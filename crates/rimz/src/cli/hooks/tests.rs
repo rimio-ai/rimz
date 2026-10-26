@@ -59,6 +59,218 @@ fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
 }
 
 #[test]
+fn opencode_snapshot_frames_leave_edge_consumers_untouched_on_apply_and_replay() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::harness::schedule::arm::{
+        DeliveryName, DeliveryPrompt, DeliveryProvenance, DeliverySpec, DeliveryTrigger,
+        SubscriptionLifetime, arm_delivery,
+    };
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
+    let mut actual = Vec::new();
+    for event in ["client_idle", "client_running"] {
+        for repeated in [false, true] {
+            for replay in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let workspace =
+                    rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+                let paths = rimz::StatePaths::for_project_root(&workspace.project_root).unwrap();
+                let runtime = rimz::disk::paths::RuntimePaths::under(
+                    workspace.workspace_id.clone(),
+                    dir.path(),
+                )
+                .unwrap();
+                let store = rimz::Store::open(paths, runtime).unwrap();
+                store.record_workspace(&workspace).unwrap();
+                let agent = rimz::agents::definition_by_kind("opencode").unwrap();
+                let mut state =
+                    rimz::testkit::agent_state("opencode", "session", jiff::Timestamp::now());
+                state.launch_id = Some("launch".into());
+                state.launched_by = Some(rimz::agents::LaunchedBy {
+                    kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                    agent_id: "launcher".into(),
+                });
+                let run = rimz::harness::run::create_peer_prompt(
+                    store.paths(),
+                    &state,
+                    None,
+                    agent,
+                    "original task",
+                    &workspace.worktree_root,
+                    rimz::store::run::ReportTo::Launcher,
+                )
+                .unwrap()
+                .unwrap();
+                let run_before = serde_json::to_value(&run).unwrap();
+                let mut message = MessageRecord::new(
+                    workspace.workspace_id.clone(),
+                    &state,
+                    "pending sent prompt".into(),
+                    DeliveryGate::Done,
+                );
+                message.status = MessageStatus::Sent;
+                store
+                    .queue_message(&message, &workspace.session_name)
+                    .unwrap();
+                arm_delivery(
+                    &workspace,
+                    DeliverySpec {
+                        name: DeliveryName::Named("arrival".parse().unwrap()),
+                        label: None,
+                        target: rimz::config::TaskTarget {
+                            kind: rimz::ids::AgentKind::new_unchecked("opencode"),
+                            session: "recipient".into(),
+                            handle: "@recipient".into(),
+                        },
+                        trigger: DeliveryTrigger::Signal {
+                            selector: "agent.started".parse().unwrap(),
+                            matches: std::collections::BTreeMap::from([(
+                                "session".into(),
+                                "session".into(),
+                            )]),
+                            lifetime: SubscriptionLifetime::Once,
+                        },
+                        prompt: DeliveryPrompt::None,
+                        provenance: DeliveryProvenance::Loop,
+                        check: None,
+                        deadline: None,
+                        max_strikes: None,
+                        surplus: None,
+                    },
+                )
+                .unwrap();
+                let subscriptions = store.paths().root.join("records/loop-instances.json");
+                let subscriptions_before = std::fs::read(&subscriptions).unwrap();
+                let payload = serde_json::json!({"session_id": "session", "on_screen": true,
+                    "session_name": "screen title", "model": "gpt-5.5"});
+                let mut decoded = agent.decode_hook(event, &payload).unwrap();
+                let Some(observation) = decoded.lifecycle() else {
+                    actual.push((event, repeated, replay, None));
+                    continue;
+                };
+                if repeated {
+                    store
+                        .append_event(&rimz::store::event::EventEnvelope::agent_lifecycle(
+                            workspace.workspace_id.clone(),
+                            &workspace.session_name,
+                            "opencode",
+                            event,
+                            observation,
+                        ))
+                        .unwrap();
+                }
+                let frame = rimz::store::ingress::HookIngress {
+                    boot_id: None,
+                    schema_version: "1".into(),
+                    event_id: rimz::EventId::new(),
+                    ts: jiff::Timestamp::now(),
+                    source: state.kind.clone(),
+                    event: Some(event.into()),
+                    payload: payload.to_string(),
+                    cwd: workspace.project_root.clone(),
+                    hook_pid: std::process::id(),
+                    env: std::collections::BTreeMap::from([(
+                        "RIMZ_RUN_ID".into(),
+                        run.run_id.to_string(),
+                    )]),
+                };
+                let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
+                if replay {
+                    scoped
+                        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                            session_name: &workspace.session_name,
+                            agent_kind: state.kind.clone(),
+                            event_name: event,
+                            observation: decoded.lifecycle().unwrap(),
+                            spawned_subagents: &[],
+                        })
+                        .unwrap();
+                }
+                let recovered = store.read_events().unwrap();
+                let non_lifecycle_before = recovered
+                    .iter()
+                    .filter(|row| row.method != "agent.lifecycle")
+                    .map(|row| row.event_id.clone())
+                    .collect::<Vec<_>>();
+                with_frame_env(
+                    &frame,
+                    if replay {
+                        FrameAttempt::Replay
+                    } else {
+                        FrameAttempt::First
+                    },
+                    || {
+                        super::lifecycle::handle_lifecycle_frame(
+                            &workspace,
+                            &scoped,
+                            agent,
+                            &mut decoded,
+                            &payload,
+                            rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                            &crate::cli::GlobalFlags {
+                                root: None,
+                                mux: None,
+                                zellij: false,
+                                tmux: false,
+                                color: crate::cli::ColorWhen::Never,
+                            },
+                            &recovered,
+                        )
+                    },
+                )
+                .unwrap();
+                let events = store.read_events().unwrap();
+                let run_after = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+                actual.push((
+                    event,
+                    repeated,
+                    replay,
+                    Some([
+                        subscriptions_before == std::fs::read(&subscriptions).unwrap_or_default(),
+                        run_before == serde_json::to_value(run_after).unwrap(),
+                        store.list_messages().unwrap().iter().any(|row| {
+                            row.message_id == message.message_id
+                                && row.status == MessageStatus::Sent
+                        }),
+                        non_lifecycle_before
+                            == events
+                                .iter()
+                                .filter(|row| row.method != "agent.lifecycle")
+                                .map(|row| row.event_id.clone())
+                                .collect::<Vec<_>>(),
+                        !store.paths().transcript_dir.exists()
+                            || std::fs::read_dir(&store.paths().transcript_dir)
+                                .unwrap()
+                                .next()
+                                .is_none(),
+                        rimz::store::active_time::read_for_keys(
+                            store.runtime_paths(),
+                            [("opencode", "session")],
+                        )
+                        .is_empty(),
+                        std::fs::read_dir(&store.runtime_paths().agent_activity_dir)
+                            .unwrap()
+                            .next()
+                            .is_none(),
+                    ]),
+                ));
+            }
+        }
+    }
+    let expected = ["client_idle", "client_running"]
+        .into_iter()
+        .flat_map(|event| {
+            [false, true].into_iter().flat_map(move |repeated| {
+                [false, true].map(move |replay| (event, repeated, replay, Some([true; 7])))
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual, expected,
+        "snapshots must never reach lifecycle edge consumers"
+    );
+}
+
+#[test]
 fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
     for derived_present in [true, false] {
         let dir = tempfile::tempdir().unwrap();

@@ -274,7 +274,10 @@ upward-dependencies = ["address"]
 # LaunchSpec::supports_preset admits session-applied models at the definition gate (+1).
 # SessionStepRequest, SessionStepRefusal, SESSION_STEP_REFUSED and the capability carry pre-exec checks (+4).
 # BudgetWindow::Month shares the account cap window with enforcement, routing and projections (+1).
-surface-budget = 1153
+# AgentState::snapshot_transition shares snapshot state with the event follower (+1).
+# AgentState::is_asking is the shared C4 ask predicate (+1).
+# AgentState::is_focused_pair is the shared C4 focus predicate (+1).
+surface-budget = 1156
 
 [[verdict]]
 kind = "item"

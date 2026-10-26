@@ -340,6 +340,231 @@ fn amp_focus_switch_retires_then_revives_threads_in_one_pane() {
 
 #[cfg(unix)]
 #[test]
+fn on_screen_switches_and_background_asks_survive_durable_reap_and_rotation() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let emit = |id: &str, offset: i64, signal: LifecycleSignal, stamped: bool, snapshot: bool| {
+        let mut observation = AgentLifecycleObservation::new(Some(id.into()), signal);
+        observation.agent_pid = Some(std::process::id());
+        observation.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+        observation.worktree_path = Some("/repo/main".into());
+        observation.on_screen = stamped.then_some(true);
+        observation.state_snapshot = snapshot.then_some(true);
+        let mut event = EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            "rimz-test",
+            "opencode",
+            "fixture",
+            &observation,
+        );
+        event.timestamp = now + jiff::SignedDuration::from_secs(offset);
+        event_log::append(&store.paths().events_log, &event).unwrap();
+    };
+    let owner = |store: &Store| {
+        let audit = store.runtime_projection(RuntimeScope::Audit).unwrap();
+        let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace_id.clone(),
+            audit.agents.to_vec(),
+            now,
+        );
+        snapshot.reap_stale_sessions();
+        let mut pane = crate::pane::PaneRef::from_id(PaneId::parse("tmux:%1").unwrap());
+        pane.command = Some("opencode".into());
+        pane.cwd = Some("/repo/main".into());
+        let bound = snapshot.with_live_panes(vec![pane], None);
+        bound
+            .worktree_groups
+            .iter()
+            .flat_map(|group| group.rows.iter())
+            .find(|row| row.is_agent())
+            .unwrap()
+            .id
+            .clone()
+    };
+    emit(
+        "a",
+        0,
+        LifecycleSignal::TurnStarted { turn_id: None },
+        true,
+        true,
+    );
+    let mut actual = Vec::new();
+    for phase in 0..4 {
+        match phase {
+            0 => emit("b", 1, LifecycleSignal::Registered, true, true),
+            1 => {
+                emit(
+                    "b",
+                    2,
+                    LifecycleSignal::TurnStarted { turn_id: None },
+                    true,
+                    false,
+                );
+                emit(
+                    "a",
+                    3,
+                    LifecycleSignal::AwaitingInput {
+                        kind: crate::agents::AskKind::Permission,
+                        ask_id: None,
+                        detail: None,
+                        native_key: None,
+                    },
+                    false,
+                    false,
+                );
+            }
+            2 => emit(
+                "a",
+                4,
+                LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                    name: None,
+                    native_key: None,
+                    turn_id: None,
+                },
+                false,
+                false,
+            ),
+            _ => emit(
+                "a",
+                5,
+                LifecycleSignal::TurnStarted { turn_id: None },
+                true,
+                true,
+            ),
+        }
+        let before = owner(&store);
+        let reaped = store.reap_dead_sessions().unwrap();
+        let after = owner(&store);
+        let audit = store.runtime_projection(RuntimeScope::Audit).unwrap();
+        let states = ["a", "b"].map(|id| {
+            let row = audit.agents.iter().find(|row| row.agent_id == id).unwrap();
+            (row.status, row.ended_at.is_some(), row.on_screen_at)
+        });
+        actual.push((before, after, reaped, states));
+    }
+    use crate::agents::AgentStatus::{Idle, Running, Waiting};
+    let stamp = |offset| Some(now + jiff::SignedDuration::from_secs(offset));
+    assert_eq!(
+        actual,
+        vec![
+            (
+                "b".into(),
+                "b".into(),
+                1,
+                [(Idle, true, stamp(0)), (Idle, false, stamp(1))]
+            ),
+            (
+                "a".into(),
+                "a".into(),
+                0,
+                [(Waiting, false, stamp(0)), (Running, false, stamp(2))]
+            ),
+            (
+                "b".into(),
+                "b".into(),
+                1,
+                [(Idle, true, stamp(0)), (Running, false, stamp(2))]
+            ),
+            (
+                "a".into(),
+                "a".into(),
+                1,
+                [(Running, false, stamp(5)), (Idle, true, stamp(2))]
+            ),
+        ]
+    );
+    for rotate in [false, true] {
+        if rotate {
+            let _ = store.rotate_event_log(0, None).unwrap();
+        }
+        std::fs::remove_file(&store.paths().rollup_cache).ok();
+        let cold = Store::open(store.paths().clone(), store.runtime_paths().clone()).unwrap();
+        assert_eq!(owner(&cold), "a");
+        let audit = cold.runtime_projection(RuntimeScope::Audit).unwrap();
+        let stamps = audit
+            .agents
+            .iter()
+            .map(|row| (row.agent_id.to_string(), row.on_screen_at))
+            .collect::<Vec<_>>();
+        assert_eq!(stamps, vec![("a".into(), stamp(5)), ("b".into(), stamp(2))]);
+    }
+}
+
+#[test]
+fn unstamped_managed_resume_does_not_reap_its_new_conversation() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let emit = |id: &str, offset: i64, pane_id: &str, pid: u32, stamped: bool| {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.agent_pid = Some(pid);
+        observation.pane_id = Some(PaneId::parse(pane_id).unwrap());
+        observation.worktree_path = Some("/repo/main".into());
+        observation.on_screen = stamped.then_some(true);
+        observation.state_snapshot = stamped.then_some(true);
+        let mut event = EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            "rimz-test",
+            "opencode",
+            "fixture",
+            &observation,
+        );
+        event.timestamp = now + jiff::SignedDuration::from_secs(offset);
+        event_log::append(&store.paths().events_log, &event).unwrap();
+    };
+    emit("a", 0, "tmux:%1", 42, true);
+    emit("a", 1, "tmux:%2", std::process::id(), false);
+    emit("b", 2, "tmux:%2", std::process::id(), false);
+    let owner = |store: &Store| {
+        let audit = store.runtime_projection(RuntimeScope::Audit).unwrap();
+        let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace_id.clone(),
+            audit.agents.to_vec(),
+            now,
+        );
+        snapshot.reap_stale_sessions();
+        let mut pane = crate::pane::PaneRef::from_id(PaneId::parse("tmux:%2").unwrap());
+        pane.command = Some("opencode".into());
+        pane.cwd = Some("/repo/main".into());
+        snapshot
+            .with_live_panes(vec![pane], None)
+            .worktree_groups
+            .iter()
+            .flat_map(|group| group.rows.iter())
+            .find(|row| row.is_agent())
+            .unwrap()
+            .id
+            .clone()
+    };
+    let before = owner(&store);
+    assert_eq!(store.reap_dead_sessions().unwrap(), 1);
+    let after = owner(&store);
+    let audit = store.runtime_projection(RuntimeScope::Audit).unwrap();
+    let b_ended = audit
+        .agents
+        .iter()
+        .find(|row| row.agent_id == "b")
+        .unwrap()
+        .ended_at;
+    assert_eq!(
+        (before, after, b_ended),
+        ("b".into(), "b".into(), None),
+        "the new managed conversation owns the pane through both reaps"
+    );
+    for rotate in [false, true] {
+        if rotate {
+            store.rotate_event_log(0, None).unwrap();
+        }
+        std::fs::remove_file(&store.paths().rollup_cache).ok();
+        let cold = Store::open(store.paths().clone(), store.runtime_paths().clone()).unwrap();
+        assert_eq!(owner(&cold), "b");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn certificate_dead_replacement_bypasses_roster_and_replays_durably() {
     let (_dir, store, workspace_id) = store();
     let now = Timestamp::now();

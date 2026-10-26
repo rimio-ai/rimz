@@ -396,7 +396,7 @@ fn read_fresh_latest_rejects_version_mismatch() {
 
     let bytes = std::fs::read(&paths.latest_snapshot).unwrap();
     let mut legacy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    legacy["snapshot_version"] = serde_json::json!(53);
+    legacy["snapshot_version"] = serde_json::json!(54);
     atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
 
     // Rewriting the version keeps the byte length identical. A production
@@ -569,6 +569,8 @@ fn read_fresh_latest_cold(paths: &StatePaths) -> Option<SidebarSnapshot> {
 
 fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) -> EventEnvelope {
     let observation = AgentLifecycleObservation {
+        on_screen: None,
+        state_snapshot: None,
         ask_queue: None,
         agent_id: Some(AgentSessionId::from(agent_id)),
         agent_name: None,

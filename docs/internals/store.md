@@ -466,7 +466,7 @@ The write tail's debounced reap (`writer/reap.rs`) scans the audit rollup and ap
 
 | Event name | Condition |
 | --- | --- |
-| `ReapedSuperseded` | A newer session took the same slot (`session_death::supersedes`): a relaunch, a fresh replacement, or a rested owner replaced in place. |
+| `ReapedSuperseded` | A different session took the same slot (`session_death::supersedes`): same-instance on-screen evidence for a non-asking `FollowLatest` owner, or the fallback proofs (relaunch, fresh replacement, in-place switch, forked retry, compaction continuation). On-screen evidence uses its own stamp, not newer activity, and never retires an open ask. |
 | `ReapedDead` | The recorded owner process is provably dead. |
 | `ReapedStale` | The session never captured an agent or script pid, or its owner is the shared daemon, and it has been quiet past `GHOST_SESSION_TTL_SECS` (3 hours). |
 

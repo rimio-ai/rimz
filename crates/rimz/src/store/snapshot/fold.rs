@@ -235,7 +235,8 @@ impl FoldCarryover {
             .map(|index| &self.agents[index])
     }
 
-    /// The copy a session rebirth folds against: panes and ordinals unstamped.
+    /// The copy a session rebirth folds against: pane, on-screen and ordinal
+    /// stamps retired.
     /// Keys are untouched, so the sort order holds.
     fn unstamped_for_rebirth(&self) -> Arc<Self> {
         Arc::clone(self.reborn.get_or_init(|| {
@@ -457,7 +458,7 @@ pub(crate) fn agent_rollup_with_carryover(
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
 /// [`FoldCarryover::trimmed`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 40;
+const ROLLUP_CACHE_VERSION: u32 = 41;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.

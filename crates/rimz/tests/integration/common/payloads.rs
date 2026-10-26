@@ -28,6 +28,8 @@ pub fn lifecycle_event(
 
 fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
+        on_screen: None,
+        state_snapshot: None,
         ask_queue: None,
         agent_id: Some(AgentSessionId::from(agent_id)),
         agent_name: None,

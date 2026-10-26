@@ -82,7 +82,7 @@ A lifecycle line is one transition of one agent or provider-native subagent:
 | `compaction_closed` | `true` when this signal closed an open context compaction. |
 | `waiting_cleared` | `true` when this signal moved the agent off `waiting`. |
 
-A lifecycle record with no agent session id prints no line.
+A lifecycle record with no agent session id prints no line. A state snapshot (for example, an OpenCode conversation switch) also prints no lifecycle line, including under `--replay`. It still updates `prior_status` for the next real transition.
 
 ## Signal lines
 

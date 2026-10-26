@@ -341,6 +341,7 @@ fn lifecycle_transition(
             .prompt
             .as_deref()
             .is_some_and(crate::store::message::prompt_is_keepalive_only),
+        observation.state_snapshot == Some(true),
     ))
 }
 
@@ -352,6 +353,9 @@ fn derive_lifecycle_events(
     login: Option<&LoginName>,
     staged: &mut Vec<StagedLifecycleEvent>,
 ) {
+    if intent.observation.state_snapshot == Some(true) {
+        return;
+    }
     if matches!(
         intent.observation.signal,
         LifecycleSignal::SubagentStarted | LifecycleSignal::SubagentStopped { .. }

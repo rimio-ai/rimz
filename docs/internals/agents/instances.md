@@ -72,11 +72,12 @@ Two diagnostics record the edges. A `local_session_bind_rejected` diagnostic is 
 
 ## Same-pane ownership
 
-Several root sessions can claim one pane: a persistent in-process fork, a `/clear` conversation, or a provider that switches conversation ids in place. [`agents/state.rs::AgentState::compare_same_pane_owner`](../../../crates/rimz/src/agents/state.rs) picks the one that owns the card:
+Several root sessions can claim one pane: a persistent in-process fork, a `/clear` conversation, or a provider that switches conversation ids in place. [`crates/rimz/src/agents/state.rs::AgentState::compare_same_pane_owner`](../../../crates/rimz/src/agents/state.rs) picks the one that owns the card:
 
-1. A root that holds an open turn (`holds_open_turn`) outranks every rested root.
-2. Among open turns, adapter policy decides. `KeepPrimary` picks the earliest registered root, which keeps an open Codex primary ahead of an open persistent in-process fork. `FollowLatest` picks the latest registered root, for providers that switch conversation ids in place: OpenCode, Cursor, Antigravity, and OMP.
-3. Among rested roots, the latest `last_activity` wins regardless of policy.
+1. For two roots of the same `FollowLatest` kind with at least one `on_screen_at` stamp, an asking root (`waiting` and `holds_open_turn`) wins first, then the later on-screen stamp wins (`None` is oldest). A tie on both falls through to the remaining rules. A background ask therefore holds the card without another stamp; once answered, the on-screen conversation takes it back without another envelope. The stamp belongs to the pane and agent-process incarnation that earned it; an unstamped placement change retires it ([stamp lifetime](./model.md)).
+2. A root that holds an open turn (`holds_open_turn`) outranks every rested root.
+3. Among open turns, adapter policy decides. `KeepPrimary` picks the earliest registered root, which keeps an open Codex primary ahead of an open persistent in-process fork. Without decisive on-screen evidence, `FollowLatest` chooses the most recent registration, for providers that switch conversation ids in place: OpenCode, Cursor, Antigravity, and OMP.
+4. Among rested roots, the latest `last_activity` wins regardless of policy.
 
 `holds_open_turn` reads the context sidecar's rest certificates, so every snapshot that compares pane owners or resolves an address attaches them first. A `running` row counts as rested when it carries a budget park, a `parked` phase, an active turn error, or a completion or interruption certificate. A current native-wait or plan-proposed certificate overrides all of these and keeps the turn open. A `waiting` row holds an open turn unless an interruption certificate rests it. Every other status is rested.
 
@@ -96,7 +97,7 @@ A row rebound to a new launch keeps answering to its earlier launch ids through 
 
 A launch id can be held by several conversations of one instance at once (a fork, a `/clear`, a compaction successor). A change that maps a launch id to one row must say which of them wins. [`address.rs::launch_row`](../../../crates/rimz/src/address.rs) prefers a live row that holds the id as its current `launch_id` over a live row that answers to it only as an earlier id. A successor still running on the id therefore keeps resolving to itself after its predecessor is revived. Child links stay broader: a child stamped with that id matches both rows through `AgentState::parent_is`.
 
-The inherited identity excludes the card `name`, `name_explicit`, `kind_ordinal`, and `registered_at`. Only a provider-linked compaction continuation takes its predecessor's `registered_at`, so it keeps the open-turn rank the predecessor held.
+The inherited identity excludes the card `name`, `name_explicit`, `kind_ordinal`, `registered_at`, and `on_screen_at`. Only a provider-linked compaction continuation takes its predecessor's `registered_at`, so it keeps the open-turn rank the predecessor held. The on-screen stamp is always session-local, including across compaction.
 
 The ownership rule also selects one un-ended row per launch as its current occupant. Only that row renders and resolves launch-derived handles such as the role. Other conversations stay audit records, and a snapshot with a live pane never offers them as message targets. When every row has ended, the most recently active row keeps the launch handle as the audit and resume representative.
 
@@ -121,7 +122,7 @@ After a publishing commit, the write-path reaper runs at most once a minute ([`s
 
 The owner comes from the hook, best-effort, on each lifecycle event: `RIMZ_AGENT_PID`, which hook configurations set to `$PPID`, falling back to a process-ancestor walk, plus a platform process-start token that defeats pid reuse ([`cli/hooks/owner.rs`](../../../crates/rimz/src/cli/hooks/owner.rs)). The resulting `RuntimeOwner` feeds the reaper, runtime visibility, and every same-instance proof: supersession, launch-identity inheritance, launch grouping, and the stamped-root activity waiver. It never binds a pane by itself. Stamped-pane binding is what keeps a stale agent off a stranger's pane.
 
-A provider that forks on resume is ended at write time, ahead of the reaper. The resume stamp sets `resumed_at` on the card, and the card's own next event clears it. While it is set, a root lifecycle event from another session of the kind, on the card's pane and agent process, makes the lifecycle writer append `ReapedSuperseded` for the resumed card in the same batch. The provider-owned attach applies the same rule to a fork that registered first ([`store/writer/lifecycle.rs::superseded_on_attach`](../../../crates/rimz/src/store/writer/lifecycle.rs)).
+A provider that forks on resume is ended at write time, ahead of the reaper. The resume stamp sets `resumed_at` on the card, and the card's own next event clears it. While it is set, a real root lifecycle edge from another session of the kind, on the card's pane and agent process, makes the lifecycle writer append `ReapedSuperseded` for the resumed card in the same batch; a state snapshot does not. The provider-owned attach applies the same rule to a fork that registered first ([`store/writer/lifecycle.rs::superseded_on_attach`](../../../crates/rimz/src/store/writer/lifecycle.rs)).
 
 Two records shield crash-recovery candidates. The persisted live roster protects them from `ReapedDead` and `ReapedStale` until room rebirth consumes it. Supersession bypasses the roster. The pending-recovery record protects a root against every reap reason, and against superseding another agent. The protection lasts until a settlement confirms the agent's tab open or ends it, or until a wrapper attaches a parked agent that is not seeded awaiting tab confirmation. Pending launched children get no reap shield, because no settlement asks about them. The record still protects every pending agent against the old exec wrapper's inferred `rimz.agent-ended` ([fleet.md](../harness/fleet.md#reclaiming-a-pane)). Worktree removal bypasses both records, because it proves the slot is gone.
 
@@ -139,17 +140,18 @@ Daemon-owned Codex sessions have one faster signal, and it is a snapshot-time dr
 
 ### Supersession
 
-A newer root supersedes an older one of the same kind, with a newer `last_activity`, when any rule in [`store/session_death.rs::supersedes`](../../../crates/rimz/src/store/session_death.rs) holds:
+Supersession first requires distinct session ids of the same kind ([`crates/rimz/src/store/session_death.rs::supersedes`](../../../crates/rimz/src/store/session_death.rs)). For a `FollowLatest` pair with at least one on-screen stamp and the same pane and agent-process incarnation, only the on-screen rule applies, ahead of activity and the fallback proofs. Every other pair requires a newer `last_activity` and one of the fallback rules:
 
 | Rule | Condition |
 | --- | --- |
+| on-screen conversation | In a stamped same-instance `FollowLatest` pair, the older row is not asking (`waiting` with an open turn), and the newer row has a strictly later `on_screen_at` (`None` is oldest). An equal stamp reaps neither row on focus evidence. |
 | relaunch | Both stamp the same pane and the newer one is a provably different process (two known, distinct owner pids). Or both are paneless remnants of the same worktree and branch. |
 | fresh conversation | Both carry `Fresh` rollout lineage on one stamped pane (a `/clear` or `/new`), and the older one does not hold an open turn. |
 | in-place switch | A `FollowLatest` adapter reports a distinct newer id on the same pane incarnation and identified agent process, and the older one does not hold an open turn. |
 | forked retry | A same-instance fork follows a predecessor already rested by a current provider error or a raw `failed` status. |
 | compaction continuation | The newer root names the older as `compacted_from` on the same pane and agent-process incarnation. |
 
-The open-turn guard exists because a child can report a distinct conversation id from the same process mid-turn. Same-process and fresh-lineage switches therefore keep an older owner authoritative while it holds an open turn, while a provably different replacement process supersedes it regardless. The compaction continuation bypasses the guard because the successor names the exact predecessor. A fork has no such link, so it retires only an errored predecessor. A clean `success` or `idle` predecessor, or a raw-active one rested by a completion or interruption certificate, stays a valid sibling. Daemon-owned roots fail every same-instance proof, and so does a known pane or process-start mismatch. Any later hook on the predecessor invalidates an old certificate by advancing its `last_activity`.
+The fallback open-turn guard exists because a child can report a distinct conversation id from the same process mid-turn. Without same-instance on-screen evidence, same-process and fresh-lineage switches keep an older owner authoritative while it holds an open turn, while a provably different replacement process supersedes it regardless. The compaction continuation bypasses the fallback guard because the successor names the exact predecessor. A fork has no such link, so it retires only an errored predecessor. A clean `success` or `idle` predecessor, or a raw-active one rested by a completion or interruption certificate, stays a valid sibling under these fallback proofs. Daemon-owned roots fail every same-instance proof, and so does a known pane or process-start mismatch. Any later hook on the predecessor invalidates an old certificate by advancing its `last_activity`.
 
 Before applying these rules, the writer attaches each raw-`running` or raw-`waiting` root's context sidecar, so a current provider turn error or a completion or interruption settle can certify that an active-looking rollup is at rest. The `parked` phase is durable and already in the rollup. A budget park is enrichment, so only readers that fold the budget ledger treat it as rest. A missing or stale sidecar leaves the raw lifecycle status in charge.
 

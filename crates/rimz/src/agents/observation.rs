@@ -445,9 +445,15 @@ pub struct AnsweredQuestion {
 /// event carries plus the enrichment it reports. A definition's hook capability attaches it
 /// to the decoded hook so the Store can record an `agent.lifecycle` event
 /// without each adapter touching durable state. The status is *derived* from
-/// the signal through `step`, never decided by the adapter.
+/// the signal through `AgentState::transition`, never decided by the adapter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecycleObservation {
+    /// Only `Some(true)` claims this conversation is on screen in its client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_screen: Option<bool>,
+    /// `Some(true)` reports current state through `Registered` or `TurnStarted`, not an edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_snapshot: Option<bool>,
     /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
     /// Codex root `session_id`, or Codex subagent `agent_id`). The CLI uses
     /// this as the `agent_id`.
@@ -461,7 +467,7 @@ pub struct AgentLifecycleObservation {
     #[serde(flatten)]
     pub launch: LaunchParams,
     /// The agent-agnostic lifecycle intent this event carries. The reducer and
-    /// the ingestion path fold it onto the rollup through the one `step` table;
+    /// the ingestion path share the `AgentState::transition` decision;
     /// the adapter no longer decides a final [`AgentStatus`](crate::agents::AgentStatus).
     pub signal: LifecycleSignal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -545,6 +551,8 @@ impl AgentLifecycleObservation {
     pub fn new(agent_id: Option<AgentSessionId>, signal: LifecycleSignal) -> Self {
         Self {
             agent_id,
+            on_screen: None,
+            state_snapshot: None,
             agent_name: None,
             launch: LaunchParams::default(),
             signal,

@@ -181,11 +181,12 @@ pub(super) fn decode_events(events: &[EventEnvelope]) -> Vec<FoldEvent<'_>> {
 
 /// A mux rebirth renumbers panes from zero, so every stamp recorded before
 /// the boundary names a pane that no longer exists and the reborn session can
-/// reuse it. Sessions stay alive across the boundary; only pane and ordinal
-/// stamps are retired.
+/// reuse it. Sessions stay alive across the boundary; pane, on-screen and
+/// ordinal stamps are retired.
 pub(super) fn unstamp_for_rebirth<'a>(agents: impl IntoIterator<Item = &'a mut AgentState>) {
     for agent in agents {
         agent.pane = None;
+        agent.on_screen_at = None;
         agent.kind_ordinal = None;
     }
 }
@@ -350,11 +351,17 @@ impl ReducerState {
                 state.mode = Some(mode);
             }
         }
-        state.pane = Some(PaneRef {
+        let prior_pane = state.pane.replace(PaneRef {
             pane_pid: payload.pane_pid,
             ..PaneRef::from_id(payload.pane_id.clone())
         });
-        state.runtime_owner = Some(payload.runtime_owner.clone());
+        let prior_owner = state.runtime_owner.replace(payload.runtime_owner.clone());
+        if !crate::store::session_death::same_instance_placement(
+            (prior_pane.as_ref(), prior_owner.as_ref()),
+            (state.pane.as_ref(), state.runtime_owner.as_ref()),
+        ) {
+            state.on_screen_at = None;
+        }
         self.launch_identity.replace(&key, state);
     }
 
@@ -362,7 +369,7 @@ impl ReducerState {
         let kind = AgentKind::new_unchecked(event.source.clone());
         // The agent-agnostic lifecycle intent this event carries. The status
         // and the phase/compacting heads are all derived from it through the
-        // one shared `lifecycle::step` table — never taken verbatim — so an
+        // shared `AgentState::transition` decision — never taken verbatim — so an
         // illegal jump can't slip through unvalidated. Replay is silent here;
         // the ingestion path logs anomalies once per fresh event.
         let observation = &payload.observation;
@@ -738,6 +745,7 @@ fn carried_base(
         state.keepalive_since = prior.keepalive_since;
         state.pinged_at = prior.pinged_at;
         state.registered_at = prior.registered_at.or(Some(event_ts));
+        state.on_screen_at = prior.on_screen_at;
     }
     state
 }
@@ -834,10 +842,12 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         (input.event_name == Some("rimz.agent-resumed")).then_some(input.event.timestamp);
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
-    let ends_session_shells = matches!(
-        &input.signal,
-        lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
-    );
+    let state_snapshot = input.observation.state_snapshot == Some(true);
+    let ends_session_shells = !state_snapshot
+        && matches!(
+            &input.signal,
+            lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
+        );
     let retires_usage = fold_lifecycle(
         &mut state,
         input.prior,
@@ -845,6 +855,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.signal,
         input.observation.prompt.as_deref(),
         input.observation.ask_queue.as_ref(),
+        state_snapshot,
     );
     // A reaper's end stamp is a liveness guess, not a failed-turn verdict.
     // Resting at Idle lets later activity recover a session that raced the reap.
@@ -905,6 +916,14 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.ended_at = ended_at;
     state.pane = pane_projection(input.observation, input.prior);
     state.runtime_owner = runtime_owner;
+    if input.observation.on_screen == Some(true) {
+        state.on_screen_at = Some(input.event.timestamp);
+    } else if input
+        .prior
+        .is_some_and(|prior| !crate::store::session_death::same_agent_instance(prior, &state))
+    {
+        state.on_screen_at = None;
+    }
     state.parent_agent_id = parent_agent_id;
     state.worktree_path = worktree.path;
     if let Some(branch) = worktree.observed_branch {
@@ -934,12 +953,12 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         state.compacted_from = Some(compacted_from.clone());
     }
     state.usage = usage;
-    // A shell never outlives its session: an end or a fresh registration
-    // drops the list before this event's own report lands.
+    // A shell never outlives its session: an end or a real registration
+    // drops the list before this event's own report lands. Snapshots keep it.
     if ends_session_shells {
         state.background_shells.clear();
     }
-    if let Some(report) = &input.observation.background_shells {
+    if !state_snapshot && let Some(report) = &input.observation.background_shells {
         report.apply(&mut state.background_shells);
     }
     state
@@ -1079,6 +1098,9 @@ fn assemble_launch_state(
         state.user_turn_started_at = Some(event.timestamp);
         state.keepalive_since = None;
     }
+    if prior.is_some_and(|prior| !crate::store::session_death::same_agent_instance(prior, &state)) {
+        state.on_screen_at = None;
+    }
     state
 }
 
@@ -1092,6 +1114,7 @@ fn fold_lifecycle(
     signal: lifecycle::LifecycleSignal,
     prompt: Option<&str>,
     ask_queue: Option<&crate::agents::AskQueueEdit>,
+    state_snapshot: bool,
 ) -> bool {
     let turn_ids = prior.map(AgentState::turn_ids).unwrap_or_default();
     let Transition {
@@ -1105,6 +1128,7 @@ fn fold_lifecycle(
         prior,
         &signal,
         prompt.is_some_and(crate::store::message::prompt_is_keepalive_only),
+        state_snapshot,
     );
     if let (Some(edge), Some(prior)) = (ping, prior) {
         carry_across_ping(state, prior, timestamp, edge);
@@ -1112,6 +1136,27 @@ fn fold_lifecycle(
     }
     state.status = next.status;
     state.phase = next.phase;
+    if state_snapshot {
+        if let Some(prior) = prior {
+            state.registered_at = prior.registered_at;
+            state.turn_ended_at = prior.turn_ended_at;
+            state.last_tool_at = prior.last_tool_at;
+            state.started_turn_id.clone_from(&prior.started_turn_id);
+            state
+                .superseded_turn_id
+                .clone_from(&prior.superseded_turn_id);
+            state
+                .interrupted_turn_id
+                .clone_from(&prior.interrupted_turn_id);
+            state.compacting_since = prior.compacting_since;
+            state.compaction_retired = prior.compaction_retired;
+            state.ping_turn = prior.ping_turn;
+        }
+        if opened_turn {
+            state.turn_started_at = Some(timestamp);
+        }
+        return false;
+    }
     state.compacting_since = next.compacting.then_some(timestamp);
     let completed_compaction = compaction_closed
         && !matches!(

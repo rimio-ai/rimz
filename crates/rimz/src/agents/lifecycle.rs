@@ -4,8 +4,8 @@
 //! a [`LifecycleSignal`] — the agent-agnostic *intent* an adapter reads off a
 //! native hook event — onto the reduced [`LifecycleState`]. Both the snapshot
 //! reducer (silently, on replay) and the hook ingestion path (with one-shot
-//! anomaly logging) call the one pure `step` function, so the transition
-//! table lives in exactly one place. See
+//! anomaly logging) enter `AgentState::transition`, which delegates real edges
+//! to the pure `step` function and handles edge-free state snapshots itself. See
 //! [docs/internals/agents/model.md](../../../../docs/internals/agents/model.md).
 //!
 //! `step` is reused identically for a root agent and a subagent: the two levels
@@ -334,7 +334,7 @@ pub struct LifecycleState {
     /// The running turn's shape; [`TurnPhase::Idle`] outside `Running`.
     pub phase: TurnPhase,
     /// Whether the agent is mid-compaction — a transient head the sidebar
-    /// paints over any base status, cleared by the next non-compaction signal.
+    /// paints over any base status, cleared when a real transition closes the bracket.
     /// Orthogonal to `phase`: compaction preserves the turn shape it interrupts.
     pub compacting: bool,
 }

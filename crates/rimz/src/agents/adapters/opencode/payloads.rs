@@ -12,6 +12,7 @@ use serde_json::Value;
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct OpencodeHookPayload {
     pub session_id: Option<String>,
+    pub on_screen: Option<bool>,
     pub parent_session_id: Option<String>,
     pub prompt: Option<String>,
     pub title: Option<String>,

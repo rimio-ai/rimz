@@ -259,6 +259,20 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
         observation_for_event(&full).transcript_path.as_deref(),
         Some("/tmp/transcript.jsonl")
     );
+    full.signal = LifecycleSignal::ToolUsed {
+        mutates: false,
+        edits: false,
+        name: None,
+        native_key: None,
+        turn_id: None,
+    };
+    full.on_screen = Some(true);
+    full.state_snapshot = Some(true);
+    let projected = observation_for_event(&full);
+    assert_eq!(
+        (projected.on_screen, projected.state_snapshot),
+        (Some(true), Some(true))
+    );
 }
 
 #[test]

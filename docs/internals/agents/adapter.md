@@ -74,7 +74,7 @@ The optional `launch.headless` form is a [`HeadlessForm`](../../../crates/rimz/s
 | `local_session_discovery` | session identity and lifecycle come from a provider-owned local store, without hooks |
 | `daemon_hooked_sessions` | hooks fire from a per-user daemon that outlives any one conversation |
 | `direct_account_usage` | an authoritative identity-bearing account-usage probe exists ([providers.md](./providers.md#refresh-cadences)) |
-| `same_pane_session` | how co-resident open turns are ordered: `KeepPrimary` chooses the earliest registration and `FollowLatest` the latest. Rested roots always follow latest activity |
+| `same_pane_session` | how co-resident roots are ordered: with on-screen evidence, `FollowLatest` prefers open asks, then the later claim. Without that evidence, open turns use earliest registration for `KeepPrimary` and latest for `FollowLatest`; rested roots follow latest activity ([ownership](./instances.md#same-pane-ownership)) |
 | `remote_control` | which remote-control surfaces the provider hosts (pane sessions, background sessions) |
 
 ### The traits

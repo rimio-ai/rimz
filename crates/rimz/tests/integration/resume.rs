@@ -34,6 +34,8 @@ fn registered(
     branch: &str,
 ) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
+        on_screen: None,
+        state_snapshot: None,
         ask_queue: None,
         agent_id: Some(agent_id.into()),
         agent_name: Some(name.to_owned()),
