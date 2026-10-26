@@ -789,6 +789,8 @@ Before you read any timing, confirm from the shell that sends the messages that 
 
 A room built by hand, outside `cargo xtask sandbox`, needs `XDG_RUNTIME_DIR` set to a short path (a few characters under `/tmp`): socket paths under a long directory exceed the AF_UNIX limit and the room fails to start. The state root may be long.
 
+To show that the provider's model received RimZ's text, ask a question that only that text answers for the launch's shape, with no tools needed. A launch with no profile or role, such as a bare `rimz agents opencode`, gets a reminder that names no handle (`crates/rimz/src/harness/launch_reminders.rs::model_line`), so asking for its handle proves nothing. Ask instead for the subagent profiles that the reminder's Subagents section lists (`crates/rimz/src/harness/subagent_policy.rs::reminder`). To show that a resumed session reads the current system prompt rather than its own earlier turns, change the prompt between `rimz agents stop` and `rimz agents resume`, then ask for the new value. An answer with the old value is the conversation repeating itself.
+
 ## Check a workflow against a real provider
 
 Use the [real-provider venue](#check-against-a-real-provider-login), not a held sandbox room. Keep the real `HOME` and account login, but isolate RimZ's state and runtime. Resolve the worktree's build directory rather than assuming `target/debug`:
