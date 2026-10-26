@@ -161,7 +161,7 @@ rimz accounts [--json] [--refresh] [--all]
 rimz accounts list [--json] [--refresh] [--all]
 ```
 
-Both spellings print the same overview. Providers with multiple accounts or a quota reading get their own tables, with `default` first and named accounts by name. A reading is a window, paid usage, or reset credits on an account with a login; stale cached facts on a logged-out account do not qualify. Healthy single-account providers without readings share `Other providers`. Unchecked logins and account repairs follow below. Spend history alone does not earn a table. Within each section, providers follow the dashboard's usage ranking; kinds without default-account facts follow in registry order. Multiple-account providers keep their tables even when not installed.
+Both spellings print the same overview. Providers with multiple accounts or a quota reading get their own tables, with `default` first and named accounts by name. A reading is a window, paid usage, or reset credits on an account with a login; stale cached facts on a logged-out account do not qualify. Healthy single-account providers without readings share `Other providers`. Unchecked logins and account repairs follow below. Spend history alone does not earn a table. Provider tables and `Other providers` put kinds named in the sidebar's [`provider_list`](../../guide/theme.md#display) first in listed order. `"all"` and unknown entries are ignored, duplicates use their first position, and a strict list does not hide unlisted kinds. The rest follow cached 30-day session counts across all accounts, descending; missing counts are zero and ties use registry order (Claude before Codex). Multiple-account providers keep their tables even when not installed.
 
 | Flag | Effect |
 | --- | --- |
@@ -263,7 +263,7 @@ Rooms and concurrent account queries share one probe and one usage read per acco
 
 ## JSON output
 
-`accounts --json`, `accounts list --json`, and `accounts show … --json` print the same top-level array contract. Listing includes every known kind, including those hidden from the text overview, plus undeclared selected accounts and failed configuration rows. `show` filters by kind and optional name. Rows keep provider usage-ranking order, then registry order for kinds without default-account facts, with `default` first and named accounts by name; they are not split into the text overview's sections. Credentials and account fingerprints never appear.
+`accounts --json`, `accounts list --json`, and `accounts show … --json` print the same top-level array contract. Listing includes every known kind, including those hidden from the text overview, plus undeclared selected accounts and failed configuration rows. `show` filters by kind and optional name. Rows follow the [overview's provider order](#list), with `default` first and named accounts by name; they are not split into the text overview's sections. Credentials and account fingerprints never appear.
 
 Every key below is present, with `null` when unknown, except `problem`, `probe_error`, `extra_credits`, and `reset_credits`, which are omitted when absent.
 

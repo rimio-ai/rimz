@@ -386,6 +386,131 @@ fn default_logins() -> Vec<ProviderLogin> {
         .collect()
 }
 
+fn ordered_kinds(provider_list: &[&str], spending: &ProviderSpendingCache) -> Vec<String> {
+    let provider_list: Vec<_> = provider_list
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect();
+    let mut logins = default_logins();
+    logins.sort_by_key(|login| provider_order(login.kind(), &provider_list, spending));
+    logins
+        .iter()
+        .map(|login| login.kind().as_str().to_owned())
+        .collect()
+}
+
+fn month(sessions: u32) -> SpendTally {
+    SpendTally {
+        month: SpendWindow {
+            sessions,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn provider_order_puts_configured_kinds_first_and_ignores_all() {
+    let mut spending = ProviderSpendingCache::default();
+    spending.spending.by_provider = BTreeMap::from([
+        ("claude".to_owned(), month(100)),
+        ("codex".to_owned(), month(50)),
+    ]);
+    for provider_list in [
+        &["pi", "codex"][..],
+        &["all", "pi", "codex"],
+        &["pi", "all", "codex"],
+        &["pi", "codex", "all"],
+        &["unknown", "pi", "codex", "pi", "all"],
+    ] {
+        let kinds = ordered_kinds(provider_list, &spending);
+        assert_eq!(&kinds[..3], ["pi", "codex", "claude"], "{provider_list:?}");
+        assert_eq!(kinds.len(), rimz::agents::known_kinds().count());
+    }
+    assert_eq!(
+        &ordered_kinds(&["claude", "codex", "pi", "opencode"], &spending)[..4],
+        ["claude", "codex", "pi", "opencode"]
+    );
+}
+
+#[test]
+fn provider_order_uses_month_sessions_across_accounts() {
+    let mut spending = ProviderSpendingCache::default();
+    spending.spending.by_provider = BTreeMap::from([
+        ("claude".to_owned(), month(20)),
+        ("codex".to_owned(), month(30)),
+        ("pi".to_owned(), month(u32::MAX)),
+        ("opencode".to_owned(), month(10)),
+    ]);
+    spending.spending.by_login = BTreeMap::from([
+        ("claude@default".parse().unwrap(), month(20)),
+        ("codex@default".parse().unwrap(), month(0)),
+        ("codex@work".parse().unwrap(), month(30)),
+    ]);
+    assert_eq!(
+        &ordered_kinds(&[], &spending)[..4],
+        ["pi", "codex", "claude", "opencode"]
+    );
+}
+
+#[test]
+fn provider_order_breaks_month_ties_and_missing_entries_by_registry_order() {
+    let mut spending = ProviderSpendingCache::default();
+    let mut codex = month(5);
+    codex.week.sessions = 5;
+    codex.year.sessions = 100;
+    spending.spending.by_provider = BTreeMap::from([
+        ("claude".to_owned(), month(5)),
+        ("codex".to_owned(), codex),
+        ("pi".to_owned(), month(10)),
+        ("opencode".to_owned(), month(0)),
+    ]);
+    let expected: Vec<_> = std::iter::once("pi")
+        .chain(rimz::agents::known_kinds().filter(|kind| *kind != "pi"))
+        .collect();
+    assert_eq!(ordered_kinds(&[], &spending), expected);
+    assert_eq!(
+        ordered_kinds(&[], &ProviderSpendingCache::default()),
+        rimz::agents::known_kinds().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn provider_order_preserves_default_then_alphabetical_named_accounts() {
+    let mut logins = Vec::new();
+    for kind in ["claude", "codex"] {
+        let kind = AgentKind::new_unchecked(kind);
+        logins.push(ProviderLogin::default_for(kind.clone()));
+        for name in ["alpha", "zulu"] {
+            logins.push(
+                ProviderLogin::named(
+                    kind.clone(),
+                    name.parse().unwrap(),
+                    format!("/accounts/{kind}/{name}").into(),
+                )
+                .unwrap(),
+            );
+        }
+    }
+    let provider_list = vec!["codex".to_owned(), "claude".to_owned()];
+    let spending = ProviderSpendingCache::default();
+    logins.sort_by_key(|login| provider_order(login.kind(), &provider_list, &spending));
+    assert_eq!(
+        logins
+            .iter()
+            .map(|login| login.key().to_string())
+            .collect::<Vec<_>>(),
+        [
+            "codex@default",
+            "codex@alpha",
+            "codex@zulu",
+            "claude@default",
+            "claude@alpha",
+            "claude@zulu",
+        ]
+    );
+}
+
 fn default_panels(panels: Vec<SidebarProviderPanel>) -> BTreeMap<LoginKey, SidebarProviderPanel> {
     panels
         .into_iter()
