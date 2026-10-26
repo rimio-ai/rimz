@@ -2194,6 +2194,58 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
 }
 
 #[test]
+fn opencode_prompt_and_delegation_merge_the_composed_config_over_inherited_config() {
+    let project = tempfile::tempdir().unwrap();
+    let mut invocation = request(
+        "opencode",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.subagent = true;
+    let mut actual = Vec::new();
+    for composed in [None, Some(r#"{"theme":"composed","plugins":["custom"]}"#)] {
+        let extra = composed
+            .map(|value| env(&[("OPENCODE_CONFIG_CONTENT", value)]))
+            .unwrap_or_default();
+        let process = compile_agent_process_with_extra_env(
+            None,
+            project.path(),
+            &invocation,
+            project.path(),
+            &extra,
+            &LaunchReminders {
+                system_prompt_file: Some("/runtime/prompt.md".into()),
+                settings: Some((
+                    project.path().into(),
+                    env(&[(
+                        "OPENCODE_CONFIG_CONTENT",
+                        r#"{"theme":"inherited","permissions":["keep"]}"#,
+                    )]),
+                )),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        actual.push(
+            serde_json::from_str::<serde_json::Value>(&process.env["OPENCODE_CONFIG_CONTENT"])
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        actual,
+        [
+            serde_json::json!({"theme":"inherited","permissions":["keep"],
+            "plugins":["-opencode.tool.subagent"],
+            "agents":{"build":{"system":"{file:/runtime/prompt.md}"}}}),
+            serde_json::json!({"theme":"composed","plugins":["custom","-opencode.tool.subagent"],
+            "agents":{"build":{"system":"{file:/runtime/prompt.md}"}}}),
+        ]
+    );
+}
+
+#[test]
 fn opencode_delegation_uses_composed_config_over_inherited_config() {
     use crate::harness::subagent_policy::{
         SubagentCatalog, SubagentProfile, SubagentProfileSource,

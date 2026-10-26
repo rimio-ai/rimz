@@ -259,12 +259,12 @@ fn agents_validate_refuses_what_launch_refuses() {
 #[test]
 fn agents_validate_and_explain_refuse_a_non_prompt_kind_base_until_deleted() {
     let env = Env::new();
-    let base = env.rimz_home().join("agents/opencode.md");
+    let base = env.rimz_home().join("agents/amp.md");
     crate::common::write_definition(
         &env,
         "agents",
         "worker",
-        "description: Worker\nagent: opencode",
+        "description: Worker\nagent: amp",
         "",
     );
     write_machine_file(&base, "---\ndescription: Base\n---\nBase.");
@@ -273,13 +273,13 @@ fn agents_validate_and_explain_refuse_a_non_prompt_kind_base_until_deleted() {
         .assert()
         .code(1)
         .stdout(
-            contains("agents/opencode.md")
+            contains("agents/amp.md")
                 .and(contains("agents/worker.md"))
                 .and(contains("takes no system prompt"))
                 .and(contains("delete"))
                 .and(contains("system-prompt-file").not()),
         );
-    for name in ["worker", "opencode"] {
+    for name in ["worker", "amp"] {
         env.rimz()
             .args(["agents", "explain", name])
             .assert()
@@ -292,7 +292,7 @@ fn agents_validate_and_explain_refuse_a_non_prompt_kind_base_until_deleted() {
     }
     std::fs::remove_file(&base).unwrap();
     env.rimz().args(["agents", "validate"]).assert().success();
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "opencode", 0);
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "amp", 0);
     let shell = crate::common::write_fake_login_shell(&env, "prompt-test-sh", &[]);
     env.rimz()
         .args(["agents", "explain", "worker"])
@@ -316,7 +316,7 @@ fn agents_validate_refuses_a_non_prompt_craft_without_create_advice() {
         &env,
         "agents",
         "worker",
-        "description: Worker\nagent: opencode",
+        "description: Worker\nagent: amp",
         "Craft.",
     );
     env.rimz()
@@ -343,11 +343,11 @@ fn agents_explain_names_definition_prompt_on_kind_override() {
         "Craft.",
     );
     env.rimz()
-        .args(["agents", "explain", "reviewer", "--agent", "opencode"])
+        .args(["agents", "explain", "reviewer", "--agent", "amp"])
         .assert()
         .code(1)
         .stderr(
-            contains("opencode takes no system prompt")
+            contains("amp takes no system prompt")
                 .and(contains(
                     env.rimz_home()
                         .join("agents/minimax.md")

@@ -1985,6 +1985,11 @@ fn definition_tools_stay_typed_until_the_final_engine_is_known() {
 fn multi_provider_models_do_not_change_the_definition_engine() {
     for kind in ["pi", "opencode"] {
         let root = fixture();
+        write(
+            root.path(),
+            &format!("agents/{kind}.md"),
+            "---\ndescription: Foundation.\n---\nBase.",
+        );
         definition(
             root.path(),
             "agents/pi-sonnet.md",
@@ -2257,7 +2262,7 @@ fn names_and_kind_bases_are_validated() {
 fn non_prompt_kind_bases_are_refused_before_their_contents() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    for kind in ["amp", "opencode"] {
+    for kind in ["amp", "cursor"] {
         for contents in [
             "---\ndescription: Foundation.\n---\nBase.",
             "---\ndescription: Foundation.\n---\n",
@@ -2295,7 +2300,7 @@ fn non_prompt_kind_bases_are_refused_before_their_contents() {
 fn failed_kind_bases_refuse_dependents_in_both_namespaces() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    for kind in ["amp", "opencode", "claude"] {
+    for kind in ["amp", "cursor", "claude"] {
         for contents in [
             "---\ndescription: Base\n---\n",
             "---\ndescription: [\n---\nBase.",
@@ -2343,13 +2348,13 @@ fn failed_kind_bases_refuse_dependents_in_both_namespaces() {
 #[test]
 fn failed_non_base_kind_names_do_not_poison_bodyless_definitions() {
     let mut actual = Vec::new();
-    for failed in ["agents/pretender.md", "subagents/opencode.md"] {
+    for failed in ["agents/pretender.md", "subagents/amp.md"] {
         let root = tempfile::tempdir().unwrap();
-        definition(root.path(), failed, "name: opencode", "");
-        definition(root.path(), "agents/worker.md", "agent: opencode", "");
+        definition(root.path(), failed, "name: amp", "");
+        definition(root.path(), "agents/worker.md", "agent: amp", "");
         let loaded = load_checked(root.path());
         actual.push((
-            loaded.failed.contains_key("opencode"),
+            loaded.failed.contains_key("amp"),
             loaded.agent_profiles.0.contains_key("worker"),
         ));
     }
@@ -2390,7 +2395,7 @@ fn crafts_on_non_prompt_kinds_refuse_the_body_not_a_missing_base() {
         definition(
             root.path(),
             &format!("{namespace}/worker.md"),
-            "agent: opencode",
+            "agent: amp",
             "Craft.",
         );
         definition(
@@ -2403,7 +2408,7 @@ fn crafts_on_non_prompt_kinds_refuse_the_body_not_a_missing_base() {
         actual.push(loaded.errors.into_iter().find(|error| error.path == path));
         expected.push(Some(DefinitionErr::new(
             &path,
-            "runs on opencode, which takes no system prompt, so its craft body cannot be delivered; remove the body or run this definition on a kind that takes a system prompt",
+            "runs on amp, which takes no system prompt, so its craft body cannot be delivered; remove the body or run this definition on a kind that takes a system prompt",
         )));
         assert!(!loaded.agent_profiles.0.contains_key("child"));
         assert!(!loaded.subagent_profiles.0.contains_key("child"));
@@ -2414,14 +2419,14 @@ fn crafts_on_non_prompt_kinds_refuse_the_body_not_a_missing_base() {
 #[test]
 fn non_prompt_team_seats_refuse_the_pipeline_but_keep_the_definition() {
     let root = fixture();
-    definition(root.path(), "agents/worker.md", "agent: opencode", "");
+    definition(root.path(), "agents/worker.md", "agent: amp", "");
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
     let loaded = load_checked(root.path());
     assert!(loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.is_empty());
     let expected = ["lead", "judge"].map(|role| {
         let message = format!(
-            "team 'probe' role '{role}' runs on opencode, which takes no system prompt; every \
+            "team 'probe' role '{role}' runs on amp, which takes no system prompt; every \
              seat carries the team's pipeline in its system prompt — select a definition on a \
              kind that takes a system prompt"
         );
@@ -2433,7 +2438,7 @@ fn non_prompt_team_seats_refuse_the_pipeline_but_keep_the_definition() {
 #[test]
 fn team_tier_overlay_can_move_a_bodyless_non_prompt_definition_to_a_prompt_kind() {
     let root = fixture();
-    definition(root.path(), "agents/worker.md", "agent: opencode", "");
+    definition(root.path(), "agents/worker.md", "agent: amp", "");
     team_definition(
         root.path(),
         TEAM_STAGES,
@@ -2477,6 +2482,19 @@ fn prompt_taking_kinds_require_their_base_body_or_not() {
         "Craft.",
     );
     error(root.path(), &missing);
+    let root = tempfile::tempdir().unwrap();
+    assert!(clean(root.path()).errors.is_empty());
+    definition(root.path(), "agents/runner.md", "agent: opencode", "");
+    let missing = format!(
+        "runs on opencode, whose kind base is missing — create {} with a nonempty body, \
+         the system prompt every opencode definition starts from",
+        root.path().join("agents/opencode.md").display(),
+    );
+    error(root.path(), &missing);
+    definition(root.path(), "agents/opencode.md", "", "OpenCode base.");
+    let loaded = clean(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert!(loaded.agent_profiles.0.contains_key("runner"));
 }
 
 #[test]

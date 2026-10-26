@@ -988,11 +988,12 @@ fn compile_agent_process_with_extra_env(
         .env(&crate::agents::ambient_env()),
     };
     login_env.extend(env.clone());
-    let mut env_warnings = Vec::new();
-    if reminders.disable_native_subagents(request) {
-        env_warnings.extend(adapter.disable_native_subagent_env(&login_env, &mut env));
-    }
-    env_warnings.extend(adapter.finalize_launch_env(&login_env, &mut env));
+    let env_warnings = adapter.finalize_launch_env(
+        &login_env,
+        &mut env,
+        reminders.disable_native_subagents(request),
+        reminders.system_prompt_file.as_deref(),
+    );
     let ask = adapter
         .spec()
         .launch

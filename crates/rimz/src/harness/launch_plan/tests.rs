@@ -1882,6 +1882,7 @@ fn materialized_prompt_replaces_raw_prompt_args_for_every_action() {
             "/runtime/prompt/sys.composed.md".to_owned(),
         ],
         env: BTreeMap::new(),
+        ..Default::default()
     };
     for action in ["launch", "resume", "fork"] {
         let mut request = request(
@@ -1925,6 +1926,7 @@ fn materialized_prompt_replaces_raw_prompt_args_for_every_action() {
                 "model_instructions_file=/runtime/prompt/sys.composed.md".to_owned(),
             ],
             env: BTreeMap::new(),
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -1950,12 +1952,101 @@ fn materialized_prompt_replaces_raw_prompt_args_for_every_action() {
                 "base text\n\nfragment text\n".to_owned(),
             ],
             env: BTreeMap::new(),
+            ..Default::default()
         },
     );
     assert_eq!(
         pi.action.extra_args(),
         ["--system-prompt", "base text\n\nfragment text\n"]
     );
+}
+
+#[test]
+fn opencode_file_prompt_reaches_launch_and_resume_as_an_artifact_without_prompt_argv() {
+    let project = tempfile::tempdir().unwrap();
+    let base = project.path().join("base}.md");
+    std::fs::write(&base, "base {env:HOME}\n").unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for action in ["launch", "resume"] {
+        for raw in [
+            None,
+            Some("not JSON"),
+            Some(r#"{"agents":{"build":false}}"#),
+        ] {
+            let mut request = request("opencode", action_with_args(action, Vec::new()));
+            request.system_prompt_file = Some(base.clone().into());
+            request.subagent = true;
+            let ambient_env = raw
+                .map(|raw| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]))
+                .unwrap_or_default();
+            let result = compile(LaunchPlanInputs {
+                request: &request,
+                cwd: project.path(),
+                project_root: project.path(),
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: &runtime,
+                state: &state,
+                effective: None,
+                commands: &machine.agents.commands,
+                accounts: &machine.accounts,
+                isolation: Isolation::Host,
+                bwrap: None,
+                agents: Ok(&[]),
+                ambient_env: &ambient_env,
+                agent_shell: None,
+                hibernate: false,
+                recorded_system_prompt_digest: Some("previous"),
+            });
+            let outcome = match result {
+                Ok(plan) => {
+                    let artifact = plan
+                        .prompt
+                        .artifact
+                        .as_ref()
+                        .expect("artifact for a lone file");
+                    assert_eq!(artifact.parent(), Some(runtime.prompt_dir().as_path()));
+                    assert_ne!(artifact, &base);
+                    let config: serde_json::Value =
+                        serde_json::from_str(&plan.process().env["OPENCODE_CONFIG_CONTENT"])
+                            .unwrap();
+                    let reference = format!("{{file:{}}}", artifact.display());
+                    assert_eq!(
+                        config,
+                        serde_json::json!({
+                            "agents":{"build":{"system":reference}},
+                            "plugins":["-opencode.tool.subagent"],
+                        })
+                    );
+                    let argv = if action == "launch" {
+                        vec!["opencode", "--standalone"]
+                    } else {
+                        vec!["opencode", "--session", "session", "--standalone"]
+                    };
+                    assert_eq!(plan.process().provider_argv, argv);
+                    assert!(plan.process().env.contains_key("RIMZ_LAUNCH_REMINDERS"));
+                    apply(&plan).unwrap();
+                    assert_eq!(
+                        std::fs::read_to_string(artifact).unwrap(),
+                        "base {env:HOME}\n"
+                    );
+                    Ok(plan
+                        .warnings
+                        .iter()
+                        .filter(|warning| matches!(warning, LaunchPlanWarning::LaunchEnv(_)))
+                        .count())
+                }
+                Err(error) => Err(error.to_string()),
+            };
+            actual.push(outcome);
+            expected.push(Ok(usize::from(raw.is_some())));
+        }
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]

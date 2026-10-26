@@ -102,6 +102,162 @@ fn opencode_activity_filter_and_launch_commands_build() {
 }
 
 #[test]
+fn composed_system_prompt_preserves_config_with_or_without_delegation() {
+    let raw = r#"{/* JSONC */"theme":"dark","plugins":"untouched",
+        "agents":{"review":{"system":"review"},"build":{"model":"custom"}}}"#;
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for disable_delegation in [false, true] {
+        let raw = if disable_delegation {
+            raw.replace("\"untouched\"", "[\"custom\"]")
+        } else {
+            raw.to_owned()
+        };
+        let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw)]);
+        let mut env = BTreeMap::new();
+        let warnings = OpencodeAdapter.finalize_launch_env(
+            &inherited,
+            &mut env,
+            disable_delegation,
+            Some(Path::new("/runtime/prompt.md")),
+        );
+        actual.push((
+            env.get("OPENCODE_CONFIG_CONTENT")
+                .map(|raw| serde_json::from_str::<Value>(raw).unwrap()),
+            warnings,
+        ));
+        let plugins = if disable_delegation {
+            json!(["custom", "-opencode.tool.subagent"])
+        } else {
+            json!("untouched")
+        };
+        expected.push((
+            Some(json!({"theme":"dark", "plugins":plugins,
+            "agents":{"review":{"system":"review"},"build":{
+                "model":"custom","system":"{file:/runtime/prompt.md}"
+            }}})),
+            Vec::<String>::new(),
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn composed_system_prompt_replaces_inherited_system_with_one_warning() {
+    let mut actual = Vec::new();
+    for system in [
+        json!("previous"),
+        json!(""),
+        json!(null),
+        json!({"file":"old"}),
+    ] {
+        let inherited = BTreeMap::from([(
+            "OPENCODE_CONFIG_CONTENT".into(),
+            json!({"agents":{"build":{"system":system}}}).to_string(),
+        )]);
+        let mut env = BTreeMap::new();
+        let warnings = OpencodeAdapter.finalize_launch_env(
+            &inherited,
+            &mut env,
+            false,
+            Some(Path::new("/runtime/prompt.md")),
+        );
+        actual.push((
+            env.get("OPENCODE_CONFIG_CONTENT")
+                .map(|raw| serde_json::from_str::<Value>(raw).unwrap()),
+            warnings,
+        ));
+    }
+    let warning = "OPENCODE_CONFIG_CONTENT set agents.build.system; RimZ's composed system prompt \
+                   replaced it for this launch; move that prompt into agents/opencode.md or a \
+                   profile's system-prompt-file, or remove it from the variable";
+    assert_eq!(
+        actual,
+        vec![
+            (
+                Some(json!({"agents":{"build":{"system":"{file:/runtime/prompt.md}"}}})),
+                vec![warning.to_owned()],
+            );
+            4
+        ]
+    );
+}
+
+#[test]
+fn malformed_prompt_and_delegation_config_warns_once_and_keeps_both_edits() {
+    let mut actual = Vec::new();
+    for (raw, member, shape, problem) in [
+        ("not JSON", "plugins", "an array", "is not valid JSONC"),
+        ("[]", "plugins", "an array", "is not a JSON object"),
+        (
+            r#"{"plugins":false}"#,
+            "plugins",
+            "an array",
+            "has a plugins value that is not an array",
+        ),
+        (
+            r#"{"agents":[]}"#,
+            "agents",
+            "an object",
+            "has a agents value that is not an object",
+        ),
+        (
+            r#"{"agents":{"build":null}}"#,
+            "agents.build",
+            "an object",
+            "has a agents.build value that is not an object",
+        ),
+    ] {
+        let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]);
+        let mut env = BTreeMap::new();
+        let warnings = OpencodeAdapter.finalize_launch_env(
+            &inherited,
+            &mut env,
+            true,
+            Some(Path::new("/runtime/prompt.md")),
+        );
+        let expected_warning = format!(
+            "OPENCODE_CONFIG_CONTENT {problem}; this launch ignored the configured value; \
+             set it to a JSON object whose {member} is {shape}, or unset it"
+        );
+        actual.push((
+            env.get("OPENCODE_CONFIG_CONTENT")
+                .map(|raw| serde_json::from_str::<Value>(raw).unwrap()),
+            warnings == [expected_warning],
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            (
+                Some(json!({"plugins":["-opencode.tool.subagent"],
+            "agents":{"build":{"system":"{file:/runtime/prompt.md}"}}})),
+                true
+            );
+            5
+        ]
+    );
+}
+
+#[test]
+fn unmanaged_core_config_is_untouched_without_prompt_or_delegation() {
+    let mut actual = Vec::new();
+    for raw in [
+        None,
+        Some("not JSON"),
+        Some(r#"{"agents":{"build":{"system":"keep"}}}"#),
+    ] {
+        let inherited = raw
+            .map(|raw| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]))
+            .unwrap_or_default();
+        let mut env = BTreeMap::new();
+        let warnings = OpencodeAdapter.finalize_launch_env(&inherited, &mut env, false, None);
+        actual.push((env.contains_key("OPENCODE_CONFIG_CONTENT"), warnings));
+    }
+    assert_eq!(actual, vec![(false, Vec::<String>::new()); 3]);
+}
+
+#[test]
 fn native_subagent_denial_preserves_opencode_config_and_appends_plugin_selector() {
     let selector = "-opencode.tool.subagent";
     let allow = json!({ "action": "other", "resource": "review", "effect": "allow" });
@@ -118,7 +274,10 @@ fn native_subagent_denial_preserves_opencode_config_and_appends_plugin_selector(
             .map(|value| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), value.into())]))
             .unwrap_or_default();
         let mut env = BTreeMap::new();
-        let warning = OpencodeAdapter.disable_native_subagent_env(&inherited, &mut env);
+        let warning = OpencodeAdapter
+            .finalize_launch_env(&inherited, &mut env, true, None)
+            .into_iter()
+            .next();
         actual.push((
             serde_json::from_str::<Value>(&env["OPENCODE_CONFIG_CONTENT"]).unwrap(),
             warning,
@@ -148,7 +307,9 @@ fn native_subagent_denial_warns_when_opencode_config_is_ignored() {
         let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]);
         let mut env = BTreeMap::new();
         let warning = OpencodeAdapter
-            .disable_native_subagent_env(&inherited, &mut env)
+            .finalize_launch_env(&inherited, &mut env, true, None)
+            .into_iter()
+            .next()
             .unwrap_or_default();
         actual.push((
             serde_json::from_str::<Value>(&env["OPENCODE_CONFIG_CONTENT"]).unwrap(),
@@ -189,7 +350,10 @@ fn managed_launch_hides_tabs_preserving_other_cli_config() {
             inherited.insert("OPENCODE_CLI_CONFIG_CONTENT".into(), raw.into());
         }
         let mut env = BTreeMap::new();
-        let warning = OpencodeAdapter.finalize_launch_env(&inherited, &mut env);
+        let warning = OpencodeAdapter
+            .finalize_launch_env(&inherited, &mut env, false, None)
+            .into_iter()
+            .next();
         actual.push((
             env.get("OPENCODE_CLI_CONFIG_CONTENT")
                 .map(|raw| serde_json::from_str::<Value>(raw).unwrap()),
@@ -239,7 +403,9 @@ fn managed_launch_warns_when_opencode_cli_config_is_ignored() {
         let inherited = BTreeMap::from([("OPENCODE_CLI_CONFIG_CONTENT".into(), raw.into())]);
         let mut env = BTreeMap::new();
         let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env)
+            .finalize_launch_env(&inherited, &mut env, false, None)
+            .into_iter()
+            .next()
             .unwrap_or_default();
         actual.push((
             env.get("OPENCODE_CLI_CONFIG_CONTENT")

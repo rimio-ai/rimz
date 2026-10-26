@@ -630,6 +630,7 @@ fn channel_label(matcher: PresetArgMatcher) -> String {
         PresetArgMatcher::Flag(flags) | PresetArgMatcher::TextFlag(flags) => flags.join(" "),
         PresetArgMatcher::ConfigKey { flags, key } => format!("{} {key}", flags.join(" ")),
         PresetArgMatcher::EnvPathVar(key) => key,
+        PresetArgMatcher::EnvConfigMember { var, member } => format!("{var} {member}"),
     }
 }
 
@@ -968,6 +969,20 @@ mod tests {
     struct ParserArgs {
         #[command(flatten)]
         explain: ExplainArgs,
+    }
+
+    #[test]
+    fn opencode_system_prompt_channel_names_the_env_and_member() {
+        let channel = rimz::agents::find_definition("opencode")
+            .unwrap()
+            .spec()
+            .launch
+            .preset_arg_matcher(PresetField::SystemPromptFile)
+            .map(channel_label);
+        assert_eq!(
+            channel.as_deref(),
+            Some("OPENCODE_CONFIG_CONTENT agents.build.system")
+        );
     }
 
     #[test]
