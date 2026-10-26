@@ -388,7 +388,7 @@ A `nobody` run owes no report, so `RunMonitor::poll` cleans it up as soon as no 
 
 `--keep` turns automatic completion cleanup off for every run state, so `RunMonitor` neither waits for receipt nor closes the pane. After provider exit the wrapper holds the pane only under a live parent watch. It restores the saved terminal modes, then prints `rimz: subagent {status}; --keep holds this pane until its parent ends; press Ctrl-C to close it`. Ctrl-C or the parent's end leaves the settled answer untouched, stamps `rimz.agent-ended`, retires the session's deliveries, and closes the pane. A SIGHUP or SIGTERM during the hold exits without a stamp or a pane close, and the [stop seam](./scripting.md#reclaiming-the-run-pane) finishes. Without a live watch, a kept child settles and closes instead of holding.
 
-The parked Unix wrapper holds no store while the provider lives and stays within an 8 MiB private (anonymous) memory budget, with executable text shared across wrappers. A parked nonterminal run adds one resident store-owning strand helper until its owed wake lands. A `--keep` child's settled hold opens a store and is outside that budget ([the exec wrapper](./fleet.md#resident-wrapper)).
+The parked Unix wrapper holds no store while the provider lives and has separate [private-memory budgets outside and inside huge pages](../performance.md#overhead-at-fleet-scale), with executable text shared across wrappers. A parked nonterminal run adds one resident store-owning strand helper until its owed wake lands. A `--keep` child's settled hold opens a store and is outside that budget ([the exec wrapper](./fleet.md#resident-wrapper)).
 
 ## Backstops
 

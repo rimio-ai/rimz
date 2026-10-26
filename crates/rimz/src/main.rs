@@ -15,17 +15,17 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
-// Linux glibc only: jemalloc does not build for Apple targets under zig, and
-// musl keeps its own allocator, which was never measured against jemalloc. A
-// heap-profiling build passes `--cfg rimz_system_malloc` to keep glibc malloc.
+// Linux x86-64 and aarch64, glibc or musl. Other targets keep their platform allocator;
+// jemalloc does not build for Apple under zig. A heap-profiling build passes
+// `--cfg rimz_system_malloc` to keep the platform allocator.
 #[cfg(rimz_jemalloc)]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 // SAFETY: jemalloc expects malloc_conf to point to a static NUL-terminated C string.
 // An array reference is a thin pointer; a byte slice would have the wrong ABI.
-// `thp:never` keeps jemalloc's 2 MiB-aligned extents off transparent huge pages,
-// which a kernel in THP `always` mode faults in whole even for a small process.
+// `thp:never` keeps jemalloc's 2 MiB-aligned extents off transparent huge pages.
+// Its base metadata blocks remain eligible on kernels in THP `always` mode.
 #[cfg(rimz_jemalloc)]
 #[expect(
     unsafe_code,

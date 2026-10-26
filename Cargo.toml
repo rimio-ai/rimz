@@ -24,8 +24,9 @@ unsafe_code = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rimz_system_malloc)"] }
 
 [workspace.dependencies]
-# Linux glibc global allocator; override C malloc so bundled SQLite uses the
-# same allocator. The binary's malloc_conf export selects immediate decay.
+# Linux x86-64/aarch64 global allocator (glibc and musl); override C malloc so bundled
+# SQLite uses the same allocator. The binary's malloc_conf export selects immediate
+# decay and keeps extents off transparent huge pages.
 tikv-jemallocator = { version = "0.7", features = ["override_allocator_on_supported_platforms"] }
 # Core runtime
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
