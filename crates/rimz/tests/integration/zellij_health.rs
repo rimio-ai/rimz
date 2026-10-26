@@ -272,6 +272,12 @@ fn named_attach_preserves_recorded_room_owner() {
     store
         .record_room_bin(&workspace, recorded_owner.clone(), "recorded".to_owned())
         .expect("record room owner");
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::MuxName::Zellij,
+        &workspace.session_name,
+        "live",
+    );
     let shim = FakeZellij::new().with_tmux();
 
     let output = env

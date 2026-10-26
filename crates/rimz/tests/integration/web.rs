@@ -2175,6 +2175,12 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
     std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
     let web_port = free_loopback_port();
     write_machine_config(&env, &format!("[web]\nport = {web_port}\n"));
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::MuxName::Zellij,
+        &workspace.session_name,
+        "live",
+    );
     let output = env
         .rimz()
         .args(["--mux", "zellij", "web", "open", "--session"])
