@@ -83,19 +83,17 @@ pub(crate) const RECONCILE_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Pause between failed native responsiveness probes.
 const HEALTH_PROBE_RETRY_DELAY: Duration = Duration::from_millis(250);
 
-/// Runtime pre-attach responsiveness budget. Tests may set
-/// `RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS` to shorten fake-shim wait paths.
+/// Runtime pre-attach responsiveness budget. Test builds may set
+/// `RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS` to shorten fake-shim wait paths; a
+/// release build never reads it.
 fn health_probe_timeout() -> Duration {
-    let Some(value) =
-        env::var_os("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS").filter(|value| !value.is_empty())
-    else {
-        return HEALTH_PROBE_TIMEOUT;
-    };
-    value
-        .to_str()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(HEALTH_PROBE_TIMEOUT)
+    #[cfg(any(test, feature = "testkit"))]
+    if let Some(ms) = env::var_os("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS")
+        .and_then(|value| value.to_str().and_then(|value| value.parse::<u64>().ok()))
+    {
+        return Duration::from_millis(ms);
+    }
+    HEALTH_PROBE_TIMEOUT
 }
 
 /// Poll cadence while waiting for the presence plugin to publish a requested
