@@ -20,10 +20,13 @@ print_stderr = "deny"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
+# A heap-profiling build keeps glibc malloc on Linux glibc (docs/internals/profiling.md).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rimz_system_malloc)"] }
 
 [workspace.dependencies]
-# glibc arena cap; already transitive via nix and trusted in supply-chain.
-libc = "0.2"
+# Linux glibc global allocator; override C malloc so bundled SQLite uses the
+# same allocator. The binary's malloc_conf export selects immediate decay.
+tikv-jemallocator = { version = "0.7", features = ["override_allocator_on_supported_platforms"] }
 # Core runtime
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
 tracing = "0.1"

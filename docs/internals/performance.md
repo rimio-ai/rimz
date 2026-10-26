@@ -253,16 +253,39 @@ Each of these has cost RimZ a real regression. They are grouped by the principle
 
 **An atomic reinstall leaves deleted inodes behind.** A long-lived renderer's `current_exe()` resolves to `rimz (deleted)`, so a naive self-spawn fails `execve`, and a supervisor parent holds the deleted inode until session end while its children orphan. `rimz_exe` repairs the suffix, supervisor-owned reload convergence re-execs parents onto the new binary, and supervisor-side reaping clears the orphans.
 
-**A 2-arena cap serializes malloc in a many-threaded long-lived process.** With glibc capped to two malloc arenas, the sidebar host's 123 threads queued on the arena locks: a profile of a 57-window room put 48% of its on-CPU samples under `__lll_lock_wait_private`. `crates/rimz/src/main.rs::malloc_arena_cap` gives the host 16 arenas and keeps 2 everywhere else. On a 57-window tmux sandbox room with 5 `store_delta` events per second and only stub agents, fresh hosts measured, over 3 × 10 s windows each:
+**Timed allocator decay leaves dirty pages in idle processes.** On Linux glibc, `crates/rimz/src/main.rs::ALLOC` selects jemalloc for Rust allocations, and the crate's `override_allocator_on_supported_platforms` feature routes C `malloc` to it too, bundled SQLite included. `crates/rimz/src/main.rs::ALLOCATOR_CONFIG` exports the process-start configuration `dirty_decay_ms:0`, with jemalloc defaults otherwise. Timed decay advances through allocator activity, so an idle process can retain dirty pages indefinitely; immediate decay returns them without a RimZ-scheduled trim or background allocator threads. macOS and musl keep their platform allocators. aarch64 Linux runs jemalloc with 64 KiB pages on every kernel, because jemalloc's bundled `configure` fixes that target's page size rather than detecting it, and its memory is unmeasured.
 
-| Host arena cap | Hosts | Mean CPU (run means) | USS after about 1 min |
-| --- | ---: | --- | --- |
-| 2 | 3 | 27.7% (26.1 to 30.3) | 51 MiB |
-| 8 | 6 | 19.1% (18.6 to 20.1) | 53 MiB |
-| 16 (shipped) | 6 | 16.9% (15.2 to 18.4) | 56 MiB |
-| no cap (8 × cores) | 6 | 15.0% (13.7 to 16.6) | 62 MiB |
+jemalloc replaces the glibc arena cap of 2, or 16 for the sidebar host. Two arenas serialized the many-threaded host on malloc locks; jemalloc instead creates arenas lazily, up to its default of four times the CPU count. Selection runs rejected mimalloc and default jemalloc because both raised small-process memory. jemalloc's background threads added threads and retained more memory than immediate decay.
 
-The 2-arena row comes from an earlier session of the same harness, where cap 8 averaged 18.1%. Cap 4 averaged 22.8%. Every cap-8 run averaged above every uncapped run, while cap 16 overlapped them. The host stays capped because glibc's default, 8 arenas per core, bounds nothing on a many-core machine over hours of uptime. Lift another process's cap only after a profile of that process shows the same lock wait.
+Built-binary re-check, 2026-10-26, on `xlab-term` (x86-64 Linux 7.0.14, 24 logical CPUs, 72 GiB RAM, Rust 1.97.1): glibc build of trunk `97b25672499d` versus the jemalloc build of `perf(runtime): replace glibc malloc with jemalloc on Linux glibc` on that trunk, both release builds with `testkit` and without `sentry`. Figures are median `Pss_Anon + SwapPss` in MiB at six minutes, except the walker at 500 seconds and the separately labelled two-minute row. Small-process samples came from two fresh rooms per build; the walker had two runs per build and the many-pane host had six, each in its own fresh room, interleaved across builds. No fleet total was measured.
+
+| Process or workload | glibc | jemalloc, immediate decay |
+| --- | ---: | ---: |
+| Sidebar supervisor | 4.004 | 2.797 |
+| Parked exec wrapper | 3.453 | 3.139 |
+| Three-window sidebar host | 42.518 | 9.518 |
+| Held tmux client | 7.695 | 4.258 |
+| Loop watch | 3.430 | 2.717 |
+| Stats daemon | 4.238 | 4.186 |
+| Content daemon | 3.299 | 3.188 |
+| Codex broker | 3.281 | 3.078 |
+| Spending walker | 310.496 | 208.455 |
+| 57-window sidebar host | 94.613 | 53.039 |
+| Stats daemon at two minutes | 4.205 | 4.439 |
+
+The stats daemon's two-minute ranges did not overlap: 4.195 to 4.215 MiB for glibc, 4.406 to 4.473 MiB for jemalloc. Its six-minute ranges overlapped (4.230 to 4.246 versus 4.070 to 4.301 MiB), so these measurements do not establish a saving for that process.
+
+| Timing measure | glibc | jemalloc, immediate decay |
+| --- | ---: | ---: |
+| Many-pane host mean CPU, percent of one core (range of six host means) | 10.83 (9.73 to 11.80) | 10.28 (9.23 to 12.07) |
+| Walker CPU seconds, median over 500 seconds | 10.335 | 9.680 |
+| First walker request seconds, median (range) | 2.524 (2.207 to 2.842) | 1.657 (1.530 to 1.784) |
+
+Each many-pane room had 56 stub agents and 57 attached sidebar panes, receiving five synthetic `store_delta` events per second. CPU windows followed a 60-second attachment settle. Across six fresh hosts per build, jemalloc's mean of host means was below glibc's, meeting the host CPU bar; shared-host load varied, so this is not a causal speedup claim. First-request timing runs from spending-service owner election to its first completed request.
+
+Immediate decay has a process-start CPU price on short-lived commands: about 0.1 to 0.3 ms per invocation, or 2 to 6 percent of a 5 to 7 ms process. In 1,000 interleaved pairs per command, jemalloc-minus-glibc CPU medians were +317.5 µs for `--version` and +268 µs for `hooks feed --source codex`; a three-arm follow-up measured +124.5 µs and −0.5 µs respectively (hook interval −111 to +95 µs). Against jemalloc's default decay, immediate decay alone cost the hook +250.5 µs, about 100 extra `madvise` calls and 198 extra minor faults. Wall time stayed within shared-load noise, and `crates/rimz/benches/hotpath.rs::hook_stop_budget` passed on both builds.
+
+Any later allocator change must meet the many-pane host CPU bar: a 57-window tmux sandbox room with stub agents and five `store_delta` events per second, at least six fresh hosts per build interleaved across configurations, each sampled over three 10-second CPU windows. Compare resident memory plus swap for each process kind, not RSS alone, and claim savings only where measured. The bench executables also use jemalloc on Linux glibc, but carry no exported configuration; their allocation counts do not depend on decay.
 
 ## Deferred and rejected
 

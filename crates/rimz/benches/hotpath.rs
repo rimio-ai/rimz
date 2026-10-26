@@ -1,12 +1,16 @@
+#[cfg(not(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc))))]
+use std::alloc::System as InnerAllocator;
 use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::PathBuf;
 
 use divan::Bencher;
 use tempfile::TempDir;
+#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+use tikv_jemallocator::Jemalloc as InnerAllocator;
 
 #[global_allocator]
-static ALLOC: divan::AllocProfiler = divan::AllocProfiler::system();
+static ALLOC: divan::AllocProfiler<InnerAllocator> = divan::AllocProfiler::new(InnerAllocator);
 
 const FLEET: usize = 40;
 const HISTORY_EVENTS: usize = 2_000;

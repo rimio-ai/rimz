@@ -215,8 +215,10 @@ nix.workspace = true
 rustix.workspace = true
 signal-hook.workspace = true
 
-[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
-libc.workspace = true
+# `--cfg rimz_system_malloc` drops jemalloc so heap profilers that interpose
+# glibc malloc (heaptrack, DHAT) see allocations; see docs/internals/profiling.md.
+[target.'cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))'.dependencies]
+tikv-jemallocator.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }

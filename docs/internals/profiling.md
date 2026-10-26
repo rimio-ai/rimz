@@ -74,7 +74,7 @@ The host carries the room's whole cost, and a supervisor reads near zero. Compar
 
 ### Memory
 
-Read memory from `/proc/<pid>/smaps_rollup`: report `Pss`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`. Summing RSS across the host and its supervisors double-counts shared mappings. Compare only newly started hosts with the same attachment count, and only after at least two host refresh cycles, because glibc arenas keep earlier high-water allocations resident. A rising resident set has its own procedure under [memory growth against allocator high-water](#memory-growth-against-allocator-high-water).
+Read memory from `/proc/<pid>/smaps_rollup`: report `Pss`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`. Summing RSS across the host and its supervisors double-counts shared mappings. Compare only newly started hosts with the same attachment count, and only after at least two host refresh cycles, because allocator fragmentation and retained state can preserve earlier memory peaks. A rising resident set has its own procedure under [memory growth against allocator high-water](#memory-growth-against-allocator-high-water).
 
 ### IO
 
@@ -82,9 +82,9 @@ Take the delta of `read_bytes` and `write_bytes` in `/proc/<pid>/io` over a fixe
 
 ### Comparing hosts across a setting
 
-To compare an allocator or other startup setting, give each configuration at least six fresh hosts, interleave the configurations so machine load drifts across all of them, and compare per-run mean CPU. Three hosts per configuration on a loaded machine left the arena-cap comparison in [performance.md → Anti-patterns](./performance.md#anti-patterns) undecided. The arena cap is set once, before any thread starts, by `crates/rimz/src/main.rs::malloc_arena_cap`. To try another cap, rebuild, or load an `LD_PRELOAD` shim over `mallopt`. A running host cannot change it.
+To compare an allocator or other startup setting, give each configuration at least six fresh hosts, interleave the configurations so machine load drifts across all of them, and compare per-run mean CPU against the [many-pane host bar](./performance.md#anti-patterns). On Linux glibc, `MALLOC_CONF` in the relaunched process's environment overrides the built-in jemalloc configuration at startup. A different allocator takes a build: `LD_PRELOAD` cannot displace the executable's exported `malloc`. Give each build its own fresh rooms, started by that build: a room records the build that started it, and `crates/rimz/src/sidebar_pane/host.rs::Host::serve` drains a host from any other build at its first poll. A hand-relaunch swaps only the startup environment, never the binary. A running host cannot change its startup configuration.
 
-A hand-relaunched host (supervisors paused with `SIGSTOP`, the host replaced, the supervisors resumed) must stay up at least 60 s after its supervisors attach. A supervisor resets its respawn backoff only after a host outlives `RESPAWN_STABLE_RUN` (60 s) in `crates/rimz/src/sidebar_pane/supervise.rs`, and each shorter run doubles the backoff. Once the backoff exceeds the host's `UNATTACHED_GRACE` (10 s) in `crates/rimz/src/sidebar_pane/host.rs`, the next host exits cleanly before any pane attaches. That looks like a crash of the configuration under test.
+A hand-relaunched host (supervisors paused with `SIGSTOP`, the host replaced, the supervisors resumed) takes the panes only if it is already listening on the room's `host.<key>.sock` (`crates/rimz/src/disk/paths.rs::RuntimePaths::sidebar_host_socket_path`) when the supervisors resume; `ss -xlp` shows the socket under its PID. A supervisor that finds no listener starts a host of its own, which takes every pane, and a replacement slowed by a profiler loses that race. The relaunched host must stay up at least 60 s after its supervisors attach. A supervisor resets its respawn backoff only after a host outlives `RESPAWN_STABLE_RUN` (60 s) in `crates/rimz/src/sidebar_pane/supervise.rs`, and each shorter run doubles the backoff. Once the backoff exceeds the host's `UNATTACHED_GRACE` (10 s) in `crates/rimz/src/sidebar_pane/host.rs`, the next host exits cleanly before any pane attaches. That looks like a crash of the configuration under test.
 
 ### Peak RSS of a CLI read
 
@@ -112,6 +112,17 @@ profiling_binary="$(cargo metadata --format-version 1 --no-deps | jq -r .target_
 
 `profile-build` prints the artifact's path. It sits under the Cargo target directory, which `CARGO_TARGET_DIR` may move out of the checkout, so resolve it through `cargo metadata` rather than `target/`. The profile inherits `release` and adds `debug = "line-tables-only"` and `strip = "none"`. xtask adds frame pointers and v0 symbol mangling through `RUSTFLAGS` (`xtask/src/build.rs::PROFILING_RUSTFLAGS`). `cargo xtask install-dev` installs the same profile, with the `sentry` feature, to `~/.cargo/bin`, so a dogfooding binary is directly profilable ([rust-conventions.md](../contributing/rust-conventions.md)).
 
+### Heap-profiling build
+
+On Linux glibc the binary exports jemalloc's `malloc` family, which binds ahead of any preloaded library, and Rust frees go through jemalloc's `sdallocx`. A heap profiler that interposes `malloc`, such as `heaptrack` or DHAT, therefore records nothing from a normal build: `heaptrack` hangs after the process exits, its output file empty. The `rimz_system_malloc` cfg drops jemalloc and keeps glibc malloc. Build it in its own target directory, since a `RUSTFLAGS` change rebuilds every crate. The `testkit` feature lets `cargo xtask sandbox room` run the binary:
+
+```sh
+RUSTFLAGS='--cfg rimz_system_malloc' cargo build --profile profiling -p rimz --bin rimz --features testkit --target-dir "$TMPDIR/heap-target"
+heaptrack --output "$TMPDIR/rimz-heap" "$TMPDIR/heap-target/profiling/rimz" agents list --json
+```
+
+Allocation sites and outstanding allocations do not depend on the allocator. Resident memory does, so measure it on a normal build.
+
 Check which build is running before trusting absolute numbers. Frames such as `core::ub_checks::*` or `precondition_check` mark a debug build, whose absolute CPU does not compare with a release build. Ratios and rates (forks per second, folds per second, shared data work against per-pane rendering) carry across builds.
 
 ## Pick the tool by the question
@@ -122,7 +133,7 @@ Start with `strace -f -c -p <pid>` when a process is busy for no clear reason. I
 | --- | --- |
 | Which binaries fork, how often, and do they succeed? | `strace -f -e trace=execve -p <pid>`. A repeating `ENOENT` on a RimZ binary path is an exec of a binary that no longer exists ([symbols from a replaced binary](#symbols-from-a-replaced-binary)). |
 | Where is CPU going by function? | `samply record -p <pid>` for a Firefox Profiler call tree, or `perf record --call-graph fp -p <pid> -- sleep 10` then `perf report --stdio` for flat self-time. |
-| Which allocations churn? | `heaptrack` or DHAT for ownership. The `malloc`, `memmove`, and `clone` share of a `perf` profile is the first-pass signal. |
+| Which allocations churn? | `heaptrack` or DHAT on a [heap-profiling build](#heap-profiling-build) for ownership. The share of allocator frames (`malloc`, `sdallocx`, jemalloc's `je_*` slow paths), `memmove`, and `clone` in a `perf` profile is the first-pass signal. |
 | What goes out on the network? | `strace -f -e trace=%network -p <pid>` for the host's own calls, `ss -tanp` for established peers, and the published cache stamps for cadence. |
 | How much does each pane render, and what does SSH carry? | `rimz pane bandwidth`, run on the host serving the room. Its per-pane rows are each pane's write rate. Its `WIRE(ssh↑)` and `WIRE(ssh↓)` rows are the payload each way on the room's SSH socket, usually far below the per-pane sum, and are absent for a local room ([reference](../reference/cli/pane.md#bandwidth)). |
 | What does an account refresh cost? | Set `RIMZ_ACCOUNT_REFRESH_TRACE` to a file path, or to `1`, `true`, or an empty value for `account_refresh_trace.jsonl` in `~/.rimz/cache/providers/`. The trace (`crates/rimz/src/sidebar/refresh/trace.rs`) appends one JSON line per provider probe, probe batch, cache contention, claim, helper spawn, and usage-helper run, with outcomes and durations and no commands, paths, identities, tokens, URLs, or bodies. It rotates at 1 MiB. |
@@ -140,7 +151,7 @@ Check these signals in order. The earlier ones find more for less effort.
 1. Fork and exec rate, and outcome. At idle the host still runs git on each root's tier ([state.md → Cadences](./sidebar/state.md#cadences)): every 60 s for an idle root and every 5 minutes for a settled one. An exec rate above those tiers at idle is a retry loop or a cache that never goes fresh, and failed execs matter as much as the rate. `strace -e trace=execve` together with the published caches locates it.
 2. Refold rate against event rate. Compare the store's events per second with the host fetch worker's fold rate. Pane requests coalesce through the shared worker, so the fold rate must not grow with tab count.
 3. The host's thread split. Sum thread-level CPU: fetch and refresher cost points at shared reads, and attachment-heavy cost points at rendering multiplied by pane count.
-4. Allocation share. A large share of `malloc`, `memmove`, and `clone` frames in fold or enrich paths means deep clones on a hot path, the cost the `Arc` handles from `crates/rimz/src/disk/parse_cache.rs` remove.
+4. Allocation share. A large share of allocator (`malloc`, `sdallocx`, `je_*`), `memmove`, and `clone` frames in fold or enrich paths means deep clones on a hot path, the cost the `Arc` handles from `crates/rimz/src/disk/parse_cache.rs` remove.
 5. Multiplexer server cost. Attribute the multiplexer's own children and resident set separately. Zellij's compact-bar instances and scrollback footprint are upstream costs that RimZ bounds but does not own ([performance.md → Deferred and rejected](./performance.md#deferred-and-rejected)).
 
 ## Two hard cases
@@ -164,8 +175,8 @@ Classify a rising resident set before changing allocation policy: it is usually 
 
 1. Sample one host at a fixed cadence. A resident set that keeps rising while the room is idle is a leak candidate. A flat plateau after an attachment change is retained state or high-water.
 2. Compare attachment counts, pets disabled, and cell pets enabled. A step tied to one attachment or feature names the owner even when the allocator keeps freed pages resident.
-3. Attach `heaptrack`. Outstanding Rust allocations that grow cycle over cycle are a leak. Bounded freed pages in the one owner are high-water.
-4. Fix the owning feature before tuning malloc. The process-start glibc arena cap (2, or 16 for the sidebar host) is the one allocator setting in force. Remove duplicate owners or compact the retained representation first, and revisit allocator policy only when a single correct owner is still a material cost.
+3. Reproduce the growth in a room the [heap-profiling build](#heap-profiling-build) started, since a heap-profiling host relaunched into a room of the shipped build drains at its first poll. Hold a disposable room with `RIMZ_BIN="$TMPDIR/heap-target/profiling/rimz" cargo xtask sandbox room --mux tmux`, or, when the growth needs real providers, start a [host room](../contributing/sidebar-live-check.md#check-against-a-real-provider-login) from that binary. Then relaunch that room's host by the [hand-relaunch procedure](#comparing-hosts-across-a-setting), its `sidebar host` command line run under `heaptrack --raw`. Without `--raw`, heaptrack interprets as it records, and on a loaded machine the host blocks on that pipe before it binds its socket. Once the host exits, heaptrack prints the command that interprets the raw file. Attaching with `heaptrack -p` needs ptrace rights over a process that is not your child, which Yama's default `ptrace_scope` of 1 denies. Keep taking step 1's resident figures from the shipped build. Outstanding Rust allocations that grow cycle over cycle are a leak. Bounded freed pages in the one owner are high-water.
+4. Fix the owning feature before tuning malloc. Linux glibc builds use jemalloc with `dirty_decay_ms:0` and defaults otherwise, unless the user overrides its configuration through `MALLOC_CONF` or `/etc/malloc.conf`. Remove duplicate owners or compact the retained representation first, and revisit allocator policy only when a single correct owner is still a material cost.
 
 ## Turn a finding into a guard
 
