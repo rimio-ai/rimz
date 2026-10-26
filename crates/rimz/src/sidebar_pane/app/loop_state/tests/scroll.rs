@@ -577,7 +577,11 @@ fn new_tab_pair(mux: MuxName) -> SharedPanes {
     pair.fold(0);
     pair.panes[0].view().ui().baseline_pane = Some(focused);
     pair.panes[0].input(KeyAction::Down);
-    paint_scrolled(&mut pair.panes[0], 4);
+    // The source paint records its anchored rows, and the unseated arrival resolves its offset
+    // from them rather than the raw value. The arrival draws the source's expanded selection
+    // collapsed, so a card anchored below that expansion starts higher there and the offset
+    // drops with it; at offset 1 both views resolve the same offset.
+    paint_scrolled(&mut pair.panes[0], 1);
     super::fetch::enable_focus_trace(&mut pair.panes[1]);
     pair
 }
@@ -1811,14 +1815,18 @@ fn visible(rig: &Rig) -> usize {
 }
 
 fn paint_at(rig: &mut Rig, elapsed_ms: u64) {
-    rig.view().ctx().anim_start = Instant::now() - Duration::from_millis(elapsed_ms);
-    rig.state.pane.next_frame = Instant::now();
+    rig.view().ctx().anim_start = rig.state.pane.clock.now() - Duration::from_millis(elapsed_ms);
+    rig.state.pane.next_frame = rig.state.pane.clock.now();
     rig.paint(true);
 }
 
+/// A hidden rig on a frozen play clock with external effects disabled and a same-clock anchor.
+/// Move time only through `rig.state.pane.clock.advance(..)`: a direct wall read is ahead of
+/// this rig's clock, so a frame set due that way never paints.
 fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnchor) {
     use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState, FocusPlacement};
     let (mut rig, output) = scroll_rig();
+    play_clock(&mut rig);
     let target = rig.view().ctx().current.worktree_groups[0].rows[4].clone();
     let pane_id = target.pane.as_ref().unwrap().pane_id.clone();
     let mut pulled = rig.state.views.mirror().clone();
@@ -1840,7 +1848,7 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
         pane_id,
         origin: FocusOrigin::User,
         repair_generation: None,
-        issued_at_ms: crate::utils::time::unix_now_ms(),
+        issued_at_ms: rig.state.pane.clock.now_ms(),
         applied_at_ms: None,
         state: FocusIntentState::Requested,
         pre_action: Vec::new(),
@@ -2039,7 +2047,10 @@ fn assert_shared_placement_from_history(previous: usize) {
     destination.state.pane.dirty = true;
     destination
         .state
-        .paint_now(&mut destination.terminal, Instant::now())
+        .paint_now(
+            &mut destination.terminal,
+            destination.state.pane.clock.now(),
+        )
         .unwrap();
     // The target's pane now shares the hidden destination's tab; the jump folds that sample.
     let mut moved = destination.state.views.mirror().clone();
@@ -2172,7 +2183,7 @@ fn destination_ack_waits_through_a_paint_hold_and_releases_on_exit() {
         rig.state
             .pane
             .paint_hold
-            .engage(Instant::now(), crate::utils::time::unix_now_ms());
+            .engage(rig.state.pane.clock.now(), rig.state.pane.clock.now_ms());
         rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         rig.paint(true);
         assert_eq!(paints(&output), 0);
@@ -2285,7 +2296,7 @@ fn fitted_grow_hold(resize_first: bool) {
             rig.state.pane.paint_hold.release();
         }
         rig.state.pane.dirty = true;
-        rig.state.pane.next_frame = Instant::now();
+        rig.state.pane.next_frame = rig.state.pane.clock.now();
         pty.drain();
         rig.paint(true);
         if rows == 30 && !painted_before_resize {
@@ -2308,7 +2319,6 @@ fn fitted_push_after_resize_releases_only_the_exact_size_hold() {
 fn displaced_placement_reports_the_landing_in_both_ack_paths() {
     for cached in [false, true] {
         let (mut rig, _, mut anchor) = hidden_destination();
-        rig.state.pane.clock = LoopClock::play(jiff::Timestamp::now());
         anchor.placement.as_mut().unwrap().viewport_row = 1_000;
         if cached {
             // The intent revealed this tab, so its fold and paint land in the routed view.
@@ -2368,7 +2378,7 @@ fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport
         "the cached frame was painted at 24 rows, not 30"
     );
     rig.state.pane.dirty = true;
-    rig.state.pane.next_frame = Instant::now();
+    rig.state.pane.next_frame = rig.state.pane.clock.now();
     rig.paint(true);
     assert_push_report(&ack, &rig, PushVerdict::Painted, false);
 }
@@ -2419,7 +2429,7 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
     rig.state
         .pane
         .paint_hold
-        .engage(Instant::now(), crate::utils::time::unix_now_ms());
+        .engage(rig.state.pane.clock.now(), rig.state.pane.clock.now_ms());
     let (first, first_ack) = focus_push(&mut rig, anchor.clone());
     rig.state.on_focus_push(first, &mut rig.terminal).unwrap();
     rig.paint(true);
@@ -2431,7 +2441,7 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
     let first = assert_push_report(&first_ack, &rig, PushVerdict::Superseded, true);
     assert_eq!(first.blocked_by, Some(PushBlock::PaintHold));
     rig.paint(true);
-    rig.state.pane.pending_focus_push.as_mut().unwrap().until = Instant::now();
+    rig.state.pane.pending_focus_push.as_mut().unwrap().until = rig.state.pane.clock.now();
     rig.paint(true);
     let second = assert_push_report(&second_ack, &rig, PushVerdict::Expired, true);
     assert_eq!(second.blocked_by, Some(PushBlock::PaintHold));
@@ -2442,7 +2452,7 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
         rig.state
             .pane
             .paint_hold
-            .engage(Instant::now(), crate::utils::time::unix_now_ms());
+            .engage(rig.state.pane.clock.now(), rig.state.pane.clock.now_ms());
         let (push, ack) = focus_push(&mut rig, anchor.clone());
         rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         let mut newer = anchor;
@@ -2472,18 +2482,18 @@ fn parked_push_counts_unmatched_and_misplaced_frames_at_the_paint_consumer() {
     rig.state
         .pane
         .paint_hold
-        .engage(Instant::now(), crate::utils::time::unix_now_ms());
+        .engage(rig.state.pane.clock.now(), rig.state.pane.clock.now_ms());
     let row_id = anchor.placement.as_ref().unwrap().row_id.clone();
     let (push, ack) = focus_push(&mut rig, anchor);
     rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     rig.view().ui().drawn_selection = None;
-    rig.observe_paint(Instant::now());
+    rig.observe_paint(rig.state.pane.clock.now());
     rig.view().ui().drawn_selection = Some(row_id);
     assert!(
         rig.view().ui().focus_placement.is_some(),
         "placement has not been consumed by a paint"
     );
-    rig.observe_paint(Instant::now());
+    rig.observe_paint(rig.state.pane.clock.now());
     assert_eq!(ack.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
     rig.state.pane.should_exit = true;
     rig.paint(true);
