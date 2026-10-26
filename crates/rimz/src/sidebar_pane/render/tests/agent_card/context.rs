@@ -50,6 +50,28 @@ fn half_hour_cache() -> CacheClock {
 }
 
 #[test]
+fn long_cache_lifetime_warns_only_in_the_last_hour() {
+    let theme = Theme::fixed(false);
+    let twelve_hours = CacheClock {
+        ceiling_secs: 43_200,
+        ..half_hour_cache()
+    };
+    for (remaining, notice) in [
+        (6 * 3_600 - 1, None),
+        (3_600, None),
+        (3_599, Some("expires in 60m")),
+        (8 * 60, Some("expires in 8m")),
+    ] {
+        let snapshot = cache_meter_snapshot(43_200 - remaining, Some(twelve_hours));
+        let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 47)).join("\n");
+        match notice {
+            Some(notice) => assert!(text.contains(notice), "{remaining}s left: {text}"),
+            None => assert!(!text.contains("expires in"), "{remaining}s left: {text}"),
+        }
+    }
+}
+
+#[test]
 fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
     let theme = Theme::fixed(false);
     for width in [45, 46, 47] {
@@ -1651,8 +1673,8 @@ fn calm_context_bar_orders_segments_left_to_right() {
 }
 /// The card's age cluster pairs a clock-fill glyph with a continuous
 /// warn-to-alarm tone after half the TTL, or in the last ten minutes if
-/// earlier. Before that band the pin stays muted, and past the ceiling it
-/// wears the expired-cache tone.
+/// earlier, never before the last hour. Before that band the pin stays
+/// muted, and past the ceiling it wears the expired-cache tone.
 #[test]
 fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
