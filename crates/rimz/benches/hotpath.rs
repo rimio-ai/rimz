@@ -1,4 +1,4 @@
-#[cfg(not(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc))))]
+#[cfg(not(rimz_jemalloc))]
 use std::alloc::System as InnerAllocator;
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use divan::Bencher;
 use tempfile::TempDir;
-#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+#[cfg(rimz_jemalloc)]
 use tikv_jemallocator::Jemalloc as InnerAllocator;
 
 #[global_allocator]

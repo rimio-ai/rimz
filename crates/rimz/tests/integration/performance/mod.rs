@@ -1,7 +1,7 @@
 //! Performance-oriented integration checks. These assert bounded work or
 //! single-flight behavior, not product semantics already covered elsewhere.
 
-#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+#[cfg(rimz_jemalloc)]
 mod allocator;
 mod concurrent_stops;
 mod concurrent_writers;

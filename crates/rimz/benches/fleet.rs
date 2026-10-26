@@ -1,12 +1,12 @@
 use divan::Bencher;
 use divan::counter::BytesCount;
-#[cfg(not(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc))))]
+#[cfg(not(rimz_jemalloc))]
 use std::alloc::System as InnerAllocator;
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
 use std::io::Write as _;
 use tempfile::TempDir;
-#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+#[cfg(rimz_jemalloc)]
 use tikv_jemallocator::Jemalloc as InnerAllocator;
 
 #[global_allocator]

@@ -38,6 +38,20 @@ const PRESENCE_PLUGIN_VENDOR_DIR: &str = "presence";
 const PRESENCE_PLUGIN_OUT: &str = "rimz-presence-zellij.wasm";
 const PRESENCE_PLUGIN_PROVENANCE: &str = "rimz-presence-zellij.wasm.provenance.json";
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(rimz_jemalloc)");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && matches!(
+            env::var("CARGO_CFG_TARGET_ENV").as_deref(),
+            Ok("gnu" | "musl")
+        )
+        && matches!(
+            env::var("CARGO_CFG_TARGET_ARCH").as_deref(),
+            Ok("x86_64" | "aarch64")
+        )
+        && env::var_os("CARGO_CFG_RIMZ_SYSTEM_MALLOC").is_none()
+    {
+        println!("cargo::rustc-cfg=rimz_jemalloc");
+    }
     println!("cargo:rerun-if-env-changed=RIMZ_PRICING_JSON_PATH");
     println!("cargo:rerun-if-env-changed={PRESENCE_PLUGIN_ENV}");
     println!("cargo:rerun-if-changed={THEME_CATALOG_DIR}");

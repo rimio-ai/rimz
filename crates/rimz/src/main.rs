@@ -18,7 +18,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 // Linux glibc only: jemalloc does not build for Apple targets under zig, and
 // musl keeps its own allocator, which was never measured against jemalloc. A
 // heap-profiling build passes `--cfg rimz_system_malloc` to keep glibc malloc.
-#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+#[cfg(rimz_jemalloc)]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -26,7 +26,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 // An array reference is a thin pointer; a byte slice would have the wrong ABI.
 // `thp:never` keeps jemalloc's 2 MiB-aligned extents off transparent huge pages,
 // which a kernel in THP `always` mode faults in whole even for a small process.
-#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+#[cfg(rimz_jemalloc)]
 #[expect(
     unsafe_code,
     reason = "jemalloc reads its configuration through this exported symbol"
