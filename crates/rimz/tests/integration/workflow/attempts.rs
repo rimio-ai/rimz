@@ -1368,7 +1368,6 @@ fn room_rebirth_cancels_root_attempt_and_wakes_its_next_check() {
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
             crate::common::room::MATERIALIZED_ROOM_PANES,
         )
-        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
         .env("RIMZ_PRESENCE_PLUGIN", presence)
         .env("RIMZ_PETS_OFFLINE", "1")
         .env("TERM", "dumb")

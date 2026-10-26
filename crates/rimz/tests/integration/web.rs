@@ -2193,9 +2193,6 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
             crate::common::room::MATERIALIZED_ROOM_PANES,
         )
-        // The shim cannot answer the room health probe; bound it so the
-        // open does not wait the full 8 s budget before proceeding.
-        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
         .bounded_output()
         .expect("open Zellij room through ttyd");
     let payload = success_json(&output, "Zellij ttyd web open");
