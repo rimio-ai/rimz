@@ -34,6 +34,13 @@ struct RawCache {
 }
 
 #[test]
+fn cached_cost_preserves_writer_precision() {
+    let source = r#"{"t":1,"u":0.027742799999999998}"#;
+    let entry: CachedEntry = serde_json::from_str(source).unwrap();
+    assert_eq!(serde_json::to_string(&entry).unwrap(), source);
+}
+
+#[test]
 fn v28_cache_preserves_per_file_and_single_file_bytes() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("spending.json");

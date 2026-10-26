@@ -175,7 +175,8 @@ sentry-tracing = { workspace = true, optional = true }
 serde.workspace = true
 serde-saphyr.workspace = true
 serde_ignored.workspace = true
-serde_json.workspace = true
+# Preserve cached f64 costs when JSON is decoded and written again.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 schemars.workspace = true
 flate2.workspace = true
 tar.workspace = true
