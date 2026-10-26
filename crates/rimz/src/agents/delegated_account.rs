@@ -38,7 +38,7 @@ impl Adapter {
 pub(super) struct Config {
     pub(crate) adapter: Adapter,
     pub(crate) load_credentials: Box<dyn Fn() -> Credentials>,
-    pub(crate) used_provider: fn() -> Option<String>,
+    pub(crate) used_provider: Box<dyn Fn() -> Option<String>>,
     pub(crate) api_key_types: &'static [&'static str],
     pub(crate) account_key_domain: &'static [u8],
 }
@@ -553,13 +553,13 @@ mod tests {
                 stamp: None,
                 entries: Ok(BTreeMap::new()),
             }),
-            used_provider: match used {
+            used_provider: Box::new(match used {
                 Some("openai") => openai_used_provider,
                 Some("opencode") => opencode_used_provider,
                 Some("opencode-go") => go_used_provider,
                 Some(other) => panic!("missing test resolver for {other}"),
                 None => no_used_provider,
-            },
+            }),
             api_key_types: match adapter {
                 Adapter::Pi => &["api_key"],
                 Adapter::OpenCode => &["key"],
@@ -876,7 +876,7 @@ mod tests {
         let mut config = config(Adapter::OpenCode, None, b"open");
         let auth_path = path.clone();
         config.load_credentials = Box::new(move || load_auth_file(&auth_path, Adapter::OpenCode));
-        config.used_provider = counted_openai_provider;
+        config.used_provider = Box::new(counted_openai_provider);
 
         assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
         std::fs::write(&path, b"not json").unwrap();

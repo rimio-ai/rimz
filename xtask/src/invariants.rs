@@ -1897,6 +1897,9 @@ fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) 
     for key in [
         "CLAUDE_CONFIG_DIR",
         "CODEX_HOME",
+        "PI_CODING_AGENT_DIR",
+        "PI_AGENT_DIR",
+        "PI_CODING_AGENT_SESSION_DIR",
         "QWEN_HOME",
         "QODER_CONFIG_DIR",
         "QWEN_RUNTIME_DIR",

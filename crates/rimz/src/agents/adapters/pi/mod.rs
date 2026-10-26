@@ -2,7 +2,7 @@
 //!
 //! Pi's integration surface is in-process TypeScript extensions, so the
 //! adapter ships one — [`extension.ts`](./extension.ts), embedded at compile
-//! time and installed whole-file to `~/.pi/agent/extensions/rimz.ts`. The
+//! time and installed whole-file under the login's `extensions/rimz.ts`. The
 //! extension forwards pi's lifecycle events to `rimz hooks feed --source pi`
 //! as fire-and-forget children, inverting the Claude/Codex child direction
 //! (pi runs RimZ, not the other way around); the wire it posts is the typed
@@ -62,8 +62,8 @@ use super::observation::{payload_context_pct, payload_has_context_observation};
 use super::pricing::PriceBook;
 use super::{
     AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, HookOutput, HookRouting,
-    Result, SanitizedPrompt, SubagentIdentity, TranscriptMessage, agent_config_path,
-    non_empty_trimmed, optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
+    Result, SanitizedPrompt, SubagentIdentity, TranscriptMessage, non_empty_trimmed,
+    optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::transcript::AskQuestion;
 
@@ -650,20 +650,20 @@ impl crate::agents::capabilities::AccountCapability for PiAdapter {
 
     fn probe_account(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> crate::agents::account::AccountProbe {
-        account::probe()
+        account::probe(login_env)
     }
 
-    fn account_inputs_stamp(&self, _login_env: &BTreeMap<String, String>) -> Option<u64> {
-        Some(account::inputs_stamp())
+    fn account_inputs_stamp(&self, login_env: &BTreeMap<String, String>) -> Option<u64> {
+        account::inputs_stamp(login_env)
     }
 
     fn probe_account_usage(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> crate::agents::AccountUsageProbe {
-        account::probe_usage()
+        account::probe_usage(login_env)
     }
 }
 
@@ -675,9 +675,9 @@ impl crate::agents::capabilities::SpendingCapability for PiAdapter {
 
     fn spending_sources(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<crate::agents::spending::SpendingSource> {
-        spend::pi_session_roots()
+        spend::pi_session_roots(login_env)
             .into_iter()
             .flat_map(|root| crate::agents::spending::SpendingSource::tree(root, "**/*.jsonl"))
             .collect()
@@ -760,18 +760,24 @@ fn pi_current_usage(parsed: &payloads::PiHookPayload) -> Option<AgentCurrentUsag
     (!usage.is_zero()).then_some(usage)
 }
 
-fn pi_extension_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
-    // Honour an explicit override (`RIMZ_PI_EXTENSION`) so tests and tooling
-    // can point the installer at a tempdir without touching real config. Pi
-    // auto-discovers `*.ts`/`*.js` under this directory; install is
-    // deliberately user-global — never pi's *project-local* discovery dir
-    // (`<project>/.pi/extensions/`, a different path) — so the project trust
-    // hash is untouched.
-    agent_config_path(
-        "pi",
-        "RIMZ_PI_EXTENSION",
-        Path::new(".pi/agent/extensions/rimz.ts"),
-    )
+// Pi's global discovery directory under the login's home, never the
+// project-local `<project>/.pi/extensions/`, so the project trust hash is
+// untouched. `RIMZ_PI_EXTENSION` points tests and tooling elsewhere.
+fn pi_extension_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
+    if let Some(path) = login_env
+        .get("RIMZ_PI_EXTENSION")
+        .filter(|path| !path.is_empty())
+    {
+        return Ok(PathBuf::from(path));
+    }
+    PiAdapter
+        .config_home(login_env)
+        .map(|home| home.join("extensions/rimz.ts"))
+        .ok_or_else(|| super::AgentErr::Install {
+            agent: "pi",
+            reason: "$PI_CODING_AGENT_DIR and $HOME are not set; cannot resolve Pi extension"
+                .to_owned(),
+        })
 }
 
 // Capabilities this agent has no behavior for; every method keeps its
