@@ -139,7 +139,7 @@ Alongside the tagged releases, the `latest-main` prerelease carries a rolling bu
 cargo install --locked rimz
 ```
 
-This builds RimZ from crates.io and works on every supported platform, ARM Linux included. It needs the Rust toolchain (through [rustup](https://rustup.rs)) and a C compiler and linker, plus `make` on Linux: `build-essential` on Debian and Ubuntu, `xcode-select --install` on macOS. The crate ships RimZ's Zellij plugin as a prebuilt WebAssembly artifact, so there is no extra Rust target to add.
+This builds RimZ from crates.io and works on every supported platform, ARM Linux included. It needs the Rust toolchain (through [rustup](https://rustup.rs)) and a C compiler and linker, plus `make` on Linux, including musl: `build-essential` on Debian and Ubuntu, `build-base` on Alpine, `xcode-select --install` on macOS. The crate ships RimZ's Zellij plugin as a prebuilt WebAssembly artifact, so there is no extra Rust target to add.
 
 ### From source
 
