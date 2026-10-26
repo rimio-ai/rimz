@@ -534,18 +534,33 @@ fn no_verdict(
 fn timeout(
     _: &crate::agents::AgentDefinition,
     _: &LaunchPlan,
-    _: &HeadlessRequest,
+    request: &HeadlessRequest,
     _: Duration,
-    _: &dyn Fn() -> bool,
+    interrupted: &dyn Fn() -> bool,
     _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+    let ready = request.schema_file.with_file_name("descendant.ready");
     let mut command = Command::new("sh");
     command
-        .args(["-c", "sleep 30 & printf '%s' $!; wait"])
+        .args(["-c", "sleep 30 & printf '%s' $!; : > \"$1\"; wait", "sh"])
+        .arg(&ready)
         .stdin(Stdio::null());
-    Ok(crate::proc::run_bounded_output(
+    // Hold the pump until the pid is in the pipe: a slow `sh` would otherwise miss
+    // the 40 ms bound and leave the judge error without it.
+    Ok(crate::proc::run_bounded_output_hosted(
         &mut command,
         Duration::from_millis(40),
+        interrupted,
+        |_| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !ready.exists() {
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::other("judge descendant never started"));
+                }
+                std::thread::sleep(CHECK_POLL_INTERVAL);
+            }
+            Ok(())
+        },
     )?)
 }
 
@@ -701,11 +716,11 @@ fn agent_check_timeout_kills_the_group_and_fails_open() {
         .remove(0);
     assert_eq!(judge.verdict, None);
     let error = judge.error.unwrap();
-    assert!(error.contains("timed out"));
+    assert!(error.contains("timed out"), "judge error: {error}");
     let pid = error
         .lines()
         .find_map(|line| line.parse::<u32>().ok())
-        .expect("captured child pid");
+        .unwrap_or_else(|| panic!("captured child pid in judge error: {error}"));
     let deadline = Instant::now() + Duration::from_secs(1);
     while crate::proc::process_is_live(pid, None) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
