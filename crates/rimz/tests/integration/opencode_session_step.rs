@@ -229,8 +229,8 @@ fn hidden_step_refuses_unknown_models_and_http_errors_without_exec() {
         (
             "deepseek-4-1-flash",
             None,
-            vec![("GET /api/model?", 503, "{}".into())],
-            "model list returned HTTP 503 Service Unavailable; model selection is verified on OpenCode 2.1.4; ",
+            vec![("GET /api/model?", 404, r#"{"message":"Not Found"}"#.into())],
+            "model list returned HTTP 404 Not Found: Not Found; model selection is verified on OpenCode 2.1.4; ",
         ),
         (
             "deepseek-v4.1-flash",
@@ -255,7 +255,7 @@ fn hidden_step_refuses_unknown_models_and_http_errors_without_exec() {
             assert!(stderr.starts_with(&line), "{stderr}");
             assert!(stderr.contains("opencode upgrade --major"), "{stderr}");
         } else {
-            // A name refusal or OpenCode's own message names the cause, not the version.
+            // A name refusal or a vanished session names the cause, not the version.
             assert_eq!(stderr.trim(), line);
         }
         assert_eq!(stderr.lines().count(), 1, "{stderr}");

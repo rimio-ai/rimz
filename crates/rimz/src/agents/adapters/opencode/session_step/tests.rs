@@ -73,6 +73,48 @@ fn model_refusals_name_the_cause_and_the_correction() {
 }
 
 #[test]
+fn http_refusals_quote_opencode_and_keep_the_version_note_for_the_model_list() {
+    let note = format!(
+        "; model selection is verified on OpenCode 2.1.4; {}",
+        OpencodeAdapter.version_upgrade_fix().unwrap()
+    );
+    let response = |status: u16, body: &str| {
+        ureq::http::Response::builder()
+            .status(status)
+            .body(ureq::Body::builder().data(body))
+            .unwrap()
+    };
+    let gone = r#"{"message":"Session not found: ses_gone"}"#;
+    for (err, reason) in [
+        (
+            status_error(
+                "model list",
+                response(404, r#"{"message":"Not Found"}"#),
+                CheckErr::Helper,
+            ),
+            format!("model list returned HTTP 404 Not Found: Not Found{note}"),
+        ),
+        (
+            status_error("model list", response(503, "{}"), CheckErr::Helper),
+            format!("model list returned HTTP 503 Service Unavailable{note}"),
+        ),
+        (
+            status_error("session model", response(404, gone), CheckErr::Answer),
+            "session model returned HTTP 404 Not Found: Session not found: ses_gone".into(),
+        ),
+        (
+            status_error("session model", response(500, "<html>"), CheckErr::Answer),
+            format!("session model returned HTTP 500 Internal Server Error{note}"),
+        ),
+    ] {
+        assert_eq!(
+            err.refusal("m").to_string(),
+            format!("OpenCode model check refused \"m\": {reason}")
+        );
+    }
+}
+
+#[test]
 fn helper_environment_is_private_and_keeps_authored_config() {
     let inherited = BTreeMap::from([
         ("RIMZ".into(), "1".into()),

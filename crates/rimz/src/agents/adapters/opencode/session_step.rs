@@ -26,7 +26,8 @@ struct Model {
 enum CheckErr {
     #[error("{0}")]
     Name(String),
-    /// An HTTP error whose body carries OpenCode's own message, which names the cause.
+    /// OpenCode's own message for an HTTP error no OpenCode version explains, such as a
+    /// vanished session.
     #[error("{0}")]
     Answer(String),
     #[error("{0}")]
@@ -94,7 +95,9 @@ fn prepare(request: &SessionStepRequest<'_>, deadline: Instant) -> CheckResult<V
         .header("Authorization", &auth)
         .call()?;
     if !response.status().is_success() {
-        return Err(status_error("model list", response));
+        // An OpenCode older than the verified version can lack this route, so even its own
+        // message keeps the version note.
+        return Err(status_error("model list", response, CheckErr::Helper));
     }
     let bytes = response
         .body_mut()
@@ -130,7 +133,7 @@ fn prepare(request: &SessionStepRequest<'_>, deadline: Instant) -> CheckResult<V
         .header("Content-Type", "application/json")
         .send(body.to_string())?;
     if !response.status().is_success() {
-        return Err(status_error("session model", response));
+        return Err(status_error("session model", response, CheckErr::Answer));
     }
     helper.finish(deadline)?;
     let mut argv = vec![program.clone()];
@@ -159,7 +162,11 @@ fn http_agent(deadline: Instant) -> CheckResult<ureq::Agent> {
         .new_agent())
 }
 
-fn status_error(request: &str, mut response: ureq::http::Response<ureq::Body>) -> CheckErr {
+fn status_error(
+    request: &str,
+    mut response: ureq::http::Response<ureq::Body>,
+    answered: fn(String) -> CheckErr,
+) -> CheckErr {
     let status = response.status();
     let message = response
         .body_mut()
@@ -170,7 +177,7 @@ fn status_error(request: &str, mut response: ureq::http::Response<ureq::Body>) -
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|body| Some(body.get("message")?.as_str()?.to_owned()));
     match message {
-        Some(message) => CheckErr::Answer(format!("{request} returned HTTP {status}: {message}")),
+        Some(message) => answered(format!("{request} returned HTTP {status}: {message}")),
         None => CheckErr::Helper(format!("{request} returned HTTP {status}")),
     }
 }
