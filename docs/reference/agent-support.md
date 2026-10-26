@@ -351,7 +351,7 @@ The `fast` profile and role field asks the provider for its fast mode (priority 
 | Claude Code | `"fastMode": true` inside the launch's one `--settings` |
 | Codex | `-c service_tier=fast -c features.fast_mode=true` |
 | Amp | `--fast` |
-| Pi | `RIMZ_LAUNCH_FAST=1`; the RimZ extension requests `service_tier: "priority"` on listed models through `openai` / `openai-responses` or `openai-codex` / `openai-codex-responses` ([limits](../internals/agents/adapter_pi.md#fast-mode)) |
+| Pi | `RIMZ_LAUNCH_FAST=1`; the RimZ extension requests `service_tier: "priority"` through `openai` / `openai-responses` or `openai-codex` / `openai-codex-responses`, on the models each route lists ([limits](../internals/agents/adapter_pi.md#fast-mode)) |
 | Cursor | skipped with a warning: choose a fast model ID with `--model` (for example `claude-opus-5-5-fast`) |
 | Kimi | skipped with a warning: use `--model kimi-for-coding-highspeed` |
 | Droid | skipped with a warning: toggle `/fast` inside the session |

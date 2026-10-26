@@ -63,6 +63,14 @@ fn extension_requests_fast_only_for_supported_openai_models() {
 /// outside a questionnaire are forwarded, and child factories report their own
 /// session identity (relabelled when the child session is renamed) through the
 /// process-lineage markers.
+///
+/// `fast_supported` `None` leaves `RIMZ_LAUNCH_FAST` unset and skips the fast
+/// checks. `Some(b)` sets it to `1` and drives `before_provider_request` over
+/// each route's listed ids, both OpenAI routes crossed with every id, and the
+/// routes, payloads, and env values the gate refuses: the payload gains
+/// `service_tier: "priority"` exactly when `b` is true and the route lists the
+/// id. The envelopes then read `fast` as `b` for an admitted model, `false` for
+/// an unlisted one, and absent for a session with no model.
 #[cfg(unix)]
 fn run_extension_harness(
     pi_version: &str,
@@ -201,9 +209,13 @@ if (fastSupported !== null) {{
       original,
     ]);
   }};
-  for (const id of ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
-    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4", "gpt-5.5", "gpt-5.3-codex"]) {{
-    check(id, {{ ...codexModel, id }}, payload, true);
+  const codexIds = ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+  const openaiIds = ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol",
+    "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4", "gpt-5.5", "gpt-5.3-codex"];
+  for (const id of new Set([...codexIds, ...openaiIds])) {{
+    check(`codex ${{id}}`, {{ ...codexModel, id }}, payload, codexIds.includes(id));
+    check(`openai ${{id}}`, {{ ...openaiModel, id }}, payload, openaiIds.includes(id));
   }}
   check("openai", openaiModel, {{ input: "go" }}, true);
   check("child", openaiModel, payload, true, childHandlers);
