@@ -308,12 +308,15 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                 let value = until(&env, id, |value| {
                     value["record"]["attempt"]["child"].is_object()
                 });
-                let host = value["record"]["attempt"]["host"]["pid"].as_u64().unwrap() as i32;
+                let host = value["record"]["attempt"]["host"]["pid"].as_u64().unwrap() as u32;
                 nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(host),
+                    nix::unistd::Pid::from_raw(host as i32),
                     nix::sys::signal::Signal::SIGKILL,
                 )
                 .unwrap();
+                // The kill is only queued: an advance that still reads the host live
+                // leaves it alone, and nothing here advances the run again.
+                until(&env, id, |_| !rimz::proc::process_is_live(host, None));
                 write_path_shim(
                     &bin,
                     "claude",
