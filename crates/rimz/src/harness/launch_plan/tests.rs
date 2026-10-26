@@ -3505,6 +3505,97 @@ fn exec_refuses_only_fresh_launches_of_an_unshadowed_failed_profile() {
         definition_failure(&launch, &machine, Some(&effective)),
         None
     );
+
+    let path = PathBuf::from("/tmp/.agents/agents/amp.md");
+    machine
+        .notices
+        .failed_definitions
+        .insert("amp".into(), [path.clone()].into());
+    machine
+        .notices
+        .definition_errors
+        .push(crate::config::definitions::DefinitionErr {
+            path,
+            message: "invalid frontmatter".into(),
+            cause: crate::config::definitions::DefinitionCause::Invalid,
+        });
+    let mut effective =
+        crate::config::effective::load_with_roots(&machine, root.path(), &root.path().join("home"))
+            .unwrap();
+    let dependent: crate::config::Profile = toml::from_str("agent = 'amp'").unwrap();
+    let safe: crate::config::Profile = toml::from_str("agent = 'codex'").unwrap();
+    effective
+        .profiles
+        .0
+        .insert("dependent".into(), dependent.clone());
+    effective
+        .subagent_profiles
+        .0
+        .insert("dependent".into(), safe.clone());
+    let mut chained = launch.clone();
+    chained.identity.params.profile = Some("dependent".into());
+    let mut pick = chained.clone();
+    pick.action = ExecAction::Pick {
+        extra_args: Vec::new(),
+    };
+    let mut bare = chained.clone();
+    bare.identity.params.profile = None;
+    bare.identity.params.record = Some(Box::default());
+    bare.kind = crate::ids::AgentKind::new_unchecked("amp");
+    let mut overridden = chained.clone();
+    overridden.identity.params.profile = None;
+    overridden.identity.params.record = Some(Box::new(crate::agents::LaunchRecord {
+        agent: Some("dependent".into()),
+        ..Default::default()
+    }));
+    let mut actual: Vec<_> = [&chained, &pick, &bare, &overridden]
+        .map(|request| definition_failure(request, &machine, Some(&effective)))
+        .into();
+    for action in [resume.action.clone(), fork.action.clone()] {
+        let mut continued = chained.clone();
+        continued.action = action;
+        assert_eq!(
+            definition_failure(&continued, &machine, Some(&effective)),
+            None
+        );
+    }
+    let mut child = chained.clone();
+    child.subagent = true;
+    assert_eq!(definition_failure(&child, &machine, Some(&effective)), None);
+    effective.profiles.0.insert("dependent".into(), safe);
+    effective
+        .subagent_profiles
+        .0
+        .insert("dependent".into(), dependent);
+    assert_eq!(
+        definition_failure(&chained, &machine, Some(&effective)),
+        None
+    );
+    actual.push(definition_failure(&child, &machine, Some(&effective)));
+    let mut seat = child.clone();
+    seat.identity.params.role = Some("worker".into());
+    assert_eq!(
+        definition_failure(&seat, &machine, Some(&effective)),
+        None,
+        "a child with a role may be a team seat, whose profile resolves in [agents.profiles]"
+    );
+    let failing = effective.subagent_profiles.0["dependent"].clone();
+    effective.profiles.0.insert("dependent".into(), failing);
+    actual.push(definition_failure(&seat, &machine, Some(&effective)));
+    effective.profiles.0.remove("dependent");
+    actual.push(definition_failure(&seat, &machine, Some(&effective)));
+    assert_eq!(actual, vec![machine.definition_failure_for("amp"); 7]);
+
+    let mut legacy = bare;
+    legacy.identity.params.record = None;
+    for action in [launch.action, pick.action] {
+        legacy.action = action;
+        assert_eq!(
+            definition_failure(&legacy, &machine, Some(&effective)),
+            None,
+            "a legacy bare row consumes no definitions, even when relaunched fresh"
+        );
+    }
 }
 
 #[test]

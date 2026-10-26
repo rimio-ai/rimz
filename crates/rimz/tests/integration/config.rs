@@ -497,6 +497,49 @@ fn agents_validate_and_explain_refuse_a_non_prompt_kind_base_until_deleted() {
 }
 
 #[test]
+fn agents_explain_refuses_a_project_profile_on_a_failed_kind_base() {
+    let env = Env::new();
+    let base = env.rimz_home().join("agents/claude.md");
+    write_machine_file(&base, "---\ndescription: Base\n---\n");
+    env.write_config(&env.project_root, "[profiles.myprof]\nagent = 'claude'\n");
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
+    let shell = crate::common::write_fake_login_shell(&env, "kind-base-test-sh", &[]);
+    let path = format!(
+        "{}:{}",
+        agent_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    env.rimz()
+        .args(["trust", "grant"])
+        .env("SHELL", &shell)
+        .env("PATH", &path)
+        .assert()
+        .success();
+    env.rimz()
+        .args(["agents", "explain", "myprof"])
+        .env("SHELL", &shell)
+        .env("PATH", &path)
+        .assert()
+        .code(1)
+        .stderr(
+            contains(format!(
+                "{}: kind base has no prompt body — write the system prompt every \
+                 claude definition starts from below the frontmatter",
+                base.display()
+            ))
+            .and(contains("add system-prompt-file").not()),
+        );
+    write_machine_file(&base, "---\ndescription: Base\n---\nBase prompt.\n");
+    env.rimz()
+        .args(["agents", "explain", "myprof"])
+        .env("SHELL", &shell)
+        .env("PATH", &path)
+        .assert()
+        .success()
+        .stdout(contains("--system-prompt-file"));
+}
+
+#[test]
 fn agents_validate_refuses_a_non_prompt_craft_without_create_advice() {
     let env = Env::new();
     crate::common::write_definition(

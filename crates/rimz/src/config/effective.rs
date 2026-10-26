@@ -680,6 +680,35 @@ impl LaunchAgents {
         }
     }
 
+    /// Refuse a name or its unshadowed terminal kind when its definition failed to load.
+    pub(crate) fn block_failed_profile(&self, name: &str, profiles: &ProfilesConfig) -> Result<()> {
+        let name = name.trim();
+        if !profiles.0.contains_key(name) {
+            return self.block_failed_reference(Some(name), None);
+        }
+        if let Ok(profile) = agents_spec::resolve_profile(name, profiles)
+            && !profiles.0.contains_key(profile.kind.as_str())
+        {
+            self.block_failed_reference(Some(profile.kind.as_str()), None)?;
+        }
+        Ok(())
+    }
+
+    /// Refuse failed definitions consumed by a launch, leaving legacy bare rows alone.
+    pub fn block_failed_launch(
+        &self,
+        kind: &crate::ids::AgentKind,
+        profile: Option<&str>,
+        record: Option<&crate::agents::LaunchRecord>,
+        profiles: &ProfilesConfig,
+    ) -> Result<()> {
+        profile
+            .or_else(|| record.map(|_| kind.as_str()))
+            .into_iter()
+            .chain(record.and_then(|record| record.agent.as_deref()))
+            .try_for_each(|name| self.block_failed_profile(name, profiles))
+    }
+
     /// Refuse unresolved names whose Markdown definitions failed to load.
     pub fn block_failed_reference(
         &self,

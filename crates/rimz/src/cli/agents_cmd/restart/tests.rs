@@ -366,6 +366,66 @@ fn restart_posture_keeps_a_team_role_childs_agent_profile() {
 }
 
 #[test]
+fn restart_posture_refuses_failed_kind_chains_before_degrading() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("agents")).unwrap();
+    std::fs::write(dir.path().join("agents/claude.md"), "invalid frontmatter").unwrap();
+    let workspace =
+        rimz::WorkspaceResolver::resolve_under(dir.path(), None, &dir.path().join("rimz-home"))
+            .unwrap();
+    let mut machine =
+        rimz::config::MachineConfig::parse_text(&dir.path().join("config.toml"), "", dir.path())
+            .unwrap();
+    for profiles in [
+        &mut machine.agents.profiles,
+        &mut machine.subagents.profiles,
+    ] {
+        for (name, kind) in [("worker", "claude"), ("safe", "codex")] {
+            profiles.0.insert(
+                name.into(),
+                toml::from_str(&format!("agent = '{kind}'")).unwrap(),
+            );
+        }
+    }
+    let mut direct = rimz::testkit::agent_state("claude", "direct", jiff::Timestamp::UNIX_EPOCH);
+    direct.profile = Some("worker".into());
+    let mut child = direct.clone();
+    child.parent_agent_id = Some("parent".into());
+    child.parent_agent_kind = Some(child.kind.clone());
+    child.launch_depth = Some(1);
+    let mut bare = direct.clone();
+    bare.profile = None;
+    bare.record = Some(Box::default());
+    let mut overridden =
+        rimz::testkit::agent_state("codex", "override", jiff::Timestamp::UNIX_EPOCH);
+    overridden.profile = Some("safe".into());
+    overridden.record = Some(Box::new(rimz::agents::LaunchRecord {
+        agent: Some("worker".into()),
+        ..Default::default()
+    }));
+    let mut rebased = overridden.clone();
+    rebased.profile = Some("worker".into());
+    rebased.record.as_mut().unwrap().agent = Some("codex".into());
+    let actual = [&direct, &child, &bare, &overridden, &rebased].map(|agent| {
+        restart_posture(agent, &workspace, &machine)
+            .err()
+            .map(|error| error.to_string())
+    });
+    let mut legacy = bare;
+    legacy.record = None;
+    assert!(
+        restart_posture(&legacy, &workspace, &machine)
+            .unwrap()
+            .degraded
+            .is_none()
+    );
+    assert_eq!(
+        Vec::from(actual),
+        vec![machine.definition_failure_for("claude"); 5]
+    );
+}
+
+#[test]
 fn fresh_relaunch_exec_uses_the_allocated_login() {
     let agent = rimz::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
     for allocated in [Some("team".parse().unwrap()), None] {
