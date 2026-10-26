@@ -648,7 +648,7 @@ fn paused_child_parks_parent_head_and_pet() {
         AnimationCadence::Fast
     );
     let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 28);
-    let mut parser = vt100::Parser::new(28, 54, 0);
+    let mut parser = vt100::Parser::new(28.try_into().unwrap(), 54.try_into().unwrap(), 0);
     parser.process(&bytes);
     let screen = parser.screen().contents();
     let parent_line = screen.lines().find(|line| line.contains("claude")).unwrap();
@@ -709,7 +709,7 @@ fn paused_child_headline_stays_in_live_band() {
         (28, "paused_child_entry_narrow"),
     ] {
         let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, width, 28);
-        let mut parser = vt100::Parser::new(28, width, 0);
+        let mut parser = vt100::Parser::new(28.try_into().unwrap(), width.try_into().unwrap(), 0);
         parser.process(&bytes);
         let screen = parser.screen().contents();
         let (line_index, line) = screen

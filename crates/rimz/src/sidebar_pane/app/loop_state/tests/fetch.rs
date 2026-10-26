@@ -425,7 +425,7 @@ fn carried_baseline_fold(case: &str) {
     }
     rig.state.pane.next_frame = Instant::now();
     rig.paint(true);
-    let mut parser = vt100::Parser::new(24, 54, 0);
+    let mut parser = vt100::Parser::new(24.try_into().unwrap(), 54.try_into().unwrap(), 0);
     parser.process(&output.0.lock().unwrap());
     let screen = parser.screen().contents();
     assert!(screen.contains("other-card"), "{screen}");
@@ -541,7 +541,7 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
     );
     rig.state.pane.next_frame = Instant::now();
     rig.paint(true);
-    let mut parser = vt100::Parser::new(24, 54, 0);
+    let mut parser = vt100::Parser::new(24.try_into().unwrap(), 54.try_into().unwrap(), 0);
     parser.process(&output.0.lock().unwrap());
     let seeded = parser.screen().contents();
     assert!(
@@ -1431,7 +1431,7 @@ fn sustained_failures_keep_the_frame_and_alert_until_completed_production() {
         committed_names
     );
     rig.paint(true);
-    let mut screen = vt100::Parser::new(24, 80, 0);
+    let mut screen = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
     screen.process(&output.0.lock().unwrap());
     let screen = screen.screen().contents();
     assert!(screen.contains("Sidebar degraded"), "{screen}");

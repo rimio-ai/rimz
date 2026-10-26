@@ -6123,7 +6123,7 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     let reader_thread = std::thread::spawn(move || {
         let mut output = Vec::new();
         let mut buffer = [0; 4096];
-        let mut terminal = vt100::Parser::new(24, 100, 0);
+        let mut terminal = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 0);
         while let Ok(count) = reader.read(&mut buffer) {
             if count == 0 {
                 break;
@@ -11677,7 +11677,7 @@ fn loop_watch_frames(env: &Env, expected: &'static [&'static str]) -> String {
         output.contains("\x1b[J"),
         "loop watch did not repaint:\n{output}"
     );
-    let mut terminal = vt100::Parser::new(24, 100, 0);
+    let mut terminal = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 0);
     terminal.process(output.as_bytes());
     terminal.screen().contents()
 }
@@ -11717,7 +11717,7 @@ fn loop_watch_pty(
     let reader_thread = std::thread::spawn(move || {
         let mut output = Vec::new();
         let mut buffer = [0; 4096];
-        let mut terminal = vt100::Parser::new(24, 100, 0);
+        let mut terminal = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 0);
         while let Ok(count) = reader.read(&mut buffer) {
             if count == 0 {
                 break;

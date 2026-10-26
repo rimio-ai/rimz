@@ -185,7 +185,11 @@ impl PtyRecorder {
     pub(crate) fn with_screen(rows: u16, cols: u16) -> Self {
         Self {
             output: Arc::new(Mutex::new(PtyOutput {
-                screen: Some(vt100::Parser::new(rows, cols, 0)),
+                screen: Some(vt100::Parser::new(
+                    rows.try_into().unwrap(),
+                    cols.try_into().unwrap(),
+                    0,
+                )),
                 ..Default::default()
             })),
         }

@@ -55,7 +55,7 @@ impl Room {
 }
 
 fn selected(pty: &mut Pty, index: usize) {
-    let mut parser = vt100::Parser::new(30, 54, 0);
+    let mut parser = vt100::Parser::new(30.try_into().unwrap(), 54.try_into().unwrap(), 0);
     eventually("the carried selection is painted", || {
         parser.process(&pty.drain());
         parser

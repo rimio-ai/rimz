@@ -621,7 +621,7 @@ fn joined_view_paints_unseated_until_the_new_sidebar_is_listed_on_both_backends(
         pair.fold(0);
         let seed = pair.plane.views.lock().unwrap().fold.clone().unwrap();
         pair.panes[1].state.seed(&seed);
-        let mut parser = vt100::Parser::new(24, 80, 0);
+        let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
         for first_paint in [true, false] {
             if !first_paint {
                 pair.snapshot.display_name = "worker before sidebar".into();

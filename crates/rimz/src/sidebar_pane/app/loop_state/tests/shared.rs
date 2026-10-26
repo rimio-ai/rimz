@@ -365,7 +365,7 @@ fn blocked_terminal_output_leaves_other_views_free_to_paint() {
             .state
             .draw_frame(&mut target.terminal, Instant::now(), false)
             .unwrap();
-        let mut parser = vt100::Parser::new(24, 80, 0);
+        let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
         parser.process(&output.0.lock().unwrap());
         assert!(parser.screen().contents().contains("shared-card-1-0"));
         release.send(()).unwrap();
@@ -460,7 +460,7 @@ fn a_jump_contending_with_a_heavy_view_reaches_target_output_within_one_click_bu
                 .map(|push| &push.peer)
         );
         assert_push_report(&ack, &target, PushVerdict::Painted, true);
-        let mut parser = vt100::Parser::new(24, 80, 0);
+        let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
         parser.process(&output.0.lock().unwrap());
         assert!(
             parser

@@ -176,7 +176,7 @@ fn eventually(what: &str, mut holds: impl FnMut() -> bool) {
 }
 
 fn has_frame_content(bytes: &[u8], rows: u16, cols: u16) -> bool {
-    let mut parser = vt100::Parser::new(rows, cols, 0);
+    let mut parser = vt100::Parser::new(rows.try_into().unwrap(), cols.try_into().unwrap(), 0);
     parser.process(bytes);
     !parser.screen().contents().trim().is_empty()
 }
@@ -266,7 +266,7 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
     room.host
         .plane
         .publish_snapshot(&pane.instance_id, snapshot.clone());
-    let mut parser = vt100::Parser::new(30, 54, 0);
+    let mut parser = vt100::Parser::new(30.try_into().unwrap(), 54.try_into().unwrap(), 0);
     eventually("focused card selected", || {
         parser.process(&pty.drain());
         parser
@@ -306,7 +306,7 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
         room.host
             .plane
             .publish_snapshot(&instance, snapshot.clone());
-        let mut parser = vt100::Parser::new(30, 54, 0);
+        let mut parser = vt100::Parser::new(30.try_into().unwrap(), 54.try_into().unwrap(), 0);
         eventually("successor cards painted", || {
             parser.process(&pty.drain());
             parser.screen().contents().contains("selected-card")
@@ -359,7 +359,7 @@ fn a_warm_plane_populates_the_first_nonblank_screen() {
 
     let mut pty = Pty::open(40, 30);
     let _pane = room.attach(&pty);
-    let mut parser = vt100::Parser::new(30, 40, 0);
+    let mut parser = vt100::Parser::new(30.try_into().unwrap(), 40.try_into().unwrap(), 0);
     eventually("the pane's first nonblank screen", || {
         parser.process(&pty.drain());
         !parser.screen().contents().trim().is_empty()
@@ -405,7 +405,7 @@ fn an_accepted_pane_is_painted_through_its_fd_and_reports_its_size() {
     room.host
         .plane
         .publish_snapshot(&pane.instance_id, snapshot);
-    let mut parser = vt100::Parser::new(30, 40, 0);
+    let mut parser = vt100::Parser::new(30.try_into().unwrap(), 40.try_into().unwrap(), 0);
     eventually("the real rendered card reaches terminal cells", || {
         parser.process(&pty.drain());
         parser.screen().contents().contains("paint-proof")
@@ -764,7 +764,7 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
         crate::sidebar_pane::app::fixtures::publish_fold(&room.host.plane, snapshot.clone(), frame);
     };
     publish(&snapshot);
-    let mut parser = vt100::Parser::new(20, 40, 0);
+    let mut parser = vt100::Parser::new(20.try_into().unwrap(), 40.try_into().unwrap(), 0);
     eventually("the viewed pane paints the initial viewport", || {
         parser.process(&visible.drain());
         parser
@@ -1285,7 +1285,7 @@ esac
         room.host
             .plane
             .publish_snapshot(&source.instance_id, snapshot);
-        let mut parser = vt100::Parser::new(30, 54, 0);
+        let mut parser = vt100::Parser::new(30.try_into().unwrap(), 54.try_into().unwrap(), 0);
         let mut row = None;
         eventually("the click target is painted", || {
             parser.process(&pty.drain());

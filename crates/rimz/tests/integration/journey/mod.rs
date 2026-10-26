@@ -175,7 +175,11 @@ impl<'a> RoomHarness<'a> {
         // Feed one long-lived parser incrementally from the reader thread, so
         // each `screen()` poll is O(grid) instead of re-parsing the whole
         // accumulated byte stream (which is O(n²) over a `SETTLE`-long wait loop).
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(
+            rows.try_into().unwrap(),
+            cols.try_into().unwrap(),
+            0,
+        )));
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("pty writer")));
         let sink = Arc::clone(&parser);
