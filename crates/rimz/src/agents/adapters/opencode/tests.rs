@@ -6,6 +6,26 @@ use crate::transcript::{AskOption, AskQuestion};
 use serde_json::json;
 
 #[test]
+fn models_render_without_argv_and_restore_from_the_session() {
+    let launch = OpencodeAdapter.spec().launch;
+    assert_eq!(
+        OpencodeAdapter
+            .spec()
+            .render_preset(&crate::agents::LaunchPreset {
+                model: Some("opencode-go/deepseek-v4.1-flash".into()),
+                ..Default::default()
+            }),
+        Ok(Vec::new())
+    );
+    assert!(launch.restores_session_model);
+    assert!(
+        launch
+            .preset_arg_matcher(crate::agents::PresetField::Model)
+            .is_none()
+    );
+}
+
+#[test]
 fn opencode_activity_filter_and_launch_commands_build() {
     for event in [
         "tool_after",

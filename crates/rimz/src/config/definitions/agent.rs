@@ -433,7 +433,7 @@ impl Resolver<'_> {
                 (PresetField::Model, "model", &fm.model),
                 (PresetField::Effort, "effort", &fm.effort),
             ] {
-                if value.is_some() && definition.spec().launch.preset_arg_matcher(field).is_none() {
+                if value.is_some() && !definition.spec().launch.supports_preset(field) {
                     return Err(DefinitionErr::new(
                         path,
                         agents::PresetErr::UnsupportedField {
