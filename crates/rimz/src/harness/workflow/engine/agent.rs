@@ -60,6 +60,7 @@ pub(super) fn empty_observation() -> Observed {
 fn observed_outcome(
     observed: &Observed,
     lifecycle: crate::store::workflow::StepLifecycle,
+    on_asked: bool,
 ) -> Option<AttemptOutcome> {
     match observed.status {
         RunStatus::Completed => Some(AttemptOutcome::Ended),
@@ -74,12 +75,38 @@ fn observed_outcome(
             Some(AttemptOutcome::Limited)
         }
         RunStatus::Pending | RunStatus::Running
-            if lifecycle.is_turn() && observed.ask.is_some() =>
+            if lifecycle.is_turn() && on_asked && observed.ask.is_some() =>
         {
             Some(AttemptOutcome::Asked)
         }
         _ => None,
     }
+}
+
+/// Folds one observation's blocking ask into the attempt's hold and reports whether it changed.
+/// A new hold opens at the ask's own open time, clamped to the attempt; a kept hold keeps its
+/// start; the first observation without an ask closes it into `asked_ms`.
+fn hold(
+    attempt: &mut workflow::LiveAttempt,
+    ask: Option<&workflow::Asking>,
+    now: Timestamp,
+) -> bool {
+    let asking = ask.map(|seen| workflow::Asking {
+        since: match &attempt.asking {
+            Some(open) => open.since,
+            None => seen.since.max(attempt.started_at).min(now),
+        },
+        ask: seen.ask.clone(),
+    });
+    let changed = attempt.asking != asking;
+    if asking.is_none()
+        && let Some(closed) = attempt.asking.take()
+    {
+        let paused = u64::try_from(now.duration_since(closed.since).as_millis()).unwrap_or(0);
+        attempt.asked_ms = attempt.asked_ms.saturating_add(paused);
+    }
+    attempt.asking = asking;
+    changed
 }
 
 pub(super) fn prepare_end(
@@ -118,6 +145,14 @@ pub(super) fn prepare_end(
         None => empty_observation(),
     };
     t.now = Timestamp::now();
+    let lifecycle = attempt.lifecycle;
+    let missing_run = attempt.run.is_none();
+    let on_asked = t.spec.steps[&attempt.node].on.asked.is_some();
+    let hold_changed = hold(
+        t.record.attempt.as_mut().expect("observed agent attempt"),
+        observed.ask.as_ref(),
+        t.now,
+    );
     let ending = if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {
         Some(Ending {
             outcome: AttemptOutcome::Canceled,
@@ -129,14 +164,17 @@ pub(super) fn prepare_end(
             cause: EndCause::Timeout,
         })
     } else {
-        observed_outcome(&observed, attempt.lifecycle)
-            .or_else(|| (attempt.run.is_none() && !host_live).then_some(AttemptOutcome::Canceled))
+        observed_outcome(&observed, lifecycle, on_asked)
+            .or_else(|| (missing_run && !host_live).then_some(AttemptOutcome::Canceled))
             .map(|outcome| Ending {
                 outcome,
                 cause: EndCause::Lifecycle,
             })
     };
     let Some(ending) = ending else {
+        if hold_changed {
+            persist(t, guard)?;
+        }
         return Ok(Decision::Stop);
     };
     if ending.outcome == AttemptOutcome::Limited
@@ -144,7 +182,7 @@ pub(super) fn prepare_end(
     {
         observed.limited = Some(Limited { reset_at: None });
     }
-    let launching = attempt.run.is_none() && host_live;
+    let launching = missing_run && host_live;
     t.stage_agent_end(ending, &observed);
     if launching {
         // The launch owner publishes its returned identity before stopping it.
@@ -313,4 +351,73 @@ pub(super) fn finish(
     t.settle_agent(children, cost, head_end, reason)?;
     persist(&t, &guard)?;
     Ok(t.record.state == RunState::Active && t.record.wait.is_none())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::workflow::{Asked, Asking, StepLifecycle};
+
+    #[test]
+    fn observed_outcome_covers_status_ask_limit_lifecycle_and_asked_edge() {
+        let statuses = [
+            (RunStatus::Pending, None),
+            (RunStatus::Running, None),
+            (RunStatus::Completed, Some(AttemptOutcome::Ended)),
+            (RunStatus::Failed, Some(AttemptOutcome::Died)),
+            (RunStatus::VerifyFailed, Some(AttemptOutcome::Died)),
+            (RunStatus::TimedOut, Some(AttemptOutcome::Died)),
+            (RunStatus::Canceled, Some(AttemptOutcome::Canceled)),
+            (RunStatus::BudgetExceeded, Some(AttemptOutcome::Limited)),
+        ];
+        let signals = [
+            (false, false, None, None),
+            (true, false, None, Some(AttemptOutcome::Asked)),
+            (
+                false,
+                true,
+                Some(AttemptOutcome::Limited),
+                Some(AttemptOutcome::Limited),
+            ),
+            (
+                true,
+                true,
+                Some(AttemptOutcome::Limited),
+                Some(AttemptOutcome::Limited),
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (status, terminal) in statuses {
+            for (ask, limit, held, routed) in signals {
+                for lifecycle in [StepLifecycle::Turn, StepLifecycle::Stay] {
+                    for on_asked in [false, true] {
+                        let observed = Observed {
+                            status,
+                            ask: ask.then(|| Asking {
+                                since: Timestamp::now(),
+                                ask: Asked {
+                                    text: "Approve?".into(),
+                                    kind: "permission".into(),
+                                    handle: "@child".into(),
+                                },
+                            }),
+                            limited: limit.then_some(Limited { reset_at: None }),
+                            children: Children::default(),
+                            cost_usd: None,
+                        };
+                        let case = (status, ask, limit, lifecycle, on_asked);
+                        actual.push((case, observed_outcome(&observed, lifecycle, on_asked)));
+                        let live = if lifecycle.is_turn() {
+                            if on_asked { routed } else { held }
+                        } else {
+                            None
+                        };
+                        expected.push((case, terminal.or(live)));
+                    }
+                }
+            }
+        }
+        assert_eq!(actual, expected);
+    }
 }

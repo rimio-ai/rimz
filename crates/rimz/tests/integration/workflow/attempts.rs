@@ -302,7 +302,7 @@ fn companion_trust_warns_when_undecided_and_refuses_as_a_workflow() {
 }
 
 #[test]
-fn stay_keeps_asks_live_and_renders_with_you_until_session_exit() {
+fn stay_renders_with_you_or_asking_you_until_session_exit() {
     let room = Room::new("lifecycle='stay'\n");
     let (id, run) = room.launch();
     assert_eq!(run.lifecycle, rimz::store::run::RunLifecycle::Session);
@@ -310,7 +310,6 @@ fn stay_keeps_asks_live_and_renders_with_you_until_session_exit() {
     for payload in [
         json!({"hook_event_name":"Stop"}),
         json!({"hook_event_name":"SessionEnd"}),
-        serde_json::from_str(&crate::common::codex_permission_payload()).unwrap(),
     ] {
         room.hook(&id, &run, payload);
         success(
@@ -342,6 +341,24 @@ fn stay_keeps_asks_live_and_renders_with_you_until_session_exit() {
     assert!(
         success(room.command(&["workflow", "show", &id]).output().unwrap())
             .contains("active (with you)")
+    );
+    room.hook(
+        &id,
+        &run,
+        serde_json::from_str(&crate::common::codex_permission_payload()).unwrap(),
+    );
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let asking = show(&room.env, &id);
+    assert_eq!(asking["record"]["state"], "active", "{asking:#}");
+    assert_eq!(asking["record"]["attempt"]["asking"]["kind"], "permission");
+    assert!(success(room.command(&["workflow", "list"]).output().unwrap()).contains("asking you:"));
+    assert!(
+        success(room.command(&["workflow", "show", &id]).output().unwrap())
+            .contains("active (asking you)")
     );
     rimz::harness::run::settle_session_exit(&room.env.store(), &run.run_id, || None).unwrap();
     success(
@@ -1092,7 +1109,7 @@ fn condition_workflow_ledger_write_failure_keeps_the_launched_history_and_repair
 
 #[test]
 fn loop_workflow_creation_duplicate_and_finished_scopes() {
-    let room = Room::new("");
+    let room = Room::new("on.asked = '@user'");
     fs::write(
         room.env.rimz_home().join("loop.toml"),
         format!(
@@ -1640,8 +1657,8 @@ fn queued_async_question_does_not_end_the_attempt() {
 }
 
 #[test]
-fn permission_parks_and_question_routes_with_evidence() {
-    for (extra, payload, parked) in [
+fn permission_stays_live_and_explicit_question_routes_with_evidence() {
+    for (extra, payload, held) in [
         (
             "",
             serde_json::from_str::<Value>(&crate::common::codex_permission_payload()).unwrap(),
@@ -1657,19 +1674,57 @@ fn permission_parks_and_question_routes_with_evidence() {
         let (id, run) = room.launch();
         room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
         room.hook(&id, &run, payload);
-        let value = settled(&room.env, &id, if parked { "parked" } else { "done" });
-        let asked = &value["record"]["prev_attempt"]["asked"];
-        assert_eq!(
-            asked["kind"],
-            if parked { "permission" } else { "question" }
+        success(
+            room.command(&["workflow", "advance", &id])
+                .output()
+                .unwrap(),
         );
+        let value = if held {
+            show(&room.env, &id)
+        } else {
+            settled(&room.env, &id, "done")
+        };
+        if held {
+            assert_eq!(value["record"]["state"], "active", "{value:#}");
+            assert!(value["record"]["prev_attempt"].is_null(), "{value:#}");
+            assert!(events(&value, "attempt").is_empty(), "{value:#}");
+        }
+        let asked = if held {
+            &value["record"]["attempt"]["asking"]
+        } else {
+            &value["record"]["prev_attempt"]["asked"]
+        };
+        assert_eq!(asked["kind"], if held { "permission" } else { "question" });
         assert!(!asked["text"].as_str().unwrap().is_empty());
         assert!(asked["handle"].as_str().unwrap().starts_with('@'));
-        if parked {
-            assert_eq!(value["record"]["park"]["reason"], "asked");
+        if held {
+            assert!(asked["since"].is_string(), "{value:#}");
+            let snapshot = room.env.store().snapshot_cached().unwrap();
+            let source = snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.name == run.agent_name)
+                .and_then(|agent| agent.open_ask.as_ref())
+                .unwrap();
+            assert_eq!(asked["since"], json!(source.since));
+            let list: Value = serde_json::from_str(&success(command(
+                &room.env,
+                &["workflow", "list", "--json"],
+            )))
+            .unwrap();
+            let detail = list[0]["detail"].as_str().unwrap();
+            assert!(
+                detail.starts_with("asking you: @") && detail.contains("(permission)"),
+                "{list:#}"
+            );
+            assert!(!detail.contains('\n'), "{detail}");
             let human = success(command(&room.env, &["workflow", "show", &id]));
-            assert!(human.contains(asked["text"].as_str().unwrap()));
-            assert!(human.contains("permission"));
+            assert!(human.contains("active (asking you)"), "{human}");
+            assert!(human.contains(asked["text"].as_str().unwrap()), "{human}");
+            room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+            let ended = settled(&room.env, &id, "done");
+            assert_eq!(ended["record"]["prev_attempt"]["outcome"], "ended");
+            assert!(ended["record"]["prev_attempt"]["asked"].is_null());
         }
     }
 }

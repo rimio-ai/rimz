@@ -224,6 +224,14 @@ pub struct LiveAttempt {
     pub retry: Option<Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub woken: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asking: Option<Asking>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub asked_ms: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(
@@ -263,6 +271,13 @@ pub struct Asked {
     pub text: String,
     pub kind: String,
     pub handle: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Asking {
+    pub since: Timestamp,
+    #[serde(flatten)]
+    pub ask: Asked,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

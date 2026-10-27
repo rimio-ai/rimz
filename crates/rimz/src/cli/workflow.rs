@@ -268,6 +268,18 @@ fn with_you(record: &records::RunRecord) -> bool {
             .is_some_and(|attempt| !attempt.lifecycle.is_turn() && attempt.run.is_some())
 }
 
+fn asking(record: &records::RunRecord) -> Option<&records::Asked> {
+    if record.state != records::RunState::Active {
+        return None;
+    }
+    record
+        .attempt
+        .as_ref()?
+        .asking
+        .as_ref()
+        .map(|asking| &asking.ask)
+}
+
 fn list(json: bool) -> Result<()> {
     let mut rows = Vec::new();
     let mut table = render::Table::new([
@@ -282,8 +294,19 @@ fn list(json: bool) -> Result<()> {
             if r.state.is_terminal() {
                 continue;
             }
+            let asking = asking(&r);
             let detail = waiting(&r)
                 .or_else(|| r.park.as_ref().map(records::Park::label))
+                .or_else(|| {
+                    asking.map(|ask| {
+                        format!(
+                            "asking you: {} ({}): {}",
+                            ask.handle,
+                            ask.kind,
+                            render::one_line(&ask.text)
+                        )
+                    })
+                })
                 .or_else(|| with_you(&r).then(|| "with you".into()))
                 .unwrap_or_default();
             rows.push(serde_json::json!({"id":r.id,"workflow":r.workflow,"scope":r.scope.path,"state":r.state,"node":r.node,"since":r.entered_at,"detail":detail}));
@@ -291,7 +314,8 @@ fn list(json: bool) -> Result<()> {
                 render::cell(r.id.as_str()),
                 render::cell(&r.workflow),
                 render::cell(r.scope.path.display().to_string()),
-                render::cell(r.state.as_str()).fg(render::status::workflow(r.state)),
+                render::cell(r.state.as_str())
+                    .fg(render::status::workflow(r.state, asking.is_some())),
                 render::cell(&r.node),
                 render::cell(r.entered_at.to_string()),
                 render::cell(detail),
@@ -326,8 +350,11 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         },
         render::cell(record.scope.path.display().to_string()),
     );
+    let asking = asking(&record);
     let state = if let Some(park) = &record.park {
         format!("{} ({})", record.state.as_str(), park.label())
+    } else if asking.is_some() {
+        "active (asking you)".into()
     } else if with_you(&record) {
         "active (with you)".into()
     } else {
@@ -335,7 +362,7 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
     };
     header.push(
         "state",
-        render::cell(state).fg(render::status::workflow(record.state)),
+        render::cell(state).fg(render::status::workflow(record.state, asking.is_some())),
     );
     header.push(
         "current node",
@@ -349,15 +376,14 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
             render::cell(format!("{} #{}", run.handle, attempt.seq)),
         );
     }
-    if record
-        .park
-        .as_ref()
-        .is_some_and(|park| park.reason == records::ParkReason::Asked)
-        && let Some(asked) = record
-            .prev_attempt
+    let asked = asking.or_else(|| {
+        record
+            .park
             .as_ref()
-            .and_then(|previous| previous.asked.as_ref())
-    {
+            .filter(|park| park.reason == records::ParkReason::Asked)
+            .and_then(|_| record.prev_attempt.as_ref()?.asked.as_ref())
+    });
+    if let Some(asked) = asked {
         header.push(
             "ask",
             render::cell(format!("{} ({}): {}", asked.handle, asked.kind, asked.text)),
