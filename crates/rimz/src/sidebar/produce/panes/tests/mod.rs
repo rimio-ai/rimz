@@ -5,6 +5,7 @@ use crate::sidebar::timing::SNAPSHOT_CACHE_TTL;
 
 mod cache;
 mod fields;
+mod held;
 
 #[test]
 fn listing_identity_survives_repaired_spawn_command() {
@@ -282,6 +283,7 @@ fn failed_presence_attempt_stamp_suppresses_retries_until_ttl() {
         presence_probed_at_ms: None,
         hibernated_panes: HashSet::new(),
         native_tenants: HashMap::new(),
+        held_checks: HashMap::new(),
     };
     let calls = std::cell::Cell::new(0);
     for _ in 0..2 {

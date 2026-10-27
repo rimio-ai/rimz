@@ -103,7 +103,8 @@ This section gives each lane's cost and the bound that holds it down. Reproducib
 | Workspace fold | One enrichment per cycle; every pane projects from it by reference ([The render thread](#the-render-thread)), with no seed serialization | Host views retain the seed fold |
 | Fold observations | One focus-anchor read and one body-filter read per real cycle, shared by every attachment | The painting view applies selection, confirmation, and read intent. A live nonce comparison guards retirement ([state.md](./sidebar/state.md#focus-intent)) |
 | Pane roster (producer) | Zellij: one topology read plus a `zellij pipe` nudge. tmux: one session-wide `list-panes` call | `SNAPSHOT_CACHE_TTL` while a client drives it, `EVENT_PANE_TTL` while the presence stamp is fresh; one attempt per data tick |
-| Process metrics (producer) | A due sample reads one metrics record per process | Per-pane focused, background, and [hibernated](./sidebar/state.md#cadences) stamps in `lanes/metrics-sample.json`. The full process-table walk runs only on pane churn |
+| Process metrics (producer) | A due sample reads one metrics record per process | Focused and background sample stamps in `lanes/metrics-sample.json`; the producer holds each pane's shared [hibernated check](./sidebar/state.md#cadences) in memory. The full process-table walk runs only on pane churn |
+| Pane process repair | Due panes read process commands, identity, cwd and hosted-agent evidence; held panes retain the prior process fields without those reads | The same per-pane [hibernated check](./sidebar/state.md#cadences) as metrics; changed or unknown native tenants repair fully |
 | Agent projection (producer) | Unchanged tick: metadata stamps only, no directory enumeration | One batched discovery call per kind and one wiring probe per data tick |
 
 ### The host cache refresher
@@ -219,7 +220,7 @@ The spend walk is incremental in three layers. The walker's directory index stat
 
 ### Per-enrichment cadences
 
-Every display figure is display-only by invariant ([DESIGN.md](../../DESIGN.md#triage-at-a-glance)), so each enrichment runs on its own cadence behind stamps stored in the cache file it already writes. Because the stamps live in shared files, every process agrees on freshness across a producer handoff. Account probes carry one stamp per login, so a failure retries alone. Process sampling keeps per-pane focused and background stamps, independent of the roster clock. Git probes take activity-tiered TTLs whose hotness comes from store activity, with no filesystem watching. In-process `.git` ref reads skip the ancestry forks when the cached HEAD and trunk pair and the clean verdict are unchanged. The values are [state.md → Cadences](./sidebar/state.md#cadences).
+Every display figure is display-only by invariant ([DESIGN.md](../../DESIGN.md#triage-at-a-glance)), so each enrichment runs on its own cadence. Normal cache freshness stamps live in shared files, agreeing across a producer handoff; per-key hibernated check stamps are process-local and start due on a new reader. Account probes carry one stamp per login, so a failure retries alone. Process sampling keeps per-pane focused and background stamps, independent of the roster clock, with the hibernated hold shared with process repair. Git probes take activity-tiered TTLs whose hotness comes from store activity, with no filesystem watching. In-process `.git` ref reads skip the ancestry forks when the cached HEAD and trunk pair and the clean verdict are unchanged. The values are [state.md → Cadences](./sidebar/state.md#cadences).
 
 ### Append and drain critical sections
 

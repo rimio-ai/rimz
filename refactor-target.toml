@@ -2376,6 +2376,11 @@ reason = "Reload reports lock, executable and mux failures from the shared recon
 
 [[verdict]]
 kind = "item"
+key = "sidebar::cache::hibernated_check_due"
+reason = "Pane, observer, enrichment, heavy lanes and transcript watches share one per-key inclusive hold rule."
+
+[[verdict]]
+kind = "item"
 key = "sidebar::reconcile_session_sidebars"
 reason = "Explicit repair uses the same lock-before-liveness reconcile entry as attachment."
 
