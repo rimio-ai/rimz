@@ -117,7 +117,8 @@ pub(crate) struct OpenPrFacts {
 }
 
 /// Where an open PR stands with the merge queue. `at` and `reason` are the
-/// forge's strings verbatim; a removal by merge is no fact.
+/// forge's strings verbatim; a removal by merge, or one that an auto-merge
+/// request enabled since has re-armed, is no fact.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub(crate) enum PrQueueFact {
