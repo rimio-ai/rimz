@@ -943,6 +943,7 @@ fn daily_scope_park(
 /// Producer-side enforcement. Ledger files are cache-class durability; pane
 /// interruption and run-store writes stay in the hidden CLI helper.
 pub(crate) fn enforce(
+    mut deferred: impl FnMut(&AgentState) -> bool,
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     store: Option<&Store>,
@@ -981,6 +982,9 @@ pub(crate) fn enforce(
             .iter()
             .filter(|agent| !agent.is_provider_subagent())
         {
+            if deferred(agent) {
+                continue;
+            }
             enforce_agent(agent, &mut ctx);
         }
     }

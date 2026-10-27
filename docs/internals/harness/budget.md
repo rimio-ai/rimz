@@ -14,7 +14,7 @@ Enforcement never writes to the store. It runs in the sidebar producer, and the 
 
 ## The scopes
 
-Four scopes live in this module, and the sidebar producer evaluates them together on every refresh tick. A fifth, a loop task's daily cap, belongs to the scheduler.
+Four scopes live in this module. The sidebar producer evaluates account and fleet scopes on every refresh tick; per-agent enforcement, including turn and waiver bookkeeping, follows the [hibernated cadence](../sidebar/state.md#cadences). A deferred agent causes no ledger read or write, while shared scope evaluation and park merges continue. A fifth, a loop task's daily cap, belongs to the scheduler.
 
 | Scope | Caps | Cap comes from | Window | Evaluated by |
 | --- | --- | --- | --- | --- |
@@ -43,7 +43,7 @@ Caps take finite, non-negative dollar amounts with an optional `$` prefix. A lea
 
 ## Where a cap comes from
 
-An agent cap enters through launch identity and is then owned by its ledger. `ledger_for_agent` re-reads the launch spec on every tick and copies it onto the ledger when it differs, so relaunching with a different `--budget` takes effect. A runtime change through `rimz agents budget` (an absolute cap, a raise, or `clear`) sets `raised_cap_usd` or `disabled`. Either one pins the ledger and stops that refresh, so the next tick does not undo a CLI adjustment.
+An agent cap enters through launch identity and is then owned by its ledger. On each due agent check, `ledger_for_agent` reads the ledger fresh and copies the current launch spec onto it when it differs, so relaunching with a different `--budget` takes effect. A runtime change through `rimz agents budget` (an absolute cap, a raise, or `clear`) sets `raised_cap_usd` or `disabled`. Either one pins the ledger and stops that refresh, so the next check does not undo a CLI adjustment.
 
 The turn cap is read straight from machine config on every tick. It has no launch flag, profile field, runtime override, raise, clear, or waiver. Removing the key drops every turn entry on the next tick.
 

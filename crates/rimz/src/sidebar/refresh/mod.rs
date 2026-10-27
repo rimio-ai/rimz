@@ -103,6 +103,7 @@ pub struct ProducerRefreshState {
     orphan_sweep_checked_at_ms: Option<u64>,
     auto_gc: crate::harness::auto_gc::AutoGcMemo,
     auto_continue_checks: HashMap<(AgentKind, AgentSessionId), Instant>,
+    budget_checks: HashMap<(AgentKind, AgentSessionId), Instant>,
     /// Spawns per step of the last `refresh_heavy_lanes` pass, handed to the
     /// tick meter once.
     pass_spawns: BTreeMap<String, u64>,
@@ -361,9 +362,31 @@ pub(super) fn refresh_heavy_lanes(
         )
     });
     steps.step("budget", || {
+        let active: std::collections::HashSet<_> = base
+            .agents
+            .iter()
+            .filter(|agent| !agent.is_provider_subagent())
+            .map(|agent| (&agent.kind, &agent.agent_id))
+            .collect();
+        state
+            .budget_checks
+            .retain(|(kind, id), _| active.contains(&(kind, id)));
         let mut budget_snapshot = base.clone();
         apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
-        crate::harness::budget::enforce(&budget_snapshot, runtime, store.as_ref(), config)
+        crate::harness::budget::enforce(
+            |agent| {
+                !super::cache::hibernated_check_due(
+                    &mut state.budget_checks,
+                    (agent.kind.clone(), agent.agent_id.clone()),
+                    agent.hibernation.is_some(),
+                    Instant::now(),
+                )
+            },
+            &budget_snapshot,
+            runtime,
+            store.as_ref(),
+            config,
+        )
     });
     let runs = steps.step("run_timeout", || {
         let runs = crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
