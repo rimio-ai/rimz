@@ -366,6 +366,68 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
 }
 
 #[test]
+fn stable_read_retries_when_stamp_moves_during_read() {
+    let stamp = std::cell::Cell::new(0);
+    let reads = std::cell::Cell::new(0);
+    let result = read_stable(
+        stamp.get(),
+        || stamp.get(),
+        |_, _| false,
+        || {
+            reads.set(reads.get() + 1);
+            if reads.get() < 3 {
+                stamp.set(stamp.get() + 1);
+                "torn"
+            } else {
+                "complete"
+            }
+        },
+    );
+    assert_eq!((result, reads.get()), (Some((2, "complete")), 3));
+}
+
+#[test]
+fn stable_read_reads_quiet_unchanged_stamp_once() {
+    let reads = std::cell::Cell::new(0);
+    let stamps = std::cell::Cell::new(0);
+    let result = read_stable(
+        7,
+        || {
+            stamps.set(stamps.get() + 1);
+            7
+        },
+        |_, _| false,
+        || {
+            reads.set(reads.get() + 1);
+            "complete"
+        },
+    );
+    assert_eq!(
+        (result, reads.get(), stamps.get()),
+        (Some((7, "complete")), 1, 1)
+    );
+}
+
+#[test]
+fn stable_read_stops_at_attempt_limit() {
+    let reads = std::cell::Cell::new(0);
+    let stamps = std::cell::Cell::new(0);
+    let result = read_stable(
+        0,
+        || {
+            stamps.set(stamps.get() + 1);
+            stamps.get()
+        },
+        |_, _| false,
+        || reads.set(reads.get() + 1),
+    );
+    assert_eq!(
+        (result, reads.get(), stamps.get()),
+        (None, STABLE_READ_ATTEMPTS, STABLE_READ_ATTEMPTS)
+    );
+}
+
+#[test]
 fn load_memo_reuses_unchanged_inputs_and_busts_on_file_change() {
     let dir = tempdir().expect("tempdir");
     let agents_home = tempdir().expect("agents home");

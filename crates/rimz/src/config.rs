@@ -260,8 +260,7 @@ impl MachineConfigFiles {
 }
 
 const CONFIG_STAMP_TTL: Duration = Duration::from_secs(2);
-/// Re-reads allowed before a config load stops chasing an in-place rewrite and
-/// holds last-known-good.
+/// Attempts to obtain a quiet input stamp unchanged across a config read.
 const STABLE_READ_ATTEMPTS: u8 = 3;
 // ponytail: mtime quiescence; require atomic writes if config gains a RimZ writer.
 const STABLE_READ_QUIET: Duration = Duration::from_millis(50);
@@ -913,7 +912,7 @@ impl MachineConfig {
             return cached.config.clone();
         }
 
-        let mut stamp = ConfigStamp::from_inputs(config_path, agents_home);
+        let stamp = ConfigStamp::from_inputs(config_path, agents_home);
 
         if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
             && let Some(cached) = memo.as_mut()
@@ -924,31 +923,26 @@ impl MachineConfig {
         }
 
         let env = crate::agents::ambient_env();
+        let read = || Arc::new(Self::load_lenient_from(config_path, agents_home, &env));
         // A hand-edited theme.toml can be rewritten in place. A read that races
         // the editor may parse a valid prefix whose missing fields serde fills
         // with built-ins, e.g. `[theme.pets] enabled = true` without `pet`
         // becomes "rocky". Cache only after the input stamp is quiet and
         // unchanged across the read.
-        for _ in 0..STABLE_READ_ATTEMPTS {
-            if stamp.modified_within(STABLE_READ_QUIET) {
-                std::thread::sleep(STABLE_READ_QUIET);
-                stamp = ConfigStamp::from_inputs(config_path, agents_home);
-                continue;
+        if let Some((stamp, config)) = read_stable(
+            stamp,
+            || ConfigStamp::from_inputs(config_path, agents_home),
+            ConfigStamp::modified_within,
+            read,
+        ) {
+            if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
+                *memo = Some(LoadMemo {
+                    stamp,
+                    config: config.clone(),
+                    last_verified: now,
+                });
             }
-
-            let config = Arc::new(Self::load_lenient_from(config_path, agents_home, &env));
-            let after = ConfigStamp::from_inputs(config_path, agents_home);
-            if after == stamp {
-                if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
-                    *memo = Some(LoadMemo {
-                        stamp,
-                        config: config.clone(),
-                        last_verified: now,
-                    });
-                }
-                return config;
-            }
-            stamp = after;
+            return config;
         }
 
         if let Ok(memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
@@ -956,7 +950,7 @@ impl MachineConfig {
         {
             return cached.config.clone();
         }
-        Arc::new(Self::load_lenient_from(config_path, agents_home, &env))
+        read()
     }
 
     pub(crate) fn load_stamp_generation() -> u64 {
@@ -1040,6 +1034,29 @@ fn hash_config_stamp(stamp: &ConfigStamp) -> u64 {
     let mut hasher = DefaultHasher::new();
     stamp.hash(&mut hasher);
     hasher.finish()
+}
+
+fn read_stable<S: PartialEq, T>(
+    mut stamp: S,
+    mut restamp: impl FnMut() -> S,
+    modified_within: impl Fn(&S, Duration) -> bool,
+    mut read: impl FnMut() -> T,
+) -> Option<(S, T)> {
+    for _ in 0..STABLE_READ_ATTEMPTS {
+        if modified_within(&stamp, STABLE_READ_QUIET) {
+            std::thread::sleep(STABLE_READ_QUIET);
+            stamp = restamp();
+            continue;
+        }
+
+        let value = read();
+        let after = restamp();
+        if after == stamp {
+            return Some((stamp, value));
+        }
+        stamp = after;
+    }
+    None
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]

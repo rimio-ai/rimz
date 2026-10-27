@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -57,19 +58,34 @@ pub struct AttentionConfig {
 impl AttentionConfig {
     /// Read only the typed core machine file, without definitions, theme, or loop files.
     /// A missing or broken core falls back to the same defaults as a full lenient load.
+    /// Shares the full load's bounded quiet-stamp guard, without its memo.
     pub fn load_lenient() -> Self {
         Self::load_lenient_from(&super::MachineConfig::config_path())
     }
 
     pub(super) fn load_lenient_from(path: &std::path::Path) -> Self {
-        super::recover_parsed(
-            path,
-            super::parse_core_text_collecting,
-            &mut super::ConfigNotices::default(),
+        let read = || {
+            super::recover_parsed(
+                path,
+                super::parse_core_text_collecting,
+                &mut super::ConfigNotices::default(),
+            )
+            .value
+            .agents
+            .attention
+        };
+        super::read_stable(
+            super::StampedPath::of(path),
+            || super::StampedPath::of(path),
+            |stamp, quiet| {
+                let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+                    return true;
+                };
+                super::stamped_path_modified_within(stamp, now, quiet)
+            },
+            read,
         )
-        .value
-        .agents
-        .attention
+        .map_or_else(read, |(_, attention)| attention)
     }
 }
 
