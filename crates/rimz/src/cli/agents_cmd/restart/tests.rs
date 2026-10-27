@@ -528,8 +528,9 @@ fn restart_posture_refuses_undeliverable_team_prompt_layers() {
             Some(format!(
                 "team `forge` sets consensus-file or append-system-prompt-files but role \
                      `reviewer` (claude) has no base system prompt to compose them onto; add \
-                     system-prompt-file to role reviewer or its profile, or create {} with a \
-                     nonempty body as the claude kind base",
+                     system-prompt-file to role reviewer or its profile, or write {} with a \
+                     nonempty body as the claude kind base \
+                     (run `rimz agents validate` if it did not load)",
                 rimz::disk::paths::agents_home()
                     .join("agents/claude.md")
                     .display()

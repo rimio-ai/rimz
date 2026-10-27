@@ -596,6 +596,7 @@ fn resolve_posture_with_role(
             team,
             &role.role,
             &cell.kind,
+            profiles.0.contains_key(cell.kind.as_str()),
             cell.system_prompt_file.is_some(),
         )
         .map_err(|err| PostureDegrade::TeamPromptRejected {

@@ -580,12 +580,13 @@ pub enum LayoutErr {
     TeamPromptWithoutStages { team: String },
     #[error(
         "team `{team}` sets consensus-file or append-system-prompt-files but role `{role}` ({kind}) has no base system prompt to compose them onto; add system-prompt-file to role {role} or its profile{kind_base_fix}",
-        kind_base_fix = team_kind_base_fix(.kind)
+        kind_base_fix = team_kind_base_fix(.kind, *.kind_base_shadowed)
     )]
     TeamPromptWithoutBase {
         team: String,
         role: String,
         kind: AgentKind,
+        kind_base_shadowed: bool,
     },
     #[error("invalid scratch-files pattern {pattern:?} in team `{team}`: {reason}")]
     InvalidScratchPattern {
@@ -1015,7 +1016,7 @@ fn resolve_team_with_base_override(
         .get(name)
         .expect("team resolution called with a known team name");
     let mut prepared = prepare_team(name, team, profiles, base_override)?;
-    resolve_team_prompts(name, &mut prepared)?;
+    resolve_team_prompts(name, &mut prepared, profiles)?;
     validate_flip_compact(
         name,
         &prepared,
@@ -1092,7 +1093,7 @@ fn resolve_team_role(
         .get(team_name)
         .expect("team role resolution called with a known team name");
     let mut prepared = prepare_team(team_name, team, profiles, base_override)?;
-    resolve_team_prompts(team_name, &mut prepared)?;
+    resolve_team_prompts(team_name, &mut prepared, profiles)?;
     validate_flip_compact(
         team_name,
         &prepared,
@@ -2142,6 +2143,7 @@ pub(super) fn role_team_prompt(
     team: &Team,
     role: &str,
     kind: &AgentKind,
+    kind_base_shadowed: bool,
     role_has_base: bool,
 ) -> Result<Option<TeamPrompt>> {
     if crate::harness::team_prompt::declared(team) {
@@ -2155,23 +2157,31 @@ pub(super) fn role_team_prompt(
                 team: name.to_owned(),
                 role: role.to_owned(),
                 kind: kind.clone(),
+                kind_base_shadowed,
             });
         }
     }
     Ok(TeamPrompt::for_role(team, role_has_base))
 }
 
-fn team_kind_base_fix(kind: &AgentKind) -> String {
+fn team_kind_base_fix(kind: &AgentKind, kind_base_shadowed: bool) -> String {
     if !crate::agents::find_definition(kind.as_str())
         .is_some_and(|definition| definition.spec().launch.takes_system_prompt())
     {
         return String::new();
     }
+    if kind_base_shadowed {
+        return format!(
+            ", or add system-prompt-file to profile `{kind}`, which replaces the {kind} kind base, \
+             or remove that profile"
+        );
+    }
     let path = crate::disk::paths::agents_home()
         .join("agents")
         .join(format!("{kind}.md"));
     format!(
-        ", or create {} with a nonempty body as the {kind} kind base",
+        ", or write {} with a nonempty body as the {kind} kind base \
+         (run `rimz agents validate` if it did not load)",
         path.display()
     )
 }
@@ -2314,13 +2324,18 @@ fn prepare_team<'a>(
     Ok(PreparedTeam { team, roles })
 }
 
-fn resolve_team_prompts(name: &str, prepared: &mut PreparedTeam<'_>) -> Result<()> {
+fn resolve_team_prompts(
+    name: &str,
+    prepared: &mut PreparedTeam<'_>,
+    profiles: &ProfilesConfig,
+) -> Result<()> {
     for role in &mut prepared.roles {
         role.team_prompt = role_team_prompt(
             name,
             prepared.team,
             &role.role,
             &role.resolved.kind,
+            profiles.0.contains_key(role.resolved.kind.as_str()),
             role.resolved.system_prompt_file.is_some(),
         )?;
     }

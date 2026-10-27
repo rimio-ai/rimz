@@ -511,8 +511,13 @@ fn member_posture_omits_inapplicable_team_layers() {
 #[test]
 fn member_posture_rejects_undeliverable_team_layers() {
     let mut actual = Vec::new();
-    for staged in [true, false] {
-        let (mut teams, profiles, _) = staged_member_configs();
+    for (staged, shadowed) in [(true, false), (true, true), (false, false)] {
+        let (mut teams, mut profiles, _) = staged_member_configs();
+        if shadowed {
+            profiles
+                .0
+                .insert("claude".into(), toml::from_str("agent = 'claude'").unwrap());
+        }
         let team = teams.0.get_mut("forge").unwrap();
         team.roles[0].system_prompt_file = None;
         if !staged {
@@ -543,12 +548,20 @@ fn member_posture_rejects_undeliverable_team_layers() {
             Some(format!(
                 "team `forge` sets consensus-file or append-system-prompt-files but role \
                      `planner` (claude) has no base system prompt to compose them onto; add \
-                     system-prompt-file to role planner or its profile, or create {} with a \
-                     nonempty body as the claude kind base",
+                     system-prompt-file to role planner or its profile, or write {} with a \
+                     nonempty body as the claude kind base \
+                     (run `rimz agents validate` if it did not load)",
                 crate::disk::paths::agents_home()
                     .join("agents/claude.md")
                     .display()
             )),
+            Some(
+                "team `forge` sets consensus-file or append-system-prompt-files but role \
+                 `planner` (claude) has no base system prompt to compose them onto; add \
+                 system-prompt-file to role planner or its profile, or add system-prompt-file \
+                 to profile `claude`, which replaces the claude kind base, or remove that profile"
+                    .into()
+            ),
             Some(
                 "team `forge` sets consensus-file or append-system-prompt-files but declares no \
                  stages; add stages (or owns) or remove the team prompt fields"

@@ -624,7 +624,8 @@ fn project_team_consensus_without_a_base_refuses_only_the_team() {
         .stderr(contains(format!(
             "team `crew` sets consensus-file or append-system-prompt-files but role `lead` \
              (claude) has no base system prompt to compose them onto; add system-prompt-file to \
-             role lead or its profile, or create {} with a nonempty body as the claude kind base",
+             role lead or its profile, or write {} with a nonempty body as the claude kind base \
+             (run `rimz agents validate` if it did not load)",
             base.display()
         )));
     env.rimz()

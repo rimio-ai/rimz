@@ -2873,6 +2873,20 @@ fn team_prompt_base_checks_wait_for_resolution_after_agent_rebase() {
 }
 
 #[test]
+fn team_prompt_without_stages_is_rejected_at_load() {
+    let mut candidate = team(vec![role("worker", "claude")]);
+    candidate.consensus_file = Some("/prompts/consensus.md".into());
+    assert!(matches!(
+        validate_config(
+            &no_profiles(),
+            &no_commands(),
+            &TeamsConfig(BTreeMap::from([("crew".into(), candidate)])),
+        ),
+        Err(LayoutErr::TeamPromptWithoutStages { team }) if team == "crew"
+    ));
+}
+
+#[test]
 fn team_prompt_without_base_names_the_kind_and_supported_fixes() {
     let actual = ["claude", "amp"].map(|kind| {
         let mut candidate = team(vec![role("worker", kind)]);
@@ -2893,8 +2907,8 @@ fn team_prompt_without_base_names_the_kind_and_supported_fixes() {
             format!(
                 "team `crew` sets consensus-file or append-system-prompt-files but role `worker` \
                  (claude) has no base system prompt to compose them onto; add system-prompt-file \
-                 to role worker or its profile, or create {} with a nonempty body as the claude \
-                 kind base",
+                 to role worker or its profile, or write {} with a nonempty body as the claude \
+                 kind base (run `rimz agents validate` if it did not load)",
                 crate::disk::paths::agents_home()
                     .join("agents/claude.md")
                     .display()
@@ -2905,6 +2919,37 @@ fn team_prompt_without_base_names_the_kind_and_supported_fixes() {
                 .into(),
         ]
     );
+}
+
+#[test]
+fn team_prompt_without_base_names_the_shadowing_profile() {
+    let mut profiles = profiles([
+        ("worker", profile("claude")),
+        (
+            "claude",
+            Profile {
+                system_prompt_file: Some("/prompts/claude.md".into()),
+                ..profile("claude")
+            },
+        ),
+    ]);
+    let mut candidate = team(vec![role("worker", "worker")]);
+    candidate.roles[0].owns = vec!["Plan".into()];
+    candidate.consensus_file = Some("/prompts/consensus.md".into());
+    let teams = TeamsConfig(BTreeMap::from([("crew".into(), candidate)]));
+    resolve_team("crew", &teams, &profiles, &no_commands()).expect("loaded kind base");
+
+    profiles.0.insert("claude".into(), profile("claude"));
+    let actual = ["crew", "crew.worker"].map(|spec| {
+        resolve_spec(Some(spec), &profiles, &no_commands(), &teams)
+            .unwrap_err()
+            .to_string()
+    });
+    let expected = "team `crew` sets consensus-file or append-system-prompt-files but role \
+                    `worker` (claude) has no base system prompt to compose them onto; add \
+                    system-prompt-file to role worker or its profile, or add system-prompt-file \
+                    to profile `claude`, which replaces the claude kind base, or remove that profile";
+    assert_eq!(actual, [expected, expected]);
 }
 
 #[test]
