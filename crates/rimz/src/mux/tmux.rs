@@ -359,12 +359,13 @@ impl WidthMemo {
         request: WidthRequest,
     ) -> Result<super::WidthStep> {
         super::ensure_pane_backend(pane, crate::MuxName::Tmux)?;
+        let now_ms = crate::utils::time::unix_now_ms();
         // A fixed event floor must not pin a failed baseline probe forever.
         if self.sample.as_ref().is_none_or(|sample| {
-            !request.accepts(sample.started_at_ms)
+            sample.started_at_ms > now_ms
+                || !request.accepts(sample.started_at_ms)
                 || (matches!(request, WidthRequest::After(_)) && sample.widths.is_err())
         }) {
-            let started_at_ms = crate::utils::time::unix_now_ms();
             let widths = self.backend.session_pane_geometries(session).map(|panes| {
                 panes
                     .into_iter()
@@ -377,7 +378,7 @@ impl WidthMemo {
                     .collect()
             });
             self.sample = Some(WidthSample {
-                started_at_ms,
+                started_at_ms: now_ms,
                 widths,
             });
         }

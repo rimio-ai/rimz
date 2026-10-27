@@ -19,6 +19,36 @@ fn width_request_freshness_boundaries() {
 
 #[cfg(unix)]
 #[test]
+fn future_width_samples_are_resampled_for_every_request() {
+    let (temp, backend) = detached_geometry_shim("%1 @1 50 240 1\n");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%1");
+    let mut memo = WidthMemo::new(backend);
+    let outcomes = [
+        WidthRequest::Backstop {
+            deadline_ms: 0,
+            max_age: Duration::from_secs(5),
+        },
+        WidthRequest::After(0),
+        WidthRequest::Fresh(0),
+    ]
+    .map(|request| {
+        memo.sample = Some(WidthSample {
+            started_at_ms: u64::MAX,
+            widths: Ok(HashMap::from([(pane.clone(), 80)])),
+        });
+        let view_cols = memo.step("rimz-test", &pane, request).unwrap().view_cols;
+        let argv = std::fs::read_to_string(temp.path().join("argv")).unwrap_or_default();
+        let queries = argv
+            .lines()
+            .filter(|line| line.contains("list-panes -s"))
+            .count();
+        (view_cols, queries)
+    });
+    assert_eq!(outcomes, [(240, 1), (240, 2), (240, 3)]);
+}
+
+#[cfg(unix)]
+#[test]
 fn fit_views_isolates_read_and_fit_failures_in_input_order() {
     use crate::ids::ViewId;
     use crate::mux::{FittedPane, ViewFit, ViewSize};
