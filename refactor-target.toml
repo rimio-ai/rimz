@@ -133,7 +133,8 @@ surface-budget = 109
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
 # Pre-tool hooks advance only the tool clock, leaving activity and the repeated-tool run intact.
-surface-budget = 7
+# read_for_keys_with_holds keeps frozen touches without per-key metadata IO (+1).
+surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/agents"
@@ -2718,6 +2719,21 @@ reason = "The sidebar projection and transcript watcher share one open-agent hib
 kind = "item"
 key = "store::hibernate::read_cached"
 reason = "Read-only fold readers reuse atomic hibernation records; locked read-modify-writes stay uncached."
+
+[[verdict]]
+kind = "item"
+key = "store::agent_context::read_for_keys_with_holds"
+reason = "The shared fold and transcript watcher retain deferred context parses without metadata IO."
+
+[[verdict]]
+kind = "item"
+key = "store::sidecar::read_for_keys_with_holds"
+reason = "Context stores share caller-owned deferral while retaining their existing parse memos."
+
+[[verdict]]
+kind = "item"
+key = "agent_activity::read_for_keys_with_holds"
+reason = "The sidebar supplies a hold decision without moving its clock below the read boundary."
 
 [[verdict]]
 kind = "item"
@@ -6364,6 +6380,11 @@ reason = "Built by literal in benches/hotpath.rs and the fold_incremental perfor
 kind = "item"
 key = "sidebar::enrich::enrich"
 reason = "Benches and the fold_incremental performance suite run the full fold from outside the library crate (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::enrich::reset_read_checks"
+reason = "Private inspection clears per-key holds before its post-refresh fold; pub(super) reaches its sibling producer only."
 
 [[verdict]]
 kind = "item"

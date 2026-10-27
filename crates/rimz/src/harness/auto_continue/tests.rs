@@ -14,6 +14,67 @@ fn ts(secs: i64) -> Timestamp {
     Timestamp::from_second(secs).expect("valid test timestamp")
 }
 
+#[test]
+fn deferred_resume_leaves_park_bytes_until_the_next_check() {
+    let (_dir, runtime) = temp_runtime();
+    let mut agent = crate::testkit::agent_state("claude", "sess", ts(500));
+    agent.status = AgentStatus::Idle;
+    let snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(500));
+    let path = park_path(&runtime);
+    let record = rate_record(100, 1, None, 0);
+    write_park(&path, &record);
+    let config = ResumeConfig {
+        auto_continue: true,
+        ..Default::default()
+    };
+    resume_parked(
+        |_| true,
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        &[],
+    );
+    assert_eq!(
+        read_park(&path),
+        Some(record),
+        "a deferred check must not clear the raw park"
+    );
+    resume_parked(
+        |_| false,
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        &[],
+    );
+    assert!(read_park(&path).is_none());
+}
+
+#[test]
+fn held_park_projection_retains_raw_evidence_until_checked_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = park_record_path(
+        &runtime,
+        &AgentKind::new_unchecked("claude"),
+        &"held".into(),
+    );
+    let first = rate_record(100, 1, None, 0);
+    let second = rate_record(200, 1, None, 1);
+    write_park(&path, &first);
+    assert_eq!(projected_park(&path, false), Some(first.clone()));
+    write_park(&path, &second);
+    assert_eq!(projected_park(&path, true), Some(first));
+    assert_eq!(projected_park(&path, false), Some(second.clone()));
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(projected_park(&path, true), Some(second));
+    assert_eq!(projected_park(&path, false), None);
+}
+
 fn rate_record(deadline: i64, activity: i64, last_nudge: Option<i64>, retries: u32) -> ParkRecord {
     ParkRecord {
         kind: ParkKind::RateLimit {
@@ -392,6 +453,7 @@ fn launched_child_arms_and_fires_resume_but_native_child_does_not() {
             ..ResumeConfig::default()
         };
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -437,6 +499,7 @@ fn launched_child_arms_and_fires_resume_but_native_child_does_not() {
             ts(2_000),
         );
         resume_parked(
+            |_| false,
             &native,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -617,6 +680,7 @@ fn only_day_budget_parks_arm_a_resume_deadline() {
         ts(4_000),
     );
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -639,6 +703,7 @@ fn only_day_budget_parks_arm_a_resume_deadline() {
     let snapshot =
         SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![budgeted], ts(4_000));
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -735,8 +800,9 @@ fn daily_scope_resumes_at_window_turn(scope: crate::harness::budget::DailyBudget
     let now: Timestamp = "2026-06-02T04:00:00Z".parse().expect("local midnight");
     let (config, mut snapshot) = daily_scope_snapshot(&runtime, &scope, parked_at, now, 0.25);
 
-    crate::harness::budget::project_parks(&mut snapshot, &runtime, None, &config);
+    crate::harness::budget::project_parks(|_| false, &mut snapshot, &runtime, None, &config);
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -815,8 +881,9 @@ fn account_budget_reset_reaches_every_room_but_an_early_raise_does_not(
         let (mut config, mut snapshot_a) = setup(&room_a);
         let (_, mut snapshot_b) = setup(&room_b);
         for (runtime, snapshot) in [(&room_a, &mut snapshot_a), (&room_b, &mut snapshot_b)] {
-            project_parks(snapshot, runtime, None, &config);
+            project_parks(|_| false, snapshot, runtime, None, &config);
             resume_parked(
+                |_| false,
                 snapshot,
                 runtime,
                 &crate::agents::RoomLoginSet::native(),
@@ -844,8 +911,9 @@ fn account_budget_reset_reaches_every_room_but_an_early_raise_does_not(
         };
         snapshot_a.now = now;
         snapshot_b.now = now;
-        project_parks(&mut snapshot_a, &room_a, None, &config);
+        project_parks(|_| false, &mut snapshot_a, &room_a, None, &config);
         resume_parked(
+            |_| false,
             &snapshot_a,
             &room_a,
             &crate::agents::RoomLoginSet::native(),
@@ -855,9 +923,10 @@ fn account_budget_reset_reaches_every_room_but_an_early_raise_does_not(
         let first_nudge = read_park(&park_path(&room_a)).and_then(|record| record.last_nudge_at);
         enforce(&snapshot_a, &room_a, None, &config);
         assert!(scope.read_ledger(&room_b, None).parked.is_none());
-        project_parks(&mut snapshot_b, &room_b, None, &config);
+        project_parks(|_| false, &mut snapshot_b, &room_b, None, &config);
         assert!(snapshot_b.agents[0].budget_park.is_none());
         resume_parked(
+            |_| false,
             &snapshot_b,
             &room_b,
             &crate::agents::RoomLoginSet::native(),
@@ -911,8 +980,9 @@ fn month_turn_fires_continue_before_stale_publication_lifts_the_park() {
     let parked_at: Timestamp = "2026-10-31T23:59:00Z".parse().unwrap();
     let now: Timestamp = "2026-11-01T00:00:05Z".parse().unwrap();
     let (config, mut snapshot) = monthly_scope_snapshot(&runtime, parked_at, now, false);
-    crate::harness::budget::project_parks(&mut snapshot, &runtime, None, &config);
+    crate::harness::budget::project_parks(|_| false, &mut snapshot, &runtime, None, &config);
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -935,8 +1005,9 @@ fn exhausted_new_month_restamps_and_fires_at_most_once() {
     let parked_at: Timestamp = "2026-10-31T23:59:00Z".parse().unwrap();
     let now: Timestamp = "2026-11-01T00:00:05Z".parse().unwrap();
     let (config, mut snapshot) = monthly_scope_snapshot(&runtime, parked_at, now, true);
-    crate::harness::budget::project_parks(&mut snapshot, &runtime, None, &config);
+    crate::harness::budget::project_parks(|_| false, &mut snapshot, &runtime, None, &config);
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -948,8 +1019,9 @@ fn exhausted_new_month_restamps_and_fires_at_most_once() {
         crate::harness::budget::DailyBudgetScope::Account("claude@default".parse().unwrap());
     let stamp = scope.read_ledger(&runtime, None).parked.unwrap().at;
     snapshot.now = ts(now.as_second() + 121);
-    crate::harness::budget::project_parks(&mut snapshot, &runtime, None, &config);
+    crate::harness::budget::project_parks(|_| false, &mut snapshot, &runtime, None, &config);
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -997,11 +1069,12 @@ fn binding_month_cap_delays_fleet_day_resume_until_the_last_reset() {
     .unwrap();
     enforce(&snapshot, &runtime, None, &config);
     snapshot.now = day_reset;
-    project_parks(&mut snapshot, &runtime, None, &config);
+    project_parks(|_| false, &mut snapshot, &runtime, None, &config);
     let park = snapshot.agents[0].budget_park.as_ref().unwrap();
     assert_eq!(park.scope, crate::agents::BudgetScope::Fleet);
     assert_eq!(park.resets_at, Some(month_reset));
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -1011,8 +1084,9 @@ fn binding_month_cap_delays_fleet_day_resume_until_the_last_reset() {
     let record = read_park(&park_path(&runtime)).unwrap();
     assert_eq!(record.last_nudge_at, None);
     snapshot.now = month_reset;
-    project_parks(&mut snapshot, &runtime, None, &config);
+    project_parks(|_| false, &mut snapshot, &runtime, None, &config);
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -1067,8 +1141,9 @@ fn raised_month_cap_does_not_swallow_a_fleet_day_reset() {
             provider.month_cutoff_secs = 0;
             write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
         }
-        project_parks(&mut snapshot, &runtime, None, &config);
+        project_parks(|_| false, &mut snapshot, &runtime, None, &config);
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -1101,8 +1176,9 @@ fn daily_scope_over_cap_after_rollover_restamps_and_does_not_resume_twice() {
     ] {
         let (_dir, runtime) = temp_runtime();
         let (config, mut snapshot) = daily_scope_snapshot(&runtime, &scope, parked_at, now, 6.0);
-        project_parks(&mut snapshot, &runtime, None, &config);
+        project_parks(|_| false, &mut snapshot, &runtime, None, &config);
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -1113,8 +1189,9 @@ fn daily_scope_over_cap_after_rollover_restamps_and_does_not_resume_twice() {
         let stamped_at = scope.read_ledger(&runtime, None).parked.expect("park").at;
 
         snapshot.now = ts(now.as_second() + 121);
-        project_parks(&mut snapshot, &runtime, None, &config);
+        project_parks(|_| false, &mut snapshot, &runtime, None, &config);
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -1149,7 +1226,7 @@ fn daily_scope_armed_deadline_matches_projection_after_rollover() {
         enforce(&snapshot, &runtime, None, &config);
         let record = read_park(&park_path(&runtime)).expect("armed record");
         snapshot.now = reset;
-        project_parks(&mut snapshot, &runtime, None, &config);
+        project_parks(|_| false, &mut snapshot, &runtime, None, &config);
         actual.push((
             record.kind,
             snapshot.agents[0]
@@ -1366,6 +1443,7 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
     };
 
     resume_parked(
+        |_| false,
         &snapshot_at(1_179),
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -1378,6 +1456,7 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
     );
 
     resume_parked(
+        |_| false,
         &snapshot_at(1_180),
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -1428,6 +1507,7 @@ fn model_limit_waits_for_scoped_reset() {
             ..ResumeConfig::default()
         };
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -1462,6 +1542,7 @@ fn model_limit_waits_for_scoped_reset() {
             snapshot.now
         ));
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -1500,6 +1581,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
             SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(now));
         snapshot.agent_panes = vec![live_pane()].into();
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -1529,6 +1611,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
             snapshot.now = ts(activity);
             assert!(snapshot.agents[0].displayed_turn_error().is_none());
             resume_parked(
+                |_| false,
                 &snapshot,
                 &runtime,
                 &crate::agents::RoomLoginSet::native(),
@@ -1543,10 +1626,11 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
         }
         if now == 6_599 {
             assert!(
-                exhausted_parks(&snapshot.agents, &runtime, &config, &messages).contains(&(
-                    snapshot.agents[0].kind.clone(),
-                    snapshot.agents[0].agent_id.clone()
-                ))
+                exhausted_parks(|_| false, &snapshot.agents, &runtime, &config, &messages)
+                    .contains(&(
+                        snapshot.agents[0].kind.clone(),
+                        snapshot.agents[0].agent_id.clone()
+                    ))
             );
             let record = read_park(&park_path(&runtime)).unwrap();
             assert_eq!(record.attempts_since, Some(ts(1_000)));
@@ -1556,6 +1640,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
             std::sync::Arc::make_mut(&mut snapshot.agents)[0].status = AgentStatus::Idle;
             std::sync::Arc::make_mut(&mut snapshot.agents)[0].last_activity = ts(now);
             resume_parked(
+                |_| false,
                 &snapshot,
                 &runtime,
                 &crate::agents::RoomLoginSet::native(),
@@ -1573,6 +1658,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
     snapshot.agent_panes = vec![live_pane()].into();
     for _ in 0..2 {
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -1619,7 +1705,7 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
             ts(6_000),
         );
         snapshot.agent_panes = vec![live_pane()].into();
-        resume_parked(&snapshot, &runtime, &logins, &config, &[]);
+        resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &[]);
         let nudged = read_park(&path).unwrap();
         assert_eq!(nudged.last_nudge_at, Some(ts(6_000)));
         assert_eq!(nudged.retries, 1);
@@ -1630,7 +1716,7 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
         snapshot.now = ts(6_001);
         assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
         assert!(snapshot.agents[0].displayed_turn_error().is_none());
-        resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+        resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
         assert_eq!(
             read_park(&path),
             Some(nudged),
@@ -1641,7 +1727,7 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
         std::sync::Arc::make_mut(&mut snapshot.agents)[0].last_activity = ts(6_100);
         snapshot.now = ts(6_100);
         assert!(snapshot.agents[0].displayed_turn_error().is_none());
-        resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+        resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
         assert!(read_park(&path).is_none(), "real progress kept the park");
 
         write_recovered_window(&runtime);
@@ -1649,7 +1735,7 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
             parked_agent(7_000, 7_001, TurnErrorClass::PausedRateLimit, "usage limit");
         std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at = Some(ts(7_000));
         snapshot.now = ts(7_001);
-        resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+        resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
         let fresh = read_park(&path).unwrap();
         assert_eq!(fresh.attempts_since, None);
         assert_eq!(fresh.parked_at_activity, ts(7_000));
@@ -1683,7 +1769,7 @@ fn overload_replies_preserve_backoff_and_retry_cap() {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(now));
         snapshot.agent_panes = vec![live_pane()].into();
-        resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+        resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
         let record = read_park(&path).unwrap();
         if record.last_nudge_at == Some(ts(now)) {
             assert!(nudges.len() < 3, "overload reply reset the retry cap");
@@ -1704,7 +1790,7 @@ fn overload_replies_preserve_backoff_and_retry_cap() {
                 Some(ts(activity));
             snapshot.now = ts(activity);
             assert!(snapshot.agents[0].displayed_turn_error().is_none());
-            resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+            resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
             assert_eq!(
                 read_park(&path),
                 Some(record),
@@ -1719,10 +1805,11 @@ fn overload_replies_preserve_backoff_and_retry_cap() {
         }
         if now == 2_100 {
             assert!(
-                exhausted_parks(&snapshot.agents, &runtime, &config, &messages).contains(&(
-                    snapshot.agents[0].kind.clone(),
-                    snapshot.agents[0].agent_id.clone()
-                ))
+                exhausted_parks(|_| false, &snapshot.agents, &runtime, &config, &messages)
+                    .contains(&(
+                        snapshot.agents[0].kind.clone(),
+                        snapshot.agents[0].agent_id.clone()
+                    ))
             );
         }
     }
@@ -1773,14 +1860,14 @@ fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
             hooks.push(("UserPromptSubmit", payload.clone(), nudge_at + 1));
             let in_flight = folded_hook_frames(&runtime, kind, &hooks);
             assert_eq!(in_flight.agents[0].turn_started_at, Some(ts(nudge_at + 1)));
-            resume_parked(&in_flight, &runtime, &logins, &config, &messages);
+            resume_parked(|_| false, &in_flight, &runtime, &logins, &config, &messages);
             assert_eq!(read_park(&path), Some(nudged.clone()));
 
             hooks.push(("PostToolUse", payload.clone(), nudge_at + 100));
             let working = folded_hook_frames(&runtime, kind, &hooks);
             assert_eq!(working.agents[0].last_tool_at, Some(ts(nudge_at + 100)));
             assert!(working.agents[0].last_activity > working.agents[0].turn_started_at.unwrap());
-            resume_parked(&working, &runtime, &logins, &config, &messages);
+            resume_parked(|_| false, &working, &runtime, &logins, &config, &messages);
             assert_eq!(read_park(&path), Some(nudged));
 
             hooks.push(("StopFailure", payload.clone(), nudge_at + 101));
@@ -1794,7 +1881,7 @@ fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
             )
             .context;
             assert!(stopped.agents[0].displayed_turn_error().is_some());
-            resume_parked(&stopped, &runtime, &logins, &config, &messages);
+            resume_parked(|_| false, &stopped, &runtime, &logins, &config, &messages);
             let fresh = read_park(&path).unwrap();
             assert_eq!(
                 fresh.attempts_since, None,
@@ -1803,7 +1890,10 @@ fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
             assert_eq!(fresh.retries, 0, "productive turn kept the old retry state");
             assert_eq!(fresh.last_nudge_at, None);
             assert_eq!(fresh.parked_at_activity, stopped.agents[0].last_activity);
-            assert!(exhausted_parks(&stopped.agents, &runtime, &config, &messages).is_empty());
+            assert!(
+                exhausted_parks(|_| false, &stopped.agents, &runtime, &config, &messages)
+                    .is_empty()
+            );
         }
     }
 }
@@ -1841,6 +1931,7 @@ fn tool_reopening_a_nudged_turn_starts_a_fresh_allowance_only_after_the_nudge() 
         let mut message = resume_message(1, MessageStatus::Delivered, 6_000);
         message.kind = AgentKind::new_unchecked("grok");
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -1883,6 +1974,7 @@ fn in_flight_turn_holds_park_when_resume_message_is_not_visible() {
         ..ResumeConfig::default()
     };
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -1926,7 +2018,7 @@ fn failed_turn_holds_park_until_its_limit_marker_is_visible() {
     message.kind = kind;
     let messages = [message];
     let logins = crate::agents::RoomLoginSet::native();
-    resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+    resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
     assert_eq!(
         read_park(&path),
         Some(record.clone()),
@@ -1935,7 +2027,7 @@ fn failed_turn_holds_park_until_its_limit_marker_is_visible() {
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].context =
         parked_agent(1_000, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
     assert!(snapshot.agents[0].displayed_turn_error().is_some());
-    resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+    resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
     record.parked_at_activity = ts(6_002);
     assert_eq!(
         read_park(&path),
@@ -2045,6 +2137,7 @@ fn bare_limit_replies_preserve_allowances_from_folded_provider_hooks() {
             ..ResumeConfig::default()
         };
         resume_parked(
+            |_| false,
             &snapshot,
             &runtime,
             &crate::agents::RoomLoginSet::native(),
@@ -2099,6 +2192,7 @@ fn background_wake_bare_limit_reply_keeps_episode_anchor() {
         ..ResumeConfig::default()
     };
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -2132,6 +2226,7 @@ fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
     snapshot.now = ts(6_000);
     snapshot.agent_panes = vec![live_pane()].into();
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -2166,6 +2261,7 @@ fn recovered_budget_rearms_a_lost_limit_park() {
     snapshot.now = ts(6_000);
     snapshot.agent_panes = vec![live_pane()].into();
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -2195,6 +2291,7 @@ fn recovered_budget_clears_a_stale_rate_limit_record() {
     );
     snapshot.now = ts(6_000);
     resume_parked(
+        |_| false,
         &snapshot,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -2316,7 +2413,7 @@ fn phantom_spawns_never_exhaust_a_park() {
     };
 
     assert!(nudge_due(&record, 0, ts(6_000), &config));
-    assert!(exhausted_parks(&snapshot.agents, &runtime, &config, &[]).is_empty());
+    assert!(exhausted_parks(|_| false, &snapshot.agents, &runtime, &config, &[]).is_empty());
 }
 
 #[test]
@@ -2345,7 +2442,7 @@ fn exhausted_resume_attempts_report_actionable_key() {
         resume_message(3, MessageStatus::Queued, 5_940),
     ];
     assert!(
-        exhausted_parks(&snapshot.agents, &runtime, &config, &messages).contains(&(
+        exhausted_parks(|_| false, &snapshot.agents, &runtime, &config, &messages).contains(&(
             AgentKind::new_unchecked("claude"),
             AgentSessionId::from("sess")
         ))

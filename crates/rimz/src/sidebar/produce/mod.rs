@@ -301,7 +301,25 @@ pub fn produce_snapshot_with_refresh(
             (rollup_snapshot(state, cursor)?, None)
         }
     };
-    Ok(enrich_with_refresh(snapshot, frame, state, runtime, opts))
+    Ok(enrich_with_refresh(
+        snapshot,
+        frame,
+        state,
+        runtime,
+        opts,
+        |folded, unreaped_agents, config| {
+            refresh_heavy_lanes(
+                folded,
+                unreaped_agents,
+                state,
+                runtime,
+                config,
+                crate::agents::spending::service::SpendingServiceStartup::OneShot,
+                crate::sidebar::refresh::git_stats::GitPass::OneShot,
+                &mut Default::default(),
+            )
+        },
+    ))
 }
 
 /// Resolve recipients over a private fresh pane read and the event-fresh rollup,
@@ -473,6 +491,11 @@ fn enrich_with_refresh(
     state: &StatePaths,
     runtime: &RuntimePaths,
     opts: &InspectOptions,
+    refresh: impl FnOnce(
+        &SidebarSnapshot,
+        &[crate::agents::AgentState],
+        &crate::config::MachineConfig,
+    ) -> crate::sidebar::refresh::RefreshedLanes,
 ) -> SidebarSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, runtime, opts.min_pane_cache_ms);
@@ -513,16 +536,8 @@ fn enrich_with_refresh(
     // the unreaped rollup so one-shot CLI refresh keeps the pre-split semantics:
     // a stale reap cache cannot hide the only daemon-mode Codex session that
     // should trigger a fresh `thread/loaded/list` read.
-    let refreshed = refresh_heavy_lanes(
-        &folded,
-        &snapshot.agents,
-        state,
-        runtime,
-        &config,
-        crate::agents::spending::service::SpendingServiceStartup::OneShot,
-        crate::sidebar::refresh::git_stats::GitPass::OneShot,
-        &mut Default::default(),
-    );
+    let refreshed = refresh(&folded, &snapshot.agents, &config);
+    crate::sidebar::enrich::reset_read_checks();
     enrich(
         snapshot,
         frame.as_ref(),
@@ -589,6 +604,95 @@ mod tests {
     use crate::pane::RuntimeOwnerKind;
     use crate::sidebar::frame::assemble_frame;
     use jiff::Timestamp;
+
+    #[test]
+    fn inspection_refolds_held_context_after_its_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        state.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        let at = Timestamp::from_second(100).unwrap();
+        let agent = crate::testkit::agent_state("claude", "held", at);
+        crate::store::hibernate::record(
+            &state,
+            crate::store::hibernate::Entry {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+                scope: dir.path().join("scope"),
+                provider_pid: 100,
+                frozen_at: at,
+                reclaimed_bytes: 0,
+                anon_at_freeze: 0,
+                step: 0,
+                wake_error: None,
+            },
+        )
+        .unwrap();
+        let write_cost = |usd| {
+            crate::store::agent_context::write(
+                &runtime,
+                "claude",
+                "held",
+                &AgentContext {
+                    cost: Some(crate::agents::AgentCost {
+                        total_cost_usd: Some(usd),
+                        ..Default::default()
+                    }),
+                    ..AgentContext::new("claude", at)
+                },
+                None,
+            )
+            .unwrap();
+        };
+        write_cost(1.0);
+        let refreshed = enrich_with_refresh(
+            SidebarSnapshot::build_with_agents(workspace, vec![agent], at),
+            None,
+            &state,
+            &runtime,
+            &InspectOptions {
+                target: None,
+                exclude: None,
+                min_pane_cache_ms: None,
+            },
+            |folded, _, _| {
+                assert!(folded.agents[0].hibernation.is_some());
+                assert_eq!(
+                    folded.agents[0]
+                        .context
+                        .as_ref()
+                        .unwrap()
+                        .cost
+                        .as_ref()
+                        .unwrap()
+                        .total_cost_usd,
+                    Some(1.0)
+                );
+                write_cost(20.0);
+                crate::sidebar::refresh::RefreshedLanes {
+                    spending: Default::default(),
+                    accounts: Default::default(),
+                    pr_states: Default::default(),
+                    branch_ci: Default::default(),
+                }
+            },
+        );
+        assert_eq!(
+            refreshed.agents[0]
+                .context
+                .as_ref()
+                .unwrap()
+                .cost
+                .as_ref()
+                .unwrap()
+                .total_cost_usd,
+            Some(20.0),
+            "the post-refresh fold must reread even held sidecars"
+        );
+    }
 
     #[test]
     fn resolution_frame_folds_bound_and_lazy_panes_without_render_spine() {

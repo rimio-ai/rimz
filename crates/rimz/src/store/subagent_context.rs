@@ -90,8 +90,8 @@ pub fn update(
 thread_local! {
     /// Per-thread parse cache. Every update lands via atomic rename of a
     /// freshly-written temp file, so `(mtime, len)` validates content; the
-    /// long-lived consumer fetch thread re-reads these sidecars on every
-    /// wakeup, and this caps its steady-state cost at one stat per file.
+    /// Normal reads cost one stat per file; deferred caller checks retain
+    /// the parse without metadata IO.
     static SUBAGENT_PARSE_CACHE: sidecar::ParseCache<SubagentContextRecord> =
         sidecar::ParseCache::default();
 }
@@ -105,13 +105,13 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<SubagentContextRecord> {
     SUBAGENT_PARSE_CACHE.with(|cache| sidecar::read_all(&runtime.subagent_context_dir, cache))
 }
 
-/// Read child context only for identities already present in the snapshot.
+/// Deferred keys retain the last parse without a stat; cadence belongs to the caller.
 pub(crate) fn read_for_keys<'a>(
     runtime: &RuntimePaths,
-    keys: impl IntoIterator<Item = (&'a str, &'a str)>,
+    keys: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
 ) -> Vec<SubagentContextRecord> {
     SUBAGENT_PARSE_CACHE
-        .with(|cache| sidecar::read_for_keys(&runtime.subagent_context_dir, keys, cache))
+        .with(|cache| sidecar::read_for_keys_with_holds(&runtime.subagent_context_dir, keys, cache))
 }
 
 #[cfg(test)]

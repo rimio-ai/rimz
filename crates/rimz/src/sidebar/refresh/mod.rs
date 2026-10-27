@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::agents::spending::{
     SpendScope, SpendingCaches, WorkspaceSpendingCache, read_workspace_spending_cache,
@@ -16,6 +16,7 @@ use crate::agents::{AgentAccount, AgentState};
 use crate::config::MachineConfig;
 use crate::forge::pr_state::PrLink;
 use crate::harness::cache_keepalive::SeatPolicy;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, Store};
 
@@ -101,6 +102,7 @@ pub struct ProducerRefreshState {
     cohort_effort: crate::agents::spending::EffortParseMemo,
     orphan_sweep_checked_at_ms: Option<u64>,
     auto_gc: crate::harness::auto_gc::AutoGcMemo,
+    auto_continue_checks: HashMap<(AgentKind, AgentSessionId), Instant>,
     /// Spawns per step of the last `refresh_heavy_lanes` pass, handed to the
     /// tick meter once.
     pass_spawns: BTreeMap<String, u64>,
@@ -287,12 +289,29 @@ pub(super) fn refresh_heavy_lanes(
         refresh_account_usage(&panels, runtime, &logins)
     });
     steps.step("auto_continue", || {
+        let active: std::collections::HashSet<_> = base
+            .agents
+            .iter()
+            .filter(|agent| !agent.is_provider_subagent() && !agent.agent_id.is_empty())
+            .map(|agent| (&agent.kind, &agent.agent_id))
+            .collect();
+        state
+            .auto_continue_checks
+            .retain(|(kind, id), _| config.resume.auto_continue && active.contains(&(kind, id)));
         let resume_messages = crate::harness::auto_continue::read_resume_messages(
             store.as_ref(),
             &config.resume,
             base.resume_outcomes.as_deref().unwrap_or_default(),
         );
         crate::harness::auto_continue::resume_parked(
+            |agent| {
+                !super::cache::hibernated_check_due(
+                    &mut state.auto_continue_checks,
+                    (agent.kind.clone(), agent.agent_id.clone()),
+                    agent.hibernation.is_some(),
+                    Instant::now(),
+                )
+            },
             base,
             runtime,
             &logins,

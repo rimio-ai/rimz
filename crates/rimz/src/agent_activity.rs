@@ -164,8 +164,8 @@ struct ParsedTouch {
 thread_local! {
     /// Per-thread parse cache for the keyed read. Every touch lands via atomic
     /// rename of a freshly-written temp file, so `(mtime, len)` validates
-    /// content; the long-lived consumer fetch thread re-reads these touches on
-    /// every wakeup, and this caps its steady-state cost at one stat per key.
+    /// content. Normal reads cost one stat per key; deferred caller checks
+    /// retain the parse without metadata IO.
     /// Pruned to the queried key set on every read, so it stays bounded by
     /// the live agent set.
     static TOUCH_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedTouch>> =
@@ -182,14 +182,28 @@ pub fn read_for_keys<'a>(
     runtime: &RuntimePaths,
     keys: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Vec<AgentActivity> {
+    read_for_keys_with_holds(
+        runtime,
+        keys.into_iter().map(|(kind, id)| (kind, id, false)),
+    )
+}
+
+/// Deferred keys retain the last touch without a stat; cadence belongs to the caller.
+pub(crate) fn read_for_keys_with_holds<'a>(
+    runtime: &RuntimePaths,
+    keys: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
+) -> Vec<AgentActivity> {
     let mut seen = BTreeSet::new();
     TOUCH_PARSE_CACHE.with_borrow_mut(|cache| {
         let touches: Vec<AgentActivity> = keys
             .into_iter()
-            .filter_map(|(kind, agent_id)| {
+            .filter_map(|(kind, agent_id, deferred)| {
                 let path = activity_path(runtime, kind, agent_id);
                 if !seen.insert(path.clone()) {
                     return None;
+                }
+                if deferred {
+                    return cache.get(&path).and_then(|parsed| parsed.record.clone());
                 }
                 let Ok(meta) = fs::metadata(&path) else {
                     // A vanished touch drops out of the cache with its file.
