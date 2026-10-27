@@ -45,7 +45,8 @@ pub enum LspErr {
         "file not found: {path}; looked in {readings}{rule}",
         path = path.display(),
         rule = if path.is_absolute() { "" } else {
-            "; relative paths are read from the current folder, then the checkout root"
+            "; relative paths are read from the current folder when it is inside the checkout, \
+             then the checkout root"
         }
     )]
     MissingFile {

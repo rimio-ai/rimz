@@ -33,22 +33,22 @@ fn typed_paths_report_each_distinct_reading_and_outside_paths() {
         (
             "src",
             "gone.rs",
-            "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder, then the checkout root",
+            "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder when it is inside the checkout, then the checkout root",
         ),
         (
             "",
             "gone.rs",
-            "file not found: gone.rs; looked in checkout root: gone.rs; relative paths are read from the current folder, then the checkout root",
+            "file not found: gone.rs; looked in checkout root: gone.rs; relative paths are read from the current folder when it is inside the checkout, then the checkout root",
         ),
         (
             "src",
             "../gone.rs",
-            "file not found: ../gone.rs; looked in current folder: gone.rs; checkout root: leaves the checkout; relative paths are read from the current folder, then the checkout root",
+            "file not found: ../gone.rs; looked in current folder: gone.rs; checkout root: leaves the checkout; relative paths are read from the current folder when it is inside the checkout, then the checkout root",
         ),
         (
             "src",
             "../../gone.rs",
-            "file not found: ../../gone.rs; looked in current folder: leaves the checkout; relative paths are read from the current folder, then the checkout root",
+            "file not found: ../../gone.rs; looked in current folder: leaves the checkout; relative paths are read from the current folder when it is inside the checkout, then the checkout root",
         ),
         (
             "src",
@@ -141,7 +141,7 @@ fn typed_position_and_file_misses_fail_before_server_selection() {
                 .map_err(|error| error.to_string())
         })
         .into();
-    let expected = "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder, then the checkout root";
+    let expected = "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder when it is inside the checkout, then the checkout root";
     assert_eq!(actual, [Err(expected.to_owned()), Err(expected.to_owned())]);
 }
 
