@@ -1107,7 +1107,7 @@ fn replacing_implicit_parents_child_keeps_harness_template_comments() {
     let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
     assert_harness_template_comments_stay_under_harness(&rendered);
     assert!(
-        rendered.contains("\n[harness.prompt_cache_ttl]\n"),
+        rendered.contains("\n[harness.prompt_cache_ttl]\ncodex = \"12h\"\n"),
         "{rendered}"
     );
     assert!(
@@ -1121,6 +1121,38 @@ fn replacing_implicit_parents_child_keeps_harness_template_comments() {
             .as_str(),
         Some("12h")
     );
+}
+
+#[test]
+fn value_replacing_a_block_under_a_header_takes_default_key_spacing() {
+    let (_dir, editor) = inline_editor(
+        "[harness.prompt_cache_ttl]\nfallback = \"off\"\n\n[harness.prompt_cache_ttl.codex]\napi-key = \"20m\"\n",
+    );
+    editor.set("harness.prompt_cache_ttl.codex", "12h").unwrap();
+
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert!(rendered.contains("\ncodex = \"12h\"\n"), "{rendered}");
+}
+
+#[test]
+fn block_replacing_a_value_takes_default_header_spacing() {
+    let (dir, editor) = inline_editor("");
+    let loop_path = dir.path().join("loop.toml");
+    std::fs::write(
+        &loop_path,
+        "[tasks.x]\ncheck = \"true\"\n\n[tasks.y]\n# the check note\ncheck = \"true\"\n",
+    )
+    .unwrap();
+    let judge = r#"{ agent = "claude", prompt = "done?" }"#;
+    editor.set("loop.tasks.x.check", judge).unwrap();
+    editor.set("loop.tasks.y.check", judge).unwrap();
+
+    let rendered = std::fs::read_to_string(&loop_path).unwrap();
+    assert!(rendered.contains("\n[tasks.x.check]\n"), "{rendered}");
+    let task = rendered.find("\n[tasks.y]\n").expect("y task");
+    let note = rendered.find("# the check note\n").expect("check note");
+    let header = rendered.find("\n[tasks.y.check]\n").expect("y check");
+    assert!(task < note && note < header, "{rendered}");
 }
 
 #[test]

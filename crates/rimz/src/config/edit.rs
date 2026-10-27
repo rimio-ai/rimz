@@ -1652,6 +1652,7 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
         });
     let creates_table =
         (parent_starts_header && old_position.is_none()) || (old.is_none() && !item.is_value());
+    let changes_form = old.is_some_and(|old| old.is_value() != item.is_value());
     // A replaced block keeps the comments above its header; under a header-less parent,
     // the parent's first header takes them and the block's place. A new table or any other
     // first header goes beside its section (see `place_new_table`); one appended at the end
@@ -1705,6 +1706,21 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
         *new.decor_mut() = old.decor().clone();
     }
     table[leaf] = item;
+    // A key keeps the spacing of the form it was parsed in (`b= 1` from `[a.b]`, `[a.b ]`
+    // from `b = 1`), so one that changes form takes its new form's default. The comment
+    // lines above a `b = 1` line stay, and render above the new header.
+    if changes_form && let Some(mut key) = table.key_mut(leaf) {
+        let comments = key
+            .leaf_decor()
+            .prefix()
+            .filter(|prefix| prefix.as_str().is_some_and(|text| text.contains('\n')))
+            .cloned();
+        let decor = key.leaf_decor_mut();
+        decor.clear();
+        if let Some(comments) = comments {
+            decor.set_prefix(comments);
+        }
+    }
     Ok(())
 }
 
