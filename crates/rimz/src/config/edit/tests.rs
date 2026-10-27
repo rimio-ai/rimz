@@ -1043,6 +1043,136 @@ fn set_agents_isolation_keeps_gc_template_comments_under_gc() {
 }
 
 #[test]
+fn first_prompt_cache_fallback_keeps_harness_template_comments() {
+    assert_first_prompt_cache_value_keeps_harness_comments("fallback", "off");
+}
+
+#[test]
+fn first_prompt_cache_provider_keeps_harness_template_comments() {
+    assert_first_prompt_cache_value_keeps_harness_comments("claude", "5m");
+}
+
+fn assert_first_prompt_cache_value_keeps_harness_comments(kind: &str, value: &str) {
+    let (_dir, editor) = inline_editor(Kind::Core.template());
+    editor
+        .set("harness.prompt_cache_ttl.codex.api-key", "20m")
+        .unwrap();
+    let key = format!("harness.prompt_cache_ttl.{kind}");
+    editor.set(&key, value).unwrap();
+
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert_harness_template_comments_stay_under_harness(&rendered);
+    assert!(
+        rendered.find("\n[harness.prompt_cache_ttl.codex]\n")
+            < rendered.find("\n[harness.prompt_cache_ttl]\n"),
+        "the first parent header must follow its child: {rendered}"
+    );
+    let uncommented = rendered.replace(
+        "# prompt_cache_margin = \"1m\"",
+        "prompt_cache_margin = \"1m\"",
+    );
+    let parsed: toml::Value = toml::from_str(&uncommented).unwrap();
+    assert_eq!(
+        parsed["harness"]["prompt_cache_margin"].as_str(),
+        Some("1m")
+    );
+    assert!(
+        parsed["harness"]["prompt_cache_ttl"]
+            .get("prompt_cache_margin")
+            .is_none()
+    );
+    assert_eq!(editor.get(Some(&key)).unwrap().as_str(), Some(value));
+    assert_eq!(
+        editor
+            .get(Some("harness.prompt_cache_ttl.codex.api-key"))
+            .unwrap()
+            .as_str(),
+        Some("20m")
+    );
+}
+
+#[test]
+fn replacing_implicit_parents_child_keeps_harness_template_comments() {
+    let (_dir, editor) = inline_editor(Kind::Core.template());
+    editor
+        .set("harness.prompt_cache_ttl.codex.api-key", "20m")
+        .unwrap();
+    editor.set("harness.prompt_cache_ttl.codex", "12h").unwrap();
+
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert_harness_template_comments_stay_under_harness(&rendered);
+    assert!(
+        rendered.contains("\n[harness.prompt_cache_ttl]\n"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("\n[harness.prompt_cache_ttl.codex]\n"),
+        "{rendered}"
+    );
+    assert_eq!(
+        editor
+            .get(Some("harness.prompt_cache_ttl.codex"))
+            .unwrap()
+            .as_str(),
+        Some("12h")
+    );
+}
+
+#[test]
+fn first_agents_value_keeps_harness_template_comments() {
+    let (_dir, editor) = inline_editor(Kind::Core.template());
+    editor.set("agents.worktree.dir", "../worktrees").unwrap();
+    editor.set("agents.isolation", "scoped").unwrap();
+
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert_harness_template_comments_stay_under_harness(&rendered);
+    assert_eq!(
+        editor.get(Some("agents.isolation")).unwrap().as_str(),
+        Some("scoped")
+    );
+}
+
+#[test]
+fn merging_implicit_parent_keeps_harness_template_comments() {
+    let (_dir, editor) = inline_editor(
+        "[harness.prompt_cache_ttl.codex]\napi-key = \"20m\"\n\n[harness.prompt_cache_ttl]\nfallback = \"off\"\n",
+    );
+    let report = editor.merge_defaults().unwrap();
+    assert!(report.files[0].skipped.is_empty(), "{report:?}");
+    assert!(
+        matches!(report.files[0].action, MergeAction::Merged { kept: 2 }),
+        "{report:?}"
+    );
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert_harness_template_comments_stay_under_harness(&rendered);
+}
+
+fn assert_harness_template_comments_stay_under_harness(rendered: &str) {
+    let harness_body = rendered
+        .split_once("\n[harness]\n")
+        .expect("harness table")
+        .1
+        .split_once("\n[")
+        .expect("table after harness")
+        .0;
+    for comment in [
+        "# cache_keepalive = true",
+        "# prompt_cache_margin = \"1m\"",
+        "## [harness.prompt_cache_ttl]",
+    ] {
+        assert_eq!(
+            rendered.matches(comment).count(),
+            1,
+            "lost or duplicated {comment}: {rendered}"
+        );
+        assert!(
+            harness_body.contains(comment),
+            "harness comment escaped its section: {comment}: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn merge_keeps_lsp_server_entry_whole() {
     for seed in [
         format!("[lsp.servers.rust]\n{LSP_SERVER_FIELDS}"),

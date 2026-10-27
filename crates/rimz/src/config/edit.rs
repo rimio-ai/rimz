@@ -923,10 +923,10 @@ struct NewTablePlace {
     decor: Option<Decor>,
 }
 
-/// Place a new `[accounts.*]` table right after the last `accounts` table, so
-/// `[accounts.use]` lands beside the templated `[accounts]` block rather than at
-/// the end of the file. Later tables shift down one. The comments a section carries
-/// after its last table are stored as the next header's prefix; the part up to
+/// Place a newly rendered `[accounts.*]` header right after the last `accounts`
+/// table, so `[accounts.use]` lands beside the templated `[accounts]` block rather
+/// than at the end of the file. Later tables shift down one. The comments a section
+/// carries after its last table are stored as the next header's prefix; the part up to
 /// its last blank line stays with the section, above the new header, and the
 /// next header keeps only the comments directly above it. Other sections, an
 /// `accounts` section the document lacks, or one that ends the file, append.
@@ -1643,11 +1643,20 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
     let mut item = value_to_item(value);
     let old = item_at(doc, path);
     let old_position = old.and_then(Item::as_table).and_then(Table::position);
-    let new_parent = !parents.is_empty() && item_at(doc, parents).is_none();
-    let creates_table = new_parent || (old.is_none() && !item.is_value());
-    // A replaced block keeps the comments above its header. A new one goes beside its
-    // section (see `place_new_table`); one appended at the end takes the template's
-    // trailing comments, so they stay with its last section, then a blank line.
+    let parent_starts_header = item.is_value()
+        && !parents.is_empty()
+        && item_at(doc, parents).is_none_or(|parent| {
+            parent
+                .as_table()
+                .is_some_and(|table| !table.is_dotted() && !renders_header(table))
+        });
+    let creates_table =
+        (parent_starts_header && old_position.is_none()) || (old.is_none() && !item.is_value());
+    // A replaced block keeps the comments above its header; under a header-less parent,
+    // the parent's first header takes them and the block's place. A new table or any other
+    // first header goes beside its section (see `place_new_table`); one appended at the end
+    // takes the template's trailing comments, so they stay with its last section, then a
+    // blank line.
     let mut decor = match old {
         Some(Item::Table(block)) => Some(block.decor().clone()),
         Some(Item::ArrayOfTables(blocks)) => blocks.get(0).map(|block| block.decor().clone()),
@@ -1682,11 +1691,13 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
                 }
             }
         }
-        _ => {
-            if let Some(decor) = decor.filter(|_| new_parent) {
+        _ if parent_starts_header => {
+            table.set_position(Some(position));
+            if let Some(decor) = decor {
                 *table.decor_mut() = decor;
             }
         }
+        _ => {}
     }
     if let Some(old) = table.get(leaf).and_then(Item::as_value)
         && let Item::Value(new) = &mut item
