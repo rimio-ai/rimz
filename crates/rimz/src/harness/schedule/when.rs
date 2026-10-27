@@ -297,6 +297,19 @@ impl CiSource {
         Timestamp::from_millisecond(i64::try_from(probe.refreshed_at_ms).ok()?).ok()
     }
 
+    /// The open PR's known head and the commit its CI verdict describes, if known.
+    pub(in crate::harness) fn ci_commits(&self, scope: &Path) -> Option<(&str, Option<&str>)> {
+        let link = self.0.states.get(scope.to_string_lossy().as_ref())?;
+        if link.state != WorktreePrState::Open {
+            return None;
+        }
+        let head = link.open.as_ref()?.head.as_str();
+        if head.is_empty() {
+            return None;
+        }
+        Some((head, link.ci_sha.as_deref().filter(|sha| !sha.is_empty())))
+    }
+
     pub fn read(runtime: &crate::RuntimePaths) -> Self {
         Self(crate::forge::pr_state::read_pr_state_cache(
             &runtime.pr_state_path(),

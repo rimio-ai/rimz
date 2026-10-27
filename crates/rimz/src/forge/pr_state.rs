@@ -103,6 +103,7 @@ impl PrLink {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct OpenPrFacts {
+    /// PR head OID (GitHub `headRefOid`), set only for open GitHub PRs; empty in legacy files.
     #[serde(default)]
     pub(crate) head: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

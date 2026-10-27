@@ -107,6 +107,97 @@ fn forge(env: &Env, at: jiff::Timestamp, ok: bool) {
     .unwrap();
 }
 
+const CI_CONDITION: &str = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['ci=passed']\noutcome='ready'\n";
+
+fn open_forge(env: &Env, scope: &Path, pr_head: &str, ci_sha: &str) {
+    let path = env.runtime_paths().lane_path("pr-state.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        serde_json::to_vec(&json!({
+            "branch_ci":{},
+            "path_repos":{(scope.to_string_lossy().as_ref()):"repo"},
+            "repos":{"repo":{"refreshed_at_ms":jiff::Timestamp::now().as_millisecond(), "ok":true}},
+            "states":{(scope.to_string_lossy().as_ref()):{
+                "state":"open", "ci":"passing", "ci_sha":ci_sha, "open":{"head":pr_head}
+            }}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn condition_ci_waits_for_local_commits_and_the_pr_head_verdict() {
+    use crate::common::git::{commit_file, git, git_stdout, init_repo};
+
+    let (env, _) = fixture(&format!("{HEADER}{CI_CONDITION}"), "");
+    init_repo(&env.project_root);
+    let parent = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+    let id = start(&env);
+    let first = until(&env, &id, |v| {
+        v["record"]["wait"]["outcome"] == "unknown" && v["record"]["attempt"].is_null()
+    });
+    let scope = PathBuf::from(first["record"]["scope"]["path"].as_str().unwrap());
+    assert_eq!(scope, env.project_root.canonicalize().unwrap());
+    commit_file(&scope, "local.txt", "local\n", "local commit during wait");
+    let local = git_stdout(&scope, &["rev-parse", "HEAD"]);
+    open_forge(&env, &scope, &parent, &parent);
+    success(command(&env, &["workflow", "advance", &id]));
+    let waiting = show(&env, &id);
+    let reason = format!(
+        "ci (local HEAD {} is not on the PR, PR head {})",
+        &local[..7],
+        &parent[..7]
+    );
+    assert_eq!(waiting["record"]["input"]["outcome"], "unknown");
+    assert_eq!(waiting["record"]["input"]["readings"], json!({"ci":null}));
+    assert_eq!(waiting["record"]["input"]["reason"], reason);
+    assert_eq!(waiting["record"]["wait"]["detail"], reason);
+    let text = success(command(&env, &["workflow", "show", &id]));
+    assert!(text.contains(&format!("unknown: {reason}")), "{text}");
+
+    open_forge(&env, &scope, &local, &parent);
+    success(command(&env, &["workflow", "advance", &id]));
+    let waiting = show(&env, &id);
+    let reason = format!("ci (read at {}, PR head {})", &parent[..7], &local[..7]);
+    assert_eq!(waiting["record"]["input"]["outcome"], "unknown");
+    assert_eq!(waiting["record"]["input"]["readings"], json!({"ci":null}));
+    assert_eq!(waiting["record"]["wait"]["detail"], reason);
+    let text = success(command(&env, &["workflow", "show", &id]));
+    assert!(text.contains(&format!("unknown: {reason}")), "{text}");
+
+    commit_file(&scope, "remote.txt", "remote\n", "another push");
+    let remote = git_stdout(&scope, &["rev-parse", "HEAD"]);
+    git(&scope, &["reset", "--hard", &local]);
+    open_forge(&env, &scope, &remote, &remote);
+    success(command(&env, &["workflow", "advance", &id]));
+    let done = settled(&env, &id, "done");
+    assert_eq!(
+        done["record"]["input"],
+        json!({"outcome":"ready", "case":0, "readings":{"ci":"passed"}})
+    );
+}
+
+#[test]
+fn condition_ci_accepts_a_pr_head_absent_from_the_checkout() {
+    let (env, _) = fixture(&format!("{HEADER}{CI_CONDITION}"), "");
+    crate::common::git::init_repo(&env.project_root);
+    let id = start(&env);
+    let first = until(&env, &id, |v| {
+        v["record"]["wait"]["outcome"] == "unknown" && v["record"]["attempt"].is_null()
+    });
+    let scope = Path::new(first["record"]["scope"]["path"].as_str().unwrap());
+    let missing = "0123456789abcdef0123456789abcdef01234567";
+    open_forge(&env, scope, missing, missing);
+    success(command(&env, &["workflow", "advance", &id]));
+    let done = settled(&env, &id, "done");
+    assert_eq!(
+        done["record"]["input"],
+        json!({"outcome":"ready", "case":0, "readings":{"ci":"passed"}})
+    );
+}
+
 #[test]
 fn condition_unknown_waits_for_a_successful_post_entry_forge_probe() {
     let spec = format!(
