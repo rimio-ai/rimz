@@ -355,6 +355,145 @@ fn git_cache_freshness_boundaries_are_inclusive() {
 }
 
 #[test]
+fn hibernated_tier_sits_below_focus_and_hot_above_settled() {
+    let none = BTreeSet::new();
+    let held = BTreeSet::from(["/wt".to_owned()]);
+    let entry = DiffStatsCacheEntry {
+        refreshed_at_ms: 1_000,
+        commit_refreshed_at_ms: Some(1_000),
+        clean: Some(true),
+        landed: Some(true),
+        ..Default::default()
+    };
+    let ttl = crate::sidebar::timing::DIFF_STATS_HIBERNATED_TTL;
+    assert_eq!(
+        diff_stats_tier("/wt", Some(&entry), &none, &none, &held),
+        (ttl, ttl)
+    );
+    assert_eq!(
+        diff_stats_tier("/wt", Some(&entry), &held, &held, &held),
+        (DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL)
+    );
+    assert_eq!(
+        diff_stats_tier("/wt", Some(&entry), &none, &held, &held),
+        (DIFF_STATS_TTL, DIFF_STATS_TTL)
+    );
+    let cache = DiffStatsCache {
+        entries: BTreeMap::from([("/wt".into(), entry)]),
+    };
+    for (at, held_paths, due) in [
+        (1_000 + ttl.as_millis() as u64, &held, false),
+        (1_001 + ttl.as_millis() as u64, &held, true),
+        (
+            1_001 + DIFF_STATS_SETTLED_TTL.as_millis() as u64,
+            &none,
+            true,
+        ),
+    ] {
+        assert_eq!(
+            !stale_paths(
+                &cache,
+                &["/wt".into()],
+                &none,
+                &none,
+                held_paths,
+                &BTreeMap::new(),
+                at
+            )
+            .is_empty(),
+            due
+        );
+    }
+}
+
+#[test]
+fn hibernated_paths_require_all_split_group_rows_and_ignore_conditions() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = Timestamp::now();
+    let mut held = root_agent("claude", "held", None);
+    held.hibernation = Some(crate::agents::state::Hibernation {
+        frozen_at: now,
+        reclaimed_bytes: 0,
+        step: 0,
+        wake_error: None,
+    });
+    let mut ended = root_agent("claude", "ended", None);
+    ended.ended_at = Some(now);
+    let live = root_agent("claude", "live", None);
+    let mut snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(dir.path()),
+        vec![held, ended, live],
+        now,
+    );
+    let path = dir.path().to_str().unwrap().to_owned();
+    let only = BTreeSet::from([path.clone()]);
+    for (other, is_agent, demanded, expected) in [
+        ("ended", true, false, only.clone()),
+        ("ended", false, false, BTreeSet::new()),
+        ("live", true, false, BTreeSet::new()),
+        ("missing", true, false, BTreeSet::new()),
+        ("ended", true, true, BTreeSet::new()),
+    ] {
+        let mut first = activity_row(true, Some(AgentStatus::Idle), now, dir.path());
+        first.id = "held".into();
+        let mut second = activity_row(is_agent, Some(AgentStatus::Idle), now, dir.path());
+        second.id = other.into();
+        let mut split = worktree_group(dir.path(), vec![second]);
+        split.key = format!("{path}\nother-branch");
+        snapshot.worktree_groups = vec![worktree_group(dir.path(), vec![first]), split].into();
+        let scopes = if demanded {
+            only.clone()
+        } else {
+            BTreeSet::new()
+        };
+        assert_eq!(
+            hibernated_worktree_paths(&snapshot, &scopes),
+            expected,
+            "other={other} is_agent={is_agent} demanded={demanded}"
+        );
+    }
+    let mut thawed = snapshot.clone();
+    std::sync::Arc::make_mut(&mut thawed.agents)[0].hibernation = None;
+    assert!(hibernated_worktree_paths(&thawed, &BTreeSet::new()).is_empty());
+    let ended = &mut std::sync::Arc::make_mut(&mut snapshot.agents)[0];
+    ended.ended_at = Some(now);
+    assert!(
+        hibernated_worktree_paths(&snapshot, &BTreeSet::new()).is_empty(),
+        "at least one open hibernated agent is required"
+    );
+}
+
+#[test]
+fn thaw_force_accepts_only_peer_stamps_after_both_baselines() {
+    let path = "/wt".to_owned();
+    let needed = [path.clone()];
+    let thawed = BTreeMap::from([(path.clone(), (1_000, 1_000))]);
+    let none = BTreeSet::new();
+    let mut observations = Vec::new();
+    for (local, commit) in [
+        (1_000, Some(1_000)),
+        (1_001, Some(1_000)),
+        (1_000, Some(1_001)),
+        (1_001, Some(1_001)),
+        (1_001, None),
+    ] {
+        let cache = DiffStatsCache {
+            entries: BTreeMap::from([(
+                path.clone(),
+                DiffStatsCacheEntry {
+                    refreshed_at_ms: local,
+                    commit_refreshed_at_ms: commit,
+                    ..Default::default()
+                },
+            )]),
+        };
+        observations
+            .push(!stale_paths(&cache, &needed, &none, &none, &none, &thawed, 1_001).is_empty());
+    }
+    assert_eq!(observations, [true, true, true, false, true]);
+}
+
+#[test]
 fn settled_tier_boundaries_and_precedence() {
     let path = "/wt";
     let settled = DiffStatsCacheEntry {
@@ -374,7 +513,7 @@ fn settled_tier_boundaries_and_precedence() {
         let cache = DiffStatsCache {
             entries: BTreeMap::from([(path.to_owned(), entry.clone())]),
         };
-        !stale_paths(&cache, &needed, focused, hot, at).is_empty()
+        !stale_paths(&cache, &needed, focused, hot, &none, &BTreeMap::new(), at).is_empty()
     };
     let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
     let settled_ttl = DIFF_STATS_SETTLED_TTL.as_millis() as u64;
@@ -419,7 +558,7 @@ fn settled_tier_boundaries_and_precedence() {
     // A missing entry is due in full.
     let empty = DiffStatsCache::default();
     assert_eq!(
-        stale_paths(&empty, &needed, &none, &none, 1),
+        stale_paths(&empty, &needed, &none, &none, &none, &BTreeMap::new(), 1),
         vec![(path.to_owned(), DueFacts::all())]
     );
 }
@@ -1150,6 +1289,7 @@ fn git_refresh_state_prunes_worktrees_and_retains_failed_status_memos() {
                 BTreeMap::from([("b".to_owned(), entry)]),
             ),
         ]),
+        ..Default::default()
     };
     let needed = ["/keep".to_owned()];
     state.retain_needed(&needed);
@@ -1332,6 +1472,7 @@ fn focused_diff_stats_refreshes_local_facts_before_commit_facts() {
         std::slice::from_ref(&path),
         &BTreeSet::from([path.clone()]),
         &BTreeSet::new(),
+        &BTreeSet::new(),
         1_000 + DIFF_STATS_FOCUSED_LOCAL_TTL.as_millis() as u64 + 1,
         None,
         GitPass::OneShot,
@@ -1399,6 +1540,7 @@ fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
         std::slice::from_ref(&path),
         &BTreeSet::new(),
         &BTreeSet::from([path.clone()]),
+        &BTreeSet::new(),
         now_ms,
         None,
         GitPass::OneShot,
@@ -2034,6 +2176,7 @@ fn run_pass(
         needed,
         focused,
         hot,
+        &BTreeSet::new(),
         BACKLOG_NOW_MS,
         None,
         pass,
@@ -2145,7 +2288,7 @@ fn selection_puts_priority_first_then_oldest_and_caps_the_rest() {
     let hot = BTreeSet::from([paths[0].clone()]);
     let focused = BTreeSet::from([paths[1].clone()]);
     let order = |limit| -> Vec<String> {
-        select_for_pass(due(), &cache, &focused, &hot, limit)
+        select_for_pass(due(), &cache, &focused, &hot, &BTreeMap::new(), limit)
             .into_iter()
             .map(|(path, _)| path)
             .collect()
@@ -2201,6 +2344,43 @@ fn host_pass_refreshes_a_capped_oldest_first_share_and_one_shot_all() {
         total,
         "one-shot is uncapped"
     );
+}
+
+#[test]
+fn thawed_paths_are_due_and_priority_beyond_the_host_cap() {
+    let total = 2 * MAX_HOST_PASS_ENTRIES + 3;
+    let (root, needed, mut cache) = backlog_fixture(total);
+    let (_runtime_dir, runtime) = runtime_for(root.path());
+    let thawed: BTreeSet<_> = needed[MAX_HOST_PASS_ENTRIES..].iter().cloned().collect();
+    for path in &thawed {
+        let entry = cache.entries.get_mut(path).unwrap();
+        entry.refreshed_at_ms = BACKLOG_NOW_MS;
+        entry.commit_refreshed_at_ms = Some(BACKLOG_NOW_MS);
+    }
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
+    let none = BTreeSet::new();
+    let mut state = GitRefreshState {
+        hibernated: thawed.clone(),
+        ..Default::default()
+    };
+    let result = refresh_diff_stats(
+        &runtime.diff_stats_path(),
+        &runtime,
+        &needed,
+        &none,
+        &none,
+        &none,
+        BACKLOG_NOW_MS,
+        None,
+        GitPass::Host,
+        &mut state,
+    );
+    assert_eq!(
+        refreshed_paths(&result),
+        thawed.iter().map(String::as_str).collect::<Vec<_>>(),
+        "every thawed path refreshes before the older backlog, even beyond eight"
+    );
+    assert!(state.hibernated.is_empty());
 }
 
 #[test]

@@ -20,8 +20,8 @@ use crate::agents::AgentStatus;
 use crate::disk::atomic;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::sidebar::timing::{
-    DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_IDLE_TTL,
-    DIFF_STATS_SETTLED_TTL, DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
+    DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_HIBERNATED_TTL,
+    DIFF_STATS_IDLE_TTL, DIFF_STATS_SETTLED_TTL, DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
 };
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 use crate::utils::time::unix_now_ms;
@@ -49,6 +49,7 @@ pub struct DiffStatsCache {
 #[derive(Debug, Default)]
 pub(super) struct GitRefreshState {
     untracked: HashMap<String, UntrackedLineMemo>,
+    hibernated: BTreeSet<String>,
 }
 
 impl GitRefreshState {
@@ -227,11 +228,13 @@ pub(super) fn refresh_diff_stats_for(
     let cache_path = runtime.diff_stats_path();
     let now_ms = unix_now_ms();
     // Focus tiers edit-sensitive facts first; activity still keeps recently
-    // worked background worktrees on the hot TTL while the rest decay to idle, or
-    // to settled once clean and landed.
+    // worked background worktrees on the hot TTL. Hibernated roots take the
+    // slowest tier unless a live condition demands their facts.
     let condition_scopes =
         crate::harness::schedule::when::probe_demand(runtime, snapshot.project_root.as_deref());
-    let needed = needed_worktree_paths(snapshot, condition_scopes.into_keys().collect());
+    let condition_scopes = condition_scopes.into_keys().collect();
+    let hibernated = hibernated_worktree_paths(snapshot, &condition_scopes);
+    let needed = needed_worktree_paths(snapshot, condition_scopes);
     let focused = focused_worktree_paths(snapshot);
     let hot = hot_worktree_paths(snapshot);
     let _ = refresh_diff_stats(
@@ -240,6 +243,7 @@ pub(super) fn refresh_diff_stats_for(
         &needed,
         &focused,
         &hot,
+        &hibernated,
         now_ms,
         configured_trunk,
         pass,
@@ -371,19 +375,37 @@ fn refresh_diff_stats(
     needed: &[String],
     focused: &BTreeSet<String>,
     hot: &BTreeSet<String>,
+    hibernated: &BTreeSet<String>,
     now_ms: u64,
     configured_trunk: Option<&str>,
     pass: GitPass,
     state: &mut GitRefreshState,
 ) -> DiffStatsCache {
     state.retain_needed(needed);
-    // One function carries the focus/activity/settled tiering, and every freshness
+    let cache: DiffStatsCache = atomic::read_json_cache(cache_path);
+    let thawed: BTreeMap<_, _> = state
+        .hibernated
+        .difference(hibernated)
+        .filter(|path| needed.contains(path))
+        .map(|path| {
+            let baseline = cache.entries.get(path).map_or((0, 0), |entry| {
+                (
+                    entry.refreshed_at_ms,
+                    entry.commit_refreshed_at_ms.unwrap_or(0),
+                )
+            });
+            (path.clone(), baseline)
+        })
+        .collect();
+    state.hibernated = hibernated.clone();
+    // One function carries the focus/activity/hold tiering, and every freshness
     // verdict — the no-lock fast path, the single-flight loser's probe, and both
     // produce arms — goes through it, so the tiers cannot disagree and a loser
     // never spin-produces what the winner correctly skipped.
-    let stale = |cache: &DiffStatsCache| stale_paths(cache, needed, focused, hot, now_ms);
+    let stale = |cache: &DiffStatsCache| {
+        stale_paths(cache, needed, focused, hot, hibernated, &thawed, now_ms)
+    };
 
-    let cache: DiffStatsCache = atomic::read_json_cache(cache_path);
     // Fast path: nothing stale — no lock, no git, as the all-fresh tick already
     // behaved before the single-flight.
     if stale(&cache).is_empty() {
@@ -393,7 +415,14 @@ fn refresh_diff_stats(
     // The capped winner leaves some entries due on purpose, so the loser waits
     // for, and falls back to, only the selection it fixed from its first read.
     let select = |cache: &DiffStatsCache| {
-        select_for_pass(stale(cache), cache, focused, hot, pass.entry_limit())
+        select_for_pass(
+            stale(cache),
+            cache,
+            focused,
+            hot,
+            &thawed,
+            pass.entry_limit(),
+        )
     };
     let selection = select(&cache);
     let selected: HashSet<&str> = selection.iter().map(|(path, _)| path.as_str()).collect();
@@ -452,6 +481,8 @@ fn stale_paths(
     needed: &[String],
     focused: &BTreeSet<String>,
     hot: &BTreeSet<String>,
+    hibernated: &BTreeSet<String>,
+    thawed: &BTreeMap<String, (u64, u64)>,
     now_ms: u64,
 ) -> Vec<(String, DueFacts)> {
     needed
@@ -461,7 +492,16 @@ fn stale_paths(
             let Some(entry) = entry else {
                 return Some((path.clone(), DueFacts::all()));
             };
-            let (local_ttl, commit_ttl) = diff_stats_tier(path, Some(entry), focused, hot);
+            // A peer must advance both stamps beyond our first read. Equal
+            // millisecond stamps do not prove that it observed the thaw.
+            if thawed.get(path).is_some_and(|(local, commit)| {
+                entry.refreshed_at_ms <= *local
+                    || entry.commit_refreshed_at_ms.unwrap_or(0) <= *commit
+            }) {
+                return Some((path.clone(), DueFacts::all()));
+            }
+            let (local_ttl, commit_ttl) =
+                diff_stats_tier(path, Some(entry), focused, hot, hibernated);
             let mut due = DueFacts {
                 local: !entry.local_fresh_for(now_ms, local_ttl),
                 commit: !entry.commit_fresh_for(now_ms, commit_ttl),
@@ -475,7 +515,7 @@ fn stale_paths(
 }
 
 /// The due entries this pass refreshes, in refresh order: focused paths, then
-/// hot ones (each in `needed` order), then the rest oldest due stamp first
+/// hot ones, then thawed ones (each in `needed` order), then oldest due first
 /// (a missing entry or stamp reads 0), ties in `needed` order. A limit keeps
 /// every priority entry and fills up to it from the rest.
 fn select_for_pass(
@@ -483,13 +523,14 @@ fn select_for_pass(
     cache: &DiffStatsCache,
     focused: &BTreeSet<String>,
     hot: &BTreeSet<String>,
+    thawed: &BTreeMap<String, (u64, u64)>,
     limit: Option<usize>,
 ) -> Vec<(String, DueFacts)> {
-    let (mut priority, mut rest): (Vec<_>, Vec<_>) = due
-        .into_iter()
-        .partition(|(path, _)| focused.contains(path) || hot.contains(path));
-    // Stable sorts keep `needed` order on ties; `false` sorts focused first.
-    priority.sort_by_key(|(path, _)| !focused.contains(path));
+    let (mut priority, mut rest): (Vec<_>, Vec<_>) = due.into_iter().partition(|(path, _)| {
+        focused.contains(path) || hot.contains(path) || thawed.contains_key(path)
+    });
+    // Stable sorting keeps `needed` order within focused, hot, and thawed tiers.
+    priority.sort_by_key(|(path, _)| (!focused.contains(path), !hot.contains(path)));
     rest.sort_by_key(|(path, _)| oldest_due_stamp(cache.entries.get(path.as_str())));
     let take = limit.map_or(rest.len(), |limit| limit.saturating_sub(priority.len()));
     rest.truncate(take);
@@ -505,24 +546,61 @@ fn oldest_due_stamp(entry: Option<&DiffStatsCacheEntry>) -> u64 {
     })
 }
 
-/// `(local, commit)` TTLs for one path: focused, then hot, then settled (the
-/// cached entry is clean and landed), else idle. A missing entry, or `None` in
-/// either fact, is never settled.
+/// `(local, commit)` TTLs: focused, hot, hibernated, settled (clean and landed),
+/// else idle. A missing entry, or `None` in either fact, is never settled.
 fn diff_stats_tier(
     path: &str,
     entry: Option<&DiffStatsCacheEntry>,
     focused: &BTreeSet<String>,
     hot: &BTreeSet<String>,
+    hibernated: &BTreeSet<String>,
 ) -> (Duration, Duration) {
     if focused.contains(path) {
         (DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL)
     } else if hot.contains(path) {
         (DIFF_STATS_TTL, DIFF_STATS_TTL)
+    } else if hibernated.contains(path) {
+        (DIFF_STATS_HIBERNATED_TTL, DIFF_STATS_HIBERNATED_TTL)
     } else if entry.is_some_and(|entry| entry.clean == Some(true) && entry.landed == Some(true)) {
         (DIFF_STATS_SETTLED_TTL, DIFF_STATS_SETTLED_TTL)
     } else {
         (DIFF_STATS_IDLE_TTL, DIFF_STATS_IDLE_TTL)
     }
+}
+
+fn hibernated_worktree_paths(
+    snapshot: &SidebarSnapshot,
+    condition_scopes: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let agents: HashMap<_, _> = snapshot
+        .agents
+        .iter()
+        .map(|agent| ((agent.kind.as_str(), agent.agent_id.as_str()), agent))
+        .collect();
+    let mut hibernated = BTreeSet::new();
+    let mut disqualified = BTreeSet::new();
+    for group in snapshot.worktree_groups.iter() {
+        let Some(path) = git_backed_worktree_path(group) else {
+            continue;
+        };
+        for row in group.rows.iter() {
+            if !row.is_agent() {
+                disqualified.insert(path.clone());
+                continue;
+            }
+            match agents.get(&(row.name.as_str(), row.id.as_str())) {
+                Some(agent) if agent.ended_at.is_some() => {}
+                Some(agent) if agent.hibernation.is_some() => {
+                    hibernated.insert(path.clone());
+                }
+                _ => {
+                    disqualified.insert(path.clone());
+                }
+            }
+        }
+    }
+    hibernated.retain(|path| !disqualified.contains(path) && !condition_scopes.contains(path));
+    hibernated
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
