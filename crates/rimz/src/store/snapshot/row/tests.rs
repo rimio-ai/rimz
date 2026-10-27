@@ -608,6 +608,7 @@ fn agent_card_session_history_requires_positive_evidence() {
 
 fn context_with_cost(total_cost_usd: f64) -> AgentContext {
     AgentContext {
+        last_cache_write: None,
         source: "claude".to_owned(),
         session_name: None,
         session_preview: None,

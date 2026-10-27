@@ -1007,6 +1007,7 @@ fn observed_at() -> Timestamp {
 
 fn observed_context() -> AgentContext {
     AgentContext {
+        last_cache_write: None,
         source: "pi".to_owned(),
         session_name: Some("fixture session".to_owned()),
         session_preview: None,
