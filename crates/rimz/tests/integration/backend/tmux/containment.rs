@@ -34,15 +34,27 @@ fn env_drop_stops_an_unguarded_real_tmux_server() {
         .trim()
         .parse::<u32>()
         .expect("tmux server pid");
+    #[cfg(target_os = "linux")]
+    let server_start = rimz::proc::process_start_token(server_pid);
     #[cfg(not(target_os = "linux"))]
     let _ = server_pid;
 
     drop(env);
 
     assert!(!socket.exists(), "managed tmux socket removed");
+    // The reap stops matching the server once its environment is unreadable, which is before
+    // it exits, and the exited server stays in /proc until its adopter collects it.
     #[cfg(target_os = "linux")]
-    assert!(
-        !Path::new(&format!("/proc/{server_pid}")).exists(),
-        "tmux server exited with its fixture"
-    );
+    {
+        use std::time::{Duration, Instant};
+
+        let deadline = Instant::now() + Duration::from_secs(12);
+        while rimz::proc::process_is_live(server_pid, server_start.as_deref()) {
+            assert!(
+                Instant::now() < deadline,
+                "tmux server did not exit within 12s of its fixture's drop"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
