@@ -256,13 +256,13 @@ The consistency family checks each committed frame alone. Each check compares fi
 
 ### Real-world cross-checks
 
-The writer thread re-verifies the latest roster against the world every `OBSERVE_CROSSCHECK_TTL` (5 s). It reads only what the producer already published (the workspace pane frame through the stat-gated cache read) and process liveness, so the producer stays the only external puller ([state.md](./sidebar/state.md#the-room-data-plane)).
+The writer thread re-verifies the latest roster against the world every `OBSERVE_CROSSCHECK_TTL` (5 s). Per-row process probes obey the [hibernated hold](./sidebar/state.md#cadences), retaining confirmations between checks; thaw restores probing on the next crosscheck. Two held probes report death or a missing hosted agent in about 60–120 s. It reads only what the producer already published (the workspace pane frame through the stat-gated cache read) and process liveness, so the producer stays the only external puller ([state.md](./sidebar/state.md#the-room-data-plane)).
 
 | Detector | Fires when |
 | --- | --- |
 | `row_pane_missing_from_frame`, `cards_exceed_panes` | A roster pane id is absent from the published frame, or the roster outnumbers the frame's panes. Runs only when the roster's fold stamp equals the frame's `produced_at_ms`, since a republish between fold and read is normal skew |
-| `dead_pid` | A row's pane root is gone, or its live start mismatches the published stamp, for `OBSERVE_DEADPID_CONFIRMATIONS` (2) consecutive passes. Agent rows derive the agent CLI's start under that root, as the producer does, and fall back to the root's start when derivation is unavailable. Process rows compare the root's start. Platforms without process metrics skip it |
-| `agent_card_without_process` | An agent row's live pane root authoritatively hosts no process of that kind for `OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS` (2) consecutive passes. Unreadable or branching process trees stay silent, and dead roots are `dead_pid`'s verdict |
+| `dead_pid` | A row's pane root is gone, or its live start mismatches the published stamp, for `OBSERVE_DEADPID_CONFIRMATIONS` (2) consecutive probes. Agent rows derive the agent CLI's start under that root, as the producer does, and fall back to the root's start when derivation is unavailable. Process rows compare the root's start. Platforms without process metrics skip it |
+| `agent_card_without_process` | An agent row's live pane root authoritatively hosts no process of that kind for `OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS` (2) consecutive probes. Unreadable or branching process trees stay silent, and dead roots are `dead_pid`'s verdict |
 
 ### Roles and cost
 

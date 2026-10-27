@@ -142,7 +142,7 @@ The choreography and write classes are [store.md → The write path](./store.md#
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Sidebar observer | One O(rows) signature pass per committed fold, microseconds | Pure detection at every renderer's fold commit point. The host writes observer records and adds one cross-check pass per `OBSERVE_CROSSCHECK_TTL` (5 s) ([diagnostics.md](./diagnostics.md#the-frame-stream-observer)) |
+| Sidebar observer | One O(rows) signature pass per committed fold, microseconds | Pure detection at every renderer's fold commit point. The host writes observer records and adds one cross-check pass per `OBSERVE_CROSSCHECK_TTL` (5 s), with per-row process probes on the [hibernated cadence](./sidebar/state.md#cadences) ([diagnostics.md](./diagnostics.md#the-frame-stream-observer)) |
 | Tick meter | Six relaxed counter loads and two clock reads per metered tick | Healthy ticks do no file IO and spawn nothing |
 | Sidebar heartbeat | Temp file plus atomic rename | Every `HEARTBEAT_WRITE_INTERVAL`, inside the liveness TTL |
 | Room read marks | One stat-keyed parse per thread per record change | Full atomic-file identity of `live/read-marks/marks.json`. Pane sweeps read the current record, never an older shared cut |

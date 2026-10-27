@@ -69,6 +69,7 @@ fn row(id: &str, pane: &str, group: &str) -> RowSig {
 fn row_with_status(id: &str, pane: &str, group: &str, status: &str) -> RowSig {
     RowSig {
         row_id: id.to_owned(),
+        hibernated: false,
         agent_kind: Some("claude".to_owned()),
         pane_id: Some(pane.to_owned()),
         pane_pid: None,
@@ -359,6 +360,18 @@ fn pending_roster_records_structural_and_stamp_changes() {
             .expect("pending roster")
             .rows,
         first.rows
+    );
+    observer.clear_roster_update();
+
+    let mut held = row("a", "p1", "main");
+    held.hibernated = true;
+    observer.observe(sig(375, vec![held]));
+    assert!(
+        observer
+            .pending_roster_update()
+            .expect("hibernation-only update")
+            .rows[0]
+            .hibernated
     );
     observer.clear_roster_update();
 
