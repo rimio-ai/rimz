@@ -1117,6 +1117,7 @@ struct PreparedRole {
     profile: String,
     resolved: ResolvedProfile,
     rendered: (Vec<String>, Vec<CellNotice>),
+    team_prompt: Option<TeamPrompt>,
 }
 
 struct PreparedTeam<'a> {
@@ -1146,7 +1147,7 @@ fn compile_team(
             Some(role.role.clone()),
             role.resolved.launch.mode,
         );
-        cell.team_prompt = TeamPrompt::for_role(prepared.team, cell.system_prompt_file.is_some());
+        cell.team_prompt = role.team_prompt;
         role_cells.insert(role.role, cell);
     }
     let layout = if let Some(raw) = prepared.team.layout.as_deref() {
@@ -2127,6 +2128,30 @@ pub(super) fn validate_team_stages(name: &str, team: &Team) -> Result<()> {
     Ok(())
 }
 
+/// The team prompt layer one role's cell receives, or the refusal for a declared
+/// layer it cannot take: the one rule team compile and a member's relaunch share.
+pub(super) fn role_team_prompt(
+    name: &str,
+    team: &Team,
+    role: &str,
+    role_has_base: bool,
+) -> Result<Option<TeamPrompt>> {
+    if crate::harness::team_prompt::declared(team) {
+        if !team.staged() {
+            return Err(LayoutErr::TeamPromptWithoutStages {
+                team: name.to_owned(),
+            });
+        }
+        if !role_has_base {
+            return Err(LayoutErr::TeamPromptWithoutBase {
+                team: name.to_owned(),
+                role: role.to_owned(),
+            });
+        }
+    }
+    Ok(TeamPrompt::for_role(team, role_has_base))
+}
+
 fn prepare_team<'a>(
     name: &str,
     team: &'a Team,
@@ -2242,18 +2267,19 @@ fn prepare_team<'a>(
                 definition: binding.profile.clone(),
             });
         }
-        if team_prompt_declared && resolved.system_prompt_file.is_none() {
-            return Err(LayoutErr::TeamPromptWithoutBase {
-                team: name.to_owned(),
-                role: binding.role.clone(),
-            });
-        }
+        let team_prompt = role_team_prompt(
+            name,
+            team,
+            &binding.role,
+            resolved.system_prompt_file.is_some(),
+        )?;
         let rendered = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
             role: binding.role.clone(),
             profile: binding.profile.clone(),
             resolved,
             rendered,
+            team_prompt,
         });
     }
     if let Some(leader) = team.leader.as_deref()

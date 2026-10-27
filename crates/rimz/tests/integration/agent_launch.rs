@@ -4024,6 +4024,99 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
 
 #[cfg(unix)]
 #[test]
+fn explain_seat_replays_the_team_prompt_layer() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let provider_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(provider_home.join("projects")).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "Profile instructions.",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "forge",
+        "layout: lead\nleader: lead\nstages: [Build]\n\
+         roles:\n  - {role: lead, agent: worker, owns: [Build]}",
+        "Team instructions.",
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: "missing-conversation".into(),
+                launch_id: Some("launch_explain_team".into()),
+                agent_name: "lead".into(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some("forge.lead".into()),
+                    team: Some("forge".into()),
+                    role: Some("lead".into()),
+                    isolation: Some(rimz::config::Isolation::Host),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    let before = serde_json::to_value(store.read_events().unwrap()).unwrap();
+    let output = env
+        .rimz()
+        .env("CLAUDE_CONFIG_DIR", &provider_home)
+        .args(["agents", "explain", "@lead", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let composed = report["prompt"]["composed"].as_str().unwrap();
+    assert!(
+        composed.starts_with("claude base.\n\nProfile instructions."),
+        "{composed}"
+    );
+    let sources = report["prompt"]["sources"].as_array().unwrap();
+    assert_eq!(
+        sources
+            .iter()
+            .map(|source| source["builtin"].as_str())
+            .collect::<Vec<_>>(),
+        [None, None, Some("team consensus"), None]
+    );
+    let role = composed.find("Profile instructions.").unwrap();
+    let consensus = composed.find("# Team consensus").unwrap();
+    let team = composed.find("Team instructions.").unwrap();
+    assert!(role < consensus && consensus < team, "{composed}");
+    assert_eq!(
+        serde_json::to_value(store.read_events().unwrap()).unwrap(),
+        before
+    );
+    assert!(!env.runtime_paths().prompt_dir().exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn explain_child_replays_its_subagent_profile_and_child_treatment() {
     let env = Env::new();
     env.record(&env.project_root);

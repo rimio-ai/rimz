@@ -337,14 +337,14 @@ pub struct ResumeSkip {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePosture {
     pub launch: ResumeLaunchPosture,
-    /// Set when the profile no longer applies and the session comes back bare.
+    /// Set when the configured posture cannot apply and the result is bare.
     /// Unattended recovery prints it and continues; restart and fork escalate
     /// [`PostureDegrade::KindChanged`] because switching providers under a
     /// running agent is a decision the user makes, not a fallback.
     pub degraded: Option<PostureDegrade>,
 }
 
-/// Why a stored profile or requested override cannot produce a resume posture.
+/// Why the configured launch or requested override cannot produce a resume posture.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PostureDegrade {
     #[error("resume override refused: {reason}")]
@@ -361,6 +361,8 @@ pub enum PostureDegrade {
     PromptFileMissing { profile: String, reason: String },
     #[error("profile `{profile}` prompt replacement is unsupported ({reason})")]
     PromptUnsupported { profile: String, reason: String },
+    #[error("{reason}")]
+    TeamPromptRejected { reason: String },
 }
 
 impl ResumePosture {
@@ -417,13 +419,17 @@ pub struct PostureRequest<'a> {
 /// that is gone, broken, or now resolves to a different provider degrades to a
 /// bare resume carrying a warning.
 pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -> ResumePosture {
-    ResumePosture::degrade_to_bare(request, resolve_posture_with_role(request, profiles, None))
+    ResumePosture::degrade_to_bare(
+        request,
+        resolve_posture_with_role(request, profiles, None, None),
+    )
 }
 
-/// [`resolve_posture`] for a team member reopened on its own, as `agents
-/// restart` does: the member's role in its recorded team layers its prompts
-/// and args the way a team resume does. A team or role no longer configured
-/// resolves as a solo agent.
+/// [`resolve_posture`] for a member's restart, molt, or explain: its recorded
+/// team's role layers its prompts and args, and the rebased cell receives the
+/// same team prompt layer as a fresh seat before prompt validation. A declared
+/// layer the seat cannot receive is reported for the caller to refuse. A team
+/// or role no longer configured resolves as a solo agent.
 pub fn resolve_member_posture(
     request: PostureRequest<'_>,
     profiles: &ProfilesConfig,
@@ -431,17 +437,17 @@ pub fn resolve_member_posture(
     team: Option<&str>,
     role: Option<&str>,
 ) -> ResumePosture {
-    let binding = team.zip(role).and_then(|(team, role)| {
-        teams
-            .0
-            .get(team)?
-            .roles
-            .iter()
-            .find(|binding| binding.role == role)
-    });
+    let (team, binding) = team
+        .zip(role)
+        .and_then(|(name, role)| {
+            let team = teams.0.get(name)?;
+            let binding = team.roles.iter().find(|binding| binding.role == role)?;
+            Some(((name, team), binding))
+        })
+        .unzip();
     ResumePosture::degrade_to_bare(
         request,
-        resolve_posture_with_role(request, profiles, binding),
+        resolve_posture_with_role(request, profiles, binding, team),
     )
 }
 
@@ -449,6 +455,7 @@ fn resolve_posture_with_role(
     request: PostureRequest<'_>,
     profiles: &ProfilesConfig,
     role: Option<&crate::config::RoleBinding>,
+    team: Option<(&str, &crate::config::Team)>,
 ) -> Result<ResumeLaunchPosture, PostureDegrade> {
     if request.profile.is_none() && request.record.is_none() {
         return Ok(bare_posture(request.stamped_mode, request.kind));
@@ -579,6 +586,17 @@ fn resolve_posture_with_role(
         if let Some(record) = &mut cell.launch.record {
             record.fast = cell.launch.fast;
         }
+    }
+    if let Some(((name, team), role)) = team.zip(role) {
+        cell.team_prompt = crate::harness::spec::role_team_prompt(
+            name,
+            team,
+            &role.role,
+            cell.system_prompt_file.is_some(),
+        )
+        .map_err(|err| PostureDegrade::TeamPromptRejected {
+            reason: err.to_string(),
+        })?;
     }
     if let Err(err) =
         crate::harness::plan::validate_finalized_cell(&cell, find_definition(cell.kind.as_str()))
@@ -2891,6 +2909,7 @@ fn restore_resume_cell(
             },
             profiles,
             role,
+            None,
         )?
     } else {
         ResumeLaunchPosture::from(&*cell)
