@@ -1008,7 +1008,7 @@ impl RecoveryPlan {
                                     "team resume materialization skipped"
                                 );
                                 resume.warnings.push(format!(
-                                    "could not restore team `{}` in {}: {err}",
+                                    "could not restore team `{}` in {}: {err:#}",
                                     planned.team, planned.label
                                 ));
                             }

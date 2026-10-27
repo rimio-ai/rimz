@@ -654,7 +654,7 @@ fn rebirth_reports_failed_team_definitions_even_with_config_fallback() {
             "cannot restore team `forge` in #forge: members resume as individual sessions \
              without the team's layout and prompt layers\n{cause}"
         );
-        let mut expected_warnings = vec![warning];
+        let mut expected_warnings = Vec::new();
         if config_fallback {
             let error = crate::config::effective::load(&machine, &fixture.project)
                 .err()
@@ -664,6 +664,7 @@ fn rebirth_reports_failed_team_definitions_even_with_config_fallback() {
                  recovery ran with machine profiles and no team definitions"
             ));
         }
+        expected_warnings.push(warning);
         let warnings = plan.planned.warnings.clone();
         let resume = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
         actual.push((warnings, resume.warnings, resume.tabs.len()));
@@ -679,30 +680,45 @@ fn rebirth_reports_failed_team_definitions_even_with_config_fallback() {
 
 #[test]
 fn rebirth_warns_when_a_team_tab_cannot_materialize() {
-    let dir = tempfile::tempdir().unwrap();
-    let worktree = dir.path().join("forge");
-    let fixture = Fixture::new(&[("planner", &worktree, true)]);
-    fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
-    fixture.conversation("planner");
-    std::fs::create_dir_all(worktree.join(".rimz/team")).unwrap();
-    let mut machine = team_machine();
-    machine.agents.teams.0.get_mut("forge").unwrap().roles[0].owns = vec!["Plan".into()];
-    let plan = fixture.inspect_with(&machine, false);
-    assert_eq!(plan.preview().pane_count(), 2);
-    assert!(plan.planned.warnings.is_empty());
-    let resume = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
-    assert!(resume.tabs.is_empty());
-    assert_eq!(resume.warnings.len(), 1);
-    let warning = &resume.warnings[0];
-    for expected in [
-        "forge",
-        "#forge",
-        "cannot link team notes",
-        "move the existing file or directory aside",
-    ] {
-        assert!(warning.contains(expected), "{warning}");
+    for notes_link_blocked in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("forge");
+        let fixture = Fixture::new(&[("planner", &worktree, true)]);
+        fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+        fixture.conversation("planner");
+        let mut machine = team_machine();
+        let prompt = dir.path().join("planner.md");
+        let causes = if notes_link_blocked {
+            std::fs::create_dir_all(worktree.join(".rimz/team")).unwrap();
+            machine.agents.teams.0.get_mut("forge").unwrap().roles[0].owns = vec!["Plan".into()];
+            [
+                "cannot link team notes",
+                "move the existing file or directory aside",
+            ]
+        } else {
+            std::fs::write(&prompt, "plan\n").unwrap();
+            let profile = machine.agents.profiles.0.get_mut("claude-plan").unwrap();
+            profile.system_prompt_file = Some(prompt.clone().into());
+            [
+                "building team restore layout: ",
+                "not found; create it or fix the launch config",
+            ]
+        };
+        let plan = fixture.inspect_with(&machine, false);
+        assert_eq!(plan.preview().pane_count(), 2);
+        assert!(plan.planned.warnings.is_empty());
+        if !notes_link_blocked {
+            std::fs::remove_file(&prompt).unwrap();
+        }
+        let resume = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
+        assert!(resume.tabs.is_empty());
+        assert_eq!(resume.warnings.len(), 1);
+        let warning = &resume.warnings[0];
+        for expected in ["forge", "#forge"].into_iter().chain(causes) {
+            assert!(warning.contains(expected), "{warning}");
+        }
+        assert!(pending(&fixture).contains(&key("planner")));
     }
-    assert!(pending(&fixture).contains(&key("planner")));
 }
 
 #[test]
