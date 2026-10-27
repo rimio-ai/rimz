@@ -1,7 +1,7 @@
 //! Deterministic sidebar scenes for scripted playback and screenshots.
 //!
-//! A fixture card carries only state its agent kind can reach on a default configuration: a cache
-//! clock goes on a Claude or Codex card, since only those adapters declare a prompt-cache lifetime.
+//! Scenes carry explicit fixture clocks. Live folds resolve per-agent cache lifetimes from
+//! observations, settings and provider defaults, including the configurable fallback.
 
 use super::Preset;
 use super::{AgentSpec, Field, Verb};

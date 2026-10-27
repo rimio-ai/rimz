@@ -59,7 +59,7 @@ pub(super) fn publish(
     }
 }
 
-/// Stamp each agent card's [`CacheClock`]: the provider's prompt-cache TTL as
+/// Stamp each agent card's [`CacheClock`]: its resolved cache lifetime as
 /// the age pin's ceiling, plus the held window when keep-warm is holding the
 /// agent under its published horizon ([`holds`]) — judged here on every fold,
 /// since status and harness settings move faster than the heavy lane.
@@ -76,7 +76,7 @@ pub(in crate::sidebar) fn project_cache_clocks(
         .agents
         .iter()
         .filter_map(|agent| {
-            let ttl = harness.prompt_cache_ttl(&agent.kind)?;
+            let ttl = harness.prompt_cache_lifetime(agent)?;
             let published = cache.horizons.get(&horizon_key(agent));
             let horizon = published.map(|&secs| std::time::Duration::from_secs(secs));
             let held = holds(agent, horizon, harness, now)
@@ -211,6 +211,40 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn observed_lifetime_keeps_a_card_clock_at_or_below_the_margin() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(
+            crate::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        let actual: Vec<_> = ["5m", "6m"]
+            .map(|margin| {
+                let mut agent = agent("claude", "short", None, Some(10));
+                agent.context = Some(crate::agents::AgentContext {
+                    last_cache_write: Some(
+                        crate::agents::context::CacheWriteRetention::FiveMinutes,
+                    ),
+                    ..Default::default()
+                });
+                let mut snapshot = snapshot(&runtime, vec![agent]);
+                project_cache_clocks(
+                    &mut snapshot,
+                    &KeepWarmCache::default(),
+                    &toml::from_str(&format!("prompt_cache_margin = '{margin}'")).unwrap(),
+                    &runtime,
+                );
+                snapshot
+                    .rows()
+                    .find_map(|row| row.as_agent()?.cache)
+                    .map(|clock| clock.ceiling_secs)
+            })
+            .into_iter()
+            .collect();
+        assert_eq!(actual, [Some(300), Some(300)]);
     }
 
     fn snapshot(runtime: &RuntimePaths, agents: Vec<AgentState>) -> SidebarSnapshot {
@@ -350,8 +384,14 @@ mod tests {
         );
         assert_eq!(
             clock("unknown-1"),
-            None,
-            "no known TTL keeps the hour clock"
+            Some(CacheClock {
+                ceiling_secs: 3600,
+                last_request_at: Some(ended),
+                warm_until: None,
+                held_since: None,
+                rewarm_cost_usd: None,
+            }),
+            "a kind without a provider default uses the fallback"
         );
     }
 

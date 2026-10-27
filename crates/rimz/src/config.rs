@@ -92,7 +92,8 @@ pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
 pub(crate) use harness::IdleCompactParseError;
 pub use harness::{
-    CompactSeat, DayCap, HarnessConfig, IdleCompact, KeepWarm, KeepWarmFields, KeepWarmPolicy,
+    CompactSeat, ConfiguredLifetime, DayCap, HarnessConfig, IdleCompact, KeepWarm, KeepWarmFields,
+    KeepWarmPolicy, LifetimeSource,
 };
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;

@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::agents::AgentState;
 use crate::agents::BudgetWindow;
+use crate::agents::context::{CacheWriteRetention, SignIn};
 use crate::harness::budget::BudgetSpec;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
@@ -431,7 +433,7 @@ pub struct HarnessConfig {
         skip_serializing_if = "BTreeMap::is_empty",
         with = "prompt_cache_ttl_serde"
     )]
-    prompt_cache_ttl: BTreeMap<String, Option<Duration>>,
+    prompt_cache_ttl: BTreeMap<String, LifetimeSetting>,
     /// Default local-calendar-day cap for one room's whole agent fleet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<DayCap>,
@@ -450,17 +452,17 @@ pub struct HarnessConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_instruction: Option<String>,
     /// Compact an idle seat whose context holds at least this many tokens
-    /// before its provider prompt cache expires; a profile or team role
+    /// before its resolved prompt cache expires; a profile or team role
     /// overrides it, and `off` disables it.
     #[serde(default)]
     pub idle_compact: IdleCompact,
     /// Compact a team member on hand-off: the role's `flip-compact` overrides this setting, then unset falls back to 120k for a Plan owner or 180k otherwise; `off` disables compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_compact: Option<FlipCompact>,
-    /// The shortest prompt-cache TTL keep-warm will hold; `None` (`off`) admits any known TTL.
+    /// The shortest lifetime admitted for any cache ping; `None` (`off`) removes the floor.
     #[serde(with = "keep_warm_min_ttl_serde")]
     pub keep_warm_min_ttl: Option<Duration>,
-    /// How long before a prompt cache expires keep-warm pings and idle
+    /// How long before a prompt cache expires cache pings and idle
     /// compaction fire. Request anchoring excludes final generation, so this
     /// covers the producer tick, helper spawn, and submission.
     #[serde(with = "prompt_cache_margin_serde")]
@@ -487,12 +489,67 @@ impl Default for HarnessConfig {
 }
 
 impl HarnessConfig {
-    /// Configured override, explicit off, or the provider definition's default.
-    pub fn prompt_cache_ttl(&self, kind: &crate::ids::AgentKind) -> Option<Duration> {
-        self.prompt_cache_ttl
+    /// Settings, provider defaults, then the fallback, without live cache-write evidence.
+    pub fn configured_lifetime(
+        &self,
+        kind: &crate::ids::AgentKind,
+        sign_in: Option<SignIn>,
+    ) -> ConfiguredLifetime {
+        let setting = self
+            .prompt_cache_ttl
             .get(kind.as_str())
-            .copied()
-            .unwrap_or_else(|| crate::agents::find_definition(kind.as_str())?.prompt_cache_ttl())
+            .and_then(|setting| match setting {
+                LifetimeSetting::Plain(ttl) => Some(*ttl),
+                LifetimeSetting::Split(values) => values.get(&sign_in?).copied(),
+            });
+        if let Some(ttl) = setting {
+            return ConfiguredLifetime {
+                ttl,
+                source: LifetimeSource::Setting,
+            };
+        }
+        if let Some(ttl) = crate::agents::find_definition(kind.as_str())
+            .and_then(|adapter| adapter.prompt_cache_ttl(sign_in))
+        {
+            return ConfiguredLifetime {
+                ttl: Some(ttl),
+                source: LifetimeSource::Default,
+            };
+        }
+        ConfiguredLifetime {
+            ttl: self.fallback_lifetime(),
+            source: LifetimeSource::Fallback,
+        }
+    }
+
+    /// The newest split cache write wins, even over `off`; unsplit writes use static policy.
+    pub fn prompt_cache_lifetime(&self, agent: &AgentState) -> Option<Duration> {
+        match agent
+            .context
+            .as_ref()
+            .and_then(|context| context.last_cache_write)
+        {
+            Some(CacheWriteRetention::FiveMinutes) => Some(Duration::from_secs(300)),
+            Some(CacheWriteRetention::OneHour) => Some(Duration::from_secs(3600)),
+            Some(CacheWriteRetention::Unsplit) | None => {
+                self.configured_lifetime(&agent.kind, agent.sign_in).ttl
+            }
+        }
+    }
+
+    /// Every ping needs room for the margin and admission by the optional lifetime floor.
+    pub fn ping_lifetime(&self, agent: &AgentState) -> Option<Duration> {
+        self.prompt_cache_lifetime(agent).filter(|ttl| {
+            *ttl > self.prompt_cache_margin
+                && self.keep_warm_min_ttl.is_none_or(|floor| *ttl >= floor)
+        })
+    }
+
+    fn fallback_lifetime(&self) -> Option<Duration> {
+        match self.prompt_cache_ttl.get("fallback") {
+            Some(LifetimeSetting::Plain(ttl)) => *ttl,
+            _ => Some(Duration::from_secs(3600)),
+        }
     }
 
     pub fn compact_instruction(&self, seat: CompactSeat) -> &str {
@@ -502,8 +559,7 @@ impl HarnessConfig {
         })
     }
 
-    /// The margin must leave room before every cache expiry it is measured
-    /// from, or keep-warm and idle compaction would silently never fire.
+    /// Static lifetimes must leave room for the margin. Runtime writes may override them.
     fn check_prompt_cache_margin(&self) -> Result<(), String> {
         let margin = self.prompt_cache_margin;
         let shown = crate::utils::time::format_duration_compact;
@@ -514,11 +570,26 @@ impl HarnessConfig {
                 shown(max)
             ));
         }
-        for kind in crate::agents::known_kinds() {
-            let kind = crate::ids::AgentKind::new_unchecked(kind);
-            if let Some(ttl) = self.prompt_cache_ttl(&kind).filter(|ttl| *ttl <= margin) {
+        let fallback = self
+            .fallback_lifetime()
+            .map(|ttl| ("fallback".to_owned(), ttl));
+        let lifetimes = crate::agents::known_kinds().flat_map(|kind| {
+            [None, Some(SignIn::Subscription), Some(SignIn::ApiKey)]
+                .into_iter()
+                .filter_map(move |sign_in| {
+                    let label = match sign_in {
+                        None => kind.to_owned(),
+                        Some(sign_in) => format!("{kind} {}", sign_in.as_str()),
+                    };
+                    self.configured_lifetime(&crate::ids::AgentKind::new_unchecked(kind), sign_in)
+                        .ttl
+                        .map(|ttl| (label, ttl))
+                })
+        });
+        for (label, ttl) in fallback.into_iter().chain(lifetimes) {
+            if ttl <= margin {
                 return Err(format!(
-                    "harness.prompt_cache_margin {} must be shorter than the {kind} prompt-cache TTL {}; lower the margin or set harness.prompt_cache_ttl.{kind}",
+                    "harness.prompt_cache_margin {} must be shorter than the {label} prompt-cache TTL {}; lower the margin or change harness.prompt_cache_ttl (settings and defaults only; an agent's own cache writes can change its lifetime)",
                     shown(margin),
                     shown(ttl)
                 ));
@@ -526,6 +597,29 @@ impl HarnessConfig {
         }
         Ok(())
     }
+}
+
+/// The static policy layer that supplied a configured prompt-cache lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifetimeSource {
+    Setting,
+    Default,
+    Fallback,
+}
+
+/// A prompt-cache lifetime resolved without live cache-write evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConfiguredLifetime {
+    /// The resolved duration, or `None` when the static policy disables it.
+    pub ttl: Option<Duration>,
+    /// The setting, provider default, or fallback that supplied the lifetime.
+    pub source: LifetimeSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LifetimeSetting {
+    Plain(Option<Duration>),
+    Split(BTreeMap<SignIn, Option<Duration>>),
 }
 
 /// Deserializes `[harness]` and refuses a prompt-cache margin its TTLs or
@@ -611,32 +705,62 @@ mod prompt_cache_ttl_serde {
 
     pub fn deserialize<'de, D>(
         deserializer: D,
-    ) -> Result<BTreeMap<String, Option<Duration>>, D::Error>
+    ) -> Result<BTreeMap<String, LifetimeSetting>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        BTreeMap::<String, String>::deserialize(deserializer)?
+        BTreeMap::<String, toml::Value>::deserialize(deserializer)?
             .into_iter()
             .map(|(kind, raw)| {
-                let ttl = parse_entry(&kind, &raw).map_err(serde::de::Error::custom)?;
+                let ttl = parse_entry(&kind, raw).map_err(serde::de::Error::custom)?;
                 Ok((kind, ttl))
             })
             .collect()
     }
 
-    fn parse_entry(kind: &str, raw: &str) -> Result<Option<Duration>, String> {
-        if !crate::agents::known_kinds().any(|known| known == kind) {
+    fn parse_entry(kind: &str, raw: toml::Value) -> Result<LifetimeSetting, String> {
+        if kind != "fallback" && !crate::agents::known_kinds().any(|known| known == kind) {
             return Err(format!(
                 "harness.prompt_cache_ttl.{kind}: unknown provider kind; use a built-in or installed plugin kind"
             ));
         }
-        parse_off_or_duration(raw).ok_or_else(|| {
-            format!("harness.prompt_cache_ttl.{kind} must be off or a non-zero duration such as 5m")
+        if kind != "fallback"
+            && let toml::Value::Table(values) = raw
+        {
+            return values
+                .into_iter()
+                .map(|(sign_in, raw)| parse_split_entry(kind, sign_in, raw))
+                .collect::<Result<_, _>>()
+                .map(LifetimeSetting::Split);
+        }
+        parse_ttl(kind, &raw).map(LifetimeSetting::Plain)
+    }
+
+    fn parse_split_entry(
+        kind: &str,
+        sign_in: String,
+        raw: toml::Value,
+    ) -> Result<(SignIn, Option<Duration>), String> {
+        let sign_in = [SignIn::Subscription, SignIn::ApiKey]
+            .into_iter()
+            .find(|mode| mode.as_str() == sign_in)
+            .ok_or_else(|| {
+                format!(
+                    "harness.prompt_cache_ttl.{kind}.{sign_in}: unknown sign-in; use subscription or api-key"
+                )
+            })?;
+        let ttl = parse_ttl(&format!("{kind}.{}", sign_in.as_str()), &raw)?;
+        Ok((sign_in, ttl))
+    }
+
+    fn parse_ttl(key: &str, raw: &toml::Value) -> Result<Option<Duration>, String> {
+        raw.as_str().and_then(parse_off_or_duration).ok_or_else(|| {
+            format!("harness.prompt_cache_ttl.{key} must be off or a non-zero duration such as 5m")
         })
     }
 
     pub fn serialize<S>(
-        values: &BTreeMap<String, Option<Duration>>,
+        values: &BTreeMap<String, LifetimeSetting>,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
@@ -644,7 +768,25 @@ mod prompt_cache_ttl_serde {
     {
         values
             .iter()
-            .map(|(kind, ttl)| (kind, format_off_or_duration(*ttl)))
+            .map(|(kind, setting)| {
+                let value = match setting {
+                    LifetimeSetting::Plain(ttl) => {
+                        toml::Value::String(format_off_or_duration(*ttl))
+                    }
+                    LifetimeSetting::Split(values) => toml::Value::Table(
+                        values
+                            .iter()
+                            .map(|(sign_in, ttl)| {
+                                (
+                                    sign_in.as_str().to_owned(),
+                                    toml::Value::String(format_off_or_duration(*ttl)),
+                                )
+                            })
+                            .collect(),
+                    ),
+                };
+                (kind, value)
+            })
             .collect::<BTreeMap<_, _>>()
             .serialize(serializer)
     }
@@ -744,414 +886,4 @@ mod smart_compact_serde {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn profiles_accept_max_blocks_but_not_flags_or_invalid_durations() {
-        for value in ["\"2h\"", "\"off\"", "{ max = \"2h\" }", "{ max = \"off\" }"] {
-            let profile = toml::from_str::<crate::config::Profile>(&format!(
-                "agent = 'claude'\nkeep-warm = {value}"
-            ));
-            assert!(profile.is_ok(), "keep-warm {value}: {profile:?}");
-        }
-        for value in [
-            "true",
-            "3",
-            "{ max = '0s' }",
-            "{ max = '2x' }",
-            "{ typo = '2h' }",
-        ] {
-            assert!(
-                toml::from_str::<crate::config::Profile>(&format!(
-                    "agent = 'claude'\nkeep-warm = {value}"
-                ))
-                .is_err(),
-                "{value}"
-            );
-        }
-    }
-
-    #[test]
-    fn prompt_cache_margin_is_positive_and_validated_against_effective_limits() {
-        let defaults = serde_json::to_value(HarnessConfig::default()).unwrap();
-        assert_eq!(defaults["prompt_cache_margin"], "1m");
-        for raw in ["90s", "30s"] {
-            let config: HarnessConfig =
-                toml::from_str(&format!("prompt_cache_margin = {raw:?}")).unwrap();
-            let encoded = toml::to_string(&config).unwrap();
-            assert_eq!(
-                serde_json::to_value(&config).unwrap()["prompt_cache_margin"],
-                raw
-            );
-            assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
-        }
-        for (raw, detail) in [
-            ("prompt_cache_margin = \"off\"", "prompt_cache_margin"),
-            ("prompt_cache_margin = \"0s\"", "prompt_cache_margin"),
-            ("prompt_cache_margin = \"30m\"", "codex"),
-            (
-                "prompt_cache_margin = \"2m\"\nprompt_cache_ttl = { claude = \"2m\" }",
-                "claude",
-            ),
-            (
-                "prompt_cache_margin = \"2m\"\ncache_keepalive_max = \"2m\"",
-                "cache_keepalive_max",
-            ),
-        ] {
-            let err = super::super::parse_core_text(
-                std::path::Path::new("config.toml"),
-                &format!("[harness]\n{raw}"),
-            )
-            .err()
-            .unwrap_or_else(|| panic!("incompatible margin must refuse load: {raw}"))
-            .validation_message();
-            assert!(err.contains(detail), "{raw}: {err}");
-        }
-    }
-
-    #[test]
-    fn prompt_cache_defaults_and_overrides() {
-        let kind = crate::ids::AgentKind::new_unchecked;
-        let defaults = HarnessConfig::default();
-        assert!(defaults.cache_keepalive);
-        assert_eq!(
-            defaults.prompt_cache_ttl(&kind("claude")),
-            Some(Duration::from_secs(3600))
-        );
-        assert_eq!(
-            defaults.prompt_cache_ttl(&kind("codex")),
-            Some(Duration::from_secs(1800))
-        );
-        assert_eq!(defaults.prompt_cache_ttl(&kind("amp")), None);
-        let config: HarnessConfig = toml::from_str("cache_keepalive = false\n[prompt_cache_ttl]\nclaude = \"5m\"\ncodex = \"off\"\namp = \"10m\"").unwrap();
-        assert!(!config.cache_keepalive);
-        assert_eq!(
-            config.prompt_cache_ttl(&kind("claude")),
-            Some(Duration::from_secs(300))
-        );
-        assert_eq!(config.prompt_cache_ttl(&kind("codex")), None);
-        assert_eq!(
-            config.prompt_cache_ttl(&kind("amp")),
-            Some(Duration::from_secs(600))
-        );
-        assert_eq!(
-            toml::from_str::<HarnessConfig>(&toml::to_string(&config).unwrap()).unwrap(),
-            config
-        );
-    }
-
-    #[test]
-    fn prompt_cache_overrides_refuse_unknown_kinds_and_bad_ttls() {
-        for (kind, value) in [
-            ("typo", "5m"),
-            ("claude", "0s"),
-            ("claude", "on"),
-            ("claude", "nonsense"),
-        ] {
-            let raw = format!("[prompt_cache_ttl]\n{kind} = {value:?}");
-            let err = toml::from_str::<HarnessConfig>(&raw)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                err.contains(&format!("harness.prompt_cache_ttl.{kind}")),
-                "{err}"
-            );
-        }
-    }
-
-    #[test]
-    fn cache_keepalive_max_defaults_to_six_hours_and_takes_off_or_a_duration() {
-        let six_hours = Some(Duration::from_secs(6 * 3600));
-        assert_eq!(HarnessConfig::default().cache_keepalive_max, six_hours);
-        let absent: HarnessConfig = toml::from_str("").unwrap();
-        assert_eq!(absent.cache_keepalive_max, six_hours);
-        for (raw, expected) in [("off", None), ("2h", Some(Duration::from_secs(7200)))] {
-            let config: HarnessConfig =
-                toml::from_str(&format!("cache_keepalive_max = {raw:?}")).unwrap();
-            assert_eq!(config.cache_keepalive_max, expected);
-            let rendered = toml::to_string(&config).unwrap();
-            assert!(
-                rendered.contains(&format!("cache_keepalive_max = {raw:?}")),
-                "{rendered}"
-            );
-            assert_eq!(toml::from_str::<HarnessConfig>(&rendered).unwrap(), config);
-        }
-        for raw in ["0s", "on", "nonsense"] {
-            let err = toml::from_str::<HarnessConfig>(&format!("cache_keepalive_max = {raw:?}"))
-                .unwrap_err()
-                .to_string();
-            assert!(
-                err.contains(
-                    "harness.cache_keepalive_max must be off or a non-zero duration such as 6h"
-                ),
-                "{raw}: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn keep_warm_takes_off_or_a_positive_duration() {
-        assert_eq!("off".parse::<KeepWarm>(), Ok(KeepWarm::Off));
-        assert_eq!(
-            "2h".parse::<KeepWarm>(),
-            Ok(KeepWarm::For(Duration::from_secs(7200)))
-        );
-        assert_eq!(KeepWarm::For(Duration::from_secs(7200)).to_string(), "2h");
-        for raw in ["true", "on", "0", "0s", "2x", ""] {
-            assert_eq!(raw.parse::<KeepWarm>(), Err(KeepWarmParseError), "{raw}");
-        }
-    }
-
-    #[test]
-    fn keep_warm_floor_defaults_to_fifteen_minutes_and_takes_off() {
-        assert_eq!(
-            HarnessConfig::default().keep_warm_min_ttl,
-            Some(Duration::from_secs(900))
-        );
-        for (raw, expected) in [("off", None), ("5m", Some(Duration::from_secs(300)))] {
-            let config: HarnessConfig =
-                toml::from_str(&format!("keep_warm_min_ttl = {raw:?}")).unwrap();
-            assert_eq!(config.keep_warm_min_ttl, expected, "{raw}");
-            assert_eq!(
-                toml::from_str::<HarnessConfig>(&toml::to_string(&config).unwrap()).unwrap(),
-                config
-            );
-        }
-        let err = toml::from_str::<HarnessConfig>("keep_warm_min_ttl = \"5x\"")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("harness.keep_warm_min_ttl must be off or a duration such as 15m"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn smart_compact_deserializes_percent() {
-        let config: HarnessConfig =
-            toml::from_str("smart_compact = \"70%\"").expect("parse harness config");
-
-        assert_eq!(config.smart_compact, Some(AutoCompact::Percent(70)));
-    }
-
-    #[test]
-    fn compaction_defaults_apply_when_unset() {
-        for config in [HarnessConfig::default(), toml::from_str("").unwrap()] {
-            assert_eq!(config.auto_compact, Some(272_000));
-            assert_eq!(config.smart_compact, Some(AutoCompact::Tokens(258 * 1_000)));
-        }
-    }
-
-    #[test]
-    fn native_compaction_takes_off_or_a_window_and_round_trips() {
-        for (raw, expected, rendered) in [
-            ("off", None, "off"),
-            ("100k", Some(100_000), "100k"),
-            ("272k", Some(272_000), "272k"),
-            ("272000", Some(272_000), "272k"),
-            ("272001", Some(272_001), "272001"),
-            ("1m", Some(1_000_000), "1000k"),
-        ] {
-            let parsed = toml::from_str::<HarnessConfig>(&format!("auto_compact = {raw:?}"));
-            assert!(parsed.is_ok(), "{raw}: {parsed:?}");
-            let config = parsed.unwrap();
-            assert_eq!(config.auto_compact, expected);
-            let encoded = toml::to_string(&config).unwrap();
-            assert!(
-                encoded.contains(&format!("auto_compact = {rendered:?}")),
-                "{encoded}"
-            );
-            assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
-        }
-    }
-
-    #[test]
-    fn native_compaction_rejects_invalid_windows_with_the_key() {
-        for raw in ["99k", "1000001", "70%", "abc"] {
-            let error = toml::from_str::<HarnessConfig>(&format!("auto_compact = {raw:?}"))
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("harness.auto_compact must be off or a token count from 100k through 1M, such as 272k"), "{raw}: {error}");
-        }
-    }
-
-    #[test]
-    fn smart_compaction_takes_off_and_round_trips() {
-        let parsed = toml::from_str::<HarnessConfig>("smart_compact = \"off\"");
-        assert!(parsed.is_ok(), "{parsed:?}");
-        let config = parsed.unwrap();
-        assert_eq!(config.smart_compact, None);
-        let encoded = toml::to_string(&config).unwrap();
-        assert!(encoded.contains("smart_compact = \"off\""), "{encoded}");
-        assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
-    }
-
-    #[test]
-    fn day_cap_requires_day_and_round_trips() {
-        let config: HarnessConfig =
-            toml::from_str("budget = \"50.25/day\"").expect("parse day cap");
-        assert_eq!(config.budget.map(DayCap::as_usd), Some(50.25));
-        let rendered = toml::to_string(&config).expect("serialize harness");
-        assert!(rendered.contains("budget = \"50.25/day\""), "{rendered}");
-        assert!(
-            toml::from_str::<HarnessConfig>("budget = \"50\"")
-                .unwrap_err()
-                .to_string()
-                .contains("must end in `/day`")
-        );
-    }
-
-    #[test]
-    fn turn_cap_requires_plain_amount_and_round_trips() {
-        let config: HarnessConfig =
-            toml::from_str("turn_budget = \"$2.50\"").expect("parse turn cap");
-        assert_eq!(config.turn_budget.map(TurnCap::as_usd), Some(2.5));
-        let rendered = toml::to_string(&config).expect("serialize harness");
-        assert!(rendered.contains("turn_budget = \"2.50\""), "{rendered}");
-        assert!(
-            toml::from_str::<HarnessConfig>("turn_budget = \"3/day\"")
-                .unwrap_err()
-                .to_string()
-                .contains("must be a plain dollar amount")
-        );
-    }
-
-    #[test]
-    fn smart_compact_deserializes_token_count() {
-        let config: HarnessConfig =
-            toml::from_str("smart_compact = \"120000\"").expect("parse harness config");
-
-        assert_eq!(config.smart_compact, Some(AutoCompact::Tokens(120_000)));
-    }
-
-    #[test]
-    fn smart_compact_deserializes_suffixed_token_count() {
-        let config: HarnessConfig =
-            toml::from_str("smart_compact = \"180k\"").expect("parse harness config");
-
-        assert_eq!(config.smart_compact, Some(AutoCompact::Tokens(180_000)));
-    }
-
-    #[test]
-    fn smart_compact_round_trips() {
-        let config = HarnessConfig {
-            smart_compact: Some(AutoCompact::Percent(70)),
-            ..Default::default()
-        };
-
-        let toml = toml::to_string(&config).expect("serialize harness config");
-        let back: HarnessConfig = toml::from_str(&toml).expect("parse harness config");
-
-        assert_eq!(back, config);
-    }
-
-    #[test]
-    fn flip_compact_round_trips() {
-        for (raw, expected) in [
-            ("off", FlipCompact::Off),
-            ("180k", FlipCompact::Threshold(AutoCompact::Tokens(180_000))),
-            ("70%", FlipCompact::Threshold(AutoCompact::Percent(70))),
-        ] {
-            let config: HarnessConfig = toml::from_str(&format!("flip_compact = {raw:?}"))
-                .expect("valid flip compaction policy");
-            assert_eq!(config.flip_compact, Some(expected));
-            let encoded = toml::to_string(&config).unwrap();
-            assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
-        }
-        assert!(toml::from_str::<HarnessConfig>("flip_compact = \"OFF\"").is_err());
-    }
-
-    #[test]
-    fn compact_instruction_defaults_to_the_brief_for_the_seat() {
-        let config: HarnessConfig = toml::from_str("").expect("parse harness config");
-
-        assert_eq!(
-            config.compact_instruction(CompactSeat::Solo),
-            DEFAULT_COMPACT_INSTRUCTION
-        );
-        assert_eq!(
-            config.compact_instruction(CompactSeat::Team),
-            TEAM_COMPACT_INSTRUCTION
-        );
-        assert!(
-            !toml::to_string(&config)
-                .expect("serialize harness config")
-                .contains("compact_instruction")
-        );
-    }
-
-    #[test]
-    fn compact_instruction_empty_value_round_trips() {
-        let config: HarnessConfig =
-            toml::from_str("compact_instruction = \"\"").expect("parse harness config");
-
-        assert_eq!(config.compact_instruction, Some(String::new()));
-        assert_eq!(config.compact_instruction(CompactSeat::Solo), "");
-        assert_eq!(config.compact_instruction(CompactSeat::Team), "");
-        let rendered = toml::to_string(&config).expect("serialize harness config");
-        assert!(
-            rendered.contains("compact_instruction = \"\""),
-            "{rendered}"
-        );
-        assert_eq!(
-            toml::from_str::<HarnessConfig>(&rendered).expect("parse rendered harness config"),
-            config
-        );
-    }
-
-    #[test]
-    fn idle_compact_defaults_to_100k() {
-        let config: HarnessConfig = toml::from_str("").expect("parse harness config");
-
-        assert_eq!(
-            serde_json::to_value(config).unwrap()["idle_compact"],
-            "100k"
-        );
-    }
-
-    #[test]
-    fn idle_compact_token_floors_round_trip_at_every_toml_site() {
-        for (raw, expected) in [
-            ("off", "off"),
-            ("25", "25"),
-            ("2k", "2k"),
-            ("100k", "100k"),
-            ("250000", "250k"),
-            ("1000k", "1000k"),
-        ] {
-            let harness: HarnessConfig =
-                toml::from_str(&format!("idle_compact = \"{raw}\"")).unwrap();
-            let encoded = toml::to_string(&harness).expect("serialize harness config");
-            assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), harness);
-            let profile: crate::config::Profile =
-                toml::from_str(&format!("agent = \"claude\"\nidle-compact = \"{raw}\"")).unwrap();
-            let role: crate::config::RoleBinding = toml::from_str(&format!(
-                "role = \"worker\"\nprofile = \"worker\"\nidle-compact = \"{raw}\""
-            ))
-            .unwrap();
-            for (value, key) in [
-                (serde_json::to_value(harness).unwrap(), "idle_compact"),
-                (serde_json::to_value(profile).unwrap(), "idle-compact"),
-                (serde_json::to_value(role).unwrap(), "idle-compact"),
-            ] {
-                assert_eq!(value[key], expected, "{raw}: {value}");
-            }
-        }
-    }
-
-    #[test]
-    fn idle_compact_rejects_bad_values() {
-        for raw in [
-            "auto", "always", "on", "2h", "25m", "1m", "59M", "70%", "0", "0k", "25w",
-        ] {
-            let err =
-                toml::from_str::<HarnessConfig>(&format!("idle_compact = \"{raw}\"")).unwrap_err();
-            assert!(
-                err.to_string()
-                    .contains("idle_compact takes off or a positive token floor in digits or k, such as 100k or 1000k"),
-                "{raw}: {err}"
-            );
-        }
-    }
-}
+mod tests;

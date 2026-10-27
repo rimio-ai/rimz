@@ -899,6 +899,7 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
 fn wait_checkin_default_yields_to_keepalive_but_explicit_timeout_wins() {
     for (switch, ttl, explicit, expected) in [
         ("true", "1h", None, None),
+        ("true", "5m", None, Some("30m")),
         ("false", "1h", None, Some("30m")),
         ("true", "off", None, Some("30m")),
         ("true", "1h", Some("1s"), Some("1s")),

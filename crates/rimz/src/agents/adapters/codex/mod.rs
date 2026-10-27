@@ -1354,8 +1354,15 @@ impl crate::agents::capabilities::TranscriptCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for CodexAdapter {
-    fn prompt_cache_ttl(&self) -> Option<std::time::Duration> {
-        Some(std::time::Duration::from_secs(30 * 60))
+    fn prompt_cache_ttl(
+        &self,
+        sign_in: Option<crate::agents::context::SignIn>,
+    ) -> Option<std::time::Duration> {
+        let seconds = match sign_in {
+            Some(crate::agents::context::SignIn::Subscription) => 12 * 3600,
+            _ => 30 * 60,
+        };
+        Some(std::time::Duration::from_secs(seconds))
     }
 
     /// Codex has no statusline, so app-server-owned metadata (rate-limit

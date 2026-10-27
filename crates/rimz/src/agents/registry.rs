@@ -258,16 +258,32 @@ mod tests {
     use crate::ids::AgentKind;
     #[test]
     fn prompt_cache_lifetimes_are_provider_defaults() {
+        use crate::agents::context::SignIn;
         use std::time::Duration;
-        for (kind, seconds) in [("claude", Some(3600)), ("codex", Some(1800)), ("amp", None)] {
-            assert_eq!(
-                find_definition(kind).unwrap().prompt_cache_ttl(),
-                seconds.map(Duration::from_secs),
-                "{kind}"
-            );
-        }
+        let sign_ins = [Some(SignIn::Subscription), Some(SignIn::ApiKey), None];
+        let actual: Vec<_> = ["claude", "codex", "amp"]
+            .into_iter()
+            .map(|kind| {
+                sign_ins.map(|sign_in| find_definition(kind).unwrap().prompt_cache_ttl(sign_in))
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                [Some(Duration::from_secs(3600)); 3],
+                [
+                    Some(Duration::from_secs(43200)),
+                    Some(Duration::from_secs(1800)),
+                    Some(Duration::from_secs(1800))
+                ],
+                [None; 3],
+            ]
+        );
         for definition in all_definitions() {
-            if let Some(ttl) = definition.prompt_cache_ttl() {
+            for ttl in sign_ins
+                .into_iter()
+                .filter_map(|sign_in| definition.prompt_cache_ttl(sign_in))
+            {
                 assert!(
                     crate::config::HarnessConfig::default().prompt_cache_margin < ttl,
                     "{}: idle compaction needs a TTL above the cache margin",

@@ -738,7 +738,18 @@ upward-dependencies = [
 # skill_is_callable shares profile skill callability with launch reminders and validation (+1).
 # AccountCap, its parser error/accessors, and budget validation reach config and launch (+6).
 # Profile::effective_effort preserves listing defaults without baking launch values (+1).
-surface-budget = 219
+# Per-agent lifetime resolution and its static provenance replace the kind-only lookup (+4).
+surface-budget = 223
+
+[[verdict]]
+kind = "item"
+key = "config::harness::ConfiguredLifetime"
+reason = "Static validation and doctor share the resolved lifetime and its provenance."
+
+[[verdict]]
+kind = "item"
+key = "config::harness::LifetimeSource"
+reason = "Doctor distinguishes fallback users from explicit settings and provider defaults."
 
 [[verdict]]
 kind = "item"

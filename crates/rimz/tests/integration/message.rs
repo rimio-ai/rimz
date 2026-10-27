@@ -4052,6 +4052,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             &env,
             &["config", "set", "harness.prompt_cache_ttl.claude", "61s"],
         );
+        wait_ok(&env, &["config", "set", "harness.keep_warm_min_ttl", "off"]);
         if capped {
             wait_ok(
                 &env,
@@ -4166,7 +4167,10 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             request
                 .target(
                     &current,
-                    &toml::from_str("[prompt_cache_ttl]\nclaude = \"61s\"").unwrap(),
+                    &toml::from_str(
+                        "keep_warm_min_ttl = 'off'\n[prompt_cache_ttl]\nclaude = \"61s\""
+                    )
+                    .unwrap(),
                     &Default::default(),
                     jiff::Timestamp::now()
                 )

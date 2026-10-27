@@ -1303,7 +1303,10 @@ impl crate::agents::capabilities::TranscriptCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
-    fn prompt_cache_ttl(&self) -> Option<std::time::Duration> {
+    fn prompt_cache_ttl(
+        &self,
+        _sign_in: Option<crate::agents::context::SignIn>,
+    ) -> Option<std::time::Duration> {
         Some(std::time::Duration::from_secs(60 * 60))
     }
 

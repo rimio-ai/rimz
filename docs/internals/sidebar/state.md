@@ -330,7 +330,7 @@ Provider panels are keyed by `LoginKey`, with `SidebarProviderPanel.account` tel
 
 | Field | Stamped from |
 | --- | --- |
-| `ceiling_secs` | The provider's prompt-cache TTL, on every agent row whose kind has one. |
+| `ceiling_secs` | The agent's resolved prompt-cache lifetime, including the configurable 1h fallback; absent only when its static chain is off and no split write overrides it. |
 | `last_request_at` | The age pin's un-held anchor when later than the agent's own activity, so a keepalive ping refreshes the clock without counting as activity. |
 | `warm_until`, `held_since` | Set when `lanes/keep-warm.json` names a horizon for the agent and `cache_keepalive::holds` says keep-warm is holding it at snapshot time. `held_since` is `turn_ended_at` ([messaging.md](../harness/messaging.md#prompt-cache-keepalive)). |
 | `rewarm_cost_usd` | The card's current context priced as a cache write through the memoized price book, using `context.model_id` before the carried `model`, and the 1h bucket for TTLs of at least an hour. Missing tokens or an unpriced model leave it absent. |

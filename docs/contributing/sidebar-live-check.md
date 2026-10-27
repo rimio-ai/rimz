@@ -398,7 +398,7 @@ rz config set harness.cache_keepalive false
 rz config set harness.idle_compact off
 ```
 
-The stub agents carry no session, so feed each one a Claude turn that ends (a statusline gives its card a meter, which is where the full card pins its age clock), then mark it read, since an unread card never shrinks:
+The stub agents carry no session or observed cache write, so these lifetime settings apply; a real agent's newest split cache write overrides even `off`. Feed each stub a Claude turn that ends (a statusline gives its card a meter, which is where the full card pins its age clock), then mark it read, since an unread card never shrinks:
 
 ```sh
 s=$(uuidgen); w="$ROOT/home/room-worktrees/probe"
@@ -410,7 +410,7 @@ jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"Stop",session_id:$s,cwd:$w,l
 rz sidebar mark-read '@coder#probe'
 ```
 
-After a minute the card shrinks to its stale line, and a minute past the last request its cache expires. Capture with `rz pane capture --ansi <sidebar>` to keep the colours: plain capture drops the SGR runs a tone check compares. Selecting the stale card expands it to show the meter's age clock, and the layout freeze holds that shape for a while after selection moves away, so capture each shape after the frame settles. `rz config set harness.prompt_cache_ttl.claude off` takes the cache clock away for the unknown-lifetime case.
+After a minute the card shrinks to its stale line, and a minute past the last request its cache expires. Capture with `rz pane capture --ansi <sidebar>` to keep the colours: plain capture drops the SGR runs a tone check compares. Selecting the stale card expands it to show the meter's age clock, and the layout freeze holds that shape for a while after selection moves away, so capture each shape after the frame settles. `rz config set harness.prompt_cache_ttl.claude off` takes the stub's cache clock away for the unresolved-lifetime case.
 
 ### Check a provider account
 
@@ -582,7 +582,7 @@ The listing that follows `armed` can read `starting` before the detached watcher
 
 ## Cache clock band
 
-A card's cache-age pin and its `cache expires in Nm` line move with the agent's quiet time against the provider's prompt-cache lifetime, an hour for Claude. Scenario playback cannot show them: a story's cards carry no cache lifetime, so every pin reads muted. In a held room, shorten the lifetime so the warning band arrives within minutes. The room picks the setting up without a restart. With the `rz` prefix from [Run a command as an agent](#run-a-command-as-an-agent):
+A card's cache-age pin and its `cache expires in Nm` line move with the agent's quiet time against the agent's resolved prompt-cache lifetime, an hour for Claude before its first observed write. Scenario cards may carry explicit fixture clocks; use a held room to check live lifetime resolution. In a held room, shorten the lifetime so the warning band arrives within minutes. The room picks the setting up without a restart; use a stub with no observed write, since a real agent's split write overrides it. With the `rz` prefix from [Run a command as an agent](#run-a-command-as-an-agent):
 
 ```sh
 rz config set harness.prompt_cache_ttl.claude 24m

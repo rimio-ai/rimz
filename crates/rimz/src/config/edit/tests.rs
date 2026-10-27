@@ -1642,6 +1642,31 @@ fn harness_prompt_cache_edits_validate_provider_and_duration() {
             .to_string();
         assert!(err.contains("harness.cache_keepalive_max"), "{err}");
     }
+    let split = editor.set("harness.prompt_cache_ttl.codex.api-key", "20m");
+    let value = editor
+        .get(Some("harness.prompt_cache_ttl.codex.api-key"))
+        .ok();
+    let fallback = editor.set("harness.prompt_cache_ttl.fallback", "off");
+    let weekly = editor
+        .set("harness.prompt_cache_ttl.amp.weekly", "1h")
+        .unwrap_err()
+        .to_string();
+    editor.set("harness.prompt_cache_ttl.codex", "12h").unwrap();
+    let over_plain = editor
+        .set("harness.prompt_cache_ttl.codex.api-key", "20m")
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        (
+            split.is_ok(),
+            value.as_ref().and_then(|value| value.as_str()),
+            fallback.is_ok(),
+            weekly.contains("subscription") && weekly.contains("api-key"),
+            over_plain.contains("`codex` is not a table")
+        ),
+        (true, Some("20m"), true, true, true),
+        "split: {split:?}; fallback: {fallback:?}; weekly: {weekly}; plain: {over_plain}"
+    );
 }
 
 #[test]
@@ -1651,6 +1676,11 @@ fn prompt_cache_margin_edits_validate_the_merged_configuration() {
         dir.path().join("config.toml"),
         dir.path(),
     ));
+    let fallback_error = editor
+        .set("harness.prompt_cache_margin", "2h")
+        .unwrap_err()
+        .to_string();
+    assert!(fallback_error.contains("fallback"), "{fallback_error}");
     let changed = editor.set("harness.prompt_cache_margin", "2m");
     assert!(
         changed.is_ok(),
@@ -1658,6 +1688,14 @@ fn prompt_cache_margin_edits_validate_the_merged_configuration() {
     );
     assert!(editor.set("harness.prompt_cache_ttl.claude", "2m").is_err());
     assert!(editor.set("harness.prompt_cache_margin", "30m").is_err());
+    editor
+        .set("harness.prompt_cache_ttl.codex.api-key", "5m")
+        .unwrap();
+    let split_error = editor
+        .set("harness.prompt_cache_margin", "10m")
+        .unwrap_err()
+        .to_string();
+    assert!(split_error.contains("codex api-key"), "{split_error}");
     assert_eq!(
         editor
             .get(Some("harness.prompt_cache_margin"))

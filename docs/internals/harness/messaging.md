@@ -595,7 +595,9 @@ The marker and the resting-row close rule ([model.md](../agents/model.md)) guard
 
 #### The idle window
 
-`fire_point` reads `HarnessConfig::prompt_cache_ttl`, which resolves a per-provider override or `off` before the argument-free `ContextCapability::prompt_cache_ttl` default. Neither model nor account participates. The [configuration guide](../../guide/configuration.md#idle-compaction) owns the provider defaults and override grammar. An unknown lifetime skips. An invalid configured kind, and a `prompt_cache_margin` no shorter than a provider TTL or `cache_keepalive_max`, are refused at config load.
+`fire_point` and the card clocks read `HarnessConfig::prompt_cache_lifetime` for the agent. Its newest observed cache write wins: `FiveMinutes` is 5m, `OneHour` is 1h, and `Unsplit` falls through to `configured_lifetime`. That static resolver chooses a sign-in-specific setting, then a plain provider setting, then `ContextCapability::prompt_cache_ttl(sign_in)`, then the fallback (default 1h). An explicit `off` stops the static chain but never overrides a known observation. The [configuration guide](../../guide/configuration.md#idle-compaction) owns the defaults and grammar. Load-time margin checks judge settings, defaults, and the fallback, not observed writes: an observed lifetime at or below the margin keeps its card clock but opens no compaction or ping window.
+
+The machine-config fold stamps `AgentState.sign_in` on producer and consumer reads alike: `context.account.metered` first, then the cached account at `agent.login_key()`. True means subscription, false means API key (including per-request Bedrock/AWS billing), and absent stays unknown. Codex uses 12h for a subscription and 30m otherwise; Claude uses 1h on every sign-in. The cache half can lag one accounts probe (10m TTL, 10s retry); a missing or unresolved login stays unknown. New context observations affect producer decisions one heavy pass later, as other context fields do. No consumer reads authentication files itself.
 
 The `IdleWindow` opens at TTL minus `prompt_cache_margin` and closes, exclusive, at the TTL. Both timers and the helper measure from `AgentState::last_request_at()` ([activity clocks](../agents/model.md#activity-clocks)). A seat found past its cache lifetime is left alone instead of compacted cold. A missing anchor never qualifies, rows without a completed turn included.
 
@@ -631,7 +633,7 @@ An agent qualifies for a ping (`should_keepalive`) when all of these hold:
 
 1. It is effectively `Sleeping` (a pending wait, timer waits included), or keep-warm [holds](#the-keep-warm-hold) it.
 2. It passes `pingable`: not a provider subagent, a nonempty session id, not compacting, not compacted since its last prompt (`AgentState::compacted_since_prompt`), not budget-parked, not hibernated, and not awaiting input.
-3. Its provider has a known TTL, and `now - last_request_at` is inside `[TTL - margin, TTL)`, where the margin is `harness.prompt_cache_margin` (default one minute).
+3. `HarnessConfig::ping_lifetime` admits its resolved lifetime: above `harness.prompt_cache_margin` (default one minute) and at least `harness.keep_warm_min_ttl` (default 15m, `off` removes the floor). The same floor applies to sleeping and keep-warm pings. `now - last_request_at` must be inside `[TTL - margin, TTL)`.
 4. The run of pings has not reached `harness.cache_keepalive_max` ([the cap](#the-cap)).
 5. The producer finds a live pane for it.
 
@@ -645,7 +647,7 @@ Keep-warm extends the same reflex to an agent with nothing pending, for a config
 - A solo seat takes its profile's `max`. A TOML profile with no `keep-warm` of its own takes the nearest one up its `agent` base chain, and an explicit `off` stops the walk. Markdown definitions arrive with inheritance resolved.
 - A `rimz subagents` child (`launch_depth` set) never resolves a horizon.
 
-The horizon is admitted only when the provider's TTL is known and at least `harness.keep_warm_min_ttl` (default 15 minutes, `off` admits any known TTL). `SeatPolicy::horizon` evaluates a resolved `while` with the shared `WhenExpr` evaluator against the seat's `lane_path`. Only `team.stage` is admitted, at load in `prepare_team`. A false known reading returns no horizon, and an unknown reading passes. A while-only hold takes `harness.cache_keepalive_max` as its horizon, and has none when that cap is off.
+The horizon is admitted only when `ping_lifetime` admits the agent's lifetime, under the same margin and floor as sleeping pings. `SeatPolicy::horizon` evaluates a resolved `while` with the shared `WhenExpr` evaluator against the seat's `lane_path`. Only `team.stage` is admitted, at load in `prepare_team`. A false known reading returns no horizon, and an unknown reading passes. A while-only hold takes `harness.cache_keepalive_max` as its horizon, and has none when that cap is off.
 
 The horizon is anchored at `AgentState::turn_ended_at`, which a ping never moves. A ping-only turn is not agent activity ([model.md § Edges](../agents/model.md#edges)): its open and close leave status, phase, activity, turn stamps, turn ids, team signals, and the supervised run as they were, and stamp only `pinged_at`. The lifecycle hook skips its activity heartbeat, active time, and run settle on those edges too.
 
@@ -693,7 +695,7 @@ The helper marks a ping final (`final_ping`) when `(now - since) + (TTL - margin
 
 ### Best effort
 
-The keepalive is cache retention, never durable correctness. The activity heartbeat is a latency hint. A slow refresh, no sidebar host, or early provider eviction can cost one cache write, but cannot lose a wait or its eventual wake. With a known TTL and no `--check-in`, a wait on a command that never exits stays silent, and an explicit `--check-in` restores the check-in. The shared `harness.prompt_cache_margin` covers refresh, helper spawn, and submission, not an end-of-response clock. Config load refuses a margin at or above any known provider TTL or `cache_keepalive_max`, since neither reflex could fire.
+The keepalive is cache retention, never durable correctness. The activity heartbeat is a latency hint. A slow refresh, no sidebar host, or early provider eviction can cost one cache write, but cannot lose a wait or its eventual wake. With an admitted lifetime and no `--check-in`, a wait on a command that never exits stays silent, and an explicit `--check-in` restores the check-in. The shared `harness.prompt_cache_margin` covers refresh, helper spawn, and submission, not an end-of-response clock. Config load refuses a margin at or above any static lifetime (fallback and every provider/sign-in combination) or `cache_keepalive_max`; that settings-and-defaults check cannot judge the agent's own later cache writes.
 
 ## Reply waits
 

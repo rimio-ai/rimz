@@ -13,7 +13,7 @@ rimz list-pets [--json]
 
 A refusal or error exits 1, following the CLI-wide [exit codes](../cli.md#exit-codes); the [global flags](../cli.md#global-flags) are defined there too.
 
-Provider prompt-cache lifetimes are configurable through `rimz config set harness.prompt_cache_ttl.claude 5m` (or `off`). The provider kind must be built-in or installed as a plugin; durations must exceed `harness.prompt_cache_margin` (default `1m`), which sets how long before a cache expires keep-warm pings and idle compaction fire. `rimz config set harness.cache_keepalive false` disables waiting-agent cache pings, and `rimz config set harness.cache_keepalive_max 2h` (default `6h`, or `off`) stops them that long after the agent's last request of its own. Defaults and idle-compaction timing are in [idle compaction](../../guide/configuration.md#idle-compaction).
+Provider prompt-cache lifetimes are configurable through `rimz config set harness.prompt_cache_ttl.claude 5m` (or `off`), sign-in overrides through `rimz config set harness.prompt_cache_ttl.codex.api-key 20m`, and the fallback through `rimz config set harness.prompt_cache_ttl.fallback off`. The provider kind must be built-in or installed as a plugin; split tables accept only `subscription` and `api-key`, not named accounts. A split edit over a plain provider value refuses because that value is not a table. Durations must exceed `harness.prompt_cache_margin` (default `1m`), which sets how long before a cache expires pings and idle compaction fire. An agent's observed cache write overrides these settings, even `off`. `rimz config set harness.cache_keepalive false` disables all cache pings; `rimz config set harness.cache_keepalive_max 2h` (default `6h`, or `off`) caps subsequent pings after the agent's last request of its own, leaving the first sleeping ping uncapped. Defaults, precedence, and timing are in [idle compaction](../../guide/configuration.md#idle-compaction).
 
 ## The config files
 
@@ -111,7 +111,9 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `harness.flip_compact` | `off`, a token count (`180k`), or a percentage (`70%`); see [hand-off compaction](../../guide/configuration.md#hand-off-compaction) |
 | `harness.compact_instruction` | any string, including `""` |
 | `harness.idle_compact` | `off` or a token floor such as `100k` (default); see [idle compaction](../../guide/configuration.md#idle-compaction) |
-| `harness.prompt_cache_margin` | a non-zero duration (default `1m`), shorter than every provider prompt-cache lifetime and `harness.cache_keepalive_max`; see [idle compaction](../../guide/configuration.md#idle-compaction) |
+| `harness.prompt_cache_margin` | a non-zero duration (default `1m`), shorter than every static prompt-cache lifetime (settings, defaults, fallback) and `harness.cache_keepalive_max`; observed writes may be shorter; see [idle compaction](../../guide/configuration.md#idle-compaction) |
+| `harness.prompt_cache_ttl.<kind>[.<subscription\|api-key>]` | `off` or a duration longer than the margin; plain or split provider settings |
+| `harness.prompt_cache_ttl.fallback` | `off` or a duration longer than the margin (default `1h`) |
 | `harness.keep_warm_min_ttl` | `off` or a duration such as `15m` (default); see [keep-warm](../../guide/configuration.md#keep-warm) |
 | `harness.budget` | an amount ending in `/day` |
 | `accounts.budget.<kind>` | an amount ending in `/day` or `/month`; monthly caps count API-key billing, not subscriptions |

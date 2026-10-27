@@ -1573,7 +1573,7 @@ fn is_harness_keep_warm_min_ttl_edit(path: &[String]) -> bool {
 }
 
 fn is_harness_prompt_cache_ttl_edit(path: &[String]) -> bool {
-    matches!(path, [root, table, _] if root == "harness" && table == "prompt_cache_ttl")
+    matches!(path, [root, table, _] | [root, table, _, _] if root == "harness" && table == "prompt_cache_ttl")
 }
 
 fn is_harness_cache_keepalive_max_edit(path: &[String]) -> bool {

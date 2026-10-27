@@ -72,10 +72,7 @@ impl SeatPolicy {
                 .as_ref()
                 .and(harness.cache_keepalive_max),
         }?;
-        let ttl = harness.prompt_cache_ttl(&agent.kind)?;
-        if harness.keep_warm_min_ttl.is_some_and(|floor| ttl < floor) {
-            return None;
-        }
+        harness.ping_lifetime(agent)?;
         if let Some(clause) = setting.while_clause
             && let Some(root) = agent.lane_path()
         {
@@ -150,7 +147,7 @@ impl SeatPolicy {
 
 /// Whether keep-warm is holding `agent` at `now` under a declared `horizon`: the one answer the
 /// ping, idle compaction, and the card's held clock share. A hold is a horizon the pings can
-/// still maintain, so it needs pings switched on, an admitted provider TTL, a resting pingable
+/// still maintain, so it needs pings switched on, an admitted agent lifetime, a resting pingable
 /// agent with no idle stop pending (resting in its durable lifecycle too, since only there
 /// does a ping fold as no work), a cache still warm from the
 /// last request (a cold cache is not pinged back), `harness.cache_keepalive_max` still permitting
@@ -162,7 +159,7 @@ pub(crate) fn holds(
     now: Timestamp,
 ) -> Option<Duration> {
     let horizon = horizon?;
-    let ttl = harness.prompt_cache_ttl(&agent.kind)?;
+    let ttl = harness.ping_lifetime(agent)?;
     let warm_until = agent.turn_ended_at?.checked_add(horizon).ok()?;
     let cache_warm = agent
         .last_request_at()
@@ -172,7 +169,6 @@ pub(crate) fn holds(
         && cache_warm
         && agent.idle_stop.is_none()
         && harness.cache_keepalive
-        && harness.keep_warm_min_ttl.is_none_or(|floor| ttl >= floor)
         && matches!(
             agent.effective_status(),
             AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
@@ -290,7 +286,7 @@ pub fn prompt(agent: &AgentState, now: Timestamp, limit: Option<Duration>) -> St
 pub fn final_ping(agent: &AgentState, config: &HarnessConfig, now: Timestamp) -> Option<Duration> {
     let max = config.cache_keepalive_max?;
     let fire_after = config
-        .prompt_cache_ttl(&agent.kind)?
+        .ping_lifetime(agent)?
         .checked_sub(config.prompt_cache_margin)?;
     let since = agent.keepalive_since.or(agent.last_request_at())?;
     next_reaches_cap(since, now, fire_after, max).then_some(max)
@@ -381,7 +377,7 @@ pub(crate) fn keepalive_agents(
     });
 }
 
-/// A sleeping agent always qualifies; any other only while keep-warm is `holding` it ([`holds`]).
+/// Sleeping agents and those held by keep-warm ([`holds`]) may qualify, subject to ping admission.
 fn should_keepalive(
     agent: &AgentState,
     config: &HarnessConfig,
@@ -394,10 +390,7 @@ fn should_keepalive(
     {
         return false;
     }
-    let (Some(ttl), Some(anchor)) = (
-        config.prompt_cache_ttl(&agent.kind),
-        agent.last_request_at(),
-    ) else {
+    let (Some(ttl), Some(anchor)) = (config.ping_lifetime(agent), agent.last_request_at()) else {
         return false;
     };
     let Some(fire_after) = ttl.checked_sub(config.prompt_cache_margin) else {
