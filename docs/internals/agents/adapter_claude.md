@@ -251,6 +251,8 @@ The transcript writes only the bare model id, so the gauge's divisor comes from 
 
 The byte cursor, duplicate window, and sums are stored together, so steady refreshes parse only appended lines. A truncated file restarts the fold, and a stored fold that lacks the duplicate window replays once. This is why Claude keeps its own unchanged-source gate ([adapter.md](./adapter.md#context-sources)). The transcript path resolves in order: the hook's `transcript_path`, the stored path, then the newest `<config>/projects/*/<session_id>.jsonl`. The result updates `AgentTokenUsage.session_usage` and leaves the statusline's current-window fields and cost in charge.
 
+The same typed spend pass and byte cursor capture the newest main-chain cache write's retention. A 1h-only split is one hour; any 5m tokens, including a mixed split, mean five minutes. A write with no split is `Unsplit` and uses the settings chain rather than pricing's 5m assumption. Read-only requests, sidechain writes, and advisor iterations do not change it. An appended tail with no write keeps the observation; a new transcript path or a rewrite with no write clears it. Statusline refreshes preserve it ([lifetime resolution](../../guide/configuration.md#idle-compaction)).
+
 ### Conversation parser
 
 `parse_transcript_messages` (`statusline::parse_messages`) is the one conversation parser for Claude transcripts. It keeps `user` and `assistant` entries with their timestamps and drops sidechain replay, `isMeta` user entries, and API-error assistant entries. Supervised streaming uses the default `stream_assistant_messages`, which filters that parse.

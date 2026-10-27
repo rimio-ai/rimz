@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::context::CacheWriteRetention;
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_ms, iso_to_unix_secs,
@@ -383,14 +384,22 @@ pub fn parse_claude_spend(
     resume: Option<&SpendCursor>,
     prices: &PriceBook,
 ) -> SpendParse {
+    parse_claude_spend_with_retention(path, resume, prices).0
+}
+
+pub(super) fn parse_claude_spend_with_retention(
+    path: &Path,
+    resume: Option<&SpendCursor>,
+    prices: &PriceBook,
+) -> (SpendParse, Option<CacheWriteRetention>) {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let Some(read) =
         read_anchored_transcript(path, from_offset, resume.and_then(|cursor| cursor.anchor))
     else {
-        return SpendParse::stalled(resume);
+        return (SpendParse::stalled(resume), None);
     };
     if read.content.is_empty() && !read.rewritten && resume.is_some() {
-        return SpendParse::stalled(resume);
+        return (SpendParse::stalled(resume), None);
     }
     let mut state: ClaudeSpendState = resume
         .filter(|_| !read.rewritten)
@@ -400,6 +409,7 @@ pub fn parse_claude_spend(
     let mut entries: Vec<CachedEntry> = Vec::new();
     let mut origin = None;
     let mut unknown_models = BTreeMap::new();
+    let mut last_cache_write = None;
 
     for line in read.content.split(|&b| b == b'\n') {
         if bytes_contains(line, br#""user""#)
@@ -457,6 +467,11 @@ pub fn parse_claude_spend(
         ) else {
             continue;
         };
+        if entry.is_sidechain != Some(true)
+            && let Some(retention) = cache_write_retention(usage)
+        {
+            last_cache_write = Some(retention);
+        }
         main_entry.timing = state
             .current_message
             .as_ref()
@@ -521,17 +536,32 @@ pub fn parse_claude_spend(
 
     let mut cursor = SpendCursor::with_state(read.offset, &state);
     cursor.anchor = read.anchor;
-    SpendParse {
-        entries,
-        origin,
-        cursor,
-        unknown_models,
-        update: if read.rewritten {
-            SpendUpdate::Rewritten
-        } else {
-            SpendUpdate::Extend
+    (
+        SpendParse {
+            entries,
+            origin,
+            cursor,
+            unknown_models,
+            update: if read.rewritten {
+                SpendUpdate::Rewritten
+            } else {
+                SpendUpdate::Extend
+            },
         },
+        last_cache_write,
+    )
+}
+
+fn cache_write_retention(usage: &ClaudeUsage) -> Option<CacheWriteRetention> {
+    if let Some(split) = &usage.cache_creation {
+        if split.ephemeral_5m_input_tokens > 0 {
+            return Some(CacheWriteRetention::FiveMinutes);
+        }
+        if split.ephemeral_1h_input_tokens > 0 {
+            return Some(CacheWriteRetention::OneHour);
+        }
     }
+    (usage.cache_creation_input_tokens.unwrap_or(0) > 0).then_some(CacheWriteRetention::Unsplit)
 }
 
 struct UsageEntryMeta {
