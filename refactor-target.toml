@@ -12,6 +12,7 @@ layers = [
     "update",
     "disk",
     "pixel_wire",
+    "fs_watch",
 ],
     [
     "workspace",
@@ -86,6 +87,21 @@ surface-budget = 46
 [[module]]
 path = "crates/rimz/src/pixel_wire.rs"
 surface-budget = 2
+
+[[module]]
+path = "crates/rimz/src/fs_watch.rs"
+allowed-dependencies = []
+surface-budget = 4
+
+[[verdict]]
+kind = "item"
+key = "fs_watch::linux::RecommendedWatcher"
+reason = "The three filesystem-watch consumers share one non-recursive Linux mutation watcher."
+
+[[verdict]]
+kind = "item"
+key = "fs_watch::linux::recommended_watcher"
+reason = "One constructor selects the narrow Linux watcher without changing notify's consumer trait."
 
 [[module]]
 path = "crates/rimz/src/lsp"

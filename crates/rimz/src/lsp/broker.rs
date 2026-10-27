@@ -637,7 +637,7 @@ fn initialize_and_run(
         .transport = Some(transport.clone());
     let (watch_tx, events) = mpsc::channel();
     let watching = shared.clone();
-    let mut watcher = notify::recommended_watcher(move |event| {
+    let mut watcher = crate::fs_watch::recommended_watcher(move |event| {
         let mut model = watching.model.lock().unwrap_or_else(|e| e.into_inner());
         if watch_tx.send(event).is_ok() && model.watch_due.is_none() {
             model.watch_due = Some(Instant::now() + Duration::from_millis(50));

@@ -231,7 +231,7 @@ fn spawn_child(pane: &ResolvedPane) -> io::Result<Child> {
 }
 
 struct ConfigWatch {
-    _watcher: notify::RecommendedWatcher,
+    _watcher: crate::fs_watch::RecommendedWatcher,
     rx: mpsc::Receiver<()>,
 }
 
@@ -247,7 +247,7 @@ fn watch_config(config_path: &Path, wake: mpsc::Sender<()>) -> Option<ConfigWatc
     let watched_name = config_path.file_name().map(ToOwned::to_owned);
     let (event_tx, event_rx) = mpsc::channel();
     let mut watcher =
-        match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        match crate::fs_watch::recommended_watcher(move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res
                 && matches!(
                     event.kind,

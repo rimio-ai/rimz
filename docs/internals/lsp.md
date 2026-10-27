@@ -246,6 +246,8 @@ Query a broker that runs the worktree's build. `rimz lsp stop` leaves the old br
 
 `lsp/broker/watch.rs` batches `notify` events into `workspace/didChangeWatchedFiles`, coalescing saved-file events in a 50 ms window from the first undelivered event. Freshness depends on the server handling these notifications. Unsaved editor buffers reach the server only through the owning editor ([Editors](#editors)), and watch traffic never increments request counters.
 
+The broker, content supervisor, and transcript watcher use [`fs_watch.rs`](../../crates/rimz/src/fs_watch.rs). On Linux its safe rustix inotify reader requests notify 8.2's mutation mask without `IN_OPEN`, avoiding wakeups from reads rather than filtering them after they wake a thread. It preserves notify event kinds, paths, rename-cookie trackers, and overflow rescan flags. It supports only non-recursive registration; callers own directory discovery. Other platforms keep notify's recommended watcher.
+
 Non-recursive watches cover individual directories. Excluded directories are dropped before registration: `.git`, `target`, `node_modules`, `.venv`, `venv`, `__pycache__`, `.tox`, `.nox`, `.mypy_cache`, `.pytest_cache`, and `.ruff_cache`, for every server kind. A package install into an excluded environment needs a stop and a lazy restart. Created or moved-in directories gain watches, and a scan also forwards files saved before the watch was registered.
 
 Files with a configured extension pass, and so do file names in `root-markers`, such as a `Cargo.toml` edit. Each Python kind adds its configuration files:
