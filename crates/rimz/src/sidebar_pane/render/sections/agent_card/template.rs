@@ -188,6 +188,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ended_idle_child_with_a_carried_prompt_is_not_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let paths = crate::disk::paths::StatePaths::under(workspace, dir.path()).unwrap();
+        std::fs::create_dir_all(paths.agents_carryover.parent().unwrap()).unwrap();
+        let now = jiff::Timestamp::from_second(1_750_000_000).unwrap();
+        let mut child = crate::testkit::agent_state("claude", "child", now);
+        child.parent_agent_id = Some("parent".into());
+        child.launch_depth = Some(1);
+        child.ended_at = Some(now);
+        child.prompt = Some("finish\n the task".to_owned());
+        std::fs::write(
+            &paths.agents_carryover,
+            serde_json::to_vec(&serde_json::json!({"agents": [child]})).unwrap(),
+        )
+        .unwrap();
+        let (_, agents, _) = crate::store::snapshot::RollupCursor::new()
+            .fold(&paths)
+            .unwrap();
+        let child = agents.iter().next().unwrap();
+        let row = SidebarRow {
+            id: child.agent_id.to_string(),
+            name: "child".to_owned(),
+            pane: None,
+            worktree_path: None,
+            checkout: None,
+            worktree_branch: None,
+            channel: None,
+            unread: false,
+            inactive: false,
+            archived: false,
+            attention_score: 0,
+            last_activity: now,
+            card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+                crate::store::snapshot::AgentCard::from_agent(child, now),
+            )),
+        };
+        assert_eq!(CardStage::of(&row), CardStage::Engaged);
+    }
+
+    #[test]
     fn selected_unlabeled_card_keeps_the_question_slot() {
         for status in [AgentStatus::Running, AgentStatus::Waiting] {
             let slots = template(

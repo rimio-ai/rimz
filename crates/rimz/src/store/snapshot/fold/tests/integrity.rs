@@ -1,6 +1,121 @@
 use super::*;
 
 #[test]
+fn ended_labels_survive_lifecycle_and_launch_revival_in_every_fold() {
+    use crate::agents::{AgentLifecycleObservation, SanitizedPrompt};
+
+    for launch_revival in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let first = format!("first\n {}", "é🦊".repeat(100));
+        let latest = format!("latest\n {}", "different ".repeat(30));
+        let first_label = format!("first {}", "é🦊".repeat(100))
+            .chars()
+            .take(160)
+            .collect::<String>();
+        let latest_label = format!("latest {}", "different ".repeat(30))
+            .chars()
+            .take(160)
+            .collect::<String>()
+            .trim_end()
+            .to_owned();
+        let lifecycle = |signal, prompt: Option<&str>, seconds| {
+            let mut observation = AgentLifecycleObservation::new(Some("agent".into()), signal);
+            observation.prompt = SanitizedPrompt::new(prompt);
+            let mut event = EventEnvelope::agent_lifecycle(
+                workspace.clone(),
+                "session",
+                "claude",
+                "test.lifecycle",
+                &observation,
+            );
+            event.timestamp = epoch() + Duration::from_secs(seconds);
+            event
+        };
+        let mut revive = lifecycle(lifecycle::LifecycleSignal::Registered, None, 3);
+        if launch_revival {
+            revive = EventEnvelope::agent_launched(
+                workspace.clone(),
+                "session",
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: "agent".into(),
+                    launch_id: None,
+                    agent_name: "lucid-atlas".to_owned(),
+                    agent_name_explicit: false,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            );
+            revive.timestamp = epoch() + Duration::from_secs(3);
+        }
+        let events = [
+            lifecycle(
+                lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
+                Some(&first),
+                1,
+            ),
+            lifecycle(lifecycle::LifecycleSignal::Ended, Some(&latest), 2),
+            revive,
+            lifecycle(
+                lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
+                Some("new\n prompt"),
+                4,
+            ),
+            lifecycle(lifecycle::LifecycleSignal::Ended, None, 5),
+        ];
+        let mut cursor = RollupCursor::new();
+        for (index, event) in events.iter().enumerate() {
+            event_log::append(&paths.events_log, event).unwrap();
+            let (warm_cache, warm, _) = catch_up_rollup(&paths).unwrap();
+            let (cursor_extent, cursor_rows, _) = cursor.fold(&paths).unwrap();
+            let (thread_cache, thread_rows, _) = thread_catch_up(&paths).unwrap();
+            if paths.rollup_cache.exists() {
+                fs::remove_file(&paths.rollup_cache).unwrap();
+            }
+            let (cold_cache, cold, _) = catch_up_rollup(&paths).unwrap();
+            assert_eq!(warm, cold);
+            assert_eq!(cursor_rows.to_vec(), cold);
+            assert_eq!(thread_rows.to_vec(), cold);
+            assert_eq!(warm_cache.raw_agents, cold_cache.raw_agents);
+            assert_eq!(cursor_extent, cold_cache.extent);
+            assert_eq!(thread_cache.extent, cold_cache.extent);
+            let row = &cold[0];
+            assert_eq!(
+                row.first_prompt.as_deref(),
+                Some(if index == 0 {
+                    first.as_str()
+                } else {
+                    first_label.as_str()
+                })
+            );
+            let expected_prompt = match index {
+                0 => first.as_str(),
+                1 | 2 => latest_label.as_str(),
+                3 => "new\n prompt",
+                _ => "new prompt",
+            };
+            assert_eq!(row.prompt.as_deref(), Some(expected_prompt));
+            assert_eq!(row.ended_at.is_some(), matches!(index, 1 | 4));
+            if row.ended_at.is_some() {
+                assert!(row.recent_prompts.is_empty());
+            }
+            write_rollup_cache(&paths, &warm_cache).unwrap();
+        }
+    }
+}
+
+#[test]
 fn catch_up_rollup_rejects_a_zeroed_middle_frame() {
     // Crash-sim for writeback reordering: an earlier frame's data pages
     // zeroed while a later frame survived. Reachable only when the

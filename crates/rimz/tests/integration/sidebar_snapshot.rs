@@ -11,6 +11,60 @@ use sha2::{Digest, Sha256};
 use crate::common::{Env, tmux_pane};
 
 #[test]
+fn ended_rows_keep_labels_without_prompt_history_or_pane_argv() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let now = jiff::Timestamp::now();
+    let parent_pane = tmux_pane("%7", "claude", &env.project_root);
+    let mut parent = rimz::testkit::agent_state("claude", "parent", now);
+    parent.pane = Some(parent_pane.clone());
+    parent.worktree_path = Some(env.project_root.display().to_string());
+    let mut child = rimz::testkit::agent_state("claude", "child", now);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.launch_depth = Some(1);
+    child.ended_at = Some(now);
+    child.first_prompt = Some(format!("first\n {}", "x".repeat(300)));
+    child.prompt = Some("latest\n request".to_owned());
+    child.recent_prompts = vec!["full history".to_owned()];
+    let mut child_pane = tmux_pane("%8", "claude", &env.project_root);
+    child_pane.spawn_command = Some("claude --prompt full history".to_owned());
+    child_pane.foreground_cmdline = Some("claude --prompt full history".to_owned());
+    child.pane = Some(child_pane);
+    std::fs::create_dir_all(store.paths().agents_carryover.parent().unwrap()).unwrap();
+    std::fs::write(
+        &store.paths().agents_carryover,
+        serde_json::to_vec(&serde_json::json!({"agents": [parent, child]})).unwrap(),
+    )
+    .unwrap();
+    rimz::store::event_log::append(
+        &store.paths().events_log,
+        &EventEnvelope::new(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "rimz",
+            "cli",
+            "test.noop",
+            serde_json::json!({}),
+        ),
+    )
+    .unwrap();
+
+    let snapshot = env.snapshot_json_with_panes(&[parent_pane]);
+    let child = snapshot["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent_id"] == "child")
+        .expect("retained ended child");
+    assert_eq!(child["prompt"], "latest request");
+    assert_eq!(child["first_prompt"], format!("first {}", "x".repeat(154)));
+    assert!(child.get("recent_prompts").is_none());
+    assert!(child["pane"].get("spawn_command").is_none());
+    assert!(child["pane"].get("foreground_cmdline").is_none());
+}
+
+#[test]
 fn resolution_fallback_only_reports_live_or_unknown_sessions() {
     use crate::common::wait::{agent_wait, register_calling_agent};
     use rimz::diag::record::DiagEvent;

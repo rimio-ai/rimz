@@ -69,18 +69,18 @@ fn fold_ready(agents: Vec<AgentState>) -> Arc<FoldCarryover> {
 }
 
 #[test]
-fn ended_carryover_keeps_a_bounded_first_line_without_splitting_characters() {
+fn ended_carryover_keeps_bounded_labels_without_splitting_characters() {
     for (prompt, expected) in [
         ("é🦊".repeat(200), "é🦊".repeat(80)),
         (format!("{}\nsecond line", "x".repeat(300)), "x".repeat(160)),
         ("short prompt".to_owned(), "short prompt".to_owned()),
         (
             "first line\r\nsecond line".to_owned(),
-            "first line".to_owned(),
+            "first line second line".to_owned(),
         ),
         (
             "\n  \nfix the auth flow\nthen ship".to_owned(),
-            "fix the auth flow".to_owned(),
+            "fix the auth flow then ship".to_owned(),
         ),
     ] {
         let mut ended = agent("claude", "ended", AgentStatus::Success, 1_000);
@@ -98,11 +98,10 @@ fn ended_carryover_keeps_a_bounded_first_line_without_splitting_characters() {
         let trimmed = FoldCarryover::from_raw(EventCarryover {
             agents: vec![ended, continuing.clone()],
             ..EventCarryover::default()
-        })
-        .trimmed(Path::new("/unused/carryover.json"));
+        });
         let ended = trimmed.get(&continuing.kind, &"ended".into()).unwrap();
         assert_eq!(ended.first_prompt.as_deref(), Some(expected.as_str()));
-        assert!(ended.prompt.is_none());
+        assert_eq!(ended.prompt.as_deref(), Some("latest prompt"));
         assert!(ended.recent_prompts.is_empty());
         let stamp = ended.pane.as_ref().unwrap();
         assert!(stamp.foreground_cmdline.is_none());
@@ -127,8 +126,7 @@ fn ended_carried_child_keeps_its_activity_label_and_truncated_prefix_filter() {
     let trimmed = FoldCarryover::from_raw(EventCarryover {
         agents: vec![child],
         ..EventCarryover::default()
-    })
-    .trimmed(Path::new("/unused/carryover.json"));
+    });
     let mut child = trimmed.agents[0].clone();
     assert_eq!(child.activity_line(), Some("x".repeat(160)));
     child.context = Some(crate::agents::AgentContext {
