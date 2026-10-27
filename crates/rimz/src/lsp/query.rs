@@ -456,6 +456,14 @@ fn rematch_enriched(
     if !enrich_containers(&mut symbols, outlines) {
         return Ok(None);
     }
+    match_preferred_symbols(root, name, symbols)
+}
+
+fn match_preferred_symbols(
+    root: &Path,
+    name: &str,
+    symbols: Vec<SymbolInformation>,
+) -> Result<Option<SymbolResolution>> {
     let matches = match match_symbols(root, name, symbols)? {
         SymbolResolution::Missing { .. } => return Ok(None),
         found => found.into_symbols(),
@@ -1042,6 +1050,7 @@ fn outcome_candidates<'a>(
         name,
         symbols,
         unresolved,
+        ..
     }) = output
     else {
         return Err(LspErr::Protocol(
@@ -1095,6 +1104,22 @@ pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String
         )
     };
     let mut lines = vec![header];
+    if let Output::NotFound { listed_symbols, .. } = output
+        && count == 0
+        && *listed_symbols > 0
+        && name_segments(name).len() == 1
+    {
+        lines.push(format!(
+            "hint: the server listed {listed_symbols} {}, none named exactly {last}; \
+             add the item's type or module, or start with its file, \
+             to search the files it lives in",
+            if *listed_symbols == 1 {
+                "symbol"
+            } else {
+                "symbols"
+            },
+        ));
+    }
     lines.extend(candidates.iter().take(20).map(Candidate::line));
     let shown = candidates.len().min(20);
     if count > shown {

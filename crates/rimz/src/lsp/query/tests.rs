@@ -934,6 +934,7 @@ fn render_ambiguous(root: &Path, name: &str, symbols: &[SymbolInformation]) -> R
 fn lookup_outcomes_render_qualified_reusable_candidates() {
     let root = Path::new("/checkout");
     let missing = Output::NotFound {
+        listed_symbols: 0,
         unresolved: 0,
         name: "nosuch".into(),
         symbols: vec![],
@@ -947,6 +948,7 @@ fn lookup_outcomes_render_qualified_reusable_candidates() {
         {"name": "read", "kind": 12, "containerName": "Container<'a>", "location": {"uri": "file:///outside/lib.rs", "range": range()}}
     ])).unwrap();
     let missing = Output::NotFound {
+        listed_symbols: 0,
         unresolved: 0,
         name: "launch_git::read".into(),
         symbols: symbols.clone(),
@@ -975,6 +977,7 @@ fn lookup_outcomes_render_qualified_reusable_candidates() {
     }
     for output in [
         Output::NotFound {
+            listed_symbols: 0,
             unresolved: 0,
             name: "wrong::read".into(),
             symbols: vec![symbols[0].clone(); 21],
@@ -1059,6 +1062,7 @@ fn not_found_candidates_collapse_re_exports_to_their_definition() {
     })
     .unwrap();
     let missing = Output::NotFound {
+        listed_symbols: 0,
         unresolved: 0,
         name: "wrong::Store".into(),
         symbols,
@@ -1206,6 +1210,7 @@ fn unresolved_candidate_counts_are_explicit_even_when_the_head_collapses() {
     let root = Path::new("/checkout");
     for output in [
         Output::NotFound {
+            listed_symbols: 0,
             name: "Wrong::new".into(),
             symbols: broad_candidates(1),
             unresolved: 15,
@@ -2223,6 +2228,7 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
     );
     assert_eq!(
         Output::NotFound {
+            listed_symbols: 0,
             unresolved: 0,
             name: "missing".into(),
             symbols: vec![]
