@@ -74,16 +74,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         )?;
         let profiles =
             effective.profiles_for_launch(agent.is_launched_child(), agent.profile.as_deref());
-        let posture = rimz::harness::resume::resolve_posture(
-            rimz::harness::resume::PostureRequest {
-                record: agent.record.as_deref(),
-                profile: agent.profile.as_deref(),
-                kind: &agent.kind,
-                stamped_mode: agent.mode,
-                stamped_tier: agent.tier.as_deref(),
-            },
-            profiles,
-        );
+        let posture = restart::member_posture(&agent, profiles, &effective.teams);
         if let Some(reason) = &posture.degraded {
             warnings.push(format!("{reason}; showing bare {} posture", agent.kind));
         }

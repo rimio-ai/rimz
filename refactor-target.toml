@@ -6089,7 +6089,7 @@ reason = "The one relaunch posture seam shared by rebirth, lane, cohort, restart
 [[verdict]]
 kind = "item"
 key = "harness::resume::resolve_member_posture"
-reason = "The posture seam with a team member's role layers, for agents restart in the CLI; team resume resolves the same binding in-module."
+reason = "The posture seam with a team member's role and team prompt layers, for restart, molt, and explain in the CLI; team resume resolves the binding in-module and retains its compiled team layer."
 
 [[verdict]]
 kind = "item"

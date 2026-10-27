@@ -352,6 +352,250 @@ fn recorded_cross_provider_cohorts_match_without_a_tier() {
     }
 }
 
+fn staged_member_configs() -> (TeamsConfig, ProfilesConfig, CommandsConfig) {
+    let (mut teams, profiles, commands) = team_configs();
+    let team = teams.0.get_mut("forge").unwrap();
+    team.layout = Some("planner".into());
+    team.roles.truncate(1);
+    team.roles[0].owns = vec!["Plan".into()];
+    team.roles[0].system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: "/role.md".into(),
+        text: "Role".into(),
+    });
+    (teams, profiles, commands)
+}
+
+#[test]
+fn member_posture_carries_the_fresh_team_prompt_layer() {
+    use crate::harness::team_prompt::{Consensus, TeamPrompt};
+
+    let consensus = tempfile::NamedTempFile::new().unwrap();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for custom in [false, true] {
+        let (mut teams, profiles, commands) = staged_member_configs();
+        let team = teams.0.get_mut("forge").unwrap();
+        team.consensus_file = custom.then(|| consensus.path().to_owned());
+        team.append_system_prompt_files = vec![crate::config::PromptSource::Text {
+            origin: "/team.md".into(),
+            text: "Team instructions".into(),
+        }];
+        let layer = Some(TeamPrompt {
+            consensus: if custom {
+                Consensus::File(consensus.path().to_owned())
+            } else {
+                Consensus::BuiltIn
+            },
+            files: team.append_system_prompt_files.clone(),
+        });
+        let fresh =
+            crate::harness::spec::resolve_team("forge", &teams, &profiles, &commands).unwrap();
+        assert_eq!(fresh.agent_cells().next().unwrap().team_prompt, layer);
+        let kind = AgentKind::new_unchecked("claude");
+        let request = PostureRequest {
+            record: None,
+            profile: Some("claude-plan"),
+            kind: &kind,
+            stamped_mode: None,
+            stamped_tier: None,
+        };
+        let posture =
+            resolve_member_posture(request, &profiles, &teams, Some("forge"), Some("planner"));
+        actual.push((posture.degraded, posture.launch.team_prompt));
+        expected.push((None, layer.clone()));
+
+        // A broken teammate or scratch declaration does not change this seat's posture.
+        let team = teams.0.get_mut("forge").unwrap();
+        team.roles
+            .push(toml::from_str("role = 'broken'\nprofile = 'deleted'").unwrap());
+        team.scratch_files = Some(vec!["../invalid".into()]);
+        let posture =
+            resolve_member_posture(request, &profiles, &teams, Some("forge"), Some("planner"));
+        actual.push((posture.degraded, posture.launch.team_prompt));
+        expected.push((None, layer));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn member_posture_rebases_into_the_fresh_team_prompt_layer() {
+    let (mut teams, mut profiles, commands) = staged_member_configs();
+    let team = teams.0.get_mut("forge").unwrap();
+    let base = team.roles[0].system_prompt_file.take();
+    let mut base_profile = profile("claude");
+    base_profile.system_prompt_file = base;
+    profiles.0.insert("base".into(), base_profile);
+    let fresh = crate::harness::spec::resolve_spec_with_agent_override(
+        Some("forge.planner"),
+        &profiles,
+        &profiles,
+        &commands,
+        &teams,
+        Some("base"),
+    )
+    .unwrap();
+    let expected = fresh.agent_cells().next().unwrap().team_prompt.clone();
+    assert!(expected.is_some());
+    let record = crate::agents::LaunchRecord {
+        agent: Some("base".into()),
+        ..Default::default()
+    };
+    let posture = resolve_member_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("claude-plan"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &profiles,
+        &teams,
+        Some("forge"),
+        Some("planner"),
+    );
+    assert_eq!(
+        (posture.degraded, posture.launch.team_prompt),
+        (None, expected)
+    );
+}
+
+#[test]
+fn member_posture_omits_inapplicable_team_layers() {
+    let mut actual = Vec::new();
+    for case in [
+        "unstaged",
+        "baseless",
+        "deleted-team",
+        "deleted-role",
+        "solo",
+    ] {
+        let (mut teams, profiles, _) = staged_member_configs();
+        let team = teams.0.get_mut("forge").unwrap();
+        if case == "unstaged" {
+            team.roles[0].owns.clear();
+        }
+        if case == "baseless" {
+            team.roles[0].system_prompt_file = None;
+        }
+        let kind = AgentKind::new_unchecked("claude");
+        let request = PostureRequest {
+            record: None,
+            profile: Some("claude-plan"),
+            kind: &kind,
+            stamped_mode: None,
+            stamped_tier: None,
+        };
+        let posture = resolve_member_posture(
+            request,
+            &profiles,
+            &teams,
+            (case != "solo").then_some(if case == "deleted-team" {
+                "deleted"
+            } else {
+                "forge"
+            }),
+            Some(if case == "deleted-role" {
+                "deleted"
+            } else {
+                "planner"
+            }),
+        );
+        if case == "solo" {
+            assert_eq!(posture, resolve_posture(request, &profiles));
+        }
+        actual.push((posture.degraded, posture.launch.team_prompt));
+    }
+    assert_eq!(actual, vec![(None, None); 5]);
+}
+
+#[test]
+fn member_posture_rejects_undeliverable_team_layers() {
+    let mut actual = Vec::new();
+    for staged in [true, false] {
+        let (mut teams, profiles, _) = staged_member_configs();
+        let team = teams.0.get_mut("forge").unwrap();
+        team.roles[0].system_prompt_file = None;
+        if !staged {
+            team.roles[0].owns.clear();
+        }
+        team.append_system_prompt_files = vec![crate::config::PromptSource::Text {
+            origin: "/team.md".into(),
+            text: "Team instructions".into(),
+        }];
+        let posture = resolve_member_posture(
+            PostureRequest {
+                record: None,
+                profile: Some("claude-plan"),
+                kind: &AgentKind::new_unchecked("claude"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+            &teams,
+            Some("forge"),
+            Some("planner"),
+        );
+        actual.push(posture.degraded.map(|reason| reason.to_string()));
+    }
+    assert_eq!(
+        actual,
+        [
+            Some(
+                "team `forge` sets consensus-file or append-system-prompt-files but role `planner` \
+                 has no system-prompt-file to compose them onto; add system-prompt-file to role \
+                 planner or its profile"
+                    .into()
+            ),
+            Some(
+                "team `forge` sets consensus-file or append-system-prompt-files but declares no \
+                 stages; add stages (or owns) or remove the team prompt fields"
+                    .into()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn member_posture_degrades_when_team_prompt_files_are_missing() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing.md");
+    let mut actual = Vec::new();
+    for consensus in [true, false] {
+        let (mut teams, profiles, _) = staged_member_configs();
+        let team = teams.0.get_mut("forge").unwrap();
+        if consensus {
+            team.consensus_file = Some(missing.clone());
+        } else {
+            team.append_system_prompt_files = vec![missing.clone().into()];
+        }
+        let posture = resolve_member_posture(
+            PostureRequest {
+                record: None,
+                profile: Some("claude-plan"),
+                kind: &AgentKind::new_unchecked("claude"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+            &teams,
+            Some("forge"),
+            Some("planner"),
+        );
+        let field = if consensus {
+            "consensus-file"
+        } else {
+            "append-system-prompt-files"
+        };
+        actual.push(matches!(
+            posture.degraded,
+            Some(PostureDegrade::PromptFileMissing { profile, reason })
+                if profile == "claude-plan" && reason.contains(missing.to_str().unwrap())
+                    && reason.contains(field)
+        ));
+    }
+    assert_eq!(actual, [true, true]);
+}
+
 #[test]
 fn replacement_base_keeps_saved_mode() {
     check_replacement_base(None);
