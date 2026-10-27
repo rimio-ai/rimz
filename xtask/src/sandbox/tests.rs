@@ -423,6 +423,7 @@ mod reaper {
             .env("HOME", &sandbox.env["HOME"])
             .spawn()
             .unwrap();
+        wait_for_home_child(&root, bystander.id());
         sandbox.keep(REPORT).unwrap();
         drop(sandbox);
         let root_exists = root.exists();
@@ -440,6 +441,17 @@ mod reaper {
             outlived.is_empty(),
             "drop must stop the sandbox's HOME child within {CLEANUP_WITHIN:?}"
         );
+    }
+
+    fn wait_for_home_child(root: &Path, pid: u32) {
+        let deadline = Instant::now() + CLEANUP_WITHIN;
+        while !sandbox_processes(root).contains(&pid) {
+            assert!(
+                Instant::now() < deadline,
+                "sandbox never identified HOME child {pid} within {CLEANUP_WITHIN:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn role_command(role: &str) -> Command {
@@ -597,6 +609,7 @@ mod reaper {
         };
         let root = owner.root.as_ref().unwrap();
         assert!(root.exists());
+        wait_for_home_child(root, bystander);
         assert!(alive(bystander));
 
         assert!(

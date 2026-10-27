@@ -609,7 +609,7 @@ fn reap_sandbox_processes(root: &Path) {
     if pids.is_empty() {
         return;
     }
-    signal_processes("-TERM", &pids);
+    signal_processes(rustix::process::Signal::TERM, &pids);
     let deadline = Instant::now() + CLEANUP_TIMEOUT;
     loop {
         let remaining = sandbox_processes(root);
@@ -617,7 +617,7 @@ fn reap_sandbox_processes(root: &Path) {
             return;
         }
         if Instant::now() >= deadline {
-            signal_processes("-KILL", &remaining);
+            signal_processes(rustix::process::Signal::KILL, &remaining);
             return;
         }
         thread::sleep(Duration::from_millis(10));
@@ -630,6 +630,10 @@ fn reap_sandbox_processes(_root: &Path) {
     // arbitrary leaked child by its environment relies on Linux `/proc`.
 }
 
+/// Processes whose exec has published an environment naming the sandbox root.
+///
+/// A child spawned an instant earlier may be missing. A caller that spawns and then reaps
+/// waits until the child is listed before starting the reap.
 #[cfg(target_os = "linux")]
 fn sandbox_processes(root: &Path) -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
@@ -664,11 +668,15 @@ fn environment_mentions_root(environment: &[u8], root: &Path) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn signal_processes(signal: &str, pids: &[u32]) {
-    let mut command = Command::new("kill");
-    command.arg(signal).arg("--");
-    command.args(pids.iter().map(u32::to_string));
-    reap_bounded(command);
+fn signal_processes(signal: rustix::process::Signal, pids: &[u32]) {
+    use rustix::process::{Pid, kill_process};
+
+    for &pid in pids {
+        let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) else {
+            continue;
+        };
+        let _ = kill_process(pid, signal);
+    }
 }
 
 fn remove_tree_bounded(root: &Path) {
