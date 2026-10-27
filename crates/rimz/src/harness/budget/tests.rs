@@ -18,6 +18,28 @@ fn agent(cost: f64, status: AgentStatus, turn_started_at: Option<Timestamp>) -> 
 }
 
 #[test]
+fn held_ledger_projection_keeps_raw_values_until_checked_again() {
+    let (_dir, runtime) = split_shared_roots();
+    let agent = agent(0.5, AgentStatus::Idle, None);
+    let first = BudgetLedger::new("10".parse().unwrap());
+    let second = BudgetLedger::new("20".parse().unwrap());
+    write_ledger(&runtime, &agent.kind, &agent.agent_id, &first).unwrap();
+    assert_eq!(
+        projected_ledger(&runtime, &agent, false),
+        Some(first.clone())
+    );
+    write_ledger(&runtime, &agent.kind, &agent.agent_id, &second).unwrap();
+    assert_eq!(projected_ledger(&runtime, &agent, true), Some(first));
+    assert_eq!(
+        projected_ledger(&runtime, &agent, false),
+        Some(second.clone())
+    );
+    std::fs::remove_file(budget_ledger_path(&runtime, &agent.kind, &agent.agent_id)).unwrap();
+    assert_eq!(projected_ledger(&runtime, &agent, true), Some(second));
+    assert_eq!(projected_ledger(&runtime, &agent, false), None);
+}
+
+#[test]
 fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
     for (raw, cap, window, display) in [
         ("5", 5.0, BudgetWindow::Session, "$5.00"),
@@ -170,7 +192,7 @@ fn monthly_applicability_exempts_subscription_pools_but_not_cold_or_daily_caps()
         let mut snapshot =
             SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![state], now);
         enforce(&snapshot, &runtime, None, &config);
-        project_parks(&mut snapshot, &runtime, None, &config);
+        project_parks(|_| false, &mut snapshot, &runtime, None, &config);
         actual.push(
             snapshot.agents[0]
                 .budget_park
@@ -797,6 +819,7 @@ fn turn_park_projection_ignores_a_stale_turn_entry() {
 
     let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![state], second);
     project_parks(
+        |_| false,
         &mut snapshot,
         &runtime,
         Some(&state_paths(&runtime)),
@@ -860,6 +883,7 @@ fn active_absolute_waiver_hides_the_paused_projection() {
         Timestamp::from_second(202).expect("timestamp"),
     );
     project_parks(
+        |_| false,
         &mut snapshot,
         &runtime,
         Some(&state_paths(&runtime)),
@@ -874,6 +898,7 @@ fn active_absolute_waiver_hides_the_paused_projection() {
         Timestamp::from_second(203).expect("timestamp"),
     );
     project_parks(
+        |_| false,
         &mut snapshot,
         &runtime,
         Some(&state_paths(&runtime)),
@@ -938,6 +963,7 @@ fn fleet_park_projects_only_live_or_interrupted_agents() {
         now,
     );
     project_parks(
+        |_| false,
         &mut snapshot,
         &runtime,
         Some(&state_paths(&runtime)),
@@ -1003,7 +1029,7 @@ fn fleet_park_projection_keeps_live_spend_parks_until_enforcement() {
         snapshot.fleet_day_spend_usd = live;
         snapshot.fleet_day_spend_epoch_secs = epoch;
 
-        project_parks(&mut snapshot, &runtime, None, &config);
+        project_parks(|_| false, &mut snapshot, &runtime, None, &config);
         assert_eq!(snapshot.agents[0].effective_status(), AgentStatus::Paused);
         assert_eq!(
             snapshot.agents[0]
@@ -1558,6 +1584,7 @@ fn park_projection_uses_agent_then_turn_then_fleet_then_account_precedence() {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace_id.clone(), vec![state.clone()], now);
         project_parks(
+            |_| false,
             &mut snapshot,
             &runtime,
             Some(&state_paths(&runtime)),
@@ -1910,6 +1937,7 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
             .exists()
     );
     project_parks(
+        |_| false,
         &mut snapshot,
         &runtime,
         Some(&state_paths(&runtime)),
@@ -1971,6 +1999,7 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
         .is_some()
     );
     project_parks(
+        |_| false,
         &mut snapshot,
         &runtime,
         Some(&state_paths(&runtime)),
@@ -2076,7 +2105,7 @@ fn accounts_of_one_pool_share_a_ledger_and_park_together() {
     assert_eq!(solo, DailyBudgetScope::Account(keys[2].clone()));
     assert!(!solo.ledger_path(&runtime, &state).exists());
 
-    project_parks(&mut snapshot, &runtime, Some(&state), &config);
+    project_parks(|_| false, &mut snapshot, &runtime, Some(&state), &config);
     let parked: Vec<_> = snapshot
         .agents
         .iter()

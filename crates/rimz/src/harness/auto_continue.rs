@@ -8,7 +8,7 @@
 //! fire so the decision never depends on the ephemeral per-session context
 //! surviving the wait:
 //!
-//! - **Arm.** Each frame an agent is parked on a resumable certificate
+//! - **Arm.** On each due agent check with a resumable park certificate
 //!   ([`resume_park`]), the producer writes a durable [`ParkRecord`]
 //!   capturing the park class and the agent's frozen `last_activity`. A
 //!   rate-limit record captures the latest spent-window reset deadline; a
@@ -21,8 +21,11 @@
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`resume_park`].
+//! The caller owns per-agent deferral. Only display projection reuses raw park
+//! reads; arm/fire/clear always reread disk when their check is due.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -61,6 +64,7 @@ pub fn park_demotion(
     let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, None, config)
         .with_agents(agents);
     park_demotion_for_logins(
+        |_| false,
         store,
         runtime,
         &config.resume,
@@ -72,7 +76,12 @@ pub fn park_demotion(
 }
 
 /// [`park_demotion`] for a caller that already resolved the room's logins.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the read boundary also carries its caller's per-agent hold decision"
+)]
 pub(crate) fn park_demotion_for_logins(
+    deferred: impl FnMut(&AgentState) -> bool,
     store: Option<&crate::Store>,
     runtime: &RuntimePaths,
     config: &ResumeConfig,
@@ -85,7 +94,7 @@ pub(crate) fn park_demotion_for_logins(
     let messages = read_resume_messages(store, config, outcomes);
     crate::agents::ParkDemotion::new(
         &capacities,
-        exhausted_parks(agents, runtime, config, &messages),
+        exhausted_parks(deferred, agents, runtime, config, &messages),
         now,
     )
 }
@@ -233,6 +242,7 @@ pub(crate) fn resume_gate_recovered(
 /// one room host drives one room, and the records live in that room's
 /// runtime dir, so one due condition nudges its agent once per retry.
 pub(crate) fn resume_parked(
+    mut deferred: impl FnMut(&AgentState) -> bool,
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     logins: &crate::agents::RoomLoginSet,
@@ -255,6 +265,9 @@ pub(crate) fn resume_parked(
     };
     for agent in snapshot.agents.iter() {
         if agent.is_provider_subagent() || agent.agent_id.is_empty() {
+            continue;
+        }
+        if deferred(agent) {
             continue;
         }
         let path = park_record_path(runtime, &agent.kind, &agent.agent_id);
@@ -355,6 +368,7 @@ fn nudged_turn_made_no_progress(agent: &AgentState, enqueued_at: Timestamp) -> b
 }
 
 pub(crate) fn exhausted_parks(
+    mut deferred: impl FnMut(&AgentState) -> bool,
     agents: &[AgentState],
     runtime: &RuntimePaths,
     config: &ResumeConfig,
@@ -362,14 +376,21 @@ pub(crate) fn exhausted_parks(
 ) -> BTreeSet<(AgentKind, AgentSessionId)> {
     let mut exhausted = BTreeSet::new();
     if !config.auto_continue {
+        PROJECTED_PARKS.with_borrow_mut(BTreeMap::clear);
         return exhausted;
     }
+    let needed: BTreeSet<_> = agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent() && !agent.agent_id.is_empty())
+        .map(|agent| park_record_path(runtime, &agent.kind, &agent.agent_id))
+        .collect();
+    PROJECTED_PARKS.with_borrow_mut(|memo| memo.retain(|path, _| needed.contains(path)));
     for agent in agents {
         if agent.is_provider_subagent() || agent.agent_id.is_empty() {
             continue;
         }
         let path = park_record_path(runtime, &agent.kind, &agent.agent_id);
-        let Some(record) = read_park(&path) else {
+        let Some(record) = projected_park(&path, deferred(agent)) else {
             continue;
         };
         if !still_parked(&record, agent.last_activity) {
@@ -385,6 +406,21 @@ pub(crate) fn exhausted_parks(
         }
     }
     exhausted
+}
+
+thread_local! {
+    static PROJECTED_PARKS: RefCell<BTreeMap<PathBuf, Option<ParkRecord>>> = RefCell::default();
+}
+
+fn projected_park(path: &Path, deferred: bool) -> Option<ParkRecord> {
+    PROJECTED_PARKS.with_borrow_mut(|memo| {
+        if deferred {
+            return memo.get(path).cloned().flatten();
+        }
+        let raw = read_park(path);
+        memo.insert(path.to_owned(), raw.clone());
+        raw
+    })
 }
 
 fn capacity_recovered(

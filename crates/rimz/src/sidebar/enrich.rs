@@ -3,12 +3,15 @@
 //! One ordered spine serves both producer and consumer reads. It projects lane
 //! caches and sidecars; it forks no subprocess and writes no cache files.
 
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
+use crate::agents::AgentState;
 use crate::agents::context::SignIn;
 use crate::agents::spending::SpendingCaches;
 use crate::forge::pr_state::{PrLink, PrQueueFact, read_pr_state_cache};
@@ -40,6 +43,100 @@ use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
 #[cfg(test)]
 mod tests;
+
+type AgentReadChecks = HashMap<(AgentKind, AgentSessionId), Instant>;
+
+#[derive(Default)]
+struct EnrichmentChecks {
+    root: PathBuf,
+    context: AgentReadChecks,
+    subagent: AgentReadChecks,
+    activity: AgentReadChecks,
+    budget: AgentReadChecks,
+    parks: AgentReadChecks,
+}
+
+thread_local! {
+    static READ_CHECKS: RefCell<EnrichmentChecks> = RefCell::default();
+}
+
+pub(super) fn reset_read_checks() {
+    READ_CHECKS.with_borrow_mut(|checks| *checks = EnrichmentChecks::default());
+}
+
+fn with_read_checks<T>(runtime: &RuntimePaths, read: impl FnOnce(&mut EnrichmentChecks) -> T) -> T {
+    READ_CHECKS.with_borrow_mut(|checks| {
+        if checks.root != runtime.root {
+            *checks = EnrichmentChecks {
+                root: runtime.root.clone(),
+                ..Default::default()
+            };
+        }
+        read(checks)
+    })
+}
+
+fn defer_agent_read(checks: &mut AgentReadChecks, agent: &AgentState, now: Instant) -> bool {
+    !super::cache::hibernated_check_due(
+        checks,
+        (agent.kind.clone(), agent.agent_id.clone()),
+        agent.hibernation.is_some(),
+        now,
+    )
+}
+
+fn agent_read_keys<'a>(
+    agents: &'a [AgentState],
+    checks: &'a mut AgentReadChecks,
+    clock: &'a dyn Fn() -> Instant,
+) -> impl Iterator<Item = (&'a str, &'a str, bool)> + 'a {
+    agents.iter().map(move |agent| {
+        (
+            agent.kind.as_str(),
+            agent.agent_id.as_str(),
+            defer_agent_read(checks, agent, clock()),
+        )
+    })
+}
+
+fn enrich_agent_sidecars(
+    snapshot: SidebarSnapshot,
+    runtime: &RuntimePaths,
+    clock: &dyn Fn() -> Instant,
+) -> SidebarSnapshot {
+    with_read_checks(runtime, |checks| {
+        let active: HashSet<_> = snapshot
+            .agents
+            .iter()
+            .map(|agent| (&agent.kind, &agent.agent_id))
+            .collect();
+        for lane in [
+            &mut checks.context,
+            &mut checks.subagent,
+            &mut checks.activity,
+            &mut checks.budget,
+            &mut checks.parks,
+        ] {
+            lane.retain(|(kind, id), _| active.contains(&(kind, id)));
+        }
+        let context = crate::store::agent_context::read_for_keys_with_holds(
+            runtime,
+            agent_read_keys(&snapshot.agents, &mut checks.context, clock),
+        );
+        let subagent_context = crate::store::subagent_context::read_for_keys(
+            runtime,
+            agent_read_keys(&snapshot.agents, &mut checks.subagent, clock),
+        );
+        let activity = crate::agent_activity::read_for_keys_with_holds(
+            runtime,
+            agent_read_keys(&snapshot.agents, &mut checks.activity, clock),
+        );
+        snapshot
+            .with_agent_context(context)
+            .with_subagent_context(subagent_context)
+            .with_agent_activity(&activity)
+    })
+}
 
 /// Fold the remote-link stats sidecar onto the snapshot. Local rooms never have
 /// this file; corrupt, unknown-version, and expired files erase the badge.
@@ -612,23 +709,18 @@ fn enrich_core(
     // the turn-grained event timestamp.
     if !snapshot.agents.is_empty() {
         crate::harness::hibernate::project_hibernation(&mut snapshot, state);
-        let keys = snapshot
-            .agents
-            .iter()
-            .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str()));
-        let context = crate::store::agent_context::read_for_keys(runtime, keys.clone());
-        let subagent_context = crate::store::subagent_context::read_for_keys(runtime, keys.clone());
-        let activity = crate::agent_activity::read_for_keys(runtime, keys);
-        snapshot = snapshot
-            .with_agent_context(context)
-            .with_subagent_context(subagent_context)
-            .with_agent_activity(&activity);
-        crate::harness::budget::project_parks(
-            &mut snapshot,
-            runtime,
-            store.map(Store::paths),
-            &machine_config,
-        );
+    }
+    snapshot = enrich_agent_sidecars(snapshot, runtime, &Instant::now);
+    if !snapshot.agents.is_empty() {
+        with_read_checks(runtime, |checks| {
+            crate::harness::budget::project_parks(
+                |agent| defer_agent_read(&mut checks.budget, agent, Instant::now()),
+                &mut snapshot,
+                runtime,
+                store.map(Store::paths),
+                &machine_config,
+            );
+        });
         // Catalog and launched-run waits are enrich-only; both producer and consumer attach them here.
         let project_root = snapshot.project_root.clone();
         crate::harness::schedule::pending::project_pending_waits(
@@ -717,15 +809,27 @@ fn enrich_core(
         exclude_pane: None,
     });
 
-    let demotion = crate::harness::auto_continue::park_demotion_for_logins(
-        store,
-        runtime,
-        &machine_config.resume,
-        &logins,
-        &snapshot.agents,
-        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
-        snapshot.now,
-    );
+    let demotion = with_read_checks(runtime, |checks| {
+        let active: HashSet<_> = snapshot
+            .agents
+            .iter()
+            .filter(|agent| !agent.is_provider_subagent() && !agent.agent_id.is_empty())
+            .map(|agent| (&agent.kind, &agent.agent_id))
+            .collect();
+        checks.parks.retain(|(kind, id), _| {
+            machine_config.resume.auto_continue && active.contains(&(kind, id))
+        });
+        crate::harness::auto_continue::park_demotion_for_logins(
+            |agent| defer_agent_read(&mut checks.parks, agent, Instant::now()),
+            store,
+            runtime,
+            &machine_config.resume,
+            &logins,
+            &snapshot.agents,
+            snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+            snapshot.now,
+        )
+    });
 
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);

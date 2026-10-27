@@ -500,7 +500,7 @@ Queue errors fail the whole repository probe. A GraphQL error whose path reaches
 
 ### Sidecars
 
-Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`, `active-time/`) are the one exception to producer ownership. Hook and statusline runs write the context and activity records, hooks update the active-time accumulators under per-record locks, and the host's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). The shared host fold reads them fresh behind stat-gated parse caches.
+Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`, `active-time/`) are the one exception to producer ownership. Hook and statusline runs write the context and activity records, hooks update the active-time accumulators under per-record locks, and the host's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). The shared host fold reads context and activity behind stat-gated parse caches. The [hibernated hold](#cadences) retains each key's last value without a stat between checks, preserving its parse memo; a due unchanged sidecar costs one stat and no parse. Removing a key drops its hold clock and memo. The one-shot `rimz sidebar` producer read ([`produce_snapshot_with_refresh`](../../../crates/rimz/src/sidebar/produce/mod.rs)) clears all keyed hold clocks after refreshing heavy lanes, so its second fold rechecks sidecars, ledgers and parks.
 
 ### Coordination and receipts
 

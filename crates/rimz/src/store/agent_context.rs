@@ -233,8 +233,8 @@ pub fn merge_locally_priced_cost(
 thread_local! {
     /// Per-thread parse cache. Every update lands via atomic rename of a
     /// freshly-written temp file, so `(mtime, len)` validates content; the
-    /// long-lived consumer fetch thread re-reads these sidecars on every
-    /// wakeup, and this caps its steady-state cost at one stat per file.
+    /// Normal reads cost one stat per file; deferred caller checks retain
+    /// the parse without metadata IO.
     static CONTEXT_PARSE_CACHE: sidecar::ParseCache<AgentContextRecord> =
         sidecar::ParseCache::default();
 }
@@ -255,6 +255,15 @@ pub(crate) fn read_for_keys<'a>(
 ) -> Vec<AgentContextRecord> {
     CONTEXT_PARSE_CACHE
         .with(|cache| sidecar::read_for_keys(&runtime.agent_context_dir, keys, cache))
+}
+
+/// Deferred keys retain the last parse without a stat; cadence belongs to the caller.
+pub(crate) fn read_for_keys_with_holds<'a>(
+    runtime: &RuntimePaths,
+    keys: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
+) -> Vec<AgentContextRecord> {
+    CONTEXT_PARSE_CACHE
+        .with(|cache| sidecar::read_for_keys_with_holds(&runtime.agent_context_dir, keys, cache))
 }
 
 /// Remove a session's sidecar on `SessionEnd` or reap. Best-effort:

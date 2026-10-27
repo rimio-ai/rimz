@@ -8,6 +8,7 @@
 //! transition; this module stays safe in the sidebar's read-only store import
 //! graph.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -795,11 +796,18 @@ fn evaluate(
 /// Stamp ledger park projections onto agent state for producer and consumer
 /// folds. This reads runtime caches and standing fleet choices without writing either.
 pub(crate) fn project_parks(
+    mut deferred: impl FnMut(&AgentState) -> bool,
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     state: Option<&crate::StatePaths>,
     config: &MachineConfig,
 ) {
+    let needed: BTreeSet<_> = snapshot
+        .agents
+        .iter()
+        .map(|agent| budget_ledger_path(runtime, &agent.kind, &agent.agent_id))
+        .collect();
+    PROJECTED_LEDGERS.with_borrow_mut(|memo| memo.retain(|path, _| needed.contains(path)));
     let now = snapshot.now;
     let zone = config.time_zone();
     let fleet_scope = DailyBudgetScope::Fleet;
@@ -811,8 +819,9 @@ pub(crate) fn project_parks(
     let catalog = account_catalog(config);
     let mut accounts = BTreeMap::new();
     for agent in std::sync::Arc::make_mut(&mut snapshot.agents) {
-        let agent_park = ledger_for_agent(runtime, agent)
-            .and_then(|ledger| agent_scope_park(agent, &ledger, now, &zone));
+        let agent_park =
+            ledger_for_projection(agent, projected_ledger(runtime, agent, deferred(agent)))
+                .and_then(|ledger| agent_scope_park(agent, &ledger, now, &zone));
         let turn_park = config.harness.turn_budget.and_then(|cap| {
             turn_scope_park(
                 agent,
@@ -1436,7 +1445,11 @@ fn warn_write(label: &str, err: impl std::error::Error + 'static) {
 }
 
 fn ledger_for_agent(runtime: &RuntimePaths, agent: &AgentState) -> Option<BudgetLedger> {
-    if let Some(mut ledger) = read_ledger(runtime, &agent.kind, &agent.agent_id) {
+    ledger_for_projection(agent, read_ledger(runtime, &agent.kind, &agent.agent_id))
+}
+
+fn ledger_for_projection(agent: &AgentState, raw: Option<BudgetLedger>) -> Option<BudgetLedger> {
+    if let Some(mut ledger) = raw {
         if let Some(spec) = agent.budget.as_deref().and_then(|raw| raw.parse().ok())
             && ledger.spec != spec
             && ledger.raised_cap_usd.is_none()
@@ -1448,6 +1461,26 @@ fn ledger_for_agent(runtime: &RuntimePaths, agent: &AgentState) -> Option<Budget
     }
     let spec = agent.budget.as_deref()?.parse().ok()?;
     Some(BudgetLedger::new(spec))
+}
+
+thread_local! {
+    static PROJECTED_LEDGERS: RefCell<BTreeMap<PathBuf, Option<BudgetLedger>>> = RefCell::default();
+}
+
+fn projected_ledger(
+    runtime: &RuntimePaths,
+    agent: &AgentState,
+    deferred: bool,
+) -> Option<BudgetLedger> {
+    let path = budget_ledger_path(runtime, &agent.kind, &agent.agent_id);
+    PROJECTED_LEDGERS.with_borrow_mut(|memo| {
+        if deferred {
+            return memo.get(&path).cloned().flatten();
+        }
+        let raw = read_ledger(runtime, &agent.kind, &agent.agent_id);
+        memo.insert(path, raw.clone());
+        raw
+    })
 }
 
 fn delivered_human_messages(store: Option<&Store>) -> Vec<MessageRecord> {

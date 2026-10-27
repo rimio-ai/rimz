@@ -242,14 +242,32 @@ pub(super) fn read_for_keys<'a, R: SidecarRecord>(
     keys: impl IntoIterator<Item = (&'a str, &'a str)>,
     cache: &ParseCache<R>,
 ) -> Vec<R> {
+    read_for_keys_with_holds(
+        dir,
+        keys.into_iter().map(|(kind, id)| (kind, id, false)),
+        cache,
+    )
+}
+
+pub(super) fn read_for_keys_with_holds<'a, R: SidecarRecord>(
+    dir: &Path,
+    keys: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
+    cache: &ParseCache<R>,
+) -> Vec<R> {
     let mut seen = BTreeSet::new();
     let mut cache = cache.0.borrow_mut();
     let records = keys
         .into_iter()
-        .filter_map(|(kind, agent_id)| {
+        .filter_map(|(kind, agent_id, deferred)| {
             let record_path = path(dir, R::FILE_PREFIX, kind, agent_id);
             if !seen.insert(record_path.clone()) {
                 return None;
+            }
+            if deferred {
+                return cache
+                    .get(&record_path)
+                    .and_then(|parsed| parsed.record.clone())
+                    .filter(|record| record.kind() == kind && record.agent_id() == agent_id);
             }
             #[cfg(any(test, feature = "testkit"))]
             testkit::record_stat();
