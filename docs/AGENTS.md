@@ -35,6 +35,8 @@ bwrap --dev-bind / / --tmpfs /home --bind "$TMPDIR/<dir>" /home/me \
 
 **Recompute it from the renderer.** `cli/render/mod.rs` is the authority. For a `render::Table`, column width is the widest cell including the header, columns join with two spaces, right-aligned columns are the ones named by `.right(&[...])`, a section emits a leading blank line, consecutive cards are separated by a blank line, card detail indents two, and the last column is padded only when it is right-aligned. For a `render::KeyVals`, the value column sits at `indent + longest_key + 2`. For a `render::roster::Roster`, the handle column pads to `handle.len() + 1` before the two-space separator, so `@planner` under a roster holding `@reviewer` carries four spaces, not three. Recompute, never eyeball.
 
+A change that moves one cell of an existing block regrounds the whole block, by capture when the branch binary can run the command. Recomputing only the changed cell keeps every other column's padding as trunk had it, and trunk's block may already be stale.
+
 A block for a command you cannot run may be derived from the error type's format string plus the `error: ` prefix `write_report` adds, as long as you say in the change that it was derived rather than captured.
 
 ## Facts that differ by surface
