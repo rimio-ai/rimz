@@ -23,8 +23,14 @@ const SPENDING_ENTRIES_PER_FILE: usize = 5_000;
 const SPENDING_NOW_SECS: u64 = 1_780_394_400;
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    host::helper();
     divan::main();
 }
+
+#[cfg(target_os = "linux")]
+#[path = "hotpath/host.rs"]
+mod host;
 
 struct HookFixture {
     _sandbox: rimz::testkit::sandbox::TestSandbox,
@@ -83,6 +89,12 @@ fn drainer_backlog(bencher: Bencher) {
 #[divan::bench(sample_count = 1, sample_size = 1, ignore)]
 fn apply_scale(bencher: Bencher) {
     latency::run_apply_scale(bencher);
+}
+
+#[cfg(target_os = "linux")]
+#[divan::bench(sample_count = 1, sample_size = 1, ignore)]
+fn host_scale(bencher: Bencher) {
+    host::run(bencher);
 }
 
 #[cfg(target_os = "linux")]
@@ -432,7 +444,7 @@ mod latency {
         duration.as_micros().try_into().unwrap()
     }
 
-    fn emit(row_key: &str, row: Value) {
+    pub(super) fn emit(row_key: &str, row: Value) {
         // Divan can leave its tree label unterminated before fixture setup.
         writeln!(io::stdout().lock(), "\n{}", json!({row_key: row})).unwrap();
     }
