@@ -132,7 +132,7 @@ pub fn merge_app_server_context(
     true
 }
 
-/// Short budget for warm unix-socket probes. A stale broker or daemon socket
+/// Default budget for warm unix-socket probes. A stale broker or daemon socket
 /// costs little before the cold-spawn fallback takes over; the sidebar's daemon
 /// ghost reap pays this only from the cache refresher, behind its own TTL.
 const DAEMON_PROBE_DEADLINE_SECS: u64 = 2;
@@ -370,16 +370,19 @@ impl CodexAppServer<WsTransport> {
     /// caller reads that as "unknown, keep all", never as "zero loaded". Used
     /// by the sidebar cache refresher's TTL-gated ghost reap.
     pub(crate) fn connect_daemon(login_env: &BTreeMap<String, String>) -> Option<Self> {
-        Self::connect_daemon_at(&daemon_socket(login_env)?)
+        Self::connect_daemon_at(
+            &daemon_socket(login_env)?,
+            loaded_threads_timeout(login_env),
+        )
     }
 
     /// [`Self::connect_daemon`] on one named control socket, for the
     /// account-link gate, which asks the socket under the account home.
-    fn connect_daemon_at(socket: &Path) -> Option<Self> {
+    fn connect_daemon_at(socket: &Path, timeout: Duration) -> Option<Self> {
         if !socket.exists() {
             return None;
         }
-        let transport = WsTransport::connect(socket, DAEMON_PROBE_DEADLINE).ok()?;
+        let transport = WsTransport::connect(socket, timeout).ok()?;
         let mut client = Self::new(transport);
         client.handshake().ok()?;
         Some(client)
@@ -428,6 +431,19 @@ fn daemon_socket(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
             &CodexAdapter.config_home(login_env)?,
         )),
     }
+}
+
+fn loaded_threads_timeout(login_env: &BTreeMap<String, String>) -> Duration {
+    #[cfg(feature = "testkit")]
+    if let Some(ms) = login_env
+        .get("RIMZ_TEST_CODEX_LOADED_THREADS_MS")
+        .and_then(|value| value.parse::<std::num::NonZeroU64>().ok())
+    {
+        return Duration::from_millis(ms.get());
+    }
+    #[cfg(not(feature = "testkit"))]
+    let _ = login_env;
+    DAEMON_PROBE_DEADLINE
 }
 
 /// A failed read yields the type's default, except one the broker did not

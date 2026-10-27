@@ -698,6 +698,18 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
 }
 
 #[test]
+fn loaded_threads_timeout_uses_only_positive_testkit_milliseconds() {
+    let default = Duration::from_secs(2);
+    assert_eq!(loaded_threads_timeout(&BTreeMap::new()), default);
+    for value in ["invalid", "0"] {
+        let env = BTreeMap::from([("RIMZ_TEST_CODEX_LOADED_THREADS_MS".into(), value.into())]);
+        assert_eq!(loaded_threads_timeout(&env), default, "{value}");
+    }
+    let env = BTreeMap::from([("RIMZ_TEST_CODEX_LOADED_THREADS_MS".into(), "30000".into())]);
+    assert_eq!(loaded_threads_timeout(&env), Duration::from_secs(30));
+}
+
+#[test]
 fn daemon_socket_defaults_under_codex_home_and_takes_the_override_verbatim() {
     let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
         pairs

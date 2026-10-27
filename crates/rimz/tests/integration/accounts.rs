@@ -2412,8 +2412,9 @@ fn accounts_add_refuses_a_history_switch_only_while_the_codex_daemon_has_session
 
     // The daemon check reads the stand-in's start time with the host `ps`,
     // which the hermetic provider `PATH` would hide; `add` probes no provider.
-    let switch = || {
+    let switch = |name: &str| {
         env.rimz()
+            .env("RIMZ_TEST_CODEX_LOADED_THREADS_MS", "30000")
             .args([
                 "accounts",
                 "add",
@@ -2423,46 +2424,60 @@ fn accounts_add_refuses_a_history_switch_only_while_the_codex_daemon_has_session
                 "standalone",
             ])
             .output()
-            .expect("run rimz accounts add")
+            .unwrap_or_else(|error| panic!("{name}: run rimz accounts add: {error}"))
     };
     let toggle = "`rimz config set remote_control.codex false`, rerun, then set it back to `true`";
     let config = "or remove `history = \"standalone\"` from `[accounts.codex.work]`";
 
     // A daemon that cannot be asked may hold a session.
-    let silent = switch();
+    let silent = switch("silent");
     let after_silent = std::fs::read_link(&sessions);
     let loaded = serve_loaded_threads(&home);
     loaded.lock().unwrap().push("thread-a".to_owned());
-    let holding = switch();
+    let holding = switch("holding");
     let after_holding = std::fs::read_link(&sessions);
     loaded.lock().unwrap().clear();
-    let idle = switch();
-    let still_running = daemon.try_wait().expect("poll the stand-in daemon");
+    let idle = switch("idle");
+    let still_running = daemon.try_wait().expect("idle: poll the stand-in daemon");
     daemon.kill().expect("kill the stand-in daemon");
     daemon.wait().expect("reap the stand-in daemon");
 
-    let error = failed(&silent);
-    assert!(error.contains("cannot unlink `"), "{error}");
+    assert!(!silent.status.success(), "silent: unexpected success");
+    let error = String::from_utf8_lossy(&silent.stderr);
+    assert!(error.contains("cannot unlink `"), "silent: {error}");
     assert!(
         error.contains(&format!(
             "the remote-control daemon on the account did not report its sessions, so it may write through that link, which would be removed under it; stop it with {toggle}, {config}"
         )),
-        "{error}"
+        "silent: {error}"
     );
-    assert_eq!(after_silent.unwrap(), linked);
+    assert_eq!(
+        after_silent.expect("silent: sessions link"),
+        linked,
+        "silent"
+    );
 
-    let error = failed(&holding);
-    assert!(error.contains("cannot unlink `"), "{error}");
+    assert!(!holding.status.success(), "holding: unexpected success");
+    let error = String::from_utf8_lossy(&holding.stderr);
+    assert!(error.contains("cannot unlink `"), "holding: {error}");
     assert!(
         error.contains(&format!(
             "the remote-control daemon on the account holds 1 live session(s) that write through that link, which would be removed under them; close them in the remote client and rerun once the daemon has unloaded them, or stop the daemon with {toggle}, {config}"
         )),
-        "{error}"
+        "holding: {error}"
     );
-    assert_eq!(after_holding.unwrap(), linked);
+    assert_eq!(
+        after_holding.expect("holding: sessions link"),
+        linked,
+        "holding"
+    );
 
     // Idle, the daemon does not block the switch and is left running.
-    succeeded(&idle);
-    assert!(still_running.is_none(), "{still_running:?}");
-    assert!(std::fs::symlink_metadata(&sessions).is_err());
+    assert!(
+        idle.status.success(),
+        "idle: stderr: {}",
+        String::from_utf8_lossy(&idle.stderr)
+    );
+    assert!(still_running.is_none(), "idle: {still_running:?}");
+    assert!(std::fs::symlink_metadata(&sessions).is_err(), "idle");
 }
