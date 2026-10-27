@@ -856,21 +856,12 @@ mod tests {
             RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
         std::fs::create_dir_all(&runtime.locks_dir).unwrap();
         drop(acquire_watch_lock(&runtime, "race").unwrap().unwrap());
-        let start = std::sync::Barrier::new(2);
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                start.wait();
-                for _ in 0..10_000 {
-                    watcher_info(&runtime, "race").unwrap();
-                }
-            });
-            start.wait();
-            for _ in 0..10_000 {
-                let claim = acquire_watch_lock(&runtime, "race").unwrap();
-                assert!(claim.is_some(), "a probe must not defeat a watcher claim");
-                drop(claim);
-            }
-        });
+        let path = watch_lock_path(&runtime, "race");
+        let info = lease::assert_waits_for_gate(&path, || watcher_info(&runtime, "race")).unwrap();
+        assert!(info.is_none());
+        let claim =
+            lease::assert_waits_for_gate(&path, || acquire_watch_lock(&runtime, "race")).unwrap();
+        assert!(claim.is_some());
     }
 
     #[test]

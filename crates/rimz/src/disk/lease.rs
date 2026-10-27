@@ -136,45 +136,61 @@ fn read_body(file: &mut File) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(test)]
+#[track_caller]
+pub(crate) fn assert_waits_for_gate<T: Send>(path: &Path, attempt: impl FnOnce() -> T + Send) -> T {
+    use std::sync::mpsc;
+
+    let gate = acquire_gate(path, GATE_TIMEOUT).unwrap();
+    let (blocked, result) = std::thread::scope(|scope| {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let worker = scope.spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = attempt();
+            finished_tx.send(()).unwrap();
+            result
+        });
+        started_rx.recv_timeout(GATE_TIMEOUT).unwrap();
+        let blocked = matches!(
+            finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        );
+        drop(gate);
+        (blocked, worker.join().unwrap())
+    });
+    // Closures do not inherit `#[track_caller]`, so the panic names the caller's step only here.
+    assert!(
+        blocked,
+        "the attempt reached the lease without waiting for the directory gate"
+    );
+    result
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const BODY: &[u8] = br#"{"pid":42,"started_at":"2026-10-22T00:00:00Z"}"#;
 
     #[test]
-    fn claims_survive_probes_and_removals_with_complete_bodies() {
+    fn claim_holds_the_gate_through_body_write_not_the_lifetime_hold() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lease.lock");
-        assert!(matches!(
-            claim(&path, |file| file.write_all(BODY)).unwrap(),
-            LeaseAttempt::Acquired(_)
-        ));
-        let start = std::sync::Barrier::new(3);
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                start.wait();
-                for _ in 0..10_000 {
-                    if let LeaseState::Held(body) = probe(&path).unwrap() {
-                        assert_eq!(body, BODY, "a held lease must have its complete body");
-                    }
-                }
-            });
-            scope.spawn(|| {
-                start.wait();
-                for _ in 0..1_000 {
-                    remove_if_free(&path).unwrap();
-                }
-            });
-            start.wait();
-            for _ in 0..1_000 {
-                let claim = claim(&path, |file| file.write_all(BODY)).unwrap();
-                assert!(
-                    matches!(claim, LeaseAttempt::Acquired(_)),
-                    "only a claimant may defeat a lease claim"
-                );
-                drop(claim);
-            }
-        });
+        let gate = path.with_file_name(GATE_NAME);
+        let LeaseAttempt::Acquired(_lease) = claim(&path, |file| {
+            assert!(
+                WorkspaceLock::try_acquire(&gate).unwrap().is_none(),
+                "a claim must hold the directory gate while writing its body"
+            );
+            file.write_all(BODY)
+        })
+        .unwrap() else {
+            panic!("a free lease must be claimed");
+        };
+        assert!(
+            WorkspaceLock::try_acquire(&gate).unwrap().is_some(),
+            "the directory gate must be released before the lease's lifetime hold ends"
+        );
     }
 
     #[test]
@@ -267,7 +283,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lease.lock");
         std::fs::write(&path, BODY).unwrap();
-        assert_eq!(remove_if_free(&path).unwrap(), Some(BODY.len() as u64));
+        assert_eq!(
+            assert_waits_for_gate(&path, || remove_if_free(&path)).unwrap(),
+            Some(BODY.len() as u64)
+        );
         assert!(!path.exists());
         let gate = dir.path().join(GATE_NAME);
         assert!(gate.is_file());
