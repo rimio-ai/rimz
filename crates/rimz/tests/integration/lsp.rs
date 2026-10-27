@@ -3056,6 +3056,250 @@ fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
 }
 
 #[test]
+fn lsp_outline_recovery_finds_crowded_methods() {
+    for target in ["Type::method", "lib.rs::Type::method"] {
+        let requests = recovered_definition(target, "lib.rs", 3, &[]);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request["method"] == "textDocument/documentSymbol")
+                .count(),
+            1
+        );
+    }
+    let requests = recovered_definition("Type::method", "lib.rs", 3, &["--many-implementations"]);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request["method"] == "textDocument/documentSymbol")
+            .count(),
+        20
+    );
+    assert!(!requests.iter().any(|request| {
+        request["method"] == "textDocument/documentSymbol"
+            && request["params"]["textDocument"]["uri"]
+                .as_str()
+                .unwrap()
+                .ends_with("/impl19.rs")
+    }));
+}
+
+#[test]
+fn lsp_outline_recovery_follows_module_definitions() {
+    let requests = recovered_definition("remote::item", "remote.rs", 1, &[]);
+    let outlines: Vec<_> = requests
+        .iter()
+        .filter(|request| request["method"] == "textDocument/documentSymbol")
+        .collect();
+    assert_eq!(outlines.len(), 1);
+    assert!(
+        outlines[0]["params"]["textDocument"]["uri"]
+            .as_str()
+            .unwrap()
+            .ends_with("/remote.rs")
+    );
+}
+
+#[test]
+fn lsp_outline_recovery_exact_head_prefers_top_level_without_a_container_lookup() {
+    let requests = recovered_definition("remote.rs::item", "remote.rs", 1, &[]);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request["method"] == "workspace/symbol")
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request["method"] == "textDocument/documentSymbol")
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request["method"] == "textDocument/definition")
+            .count(),
+        1
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request["method"] == "textDocument/implementation")
+    );
+}
+
+#[test]
+fn lsp_outline_recovery_reads_implementation_files_and_filters_the_member_file() {
+    for target in ["SplitType::member", "split.rs::SplitType::member"] {
+        let requests = recovered_definition(target, "impls/split.rs", 1, &[]);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request["method"] == "textDocument/implementation")
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request["method"] == "textDocument/definition")
+                .count(),
+            2
+        );
+        let outlines: Vec<_> = requests
+            .iter()
+            .filter(|request| request["method"] == "textDocument/documentSymbol")
+            .collect();
+        if target.starts_with("split.rs") {
+            assert_eq!(outlines.len(), 1);
+            assert!(
+                outlines[0]["params"]["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("/impls/split.rs")
+            );
+        } else {
+            assert_eq!(outlines.len(), 2);
+        }
+    }
+}
+
+#[test]
+fn lsp_outline_recovery_accepts_unsupported_implementation_requests() {
+    let requests = recovered_definition("Type::method", "lib.rs", 3, &["--no-implementation"]);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request["method"] == "textDocument/implementation")
+            .count(),
+        1
+    );
+
+    let env = outline_recovery_fixture();
+    let (mut broker, directory) = editor_broker_modes(&env, "20m", &["--no-implementation"]);
+    env.rimz()
+        .args(["lsp", "impl", "Type::method", "--json"])
+        .assert()
+        .code(1)
+        .stderr(
+            predicates::str::contains("\"code\":-32601")
+                .and(predicates::str::contains("Method not found")),
+        );
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+}
+
+fn outline_recovery_fixture() -> Env {
+    let env = Env::new();
+    std::fs::create_dir(env.project_root.join("impls")).unwrap();
+    for (file, source) in [
+        (
+            "lib.rs",
+            "struct Type { field: i32 }\n\nimpl Type {\n    fn method() {}\n}\n\nfn saved() {}\n\nstruct UniqueMember {\nfield: i32,\n}\n\nmod remote;\nstruct SplitType;\n",
+        ),
+        (
+            "remote.rs",
+            "\n    fn item() {}\n\n\nmod nested {\n    fn item() {}\n}\n",
+        ),
+        (
+            "impls/split.rs",
+            "impl SplitType {\n    fn member() {}\n}\n",
+        ),
+    ] {
+        std::fs::write(env.project_root.join(file), source).unwrap();
+    }
+    env
+}
+
+fn recovered_definition(target: &str, file: &str, line: u32, modes: &[&str]) -> Vec<Value> {
+    let env = outline_recovery_fixture();
+    let (mut broker, directory) = editor_broker_modes(&env, "20m", modes);
+    let output = env
+        .rimz()
+        .args(["lsp", "def", target, "--json"])
+        .assert()
+        .success();
+    let result: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    let position = json!({"line":line,"character":7});
+    assert_eq!(
+        result,
+        json!([{
+            "uri":format!("file://{}/{file}", env.project_root.display()),
+            "range":{"start":position,"end":position}
+        }])
+    );
+    let trace = editor_query(&directory, "requests");
+    let mut requests = trace["requests"].as_array().unwrap().clone();
+    assert_eq!(
+        requests.pop().unwrap()["params"],
+        json!({"query":"requests"})
+    );
+    let navigation = requests
+        .iter()
+        .rev()
+        .find(|request| request["method"] == "textDocument/definition")
+        .unwrap();
+    assert_eq!(
+        navigation["params"]["position"],
+        json!({"line":line,"character":7})
+    );
+    assert_eq!(
+        navigation["params"]["textDocument"]["uri"],
+        format!("file://{}/{file}", env.project_root.display())
+    );
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+    requests
+}
+
+#[test]
+fn lsp_outline_recovery_agrees_with_anchor_checks() {
+    let env = outline_recovery_fixture();
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(
+        env.project_root.join("notes.md"),
+        "`lib.rs::Type::method`\n`remote.rs::item`\n",
+    )
+    .unwrap();
+    let (mut broker, directory) = editor_broker(&env, "20m");
+    env.rimz()
+        .args(["lsp", "check", "notes.md"])
+        .assert()
+        .success();
+    for (target, expected) in [
+        ("lib.rs::Type::method", "lib.rs:4:8  fn method() {}\n"),
+        ("remote.rs::item", "remote.rs:2:8  fn item() {}\n"),
+    ] {
+        env.rimz()
+            .args(["lsp", "def", target])
+            .assert()
+            .success()
+            .stdout(expected);
+    }
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+}
+
+#[test]
 fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
     use serde_json::{Value, json};
     use std::io::{BufRead, BufReader, Write};
@@ -3212,7 +3456,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         .assert()
         .code(5)
         .stdout("not found: empty.rs::Type::field\n");
-    for name in ["Type::nosuch", "Type::method", "Wrong::field", "field"] {
+    for name in ["Type::nosuch", "Wrong::field", "field"] {
         env.rimz()
             .args(["lsp", "def", name])
             .assert()
@@ -3228,13 +3472,30 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
             .filter(|request| request["method"] == "textDocument/documentSymbol")
             .count()
     };
-    let outlines_before = outline_requests();
+    let recovery_requests = || {
+        query("requests")["result"]["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|request| {
+                matches!(
+                    request["method"].as_str(),
+                    Some(
+                        "textDocument/documentSymbol"
+                            | "textDocument/definition"
+                            | "textDocument/implementation"
+                    )
+                )
+            })
+            .count()
+    };
+    let requests_before = recovery_requests();
     env.rimz()
         .args(["lsp", "def", "BroadType::field"])
         .assert()
         .code(5)
         .stdout("not found: BroadType::field\n");
-    assert_eq!(outline_requests(), outlines_before);
+    assert_eq!(recovery_requests(), requests_before);
     let definition_requests = || {
         query("requests")["result"]["requests"]
             .as_array()

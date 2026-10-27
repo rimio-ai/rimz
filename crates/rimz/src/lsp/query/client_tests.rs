@@ -14,7 +14,15 @@ fn query_reply(response: Value) -> QueryErr {
     query_reply_with_wait(Some(response), 110_000)
 }
 
-fn query_reply_with_wait(mut response: Option<Value>, wait_ms: u64) -> QueryErr {
+fn query_reply_with_wait(response: Option<Value>, wait_ms: u64) -> QueryErr {
+    query_response("workspace/symbol", response, wait_ms).unwrap_err()
+}
+
+fn query_response(
+    method: &str,
+    mut response: Option<Value>,
+    wait_ms: u64,
+) -> std::result::Result<Value, QueryErr> {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::net::UnixListener;
     let root = tempfile::tempdir().unwrap();
@@ -45,10 +53,29 @@ fn query_reply_with_wait(mut response: Option<Value>, wait_ms: u64) -> QueryErr 
             );
         }
     });
-    let error = request_with_wait(&entry, "workspace/symbol", json!({}), wait_ms).unwrap_err();
+    let result = request_with_wait(&entry, method, json!({}), wait_ms);
     server.join().unwrap();
     std::fs::remove_dir_all(directory).unwrap();
-    error
+    result
+}
+
+#[test]
+fn unsupported_methods_and_other_protocol_errors_propagate() {
+    let missing = json!({"error":{"code":-32601,"message":"Method not found"}});
+    for (method, response) in [
+        ("textDocument/implementation", missing.clone()),
+        ("workspace/symbol", missing),
+        (
+            "textDocument/implementation",
+            json!({"error":{"code":-32603,"message":"internal error"}}),
+        ),
+    ] {
+        let error = query_response(method, Some(response), 110_000).unwrap_err();
+        assert!(
+            matches!(error, QueryErr::Failed(LspErr::Protocol(_))),
+            "{error}"
+        );
+    }
 }
 
 #[test]
