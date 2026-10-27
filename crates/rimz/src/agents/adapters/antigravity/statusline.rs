@@ -119,7 +119,7 @@ fn normalize_model_display(
 }
 
 impl StatuslinePayload {
-    pub(super) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+    pub(super) fn cost(&self, prices: &dyn Fn() -> std::sync::Arc<PriceBook>) -> Option<AgentCost> {
         let model_id = self.model.id.as_deref()?.trim();
         (!model_id.is_empty()).then_some(())?;
         let usage = &self.context_window.current_usage;
@@ -128,6 +128,7 @@ impl StatuslinePayload {
             || usage.cache_creation_input_tokens.is_some()
             || usage.cache_read_input_tokens.is_some())
         .then_some(())?;
+        let prices = prices();
         let price = prices.price(model_id).or_else(|| {
             selector_price_keys(model_id)
                 .into_iter()

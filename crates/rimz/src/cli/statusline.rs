@@ -4,10 +4,10 @@
 //! wrapped user command and forwards its stdout + exit code so the user's
 //! statusline renders exactly as before.
 //!
-//! This path is deliberately store-free — it runs on every statusline render.
-//! It resolves only the workspace runtime dir, takes the session sidecar's
-//! short advisory lock, writes one atomic file, and (when wrapping) spawns one
-//! child. It never blocks on the workspace lock and never opens the event log.
+//! Context persistence opens an existing room's Store handle for runtime paths,
+//! then uses short sidecar locks and atomic writes. A wrapped command adds one
+//! child. This path never blocks on the workspace lock or opens the event log.
+//! Main-session prices load only when the adapter needs token pricing.
 //!
 //! Stdio discipline: stdout is reserved for the wrapped command's output (what
 //! Claude renders); diagnostics go to stderr via `tracing`. The wrapped child's
@@ -20,6 +20,7 @@
 
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
@@ -87,7 +88,7 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
         })
         .unwrap_or((None, StatusLineInvocation::Shell));
 
-    // Best-effort context capture. Never fatal, never blocks on the store.
+    // Best-effort context capture. Never fatal, never takes the workspace lock.
     let persisted = if subagent {
         persist_subagent_context(&source, &buf, globals)
     } else {
@@ -107,8 +108,8 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
 }
 
 /// Parse the payload, normalize it via the agent adapter, and write the sidecar.
-/// Resolves only `RuntimePaths` (no store open or workspace lock) to stay fast
-/// on the per-render path.
+/// Opens an existing Store handle for runtime paths, without reading the event
+/// log or taking the workspace lock.
 fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
     let payload: Value = serde_json::from_slice(stdin).context("parsing statusline payload")?;
     let agent = definition_by_kind(source)?;
@@ -118,7 +119,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let runtime = runtime_paths_for_root(&workspace.project_root)?;
-    let prices = pricing::cached_book(&runtime.shared_pricing_cache_path());
+    let prices = || pricing::cached_book(&runtime.shared_pricing_cache_path());
     attach_context_cost(agent, &payload, &prices, &mut observation.context);
     rimz::store::agent_context::write(
         &runtime,
@@ -164,7 +165,7 @@ fn runtime_paths_for_root(project_root: &std::path::Path) -> Result<rimz::Runtim
 fn attach_context_cost(
     agent: &AgentDefinition,
     payload: &Value,
-    prices: &PriceBook,
+    prices: &dyn Fn() -> Arc<PriceBook>,
     context: &mut AgentContext,
 ) {
     if let Some(cost) = agent.context_cost(payload, prices) {
@@ -177,8 +178,8 @@ fn attach_context_cost(
 /// Parse a `subagentStatusLine` payload, harvest its `tasks`, and write one
 /// per-child sidecar keyed by `(kind, task id)` — the same id the child's
 /// `SubagentStart` lifecycle row is keyed under, so the snapshot fold attaches
-/// it. Like [`persist_context`] this resolves only `RuntimePaths` (no store or
-/// workspace lock) to stay fast on the per-render path. Nothing to
+/// it. Like [`persist_context`] this opens an existing Store handle for runtime
+/// paths without reading the event log or taking the workspace lock. Nothing to
 /// persist (a non-Claude source, or a payload with no attributable task) is
 /// success, not an error.
 fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
@@ -312,6 +313,73 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn context_persistence_loads_prices_only_for_pricing_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace =
+            WorkspaceResolver::resolve_participant(dir.path(), Some(dir.path().to_owned()))
+                .unwrap();
+        let paths = rimz::StatePaths::for_project_root(&workspace.project_root).unwrap();
+        let runtime = rimz::RuntimePaths::for_state(&paths).unwrap();
+        let store = rimz::Store::open(paths, runtime.clone()).unwrap();
+        store.record_workspace(&workspace).unwrap();
+        let globals = GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: Some(workspace.project_root.clone()),
+            color: crate::cli::ColorWhen::Never,
+        };
+        let cache = runtime.shared_pricing_cache_path();
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        std::fs::write(
+            cache,
+            json!({"schema": 4, "models": {"qwen-test-model": {
+                "input": 0.000001, "output": 0.000002, "cache_read": 0.0000001,
+                "cache_create": 0.0, "cache_read_explicit": true, "fast_multiplier": 1.0,
+            }}})
+            .to_string(),
+        )
+        .unwrap();
+        let before = pricing::testkit::book_loads();
+        persist_context(
+            "claude",
+            br#"{"session_id":"claude-session","model":{"id":"claude-opus-4-8"}}"#,
+            &globals,
+        )
+        .unwrap();
+        let after_claude = pricing::testkit::book_loads();
+        assert!(
+            rimz::store::agent_context::read_one(&runtime, "claude", "claude-session").is_some()
+        );
+        persist_context(
+            "qwen",
+            &serde_json::to_vec(&json!({
+                "session_id": "qwen-session",
+                "metrics": {
+                    "models": {"qwen-test-model": {"tokens": {
+                        "prompt": 100, "completion": 20, "cached": 40, "thoughts": 5,
+                    }}},
+                    "files": {"total_lines_added": 12, "total_lines_removed": 3},
+                },
+            }))
+            .unwrap(),
+            &globals,
+        )
+        .unwrap();
+        let after_qwen = pricing::testkit::book_loads();
+        let cost = rimz::store::agent_context::read_one(&runtime, "qwen", "qwen-session")
+            .unwrap()
+            .context
+            .cost
+            .unwrap();
+        assert!((cost.total_cost_usd.unwrap() - 0.000_104).abs() < 1e-15);
+        assert_eq!(cost.coverage, rimz::agents::CostCoverage::Session);
+        assert_eq!(cost.total_lines_added, Some(12));
+        assert_eq!(cost.total_lines_removed, Some(3));
+        assert_eq!([after_claude - before, after_qwen - after_claude], [0, 1]);
+    }
+
+    #[test]
     fn current_usage_cost_attaches_only_when_the_payload_is_priceable() {
         let prices = PriceBook::from_litellm_json(
             r#"{"gemini-3.5-flash": {"input_cost_per_token": 1.5e-6, "output_cost_per_token": 9e-6, "cache_read_input_token_cost": 0.15e-6}}"#,
@@ -333,7 +401,7 @@ mod tests {
         attach_context_cost(
             rimz::agents::definition_by_kind("antigravity").unwrap(),
             &priced,
-            &prices,
+            &|| Arc::new(prices.clone()),
             &mut context,
         );
         let cost = context.cost.unwrap();
@@ -361,7 +429,7 @@ mod tests {
         attach_context_cost(
             rimz::agents::definition_by_kind("antigravity").unwrap(),
             &unknown,
-            &prices,
+            &|| Arc::new(prices.clone()),
             &mut context,
         );
         assert!(context.cost.is_none());
@@ -397,7 +465,7 @@ mod tests {
         attach_context_cost(
             rimz::agents::definition_by_kind("qwen").unwrap(),
             &priced,
-            &prices,
+            &|| Arc::new(prices.clone()),
             &mut context,
         );
         let cost = context.cost.unwrap();
@@ -421,7 +489,7 @@ mod tests {
         attach_context_cost(
             rimz::agents::definition_by_kind("qwen").unwrap(),
             &unknown,
-            &prices,
+            &|| Arc::new(prices.clone()),
             &mut context,
         );
         let cost = context.cost.unwrap();

@@ -219,6 +219,8 @@ Lookups are pure and network-free. The only network access is the gated refresh 
 
 Every price consumer uses the same book, the embedded snapshot plus the shared `pricing-cache.json`: history parsers, session and seat folds, live-card transcript costs, and hook-side transcript reconciliation. [`cached_book`](../../../crates/rimz/src/agents/pricing/mod.rs) memoizes the book by cache path, whole-second modification time, and length, and stats the cache on each call. An atomic rewrite therefore invalidates the memo, unless it keeps the length and lands within the same second (`crates/rimz/src/agents/pricing/mod.rs::cache_stamp`).
 
+The main statusline supplies prices lazily through `crates/rimz/src/agents/capabilities.rs::ContextCapability::context_cost`. Antigravity, Copilot, and Qwen request the book only when pricing token usage. Copilot's native AI credits need no book, and Claude's main statusline keeps provider-reported dollars without loading prices. Claude's subagent statusline still loads the book and its fingerprint for transcript pricing.
+
 An unknown model heals without a binary upgrade once the chase lands its price, but only where a surface parses the file again:
 
 | Surface | After the chase lands a price |
@@ -234,7 +236,7 @@ The book is assembled from two ordered layers. Each layer is one projection by [
 
 | Layer | When | Source |
 | --- | --- | --- |
-| 1. Embedded snapshot | always, at process start | the compacted snapshot `build.rs` gzips into the binary. A source checkout without the generated snapshot embeds an empty table. |
+| 1. Embedded snapshot | on each book assembly | the compacted snapshot `build.rs` gzips into the binary. A source checkout without the generated snapshot embeds an empty table. |
 | 2. Projected refresh | weekly, or early during an unknown-model chase | fresh LiteLLM and models.dev documents projected together into `pricing-cache.json`, overwriting embedded rows |
 
 The authoritative models.dev catalogues are `anthropic`, `openai`, `google`, `xai`, `zai`, `zhipuai`, `alibaba`, and `moonshotai`, in that precedence order. They fill missing models and fields, including context capacities and request-selected context tiers.
