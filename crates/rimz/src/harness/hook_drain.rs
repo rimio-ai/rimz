@@ -1244,10 +1244,10 @@ fn read_line<T: serde::de::DeserializeOwned>(stream: &UnixStream) -> Result<T, H
     Ok(serde_json::from_str(&line)?)
 }
 
-fn write_line(stream: &mut UnixStream, value: &impl Serialize) -> Result<(), HookDrainErr> {
-    serde_json::to_writer(&mut *stream, value)?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
+fn write_line(mut writer: impl Write, value: &impl Serialize) -> Result<(), HookDrainErr> {
+    let mut bytes = serde_json::to_vec(value)?;
+    bytes.push(b'\n');
+    writer.write_all(&bytes)?;
     Ok(())
 }
 
@@ -1261,6 +1261,48 @@ fn remove_socket(path: &std::path::Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct CountingWriter {
+        writes: usize,
+        bytes: Vec<u8>,
+    }
+
+    impl Write for CountingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.writes += 1;
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn wire_frame_is_encoded_with_one_write() {
+        let payload = serde_json::json!({
+            "through": 42, "reply_for": "event", "stop": false, "text": "line one\nline two",
+        });
+        let mut writer = CountingWriter::default();
+        write_line(&mut writer, &payload).unwrap();
+        assert_eq!(writer.bytes.last(), Some(&b'\n'));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&writer.bytes).unwrap(),
+            payload
+        );
+        assert_eq!(writer.writes, 1);
+    }
+
+    #[test]
+    fn serialization_failure_writes_no_partial_frame() {
+        let mut writer = CountingWriter::default();
+        let invalid = BTreeMap::from([((1, 2), "non-string key")]);
+        let result = write_line(&mut writer, &invalid);
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!((writer.writes, writer.bytes), (0, Vec::new()));
+    }
 
     fn fixture(prefix_frames: usize) -> (tempfile::TempDir, Store, Vec<(HookIngress, u64)>) {
         use crate::disk::paths::{RuntimePaths, StatePaths};
