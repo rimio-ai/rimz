@@ -925,7 +925,8 @@ allowed-dependencies = [
 # StatePaths::lsp_usage_paths keeps usage records and locks in their lifetime classes (+1).
 # WorkflowPaths::check_log owns per-evaluation shell output paths (+1).
 # RuntimePaths::hook_drainer_outages_dir owns wrapper outage lease locations (+1).
-surface-budget = 282
+# WorkflowPaths::step_log owns command-step output paths (+1).
+surface-budget = 283
 
 [[verdict]]
 kind = "item"
@@ -1302,7 +1303,8 @@ path = "crates/rimz/src/harness"
 # AgentShellResolution, its path/name views and resolve_agent_shell share room-scoped shells (+3).
 # AgentShellResolution::missing_saved_path explains the per-launch fallback in doctor (+1).
 # AgentShellPersistence carries the birth's shell-lookup save policy (+1).
-surface-budget = 1006
+# StepKind/kind, ChildError, execute_step and finish_script share command-step policy (+5).
+surface-budget = 1011
 
 [[verdict]]
 kind = "item"
@@ -8577,6 +8579,11 @@ reason = "Workflow shell output uses a classed per-sequence path beside the judg
 
 [[verdict]]
 kind = "item"
+key = "disk::paths::WorkflowPaths::step_log"
+reason = "Workflow command-step output has its own classed per-sequence path."
+
+[[verdict]]
+kind = "item"
 key = "harness::schedule::signal::team::team_lifecycle_signals"
 reason = "Pass 28e: four distinct, test-pinned edge rules (team.waiting, team.failed, team.idle, team.ended) share one payload; extracting them only moves the rule table."
 
@@ -9047,6 +9054,16 @@ reason = "Workflow validation and execution share one check-kind decision."
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::spec::StepKind"
+reason = "Workflow validation and execution share one agent/run/shell step decision."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Step::kind"
+reason = "Workflow validation and execution share one agent/run/shell step decision."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::Check::edges"
 reason = "Routing, admission, and cycle checks use the same explicit and default edges."
 
@@ -9207,6 +9224,11 @@ reason = "Workflow engine orchestration and script-host interrupts share the pur
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::state::Transition::finish_script"
+reason = "Every non-agent settlement chooses step or check evidence at one node-aware entry."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::state::Transition::timeout_at"
 reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
 
@@ -9234,6 +9256,16 @@ reason = "Workflow checks and step prompt composition share content digesting."
 kind = "item"
 key = "harness::workflow::script::evaluate"
 reason = "The workflow engine hosts scripts and judges through one interruptible child-publication boundary."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::script::ChildError"
+reason = "The command-step consumer distinguishes pre-spawn interruption from a failed command."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::script::execute_step"
+reason = "The engine runs command steps through the existing hosted-child publication boundary."
 
 [[verdict]]
 kind = "item"

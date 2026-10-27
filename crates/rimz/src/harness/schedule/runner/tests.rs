@@ -1755,6 +1755,7 @@ fn hosted_check_publishes_its_process_group_and_tees_both_streams() {
         dir.path(),
         "printf out; printf err >&2; exit 7",
         WatchDeadline::Hosted {
+            argv: None,
             interrupted: &|| false,
             spawned: &mut |pid| {
                 assert_eq!(
@@ -1787,6 +1788,67 @@ fn hosted_check_publishes_its_process_group_and_tees_both_streams() {
 }
 
 #[test]
+fn hosted_check_argv_preserves_literal_words_without_a_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let argv: Vec<std::ffi::OsString> = [
+        "sh",
+        "-c",
+        "printf '%s\\n' \"$@\"; test ! -t 0",
+        "script",
+        "two words",
+        "$HOME",
+        "*",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    let output = run_command(
+        dir.path(),
+        "printf shell-was-used",
+        WatchDeadline::Hosted {
+            argv: Some(&argv),
+            interrupted: &|| false,
+            spawned: &mut |_| Ok(()),
+        },
+        CheckEcho::Capture,
+        &BTreeMap::new(),
+        |_, _| panic!("hosted commands have no check-in"),
+        &mut None,
+    )
+    .unwrap();
+    assert_eq!(output.output, "two words\n$HOME\n*\n");
+    assert!(output.passed, "{}", output.output);
+}
+
+#[test]
+fn hosted_check_keeps_an_exited_childs_status_when_the_interrupt_is_due() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run_command(
+        dir.path(),
+        "exec >/dev/null 2>&1; sleep 0.1; exit 7",
+        WatchDeadline::Hosted {
+            argv: None,
+            interrupted: &|| true,
+            spawned: &mut |pid| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while crate::proc::process_is_live(pid, None) {
+                    assert!(Instant::now() < deadline, "child {pid} did not exit");
+                    std::thread::sleep(CHECK_POLL_INTERVAL);
+                }
+                Ok(())
+            },
+        },
+        CheckEcho::Capture,
+        &BTreeMap::new(),
+        |_, _| panic!("hosted commands have no check-in"),
+        &mut None,
+    )
+    .unwrap();
+    assert_eq!(output.code, Some(7));
+    assert!(!output.interrupted, "an exited child was not interrupted");
+}
+
+#[test]
 fn hosted_check_interrupt_kills_the_group_without_a_timeout() {
     let dir = tempfile::tempdir().unwrap();
     let polls = std::cell::Cell::new(0);
@@ -1795,6 +1857,7 @@ fn hosted_check_interrupt_kills_the_group_without_a_timeout() {
         dir.path(),
         "sleep 60 & echo $! > descendant.pid; wait",
         WatchDeadline::Hosted {
+            argv: None,
             interrupted: &|| {
                 polls.set(polls.get() + 1);
                 polls.get() >= 3
@@ -1837,6 +1900,7 @@ fn hosted_check_interrupts_pipe_holders_after_the_shell_exits() {
         dir.path(),
         "sleep 60 & echo $! > descendant.pid",
         WatchDeadline::Hosted {
+            argv: None,
             interrupted: &|| {
                 polls.set(polls.get() + 1);
                 polls.get() >= 3
@@ -1877,6 +1941,7 @@ fn hosted_check_publication_error_kills_the_group_and_returns_the_error() {
         dir.path(),
         "sleep 60 & echo $! > descendant.pid; wait",
         WatchDeadline::Hosted {
+            argv: None,
             interrupted: &|| false,
             spawned: &mut |pid| {
                 published = Some(pid);

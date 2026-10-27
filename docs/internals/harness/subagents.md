@@ -288,7 +288,7 @@ A launcher's fleet is its launched children plus the peers it stamped with `laun
 
 It then drops each selected run whose `report_to` is `nobody`, and deduplicates by run id. A supervised parent parks at a clean end while any selected run is live or owes an answer's report, and the queued digest then holds it until delivery opens its next turn.
 
-`RunRecord.report_to` is the policy of the answer that the launch prompt opens: `launcher`, or `nobody`. Its producers are `rimz agents` and `rimz teams` with `--detach`, and workflow steps (`cli/workflow/host.rs`). A subagent record carries `nobody` only when the retired `rimz subagents --detach` wrote it. Two source rules carry the policy, so no consumer needs its own guard:
+`RunRecord.report_to` is the policy of the answer that the launch prompt opens: `launcher`, or `nobody`. Its producers are `rimz agents` and `rimz teams` with `--detach`, and workflow agent steps (`cli/workflow/host.rs`). A subagent record carries `nobody` only when the retired `rimz subagents --detach` wrote it. Two source rules carry the policy, so no consumer needs its own guard:
 
 - `RunRecord::answer_claims` never marks an answer on a `nobody` run as owed, so no digest row is built from it.
 - `FleetRuns::of` drops a `nobody` run after the newest-run pick, so an older attached run of the same member does not resurface.

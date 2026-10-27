@@ -10,7 +10,7 @@ fn shell_fixture(shell: &str, fields: &str) -> (Env, PathBuf) {
     )
 }
 
-fn live_group(env: &Env, id: &str) -> (Value, u32, u32) {
+pub(super) fn live_group(env: &Env, id: &str) -> (Value, u32, u32) {
     let value = until(env, id, |value| {
         value["record"]["attempt"]["child"]["pid"].is_number()
             && fs::read_to_string(Path::new(value["dir"].as_str().unwrap()).join("descendant.pid"))
@@ -27,7 +27,7 @@ fn live_group(env: &Env, id: &str) -> (Value, u32, u32) {
     (value, child, descendant)
 }
 
-fn assert_group_stopped(child: u32, descendant: u32) {
+pub(super) fn assert_group_stopped(child: u32, descendant: u32) {
     let deadline = Instant::now() + Duration::from_secs(3);
     while [child, descendant]
         .into_iter()
@@ -41,7 +41,7 @@ fn assert_group_stopped(child: u32, descendant: u32) {
     }
 }
 
-const LIVE: &str = "sleep 60 & echo $! > \"$RIMZ_WORKFLOW_DIR/descendant.pid\"; wait";
+pub(super) const LIVE: &str = "sleep 60 & echo $! > \"$RIMZ_WORKFLOW_DIR/descendant.pid\"; wait";
 
 fn expire_check(env: &Env, value: &Value) {
     let mut record = value["record"].clone();

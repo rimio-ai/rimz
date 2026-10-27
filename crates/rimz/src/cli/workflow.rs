@@ -457,11 +457,14 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
             handle,
             head_start,
             head_end,
+            code,
+            log,
             cost_usd,
             children,
             limited,
             asked,
             digests,
+            reason,
             ..
         } = &entry.event
         {
@@ -472,14 +475,34 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
                     .take(8)
                     .collect::<String>()
             };
-            writeln!(
-                out,
-                "    {} HEAD {} → {} cost {}",
-                handle.as_deref().unwrap_or("—"),
-                short(head_start),
-                short(head_end),
-                cost_usd.map_or_else(|| "unknown".into(), rimz::theme::fmt::dollars2)
-            )?;
+            if spec
+                .steps
+                .get(&entry.node)
+                .is_some_and(|step| step.agent.is_none())
+            {
+                writeln!(
+                    out,
+                    "    exit {} HEAD {} → {}",
+                    code.map_or_else(|| "—".into(), |code| code.to_string()),
+                    short(head_start),
+                    short(head_end),
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    "    {} HEAD {} → {} cost {}",
+                    handle.as_deref().unwrap_or("—"),
+                    short(head_start),
+                    short(head_end),
+                    cost_usd.map_or_else(|| "unknown".into(), rimz::theme::fmt::dollars2)
+                )?;
+            }
+            if let Some(log) = log {
+                writeln!(out, "    log: {}", log.display())?;
+            }
+            if let Some(reason) = reason {
+                writeln!(out, "    reason: {reason}")?;
+            }
             if let Some(children) = children {
                 for (label, children) in [("stopped", &children.stopped), ("live", &children.live)]
                 {

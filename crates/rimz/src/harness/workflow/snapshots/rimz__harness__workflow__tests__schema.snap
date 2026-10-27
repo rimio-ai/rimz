@@ -186,11 +186,20 @@ expression: value
       "additionalProperties": false,
       "properties": {
         "agent": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "lifecycle": {
-          "$ref": "#/$defs/StepLifecycle",
-          "default": "turn"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepLifecycle"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "max-visits": {
           "format": "uint64",
@@ -212,11 +221,28 @@ expression: value
           "$ref": "#/$defs/StepEdges"
         },
         "prompt-file": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shell": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "takeover": {
-          "default": false,
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "then": {
           "type": "string"
@@ -235,8 +261,6 @@ expression: value
         }
       },
       "required": [
-        "agent",
-        "prompt-file",
         "then"
       ],
       "type": "object"

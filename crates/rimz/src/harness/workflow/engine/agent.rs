@@ -17,9 +17,11 @@ pub(super) fn compose(
     step: &super::super::Step,
     digests: &mut BTreeMap<String, String>,
 ) -> Result<String> {
-    let file = spec::confined_file(&record.spec_dir, &step.prompt_file)?;
+    // Only validated agent steps compose prompts.
+    let prompt_file = step.prompt_file.as_deref().expect("agent step prompt file");
+    let file = spec::confined_file(&record.spec_dir, prompt_file)?;
     let prompt = std::fs::read_to_string(file)?;
-    digests.insert(step.prompt_file.clone(), script::digest(prompt.as_bytes()));
+    digests.insert(prompt_file.into(), script::digest(prompt.as_bytes()));
     let mut parts = vec![prompt];
     match paths.signs(Some(&record.node)).canonicalize() {
         Ok(path) => {
@@ -172,7 +174,11 @@ pub(super) fn launch(
                     seq: attempt.seq,
                     role: WorkflowAttemptRole::Step,
                 },
-                agent: spec.steps[&record.node].agent.clone(),
+                // Preparation dispatches only validated agent steps here.
+                agent: spec.steps[&record.node]
+                    .agent
+                    .clone()
+                    .expect("agent step layout"),
                 lifecycle: attempt.lifecycle,
                 prompt,
                 cwd: record.scope.path.clone(),

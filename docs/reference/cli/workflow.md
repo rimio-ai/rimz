@@ -24,19 +24,21 @@ The [global flags](../cli.md#global-flags) apply. Every subcommand except `run` 
 | --- | --- |
 | `<NAME\|DIR>` | A single path component is a name under `~/.rimz/workflows/`; anything else is a directory, which must lie inside `~/.rimz/workflows/`. `.` is the current directory. |
 | `-w, --worktree <WORKTREE>` | Select an existing RimZ-owned worktree instead of the current checkout. It never creates one. Project scope overrides this selection. |
-| `--prompt <TEXT>` | Stored unchanged, appended to every step's prompt, and exposed as `prompt` in `context.json`. |
+| `--prompt <TEXT>` | Stored unchanged, appended to every agent step's prompt, and exposed as `prompt` in `context.json`. |
 
 Before creating a run, the command validates the definition and refuses on any error. It needs an existing room (`rimz start` creates one). With `scope = "worktree"`, nodes run in the selected checkout; with `scope = "project"`, they run at the project root, even when invoked from an owned worktree. One active or parked run holds each `(workflow, scope path)` pair; a second start refuses and names the existing run before reading the definition or prompt. On success it prints the run id, then the run's work directory (`RIMZ_WORKFLOW_DIR`), and the first advance starts in the background. The work directory includes `notes/` for node-owned cross-node scratch and `signs/` for step guidance. Every evaluation and attempt takes a new `seq`, a retry included, so name a scratch write after the item it records to make a repeat overwrite it.
 
 When `-w` selects a project-scoped workflow, stderr prints `note: <workflow> has scope = project; the run is at <project root>, not <worktree path>`. The command still exits 0 and stdout is unchanged.
 
-A step's `agent` accepts the fresh-launch layout grammar, including agent and command cells. `lifecycle` is `turn` by default or `stay` to keep the attempt live until the leader's session exits; a staying step has neither `timeout` nor `on.asked`. Teams, command-only layouts, and ambiguous prompt leaders refuse with a field-specific fix. Judge checks still take one profile. A step's `window` gates every agent cell's provider.
+A step selects exactly one of `agent`, `run`, or `shell`, and requires `then` naming a check. A run or shell step requires `timeout` and accepts the common visit bounds and `on.cap`. `run` is a literally passed argv, with slash-containing words confined to the definition directory; `shell` runs through `sh -c` without path confinement. Command steps refuse `prompt-file`, `lifecycle`, `window`, `takeover`, and `on.asked`, and never wait for checkout occupancy. Their stdin is closed, both streams go to `work/<seq>.step.log`, and they inherit the workspace pin and workflow environment.
+
+An agent step requires `prompt-file`. Its `agent` accepts the fresh-launch layout grammar, including agent and command cells. `lifecycle` is `turn` by default or `stay` to keep the attempt live until the leader's session exits; a staying step has neither `timeout` nor `on.asked`. Teams, command-only layouts, and ambiguous prompt leaders refuse with a field-specific fix. Judge checks still take one profile. An agent step's `window` gates every agent cell's provider.
 
 ## Inspect runs
 
 `rimz workflow list [--json]` prints every active and parked run across rooms: `RUN`, `WORKFLOW`, `CHECKOUT`, `STATE`, `NODE`, `SINCE` (when the run entered its node), and `DETAIL`, which is `with you` for a live staying attempt, the [waiting line](#the-waiting-line) for a waiting run, and the [park reason](#park-reasons) for a parked one. JSON `detail` uses the same text. Finished runs are omitted. `show` prints a live staying attempt's state as `active (with you)`; its JSON record carries `attempt.lifecycle = "stay"`. Turn attempts omit that field.
 
-`rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope worktree` or `scope project`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live step's handle and sequence), `ask` (handle, kind, and text, on a run parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the scope path when a step waits on takeover (`blockers unavailable` when the agent roster or the project's worktrees cannot be read), one `step <name>: N visits of <max> + <grant> grant` line per recorded step, and the history. An unbounded step prints `unbounded` instead of the limit and grant. A step declaring `max-visits-per-key` adds one indented `  key <json>: N visits of <max-visits-per-key> + <grant> grant` row per recorded key, in record order; unkeyed visits print `key null`. Steps without that field print no key rows. Each history line is time, `#seq`, node, event, outcome, count, and the routed object; an attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
+`rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope worktree` or `scope project`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live agent step's handle and sequence), `ask` (handle, kind, and text, on a run parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the scope path when a step waits on takeover (`blockers unavailable` when the agent roster or the project's worktrees cannot be read), one `step <name>: N visits of <max> + <grant> grant` line per recorded step, and the history. An unbounded step prints `unbounded` instead of the limit and grant. A step declaring `max-visits-per-key` adds one indented `  key <json>: N visits of <max-visits-per-key> + <grant> grant` row per recorded key, in record order; unkeyed visits print `key null`. Steps without that field print no key rows. Each history line is time, `#seq`, node, event, outcome, count, and the routed object; an agent attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
 
 ### The waiting line
 
@@ -54,7 +56,7 @@ waiting: sweep, takeover, since 09:10, ×3
 | `said <outcome>` | A check answered an outcome routed to `@wait`. |
 | `holding <outcome> <elapsed>/<for>` | A condition case keeps winning while its hold duration runs. |
 | `unknown: <keys and reasons>` | A condition cannot read enough data to choose its first matching case. Bare `ci` can name a local HEAD not on the PR or CI read at a different PR head; see [JSON shapes](#json-shapes) for the reason forms. |
-| `window <term>` | A step or judge whose provider `window` is closed, with the failing term and its reading. |
+| `window <term>` | An agent step or judge whose provider `window` is closed, with the failing term and its reading. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot evict it yet. |
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
 | `since` | First time the run waited here. |
@@ -77,6 +79,8 @@ An active run accepts `--extend` alone; `--at` needs a parked run. A finished ru
 ## Validate and schema
 
 `rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, step layout, judge profile, or `condition`), `BACKGROUND` (whether the step's leader reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `runner = "run" | "shell" | "agent" | "condition"`, nullable `run`, `shell`, and `agent` fields, `workflow`, `node`, `kind`, `do_background`, and resolved `edges`. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
+
+Command-step validation rows have `kind = "step"`, `runner = "run" | "shell"`, the command in the corresponding field, `agent = null`, and `do_background = false`. Their edges are `then`, `cap`, and `deadline`, never `asked`; `BACKGROUND` prints `—`. Agent-only warnings do not apply.
 
 `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
@@ -123,6 +127,12 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 `list --json` prints an array of `{id, workflow, scope, state, node, since, detail}`, where `scope` is the scope path: the checkout, or the project root for `scope = "project"`; `detail` is the waiting line or park reason as printed. The human column remains `CHECKOUT` for both kinds.
 
 `show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
+
+Command-step attempts and `record.prev_attempt` carry nullable `code` (exit code, null after a signal or an unobserved exit) and `log` (the absolute `work/<seq>.step.log` path when the file exists). Agent attempts write both as null; records predating these fields still decode. Command steps have null `handle`, `run_id`, `children`, `limited`, `asked`, and `cost_usd`. The hosting process samples `head_start` before the command and `head_end` after reaping it; `head_end` is null when another process settles it. `claim_path` still names `work/<seq>.claim.json`.
+
+A command step records `ended` on exit 0, `died` on another exit, signal, spawn failure, or log-open failure, and `timeout` when its step timeout interrupts it; these follow `then`. A run deadline records `canceled` and follows `on.deadline`. Cancel records `canceled` and ends the run. A lost host records `canceled` with a reason and follows `then`, without rerunning the action. An interrupted command whose bound is no longer due follows `then` as `canceled`. A child that exited on its own keeps its exit outcome even if a bound fell due before settlement. The next check receives the original routed input; the command's evidence is in `prev_attempt`.
+
+Text history keeps the attempt event line and adds `    exit <code|—> HEAD <start8|—> → <end8|—>` when `code` or `log` is present, followed by `    log: <path>` when present. Any attempt with a reason adds `    reason: <text>`. A running command has no live `attempt` header row; that row belongs to supervised agent runs.
 
 A visit cap routes `on.cap` with `{outcome: "cap", step, bound: "max-visits" | "max-visits-per-key", visits, max}`, plus the inherited `key` when present. The total cap is checked first and wins when both trip. `visits` is the tripped bound's count; `max` is its limit plus the run's visit grant. The journal's route input carries the same object.
 

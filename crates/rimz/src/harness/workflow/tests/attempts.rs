@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 const STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=2\n";
 const KEYED_STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=5\nmax-visits-per-key=2\n";
 
-fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
+pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let dir = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
     fs::write(dir.path().join("prompt.md"), "Build it").unwrap();

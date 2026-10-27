@@ -3256,6 +3256,7 @@ pub(crate) enum WatchDeadline<'a> {
     /// Run to exit, with an optional one-time check-in.
     Watch(Option<Duration>),
     Hosted {
+        argv: Option<&'a [std::ffi::OsString]>,
         interrupted: &'a dyn Fn() -> bool,
         spawned: &'a mut dyn FnMut(u32) -> std::io::Result<()>,
     },
@@ -3414,11 +3415,20 @@ pub(crate) fn run_command(
             command.args(["-c", cmd]);
             (command, None, None, *check_in)
         }
-        WatchDeadline::Hosted { .. } => {
+        WatchDeadline::Hosted { argv, .. } => {
             use std::os::unix::process::CommandExt;
 
-            let mut command = Command::new("sh");
-            command.args(["-c", cmd]).process_group(0);
+            let mut command = if let Some(argv) = argv {
+                // Hosted argv comes from the validated workflow resolver.
+                let mut command = Command::new(&argv[0]);
+                command.args(&argv[1..]);
+                command
+            } else {
+                let mut command = Command::new("sh");
+                command.args(["-c", cmd]);
+                command
+            };
+            command.process_group(0);
             (command, None, None, None)
         }
     };
@@ -3466,6 +3476,15 @@ pub(crate) fn run_command(
     let mut pending_signals = Vec::new();
     let (status, timed_out) = loop {
         if publication_error.is_some() || host_interrupted() {
+            if publication_error.is_none()
+                && stdout.is_finished()
+                && stderr.is_finished()
+                && let Some(status) = child
+                    .try_wait()
+                    .with_context(|| format!("waiting for hosted command `{cmd}`"))?
+            {
+                break (status, false);
+            }
             interrupted = true;
             let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
             let _ = child.kill();

@@ -15,8 +15,8 @@ use crate::harness::schedule::{
 };
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
-    self, AttemptKind, AttemptOutcome, Host, JournalEvent, KeyVisits, LiveAttempt, ParkReason,
-    RunRecord, RunState, Scope,
+    self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, KeyVisits,
+    LiveAttempt, ParkReason, RunRecord, RunState, Scope,
 };
 
 mod accounting;
@@ -335,6 +335,12 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             .seq;
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_CONTEXT_GATE");
+        if spec.steps.contains_key(&record.node) {
+            if command_step(state, &paths, &spec, &record)? {
+                continue;
+            }
+            return Ok(());
+        }
         let result = script::evaluate(state, &paths, &spec, &record);
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
@@ -389,6 +395,67 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     }
 }
 
+fn command_step(
+    state: &StatePaths,
+    paths: &WorkflowPaths,
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+) -> Result<bool> {
+    let result = script::execute_step(state, paths, spec, record, || accounting::step(record));
+    let head_end = super::head(&record.scope.path);
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
+    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let mut t = Transition {
+        record: workflow::load(paths)?,
+        spec,
+        paths,
+        now: Timestamp::now(),
+        entries: Vec::new(),
+    };
+    // prepare publishes every attempt before command execution.
+    let seq = record.attempt.as_ref().expect("prepared command step").seq;
+    if !t.current(seq) {
+        return Ok(false);
+    }
+    let (mut outcome, code, reason, interrupted) = match result {
+        Ok(output) if !output.interrupted() => (
+            if output.passed() {
+                AttemptOutcome::Ended
+            } else {
+                AttemptOutcome::Died
+            },
+            output.code(),
+            (!output.passed()).then(|| {
+                output.code().map_or_else(
+                    || "killed by signal".into(),
+                    |code| format!("exited {code}"),
+                )
+            }),
+            false,
+        ),
+        Ok(_) | Err(script::ChildError::Interrupted) => {
+            (AttemptOutcome::Canceled, None, None, true)
+        }
+        Err(script::ChildError::Failed(reason)) => {
+            (AttemptOutcome::Died, None, Some(reason), false)
+        }
+    };
+    let cause = if !interrupted {
+        EndCause::Lifecycle
+    } else if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {
+        EndCause::Deadline
+    } else if t.timeout_at()?.is_some_and(|at| at <= t.now) {
+        outcome = AttemptOutcome::Timeout;
+        EndCause::Timeout
+    } else {
+        EndCause::Lifecycle
+    };
+    t.finish_script(Ending { outcome, cause }, code, head_end, reason)?;
+    persist(&t, &guard)?;
+    Ok(t.record.state == RunState::Active)
+}
+
 fn prepare(
     state: &StatePaths,
     paths: &WorkflowPaths,
@@ -430,7 +497,16 @@ fn prepare(
         if crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref()) {
             return Ok(Decision::Stop);
         }
-        t.abandon_check("canceled");
+        let reason = format!("lost command-step host {}", attempt.host.pid);
+        t.finish_script(
+            Ending {
+                outcome: AttemptOutcome::Canceled,
+                cause: EndCause::Lifecycle,
+            },
+            None,
+            None,
+            Some(reason),
+        )?;
         persist(&t, &guard)?;
         return Ok(Decision::Again);
     }
@@ -476,30 +552,32 @@ fn prepare(
             persist(&t, &guard)?;
             return Ok(Decision::Again);
         }
-        if let Some(raw) = &step.window
-            && let Some(detail) = window_wait_for_launch(&t.record, &step.agent, raw, windows)?
-        {
-            t.step_wait("window", Some(detail));
-            persist(&t, &guard)?;
-            return Ok(Decision::Stop);
-        }
-        if let Some((_, error)) = eviction.take().filter(|(seq, _)| *seq == t.record.next_seq) {
-            // A confirmed stop admits only this launch; later visits read occupancy afresh.
-            eviction_error = error;
-        } else {
-            match host.occupancy(&t.record.scope.path, &t.record.project_root)? {
-                Occupancy::Free => {}
-                Occupancy::Blocked(_) => {
-                    t.step_wait("takeover", None);
-                    persist(&t, &guard)?;
-                    return Ok(Decision::Stop);
+        if let Some(spec::StepKind::Agent(agent)) = step.kind() {
+            if let Some(raw) = &step.window
+                && let Some(detail) = window_wait_for_launch(&t.record, agent, raw, windows)?
+            {
+                t.step_wait("window", Some(detail));
+                persist(&t, &guard)?;
+                return Ok(Decision::Stop);
+            }
+            if let Some((_, error)) = eviction.take().filter(|(seq, _)| *seq == t.record.next_seq) {
+                // A confirmed stop admits only this launch; later visits read occupancy afresh.
+                eviction_error = error;
+            } else {
+                match host.occupancy(&t.record.scope.path, &t.record.project_root)? {
+                    Occupancy::Free => {}
+                    Occupancy::Blocked(_) => {
+                        t.step_wait("takeover", None);
+                        persist(&t, &guard)?;
+                        return Ok(Decision::Stop);
+                    }
+                    Occupancy::Occupied(_) if !step.takeover.unwrap_or_default() => {
+                        t.step_wait("occupied", None);
+                        persist(&t, &guard)?;
+                        return Ok(Decision::Stop);
+                    }
+                    Occupancy::Occupied(_) => return Ok(Decision::Evict(Box::new(t.record))),
                 }
-                Occupancy::Occupied(_) if !step.takeover => {
-                    t.step_wait("occupied", None);
-                    persist(&t, &guard)?;
-                    return Ok(Decision::Stop);
-                }
-                Occupancy::Occupied(_) => return Ok(Decision::Evict(Box::new(t.record))),
             }
         }
     } else if spec.checks.contains_key(&t.record.node) {
@@ -529,8 +607,11 @@ fn prepare(
         )));
     }
     let step = spec.steps.get(&t.record.node);
-    let kind = if step.is_some() {
+    let agent_step = step.filter(|step| matches!(step.kind(), Some(spec::StepKind::Agent(_))));
+    let kind = if agent_step.is_some() {
         AttemptKind::Agent
+    } else if step.is_some() {
+        AttemptKind::Script
     } else {
         match spec.checks[&t.record.node].kind() {
             Some(spec::CheckKind::Agent(_)) => AttemptKind::Judge,
@@ -538,10 +619,10 @@ fn prepare(
         }
     };
     let mut digests = BTreeMap::new();
-    let prompt = step.map(|step| {
+    let prompt = agent_step.map(|step| {
         agent::compose(&t.record, paths, step, &mut digests).map_err(|error| error.to_string())
     });
-    let head_start = if kind == AttemptKind::Script {
+    let head_start = if step.is_none() && kind == AttemptKind::Script {
         None
     } else {
         super::head(&t.record.scope.path)
@@ -570,7 +651,7 @@ fn prepare(
     t.record.next_seq += 1;
     t.record.attempt = Some(LiveAttempt {
         kind,
-        lifecycle: step.map(|step| step.lifecycle).unwrap_or_default(),
+        lifecycle: step.and_then(|step| step.lifecycle).unwrap_or_default(),
         seq,
         node: t.record.node.clone(),
         started_at: t.now,
@@ -663,7 +744,18 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
         }
         return Ok(true);
     }
-    t.abandon_check("canceled");
+    if t.finish_script(
+        Ending {
+            outcome: AttemptOutcome::Canceled,
+            cause: EndCause::Cancel,
+        },
+        None,
+        None,
+        None,
+    )? {
+        persist(&t, &guard)?;
+        return Ok(true);
+    }
     t.record.state = RunState::Canceled;
     t.record.terminal_at = Some(t.now);
     t.push(None, JournalEvent::Cancel);

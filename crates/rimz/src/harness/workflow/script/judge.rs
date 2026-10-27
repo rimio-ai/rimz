@@ -109,7 +109,8 @@ fn run(
                     .execute_hosted(Duration::from_secs(u32::MAX.into()), interrupted, spawned)
                     .map_err(|e| e.to_string())
             },
-        )?;
+        )
+        .map_err(|error| error.to_string())?;
         let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
         let response = form.read_result(
             &output.stdout,

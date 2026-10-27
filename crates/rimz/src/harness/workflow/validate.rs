@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 
-use super::spec::{self, CheckKind, RESERVED_OUTCOMES, WorkflowSpec};
+use super::spec::{self, CheckKind, RESERVED_OUTCOMES, StepKind, WorkflowSpec};
 use crate::config::definitions::LoadedDefinitions;
 use serde::Serialize;
 
@@ -241,7 +241,8 @@ pub(super) fn validate_spec(
                 && spec
                     .steps
                     .get(target)
-                    .and_then(|step| step_layout(dir, &step.agent, definitions, project_root).ok())
+                    .and_then(|step| step.agent.as_deref())
+                    .and_then(|agent| step_layout(dir, agent, definitions, project_root).ok())
                     .and_then(|layout| {
                         let leader = crate::harness::spec::prompt_leader(&layout, None).ok()?;
                         let cell = layout.agent_cells().nth(leader)?;
@@ -273,15 +274,84 @@ pub(super) fn validate_spec(
     for (node, step) in &spec.steps {
         let path = format!("steps.{node}");
         report.node_name(&path, node);
-        report.prompt_window(dir, &path, Some(&step.prompt_file), step.window.as_deref());
-        let layout = match step_layout(dir, &step.agent, definitions, project_root) {
-            Ok(layout) => Some(layout),
-            Err(error) => {
-                report.error(&format!("{path}.agent"), error);
-                None
+        if step.kind().is_none() {
+            report.error(&path, "set exactly one of agent, run, or shell");
+        }
+        let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
+        let command = matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)));
+        if agent && step.prompt_file.is_none() {
+            report.error(
+                &format!("{path}.prompt-file"),
+                "an agent step requires prompt-file",
+            );
+        }
+        if command && step.timeout.is_none() {
+            report.error(
+                &format!("{path}.timeout"),
+                "a run or shell step requires timeout, so a hung command cannot hold the run",
+            );
+        }
+        if let Some(StepKind::Run(run)) = step.kind()
+            && let Err(error) = spec::resolve_argv(dir, run)
+        {
+            report.error(&format!("{path}.run"), error);
+        }
+        if let Some(StepKind::Shell(shell)) = step.kind()
+            && shell.trim().is_empty()
+        {
+            report.error(&format!("{path}.shell"), "set a nonempty shell command");
+        }
+        if command {
+            for (field, present, message) in [
+                (
+                    "takeover",
+                    step.takeover.is_some(),
+                    "a command step never waits for occupancy, so it has nothing to take over",
+                ),
+                (
+                    "lifecycle",
+                    step.lifecycle.is_some(),
+                    "a command step ends when its command exits; stay is for agent steps",
+                ),
+                (
+                    "window",
+                    step.window.is_some(),
+                    "windows gate provider usage, which a command step does not use",
+                ),
+                (
+                    "on.asked",
+                    step.on.asked.is_some(),
+                    "a command cannot ask; its outcome goes to prev_attempt",
+                ),
+                (
+                    "prompt-file",
+                    step.prompt_file.is_some(),
+                    "a command step takes no prompt; it reads context.json",
+                ),
+            ] {
+                if present {
+                    report.error(&format!("{path}.{field}"), message);
+                }
             }
+        }
+        let layout = if let Some(StepKind::Agent(agent)) = step.kind() {
+            report.prompt_window(
+                dir,
+                &path,
+                step.prompt_file.as_deref(),
+                step.window.as_deref(),
+            );
+            match step_layout(dir, agent, definitions, project_root) {
+                Ok(layout) => Some(layout),
+                Err(error) => {
+                    report.error(&format!("{path}.agent"), error);
+                    None
+                }
+            }
+        } else {
+            None
         };
-        if !step.lifecycle.is_turn() {
+        if agent && !step.lifecycle.unwrap_or_default().is_turn() {
             if step.timeout.is_some() {
                 report.error(
                     &format!("{path}.timeout"),
@@ -306,7 +376,7 @@ pub(super) fn validate_spec(
                     .is_wired(),
             )
         });
-        if step.lifecycle.is_turn() && do_background == Some(false) {
+        if step.lifecycle.unwrap_or_default().is_turn() && do_background == Some(false) {
             report.warnings.push(issue(&path, "step adapter has no background reporting; a turn end may finish the attempt while provider background work remains"));
         }
         if !step
@@ -338,6 +408,9 @@ pub(super) fn validate_spec(
             edges.insert("then".into(), target.clone());
         }
         for (outcome, target) in [("asked", &step.on.asked), ("cap", &step.on.cap)] {
+            if outcome == "asked" && !agent {
+                continue;
+            }
             if let Some(target) = target {
                 report.target(spec, &format!("{path}.on.{outcome}"), target);
                 if target == "@wait" {
@@ -359,10 +432,15 @@ pub(super) fn validate_spec(
             workflow: name.into(),
             node: node.clone(),
             kind: "step".into(),
-            runner: "agent".into(),
-            run: None,
-            shell: None,
-            agent: Some(step.agent.clone()),
+            runner: match step.kind() {
+                Some(StepKind::Run(_)) => "run",
+                Some(StepKind::Shell(_)) => "shell",
+                _ => "agent",
+            }
+            .into(),
+            run: step.run.clone(),
+            shell: step.shell.clone(),
+            agent: step.agent.clone(),
             do_background: do_background.unwrap_or(false),
             edges: resolved_edges(spec, edges, |outcome| match outcome {
                 "then" => true,
@@ -380,7 +458,7 @@ pub(super) fn validate_spec(
             if spec
                 .steps
                 .get(&row.node)
-                .is_some_and(|step| !step.lifecycle.is_turn())
+                .is_some_and(|step| !step.lifecycle.unwrap_or_default().is_turn())
             {
                 continue;
             }

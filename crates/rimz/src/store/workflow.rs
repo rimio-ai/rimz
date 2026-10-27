@@ -299,6 +299,10 @@ pub struct PreviousAttempt {
     pub claim_path: PathBuf,
     pub head_start: Option<String>,
     pub head_end: Option<String>,
+    #[serde(default)]
+    pub code: Option<i32>,
+    #[serde(default)]
+    pub log: Option<PathBuf>,
     pub children: Option<Children>,
     #[serde(default)]
     pub limited: Option<Limited>,
@@ -388,6 +392,10 @@ pub enum EvaluationOrigin {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "journal evidence stays inline without an allocation or a public variant change"
+)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum JournalEvent {
     Evaluation {
@@ -420,6 +428,10 @@ pub enum JournalEvent {
         head_start: Option<String>,
         #[serde(default)]
         head_end: Option<String>,
+        #[serde(default)]
+        code: Option<i32>,
+        #[serde(default)]
+        log: Option<PathBuf>,
         #[serde(default)]
         cost_usd: Option<f64>,
         #[serde(default)]
