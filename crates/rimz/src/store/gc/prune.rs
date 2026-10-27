@@ -257,9 +257,7 @@ fn workspace_has_history(path: &Path) -> bool {
     // recorded. Guarded by
     // `loop_schedule::loop_stop_cancels_a_spawn_run_in_an_unroomed_project`.
     let history = crate::StatePaths::history_paths(path);
-    history.events_log.exists()
-        || history.latest_snapshot.exists()
-        || dir_has_entries(&history.events_archive_dir)
+    history.events_log.exists() || dir_has_entries(&history.events_archive_dir)
 }
 
 fn dir_has_entries(path: &Path) -> bool {

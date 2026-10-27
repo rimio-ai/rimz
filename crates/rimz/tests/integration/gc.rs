@@ -623,6 +623,12 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
     std::fs::write(history.join("workspace.json"), b"{ not json").expect("garbled record");
     std::fs::write(&events_log, b"{}\n").expect("history");
 
+    let debris = workspaces.join("checkpoint-only-abcd");
+    let legacy = debris.join("cache/snapshots");
+    std::fs::create_dir_all(&legacy).expect("mkdir legacy checkpoint");
+    std::fs::write(debris.join("workspace.json"), b"{ not json").expect("garbled debris record");
+    std::fs::write(legacy.join("latest.json"), b"{}").expect("legacy checkpoint debris");
+
     env.rimz()
         .args(["gc", "--all", "--older-than", "1h"])
         .assert()
@@ -635,6 +641,10 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
     assert!(
         history.exists(),
         "unreadable record with history should be kept"
+    );
+    assert!(
+        !debris.exists(),
+        "a legacy latest view without a log or archive is not history"
     );
 }
 

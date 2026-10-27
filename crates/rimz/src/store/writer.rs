@@ -292,7 +292,8 @@ impl Store {
     /// workspace → publish lock order. When the log changed, retract the
     /// published view before touching the rollup cache so a crash leaves
     /// readers folding for themselves, never trusting an offset that can alias
-    /// into the fresh log after it regrows. Forget drops without rebuilding.
+    /// into the fresh log after it regrows. Log replacements also retract the
+    /// legacy state checkpoint. Forget drops without rebuilding.
     fn commit_boundary<T, F>(&self, mutation: F) -> Result<T>
     where
         F: FnOnce(&StatePaths) -> Result<(T, Option<RollupInvalidation>)>,
@@ -307,6 +308,15 @@ impl Store {
                 RollupInvalidation::Replace | RollupInvalidation::Forget { replaced: true }
             ) {
                 snapshot::advance_log_generation(paths)?;
+                let legacy = paths.legacy_snapshots_dir();
+                if let Err(source) = std::fs::remove_dir_all(&legacy)
+                    && source.kind() != io::ErrorKind::NotFound
+                {
+                    return Err(StoreErr::Io {
+                        path: legacy,
+                        source,
+                    });
+                }
             }
             if let Some(path) = paths.latest_snapshot() {
                 remove_file_if_exists(&path)?;

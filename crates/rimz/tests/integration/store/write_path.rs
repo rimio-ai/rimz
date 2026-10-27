@@ -562,6 +562,66 @@ fn a_missing_runtime_checkpoint_does_not_get_recreated_by_a_commit() {
 }
 
 #[test]
+fn boundaries_retract_legacy_checkpoints_only_when_the_log_is_replaced() {
+    use std::io::Write;
+
+    let mut retained = Vec::new();
+    for boundary in ["check", "rotation", "soft", "hard", "empty soft", "repair"] {
+        let h = crate::common::Harness::new();
+        if boundary != "empty soft" {
+            h.store
+                .append_event(&lifecycle(&h, "SessionStart", "retained"))
+                .unwrap();
+        }
+        let legacy = h.store.paths().cache_dir.join("snapshots");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("rollup.json"), b"legacy").unwrap();
+        match boundary {
+            "check" => assert!(
+                !h.store
+                    .rotate_event_log(u64::MAX, None)
+                    .unwrap()
+                    .rotation
+                    .is_rotated()
+            ),
+            "rotation" => assert!(
+                h.store
+                    .rotate_event_log(1, None)
+                    .unwrap()
+                    .rotation
+                    .is_rotated()
+            ),
+            "soft" | "hard" | "empty soft" => {
+                h.store.reset_records(boundary == "hard").unwrap();
+            }
+            "repair" => {
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&h.store.paths().events_log)
+                    .unwrap()
+                    .write_all(b"not a frame\n")
+                    .unwrap();
+                assert!(h.store.repair_event_log().unwrap().truncated());
+            }
+            _ => unreachable!(),
+        }
+        retained.push((boundary, legacy.exists()));
+    }
+    assert_eq!(
+        retained,
+        [
+            ("check", true),
+            ("rotation", false),
+            ("soft", false),
+            ("hard", false),
+            ("empty soft", false),
+            ("repair", true),
+        ],
+        "a no-op check and an in-place repair leave old binaries' checkpoints alone"
+    );
+}
+
+#[test]
 fn reset_retracts_the_published_view_and_rebuilds_by_mode() {
     let h = crate::common::Harness::new();
     let paths = h.store.paths();
