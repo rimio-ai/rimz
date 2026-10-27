@@ -148,6 +148,7 @@ fn prepare(
             snapshot.as_ref(),
             &machine_config,
             &effective,
+            crate::config::effective::ProfileScope::Agents,
             args.launch.spec.as_deref(),
             args.launch.prompt.as_deref(),
             &args.launch.overrides,

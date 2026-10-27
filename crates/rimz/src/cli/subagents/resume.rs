@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::cli::supervised;
+use rimz::config::effective::ProfileScope;
 use rimz::harness::launch::{ExecAction, ExecRequest};
 use rimz::harness::resume::{PostureRequest, ResumePosture};
 use rimz::message::dispatch::{
@@ -85,7 +86,10 @@ fn resume_resolved(
             stamped_mode: child.mode,
             stamped_tier: child.tier.as_deref(),
         },
-        launch.profiles_for_launch(child.is_launched_child(), child.profile.as_deref()),
+        launch.profiles_for_launch(
+            ProfileScope::for_launch(child.profile_scope, child.is_launched_child()),
+            child.profile.as_deref(),
+        ),
     );
     if let Some(reason) = &posture.degraded {
         bail!("{reason}");

@@ -735,18 +735,15 @@ impl LaunchAgents {
         }
     }
 
-    /// The table a launch's recorded profile name resolves in. A child takes
-    /// `[subagents.profiles]`, except for a name only `[agents.profiles]`
-    /// defines, which a child launched from a team role records.
-    pub fn profiles_for_launch(&self, child: bool, profile: Option<&str>) -> &ProfilesConfig {
-        let agents_only = profile.is_some_and(|name| {
-            !self.subagent_profiles.0.contains_key(name) && self.profiles.0.contains_key(name)
-        });
-        if child && !agents_only {
-            &self.subagent_profiles
-        } else {
-            &self.profiles
-        }
+    /// Resolve a profile through its launch doorway, including the team-role exception.
+    pub fn profiles_for_launch(
+        &self,
+        scope: ProfileScope,
+        profile: Option<&str>,
+    ) -> &ProfilesConfig {
+        scope
+            .resolve_launch(profile, &self.profiles, &self.subagent_profiles)
+            .1
     }
 
     /// Return a trust error only when a requested launch spec would consume a
@@ -797,6 +794,30 @@ impl LaunchAgents {
 pub enum ProfileScope {
     Agents,
     Subagents,
+}
+
+impl ProfileScope {
+    /// A recorded doorway wins over the one implied by child launch treatment.
+    pub fn for_launch(recorded: Option<Self>, child: bool) -> Self {
+        recorded.unwrap_or(if child { Self::Subagents } else { Self::Agents })
+    }
+
+    /// Select the scope and table, keeping agents-only team-role profiles on their table.
+    pub fn resolve_launch<'a>(
+        self,
+        profile: Option<&str>,
+        profiles: &'a ProfilesConfig,
+        subagent_profiles: &'a ProfilesConfig,
+    ) -> (Self, &'a ProfilesConfig) {
+        let agents_only = profile.is_some_and(|name| {
+            !subagent_profiles.0.contains_key(name) && profiles.0.contains_key(name)
+        });
+        if self == Self::Subagents && !agents_only {
+            (Self::Subagents, subagent_profiles)
+        } else {
+            (Self::Agents, profiles)
+        }
+    }
 }
 
 fn read_repo_value(path: &Path) -> Result<Option<toml::Value>> {

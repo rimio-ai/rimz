@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use rimz::agents::capabilities::SystemTextChannel;
 use rimz::agents::{PermissionMode, PresetArgMatcher, PresetField};
+use rimz::config::effective::ProfileScope;
 use rimz::config::{Isolation, ProfilesConfig, SkillName};
 use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
@@ -72,8 +73,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             &args.target,
             &channel.address_context(),
         )?;
-        let profiles =
-            effective.profiles_for_launch(agent.is_launched_child(), agent.profile.as_deref());
+        let scope = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
+        let profiles = effective.profiles_for_launch(scope, agent.profile.as_deref());
         let posture = restart::member_posture(&agent, profiles, &effective.teams);
         if let Some(reason) = &posture.degraded {
             warnings.push(format!("{reason}; showing bare {} posture", agent.kind));
@@ -106,6 +107,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             snapshot.as_ref(),
             &machine,
             &effective,
+            ProfileScope::Agents,
             Some(&args.target),
             None,
             &args.overrides,

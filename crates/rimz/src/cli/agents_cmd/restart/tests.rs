@@ -304,8 +304,10 @@ fn restart_posture_uses_the_profile_table_of_the_launch_doorway() {
     let mut top_level = peer.clone();
     top_level.launch_depth = None;
     top_level.launched_by = None;
+    let mut fork = peer.clone();
+    fork.profile_scope = Some(ProfileScope::Subagents);
 
-    let tools = [&child, &peer, &top_level].map(|agent| {
+    let tools = [&child, &peer, &top_level, &fork].map(|agent| {
         restart_posture(agent, &workspace, &machine)
             .unwrap()
             .launch
@@ -318,6 +320,7 @@ fn restart_posture_uses_the_profile_table_of_the_launch_doorway() {
             Some(vec!["Read".parse().unwrap()]),
             Some(vec!["Bash".parse().unwrap()]),
             Some(vec!["Bash".parse().unwrap()]),
+            Some(vec!["Read".parse().unwrap()]),
         ]
     );
 }
@@ -357,11 +360,44 @@ fn restart_posture_keeps_a_team_role_childs_agent_profile() {
     child.parent_agent_kind = Some(child.kind.clone());
     child.launch_depth = Some(1);
 
-    let posture = restart_posture(&child, &workspace, &machine).unwrap();
-
+    let mut fork = child.clone();
+    fork.parent_agent_id = None;
+    fork.parent_agent_kind = None;
+    fork.profile_scope = Some(ProfileScope::Subagents);
+    let actual = [&child, &fork].map(|agent| {
+        let posture = restart_posture(agent, &workspace, &machine).unwrap();
+        (posture.degraded, posture.launch.allowed_tools)
+    });
     assert_eq!(
-        (posture.degraded, posture.launch.allowed_tools),
-        (None, Some(vec!["Read".parse().unwrap()]))
+        actual,
+        std::array::from_fn::<_, 2, _>(|_| { (None, Some(vec!["Read".parse().unwrap()])) })
+    );
+}
+
+#[test]
+fn relaunch_requests_preserve_a_forks_profile_scope_without_child_treatment() {
+    let mut agent = rimz::testkit::agent_state("claude", "fork", jiff::Timestamp::UNIX_EPOCH);
+    agent.profile_scope = Some(ProfileScope::Subagents);
+    let posture = ResumePosture::default();
+    let actual = [
+        ExecAction::Resume {
+            session_id: "fork".into(),
+            extra_args: Vec::new(),
+        },
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    ]
+    .map(|action| {
+        let request = relaunch_request(&agent, &posture, action, None, None);
+        assert!(!request.subagent);
+        request.identity.params.profile_scope
+    });
+    let fresh = fresh_launch_request(&agent, restart_cell(&agent, &posture), None).unwrap();
+    assert_eq!(
+        [actual[0], actual[1], fresh.launch.profile_scope],
+        [Some(ProfileScope::Subagents); 3]
     );
 }
 

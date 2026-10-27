@@ -3,7 +3,10 @@
 use super::LaunchOverrideArgs;
 use anyhow::{Result, bail};
 use rimz::agents::PermissionMode;
-use rimz::config::{MachineConfig, effective::LaunchAgents};
+use rimz::config::{
+    MachineConfig,
+    effective::{LaunchAgents, ProfileScope},
+};
 use rimz::harness::budget::BudgetSpec;
 pub(super) use rimz::launcher::resolve::{
     FinalizedLaunch, resolve_launch_prompt_file, resolve_launch_prompt_files,
@@ -35,6 +38,7 @@ pub(super) fn resolve_finalized_layout(
     snapshot: Option<&SidebarSnapshot>,
     machine_config: &MachineConfig,
     effective: &LaunchAgents,
+    scope: ProfileScope,
     spec: Option<&str>,
     prompt: Option<&str>,
     overrides: &LaunchOverrideArgs,
@@ -48,6 +52,7 @@ pub(super) fn resolve_finalized_layout(
         snapshot,
         machine_config,
         effective,
+        scope,
         spec,
         prompt,
         &typed_overrides(overrides)?,

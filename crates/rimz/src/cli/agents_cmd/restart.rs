@@ -1,4 +1,5 @@
 use super::*;
+use rimz::config::effective::ProfileScope;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::launch::{ExecAction, ExecRequest};
 
@@ -317,7 +318,7 @@ pub(in crate::cli) fn relaunch_request(
         launch_depth: agent.launch_depth,
         launched_by: agent.launched_by.clone().map(Box::new),
         profile: agent.profile.clone(),
-        profile_scope: None,
+        profile_scope: agent.profile_scope,
         login: fresh_identity.map_or(login, |identity| identity.launch.login.clone()),
         tier: posture.launch.tier.clone(),
         role: agent.role.clone(),
@@ -365,7 +366,8 @@ pub(super) fn restart_posture(
 ) -> Result<ResumePosture> {
     let launch = rimz::config::effective::load(machine_config, &workspace.project_root)?;
     launch.block_set_failure()?;
-    let profiles = launch.profiles_for_launch(agent.is_launched_child(), agent.profile.as_deref());
+    let scope = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
+    let profiles = launch.profiles_for_launch(scope, agent.profile.as_deref());
     launch.block_failed_launch(
         &agent.kind,
         agent.profile.as_deref(),
@@ -543,6 +545,7 @@ pub(super) fn fresh_launch_request(
         AgentLaunchName::Soft(name.clone())
     });
     request.launch.profile = agent.profile.clone();
+    request.launch.profile_scope = agent.profile_scope;
     request.launch.checkout = agent.checkout.clone();
     request.launch.parent_agent_id = agent.parent_agent_id.clone();
     request.launch.parent_agent_kind = agent.parent_agent_kind.clone();
