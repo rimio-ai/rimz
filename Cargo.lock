@@ -5606,6 +5606,7 @@ dependencies = [
  "hex",
  "proc-macro2",
  "protobuf",
+ "rustix 1.1.5",
  "scip",
  "serde",
  "serde_json",
