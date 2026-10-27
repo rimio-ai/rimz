@@ -139,30 +139,28 @@ fn read_body(file: &mut File) -> io::Result<Vec<u8>> {
 #[track_caller]
 pub(crate) fn assert_waits_for_gate<T: Send>(path: &Path, attempt: impl FnOnce() -> T + Send) -> T {
     use std::sync::mpsc;
+    use std::time::Instant;
 
     let gate = acquire_gate(path, GATE_TIMEOUT).unwrap();
-    let (blocked, result) = std::thread::scope(|scope| {
+    let (returned_after, result) = std::thread::scope(|scope| {
         let (started_tx, started_rx) = mpsc::channel();
         let (finished_tx, finished_rx) = mpsc::channel();
         let worker = scope.spawn(move || {
+            let started = Instant::now();
             started_tx.send(()).unwrap();
             let result = attempt();
-            finished_tx.send(()).unwrap();
+            finished_tx.send(started.elapsed()).unwrap();
             result
         });
         started_rx.recv_timeout(GATE_TIMEOUT).unwrap();
-        let blocked = matches!(
-            finished_rx.recv_timeout(Duration::from_millis(100)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        );
+        let returned_after = finished_rx.recv_timeout(Duration::from_millis(100)).ok();
         drop(gate);
-        (blocked, worker.join().unwrap())
+        (returned_after, worker.join().unwrap())
     });
     // Closures do not inherit `#[track_caller]`, so the panic names the caller's step only here.
-    assert!(
-        blocked,
-        "the attempt reached the lease without waiting for the directory gate"
-    );
+    if let Some(elapsed) = returned_after {
+        panic!("the attempt returned after {elapsed:?} while the directory gate was held");
+    }
     result
 }
 
