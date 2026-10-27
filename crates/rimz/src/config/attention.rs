@@ -54,6 +54,25 @@ pub struct AttentionConfig {
     pub archive_after_secs: NonZeroU32,
 }
 
+impl AttentionConfig {
+    /// Read only the typed core machine file, without definitions, theme, or loop files.
+    /// A missing or broken core falls back to the same defaults as a full lenient load.
+    pub fn load_lenient() -> Self {
+        Self::load_lenient_from(&super::MachineConfig::config_path())
+    }
+
+    pub(super) fn load_lenient_from(path: &std::path::Path) -> Self {
+        super::recover_parsed(
+            path,
+            super::parse_core_text_collecting,
+            &mut super::ConfigNotices::default(),
+        )
+        .value
+        .agents
+        .attention
+    }
+}
+
 impl Default for AttentionConfig {
     fn default() -> Self {
         Self {

@@ -1,6 +1,8 @@
 //! Per-machine settings, loaded from `~/.rimz/config.toml`, `theme.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
 //!
-//! Markdown definitions under the agents home populate profiles and teams at every config load; config.toml owns machine launch preferences.
+//! Full machine-config loads populate profiles and teams from Markdown definitions under the agents
+//! home; config.toml owns machine launch preferences. Core-only attention and Sentry reads skip
+//! definitions, theme.toml, and loop.toml.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in

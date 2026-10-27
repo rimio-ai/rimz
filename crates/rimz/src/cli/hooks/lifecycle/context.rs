@@ -129,9 +129,7 @@ pub(super) fn touch_agent_activity(
     ) {
         Ok(count)
             if count
-                == crate::cli::machine_config()
-                    .agents
-                    .attention
+                == rimz::config::AttentionConfig::load_lenient()
                     .tool_repeat_attention_after
                     .get() =>
         {

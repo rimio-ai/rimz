@@ -60,6 +60,46 @@ fn append_stop(env: &Env) -> (HookIngress, u64) {
 }
 
 #[test]
+fn ordinary_lifecycle_apply_loads_no_machine_config() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    run_claude_lifecycle(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "drain-session"}),
+    );
+    let loads = env.home_root.join("machine-config-loads");
+    std::fs::write(&loads, "").unwrap();
+    let mut frame = stop_frame(&env);
+    frame.event = Some("PostToolUse".into());
+    frame.payload = json!({
+        "session_id": "drain-session", "tool_name": "Bash",
+        "tool_input": {"command": "cargo check"}, "tool_response": "ok",
+    })
+    .to_string();
+    let mut command = env.rimz();
+    command
+        .args(["hooks", "apply"])
+        .env("RIMZ_TEST_MACHINE_CONFIG_LOAD_LOG", &loads)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = env
+        .spawn_payload(command, &serde_json::to_string(&frame).unwrap())
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let activity =
+        rimz::agent_activity::read_for_keys(&env.runtime_paths(), [("claude", "drain-session")]);
+    assert_eq!(activity.len(), 1, "{activity:?}");
+    assert_eq!(activity[0].at, frame.ts);
+    assert_eq!(
+        std::fs::read_to_string(&loads).unwrap(),
+        "",
+        "ordinary lifecycle applies must not build the full machine config"
+    );
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn a_simulated_reboot_drops_pending_frames_and_fresh_frames_apply_once() {
     let env = Env::new();
