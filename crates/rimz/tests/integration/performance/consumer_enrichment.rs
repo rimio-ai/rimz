@@ -1,10 +1,10 @@
 //! Warm-read bound on the consumer enrichment sidecars.
 //!
-//! The sidebar's consumer read folds every live session's `agent_context`
-//! and `agent_activity` sidecar on each wakeup. The contract
-//! (docs/internals/performance.md): an unchanged room costs one stat per
-//! file — the `(mtime, len)` parse caches serve every record without a read
-//! or a parse, so a fleet of tens of agents re-reads in microseconds.
+//! Consumer reads fold the current agent keys, never historical sidecar files.
+//! Unheld context and activity keys cost one stat per wakeup; hibernated keys
+//! retain their checked values between minute checks. With a fixed unheld
+//! count, growing the frozen fleet must not increase warm-fetch sidecar IO.
+//! The `(mtime, len)` parse caches serve unchanged records without a reparse.
 //!
 //! Proven structurally, not by wall clock: every sidecar is rewritten in
 //! place with *different* content but identical `(mtime, len)`. A warm pass
@@ -67,6 +67,81 @@ fn warm_fetch_reads_only_agent_keys_despite_orphan_contexts() {
         after.0 - before.0 <= 400,
         "at most one stat per agent key in each context store, got {}",
         after.0 - before.0,
+    );
+}
+
+#[test]
+fn warm_fetch_sidecar_stats_depend_on_unheld_agents_not_frozen_fleet_size() {
+    let mut counts = Vec::new();
+    for total in [100, 200] {
+        let harness = crate::common::Harness::new();
+        let paths = harness.store.paths();
+        let runtime = &harness.runtime_paths;
+        let frame = rimz::testkit::fleet::seed_scale_room(
+            paths,
+            runtime,
+            rimz::testkit::fleet::ScaleRoom {
+                agents: total,
+                panes: 100,
+                ended_sessions: 0,
+                orphan_contexts: 3_000,
+            },
+        )
+        .unwrap();
+        let now = Timestamp::now();
+        for slot in 0..total {
+            let id = format!("agent-{slot}");
+            agent_context::write(runtime, "claude", &id, &context_at(now), None).unwrap();
+            rimz::store::subagent_context::update(runtime, "claude", &id, |_| {
+                (
+                    serde_json::from_value(serde_json::json!({
+                        "description": "child", "observed_at": now.to_string(),
+                    }))
+                    .unwrap(),
+                    None,
+                )
+            })
+            .unwrap();
+            if slot < total - 20 {
+                rimz::store::hibernate::record(
+                    paths,
+                    rimz::store::hibernate::Entry {
+                        kind: rimz::ids::AgentKind::new_unchecked("claude"),
+                        agent_id: id.into(),
+                        pane_id: rimz::PaneId::from_parts(
+                            rimz::MuxName::Zellij,
+                            format!("terminal_{}", slot % 100),
+                        ),
+                        scope: Default::default(),
+                        provider_pid: 1,
+                        frozen_at: now,
+                        anon_at_freeze: 0,
+                        step: 0,
+                        wake_error: None,
+                        reclaimed_bytes: 0,
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let mut cycle = rimz::sidebar_pane::app::IdleCycleFixture::new(
+            paths.clone(),
+            runtime.clone(),
+            frame,
+            100,
+        );
+        cycle.run_cycle();
+        let before = rimz::testkit::sidecar_read_counts();
+        cycle.run_cycle();
+        let after = rimz::testkit::sidecar_read_counts();
+        assert_eq!(after.1 - before.1, 0, "no directory enumeration");
+        assert_eq!(after.2 - before.2, 0, "no warm reparse");
+        counts.push(after.0 - before.0);
+    }
+    assert_eq!(
+        counts,
+        [40, 40],
+        "only the 20 unheld keys in each store are stat'd"
     );
 }
 
