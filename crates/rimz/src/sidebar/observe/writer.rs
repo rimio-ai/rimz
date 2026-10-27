@@ -2,14 +2,14 @@
 //! [`DiagEvent::FrameAnomaly`] records through the shared diagnostics sink,
 //! which owns the rate limit — the render thread never does IO for the observer.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Instant;
 
 use crate::diag::DiagSink;
 use crate::diag::record::DiagEvent;
 use crate::disk::paths::RuntimePaths;
-use crate::sidebar::cache::read_snapshot_cache;
+use crate::sidebar::cache::{hibernated_check_due, read_snapshot_cache};
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
     OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS, OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS,
@@ -170,6 +170,7 @@ fn compare_roster_to_frame(roster: &RosterSig, frame: &PaneFrame) -> Vec<Anomaly
 #[derive(Default)]
 struct DeadPidTracker {
     by_pid: BTreeMap<(String, u32), DeadPidObservation>,
+    checked: HashMap<(String, u32), Instant>,
 }
 
 impl DeadPidTracker {
@@ -179,6 +180,16 @@ impl DeadPidTracker {
         process_start: fn(u32) -> Option<Timestamp>,
         agent_start: fn(&str, u32) -> Option<Timestamp>,
     ) -> Vec<AnomalyKind> {
+        self.check_with_clock(roster, &process_start, &agent_start, &Instant::now)
+    }
+
+    fn check_with_clock(
+        &mut self,
+        roster: &RosterSig,
+        process_start: &dyn Fn(u32) -> Option<Timestamp>,
+        agent_start: &dyn Fn(&str, u32) -> Option<Timestamp>,
+        clock: &dyn Fn() -> Instant,
+    ) -> Vec<AnomalyKind> {
         let mut active = BTreeSet::new();
         let mut anomalies = Vec::new();
         for row in &roster.rows {
@@ -187,6 +198,9 @@ impl DeadPidTracker {
             };
             let key = (row.row_id.clone(), pid);
             active.insert(key.clone());
+            if !hibernated_check_due(&mut self.checked, key.clone(), row.hibernated, clock()) {
+                continue;
+            }
             let live_start = process_start(pid).map(|root_start| {
                 row.agent_kind
                     .as_deref()
@@ -235,6 +249,7 @@ impl DeadPidTracker {
             }
         }
         self.by_pid.retain(|key, _| active.contains(key));
+        self.checked.retain(|key, _| active.contains(key));
         cap_vec(anomalies)
     }
 }
@@ -249,6 +264,7 @@ struct DeadPidObservation {
 #[derive(Default)]
 struct HostedAgentTracker {
     by_pid: BTreeMap<(String, u32), HostedAgentObservation>,
+    checked: HashMap<(String, u32), Instant>,
 }
 
 impl HostedAgentTracker {
@@ -258,17 +274,31 @@ impl HostedAgentTracker {
         process_start: fn(u32) -> Option<Timestamp>,
         hosted_agent_absent: &dyn Fn(&str, u32) -> bool,
     ) -> Vec<AnomalyKind> {
+        self.check_with_clock(roster, &process_start, hosted_agent_absent, &Instant::now)
+    }
+
+    fn check_with_clock(
+        &mut self,
+        roster: &RosterSig,
+        process_start: &dyn Fn(u32) -> Option<Timestamp>,
+        hosted_agent_absent: &dyn Fn(&str, u32) -> bool,
+        clock: &dyn Fn() -> Instant,
+    ) -> Vec<AnomalyKind> {
         let mut active = BTreeSet::new();
         let mut anomalies = Vec::new();
         for row in &roster.rows {
             let (Some(kind), Some(pid)) = (row.agent_kind.as_deref(), row.pane_pid) else {
                 continue;
             };
-            if process_start(pid).is_none() {
-                continue;
-            }
             let key = (row.row_id.clone(), pid);
             active.insert(key.clone());
+            if !hibernated_check_due(&mut self.checked, key.clone(), row.hibernated, clock()) {
+                continue;
+            }
+            if process_start(pid).is_none() {
+                self.by_pid.remove(&key);
+                continue;
+            }
             if !hosted_agent_absent(kind, pid) {
                 self.by_pid.remove(&key);
                 continue;
@@ -288,6 +318,7 @@ impl HostedAgentTracker {
             }
         }
         self.by_pid.retain(|key, _| active.contains(key));
+        self.checked.retain(|key, _| active.contains(key));
         cap_vec(anomalies)
     }
 }
@@ -318,6 +349,7 @@ mod tests {
                 .into_iter()
                 .map(|(row_id, pane)| RosterRowSig {
                     row_id: row_id.to_owned(),
+                    hibernated: false,
                     agent_kind: Some("claude".to_owned()),
                     pane_id: Some(pane_id(pane).to_string()),
                     pane_pid: None,
@@ -332,12 +364,76 @@ mod tests {
             panes_produced_at_ms: Some(10),
             rows: vec![RosterRowSig {
                 row_id: row_id.to_owned(),
+                hibernated: false,
                 agent_kind: Some("claude".to_owned()),
                 pane_id: Some(pane_id("terminal_1").to_string()),
                 pane_pid: Some(pid),
                 pane_process_start: Some(started_at),
             }],
         }
+    }
+
+    #[test]
+    fn held_crosschecks_keep_confirmations_and_probe_immediately_on_thaw() {
+        let mut roster = roster_with_pid("held", 123, Timestamp::from_second(10).unwrap());
+        roster.rows[0].hibernated = true;
+        let mut dead = DeadPidTracker::default();
+        let mut hosted = HostedAgentTracker::default();
+        let now = Instant::now();
+        let mut observations = Vec::new();
+        for seconds in [0, 30, 60, 90, 120, 121] {
+            if seconds == 121 {
+                roster.rows[0].hibernated = false;
+            }
+            let dead_probes = std::cell::Cell::new(0);
+            let hosted_probes = std::cell::Cell::new(0);
+            let absent_probes = std::cell::Cell::new(0);
+            let clock = || now + std::time::Duration::from_secs(seconds);
+            let dead_events = dead.check_with_clock(
+                &roster,
+                &|_| {
+                    dead_probes.set(dead_probes.get() + 1);
+                    None
+                },
+                &|_, _| None,
+                &clock,
+            );
+            let hosted_events = hosted.check_with_clock(
+                &roster,
+                &|_| {
+                    hosted_probes.set(hosted_probes.get() + 1);
+                    Some(Timestamp::from_second(10).unwrap())
+                },
+                &|_, _| {
+                    absent_probes.set(absent_probes.get() + 1);
+                    true
+                },
+                &clock,
+            );
+            observations.push((
+                dead_probes.get(),
+                hosted_probes.get(),
+                absent_probes.get(),
+                dead_events.len(),
+                hosted_events.len(),
+            ));
+        }
+        assert_eq!(
+            observations,
+            [
+                (1, 1, 1, 0, 0),
+                (0, 0, 0, 0, 0),
+                (1, 1, 1, 1, 1),
+                (0, 0, 0, 0, 0),
+                (1, 1, 1, 0, 0),
+                (1, 1, 1, 0, 0),
+            ]
+        );
+        roster.rows.clear();
+        dead.check_with_clock(&roster, &|_| None, &|_, _| None, &|| now);
+        hosted.check_with_clock(&roster, &|_| None, &|_, _| true, &|| now);
+        assert!(dead.by_pid.is_empty());
+        assert!(hosted.by_pid.is_empty());
     }
 
     fn check_root(
@@ -517,6 +613,7 @@ mod tests {
         rows.rows[0].agent_kind = None;
         rows.rows.push(RosterRowSig {
             row_id: "pidless".to_owned(),
+            hibernated: false,
             agent_kind: Some("claude".to_owned()),
             pane_id: Some(pane_id("terminal_2").to_string()),
             pane_pid: None,

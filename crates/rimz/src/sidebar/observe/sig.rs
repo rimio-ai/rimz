@@ -44,6 +44,8 @@ pub struct FrameSig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RowSig {
     pub row_id: String,
+    #[serde(skip)]
+    pub hibernated: bool,
     pub agent_kind: Option<String>,
     pub pane_id: Option<String>,
     pub pane_pid: Option<u32>,
@@ -210,6 +212,7 @@ pub struct RosterSig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RosterRowSig {
     pub row_id: String,
+    pub hibernated: bool,
     pub agent_kind: Option<String>,
     pub pane_id: Option<String>,
     pub pane_pid: Option<u32>,
@@ -229,12 +232,20 @@ pub fn extract_sig(
         let (common, own) = count.get();
         count.set((common + 1, own));
     });
+    let hibernated: BTreeSet<_> = current
+        .agents
+        .iter()
+        .filter(|agent| agent.hibernation.is_some())
+        .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str()))
+        .collect();
     let mut rows = current
         .worktree_groups
         .iter()
         .flat_map(|group| {
             group.rows.iter().map(|row| RowSig {
                 row_id: row.id.clone(),
+                hibernated: row.is_agent()
+                    && hibernated.contains(&(row.name.as_str(), row.id.as_str())),
                 agent_kind: row.is_agent().then(|| row.name.clone()),
                 pane_id: row.pane.as_ref().map(|pane| pane.pane_id.to_string()),
                 pane_pid: row.pane.as_ref().and_then(|pane| pane.pane_pid),
@@ -520,6 +531,7 @@ impl RosterSig {
                 .iter()
                 .map(|row| RosterRowSig {
                     row_id: row.row_id.clone(),
+                    hibernated: row.hibernated,
                     agent_kind: row.agent_kind.clone(),
                     pane_id: row.pane_id.clone(),
                     pane_pid: row.pane_pid,
