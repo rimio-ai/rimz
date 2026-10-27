@@ -11,7 +11,8 @@ use crate::mux::zellij::ZellijPaneResolver;
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
 use crate::sidebar::timing::{
-    METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL, PROCESS_D_STATE_STUCK_AFTER,
+    HIBERNATED_CHECK_TTL, METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL,
+    PROCESS_D_STATE_STUCK_AFTER,
 };
 use crate::store::snapshot::ProcessState;
 use crate::utils::time::unix_now_ms;
@@ -165,7 +166,11 @@ pub(super) fn pane_root_bindings(history: &MetricsSampleCache) -> HashMap<PaneId
 /// Whether any pane in `frame` needs a fresh process sample. Used by the pane
 /// cache fast path so metrics can refresh from a topology-fresh frame without
 /// paying another mux roster read.
-pub(super) fn pane_metrics_due(frame: &PaneFrame, prior: &MetricsSampleCache) -> bool {
+pub(super) fn pane_metrics_due(
+    frame: &PaneFrame,
+    prior: &MetricsSampleCache,
+    hibernated: &HashSet<PaneId>,
+) -> bool {
     let now_ms = unix_now_ms();
     let viewed: HashSet<&PaneId> = frame.viewed_panes.iter().collect();
     frame.pane_states().any(|pane| {
@@ -175,6 +180,7 @@ pub(super) fn pane_metrics_due(frame: &PaneFrame, prior: &MetricsSampleCache) ->
                 &pane.current.command,
                 now_ms,
                 viewed.contains(&pane.pane_id),
+                hibernated.contains(&pane.pane_id),
             )
     })
 }
@@ -182,7 +188,7 @@ pub(super) fn pane_metrics_due(frame: &PaneFrame, prior: &MetricsSampleCache) ->
 /// Enrich each pane with process-tree resource metrics from the process backend, on the
 /// sampling cadence's own clock: viewed panes sample on
 /// [`METRICS_FOCUSED_SAMPLE_TTL`], background panes on
-/// [`METRICS_BACKGROUND_SAMPLE_TTL`]. Fresh
+/// [`METRICS_BACKGROUND_SAMPLE_TTL`], hibernated panes on [`HIBERNATED_CHECK_TTL`]. Fresh
 /// entries carry their stored display values — and the pane→root-pid binding
 /// the process-row name anchors on — forward with zero process IO. Due entries
 /// read process counters to compute two-sample rates (CPU%, IO bytes/s) and
@@ -200,6 +206,7 @@ pub(super) fn enrich_pane_metrics(
     frame: &mut PaneFrame,
     session_name: &str,
     prior: &mut MetricsSampleCache,
+    hibernated: &HashSet<PaneId>,
 ) -> bool {
     let now_ms = unix_now_ms();
     let viewed: HashSet<PaneId> = frame.viewed_panes.iter().cloned().collect();
@@ -216,6 +223,7 @@ pub(super) fn enrich_pane_metrics(
             &pane.current.command,
             now_ms,
             viewed.contains(&pane.pane_id),
+            hibernated.contains(&pane.pane_id),
         ) {
             due.insert(pane_key);
         } else if let Some(entry) = prior_entry {
@@ -534,7 +542,7 @@ fn pane_sampleable(pane: &PaneState) -> bool {
 
 /// Whether a pane needs a fresh process sample this produce: immediately when
 /// it has no entry or its foreground command changed (the warmup sample for a
-/// new tenant), otherwise on the viewed or background cadence.
+/// new tenant), otherwise on the viewed, background, or hibernated cadence.
 /// Saturating, so a clock that ran backwards reads fresh rather than
 /// re-sampling every tick.
 fn metric_entry_due(
@@ -542,6 +550,7 @@ fn metric_entry_due(
     command: &Option<String>,
     now_ms: u64,
     is_viewed: bool,
+    hibernated: bool,
 ) -> bool {
     let Some(entry) = entry else {
         return true;
@@ -551,6 +560,10 @@ fn metric_entry_due(
     }
     if entry.command != *command {
         return true;
+    }
+    if hibernated {
+        return now_ms.saturating_sub(entry.sampled_at_ms)
+            >= HIBERNATED_CHECK_TTL.as_millis() as u64;
     }
     let ttl = if is_viewed {
         METRICS_FOCUSED_SAMPLE_TTL

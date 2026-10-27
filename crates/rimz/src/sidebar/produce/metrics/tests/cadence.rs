@@ -7,22 +7,29 @@ fn metric_entry_due_samples_missing_changed_and_legacy_entries_immediately() {
     let command = Some("zsh".to_owned());
     let entry = fresh_entry(42, 700, "zsh", 1_000);
 
-    assert!(metric_entry_due(None, &command, 1_000, false));
+    assert!(metric_entry_due(None, &command, 1_000, false, false));
     assert!(metric_entry_due(
         Some(&entry),
         &Some("cargo build".to_owned()),
         1_001,
         false,
+        false,
     ));
     assert!(
-        !metric_entry_due(Some(&entry), &command, 500, false),
+        !metric_entry_due(Some(&entry), &command, 500, false, false),
         "a clock that ran backwards reads fresh rather than busy-looping"
     );
 
     let mut entry = fresh_entry(42, 700, "cargo build", 1_000);
     entry.sample_version = 1;
     assert!(
-        metric_entry_due(Some(&entry), &Some("cargo build".to_owned()), 1_001, false,),
+        metric_entry_due(
+            Some(&entry),
+            &Some("cargo build".to_owned()),
+            1_001,
+            false,
+            false
+        ),
         "single-process cache entries cannot seed pane-tree rates"
     );
 }
@@ -44,17 +51,20 @@ fn metric_entry_due_uses_viewed_or_background_ttl() {
             &command,
             1_000 + focused_ttl,
             true,
+            false,
         ));
         assert!(metric_entry_due(
             Some(&entry),
             &command,
             1_001 + focused_ttl,
             true,
+            false,
         ));
         assert!(!metric_entry_due(
             Some(&entry),
             &command,
             1_000 + background_ttl,
+            false,
             false,
         ));
         assert!(metric_entry_due(
@@ -62,8 +72,44 @@ fn metric_entry_due_uses_viewed_or_background_ttl() {
             &command,
             1_001 + background_ttl,
             false,
+            false,
         ));
     }
+}
+
+#[test]
+fn hibernated_metrics_wait_a_minute_and_resume_normal_ttls_on_thaw() {
+    let command = Some("claude".to_owned());
+    let entry = fresh_entry(42, 700, "claude", 1_000);
+    let results: Vec<_> = [false, true]
+        .into_iter()
+        .flat_map(|viewed| {
+            [30_000, 59_999, 60_000, 60_001]
+                .map(|age| metric_entry_due(Some(&entry), &command, 1_000 + age, viewed, true))
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [false, false, true, true, false, false, true, true]
+    );
+    assert!(metric_entry_due(
+        Some(&entry),
+        &command,
+        31_000,
+        false,
+        false
+    ));
+    assert!(metric_entry_due(None, &command, 1_000, false, true));
+    assert!(metric_entry_due(
+        Some(&entry),
+        &Some("codex".to_owned()),
+        1_001,
+        false,
+        true,
+    ));
+    let mut legacy = entry;
+    legacy.sample_version = 1;
+    assert!(metric_entry_due(Some(&legacy), &command, 1_001, true, true));
 }
 
 #[test]
@@ -93,10 +139,11 @@ fn unbound_idle_panes_back_off_on_the_idle_ttl() {
     assert!(enrich_pane_metrics(
         &mut frame,
         "rimz-test-no-such-session-for-metrics",
-        &mut cache
+        &mut cache,
+        &HashSet::new(),
     ));
     assert!(
-        !pane_metrics_due(&frame, &cache),
+        !pane_metrics_due(&frame, &cache, &HashSet::new()),
         "an unbound idle pane records a sample attempt instead of retrying the \
          table walk every produce"
     );
@@ -142,7 +189,8 @@ fn metrics_within_ttl_carries_matching_display_values_and_binding() {
     assert!(!enrich_pane_metrics(
         &mut frame,
         "rimz-query-engine",
-        &mut cache
+        &mut cache,
+        &HashSet::new(),
     ));
 
     assert_eq!(
@@ -193,7 +241,8 @@ fn metrics_within_ttl_warms_changed_or_uncached_panes() {
     assert!(enrich_pane_metrics(
         &mut frame,
         "rimz-query-engine",
-        &mut cache
+        &mut cache,
+        &HashSet::new(),
     ));
 
     assert_eq!(
@@ -233,7 +282,8 @@ fn metrics_due_path_resamples_and_restamps() {
     assert!(enrich_pane_metrics(
         &mut frame,
         "rimz-query-engine",
-        &mut cache
+        &mut cache,
+        &HashSet::new(),
     ));
 
     let rewritten = cache;

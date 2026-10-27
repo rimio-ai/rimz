@@ -63,6 +63,7 @@ pub struct ProduceOptions {
     /// The frame-validation witness pane, not a workspace row exclusion.
     pub exclude: Option<PaneId>,
     pub min_pane_cache_ms: Option<u64>,
+    pub hibernated_panes: HashSet<PaneId>,
     pub diag: crate::diag::DiagSink,
 }
 
@@ -195,6 +196,7 @@ pub(crate) fn produce_workspace_snapshot(
     last_projection: &mut Option<AgentProjectionPublication>,
     inputs: &mut Option<HostInputs>,
 ) -> Result<ProducedWorkspaceSnapshot> {
+    producer.hibernated_panes.clone_from(&opts.hibernated_panes);
     let frame = producer.tick(
         runtime,
         opts.mux,

@@ -1,6 +1,6 @@
 //! Retained host pane production and private CLI reads share raced-read repair, confirmation, carry, and acceptance. Only the host publishes `snapshot.json` and metrics history.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +37,8 @@ use super::metrics::{MetricsSampleCache, read_metrics_sample_cache, write_metric
 
 pub(crate) struct PaneProducer {
     pub(super) prior: Option<Arc<PaneFrame>>,
+    pub(super) hibernated_panes: HashSet<PaneId>,
+    native_tenants: HashMap<PaneId, (u32, Option<String>)>,
     metrics: MetricsSampleCache,
     presence_probed_at_ms: Option<u64>,
 }
@@ -58,6 +60,8 @@ impl PaneProducer {
                 read_metrics_sample_cache(&runtime.lane_path("metrics-sample.json"))
             },
             presence_probed_at_ms: None,
+            hibernated_panes: HashSet::new(),
+            native_tenants: HashMap::new(),
         }
     }
 
@@ -125,11 +129,26 @@ impl PaneProducer {
         });
         let frame = if let Some(prior) = fresh {
             let mut frame = Arc::clone(prior);
-            if super::metrics::pane_metrics_due(&frame, &self.metrics)
+            let hibernated = frame
+                .pane_states()
+                .filter(|pane| {
+                    self.hibernated_panes.contains(&pane.pane_id)
+                        && self
+                            .native_tenants
+                            .get(&pane.pane_id)
+                            .is_some_and(|(pid, spawn)| {
+                                pane.current.pid == Some(*pid)
+                                    && pane.current.spawn_command == *spawn
+                            })
+                })
+                .map(|pane| pane.pane_id.clone())
+                .collect();
+            if super::metrics::pane_metrics_due(&frame, &self.metrics, &hibernated)
                 && super::metrics::enrich_pane_metrics(
                     Arc::make_mut(&mut frame),
                     session,
                     &mut self.metrics,
+                    &hibernated,
                 )
             {
                 annotate_elevated_agents(
@@ -169,6 +188,8 @@ impl PaneProducer {
                 diag,
                 metrics: &mut self.metrics,
                 sampled: false,
+                hibernated_panes: &self.hibernated_panes,
+                native_tenants: &mut self.native_tenants,
             };
             let accepted = produce(&mut ctx, self.prior.as_deref());
             if ctx.sampled {
@@ -217,6 +238,8 @@ pub(crate) fn read_pane_frame(
         diag,
         metrics: &mut metrics,
         sampled: false,
+        hibernated_panes: &HashSet::new(),
+        native_tenants: &mut HashMap::new(),
     })
     .produce(prior.as_deref())?
     {
@@ -232,6 +255,8 @@ struct FrameContext<'a> {
     diag: &'a crate::diag::DiagSink,
     metrics: &'a mut MetricsSampleCache,
     sampled: bool,
+    hibernated_panes: &'a HashSet<PaneId>,
+    native_tenants: &'a mut HashMap<PaneId, (u32, Option<String>)>,
 }
 
 /// Enumerate only the session's panes; the store rollup is read separately. The host amortizes this read across the fleet, while private CLI calls always invoke it.
@@ -338,11 +363,12 @@ fn repair_pane_frame(
     prior: Option<&PaneFrame>,
     session: &str,
     metrics: Option<&mut MetricsSampleCache>,
+    hibernated_panes: &HashSet<PaneId>,
 ) -> (Vec<HostedCarryDrop>, bool) {
     let unstamped = natively_unstamped(frame);
     rotate_from_prior(frame, prior);
     let sampled = if let Some(metrics) = metrics {
-        super::metrics::enrich_pane_metrics(frame, session, metrics)
+        super::metrics::enrich_pane_metrics(frame, session, metrics, hibernated_panes)
     } else {
         super::metrics::backfill_zellij_pane_pids_from_proc(frame, session);
         false
@@ -380,6 +406,26 @@ fn repair_pane_frame(
     annotate_elevated_agents(frame, &crate::proc::elevated_in_pane_agent);
     stamp_first_seen(frame);
     (hosted_carry_drops, sampled)
+}
+
+fn hibernated_panes_for(
+    frame: &PaneFrame,
+    native_tenants: &HashMap<PaneId, (u32, Option<String>)>,
+    requested: &HashSet<PaneId>,
+) -> HashSet<PaneId> {
+    frame
+        .pane_states()
+        .filter(|pane| {
+            requested.contains(&pane.pane_id)
+                && pane.current.pid.is_some()
+                && native_tenants
+                    .get(&pane.pane_id)
+                    .is_some_and(|(pid, spawn)| {
+                        pane.current.pid == Some(*pid) && pane.current.spawn_command == *spawn
+                    })
+        })
+        .map(|pane| pane.pane_id.clone())
+        .collect()
 }
 
 /// Name a pane the mux reported with a root pid but no command from that
@@ -487,7 +533,8 @@ pub fn repaired_pane_frame_for_binding(
         None,
     );
     emit_frame_diagnostics(&diag, diagnostics);
-    let (hosted_carry_drops, _) = repair_pane_frame(&mut frame, prior.as_deref(), session, None);
+    let (hosted_carry_drops, _) =
+        repair_pane_frame(&mut frame, prior.as_deref(), session, None, &HashSet::new());
     emit_hosted_carry_dropped(&diag, hosted_carry_drops);
     Ok(frame)
 }
@@ -799,11 +846,22 @@ impl FrameContext<'_> {
             });
         frame.presence = presence;
         emit_frame_diagnostics(self.diag, diagnostics);
+        let hibernated = hibernated_panes_for(&frame, self.native_tenants, self.hibernated_panes);
+        *self.native_tenants = frame
+            .pane_states()
+            .filter_map(|pane| {
+                Some((
+                    pane.pane_id.clone(),
+                    (pane.current.pid?, pane.current.spawn_command.clone()),
+                ))
+            })
+            .collect();
         let (hosted_carry_drops, sampled) = repair_pane_frame(
             &mut frame,
             prior,
             self.session,
             enrich_metrics.then_some(&mut *self.metrics),
+            &hibernated,
         );
         self.sampled |= sampled;
         emit_hosted_carry_dropped(self.diag, hosted_carry_drops);

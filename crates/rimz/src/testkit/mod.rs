@@ -492,6 +492,7 @@ pub mod fleet {
             session_name: SESSION_NAME.to_owned(),
             exclude: None,
             min_pane_cache_ms: None,
+            hibernated_panes: Default::default(),
             diag: crate::diag::DiagSink::disabled(),
         }
     }
