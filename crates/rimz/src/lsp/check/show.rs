@@ -368,7 +368,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (error.status, error.detail),
-            (Status::MissingPath, "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder, then the checkout root; no checkout file ends with gone.rs".into())
+            (Status::MissingPath, "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder when it is inside the checkout, then the checkout root; no checkout file ends with gone.rs".into())
         );
         let outside = tempfile::tempdir().unwrap();
         let path = outside.path().join("lib.rs");

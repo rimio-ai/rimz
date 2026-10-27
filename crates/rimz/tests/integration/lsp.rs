@@ -2058,7 +2058,8 @@ fn lsp_folder_queries_send_the_resolved_file_and_keep_typed_batch_targets() {
 
 /// The missing-file error for `gone.rs` typed from the `scope` folder of a checkout.
 const GONE_FROM_SCOPE: &str = "file not found: gone.rs; looked in current folder: scope/gone.rs; \
-    checkout root: gone.rs; relative paths are read from the current folder, then the checkout root";
+    checkout root: gone.rs; relative paths are read from the current folder when it is inside \
+    the checkout, then the checkout root";
 
 #[test]
 fn lsp_missing_folder_paths_fail_before_selection_even_without_a_server() {
