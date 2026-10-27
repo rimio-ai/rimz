@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::*;
+use crate::disk::lease::assert_waits_for_gate;
 
 fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
     TaskFire::new(
@@ -1148,24 +1149,10 @@ fn run_lock_probes_never_defeat_a_starting_run() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("task.lock");
     std::fs::write(&path, b"").unwrap();
-    let start = std::sync::Barrier::new(2);
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            start.wait();
-            for _ in 0..10_000 {
-                probe_run_lock_path(&path).unwrap();
-            }
-        });
-        start.wait();
-        for _ in 0..10_000 {
-            let claim = acquire_run_lock_file(&path, None, None).unwrap();
-            assert!(
-                matches!(claim, RunLockAttempt::Acquired(_)),
-                "a probe must not make a run look overlapped"
-            );
-            drop(claim);
-        }
-    });
+    let state = assert_waits_for_gate(&path, || probe_run_lock_path(&path)).unwrap();
+    assert!(matches!(state, RunLockState::Available));
+    let claim = assert_waits_for_gate(&path, || acquire_run_lock_file(&path, None, None)).unwrap();
+    assert!(matches!(claim, RunLockAttempt::Acquired(_)));
 }
 
 #[test]
