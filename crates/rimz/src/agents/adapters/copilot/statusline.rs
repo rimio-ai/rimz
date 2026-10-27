@@ -139,7 +139,7 @@ impl StatuslinePayload {
     }
 
     /// Session dollars from Copilot's metered AI credits, else the price book.
-    pub(super) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+    pub(super) fn cost(&self, prices: &dyn Fn() -> std::sync::Arc<PriceBook>) -> Option<AgentCost> {
         if let Some(total_cost_usd) = self
             .ai_used
             .as_ref()
@@ -154,6 +154,7 @@ impl StatuslinePayload {
         let model = resolve_model(self.model.as_ref()?);
         let model = model.id.as_deref()?;
         let usage = self.context_window.as_ref()?.session_usage()?;
+        let prices = prices();
         let price = prices.price(model)?;
         let total_cost_usd = price.session_cost(
             usage.input_tokens.unwrap_or(0),
@@ -393,13 +394,13 @@ mod tests {
         let prices = PriceBook::fixture();
         let metered_cost = StatuslinePayload::parse(&payload)
             .unwrap()
-            .cost(&prices)
+            .cost(&|| std::sync::Arc::new(prices.clone()))
             .unwrap();
         let mut unmetered = payload.clone();
         unmetered["ai_used"]["total_nano_aiu"] = json!(0);
         let estimated_cost = StatuslinePayload::parse(&unmetered)
             .unwrap()
-            .cost(&prices)
+            .cost(&|| std::sync::Arc::new(prices.clone()))
             .unwrap();
 
         let context = context(payload).unwrap();
@@ -456,7 +457,7 @@ mod tests {
         let price = prices.price("gpt-5.6-sol").unwrap();
         let actual = StatuslinePayload::parse(&payload)
             .unwrap()
-            .cost(&prices)
+            .cost(&|| std::sync::Arc::new(prices.clone()))
             .unwrap()
             .total_cost_usd
             .unwrap();
@@ -601,7 +602,7 @@ mod tests {
             assert!(
                 StatuslinePayload::parse(&payload)
                     .unwrap()
-                    .cost(&prices)
+                    .cost(&|| std::sync::Arc::new(prices.clone()))
                     .and_then(|cost| cost.total_cost_usd)
                     .is_some_and(|cost| cost > 0.0),
                 "{model}"

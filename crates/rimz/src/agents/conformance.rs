@@ -1654,7 +1654,7 @@ fn realtime_cost_from_fixture(adapter: &AgentDefinition, conformance: &AdapterCo
     let prices = PriceBook::fixture();
     if let Some(fixture) = conformance.context_cost.as_ref() {
         return adapter
-            .context_cost(&fixture.payload, &prices)
+            .context_cost(&fixture.payload, &|| std::sync::Arc::new(prices.clone()))
             .and_then(|cost| cost.total_cost_usd)
             .is_some_and(|cost| cost > 0.0);
     }

@@ -852,7 +852,9 @@ fn statusline_cost_prices_every_decorated_routed_model() {
             }
         }
     });
-    let cost = QwenAdapter.context_cost(&payload, &prices).unwrap();
+    let cost = QwenAdapter
+        .context_cost(&payload, &|| std::sync::Arc::new(prices.clone()))
+        .unwrap();
     assert_eq!(cost.coverage, CostCoverage::Session);
     assert!((cost.total_cost_usd.unwrap() - 0.000_286).abs() < 1e-15);
 }
@@ -872,7 +874,10 @@ fn statusline_cost_requires_every_material_bucket_to_be_priceable() {
             }
         }
     });
-    assert_eq!(QwenAdapter.context_cost(&partial, &prices), None);
+    assert_eq!(
+        QwenAdapter.context_cost(&partial, &|| std::sync::Arc::new(prices.clone())),
+        None
+    );
 
     let complete = json!({
         "metrics": {
@@ -884,7 +889,9 @@ fn statusline_cost_requires_every_material_bucket_to_be_priceable() {
             }
         }
     });
-    let cost = QwenAdapter.context_cost(&complete, &prices).unwrap();
+    let cost = QwenAdapter
+        .context_cost(&complete, &|| std::sync::Arc::new(prices.clone()))
+        .unwrap();
     assert_eq!(cost.coverage, CostCoverage::Session);
     assert!((cost.total_cost_usd.unwrap() - 0.000_14).abs() < 1e-15);
 }

@@ -147,8 +147,9 @@ fn model_display_name(value: Option<String>) -> Option<String> {
 }
 
 impl StatuslinePayload {
-    pub(super) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+    pub(super) fn cost(&self, prices: &dyn Fn() -> std::sync::Arc<PriceBook>) -> Option<AgentCost> {
         // This provider statusline is the sanctioned live-card cost overlay.
+        let prices = std::cell::LazyCell::new(prices);
         let mut total_cost_usd = 0.0;
         for (model, metrics) in &self.metrics.models {
             let Some(usage) = metrics.tokens.session_usage() else {

@@ -938,10 +938,14 @@ pub trait ContextCapability: CoreCapability {
         None
     }
 
-    /// Price current provider-reported context usage. The statusline command
-    /// supplies the local price book and owns persistence; adapters only parse
-    /// their native payload and return the normalized cost.
-    fn context_cost(&self, _payload: &Value, _prices: &PriceBook) -> Option<AgentCost> {
+    /// Price current provider-reported context usage. The statusline supplies a lazy
+    /// local price book and owns persistence; adapters request prices only after
+    /// their native payload qualifies for token pricing.
+    fn context_cost(
+        &self,
+        _payload: &Value,
+        _prices: &dyn Fn() -> std::sync::Arc<PriceBook>,
+    ) -> Option<AgentCost> {
         None
     }
 

@@ -558,7 +558,7 @@ fn statusline_prices_canonical_and_observed_model_ids_with_current_usage() {
                     "cache_read_input_tokens": usage.3
                 }}
             }),
-            &prices,
+            &|| std::sync::Arc::new(prices.clone()),
         );
         assert!(cost.is_some(), "{id} must have an exact selector price");
         let cost = cost.unwrap();
@@ -575,7 +575,9 @@ fn statusline_prices_canonical_and_observed_model_ids_with_current_usage() {
     ] {
         assert!(
             AntigravityAdapter
-                .context_cost(&json_value(payload), &prices)
+                .context_cost(&json_value(payload), &|| std::sync::Arc::new(
+                    prices.clone()
+                ))
                 .is_none()
         );
     }

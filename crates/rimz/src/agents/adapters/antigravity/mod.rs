@@ -544,7 +544,11 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
         super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now()))
     }
 
-    fn context_cost(&self, payload: &Value, prices: &super::PriceBook) -> Option<super::AgentCost> {
+    fn context_cost(
+        &self,
+        payload: &Value,
+        prices: &dyn Fn() -> std::sync::Arc<super::PriceBook>,
+    ) -> Option<super::AgentCost> {
         if !payload.is_object() {
             return None;
         }

@@ -689,7 +689,11 @@ impl crate::agents::capabilities::ContextCapability for CopilotAdapter {
         super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now())?)
     }
 
-    fn context_cost(&self, payload: &Value, prices: &super::PriceBook) -> Option<super::AgentCost> {
+    fn context_cost(
+        &self,
+        payload: &Value,
+        prices: &dyn Fn() -> std::sync::Arc<super::PriceBook>,
+    ) -> Option<super::AgentCost> {
         statusline::StatuslinePayload::parse(payload)?.cost(prices)
     }
 
