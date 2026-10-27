@@ -6,10 +6,11 @@
 //! The host watches each live root session's transcript with a
 //! filesystem watcher and runs the same stat-gated refresh on writes, so meters
 //! move mid-turn. Latency only, never truth: the refresh is idempotent behind
-//! its transcript-stat gate, the tick backstop stays unconditional, and a
-//! watcher that fails to start degrades to the producer cadence.
+//! its transcript-stat gate, and a watcher that fails to start degrades to the
+//! producer cadence. Hibernated roster reads and producer backstop refreshes
+//! follow the per-agent hold; already registered OS watches stay armed.
 //!
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
@@ -19,6 +20,7 @@ use notify::{RecursiveMode, Watcher};
 use tracing::debug;
 
 use crate::agents::context::record::AgentContextRecord;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::event_log::LogExtent;
 use crate::{RuntimePaths, fs_watch};
 
@@ -48,6 +50,7 @@ struct WatchTarget {
 struct Roster {
     watched: BTreeMap<PathBuf, BTreeSet<WatchTarget>>,
     stamp: Option<RosterStamp>,
+    checks: HashMap<(AgentKind, AgentSessionId), Instant>,
 }
 
 struct RosterStamp {
@@ -147,19 +150,32 @@ fn watch_transcripts(runtime: &RuntimePaths) -> notify::Result<()> {
 ///
 /// The sidecar scan and the rebuild run only when the log extent or the
 /// sidecar directory's mtime moved since the last stamp, or the stamp is
-/// [`ROSTER_RESCAN_BACKSTOP`] old. Only a pass whose every registration
-/// succeeded stores a stamp, which is what keeps that retry alive.
+/// [`ROSTER_RESCAN_BACKSTOP`] old. Held checks wait for those rebuilds; kept
+/// watches cover a thaw without reopening the gate. Only a pass whose every
+/// registration succeeded stores a stamp, keeping registration retries alive
+/// even while its sidecar read is deferred.
 ///
 /// The scan reads context sidecars only for the rollup's rows that have not
 /// ended (a session's sidecar is removed at `SessionEnd`), so a sidecar with
-/// no live row is not watched. That row's arrival moves the log extent, which
-/// reopens the gate on the next pass.
+/// no live row is not watched. Deferred keys keep their cached targets and OS
+/// watches. A row's arrival moves the log extent, reopening the next pass.
 fn reconcile_roster<W: Watcher>(
     runtime: &RuntimePaths,
     state: &crate::StatePaths,
     cursor: &mut crate::sidebar::consumer::RollupCursor,
     watcher: &mut W,
     roster: &mut Roster,
+) -> RosterPass {
+    reconcile_roster_with_clock(runtime, state, cursor, watcher, roster, &Instant::now)
+}
+
+fn reconcile_roster_with_clock<W: Watcher>(
+    runtime: &RuntimePaths,
+    state: &crate::StatePaths,
+    cursor: &mut crate::sidebar::consumer::RollupCursor,
+    watcher: &mut W,
+    roster: &mut Roster,
+    clock: &dyn Fn() -> Instant,
 ) -> RosterPass {
     let Ok((extent, agents, _)) = cursor.fold(state) else {
         roster.stamp = None;
@@ -168,19 +184,57 @@ fn reconcile_roster<W: Watcher>(
     let sidecar_mtime = std::fs::metadata(&runtime.agent_context_dir)
         .ok()
         .and_then(|meta| meta.modified().ok());
-    let now = Instant::now();
+    let now = clock();
     if roster_unchanged(roster.stamp.as_ref(), extent, sidecar_mtime, now) {
         return RosterPass::Unchanged;
     }
     roster.stamp = None;
+    let entries = crate::store::hibernate::read_cached(state);
+    let active: HashSet<_> = agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_none())
+        .map(|agent| (&agent.kind, &agent.agent_id))
+        .collect();
+    roster
+        .checks
+        .retain(|(kind, id), _| active.contains(&(kind, id)));
+    let held: HashSet<_> = agents
+        .iter()
+        .filter(|agent| crate::harness::hibernate::hibernation_entry(agent, &entries).is_some())
+        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        .collect();
+    let mut deferred = HashSet::new();
     let keys = agents
         .iter()
         .filter(|agent| agent.ended_at.is_none())
-        .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str()));
-    let live = transcript_targets(
-        &crate::store::agent_context::read_for_keys(runtime, keys),
+        .map(|agent| {
+            let key = (agent.kind.clone(), agent.agent_id.clone());
+            let skip = !crate::sidebar::cache::hibernated_check_due(
+                &mut roster.checks,
+                key.clone(),
+                held.contains(&key),
+                clock(),
+            );
+            if skip {
+                deferred.insert(key);
+            }
+            (agent.kind.as_str(), agent.agent_id.as_str(), skip)
+        });
+    let mut live = transcript_targets(
+        &crate::store::agent_context::read_for_keys_with_holds(runtime, keys),
         agents.iter(),
     );
+    for (path, targets) in &roster.watched {
+        for target in targets {
+            let key = (
+                AgentKind::new_unchecked(target.kind.clone()),
+                target.session_id.clone().into(),
+            );
+            if deferred.contains(&key) {
+                live.entry(path.clone()).or_default().insert(target.clone());
+            }
+        }
+    }
     let mut registration_failed = false;
     roster.watched.retain(|path, _| {
         if live.contains_key(path) {
@@ -338,6 +392,25 @@ mod tests {
         path
     }
 
+    fn hold_session(state: &crate::StatePaths, session: &str) {
+        crate::store::hibernate::record(
+            state,
+            crate::store::hibernate::Entry {
+                kind: crate::ids::AgentKind::new_unchecked("codex"),
+                agent_id: session.into(),
+                pane_id: "tmux:%1".parse().unwrap(),
+                scope: Default::default(),
+                provider_pid: 1,
+                frozen_at: jiff::Timestamp::now(),
+                anon_at_freeze: 0,
+                step: 0,
+                wake_error: None,
+                reclaimed_bytes: 0,
+            },
+        )
+        .unwrap();
+    }
+
     fn stamp_directory(runtime: &RuntimePaths, seconds: u64) {
         std::fs::File::open(&runtime.agent_context_dir)
             .unwrap()
@@ -478,18 +551,111 @@ mod tests {
         let (_dir, state, runtime) = fixture();
         register_codex(&state, "first");
         write_sidecar(&runtime, "first", "/t/first.jsonl");
+        hold_session(&state, "first");
         let mut cursor = crate::sidebar::consumer::RollupCursor::new();
         let mut watcher = RefusingWatcher::default();
         let mut roster = Roster::default();
+        let mut stats = Vec::new();
         for _ in 0..2 {
+            let before = crate::testkit::sidecar_read_counts();
             assert_eq!(
                 reconcile_roster(&runtime, &state, &mut cursor, &mut watcher, &mut roster),
                 RosterPass::Rebuilt
             );
             assert!(roster.watched.is_empty());
             assert!(roster.stamp.is_none());
+            stats.push(crate::testkit::sidecar_read_counts().0 - before.0);
         }
         assert_eq!(watcher.attempts, 2);
+        assert_eq!(stats, [2, 1], "retry cached held targets without a stat");
+    }
+
+    #[derive(Default)]
+    struct RecordingWatcher {
+        unwatched: usize,
+    }
+
+    impl Watcher for RecordingWatcher {
+        fn new<F: notify::EventHandler>(_: F, _: notify::Config) -> notify::Result<Self> {
+            Ok(Self::default())
+        }
+
+        fn watch(&mut self, _: &std::path::Path, _: RecursiveMode) -> notify::Result<()> {
+            Ok(())
+        }
+
+        fn unwatch(&mut self, _: &std::path::Path) -> notify::Result<()> {
+            self.unwatched += 1;
+            Ok(())
+        }
+
+        fn kind() -> notify::WatcherKind {
+            notify::WatcherKind::NullWatcher
+        }
+    }
+
+    #[test]
+    fn held_roster_reads_wait_for_rebuild_and_keep_watches_through_thaw() {
+        let (_dir, state, runtime) = fixture();
+        register_codex(&state, "held");
+        register_codex(&state, "live");
+        write_sidecar(&runtime, "held", "/t/held.jsonl");
+        write_sidecar(&runtime, "live", "/t/live.jsonl");
+        hold_session(&state, "held");
+        stamp_directory(&runtime, 1);
+        let mut cursor = crate::sidebar::consumer::RollupCursor::new();
+        let mut watcher = RecordingWatcher::default();
+        let mut roster = Roster::default();
+        let now = Instant::now();
+        let mut observations = Vec::new();
+        for seconds in [0, 30, 60, 61, 90] {
+            if seconds == 30 {
+                write_sidecar(&runtime, "held", "/t/held-new.jsonl");
+                stamp_directory(&runtime, 2);
+            } else if seconds == 61 {
+                crate::store::hibernate::withdraw(
+                    &state,
+                    &crate::ids::AgentKind::new_unchecked("codex"),
+                    &"held".into(),
+                )
+                .unwrap();
+                write_sidecar(&runtime, "held", "/t/held-after-thaw.jsonl");
+                stamp_directory(&runtime, 2);
+            }
+            let before = crate::testkit::sidecar_read_counts();
+            let pass = reconcile_roster_with_clock(
+                &runtime,
+                &state,
+                &mut cursor,
+                &mut watcher,
+                &mut roster,
+                &|| now + Duration::from_secs(seconds),
+            );
+            let after = crate::testkit::sidecar_read_counts();
+            assert_eq!(after.1 - before.1, 0, "no enumeration");
+            let held_path = roster.watched.iter().find_map(|(path, targets)| {
+                targets
+                    .iter()
+                    .any(|target| target.session_id == "held")
+                    .then(|| path.to_str().unwrap().to_owned())
+            });
+            observations.push((after.0 - before.0, pass, watcher.unwatched, held_path));
+        }
+        assert_eq!(
+            observations,
+            [
+                (3, RosterPass::Rebuilt, 0, Some("/t/held.jsonl".into())),
+                (2, RosterPass::Rebuilt, 0, Some("/t/held.jsonl".into())),
+                (0, RosterPass::Unchanged, 0, Some("/t/held.jsonl".into())),
+                (0, RosterPass::Unchanged, 0, Some("/t/held.jsonl".into())),
+                (
+                    3,
+                    RosterPass::Rebuilt,
+                    1,
+                    Some("/t/held-after-thaw.jsonl".into())
+                ),
+            ]
+        );
     }
 
     #[test]
