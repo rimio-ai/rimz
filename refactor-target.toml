@@ -9419,6 +9419,11 @@ reason = "Workflow attempts share durable process, run, stop, ask, limit, and li
 
 [[verdict]]
 kind = "item"
+key = "store::workflow::Asking"
+reason = "Workflow observations and live records share the blocking ask's open time without changing ended-attempt evidence."
+
+[[verdict]]
+kind = "item"
 key = "store::workflow::TeamRef"
 reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
 

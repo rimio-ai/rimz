@@ -48,7 +48,7 @@ The workflow runs it again after your turn.
 
 Read the graph from `start`. The run begins at the `tests` check. An answer of `pass` goes to `@done`, which ends the run. An answer of `fail` goes to the `fix` step, which starts Claude Code in the checkout with the prompt file. When that agent's turn ends, RimZ stops the agent and follows `then` back to `tests`. The check decides whether the work is done, never the agent. The check's whole answer, `outcome` and `reason` included, becomes the next node's `input`. That is how `log` reaches the agent.
 
-Two fields bound the loop. `max-visits = 3` refuses a fourth launch of `fix`, and the run parks to wait for you. `timeout = "1h"` ends an attempt that runs longer than an hour and follows `then` as if the turn had ended. Durations take `s`, `m`, `h`, and `d`.
+Two fields bound the loop. `max-visits = 3` refuses a fourth launch of `fix`, and the run parks to wait for you. `timeout = "1h"` ends an attempt that runs longer than an hour and follows `then` as if the turn had ended. Time the step's agent, or a subagent it launched, spends waiting on a blocking question or permission prompt does not count toward that hour. Durations take `s`, `m`, `h`, and `d`.
 
 For distinct failures to get their own tries while the same failure stops retrying, add `max-visits-per-key = 2` to the step. A `run` script's answer can name the failure in `key`, and a condition case can fix its `key`; a shell check passes the run's key through unchanged. A key's count never resets during the run, even after the run works on other keys; without a key, all visits share one count. Keep `max-visits` to cap the total: a check naming a new key each time must not retry forever, and a per-key bound alone does not bound a cycle. Both fields must be positive, and when both are set the per-key bound must be below the total. The total cap is checked first and wins if both trip. Either cap follows `on.cap` (default `@user`), and its `input.bound` names the field that tripped, `"max-visits"` or `"max-visits-per-key"`, so a `run` or agent check can route the two apart. The reference gives the [whole cap input](../reference/cli/workflow.md#json-shapes).
 
@@ -62,13 +62,13 @@ Validate the definition first. The command prints every node with the edges it r
 
 ```console
 $ rimz workflow validate ~/.rimz/workflows/fix-tests
-WORKFLOW   NODE   KIND   RUNNER              BACKGROUND  EDGES
-fix-tests  tests  check  cargo test          —           deadline → @user (default), fail → fix (explicit), invalid → @user (default), pass → @done (explicit), timeout → @user (default)
-fix-tests  fix    step   claude              yes         asked → @user (default), cap → @user (default), deadline → @user (default), then → tests (explicit)
+WORKFLOW   NODE   KIND   RUNNER      BACKGROUND  EDGES
+fix-tests  tests  check  cargo test  —           deadline → @user (default), fail → fix (explicit), invalid → @user (default), pass → @done (explicit), timeout → @user (default)
+fix-tests  fix    step   claude      yes         cap → @user (default), deadline → @user (default), then → tests (explicit)
 warning: fix-tests: steps.fix: auto-continue is off; a provider limit mid-attempt ends the attempt as limited
 ```
 
-Every `(default)` edge to `@user` parks the run for you. The `tests` row says a command that cannot start or a log that cannot open (`invalid`) parks. The `fix` row says the cap (`cap`) and a question from the agent (`asked`) park too. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
+Every `(default)` edge to `@user` parks the run for you. The `tests` row says a command that cannot start or a log that cannot open (`invalid`) parks. The `fix` row says the cap (`cap`) parks too; a question stays live in the agent's pane. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
 
 The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A turn step whose leader or its subagent parks on a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A script check can wait for the reset instead; [the PR example](#wait-on-the-outside-world) links one. A staying step remains open on provider limits.
 
@@ -123,7 +123,7 @@ An agent step's `agent` accepts the same layout grammar as `rimz agents`: a kind
 
 For an agent step, `lifecycle = "turn"` is the default. When the leader's turn ends, RimZ stops every agent cell and its subagents, closes the command cells, records the commit before and after, and follows `then`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until you stop it.
 
-Use `lifecycle = "stay"` when you want to work with the agent across turns. The run reads `with you` in `workflow list` and `active (with you)` in `show`. Questions stay on the agent's card: answer in its pane. Turn ends, interruptions, provider limits, and provider session-end hooks do not end the attempt. Exiting the leader's provider process ends it as `ended` after registration, or `died` before registration, and follows `then`; a crash after registration also reads `ended`, so the check judges the work. Every layout cell closes. A staying step refuses `timeout` and `on.asked`; the workflow deadline, cancel, reset, and rebirth still end it as `canceled`.
+Use `lifecycle = "stay"` when you want to work with the agent across turns. The run reads `with you` in `workflow list` and `active (with you)` in `show`, or `asking you: …` and `active (asking you)` while a blocking question is open. Questions stay on the agent's card: answer in its pane. Turn ends, interruptions, provider limits, and provider session-end hooks do not end the attempt. Exiting the leader's provider process ends it as `ended` after registration, or `died` before registration, and follows `then`; a crash after registration also reads `ended`, so the check judges the work. Every layout cell closes. A staying step refuses `timeout` and `on.asked`; the workflow deadline, cancel, reset, and rebirth still end it as `canceled`.
 
 An agent step does not start in a checkout another agent is using. It waits until the checkout is free. With `takeover = true` it stops an idle agent there to make room, but an agent in the middle of a turn still makes it wait. Agents in other RimZ worktrees do not count.
 
@@ -261,13 +261,13 @@ A run parks when it would otherwise have to guess:
 - a check's `timeout` passed,
 - a run check exited nonzero or printed a bad answer, or a shell check could not start or its log could not open,
 - a judge failed twice,
-- a turn step's leader or child stopped on a question or a permission prompt, and no `on.asked` edge answers it,
+- a turn step's leader or child blocked on a question or permission prompt, and `on.asked = "@user"` routes it to you,
 - the run's `deadline` passed,
 - a check routed an outcome to `@user`, with its `reason` as the text.
 
 A condition's unread data normally waits rather than parking; an explicit `on.unknown = "@user"` asks you instead.
 
-A question from a turn step's leader or its subagent ends the attempt. RimZ notices it within about a minute, stops the layout, and parks the run with the question as its text, so an answer typed into the pane after that reaches nobody. Fix what made the agent ask (its permission mode, the prompt, or a [sign](#rules-for-writing-nodes)), then resume. The step relaunches, and `prev_attempt.asked` in `context.json` holds the question. Use a staying step to keep the question live and answer in the pane instead.
+A blocking question or permission prompt from a turn step's leader or its subagent keeps the attempt live: answer in the agent's pane. `workflow list` reads `asking you: <handle> (<kind>): <text>`, and the step's `timeout` pauses from when the ask opened until RimZ sees it answered. A subagent's ask or answer is noticed within about a minute. Set `on.asked` to end the attempt on a question instead: RimZ stops the layout and follows that edge, with the question in `prev_attempt.asked` in `context.json`. If the edge is `@user`, fix what made the agent ask (its permission mode, the prompt, or a [sign](#rules-for-writing-nodes)), then resume to relaunch it.
 
 `[workflow] deadline = "2026-11-01"` bounds the whole run. It takes a date (local midnight), a local date and time, or an RFC 3339 instant. When it passes, RimZ stops a live attempt and parks the run, unless `on.deadline` routes it somewhere else.
 
@@ -359,7 +359,7 @@ A condition answer carries `outcome`, the zero-based winning `case` (absent for 
 | `signs_path` | For a step, its sign file, `signs/<step>.md`. For a check, the `signs/` directory. |
 | `prev_attempt` | How the last step attempt ended, or null. |
 
-`prev_attempt.outcome` is `ended`, `died`, `timeout`, `asked`, `limited`, or `canceled`. A staying agent step ends only as `ended`, `died`, or `canceled` once launched, and records no ask. A command step ends as `ended`, `died`, `timeout`, or `canceled`. The object also carries the attempt's start and end times (`started_at`, `ended_at`), the leader's handle, the commit before and after (`head_start`, `head_end`), its cost, and, when they apply, the question it asked (`asked`) and the provider's reset time (`limited.reset_at`). For a command step, `code` is its exit code (null after a signal or an unobserved exit) and `log` is its output file when one exists; agent attempts have both fields null. Agent-only evidence is null for a command step. A command's `head_end` is null when another process, rather than the host that reaped the child, settles the attempt.
+`prev_attempt.outcome` is `ended`, `died`, `timeout`, `asked`, `limited`, or `canceled`. `asked` occurs only on a turn agent step with `on.asked` set. A staying agent step ends only as `ended`, `died`, or `canceled` once launched, and records no ask. A command step ends as `ended`, `died`, `timeout`, or `canceled`. The object also carries the attempt's start and end times (`started_at`, `ended_at`), the leader's handle, the commit before and after (`head_start`, `head_end`), its cost, and, when they apply, the question it asked (`asked`) and the provider's reset time (`limited.reset_at`). For a command step, `code` is its exit code (null after a signal or an unobserved exit) and `log` is its output file when one exists; agent attempts have both fields null. Agent-only evidence is null for a command step. A command's `head_end` is null when another process, rather than the host that reaped the child, settles the attempt.
 
 ## See also
 

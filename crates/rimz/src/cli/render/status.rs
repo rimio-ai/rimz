@@ -109,9 +109,10 @@ pub(crate) fn run(status: RunStatus) -> anstyle::Style {
     }
 }
 
-pub(crate) fn workflow(state: rimz::store::workflow::RunState) -> anstyle::Style {
+pub(crate) fn workflow(state: rimz::store::workflow::RunState, asking: bool) -> anstyle::Style {
     use rimz::store::workflow::RunState;
     match state {
+        RunState::Active if asking => role(StateRole::Waiting),
         RunState::Active => role(StateRole::Working),
         RunState::Parked => role(StateRole::Waiting),
         RunState::Done => role(StateRole::Success),

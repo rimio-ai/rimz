@@ -10,7 +10,7 @@ use rimz::launcher::{self, LaunchOutcome, Preparation};
 use rimz::store::run::{ReportTo, RunLifecycle, RunRecord};
 use rimz::store::snapshot::SidebarSnapshot;
 use rimz::store::workflow::{
-    Asked, AttemptOutcome, AttemptRun, ChildRef, Children, Limited, TeamRef,
+    Asked, Asking, AttemptOutcome, AttemptRun, ChildRef, Children, Limited, TeamRef,
 };
 
 use crate::cli::{GlobalFlags, agents_cmd, ctx::Ctx, supervised};
@@ -263,15 +263,18 @@ impl workflow::AttemptHost for Host<'_> {
                         .chain(ask.questions.into_iter().map(|question| question.question))
                         .collect::<Vec<_>>()
                         .join("\n\n");
-                    observed.ask = Some(Asked {
-                        text,
-                        kind: match ask.open.kind {
-                            AskKind::Question => "question",
-                            AskKind::Permission => "permission",
-                            AskKind::PlanApproval => "plan_approval",
-                        }
-                        .into(),
-                        handle: rimz::address::agent_handle(current, &peers, true),
+                    observed.ask = Some(Asking {
+                        since: ask.open.since,
+                        ask: Asked {
+                            text,
+                            kind: match ask.open.kind {
+                                AskKind::Question => "question",
+                                AskKind::Permission => "permission",
+                                AskKind::PlanApproval => "plan_approval",
+                            }
+                            .into(),
+                            handle: rimz::address::agent_handle(current, &peers, true),
+                        },
                     });
                 }
                 if observed.limited.is_none()

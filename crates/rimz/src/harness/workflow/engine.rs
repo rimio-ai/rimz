@@ -661,6 +661,8 @@ fn prepare(
         started_at: t.now,
         host: agent::identity(),
         woken: false,
+        asking: None,
+        asked_ms: 0,
         child: None,
         run: None,
         head_start,

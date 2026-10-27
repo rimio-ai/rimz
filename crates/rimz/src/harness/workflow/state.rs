@@ -386,18 +386,20 @@ impl Transition<'_> {
     pub(super) fn stage_agent_end(&mut self, ending: Ending, observed: &super::Observed) {
         // Only published agent attempts enter the stop protocol.
         let outcome = ending.outcome;
-        self.record
+        let attempt = self
+            .record
             .attempt
             .as_mut()
-            .expect("agent ending has an attempt")
-            .ending = Some(ending);
+            .expect("agent ending has an attempt");
+        attempt.asking = None;
+        attempt.ending = Some(ending);
         let mut previous = self.previous_attempt(outcome);
         previous.children = Some(observed.children.clone());
         previous.limited = (outcome == AttemptOutcome::Limited)
             .then(|| observed.limited.clone())
             .flatten();
         previous.asked = (outcome == AttemptOutcome::Asked)
-            .then(|| observed.ask.clone())
+            .then(|| observed.ask.as_ref().map(|asking| asking.ask.clone()))
             .flatten();
         previous.cost_usd = observed.cost_usd;
         self.record.prev_attempt = Some(previous);
@@ -631,15 +633,21 @@ impl Transition<'_> {
             let Some(attempt) = self.record.attempt.as_ref() else {
                 return Ok(None);
             };
-            if !attempt.lifecycle.is_turn() {
+            if !attempt.lifecycle.is_turn() || attempt.asking.is_some() {
                 return Ok(None);
             }
+            let Ok(start) = attempt
+                .started_at
+                .checked_add(std::time::Duration::from_millis(attempt.asked_ms))
+            else {
+                return Ok(None);
+            };
             (
                 self.spec
                     .steps
                     .get(&self.record.node)
                     .and_then(|step| step.timeout.as_deref()),
-                attempt.started_at,
+                start,
             )
         };
         let Some(raw) = timeout else {

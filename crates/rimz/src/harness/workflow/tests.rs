@@ -732,6 +732,39 @@ fn validation_resolves_edges_and_warns_about_judge_independence() {
     assert!(row.edges.iter().any(|edge| edge.outcome == "ready"
         && edge.target == "build"
         && edge.source == "explicit"));
+    let cases = [
+        ("", None),
+        ("lifecycle='stay'", None),
+        ("on.asked='pick'", Some("pick")),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(extra, _)| {
+            fs::write(dir.join("workflow.toml"), format!("{VALID}\n{extra}\n")).unwrap();
+            let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+            assert!(report.errors.is_empty(), "{report:?}");
+            report
+                .rows
+                .iter()
+                .find(|row| row.node == "build")
+                .unwrap()
+                .edges
+                .iter()
+                .filter(|edge| edge.outcome == "asked")
+                .map(|edge| (edge.target.clone(), edge.source.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|(_, target)| {
+            target
+                .iter()
+                .map(|target| (target.to_string(), "explicit".to_owned()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(actual, expected);
 }
 
 #[test]

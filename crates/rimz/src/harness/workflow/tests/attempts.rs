@@ -342,18 +342,25 @@ fn signs_cannot_read_outside_the_node_writable_work_directory() {
 
 #[test]
 fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
-    use crate::store::workflow::{Asked, Limited};
+    use crate::store::workflow::{Asked, Asking, Limited};
     let (_dir, state, record) = setup(&format!("{STEP}lifecycle='stay'\n"));
     let host = FakeHost::new();
-    let live = advance_ok(&state, &record.id, &host);
+    let mut live = advance_ok(&state, &record.id, &host);
+    let now = jiff::Timestamp::now();
+    live.attempt.as_mut().unwrap().started_at = now - std::time::Duration::from_secs(120);
+    update(&state, &live);
+    let since = now - std::time::Duration::from_secs(60);
     let seq = live.attempt.as_ref().unwrap().seq;
     for status in [RunStatus::Pending, RunStatus::Running] {
         let mut observed = host.observed.borrow_mut();
         observed.status = status;
-        observed.ask = Some(Asked {
-            text: "Which approach?".into(),
-            kind: "question".into(),
-            handle: "@builder".into(),
+        observed.ask = Some(Asking {
+            since,
+            ask: Asked {
+                text: "Which approach?".into(),
+                kind: "question".into(),
+                handle: "@builder".into(),
+            },
         });
         observed.limited = Some(Limited { reset_at: None });
         drop(observed);
@@ -364,9 +371,20 @@ fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
             "stay must not park on {status:?}"
         );
         assert_eq!(live.attempt.as_ref().unwrap().seq, seq);
+        assert_eq!(
+            live.attempt.as_ref().unwrap().asking,
+            host.observed.borrow().ask
+        );
         assert!(live.prev_attempt.is_none());
         assert_eq!(host.stops.get(), 0);
     }
+    host.observed.borrow_mut().ask = None;
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(live.state, RunState::Active);
+    assert!(live.attempt.as_ref().unwrap().asking.is_none());
+    assert!(live.attempt.as_ref().unwrap().asked_ms >= 60_000);
+    assert!(live.prev_attempt.is_none());
+    assert_eq!(host.stops.get(), 0);
     host.observed.borrow_mut().status = RunStatus::Completed;
     let ended = advance_ok(&state, &record.id, &host);
     let previous = ended.prev_attempt.unwrap();
@@ -394,6 +412,168 @@ fn stay_lifecycle_is_persisted_and_legacy_attempts_remain_turns() {
 }
 
 #[test]
+fn asking_fields_round_trip_and_legacy_records_omit_them() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    let legacy = serde_json::to_value(&live).unwrap();
+    assert!(legacy["attempt"].get("asking").is_none());
+    assert!(legacy["attempt"].get("asked_ms").is_none());
+    let decoded: RunRecord = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
+
+    let mut value = legacy;
+    value["attempt"]["asking"] = json!({
+        "since":live.attempt.as_ref().unwrap().started_at,
+        "text":"Approve?", "kind":"permission", "handle":"@builder"
+    });
+    value["attempt"]["asked_ms"] = json!(5400000);
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    update(&state, &decoded);
+    let loaded = records::load(&state.workflow(&record.id)).unwrap();
+    assert_eq!(serde_json::to_value(loaded).unwrap(), value);
+}
+
+#[test]
+fn answered_ask_resumes_the_same_attempt_until_turn_end() {
+    use std::os::unix::fs::MetadataExt;
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    let mut live = advance_ok(&state, &record.id, &host);
+    let now = jiff::Timestamp::now();
+    live.attempt.as_mut().unwrap().started_at = now - std::time::Duration::from_secs(120);
+    update(&state, &live);
+    let since = now - std::time::Duration::from_secs(60);
+    host.observed.borrow_mut().ask = Some(records::Asking {
+        since,
+        ask: records::Asked {
+            text: "Which approach?".into(),
+            kind: "question".into(),
+            handle: "@child".into(),
+        },
+    });
+    let paths = state.workflow(&record.id);
+    let journal = records::journal(&paths).unwrap();
+    let held = advance_ok(&state, &record.id, &host);
+    assert_eq!(held.state, RunState::Active);
+    assert_eq!(
+        held.attempt
+            .as_ref()
+            .unwrap()
+            .asking
+            .as_ref()
+            .map(|ask| ask.since),
+        Some(since)
+    );
+    let published = fs::File::open(&paths.record).unwrap();
+    assert_eq!(advance_ok(&state, &record.id, &host), held);
+    assert_eq!(
+        published.metadata().unwrap().ino(),
+        fs::metadata(&paths.record).unwrap().ino(),
+        "a stable hold must not rewrite the record"
+    );
+
+    host.observed.borrow_mut().ask = Some(records::Asking {
+        since: jiff::Timestamp::now(),
+        ask: records::Asked {
+            text: "Approve now?".into(),
+            kind: "permission".into(),
+            handle: "@reviewer".into(),
+        },
+    });
+    let refreshed = advance_ok(&state, &record.id, &host);
+    let asking = refreshed.attempt.as_ref().unwrap().asking.as_ref().unwrap();
+    assert_eq!(asking.since, since);
+    assert_eq!(asking.ask, host.observed.borrow().ask.as_ref().unwrap().ask);
+    host.observed.borrow_mut().ask = None;
+    let answered = advance_ok(&state, &record.id, &host);
+    assert_eq!(answered.state, RunState::Active);
+    let attempt = answered.attempt.as_ref().unwrap();
+    assert!(attempt.asking.is_none());
+    assert!(attempt.asked_ms >= 60_000);
+    assert_eq!(attempt.seq, held.attempt.as_ref().unwrap().seq);
+    assert!(answered.prev_attempt.is_none());
+    assert_eq!(host.stops.get(), 0);
+    assert_eq!(
+        records::journal(&paths).unwrap(),
+        journal,
+        "holds are not attempt ends"
+    );
+
+    host.observed.borrow_mut().status = RunStatus::Completed;
+    let ended = advance_ok(&state, &record.id, &host);
+    assert_eq!(ended.state, RunState::Done);
+    assert!(ended.attempt.is_none());
+    let previous = ended.prev_attempt.unwrap();
+    assert_eq!(previous.outcome, AttemptOutcome::Ended);
+    assert!(previous.asked.is_none());
+    assert_eq!(host.stops.get(), 1);
+}
+
+#[test]
+fn step_timeout_pauses_from_ask_open_and_rejudges_after_the_answer() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (open_seconds_ago, overdue) in [(5400, false), (1800, true), (10800, false)] {
+        let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\n"));
+        let host = FakeHost::new();
+        let mut live = advance_ok(&state, &record.id, &host);
+        let now = jiff::Timestamp::now();
+        let start = now - std::time::Duration::from_secs(7200);
+        let since = now - std::time::Duration::from_secs(open_seconds_ago);
+        live.attempt.as_mut().unwrap().started_at = start;
+        update(&state, &live);
+        host.observed.borrow_mut().ask = Some(records::Asking {
+            since,
+            ask: records::Asked {
+                text: "Approve?".into(),
+                kind: "permission".into(),
+                handle: "@child".into(),
+            },
+        });
+        let held = advance_ok(&state, &record.id, &host);
+        let held_since = held
+            .attempt
+            .as_ref()
+            .and_then(|attempt| attempt.asking.as_ref())
+            .map(|ask| ask.since);
+        host.observed.borrow_mut().ask = None;
+        let earliest = jiff::Timestamp::now();
+        let answered = advance_ok(&state, &record.id, &host);
+        let latest = jiff::Timestamp::now();
+        let clamped = since.max(start);
+        let credit_matches = answered.attempt.as_ref().map(|attempt| {
+            let credit = i128::from(attempt.asked_ms);
+            earliest.duration_since(clamped).as_millis() <= credit
+                && credit <= latest.duration_since(clamped).as_millis()
+        });
+        actual.push((
+            open_seconds_ago,
+            held.state,
+            held_since,
+            answered.state,
+            credit_matches,
+            answered.prev_attempt.map(|previous| previous.outcome),
+            host.stops.get(),
+        ));
+        expected.push((
+            open_seconds_ago,
+            RunState::Active,
+            Some(clamped),
+            if overdue {
+                RunState::Done
+            } else {
+                RunState::Active
+            },
+            (!overdue).then_some(true),
+            overdue.then_some(AttemptOutcome::Timeout),
+            usize::from(overdue),
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn stay_deadline_beats_completed_observation_and_cancel_stops() {
     for cause in ["deadline", "cancel"] {
         let (_dir, state, record) = setup(&format!("{STEP}lifecycle='stay'\n"));
@@ -418,16 +598,16 @@ fn stay_deadline_beats_completed_observation_and_cancel_stops() {
 
 #[test]
 fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
-    use crate::store::workflow::{Asked, ChildRef, Limited};
+    use crate::store::workflow::{Asked, Asking, ChildRef, Limited};
     for (status, expected) in [
-        (RunStatus::Completed, AttemptOutcome::Ended),
-        (RunStatus::Failed, AttemptOutcome::Died),
-        (RunStatus::VerifyFailed, AttemptOutcome::Died),
-        (RunStatus::TimedOut, AttemptOutcome::Died),
-        (RunStatus::Canceled, AttemptOutcome::Canceled),
-        (RunStatus::BudgetExceeded, AttemptOutcome::Limited),
-        (RunStatus::Running, AttemptOutcome::Asked),
-        (RunStatus::Pending, AttemptOutcome::Limited),
+        (RunStatus::Completed, Some(AttemptOutcome::Ended)),
+        (RunStatus::Failed, Some(AttemptOutcome::Died)),
+        (RunStatus::VerifyFailed, Some(AttemptOutcome::Died)),
+        (RunStatus::TimedOut, Some(AttemptOutcome::Died)),
+        (RunStatus::Canceled, Some(AttemptOutcome::Canceled)),
+        (RunStatus::BudgetExceeded, Some(AttemptOutcome::Limited)),
+        (RunStatus::Running, None),
+        (RunStatus::Pending, Some(AttemptOutcome::Limited)),
     ] {
         let (_dir, state, record) = setup(STEP);
         let host = FakeHost::new();
@@ -448,10 +628,13 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
                 kind: crate::ids::AgentKind::new_unchecked("codex"),
                 team: None,
             });
-            observed.ask = Some(Asked {
-                text: "Which approach?".into(),
-                kind: "question".into(),
-                handle: "child".into(),
+            observed.ask = Some(Asking {
+                since: jiff::Timestamp::now(),
+                ask: Asked {
+                    text: "Which approach?".into(),
+                    kind: "question".into(),
+                    handle: "@child".into(),
+                },
             });
             if matches!(status, RunStatus::Pending | RunStatus::BudgetExceeded) {
                 observed.limited = Some(Limited {
@@ -465,6 +648,15 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
             observed.borrow_mut().limited = None;
         }));
         let ended = advance_ok(&state, &record.id, &host);
+        let Some(expected) = expected else {
+            assert_eq!(ended.state, RunState::Active);
+            assert_eq!(host.stops.get(), 0);
+            assert!(ended.prev_attempt.is_none());
+            let asking = ended.attempt.as_ref().unwrap().asking.as_ref().unwrap();
+            assert_eq!(asking.ask.handle, "@child");
+            assert_eq!(asking.ask.text, "Which approach?");
+            continue;
+        };
         assert_eq!(host.stops.get(), 1, "every agent end stops the tree");
         let prev = ended
             .prev_attempt
@@ -477,20 +669,8 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
         assert_eq!(prev.head_start.as_deref(), Some("recorded-head"));
         assert_eq!(prev.children.as_ref().unwrap().stopped[0].handle, "child");
         assert_eq!(prev.children.as_ref().unwrap().live[0].handle, "peer");
-        if expected == AttemptOutcome::Asked {
-            assert_eq!(ended.state, RunState::Parked);
-            assert_eq!(
-                ended.park.as_ref().unwrap().reason,
-                records::ParkReason::Asked
-            );
-            assert_eq!(
-                ended.park.as_ref().unwrap().text.as_deref(),
-                Some("Which approach?")
-            );
-            assert_eq!(prev.asked.as_ref().unwrap().kind, "question");
-        } else {
-            assert_eq!(ended.state, RunState::Done);
-        }
+        assert_eq!(ended.state, RunState::Done);
+        assert!(prev.asked.is_none());
         if status == RunStatus::Pending {
             assert_eq!(prev.limited.as_ref().unwrap().reset_at, Some(reset));
         }
@@ -517,8 +697,7 @@ fn asked_edge_routes_and_launch_failures_count_as_attempts() {
         AttemptOutcome::Limited,
         AttemptOutcome::Asked,
     ] {
-        let (_dir, state, record) =
-            setup(&STEP.replace("max-visits=2", "max-visits=2\non.asked='@failed'"));
+        let (_dir, state, record) = setup(&format!("{STEP}on.asked='@failed'\ntimeout='1h'\n"));
         let host = FakeHost::new();
         if outcome != AttemptOutcome::Asked {
             *host.failure.borrow_mut() = Some(LaunchFailure {
@@ -528,14 +707,26 @@ fn asked_edge_routes_and_launch_failures_count_as_attempts() {
         }
         let mut ended = advance_ok(&state, &record.id, &host);
         if outcome == AttemptOutcome::Asked {
-            host.observed.borrow_mut().ask = Some(records::Asked {
-                text: "Approve?".into(),
-                kind: "permission".into(),
-                handle: "@builder".into(),
+            let now = jiff::Timestamp::now();
+            ended.attempt.as_mut().unwrap().started_at = now - std::time::Duration::from_secs(7200);
+            update(&state, &ended);
+            host.observed.borrow_mut().ask = Some(records::Asking {
+                since: now - std::time::Duration::from_secs(5400),
+                ask: records::Asked {
+                    text: "Approve?".into(),
+                    kind: "permission".into(),
+                    handle: "@builder".into(),
+                },
             });
             ended = advance_ok(&state, &record.id, &host);
         }
         assert_eq!(ended.prev_attempt.as_ref().unwrap().outcome, outcome);
+        if outcome == AttemptOutcome::Asked {
+            assert_eq!(
+                serde_json::to_value(&ended.prev_attempt.as_ref().unwrap().asked).unwrap(),
+                json!({"text":"Approve?", "kind":"permission", "handle":"@builder"})
+            );
+        }
         assert_eq!(ended.visits["build"].total, 1);
         assert_eq!(
             ended.state,
@@ -635,17 +826,35 @@ fn eviction_failure_is_a_counted_died_attempt() {
 
 #[test]
 fn timeout_deadline_and_cancel_stop_before_settlement() {
+    let cleared = Rc::new(RefCell::new(Vec::new()));
     for cause in ["timeout", "deadline", "cancel"] {
         let (_dir, state, record) = setup(&format!("{STEP}timeout='1s'\n"));
         let host = FakeHost::new();
         let mut live = advance_ok(&state, &record.id, &host);
+        if cause != "timeout" {
+            let asking = records::Asking {
+                since: live.attempt.as_ref().unwrap().started_at,
+                ask: records::Asked {
+                    text: "Approve?".into(),
+                    kind: "permission".into(),
+                    handle: "@builder".into(),
+                },
+            };
+            live.attempt.as_mut().unwrap().asking = Some(asking.clone());
+            host.observed.borrow_mut().ask = Some(asking);
+            update(&state, &live);
+        }
         let stop_state = state.clone();
         let stop_id = record.id.clone();
+        let cleared_on_stop = Rc::clone(&cleared);
         *host.on_stop.borrow_mut() = Some(Box::new(move || {
             let _guard = WorkspaceLock::acquire(&stop_state.workspace_lock).unwrap();
             let current = records::load(&stop_state.workflow(&stop_id)).unwrap();
             assert_eq!(current.state, RunState::Active);
             assert!(current.attempt.as_ref().unwrap().ending.is_some());
+            cleared_on_stop
+                .borrow_mut()
+                .push((cause, current.attempt.as_ref().unwrap().asking.is_none()));
             assert_eq!(
                 current.next_seq, 2,
                 "no successor is admitted before stop returns"
@@ -656,9 +865,10 @@ fn timeout_deadline_and_cancel_stop_before_settlement() {
             assert!(!cancel(&state, &record.id, &host).unwrap());
         } else {
             if cause == "timeout" {
-                live.attempt.as_mut().unwrap().started_at = "2000-01-01T00:00:00Z".parse().unwrap();
+                live.attempt.as_mut().unwrap().started_at =
+                    jiff::Timestamp::now() - std::time::Duration::from_secs(7200);
             } else {
-                live.deadline = Some("2000-01-01T00:00:00Z".parse().unwrap());
+                live.deadline = Some(jiff::Timestamp::now() - std::time::Duration::from_secs(1));
             }
             update(&state, &live);
             advance_ok(&state, &record.id, &host);
@@ -683,6 +893,10 @@ fn timeout_deadline_and_cancel_stop_before_settlement() {
             }
         );
     }
+    assert_eq!(
+        *cleared.borrow(),
+        vec![("timeout", true), ("deadline", true), ("cancel", true)]
+    );
     let (_dir, state, record) = setup(STEP);
     let host = FakeHost::new();
     let launch_state = state.clone();

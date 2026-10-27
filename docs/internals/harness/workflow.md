@@ -83,7 +83,7 @@ A condition's cases are ordered `[[checks.<name>.cases]]` tables:
 
 An agent step requires `prompt-file`. `agent` takes the fresh-launch layout grammar: kinds, profiles, virtual cells, and mixed agent/command layouts. Teams, command-only layouts and ambiguous prompt leaders refuse; judges still take one profile. Agent-only optional fields are `lifecycle` (`turn` by default, or `stay`), `window`, `takeover`, and `on.asked`. Staying steps refuse `timeout` and `on.asked`.
 
-Both visit bounds must be at least 1. When both are set, `max-visits-per-key` must be below `max-visits`, since the total cap trips first. Per-key counts accumulate for the run, and unkeyed visits share one count. `on.cap` and an agent step's `on.asked` default to `@user`, neither may target `@wait`, and `on.cap` may not target its own step.
+Both visit bounds must be at least 1. When both are set, `max-visits-per-key` must be below `max-visits`, since the total cap trips first. Per-key counts accumulate for the run, and unkeyed visits share one count. `on.cap` defaults to `@user`; an agent step's `on.asked` has no default and keeps the question live when absent. Neither edge may target `@wait`, and `on.cap` may not target its own step. Validation prints an `asked` edge only when explicitly set.
 
 ### Edges and the graph
 
@@ -119,7 +119,7 @@ Checks must be idempotent. A host killed after a script's effects but before set
 
 Step 1 runs before the prompt or definition bytes are read, so a held run wins over a broken definition, a prompt-file error, or a scope-kind edit. Comparing each existing run by its own kind keeps a worktree run at the project root from blocking a different worktree. `rimz workflow run` validates the definition directory before it calls `create`, so a manual start of a broken definition refuses on the definition even while a run holds the slot. The CLI prints `Exists` as a refusal, and a loop fire reaching `create` records it as `workflow_skipped`. A scheduled condition task with a launch entry never reaches `create`: it exits silently.
 
-`rimz workflow run` resolves `-w` to an existing RimZ-owned worktree before it calls `create`, never creating one, so an unknown worktree refuses even a project-scoped run. Without `-w` the checkout is the current one. Worktree scope runs in that checkout. Project scope always runs at the root, and the CLI prints a stderr notice when `-w` named a worktree. Run ids are `wf_` identities. `list` enumerates active and parked runs across rooms, and `show`, `cancel`, `resume`, and the hidden `advance` find a run id from any directory through `crates/rimz/src/disk/paths.rs::workflow_runs_under`, which skips a room whose run homes cannot be read. A live staying attempt has DETAIL `with you` in list text and JSON `detail`, and show reads `active (with you)`.
+`rimz workflow run` resolves `-w` to an existing RimZ-owned worktree before it calls `create`, never creating one, so an unknown worktree refuses even a project-scoped run. Without `-w` the checkout is the current one. Worktree scope runs in that checkout. Project scope always runs at the root, and the CLI prints a stderr notice when `-w` named a worktree. Run ids are `wf_` identities. `list` enumerates active and parked runs across rooms, and `show`, `cancel`, `resume`, and the hidden `advance` find a run id from any directory through `crates/rimz/src/disk/paths.rs::workflow_runs_under`, which skips a room whose run homes cannot be read. An active attempt with `asking` has DETAIL `asking you: <handle> (<kind>): <text>` in list text and JSON `detail`, with text collapsed to one line; show reads `active (asking you)` and prints an `ask` row. Both state labels use the Waiting role. Waiting lines and park labels take precedence in DETAIL. A live staying attempt without an ask has DETAIL `with you`, and show reads `active (with you)`.
 
 `cancel` takes the workspace lock and returns false on a terminal record, so the first terminal write wins. It kills the child of a hosted check or command step and ends the run `canceled`. For an agent step it stages a `canceled` end with cause `Cancel` and stops the attempt ([Stopping an attempt](#stopping-an-attempt)). While a live host is mid-launch or already ending the attempt, cancel leaves the stop to that host.
 
@@ -216,13 +216,13 @@ A wait keeps its node and the node's original timeout clock. Repeated identical 
 
 ### Bounds
 
-Every advance checks bounds before anything else. The engine routes a bound with an engine object that inherits the current key:
+Every advance checks bounds before routing; an agent observation first updates its live ask hold. The engine routes a bound with an engine object that inherits the current key:
 
 | Bound | Fires when | Input object | Route |
 | --- | --- | --- | --- |
 | Deadline | Once, when the unfired deadline passes. It stops gating until `--extend deadline` re-arms it. | `{outcome: deadline, deadline: T}` | `on.deadline` |
 | Check timeout | The check's `timeout` after `entered_at`. It spans every evaluation and wait at the node. | `{outcome: timeout, node: C, timeout: S}` | `on.timeout` |
-| Step timeout | The step's `timeout` after the attempt started. | The run's routed input | Ends the attempt as `timeout`, then `then`. |
+| Step timeout | The turn step's `timeout` after the attempt started, excluding closed ask pauses (`asked_ms`); never due while `asking` is set. | The run's routed input | Ends the attempt as `timeout`, then `then`. |
 | Visit caps | Before launch, the total visits reach `max-visits + visit_grant`, or the current key's visits reach `max-visits-per-key + visit_grant`. Total is checked first. Nothing launches, and no visit or sequence is consumed. | `{outcome: cap, step: S, bound: "max-visits" or "max-visits-per-key", visits: N, max: M}`. `visits` and `max` belong to the tripped bound, with the grant included in `max`. | `on.cap` |
 
 ## Agent attempts
@@ -249,22 +249,30 @@ Prompt composition and `git rev-parse HEAD` run under the lock after the first b
 
 ### How an attempt ends
 
-`crates/rimz/src/harness/workflow/engine/agent.rs::prepare_end` maps what the host observes to the attempt's outcome:
+`crates/rimz/src/harness/workflow/engine/agent.rs::prepare_end` observes once, stamps the clock after observation, and updates the hold before deciding an end, in this precedence order:
 
-| Observed | Outcome | Route |
+| Condition | Outcome / effect | Route |
 | --- | --- | --- |
+| Unfired run deadline at or before now | `canceled` | `on.deadline`, once |
+| Turn step, no open hold, `started_at + timeout + asked_ms` at or before now | `timeout` | `then` |
 | Supervised run `completed` | `ended` | `then` |
 | `failed`, `verify_failed`, or `timed_out` | `died` | `then` |
 | `canceled` | `canceled` | `then` |
-| Turn run `budget_exceeded` | `limited`, with no known reset | `then` |
-| Turn leader or a stopped descendant with a `paused_rate_limit` or `paused_spend_limit` turn error | `limited` | `then` |
-| Turn leader or a stopped descendant with a blocking ask | `asked` | `on.asked`, or a park with the ask's text and kind |
-| A turn step's own `timeout` | `timeout` | `then` |
-| The run deadline | `canceled` | `on.deadline`, once |
+| `budget_exceeded` | `limited`, with no known reset | `then` |
+| Turn run `pending` or `running`, observed provider limit | `limited` | `then` |
+| Turn run `pending` or `running`, blocking ask, explicit `on.asked` | `asked` | `on.asked` |
+| No supervised run and dead launch host | `canceled` | `then` |
+| Otherwise | Keep the attempt live; persist only a changed hold | None |
+
+The status, limit, and explicit-ask mapping is one pure function, `crates/rimz/src/harness/workflow/engine/agent.rs::observed_outcome`; timeout and deadline stay outside it. A pending ask therefore beats the step timeout even with `on.asked`, but not the deadline or cancel. A completed run still ends `ended` even if an ask remains visible.
+
+For turn and stay attempts, `LiveAttempt.asking` stores `{since, text, kind, handle}` while a blocking ask is observed, and `asked_ms` stores closed pause time as u64 milliseconds. Both default when absent and are omitted when empty or zero; the record stays version 1. On opening, `since` is the ask's own open time clamped to `[started_at, now]`, not the observation time. Further asks keep that interval's start and replace its text, kind, and handle. The first observation without an ask closes the interval, saturating elapsed milliseconds at zero and accumulating them into `asked_ms`. A stable hold writes nothing, and a hold-only write journals and accounts nothing. Already-ending attempts do not update the hold; staging any end clears it.
+
+Leader lifecycle hooks wake the run; subagents have no workflow pin and are sampled by the roughly one-minute tick. Two asks without an intervening observation merge into one pause, and a subagent's answer may remain credited and displayed until the next tick. A step already overdue when the ask opened times out after the answer is observed. Old `asked` parks and already-staged `asked` ends still settle and resume as before, including the `@user` fallback when the sealed step has no `on.asked`. Old live records start with no pause; an older binary rewriting one drops these new fields, losing already-closed pause time.
 
 A route through `then` forwards the run's routed input unchanged, with the current key: the attempt's outcome and evidence go to `prev_attempt`, never into the input. A queued asynchronous question does not end an attempt. The host reads asks by ask id and limits from typed turn-error classes, taking the reset from the affected agent's account and model, never from provider text. A launch refusal is `died`, or `limited` for a budget refusal, with the refusal text as the attempt's reason.
 
-A staying attempt ignores live asks and provider limits and has no step timeout. Turn ends, interruptions, session-end hooks, and RimZ budget parks keep its session run open. A park still interrupts the provider and stamps its ledger; a budget-gate refusal before launch still reads `limited`. Provider exit completes a registered session as `ended`, or an unregistered one as `died`; a crash after registration also reads `ended`. The run deadline beats a completed observation and routes `on.deadline` with outcome `canceled`. Cancel, reset and rebirth also cancel staying attempts. A stay end records no ask in `prev_attempt`, and companion trees never control an attempt's end.
+A staying attempt records live ask holds but does not end on them or live provider limits, and has no step timeout. Turn ends, interruptions, session-end hooks, and RimZ budget parks keep its session run open. A park still interrupts the provider and stamps its ledger; a budget-gate refusal before launch still reads `limited`. Provider exit completes a registered session as `ended`, or an unregistered one as `died`; a crash after registration also reads `ended`. The run deadline beats a completed observation and routes `on.deadline` with outcome `canceled`. Cancel, reset and rebirth also cancel staying attempts. A stay end records no ask in `prev_attempt`, and companion trees never control an attempt's end.
 
 ### Stopping an attempt
 
@@ -320,7 +328,7 @@ Negated terms derive the same selectors. At match time, never persisted, `ci` an
 
 An agent step's supervised run wakes its own workflow directly, through `engine::wake_run`. Every newly terminal run write through the harness wakes the run named in its `workflow` field after releasing the workspace lock: provider exits without hooks, wrapper failures, turn-run budget parks, timeouts, and rebirth cancellation included ([scripting.md](./scripting.md#the-record)). A hook-ended run that is not a peer turn settles its session spend before the wake, so the advance reads the stamped cost. Non-terminal lifecycle and turn-error frames carrying `RIMZ_WORKFLOW_RUN` wake only that run.
 
-Room teardown cancels supervised runs without waking workflows, and the next advance settles those attempts. Rebirth excludes every workflow-pinned cell from recovery and cancels nonterminal workflow runs even outside the roster, unless a live provider or wrapper still serves them, then wakes each workflow to decide again. A stop never closes a supervised run's pre-rebirth pane id in the new session. A descendant's frames carry no workflow pin, so its asks and limits are sampled at the next step edge or tick, within about a minute for turn attempts.
+Room teardown cancels supervised runs without waking workflows, and the next advance settles those attempts. Rebirth excludes every workflow-pinned cell from recovery and cancels nonterminal workflow runs even outside the roster, unless a live provider or wrapper still serves them, then wakes each workflow to decide again. A stop never closes a supervised run's pre-rebirth pane id in the new session. A descendant's frames carry no workflow pin, so its asks and limits are sampled at the next step edge or tick, within about a minute.
 
 ## The tick
 

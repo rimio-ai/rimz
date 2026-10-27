@@ -361,7 +361,7 @@ pub(super) fn validate_spec(
             if step.on.asked.is_some() {
                 report.error(
                     &format!("{path}.on.asked"),
-                    "a staying step keeps asks live; remove on.asked or use lifecycle = 'turn'",
+                    "a staying step never ends on a question; remove on.asked or use lifecycle = 'turn'",
                 );
             }
         }
@@ -423,10 +423,14 @@ pub(super) fn validate_spec(
                     );
                 }
             }
-            edges.insert(
-                outcome.into(),
-                target.clone().unwrap_or_else(|| "@user".into()),
-            );
+            if outcome == "cap"
+                || (step.lifecycle.unwrap_or_default().is_turn() && target.is_some())
+            {
+                edges.insert(
+                    outcome.into(),
+                    target.clone().unwrap_or_else(|| "@user".into()),
+                );
+            }
         }
         report.rows.push(NodeRow {
             workflow: name.into(),

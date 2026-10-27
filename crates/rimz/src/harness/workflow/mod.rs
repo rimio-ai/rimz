@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::WorkflowAttemptRef;
 use crate::harness::schedule::takeover::OpenTurn;
 use crate::store::run::RunStatus;
-use crate::store::workflow::{Asked, AttemptOutcome, AttemptRun, Children, Limited};
+use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited};
 
 mod engine;
 mod script;
@@ -94,7 +94,7 @@ pub struct StepLaunch {
 #[derive(Clone, Debug)]
 pub struct Observed {
     pub status: RunStatus,
-    pub ask: Option<Asked>,
+    pub ask: Option<Asking>,
     pub limited: Option<Limited>,
     pub children: Children,
     pub cost_usd: Option<f64>,
