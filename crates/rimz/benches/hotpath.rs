@@ -1600,6 +1600,18 @@ fn ended_carryover_fixture(rows: usize, rebirth: bool) -> FoldFixture {
     }
 }
 
+fn trimmed_carryover_fixture(rows: usize) -> FoldFixture {
+    let workspace = BenchWorkspace::new();
+    let store =
+        rimz::Store::open(workspace.paths.clone(), workspace.runtime.clone()).expect("open store");
+    rimz::testkit::fleet::seed_trimmed_carryover(&store, rows).expect("seed carryover");
+    FoldFixture {
+        paths: workspace.paths.clone(),
+        cursor: rimz::sidebar::consumer::RollupCursor::new(),
+        _workspace: workspace,
+    }
+}
+
 fn spending_fixture(warm: bool) -> SpendingFixture {
     spending_fixture_scaled(SPENDING_FILES, SPENDING_ENTRIES_PER_FILE, warm, false)
 }
@@ -1751,6 +1763,16 @@ fn rollup_fold_unchanged(bencher: Bencher, history_carryover: usize) {
 fn carryover_fold_cold(bencher: Bencher, rows: usize) {
     bencher
         .with_inputs(|| ended_carryover_fixture(rows, false))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(fixture.cursor.fold(&fixture.paths).expect("cold fold"));
+            fixture
+        });
+}
+
+#[divan::bench(args = [3_300, 13_200], sample_count = 20, sample_size = 1, skip_ext_time)]
+fn carryover_fold_cold_trimmed(bencher: Bencher, rows: usize) {
+    bencher
+        .with_inputs(|| trimmed_carryover_fixture(rows))
         .bench_local_values(|mut fixture| {
             divan::black_box(fixture.cursor.fold(&fixture.paths).expect("cold fold"));
             fixture

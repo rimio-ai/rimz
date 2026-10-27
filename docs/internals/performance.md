@@ -393,7 +393,7 @@ The `fleet::publish` module measures shared publication at (51 agents, 24 panes,
 
 `fleet::idle_cycle_hidden_fanout` places each of 57 subscribers over 50 agents in its own tab, with explicit client membership, and watches and paints one of them. It waits two seconds, past the renderers' one-second data tick, before timing. Every measured cycle changes row content, delivers a real retained worker fold, and steps each renderer's frame timing twice. The 56 hidden panes retain content until reveal without reducing a view, and the watched pane applies every change.
 
-`hotpath::carryover_fold_cold` parses the durable carryover inside timing. `hotpath::carryover_fold_rebirth_warm` primes a rebirth cursor and appends one `Registered` frame outside timing, then measures the delta fold. Their legacy full-text fixture rows are 4,800 bytes at p50, about 13,200 at p90, and 35,900 at maximum, and the 3,300-row and 13,200-row files are 32,943,350 and 131,784,597 bytes. Cold allocation includes transient raw-file text and decoding, not only the retained projection; production rotations now write already-trimmed ended rows. To measure a CLI read's peak RSS on these fixtures, follow [profiling.md → Peak RSS of a CLI read](./profiling.md#peak-rss-of-a-cli-read).
+`hotpath::carryover_fold_cold` parses the durable carryover inside timing. `hotpath::carryover_fold_rebirth_warm` primes a rebirth cursor and appends one `Registered` frame outside timing, then measures the delta fold. Their legacy full-text fixture rows are 4,800 bytes at p50, about 13,200 at p90, and 35,900 at maximum, and the 3,300-row and 13,200-row files are 32,943,350 and 131,784,597 bytes. Cold allocation includes transient raw-file text and decoding, not only the retained projection; production rotations now write already-trimmed ended rows. `hotpath::carryover_fold_cold_trimmed` folds the same history cold in that trimmed shape (`crates/rimz/src/testkit/mod.rs::fleet::seed_trimmed_carryover`), so it times the steady state, while `carryover_fold_cold` times the first cold fold after an upgrade. To measure a CLI read's peak RSS on these fixtures, follow [profiling.md → Peak RSS of a CLI read](./profiling.md#peak-rss-of-a-cli-read).
 
 #### Reference figures
 
@@ -415,6 +415,7 @@ The latest capture of each bench. Run one group with a name filter, such as `car
 | `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows | 56.9 / 79.8 µs | 655.6 / 655.6 KB alloc/op | 2026-09-14 |
 | `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows | 2.24 / 2.99 µs | 0 / 0 B alloc/op | 2026-09-14 |
 | `hotpath::carryover_fold_cold` 3,300 / 13,200 rows | 58.97 / 299.4 ms | 107.9 / 420.5 MB alloc/op | 2026-10-07 |
+| `hotpath::carryover_fold_cold_trimmed` 3,300 / 13,200 rows | 64.66 / 287.5 ms | 52.86 / 202.4 MB alloc/op | 2026-10-27 |
 | `hotpath::carryover_fold_rebirth_warm` 3,300 / 13,200 rows | 429.8 µs / 4.347 ms | 1.725 / 6.746 MB alloc/op | 2026-10-07 |
 | `hotpath::enrich_cached` 40 agents | 610 µs | 1.21 MB alloc/op | 2026-07-05 |
 | `hotpath::render_fixed` 40 agents | 413 µs | 1.09 MB alloc/op | 2026-07-05 |
