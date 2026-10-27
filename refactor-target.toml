@@ -1327,7 +1327,8 @@ path = "crates/rimz/src/harness"
 # AgentShellPersistence carries the birth's shell-lookup save policy (+1).
 # StepKind/kind, ChildError, execute_step and finish_script share command-step policy (+5).
 # WorkflowLaunchRecord, WorkflowLedger, load_workflows, Launch, and launched share typed launch memory with loop inspection (+5).
-surface-budget = 1016
+# LoadedTask::key_for_root reuses the loop list's resolved root across key and row reads (+1).
+surface-budget = 1017
 
 [[verdict]]
 kind = "item"
@@ -8294,6 +8295,11 @@ reason = "The parent loop dispatcher calls its private read-only condition inspe
 kind = "item"
 key = "cli::loop_cmd::condition::reading"
 reason = "Explain and task presentation share the room-gated forge and account-window reading path."
+
+[[verdict]]
+kind = "item"
+key = "cli::loop_cmd::condition::RoomReadings"
+reason = "Loop list and watch share one room's condition inputs within each repaint."
 
 [[verdict]]
 kind = "item"

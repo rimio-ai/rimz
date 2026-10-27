@@ -1350,7 +1350,7 @@ fn resolve_show(args: &mut ShowArgs, caller: Option<&Path>) -> Result<ShowTarget
     for (_, catalog) in &catalogs {
         for (name, task) in catalog.visible() {
             let entry = task.entry();
-            if list::worktree_name(entry).as_deref() != Some(args.name.as_str()) {
+            if list::worktree_name(entry, &entry.run_dir()).as_deref() != Some(args.name.as_str()) {
                 continue;
             }
             if task.kind() == schedule::TaskKind::WakeUp {
@@ -2217,7 +2217,7 @@ fn write_show_headline(
         schedule::TaskKind::WakeUp => "wake-up",
     };
     write!(out, "{} · {kind}", ui::paint(ui::palette::header(), name),)?;
-    if let Some(worktree) = list::worktree_name(entry) {
+    if let Some(worktree) = list::worktree_name(entry, &entry.run_dir()) {
         write!(out, " · worktree {worktree}")?;
     }
     let trigger = match timing.parsed() {

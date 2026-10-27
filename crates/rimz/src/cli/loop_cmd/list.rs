@@ -408,6 +408,8 @@ pub(super) struct TaskRow {
 }
 
 struct RowContext<'a> {
+    root: &'a Path,
+    run_dir: &'a Path,
     open: bool,
     stats: Option<&'a run_log::LoopRunStats>,
     count: u32,
@@ -478,6 +480,7 @@ fn load(
         };
         let runtime = runtime_for_root(&root);
         let open = runtime.as_ref().is_some_and(fresh_sidebar_present);
+        let conditions = std::cell::OnceCell::new();
         let stamps = runtime
             .as_ref()
             .map(schedule::last_stamps)
@@ -504,11 +507,18 @@ fn load(
             .and_then(|paths| rimz::store::workflow::list(&paths).ok())
             .unwrap_or_default();
         let mut tasks = Vec::new();
-        for (name, task) in catalog
-            .visible()
-            .iter()
-            .filter(|(_, task)| task.entry().resolved_root() == root)
-        {
+        for (name, task) in catalog.visible() {
+            let entry = task.entry();
+            let task_root = entry.resolved_root();
+            if task_root != root {
+                continue;
+            }
+            let run_dir = entry
+                .dir
+                .as_ref()
+                .map(|_| entry.run_dir())
+                .unwrap_or_else(|| task_root.clone());
+            let key = task.key_for_root(name, &task_root);
             let running = locks.as_ref().and_then(|locks| match locks.state(name) {
                 Ok(RunLockState::Held(holder)) => Some(holder),
                 Ok(RunLockState::Available) => None,
@@ -517,15 +527,32 @@ fn load(
                     None
                 }
             });
-            let timing =
-                observe_task_timing(name, task, &stamps, arming.get(&task.key(name)), &now_zoned);
-            let count = strikes.get(&task.key(name)).copied().unwrap_or_default();
+            let timing = schedule::TaskTiming::evaluate(
+                task.trigger(),
+                task.source(),
+                stamps.get(name).copied(),
+                arming.get(&key),
+                &now_zoned,
+            );
+            let timing = if timing
+                .parsed()
+                .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Condition { .. }))
+            {
+                conditions
+                    .get_or_init(|| condition::RoomReadings::new(runtime.as_ref(), open, now))
+                    .observe(name, entry, &run_dir, timing, now)
+            } else {
+                timing
+            };
+            let count = strikes.get(&key).copied().unwrap_or_default();
             let mut row = TaskRow::new(
                 name,
                 task,
                 timing,
                 running,
                 RowContext {
+                    root: &task_root,
+                    run_dir: &run_dir,
                     open,
                     stats: stats.get(name),
                     count,
@@ -536,7 +563,7 @@ fn load(
                     launch: match launch_ledger::launched(
                         task.entry(),
                         name,
-                        &task.entry().run_dir(),
+                        &run_dir,
                         &ledger,
                         &workflow_ledger,
                     ) {
@@ -552,7 +579,7 @@ fn load(
                         rimz::worktree::worktree_path(&root, &config.agents.worktree, name)
                             .is_ok_and(|path| path == workspace.worktree_root)
                     }
-                    None => task.entry().run_dir() == workspace.worktree_root,
+                    None => run_dir == workspace.worktree_root,
                 });
             row.launched_count = launched_count(task.entry(), name, &ledger, &workflow_ledger);
             row.attach_workflow_runs(WorkflowRunRow::of_task(&workflows, name, &root), now);
@@ -641,6 +668,8 @@ impl TaskRow {
         context: RowContext<'_>,
     ) -> Self {
         let RowContext {
+            root,
+            run_dir,
             open,
             stats,
             count,
@@ -650,7 +679,7 @@ impl TaskRow {
         } = context;
         let entry = task.entry();
         let state = TaskState::observe(&timing, running.is_some(), open);
-        let (head, continuation) = trigger_text(entry, &timing, state, now);
+        let (head, continuation) = trigger_text(entry, run_dir, &timing, state, now);
         let action = task.action().ok().map(|action| Action {
             kind: ActionKind::from(action),
             subject: match action {
@@ -659,8 +688,8 @@ impl TaskRow {
                 TaskAction::CheckOnly => "check".into(),
             },
         });
-        let dir = entry.dir.as_ref().map(|_| entry.run_dir());
-        let worktree = worktree_name(entry);
+        let dir = entry.dir.as_ref().map(|_| run_dir.to_owned());
+        let worktree = worktree_name(entry, run_dir);
         let owner = match schedule::delivery_owner(name, entry) {
             schedule::DeliveryOwner::Team(team) => Some(Owner {
                 kind: OwnerKind::Team,
@@ -673,7 +702,7 @@ impl TaskRow {
             schedule::DeliveryOwner::SelfWait | schedule::DeliveryOwner::Loop(_) => None,
         };
         let held = if running.is_some() {
-            schedule::throttle::held(name, &entry.resolved_root())
+            schedule::throttle::held(name, root)
         } else {
             Vec::new()
         };
@@ -1104,6 +1133,7 @@ fn elapsed(at: Timestamp, now: Timestamp) -> String {
 
 fn trigger_text(
     entry: &TaskEntry,
+    run_dir: &Path,
     timing: &schedule::TaskTiming,
     state: TaskState,
     now: Timestamp,
@@ -1116,7 +1146,7 @@ fn trigger_text(
                     matches
                         .iter()
                         .filter(|(key, value)| {
-                            !(key.as_str() == "path" && entry.run_dir() == Path::new(value))
+                            !(key.as_str() == "path" && run_dir == Path::new(value))
                         })
                         .map(|(key, value)| format!("{key}={value}")),
                 );

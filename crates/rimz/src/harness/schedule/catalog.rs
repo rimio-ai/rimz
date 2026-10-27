@@ -200,7 +200,11 @@ impl LoadedTask {
     }
 
     pub fn key(&self, name: &str) -> String {
-        TaskKey::for_task(name, self.source(), &self.entry().resolved_root())
+        self.key_for_root(name, &self.entry().resolved_root())
+    }
+
+    pub fn key_for_root(&self, name: &str, root: &Path) -> String {
+        TaskKey::for_task(name, self.source(), root)
     }
 
     pub fn enable(
