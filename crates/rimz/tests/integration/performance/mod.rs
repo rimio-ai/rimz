@@ -13,3 +13,5 @@ mod sidebar_diff_stats;
 mod spending_incremental;
 mod store_bytes;
 mod store_fsync;
+#[cfg(target_os = "linux")]
+mod work_log;

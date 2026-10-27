@@ -38,6 +38,8 @@ const DEFAULT_LOG_FILTER: &str = "warn";
 const RENDERED_PANE_LOG_FILTER: &str = "off";
 
 fn main() -> std::process::ExitCode {
+    #[cfg(feature = "testkit")]
+    let _work_log = cli::record_work_on_exit();
     #[cfg(target_os = "linux")]
     if let Some(code) = rimz::sandbox::run_bind_helper() {
         return code;

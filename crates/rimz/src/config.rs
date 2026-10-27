@@ -1227,6 +1227,9 @@ impl<T: Default> Default for Parsed<T> {
 fn record_machine_config_load(kind: &str) {
     use std::io::Write;
 
+    crate::testkit::WORK_COUNTERS
+        .machine_config_loads
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let Some(path) = std::env::var_os("RIMZ_TEST_MACHINE_CONFIG_LOAD_LOG") else {
         return;
     };
