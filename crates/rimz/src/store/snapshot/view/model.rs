@@ -236,6 +236,12 @@ impl SidebarProviderPanel {
         self.alternates.iter_mut().for_each(update);
     }
 
+    /// A known API-key credential, whose credits RimZ projects from spend. An
+    /// undecided panel is unmetered too, but backs no known credential.
+    pub(crate) fn is_api_key(&self) -> bool {
+        !self.metered && !self.undecided
+    }
+
     pub(crate) fn login_key(&self) -> crate::ids::LoginKey {
         crate::ids::LoginKey {
             kind: crate::ids::AgentKind::new_unchecked(&self.kind),

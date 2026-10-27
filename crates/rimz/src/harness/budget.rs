@@ -1612,7 +1612,7 @@ pub(crate) fn project_budget_views(
             BudgetWindow::Day => panel.day_budget = Some(view),
             BudgetWindow::Month => {
                 panel.month_budget = Some(view);
-                if !panel.metered {
+                if panel.is_api_key() {
                     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
                         spend,
                         None,
