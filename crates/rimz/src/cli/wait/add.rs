@@ -28,20 +28,20 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     if agent.agent_id.is_provisional() {
         bail!("the calling agent has not registered a real session yet");
     }
-    let timeout = match args.check_in {
-        Some(timeout) => Some(timeout),
-        None => {
-            let config = rimz::config::MachineConfig::load_lenient();
-            let published = ctx.published_snapshot()?;
-            let ping_agent = published
-                .agents
-                .iter()
-                .find(|row| row.kind == agent.kind && row.agent_id == agent.agent_id)
-                .unwrap_or(agent);
-            (!(config.harness.cache_keepalive
-                && config.harness.ping_lifetime(ping_agent).is_some()))
-            .then_some(Duration::from_secs(30 * 60))
+    let check_in = || -> Result<Option<Duration>> {
+        if args.check_in.is_some() {
+            return Ok(args.check_in);
         }
+        let config = rimz::config::MachineConfig::load_lenient();
+        let published = ctx.published_snapshot()?;
+        let ping_agent = published
+            .agents
+            .iter()
+            .find(|row| row.kind == agent.kind && row.agent_id == agent.agent_id)
+            .unwrap_or(agent);
+        Ok((!(config.harness.cache_keepalive
+            && config.harness.ping_lifetime(ping_agent).is_some()))
+        .then_some(Duration::from_secs(30 * 60)))
     };
     let target = TaskTarget {
         kind: agent.kind.clone(),
@@ -62,7 +62,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         if nix::sys::signal::kill(process, None) == Err(nix::errno::Errno::EPERM) {
             bail!("cannot watch PID {pid}: permission denied; choose a process owned by your user");
         }
-        watch_trigger(WatchSpec::Pid { pid }, CheckOn::Any, timeout)
+        watch_trigger(WatchSpec::Pid { pid }, CheckOn::Any, check_in()?)
     } else if let Some(check) = args.check.clone() {
         let spec = WatchSpec::Check {
             check,
@@ -72,7 +72,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
                 CheckOn::Success | CheckOn::Any => CheckOn::Success,
             },
         };
-        watch_trigger(spec, CheckOn::Any, timeout)
+        watch_trigger(spec, CheckOn::Any, check_in()?)
     } else if let Some(file) = &args.file {
         let file = rimz::utils::path::normalize_path_lexical(
             &std::env::current_dir()
@@ -89,12 +89,12 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             grep: args.grep.clone(),
             mark,
         };
-        watch_trigger(spec, CheckOn::Any, timeout)
+        watch_trigger(spec, CheckOn::Any, check_in()?)
     } else if let Some(command) = args.run.clone() {
         watch_trigger(
             WatchSpec::Command(command),
             parse_on(args.on.as_deref()),
-            timeout,
+            check_in()?,
         )
     } else {
         unreachable!("validate_shape requires exactly one wait trigger")
