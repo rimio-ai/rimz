@@ -495,6 +495,7 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
         r#"pr0: pullRequests(first: 10, headRefName: "feature", states: [OPEN, MERGED, CLOSED]"#
     ));
     assert!(query.contains("nodes { number state createdAt isCrossRepository statusCheckRollup"));
+    assert!(query.contains("statusCheckRollup { state commit { oid } } mergeCommit"));
     assert!(query.contains(r#"pr1: pullRequests(first: 10, headRefName: "quote\"branch""#));
     assert!(query.contains(r#"sha0: object(oid: "head-one")"#));
     assert!(query.contains(r#"sha1: object(oid: "head\"two")"#));
@@ -836,6 +837,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 state: WorktreePrState::Open,
                 created_at: Some("2026-07-18T01:25:14Z".parse().unwrap()),
                 head_ci: Some(WorktreeCi::Pending),
+                head_ci_sha: None,
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -845,6 +847,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 state: WorktreePrState::Merged,
                 created_at: Some("2026-07-18T01:26:14Z".parse().unwrap()),
                 head_ci: Some(WorktreeCi::Failing),
+                head_ci_sha: None,
                 merge_sha: Some("merge-sha".to_owned()),
                 merge_ci: Some(WorktreeCi::Passing),
             }),
@@ -854,6 +857,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 state: WorktreePrState::Closed,
                 created_at: None,
                 head_ci: Some(WorktreeCi::Failing),
+                head_ci_sha: None,
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -864,6 +868,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 state: WorktreePrState::Merged,
                 created_at: None,
                 head_ci: Some(WorktreeCi::Pending),
+                head_ci_sha: None,
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -878,6 +883,46 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
             None,
         ]
     );
+}
+
+#[test]
+fn github_pr_rollups_keep_their_own_commits_when_known() {
+    for (rollup, expected_ci, expected_sha) in [
+        (
+            serde_json::json!({"state": "FAILURE", "commit": {"oid": " pushed "}}),
+            Some(WorktreeCi::Failing),
+            Some("pushed"),
+        ),
+        (
+            serde_json::json!({"state": "SUCCESS"}),
+            Some(WorktreeCi::Passing),
+            None,
+        ),
+        (
+            serde_json::json!({"state": "PENDING", "commit": null}),
+            Some(WorktreeCi::Pending),
+            None,
+        ),
+        (
+            serde_json::json!({"state": "FAILURE", "commit": {"oid": " "}}),
+            Some(WorktreeCi::Failing),
+            None,
+        ),
+        (
+            serde_json::json!({"state": "UNKNOWN", "commit": {"oid": "pushed"}}),
+            None,
+            None,
+        ),
+    ] {
+        let raw = serde_json::json!({"data": {"repository": {
+            "pr0": {"nodes": [{"number": 42, "state": "OPEN", "statusCheckRollup": rollup}]},
+            "facts0": null
+        }}});
+        let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+        let pr = response.prs[0].as_ref().unwrap();
+        assert_eq!(pr.head_ci, expected_ci);
+        assert_eq!(pr.head_ci_sha.as_deref(), expected_sha);
+    }
 }
 
 #[test]
@@ -1074,8 +1119,18 @@ fn parses_tea_combined_commit_status() {
         ("error", WorktreeCi::Failing),
         ("warning", WorktreeCi::Failing),
     ] {
-        let raw = format!(r#"{{"state":"{state}"}}"#);
-        assert_eq!(parse_tea_combined_status(&raw).unwrap(), Some(expected));
+        let raw = format!(r#"{{"state":"{state}","sha":" pushed "}}"#);
+        assert_eq!(
+            parse_tea_combined_status(&raw).unwrap(),
+            (Some(expected), Some("pushed".to_owned()))
+        );
+        for sha in [None, Some(""), Some("  ")] {
+            let raw = serde_json::json!({"state": state, "sha": sha});
+            assert_eq!(
+                parse_tea_combined_status(&raw.to_string()).unwrap(),
+                (Some(expected), None)
+            );
+        }
     }
 
     for raw in [
@@ -1083,8 +1138,9 @@ fn parses_tea_combined_commit_status() {
         r#"{"state":"unknown"}"#,
         r#"{}"#,
         r#"{"message":"not found"}"#,
+        r#"{"state":"unknown","sha":"pushed"}"#,
     ] {
-        assert_eq!(parse_tea_combined_status(raw).unwrap(), None);
+        assert_eq!(parse_tea_combined_status(raw).unwrap(), (None, None));
     }
     assert!(parse_tea_combined_status("[]").is_err());
 }

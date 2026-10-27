@@ -112,6 +112,7 @@ pub(crate) struct GhBulkPr {
     pub(crate) state: WorktreePrState,
     pub(crate) created_at: Option<jiff::Timestamp>,
     pub(crate) head_ci: Option<WorktreeCi>,
+    pub(crate) head_ci_sha: Option<String>,
     pub(crate) merge_sha: Option<String>,
     pub(crate) merge_ci: Option<WorktreeCi>,
 }
@@ -597,7 +598,7 @@ pub(crate) fn github_bulk_query(
             ));
         }
         fields.push(format!(
-            "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state createdAt isCrossRepository statusCheckRollup {{ state }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
+            "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state createdAt isCrossRepository statusCheckRollup {{ state commit {{ oid }} }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
             graphql_string(branch)
         ));
         fields.push(format!(
@@ -741,6 +742,8 @@ pub(crate) fn parse_github_bulk_response(
     #[derive(Deserialize)]
     struct Rollup {
         state: Option<String>,
+        #[serde(default)]
+        commit: Option<CommitOid>,
     }
 
     #[derive(Deserialize)]
@@ -791,6 +794,11 @@ pub(crate) fn parse_github_bulk_response(
                 let merge_commit = pull
                     .merge_commit
                     .filter(|_| state == WorktreePrState::Merged);
+                let head_ci = pull
+                    .status_check_rollup
+                    .as_ref()
+                    .and_then(|rollup| rollup.state.as_deref())
+                    .and_then(ci_from_gh_rollup_state);
                 Some(GhBulkPr {
                     open: None,
                     number: pull.number,
@@ -799,11 +807,12 @@ pub(crate) fn parse_github_bulk_response(
                         .created_at
                         .as_deref()
                         .and_then(|created_at| created_at.parse().ok()),
-                    head_ci: pull
-                        .status_check_rollup
-                        .as_ref()
-                        .and_then(|rollup| rollup.state.as_deref())
-                        .and_then(ci_from_gh_rollup_state),
+                    head_ci,
+                    head_ci_sha: head_ci.and_then(|_| {
+                        pull.status_check_rollup
+                            .and_then(|rollup| rollup.commit)
+                            .and_then(|commit| nonempty(commit.oid))
+                    }),
                     merge_sha: merge_commit
                         .as_ref()
                         .and_then(|commit| nonempty(&commit.oid)),
@@ -1044,8 +1053,10 @@ pub(crate) fn tea_commit_status_endpoint(repo_slug: &str, branch: &str) -> Strin
     format!("repos/{repo_slug}/commits/{branch}/status")
 }
 
-/// Parse Gitea's combined commit status into the sidebar CI vocabulary.
-pub(crate) fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreeCi>, String> {
+/// Parse Gitea's combined commit status and the commit it was resolved at.
+pub(crate) fn parse_tea_combined_status(
+    raw: &str,
+) -> Result<(Option<WorktreeCi>, Option<String>), String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let object = value
         .as_object()
@@ -1061,7 +1072,8 @@ pub(crate) fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreeCi>,
             "failure" | "error" | "warning" => Some(WorktreeCi::Failing),
             _ => None,
         });
-    Ok(verdict)
+    let sha = verdict.and_then(|_| object.get("sha").and_then(Value::as_str).and_then(nonempty));
+    Ok((verdict, sha))
 }
 
 fn pr_state_from_value(value: &Value) -> Option<WorktreePrState> {

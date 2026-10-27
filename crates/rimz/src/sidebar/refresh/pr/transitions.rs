@@ -211,7 +211,13 @@ fn payload(
             payload.insert("url".to_owned(), Value::String(url.clone()));
         }
     }
-    if let Some(head) = cache.head_seen.get(path).filter(|head| !head.is_empty()) {
+    let head = match (link, signal) {
+        (Some(link), None | Some(ForgeSignal::CiPassed | ForgeSignal::CiFailed)) => {
+            link.ci_sha.as_ref()
+        }
+        _ => cache.head_seen.get(path),
+    };
+    if let Some(head) = head.filter(|head| !head.is_empty()) {
         payload.insert("head".to_owned(), Value::String(head.clone()));
         if let Some(url) = remote.and_then(|remote| remote.checks_web_url(head)) {
             payload.insert("checks_url".to_owned(), Value::String(url));
