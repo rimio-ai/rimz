@@ -100,6 +100,20 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           cargo-zigbuild check -p rimz --target aarch64-apple-darwin --locked
 
+      # The installer sends musl and ARM Linux users to cargo install. No other
+      # PR job compiles these targets, and the only other aarch64 Linux compile
+      # is GitHub's arm64 Docker image build at release; this type-checks both
+      # on every PR.
+      - name: musl linux check
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo-zigbuild check -p rimz --target x86_64-unknown-linux-musl --locked
+
+      - name: aarch64 linux check
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo-zigbuild check -p rimz --target aarch64-unknown-linux-gnu --locked
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats
