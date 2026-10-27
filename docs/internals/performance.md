@@ -103,7 +103,7 @@ This section gives each lane's cost and the bound that holds it down. Reproducib
 | Workspace fold | One enrichment per cycle; every pane projects from it by reference ([The render thread](#the-render-thread)), with no seed serialization | Host views retain the seed fold |
 | Fold observations | One focus-anchor read and one body-filter read per real cycle, shared by every attachment | The painting view applies selection, confirmation, and read intent. A live nonce comparison guards retirement ([state.md](./sidebar/state.md#focus-intent)) |
 | Pane roster (producer) | Zellij: one topology read plus a `zellij pipe` nudge. tmux: one session-wide `list-panes` call | `SNAPSHOT_CACHE_TTL` while a client drives it, `EVENT_PANE_TTL` while the presence stamp is fresh; one attempt per data tick |
-| Process metrics (producer) | A due sample reads one metrics record per process | Per-pane focused and background stamps in `lanes/metrics-sample.json`. The full process-table walk runs only on pane churn |
+| Process metrics (producer) | A due sample reads one metrics record per process | Per-pane focused, background, and [hibernated](./sidebar/state.md#cadences) stamps in `lanes/metrics-sample.json`. The full process-table walk runs only on pane churn |
 | Agent projection (producer) | Unchanged tick: metadata stamps only, no directory enumeration | One batched discovery call per kind and one wiring probe per data tick |
 
 ### The host cache refresher

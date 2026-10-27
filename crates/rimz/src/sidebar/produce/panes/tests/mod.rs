@@ -6,6 +6,67 @@ use crate::sidebar::timing::SNAPSHOT_CACHE_TTL;
 mod cache;
 mod fields;
 
+#[test]
+fn listing_identity_survives_repaired_spawn_command() {
+    let mut pane = pane("terminal_1", Some("claude"), None);
+    pane.pane_pid = Some(42);
+    let listing = frame(vec![pane]);
+    let native_tenants = HashMap::from([(first(&listing).pane_id.clone(), (42, None))]);
+    let mut repaired = listing.clone();
+    backfill_wrapper_spawn_commands(&mut repaired, &|_| Some("claude --resume old".into()));
+    assert_eq!(
+        first(&repaired).current.spawn_command.as_deref(),
+        Some("claude --resume old")
+    );
+    let requested = HashSet::from([first(&listing).pane_id.clone()]);
+    assert_eq!(
+        hibernated_panes_for(&listing, &native_tenants, &requested),
+        requested,
+        "repair metadata must not invalidate the unchanged native tenant"
+    );
+}
+
+#[test]
+fn hibernated_panes_require_native_pid_and_prior_spawn_identity() {
+    let panes: Vec<_> = (1..=4)
+        .map(|slot| {
+            let mut pane = pane(&format!("terminal_{slot}"), Some("claude"), Some("/repo"));
+            pane.pane_pid = Some(slot);
+            pane.spawn_command = Some("claude".to_owned());
+            pane.view_id = Some("tab_1".to_owned());
+            pane
+        })
+        .collect();
+    let prior = frame(panes.clone());
+    let native_tenants = prior
+        .pane_states()
+        .map(|pane| {
+            (
+                pane.pane_id.clone(),
+                (
+                    pane.current.pid.unwrap(),
+                    pane.current.spawn_command.clone(),
+                ),
+            )
+        })
+        .collect();
+    let requested: HashSet<_> = panes.iter().map(|pane| pane.pane_id.clone()).collect();
+    let mut fresh = frame(panes);
+    fresh.tabs[0].panes[1].current.pid = Some(99);
+    fresh.tabs[0].panes[2].current.pid = None;
+    fresh.tabs[0].panes[3].current.spawn_command = Some("codex".to_owned());
+    let held = hibernated_panes_for(&fresh, &native_tenants, &requested);
+    assert_eq!(
+        fresh
+            .pane_states()
+            .map(|pane| held.contains(&pane.pane_id))
+            .collect::<Vec<_>>(),
+        [true, false, false, false]
+    );
+    assert!(hibernated_panes_for(&fresh, &HashMap::new(), &requested).is_empty());
+    assert!(hibernated_panes_for(&fresh, &native_tenants, &HashSet::new()).is_empty());
+}
+
 fn frame(panes: Vec<crate::pane::PaneRef>) -> crate::sidebar::frame::PaneFrame {
     crate::sidebar::frame::assemble_frame(panes, 1, "s")
 }
@@ -219,6 +280,8 @@ fn failed_presence_attempt_stamp_suppresses_retries_until_ttl() {
         prior: Some(Arc::new(frame)),
         metrics: Default::default(),
         presence_probed_at_ms: None,
+        hibernated_panes: HashSet::new(),
+        native_tenants: HashMap::new(),
     };
     let calls = std::cell::Cell::new(0);
     for _ in 0..2 {

@@ -14,7 +14,7 @@ fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::diag::record::D
 }
 
 #[test]
-fn cached_pid_restoration_does_not_rotate_a_pidless_fresh_pane() {
+fn requested_pidless_pane_keeps_its_cached_binding_across_topology_frames() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = crate::RuntimePaths::under(
         crate::WorkspaceId::from_project_root(dir.path()),
@@ -48,6 +48,7 @@ fn cached_pid_restoration_does_not_rotate_a_pidless_fresh_pane() {
                 "sampled_at_ms": now.saturating_add(60_000),
                 "stats_pid": u32::MAX,
                 "pane_pid": u32::MAX,
+                "root_start_ticks": 700,
                 "cpu_ticks": 0,
                 "io_bytes": 0,
                 "command": "zsh"
@@ -55,6 +56,7 @@ fn cached_pid_restoration_does_not_rotate_a_pidless_fresh_pane() {
         }
     }))
     .unwrap();
+    let requested = HashSet::from([first(&prior).pane_id.clone()]);
     let mut context = FrameContext {
         runtime: &runtime,
         mux: MuxName::Zellij,
@@ -63,16 +65,28 @@ fn cached_pid_restoration_does_not_rotate_a_pidless_fresh_pane() {
         diag: &crate::diag::DiagSink::disabled(),
         metrics: &mut history,
         sampled: false,
+        hibernated_panes: &requested,
+        native_tenants: &mut HashMap::new(),
     };
-    let (fresh, _) = context.candidate(Some(&prior), true, None, false).unwrap();
-
-    assert_eq!(first(&fresh).current.pid, Some(u32::MAX));
-    assert_eq!(
-        first(&fresh).previous,
-        None,
-        "a cached pid restored after rotation is not a mux-reported tenant change"
-    );
-    assert_eq!(first(&fresh).first_seen_at_ms, Some(7));
+    for _ in 0..2 {
+        let (fresh, _) = context.candidate(Some(&prior), true, None, false).unwrap();
+        assert_eq!(first(&fresh).current.pid, Some(u32::MAX));
+        assert_eq!(
+            first(&fresh).previous,
+            None,
+            "a cached pid restored after rotation is not a mux-reported tenant change"
+        );
+        assert_eq!(first(&fresh).first_seen_at_ms, Some(7));
+        assert_eq!(
+            metrics::pane_root_bindings(context.metrics).get(&first(&fresh).pane_id),
+            Some(&metrics::PaneRootBinding {
+                pid: u32::MAX,
+                start_ticks: 700
+            }),
+            "topology checks retain the guarded binding and rate baseline"
+        );
+        assert!(!context.sampled, "a fresh binding needs no metrics walk");
+    }
 }
 
 #[test]

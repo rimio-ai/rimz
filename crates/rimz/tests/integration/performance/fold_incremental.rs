@@ -130,6 +130,7 @@ fn warm_produce_folds_o_new_bytes() {
         session_name: SESSION_NAME.to_owned(),
         exclude: None,
         min_pane_cache_ms: None,
+        hibernated_panes: Default::default(),
         diag: rimz::diag::DiagSink::disabled(),
     };
     let mut cursor = RollupCursor::new();

@@ -6,10 +6,6 @@
 
 use std::time::Duration;
 
-#[expect(
-    dead_code,
-    reason = "foundation for the following hibernated cadence lanes"
-)]
 pub(crate) const HIBERNATED_CHECK_TTL: Duration = Duration::from_secs(60);
 
 #[expect(dead_code, reason = "foundation for the following hibernated git tier")]
