@@ -875,19 +875,23 @@ fn plan_settlement(
     }
     let availability =
         crate::harness::plan::LaunchAvailability::read(runtime, paths, machine, Timestamp::now());
-    let teams_and_profiles = effective_teams_and_profiles(machine, project_root, &availability);
-    let planned = plan_recovery(
+    let (teams, profiles, subagent_profiles, warning) =
+        effective_teams_and_profiles(machine, project_root, &availability);
+    let mut planned = plan_recovery(
         projection,
         paths,
         runtime,
         &lost,
         project_root,
         machine,
-        &teams_and_profiles,
+        &(teams, profiles, subagent_profiles),
         logins,
         agent_shell,
         ambient,
     );
+    if let Some(warning) = warning {
+        planned.warnings.push(warning);
+    }
     candidates.retain(|agent| {
         !planned
             .refilled()
@@ -926,44 +930,39 @@ fn effective_teams_and_profiles(
     machine: &MachineConfig,
     project_root: &Path,
     availability: &crate::harness::plan::LaunchAvailability,
-) -> (TeamsConfig, ProfilesConfig, ProfilesConfig) {
-    match crate::config::effective::load(machine, project_root) {
-        Ok(mut launch) => {
-            if let Err(error) = launch.route(
-                &machine.tiers,
-                crate::config::effective::ProfileScope::Agents,
-                None,
-                None,
-                None,
-                None,
-                |kind, model| availability.unavailable(kind, model),
-            ) {
-                tracing::warn!(%error, "cannot route team restore profiles; recovering existing members only");
-                return (
-                    TeamsConfig::default(),
-                    machine.agents.profiles.clone(),
-                    machine.subagents.profiles.clone(),
-                );
-            }
-            (launch.teams, launch.profiles, launch.subagent_profiles)
-        }
-        Err(err) => {
-            let (config, detail) = err
-                .diagnosis()
-                .map(|diagnosis| (diagnosis.path().display().to_string(), diagnosis.summary()))
-                .unwrap_or_default();
-            tracing::warn!(
-                error = %err,
-                config = %config,
-                detail = %detail,
-                "effective agent config unavailable; recovering existing members with machine profiles only"
-            );
-            (
-                TeamsConfig::default(),
-                machine.agents.profiles.clone(),
-                machine.subagents.profiles.clone(),
-            )
-        }
+) -> (TeamsConfig, ProfilesConfig, ProfilesConfig, Option<String>) {
+    let launch = crate::config::effective::load(machine, project_root)
+        .map_err(|error| error.to_string())
+        .and_then(|mut launch| {
+            launch
+                .route(
+                    &machine.tiers,
+                    crate::config::effective::ProfileScope::Agents,
+                    None,
+                    None,
+                    None,
+                    None,
+                    |kind, model| availability.unavailable(kind, model),
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(launch)
+        });
+    match launch {
+        Ok(launch) => (
+            launch.teams,
+            launch.profiles,
+            launch.subagent_profiles,
+            None,
+        ),
+        Err(error) => (
+            TeamsConfig::default(),
+            machine.agents.profiles.clone(),
+            machine.subagents.profiles.clone(),
+            Some(format!(
+                "effective agent config unavailable: {error}; \
+                 recovery ran with machine profiles and no team definitions"
+            )),
+        ),
     }
 }
 
@@ -989,7 +988,7 @@ fn plan_recovery(
             .unwrap_or_else(crate::agents::RoomAccounts::unavailable);
     let logins = logins.unwrap_or(&recorded_logins);
     let catalog = crate::agents::LoginCatalog::room_view(&machine.accounts).0;
-    let (mut team, mut flat_agents, mut refilled) = split_team_and_flat(
+    let (mut team, mut flat_agents) = split_team_and_flat(
         &agents
             .iter()
             .filter(|agent| agent.workflow.is_none())
@@ -1007,6 +1006,7 @@ fn plan_recovery(
         false,
         &projection.agents,
         agent_liveness,
+        |name| machine.definition_failure_for(name),
     );
     let mut health = BTreeMap::new();
     let mut sandbox = None;
@@ -1084,7 +1084,7 @@ fn plan_recovery(
             .map(|error| (ResumeSkipReason::SandboxUnavailable, error.clone()))
     };
     let mut skipped = Vec::new();
-    team.retain(|planned| {
+    team.tabs.retain(|planned| {
         let problem = planned
             .layout
             .agent_cells()
@@ -1131,7 +1131,8 @@ fn plan_recovery(
             .iter()
             .filter(|agent| crate::harness::resume::planned_team_matches_agent(planned, agent))
         {
-            refilled.remove(&(agent.kind.clone(), agent.agent_id.clone()));
+            team.refilled
+                .remove(&(agent.kind.clone(), agent.agent_id.clone()));
             skipped.push((agent.clone(), reason.clone(), message.clone()));
         }
         false
@@ -1177,6 +1178,7 @@ fn plan_recovery(
         false
     });
     let team_panes = team
+        .tabs
         .iter()
         .map(|planned| planned.cohort.seeds.len())
         .sum::<usize>();
@@ -1198,7 +1200,7 @@ fn plan_recovery(
         Path::is_dir,
         resume_session_present,
     );
-    let mut plan = RecoveryPlan::new(teams.clone(), team, flat, refilled);
+    let mut plan = RecoveryPlan::new(teams.clone(), team, flat);
     for (agent, reason, message) in skipped {
         plan.skip_agent(&agent, reason, message);
     }

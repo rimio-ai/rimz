@@ -157,6 +157,114 @@ fn discovered_lane_recovers_unbacked_root_without_recorded_child() {
 }
 
 #[test]
+fn closed_lane_warns_when_its_team_cannot_restore() {
+    let (mut teams, profiles, commands) = team_configs();
+    teams.0.get_mut("forge").unwrap().roles[0].profile = "missing".into();
+    let cause = crate::harness::spec::resolve_team("forge", &teams, &profiles, &commands)
+        .unwrap_err()
+        .to_string();
+    let agents = [team_agent("claude", "planner", "planner", "/lane", 1)];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .restore(|| {
+            Ok(LaneRestoreConfig {
+                teams,
+                profiles,
+                subagent_profiles: ProfilesConfig::default(),
+                commands,
+                failed_definitions: BTreeMap::new(),
+            })
+        })
+        .run()
+        .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected closed restore");
+    };
+    assert_eq!(plan.recovery.resumed_keys().len(), 1);
+    assert_eq!(plan.warnings().len(), 1);
+    let warning = &plan.warnings()[0];
+    for expected in ["forge", "#lane", &cause, "individual sessions"] {
+        assert!(warning.contains(expected), "{warning}");
+    }
+}
+
+#[test]
+fn fresh_lane_refusal_explains_each_failed_team() {
+    let root = tempfile::tempdir().unwrap();
+    let (_, profiles, commands) = team_configs();
+    let mut machine = crate::config::MachineConfig::default();
+    machine.agents.profiles = profiles;
+    machine.agents.commands = commands;
+    for (path, message) in [
+        (
+            "/definitions/teams/forge.md",
+            "team 'forge' role 'coder' selects unknown agent 'missing'; \
+             team roles can select definitions from agents only",
+        ),
+        (
+            "/definitions/teams/forge/TEAM.md",
+            "duplicate team definition; keep one file",
+        ),
+    ] {
+        machine
+            .notices
+            .failed_definitions
+            .entry("forge".into())
+            .or_default()
+            .insert(path.into());
+        machine
+            .notices
+            .definition_errors
+            .push(crate::config::definitions::DefinitionErr {
+                path: path.into(),
+                message: message.into(),
+                cause: crate::config::definitions::DefinitionCause::Invalid,
+            });
+    }
+    let cause = machine.definition_failure_for("forge").unwrap();
+    let agents = [
+        team_agent("claude", "planner", "planner", "/lane", 1),
+        AgentState {
+            team: Some("retired".into()),
+            ..team_agent("codex", "coder", "coder", "/lane", 2)
+        },
+    ];
+    let error = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .fresh()
+        .restore(|| {
+            LaneRestoreConfig::load(&machine, root.path(), |_, _| None).map_err(|error| {
+                LaneResumeError::RestoreConfig {
+                    message: error.to_string(),
+                }
+            })
+        })
+        .run()
+        .unwrap_err()
+        .to_string();
+    for expected in [
+        &cause,
+        "no definition for team `retired`",
+        "#lane",
+        "not relaunched",
+        "rimz agents forge.planner -w lane",
+        "rimz agents retired.coder -w lane",
+    ] {
+        assert!(error.contains(expected), "{error}");
+    }
+    assert!(!error.contains("no saved team"), "{error}");
+    assert!(!error.contains("no definition for team `forge`"), "{error}");
+    assert_eq!(error.matches(&cause).count(), 1, "{error}");
+    assert!(
+        error.contains(&format!(
+            "cannot restore team `forge` in #lane: members are not relaunched\n{cause}\n\
+             cannot restore team `retired`"
+        )),
+        "{error}"
+    );
+}
+
+#[test]
 fn fresh_lane_refuses_when_no_team_can_be_restored() {
     let agents = [agent("opencode", "flat", "/lane", 1)];
     let error = LaneCase::new(LaneResumeSelector::Current, &agents)
@@ -166,7 +274,7 @@ fn fresh_lane_refuses_when_no_team_can_be_restored() {
         .expect_err("fresh needs a restorable team")
         .to_string();
     assert!(
-        error.contains("no saved team in '#lane' to relaunch fresh"),
+        error.contains("no restorable team in '#lane' to relaunch fresh"),
         "{error}"
     );
     assert!(error.contains("rimz agents opencode -w lane"), "{error}");
@@ -230,6 +338,7 @@ fn fresh_lane_rebuilds_team_and_skips_flat_roots() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                failed_definitions: BTreeMap::new(),
             })
         })
         .run()
@@ -314,6 +423,7 @@ fn fresh_lane_materializes_new_team_launches() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                failed_definitions: BTreeMap::new(),
             })
         })
         .run()
@@ -674,6 +784,7 @@ fn lane_all_closed_restores_team_first_within_the_cap() {
                     profiles,
                     subagent_profiles: ProfilesConfig::default(),
                     commands,
+                    failed_definitions: BTreeMap::new(),
                 })
             })
             .run()
@@ -731,6 +842,7 @@ fn lane_restore_gives_a_team_and_a_standalone_agent_in_one_channel_distinct_tabs
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                failed_definitions: BTreeMap::new(),
             })
         })
         .run()
@@ -765,6 +877,7 @@ fn lane_all_closed_drops_launched_children_of_team_and_flat_roots() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                failed_definitions: BTreeMap::new(),
             })
         })
         .run()
@@ -965,6 +1078,7 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                failed_definitions: BTreeMap::new(),
             })
         })
         .run()
@@ -1048,7 +1162,7 @@ fn recovery_plan_sorts_equal_freshness_by_label() {
         |_| true,
         |_| true,
     );
-    let mut recovery = RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat, BTreeSet::new());
+    let mut recovery = RecoveryPlan::new(TeamsConfig::default(), TeamRestorePlan::default(), flat);
     recovery.sort_by_freshness();
 
     assert_eq!(recovery.labels(), ["#alpha", "#zed"]);

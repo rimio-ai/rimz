@@ -561,8 +561,157 @@ fn live_replacements_settle_only_the_seats_they_fill() {
 }
 
 #[test]
+fn rebirth_reports_a_failed_team_only_when_recovering() {
+    for disposition in [
+        RebirthDisposition::RecoverKeep,
+        RebirthDisposition::RecoverDrop,
+        RebirthDisposition::Defer,
+        RebirthDisposition::Decline,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("forge");
+        let fixture = Fixture::new(&[("planner", &worktree, true)]);
+        fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+        fixture.conversation("planner");
+        let mut machine = team_machine();
+        machine.agents.teams.0.get_mut("forge").unwrap().roles[0].profile = "missing".into();
+        let cause = crate::harness::spec::resolve_team(
+            "forge",
+            &machine.agents.teams,
+            &machine.agents.profiles,
+            &machine.agents.commands,
+        )
+        .unwrap_err()
+        .to_string();
+        let plan = fixture.inspect_with(&machine, false);
+        assert_eq!(plan.preview().pane_count(), 1);
+        assert_eq!(plan.planned.warnings.len(), 1);
+        let warning = plan.planned.warnings[0].clone();
+        for expected in ["forge", "#forge", &cause, "individual sessions"] {
+            assert!(warning.contains(expected), "{warning}");
+        }
+        assert!(
+            !warning.contains(fixture.ambient["HOME"].as_str()),
+            "{warning}"
+        );
+        let resume = materialize(plan, disposition, "rimz-test");
+        if disposition.recovers() {
+            assert_eq!(resume.warnings, [warning]);
+            assert_eq!(resume.tabs.len(), 1);
+        } else {
+            assert!(resume.warnings.is_empty());
+            assert!(resume.tabs.is_empty());
+        }
+    }
+}
+
+#[test]
+fn rebirth_reports_failed_team_definitions_even_with_config_fallback() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for config_fallback in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("forge");
+        let fixture = Fixture::new(&[("planner", &worktree, true)]);
+        fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+        fixture.conversation("planner");
+        let mut machine = team_machine();
+        machine.agents.teams.0.remove("forge");
+        for (path, message) in [
+            (
+                "/definitions/teams/forge.md",
+                "team 'forge' role 'coder' selects unknown agent 'missing'; \
+                 team roles can select definitions from agents only",
+            ),
+            (
+                "/definitions/teams/forge/TEAM.md",
+                "duplicate team definition; keep one file",
+            ),
+        ] {
+            machine
+                .notices
+                .failed_definitions
+                .entry("forge".into())
+                .or_default()
+                .insert(path.into());
+            machine
+                .notices
+                .definition_errors
+                .push(crate::config::definitions::DefinitionErr {
+                    path: path.into(),
+                    message: message.into(),
+                    cause: crate::config::definitions::DefinitionCause::Invalid,
+                });
+        }
+        if config_fallback {
+            std::fs::create_dir_all(fixture.project.join(".rimz")).unwrap();
+            std::fs::write(fixture.project.join(".rimz/config.toml"), "[tiers]\n").unwrap();
+        }
+        let cause = machine.definition_failure_for("forge").unwrap();
+        let plan = fixture.inspect_with(&machine, false);
+        assert_eq!(plan.preview().pane_count(), 1);
+        let warning = format!(
+            "cannot restore team `forge` in #forge: members resume as individual sessions \
+             without the team's layout and prompt layers\n{cause}"
+        );
+        let mut expected_warnings = vec![warning];
+        if config_fallback {
+            let error = crate::config::effective::load(&machine, &fixture.project)
+                .err()
+                .unwrap();
+            expected_warnings.push(format!(
+                "effective agent config unavailable: {error}; \
+                 recovery ran with machine profiles and no team definitions"
+            ));
+        }
+        let warnings = plan.planned.warnings.clone();
+        let resume = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
+        actual.push((warnings, resume.warnings, resume.tabs.len()));
+        expected.push((expected_warnings.clone(), expected_warnings, 1));
+    }
+    assert_eq!(actual, expected);
+    assert!(actual.iter().all(|(warnings, _, _)| {
+        warnings
+            .iter()
+            .all(|warning| !warning.contains("no definition"))
+    }));
+}
+
+#[test]
+fn rebirth_warns_when_a_team_tab_cannot_materialize() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("forge");
+    let fixture = Fixture::new(&[("planner", &worktree, true)]);
+    fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+    fixture.conversation("planner");
+    std::fs::create_dir_all(worktree.join(".rimz/team")).unwrap();
+    let mut machine = team_machine();
+    machine.agents.teams.0.get_mut("forge").unwrap().roles[0].owns = vec!["Plan".into()];
+    let plan = fixture.inspect_with(&machine, false);
+    assert_eq!(plan.preview().pane_count(), 2);
+    assert!(plan.planned.warnings.is_empty());
+    let resume = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
+    assert!(resume.tabs.is_empty());
+    assert_eq!(resume.warnings.len(), 1);
+    let warning = &resume.warnings[0];
+    for expected in [
+        "forge",
+        "#forge",
+        "cannot link team notes",
+        "move the existing file or directory aside",
+    ] {
+        assert!(warning.contains(expected), "{warning}");
+    }
+    assert!(pending(&fixture).contains(&key("planner")));
+}
+
+#[test]
 fn invalid_effective_config_keeps_flat_recovery_without_fresh_team_seats() {
-    let fixture = Fixture::new(&[]);
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("forge");
+    let fixture = Fixture::new(&[("planner", &worktree, true)]);
+    fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+    fixture.conversation("planner");
     std::fs::create_dir_all(fixture.project.join(".rimz")).unwrap();
     std::fs::write(fixture.project.join(".rimz/config.toml"), "[tiers]\n").unwrap();
     let machine = team_machine();
@@ -572,13 +721,24 @@ fn invalid_effective_config_keeps_flat_recovery_without_fresh_team_seats() {
         &machine,
         Timestamp::UNIX_EPOCH,
     );
-    let (teams, profiles, _) =
+    let (teams, profiles, _, _) =
         effective_teams_and_profiles(&machine, &fixture.project, &availability);
     assert!(
         teams.0.is_empty(),
         "an unrouted fresh seat must not be planned"
     );
     assert_eq!(profiles.0.len(), machine.agents.profiles.0.len());
+    let cause = crate::config::effective::load(&machine, &fixture.project)
+        .err()
+        .unwrap()
+        .to_string();
+    let plan = fixture.inspect_with(&machine, false);
+    assert_eq!(plan.preview().pane_count(), 1);
+    let warnings = plan.planned.warnings.join("\n");
+    assert_eq!(warnings.matches(&cause).count(), 1, "{warnings}");
+    for expected in ["machine profiles", "no team definitions", "forge", "#forge"] {
+        assert!(warnings.contains(expected), "{warnings}");
+    }
 }
 
 struct Fixture {

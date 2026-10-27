@@ -63,6 +63,7 @@ pub struct LaneRestoreConfig {
     pub profiles: ProfilesConfig,
     pub subagent_profiles: ProfilesConfig,
     pub commands: CommandsConfig,
+    failed_definitions: BTreeMap<String, String>,
 }
 
 impl LaneRestoreConfig {
@@ -87,6 +88,16 @@ impl LaneRestoreConfig {
             profiles: launch.profiles,
             subagent_profiles: launch.subagent_profiles,
             commands: machine.agents.commands.clone(),
+            failed_definitions: machine
+                .notices
+                .failed_definitions
+                .keys()
+                .filter_map(|name| {
+                    machine
+                        .definition_failure_for(name)
+                        .map(|detail| (name.clone(), detail))
+                })
+                .collect(),
         })
     }
 }
@@ -161,8 +172,16 @@ pub enum LaneResumeError {
         "no saved team shape in '{scope}'; resume without --fresh, or launch with rimz agents <spec> -w {worktree}"
     )]
     FreshNoShape { scope: String, worktree: String },
-    #[error("no saved team in '{scope}' to relaunch fresh; launch with:\n{commands}", commands = .specs.join("\n"))]
-    FreshNoTeam { scope: String, specs: Vec<String> },
+    #[error(
+        "no restorable team in '{scope}' to relaunch fresh{notices}\nlaunch with:\n{commands}",
+        notices = .warnings.iter().map(|warning| format!("\n{warning}")).collect::<String>(),
+        commands = .specs.join("\n")
+    )]
+    FreshNoTeam {
+        scope: String,
+        specs: Vec<String>,
+        warnings: Vec<String>,
+    },
     #[error("live lane has no focus candidate")]
     LiveNoFocus,
     #[error("live lane agent has no bound pane")]
@@ -186,7 +205,7 @@ impl LaneRestorePlan {
         &self.recovery.skipped
     }
 
-    /// Members coming back bare because their profile no longer resolves.
+    /// Profile and team degradations reported before materialization.
     pub fn warnings(&self) -> &[String] {
         &self.recovery.warnings
     }
@@ -669,8 +688,7 @@ pub struct ResumePlan {
     /// Candidates whose worktree disappeared; the caller records these as
     /// durable end traces so they leave the next resume candidate set.
     pub agents_to_end: Vec<(AgentKind, AgentSessionId)>,
-    /// Sessions that came back bare because their profile no longer resolves.
-    /// The caller prints these; the resume itself succeeded.
+    /// Recovery degradations and failed team or tab restores for the caller to report.
     pub warnings: Vec<String>,
 }
 
@@ -700,6 +718,13 @@ pub(super) struct PlannedTeamTab {
     pub layout: LayoutSpec,
     pub cohort: CohortResumePlan,
     pub freshest: Timestamp,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct TeamRestorePlan {
+    pub(super) tabs: Vec<PlannedTeamTab>,
+    pub(super) refilled: BTreeSet<(AgentKind, AgentSessionId)>,
+    pub(super) warnings: Vec<String>,
 }
 
 /// Why explicit cohort resume cannot proceed.
@@ -848,17 +873,18 @@ impl RecoveryPlan {
         self.warnings.push(message);
     }
 
-    pub(super) fn new(
-        teams: TeamsConfig,
-        team: Vec<PlannedTeamTab>,
-        flat: DetailedResumePlan,
-        refilled: BTreeSet<(AgentKind, AgentSessionId)>,
-    ) -> Self {
+    pub(super) fn new(teams: TeamsConfig, team: TeamRestorePlan, flat: DetailedResumePlan) -> Self {
         let mut warnings = flat.warnings;
-        warnings.extend(team.iter().flat_map(|tab| tab.warnings.iter().cloned()));
+        warnings.extend(team.warnings);
+        warnings.extend(
+            team.tabs
+                .iter()
+                .flat_map(|tab| tab.warnings.iter().cloned()),
+        );
         let mut flat_tabs = flat.tabs;
-        disambiguate_flat_labels_from_teams(&team, &mut flat_tabs);
+        disambiguate_flat_labels_from_teams(&team.tabs, &mut flat_tabs);
         let mut entries = team
+            .tabs
             .into_iter()
             .map(RecoveryEntry::Team)
             .collect::<Vec<_>>();
@@ -871,7 +897,7 @@ impl RecoveryPlan {
             warnings,
             agents_to_end: flat.agents_to_end,
             base_resumed: flat.resumed,
-            refilled,
+            refilled: team.refilled,
         }
     }
 
@@ -975,7 +1001,16 @@ impl RecoveryPlan {
                                 return Err(err);
                             }
                             RecoveryMaterializer::BestEffort { workspace_id, .. } => {
-                                tracing::warn!(workspace = %workspace_id, team = %planned.team, error = %err, "team resume materialization skipped");
+                                tracing::debug!(
+                                    workspace = %workspace_id,
+                                    team = %planned.team,
+                                    error = %err,
+                                    "team resume materialization skipped"
+                                );
+                                resume.warnings.push(format!(
+                                    "could not restore team `{}` in {}: {err}",
+                                    planned.team, planned.label
+                                ));
                             }
                         },
                     }
@@ -1574,7 +1609,7 @@ fn plan_discovered_lane(
         lane_label: lane.display.clone(),
         cwd: lane.path.clone(),
         plan: LaneRestorePlan {
-            recovery: RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat, BTreeSet::new()),
+            recovery: RecoveryPlan::new(TeamsConfig::default(), TeamRestorePlan::default(), flat),
             discovery_skipped,
             preflight_kinds,
         },
@@ -1651,7 +1686,7 @@ fn plan_closed_lane(
     restore: LaneRestoreConfig,
     liveness: impl Fn(&AgentState) -> AgentLiveness,
 ) -> Result<LaneResumeAction, LaneResumeError> {
-    let (team, flat_agents, refilled) = split_team_and_flat(
+    let (team, flat_agents) = split_team_and_flat(
         &closed,
         request.logins,
         request.catalog,
@@ -1665,8 +1700,10 @@ fn plan_closed_lane(
         request.fresh,
         request.agents,
         liveness,
+        |name| restore.failed_definitions.get(name).cloned(),
     );
     let team_panes = team
+        .tabs
         .iter()
         .map(|planned| planned.cohort.seeds.len())
         .sum::<usize>();
@@ -1717,9 +1754,10 @@ fn plan_closed_lane(
             &session_backed,
         )
     };
-    if request.fresh && team.is_empty() {
+    if request.fresh && team.tabs.is_empty() {
         return Err(LaneResumeError::FreshNoTeam {
             scope: lane.display,
+            warnings: team.warnings,
             specs: flat
                 .skipped
                 .iter()
@@ -1730,12 +1768,13 @@ fn plan_closed_lane(
                 .collect(),
         });
     }
-    if team.is_empty() && flat.tabs.is_empty() {
+    if team.tabs.is_empty() && flat.tabs.is_empty() {
         return Err(LaneResumeError::Nothing {
             scope: lane.display,
         });
     }
     let mut preflight_kinds = team
+        .tabs
         .iter()
         .flat_map(|planned| planned.layout.agent_kinds())
         .map(AgentKind::new_unchecked)
@@ -1745,7 +1784,7 @@ fn plan_closed_lane(
         lane_label: lane.display,
         cwd: lane.path,
         plan: LaneRestorePlan {
-            recovery: RecoveryPlan::new(restore.teams, team, flat, refilled),
+            recovery: RecoveryPlan::new(restore.teams, team, flat),
             discovery_skipped: Vec::new(),
             preflight_kinds,
         },
@@ -1943,7 +1982,8 @@ fn plan_team_restore_tabs(
     fresh: bool,
     roster: &[AgentState],
     liveness: impl Fn(&AgentState) -> AgentLiveness,
-) -> (Vec<PlannedTeamTab>, BTreeSet<(AgentKind, AgentSessionId)>) {
+    definition_failure_for: impl Fn(&str) -> Option<String>,
+) -> TeamRestorePlan {
     let mut groups: BTreeMap<(String, PathBuf), Vec<&AgentState>> = BTreeMap::new();
     for agent in agents {
         if !root_session(agent) {
@@ -1952,9 +1992,6 @@ fn plan_team_restore_tabs(
         let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
             continue;
         };
-        if !teams.0.contains_key(team) {
-            continue;
-        }
         let Some(worktree) = normalized_agent_worktree(agent) else {
             continue;
         };
@@ -1964,12 +2001,38 @@ fn plan_team_restore_tabs(
             .push(agent);
     }
 
-    let mut tabs = Vec::new();
-    let mut refilled = BTreeSet::new();
+    let mut plan = TeamRestorePlan::default();
     for ((team, cwd), group) in groups {
-        let Ok(mut layout) = crate::harness::spec::resolve_team(&team, teams, profiles, commands)
-        else {
+        let Some(newest) = newest_agent(&group) else {
             continue;
+        };
+        let failure_warning = |reason: String| {
+            let label = channel_label(newest.channel().as_deref(), &cwd);
+            let consequence = if fresh {
+                "members are not relaunched"
+            } else {
+                "members resume as individual sessions without the team's layout and prompt layers"
+            };
+            if reason.contains('\n') {
+                format!("cannot restore team `{team}` in {label}: {consequence}\n{reason}")
+            } else {
+                format!("cannot restore team `{team}` in {label}: {reason}; {consequence}")
+            }
+        };
+        let layout = if teams.0.contains_key(&team) {
+            crate::harness::spec::resolve_team(&team, teams, profiles, commands)
+                .map_err(|error| error.to_string())
+        } else {
+            Err(definition_failure_for(&team).unwrap_or_else(|| {
+                format!("the config read for recovery has no definition for team `{team}`")
+            }))
+        };
+        let mut layout = match layout {
+            Ok(layout) => layout,
+            Err(reason) => {
+                plan.warnings.push(failure_warning(reason));
+                continue;
+            }
         };
         let cells = cohort_cells(&layout);
         let present = roster
@@ -1993,14 +2056,12 @@ fn plan_team_restore_tabs(
                 if live.is_some()
                     && let Some(agent) = parked
                 {
-                    refilled.insert((agent.kind.clone(), agent.agent_id.clone()));
+                    plan.refilled
+                        .insert((agent.kind.clone(), agent.agent_id.clone()));
                 }
             }
             continue;
         }
-        let Some(newest) = newest_agent(&group) else {
-            continue;
-        };
         let mut cohort = if fresh {
             fresh_cohort_plan(&cells, &team, newest, &cwd, newest.channel())
         } else {
@@ -2021,7 +2082,7 @@ fn plan_team_restore_tabs(
             };
             cohort
         };
-        // Failed stamped renders fall through to flat recovery, which reports the degradation and keeps the stored provider.
+        // Failed stamped renders leave the cohort to flat recovery with its stored providers.
         let warnings = match restore_routed_cells(
             &mut layout,
             &cohort.seeds,
@@ -2036,7 +2097,7 @@ fn plan_team_restore_tabs(
                 .map(|warning| warning.to_string())
                 .collect(),
             Err(reason) => {
-                tracing::warn!(%reason, "team restore is falling back to individual sessions");
+                plan.warnings.push(failure_warning(reason.to_string()));
                 continue;
             }
         };
@@ -2053,7 +2114,7 @@ fn plan_team_restore_tabs(
         cohort.channel = channel.clone();
         let label = channel_label(channel.as_deref(), &cwd);
         let env = tab_pin_env(workspace_id, project_root, &cwd, channel.as_deref());
-        tabs.push(PlannedTeamTab {
+        plan.tabs.push(PlannedTeamTab {
             warnings,
             label,
             cwd,
@@ -2065,8 +2126,9 @@ fn plan_team_restore_tabs(
             freshest: newest.last_activity,
         });
     }
-    tabs.sort_by(|a, b| newest_cmp(a.freshest, &a.team, b.freshest, &b.team));
-    (tabs, refilled)
+    plan.tabs
+        .sort_by(|a, b| newest_cmp(a.freshest, &a.team, b.freshest, &b.team));
+    plan
 }
 
 /// Partition agents into planned named-team tabs and flat resume candidates.
@@ -2088,12 +2150,9 @@ pub(super) fn split_team_and_flat(
     fresh: bool,
     roster: &[AgentState],
     liveness: impl Fn(&AgentState) -> AgentLiveness,
-) -> (
-    Vec<PlannedTeamTab>,
-    Vec<AgentState>,
-    BTreeSet<(AgentKind, AgentSessionId)>,
-) {
-    let (team, refilled) = plan_team_restore_tabs(
+    definition_failure_for: impl Fn(&str) -> Option<String>,
+) -> (TeamRestorePlan, Vec<AgentState>) {
+    let team = plan_team_restore_tabs(
         agents,
         logins,
         catalog,
@@ -2107,18 +2166,22 @@ pub(super) fn split_team_and_flat(
         fresh,
         roster,
         liveness,
+        definition_failure_for,
     );
     let flat = agents
         .iter()
         .filter(|agent| {
-            !refilled.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+            !team
+                .refilled
+                .contains(&(agent.kind.clone(), agent.agent_id.clone()))
                 && !team
+                    .tabs
                     .iter()
                     .any(|planned| planned_team_matches_agent(planned, agent))
         })
         .cloned()
         .collect();
-    (team, flat, refilled)
+    (team, flat)
 }
 
 pub(super) fn planned_team_matches_agent(planned: &PlannedTeamTab, agent: &AgentState) -> bool {
