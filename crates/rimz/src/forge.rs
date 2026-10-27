@@ -602,7 +602,7 @@ pub(crate) fn github_bulk_query(
             graphql_string(branch)
         ));
         fields.push(format!(
-            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable isCrossRepository baseRef {{ name compare(headRef: {}) {{ behindBy }} }} mergeQueueEntry {{ enqueuedAt }} timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {{ nodes {{ ... on RemovedFromMergeQueueEvent {{ createdAt reason beforeCommit {{ oid }} }} }} }} }} }}",
+            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable isCrossRepository baseRef {{ name compare(headRef: {}) {{ behindBy }} }} mergeQueueEntry {{ enqueuedAt }} autoMergeRequest {{ enabledAt }} timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {{ nodes {{ ... on RemovedFromMergeQueueEvent {{ createdAt reason beforeCommit {{ oid }} }} }} }} }} }}",
             graphql_string(branch),
             graphql_string(branch)
         ));
@@ -665,6 +665,8 @@ pub(crate) fn parse_github_bulk_response(
         #[serde(default)]
         merge_queue_entry: Option<QueueEntry>,
         #[serde(default)]
+        auto_merge_request: Option<AutoMergeRequest>,
+        #[serde(default)]
         timeline_items: Option<QueueRemovals>,
     }
 
@@ -672,6 +674,12 @@ pub(crate) fn parse_github_bulk_response(
     #[serde(rename_all = "camelCase")]
     struct QueueEntry {
         enqueued_at: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AutoMergeRequest {
+        enabled_at: Option<String>,
     }
 
     #[derive(Deserialize)]
@@ -762,9 +770,13 @@ pub(crate) fn parse_github_bulk_response(
         }) else {
             return Err("github GraphQL response contains errors".to_owned());
         };
-        // A nulled queue field would read as "not queued" and surface a stale removal.
-        let queue_field =
-            |segment: &Value| matches!(segment.as_str(), Some("mergeQueueEntry" | "timelineItems"));
+        // A nulled entry or re-arm request would surface a stale removal.
+        let queue_field = |segment: &Value| {
+            matches!(
+                segment.as_str(),
+                Some("mergeQueueEntry" | "autoMergeRequest" | "timelineItems")
+            )
+        };
         if path.is_some_and(|path| path.iter().any(queue_field)) {
             return Err("github GraphQL response has a merge-queue field error".to_owned());
         }
@@ -846,6 +858,10 @@ pub(crate) fn parse_github_bulk_response(
                 "CONFLICTING" => Some(pr_state::SettledMergeability::Conflicting(head.clone())),
                 _ => None,
             };
+            let enabled_at = facts
+                .auto_merge_request
+                .and_then(|request| request.enabled_at)
+                .and_then(|at| at.parse::<jiff::Timestamp>().ok());
             let queue = match facts.merge_queue_entry {
                 Some(entry) => Some(pr_state::PrQueueFact::Queued {
                     at: entry.enqueued_at,
@@ -857,8 +873,17 @@ pub(crate) fn parse_github_bulk_response(
                     // A removal by merge belongs to `pr.merged`, even while the PR still reads open.
                     .filter(|removal| removal.reason.as_deref() != Some("merged"))
                     .and_then(|removal| {
+                        let at = removal.created_at?;
+                        // An auto-merge request enabled since re-armed the PR.
+                        if let Some(enabled_at) = enabled_at
+                            && at
+                                .parse::<jiff::Timestamp>()
+                                .is_ok_and(|removed_at| enabled_at > removed_at)
+                        {
+                            return None;
+                        }
                         Some(pr_state::PrQueueFact::Dequeued {
-                            at: removal.created_at?,
+                            at,
                             reason: removal.reason,
                             commit: removal.before_commit.and_then(|commit| nonempty(commit.oid)),
                         })
