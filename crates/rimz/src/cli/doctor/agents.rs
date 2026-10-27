@@ -740,6 +740,35 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
     )
 }
 
+pub(super) fn collect_prompt_cache_fallback(
+    hooks: &[HookRow],
+    harness: &rimz::config::HarnessConfig,
+) -> super::model::PromptCacheFallback {
+    use rimz::agents::context::SignIn;
+    use rimz::config::LifetimeSource;
+    use rimz::ids::AgentKind;
+
+    let ttl = harness.fallback_lifetime().map_or_else(
+        || "off".to_owned(),
+        rimz::utils::time::format_duration_compact,
+    );
+    let mut kinds: Vec<_> = hooks
+        .iter()
+        .filter(|row| row.detected)
+        .filter(|row| {
+            let kind = AgentKind::new_unchecked(&row.kind);
+            [None, Some(SignIn::Subscription), Some(SignIn::ApiKey)]
+                .into_iter()
+                .any(|sign_in| {
+                    harness.configured_lifetime(&kind, sign_in).source == LifetimeSource::Fallback
+                })
+        })
+        .map(|row| row.kind.clone())
+        .collect();
+    kinds.sort_unstable();
+    super::model::PromptCacheFallback { ttl, kinds }
+}
+
 pub(super) fn collect_plugins() -> Vec<PluginRow> {
     rimz::agents::plugins::loaded()
         .diagnostics
@@ -786,6 +815,49 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_cache_fallback_lists_detected_kinds_using_any_sign_in_mode() {
+        let hooks: Vec<_> = ["custom", "codex", "amp", "claude", "gemini"]
+            .map(|kind| HookRow {
+                kind: kind.into(),
+                detected: kind != "gemini",
+                status: HookStatus::Installed,
+            })
+            .into();
+        let actual: Vec<_> = [
+            ("", "1h", vec!["amp", "custom"]),
+            ("[prompt_cache_ttl]\namp = 'off'", "1h", vec!["custom"]),
+            (
+                "[prompt_cache_ttl]\namp = {subscription = '2h', api-key = '3h'}",
+                "1h",
+                vec!["amp", "custom"],
+            ),
+            (
+                "[prompt_cache_ttl]\nfallback = 'off'",
+                "off",
+                vec!["amp", "custom"],
+            ),
+            (
+                "[prompt_cache_ttl]\nfallback = '2h'",
+                "2h",
+                vec!["amp", "custom"],
+            ),
+        ]
+        .map(|(config, ttl, kinds)| {
+            let harness = toml::from_str(config).unwrap();
+            let summary = collect_prompt_cache_fallback(&hooks, &harness);
+            let empty = collect_prompt_cache_fallback(&[], &harness);
+            (
+                serde_json::to_value(summary).unwrap()
+                    == serde_json::json!({"ttl": ttl, "kinds": kinds}),
+                serde_json::to_value(empty).unwrap()
+                    == serde_json::json!({"ttl": ttl, "kinds": []}),
+            )
+        })
+        .into();
+        assert_eq!(actual, [(true, true); 5]);
+    }
 
     #[test]
     fn account_config_remedies_are_separate_from_the_wire_problem() {

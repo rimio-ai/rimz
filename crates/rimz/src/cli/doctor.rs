@@ -143,6 +143,9 @@ fn collect_report(
             ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at))
         });
         let (accounts, agents) = collected(accounts);
+        let hooks = collected(hooks);
+        let prompt_cache_fallback =
+            agents::collect_prompt_cache_fallback(&hooks, &crate::cli::machine_config().harness);
         DoctorReport {
             schema: "rimz.doctor.v1",
             audit,
@@ -161,7 +164,8 @@ fn collect_report(
             machine_config: collected(machine_config),
             sandbox: collected(sandbox),
             hibernate: collected(hibernate),
-            hooks: collected(hooks),
+            hooks,
+            prompt_cache_fallback,
             accounts,
             plugins: collected(plugins),
             loop_tasks: collected(loop_tasks),

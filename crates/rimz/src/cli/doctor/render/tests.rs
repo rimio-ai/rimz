@@ -710,6 +710,10 @@ fn report_fixture() -> DoctorReport {
             ),
         },
         hooks: Vec::new(),
+        prompt_cache_fallback: super::super::model::PromptCacheFallback {
+            ttl: "1h".into(),
+            kinds: Vec::new(),
+        },
         accounts: Probe::Ready(Accounts { rows: Vec::new() }),
         plugins: Vec::new(),
         loop_tasks: LoopTasks {
@@ -834,6 +838,34 @@ fn terminal_section_renders_depth_signals_and_fix() {
         out.contains("mode = \"truecolor\""),
         "fix command is present:\n{out}"
     );
+}
+
+#[test]
+fn prompt_cache_fallback_is_always_json_and_uncounted_context_when_nonempty() {
+    let mut actual = Vec::new();
+    for ttl in ["1h", "off"] {
+        for kinds in [Vec::<String>::new(), vec!["amp".into(), "pi".into()]] {
+            let mut report = report_fixture();
+            report.prompt_cache_fallback = super::super::model::PromptCacheFallback {
+                ttl: ttl.into(),
+                kinds: kinds.clone(),
+            };
+            let json = serde_json::to_value(&report).unwrap();
+            let mut tally = Tally::default();
+            let text = strip(|w| render_hooks(w, &report, &mut tally));
+            actual.push((
+                json["prompt_cache_fallback"] == serde_json::json!({"ttl": ttl, "kinds": kinds}),
+                json["schema"] == "rimz.doctor.v1",
+                text.contains("prompt-cache fallback") == !kinds.is_empty(),
+                kinds.is_empty()
+                    || (text.contains(ttl)
+                        && text.contains("amp, pi")
+                        && text.contains("[harness.prompt_cache_ttl]")),
+                tally.warns.is_empty() && tally.alarms.is_empty(),
+            ));
+        }
+    }
+    assert_eq!(actual, [(true, true, true, true, true); 4]);
 }
 
 #[test]
