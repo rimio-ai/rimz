@@ -511,7 +511,7 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
     );
     assert_eq!(query.matches("pullRequests(").count(), 4);
     assert_eq!(query.matches(": object(").count(), 2);
-    let queue_fields = "mergeQueueEntry { enqueuedAt } timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { nodes { ... on RemovedFromMergeQueueEvent { createdAt reason beforeCommit { oid } } } }";
+    let queue_fields = "mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt } timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { nodes { ... on RemovedFromMergeQueueEvent { createdAt reason beforeCommit { oid } } } }";
     let facts = query.split("facts").skip(1).map(|alias| {
         alias
             .split(" pr1:")
@@ -545,12 +545,13 @@ fn parses_github_merge_queue_facts() {
         at: "2026-10-03T12:28:46Z".into(),
     });
     let entry = json!({"enqueuedAt": "2026-10-03T12:28:46Z"});
-    for (label, queue_entry, timeline, expected) in [
-        ("absent fields", None, None, None),
+    for (label, queue_entry, timeline, request, expected) in [
+        ("absent fields", None, None, None, None),
         (
             "never queued",
             Some(json!(null)),
             Some(json!({"nodes": []})),
+            None,
             None,
         ),
         (
@@ -558,47 +559,129 @@ fn parses_github_merge_queue_facts() {
             Some(json!(null)),
             Some(json!({"nodes": null})),
             None,
+            None,
         ),
         (
             "queued",
             Some(entry.clone()),
             Some(json!({"nodes": []})),
+            None,
             queued.clone(),
         ),
         (
             "re-queued after a removal",
-            Some(entry),
+            Some(entry.clone()),
             Some(removal(json!("failed_checks"), json!({"oid": "queue-a"}))),
-            queued,
+            None,
+            queued.clone(),
         ),
         (
             "failed checks",
             Some(json!(null)),
             Some(removal(json!("failed_checks"), json!({"oid": "queue-a"}))),
+            None,
             dequeued(Some("failed_checks"), Some("queue-a")),
         ),
         (
             "manual",
             Some(json!(null)),
             Some(removal(json!("manual"), json!(null))),
+            None,
             dequeued(Some("manual"), None),
         ),
         (
             "a reason this build has never seen",
             Some(json!(null)),
             Some(removal(json!("queue_cleared"), json!(null))),
+            None,
             dequeued(Some("queue_cleared"), None),
         ),
         (
             "no reason",
             Some(json!(null)),
             Some(removal(json!(null), json!(null))),
+            None,
             dequeued(None, None),
         ),
         (
             "merged",
             Some(json!(null)),
             Some(removal(json!("merged"), json!({"oid": "queue-a"}))),
+            None,
+            None,
+        ),
+        (
+            "request enabled before removal",
+            None,
+            Some(removal(json!("failed_checks"), json!(null))),
+            Some(json!({"enabledAt": "2026-10-03T12:46:02Z"})),
+            dequeued(Some("failed_checks"), None),
+        ),
+        (
+            "request enabled at removal",
+            None,
+            Some(removal(json!("failed_checks"), json!(null))),
+            Some(json!({"enabledAt": "2026-10-03T12:46:03Z"})),
+            dequeued(Some("failed_checks"), None),
+        ),
+        (
+            "request with null enabledAt",
+            None,
+            Some(removal(json!("failed_checks"), json!(null))),
+            Some(json!({"enabledAt": null})),
+            dequeued(Some("failed_checks"), None),
+        ),
+        (
+            "request without enabledAt",
+            None,
+            Some(removal(json!("failed_checks"), json!(null))),
+            Some(json!({})),
+            dequeued(Some("failed_checks"), None),
+        ),
+        (
+            "request with unparseable enabledAt",
+            None,
+            Some(removal(json!("failed_checks"), json!(null))),
+            Some(json!({"enabledAt": "not a timestamp"})),
+            dequeued(Some("failed_checks"), None),
+        ),
+        (
+            "removal with unparseable createdAt",
+            None,
+            Some(json!({"nodes": [{"createdAt": "not a timestamp", "reason": "failed_checks"}]})),
+            Some(json!({"enabledAt": "2026-10-03T12:46:04Z"})),
+            Some(PrQueueFact::Dequeued {
+                at: "not a timestamp".into(),
+                reason: Some("failed_checks".into()),
+                commit: None,
+            }),
+        ),
+        (
+            "queue entry takes precedence over request",
+            Some(entry),
+            Some(removal(json!("failed_checks"), json!(null))),
+            Some(json!({"enabledAt": "2026-10-03T12:46:04Z"})),
+            queued,
+        ),
+        (
+            "request without removal",
+            None,
+            None,
+            Some(json!({"enabledAt": "2026-10-03T12:46:04Z"})),
+            None,
+        ),
+        (
+            "merged removal followed by request",
+            None,
+            Some(removal(json!("merged"), json!(null))),
+            Some(json!({"enabledAt": "2026-10-03T12:46:04Z"})),
+            None,
+        ),
+        (
+            "re-armed after failed checks",
+            None,
+            Some(removal(json!("failed_checks"), json!({"oid": "queue-a"}))),
+            Some(json!({"enabledAt": "2026-10-03T12:46:04Z"})),
             None,
         ),
     ] {
@@ -609,6 +692,9 @@ fn parses_github_merge_queue_facts() {
         }
         if let Some(timeline) = timeline {
             facts["timelineItems"] = timeline;
+        }
+        if let Some(request) = request {
+            facts["autoMergeRequest"] = request;
         }
         let raw = json!({"data": {"repository": {
             "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
@@ -754,6 +840,15 @@ fn github_queue_field_errors_fail_the_probe() {
             0,
             "mergeQueueEntry",
             "enqueuedAt"
+        ]),
+        json!(["repository", "facts0", "nodes", 0, "autoMergeRequest"]),
+        json!([
+            "repository",
+            "facts0",
+            "nodes",
+            0,
+            "autoMergeRequest",
+            "enabledAt"
         ]),
         json!(["repository", "facts0", "nodes", 0, "timelineItems"]),
         json!([

@@ -172,7 +172,7 @@ fn queue_signals_follow_enqueue_and_removal_timestamps() {
     ] {
         let mut prior = pr_cache(WorktreePrState::Open, None);
         for (entry, removed, expected) in sequence {
-            let next = queue_reading(&prior, "head-a", entry, removed.clone());
+            let next = queue_reading(&prior, "head-a", entry, removed.clone(), None);
             assert_eq!(
                 signal_names(&production_transitions(&prior, &next)),
                 expected,
@@ -184,14 +184,112 @@ fn queue_signals_follow_enqueue_and_removal_timestamps() {
 }
 
 #[test]
+fn rearming_a_removed_pr_clears_the_queue_fact_until_it_is_queued_again() {
+    let failed = || removal(REMOVED, "failed_checks", Some("queue-a"));
+    let dequeued = Some(PrQueueFact::Dequeued {
+        at: REMOVED.into(),
+        reason: Some("failed_checks".into()),
+        commit: Some("queue-a".into()),
+    });
+    let mut prior = pr_cache(WorktreePrState::Open, None);
+    for (head, entry, removed, request, queue, names) in [
+        (
+            "head-a",
+            Some(ENQUEUED),
+            None,
+            None,
+            Some(PrQueueFact::Queued {
+                at: ENQUEUED.into(),
+            }),
+            vec!["pr.queued"],
+        ),
+        (
+            "head-a",
+            None,
+            Some(failed()),
+            None,
+            dequeued.clone(),
+            vec!["pr.dequeued"],
+        ),
+        ("head-b", None, Some(failed()), None, dequeued, vec![]),
+        (
+            "head-b",
+            None,
+            Some(failed()),
+            Some("2026-10-03T12:46:04Z"),
+            None,
+            vec![],
+        ),
+        (
+            "head-b",
+            Some("2026-10-03T13:00:00Z"),
+            Some(failed()),
+            None,
+            Some(PrQueueFact::Queued {
+                at: "2026-10-03T13:00:00Z".into(),
+            }),
+            vec!["pr.queued"],
+        ),
+    ] {
+        let next = queue_reading(&prior, head, entry, removed, request);
+        assert_eq!(
+            next.states[PATH].queue(),
+            queue.as_ref(),
+            "head={head}, request={request:?}"
+        );
+        assert_eq!(signal_names(&production_transitions(&prior, &next)), names);
+        prior = next;
+    }
+}
+
+#[test]
+fn withdrawing_a_rearm_announces_the_original_removal_again() {
+    let prior = pr_cache(WorktreePrState::Open, None);
+    let failed = || Some(removal(REMOVED, "failed_checks", None));
+    let removed = queue_reading(&prior, "head-a", None, failed(), None);
+    let armed = queue_reading(
+        &removed,
+        "head-b",
+        None,
+        failed(),
+        Some("2026-10-03T12:46:04Z"),
+    );
+    assert_eq!(armed.states[PATH].queue(), None);
+    assert!(production_transitions(&removed, &armed).is_empty());
+
+    let withdrawn = queue_reading(&armed, "head-b", None, failed(), None);
+    assert_eq!(withdrawn.states[PATH].queue(), removed.states[PATH].queue());
+    let signals = production_transitions(&armed, &withdrawn);
+    assert_eq!(signal_names(&signals), vec!["pr.dequeued"]);
+    assert_eq!(signals[0].1["dequeued_at"], REMOVED);
+}
+
+#[test]
+fn a_first_reading_of_a_rearmed_removal_does_not_announce_dequeued() {
+    let prior = base_cache();
+    let next = queue_reading(
+        &prior,
+        "head-b",
+        None,
+        Some(removal(REMOVED, "failed_checks", None)),
+        Some("2026-10-03T12:46:04Z"),
+    );
+    assert_eq!(next.states[PATH].queue(), None);
+    assert_eq!(
+        signal_names(&production_transitions(&prior, &next)),
+        vec!["pr.opened"]
+    );
+}
+
+#[test]
 fn a_new_push_does_not_repeat_a_standing_queue_signal() {
     let prior = pr_cache(WorktreePrState::Open, None);
     for (entry, removed) in [
         (Some(ENQUEUED), None),
         (None, Some(removal(REMOVED, "failed_checks", None))),
     ] {
-        let seen = queue_reading(&prior, "head-a", entry, removed.clone());
-        let pushed = queue_reading(&seen, "head-b", entry, removed);
+        let seen = queue_reading(&prior, "head-a", entry, removed.clone(), None);
+        let pushed = queue_reading(&seen, "head-b", entry, removed, None);
         assert!(production_transitions(&seen, &pushed).is_empty());
     }
 }
@@ -199,7 +297,7 @@ fn a_new_push_does_not_repeat_a_standing_queue_signal() {
 #[test]
 fn queued_pr_that_merges_emits_only_merged() {
     let open = pr_cache(WorktreePrState::Open, None);
-    let queued = queue_reading(&open, "head-a", Some(ENQUEUED), None);
+    let queued = queue_reading(&open, "head-a", Some(ENQUEUED), None, None);
     for state in [WorktreePrState::Merged, WorktreePrState::Closed] {
         let mut terminal = queued.clone();
         terminal.states.get_mut(PATH).unwrap().state = state;
@@ -218,6 +316,7 @@ fn queued_pr_that_merges_emits_only_merged() {
         "head-a",
         None,
         Some(removal(REMOVED, "merged", None)),
+        None,
     );
     assert!(production_transitions(&queued, &removed).is_empty());
     assert_eq!(
@@ -240,7 +339,7 @@ fn queue_signals_require_continuity_ownership_and_success() {
             "pr.dequeued",
         ),
     ] {
-        let next = queue_reading(&prior, "head-a", entry, removed);
+        let next = queue_reading(&prior, "head-a", entry, removed, None);
         assert_eq!(
             signal_names(&production_transitions(&prior, &next)),
             vec!["pr.opened", name]
@@ -283,7 +382,7 @@ fn queue_payloads_keep_the_pr_head_apart_from_the_queue_timestamp() {
         payload
     };
 
-    let queued = queue_reading(&prior, "forge-head", Some(ENQUEUED), None);
+    let queued = queue_reading(&prior, "forge-head", Some(ENQUEUED), None, None);
     let signals = production_transitions(&prior, &queued);
     assert_eq!(signal_names(&signals), vec!["pr.queued"]);
     assert_eq!(signals[0].1, expect(json!({"queued_at": ENQUEUED})));
@@ -293,6 +392,7 @@ fn queue_payloads_keep_the_pr_head_apart_from_the_queue_timestamp() {
         "forge-head",
         None,
         Some(removal(REMOVED, "failed_checks", Some("queue-a"))),
+        None,
     );
     let signals = production_transitions(&queued, &failed);
     assert_eq!(signal_names(&signals), vec!["pr.dequeued"]);
@@ -309,6 +409,7 @@ fn queue_payloads_keep_the_pr_head_apart_from_the_queue_timestamp() {
         "forge-head",
         None,
         Some(removal(REMOVED, "manual", None)),
+        None,
     );
     assert_eq!(
         production_transitions(&queued, &manual)[0].1,
@@ -328,6 +429,7 @@ fn queue_reading(
     head: &str,
     entry: Option<&str>,
     removal: Option<Value>,
+    request: Option<&str>,
 ) -> PrStateCache {
     let group = super::repo_group(vec![super::target(PATH, "feature")]);
     let plan = plan_github_queries(&group).remove(0);
@@ -336,6 +438,7 @@ fn queue_reading(
         "facts0": {"nodes": [{"number": 42, "headRefOid": head, "mergeable": "MERGEABLE", "isCrossRepository": false,
             "baseRef": {"name": "main", "compare": {"behindBy": 0}},
             "mergeQueueEntry": entry.map(|at| json!({"enqueuedAt": at})),
+            "autoMergeRequest": request.map(|at| json!({"enabledAt": at})),
             "timelineItems": {"nodes": removal.into_iter().collect::<Vec<_>>()}}]}
     }}});
     let response = forge::parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
