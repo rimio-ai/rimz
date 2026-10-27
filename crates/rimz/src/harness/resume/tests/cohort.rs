@@ -98,7 +98,7 @@ fn live_team_seats_are_refilled_without_planning_a_team_tab() {
                 1,
             ));
         }
-        let (tabs, flat, refilled) = split_team_and_flat(
+        let (team, flat) = split_team_and_flat(
             &parked,
             &NO_LOGINS,
             &NO_ACCOUNTS,
@@ -118,10 +118,14 @@ fn live_team_seats_are_refilled_without_planning_a_team_tab() {
                     dead(agent)
                 }
             },
+            |_| None,
         );
-        assert!(tabs.is_empty(), "a live cohort already owns its tab");
-        assert!(refilled.contains(&(parked[1].kind.clone(), parked[1].agent_id.clone())));
-        assert_eq!(refilled.len(), if fully_live { 2 } else { 1 });
+        assert!(team.tabs.is_empty(), "a live cohort already owns its tab");
+        assert!(
+            team.refilled
+                .contains(&(parked[1].kind.clone(), parked[1].agent_id.clone()))
+        );
+        assert_eq!(team.refilled.len(), if fully_live { 2 } else { 1 });
         assert_eq!(
             flat,
             if fully_live {
@@ -145,7 +149,7 @@ fn an_ended_parked_row_never_claims_the_seat_a_live_member_refills() {
     ];
     let mut roster = parked.clone();
     roster.push(team_agent("codex", "live-coder", "coder", "/repo/forge", 1));
-    let (_, _, refilled) = split_team_and_flat(
+    let (team, _) = split_team_and_flat(
         &parked,
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -165,9 +169,10 @@ fn an_ended_parked_row_never_claims_the_seat_a_live_member_refills() {
                 dead(agent)
             }
         },
+        |_| None,
     );
     assert_eq!(
-        refilled,
+        team.refilled,
         BTreeSet::from([(parked[1].kind.clone(), parked[1].agent_id.clone())])
     );
 }
@@ -192,6 +197,149 @@ fn fresh_cohort_seeds_retain_the_parked_session_key() {
 }
 
 #[test]
+fn team_restore_warns_when_the_definition_is_absent() {
+    let (_, profiles, commands) = team_configs();
+    let agents = [
+        AgentState {
+            channel: Some("design".into()),
+            ..team_agent("claude", "planner", "planner", "/repo/forge", 1)
+        },
+        AgentState {
+            channel: Some("old".into()),
+            ..team_agent("codex", "coder", "coder", "/repo/forge", 2)
+        },
+    ];
+    let failure = "/definitions/teams/forge.md: team 'forge' role 'coder' selects unknown agent \
+                   'missing'; team roles can select definitions from agents only";
+    let multiple_failures = format!(
+        "{failure}\n\n/definitions/teams/forge/TEAM.md: duplicate team definition; keep one file"
+    );
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for cause in [None, Some(failure), Some(multiple_failures.as_str())] {
+        for fresh in [false, true] {
+            actual.push(failed_team_restore_warnings(
+                &agents,
+                &TeamsConfig::default(),
+                &profiles,
+                &commands,
+                fresh,
+                |team| {
+                    assert_eq!(team, "forge");
+                    cause.map(str::to_owned)
+                },
+            ));
+            let consequence = if fresh {
+                "members are not relaunched"
+            } else {
+                "members resume as individual sessions without the team's layout and prompt layers"
+            };
+            let cause =
+                cause.unwrap_or("the config read for recovery has no definition for team `forge`");
+            expected.push(vec![if cause.contains('\n') {
+                format!("cannot restore team `forge` in #design: {consequence}\n{cause}")
+            } else {
+                format!("cannot restore team `forge` in #design: {cause}; {consequence}")
+            }]);
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn team_restore_warns_when_a_role_profile_no_longer_resolves() {
+    let (mut teams, profiles, commands) = team_configs();
+    teams.0.get_mut("forge").unwrap().roles[0].profile = "missing".into();
+    let cause = crate::harness::spec::resolve_team("forge", &teams, &profiles, &commands)
+        .unwrap_err()
+        .to_string();
+    let agents = [
+        team_agent("claude", "planner", "planner", "/repo/forge", 1),
+        team_agent("codex", "coder", "coder", "/repo/forge", 2),
+    ];
+    for fresh in [false, true] {
+        let warnings =
+            failed_team_restore_warnings(&agents, &teams, &profiles, &commands, fresh, |_| None);
+        assert_failed_team_notice(&warnings, "#forge", &cause, fresh);
+    }
+}
+
+#[test]
+fn team_restore_warns_when_a_recorded_seat_profile_is_gone() {
+    let (teams, profiles, commands) = team_configs();
+    let planner = AgentState {
+        profile: Some("retired".into()),
+        record: Some(Box::default()),
+        ..team_agent("claude", "planner", "planner", "/repo/forge", 1)
+    };
+    let cause = resolve_posture(
+        PostureRequest {
+            record: planner.record.as_deref(),
+            profile: planner.profile.as_deref(),
+            kind: &planner.kind,
+            stamped_mode: planner.mode,
+            stamped_tier: planner.tier.as_deref(),
+        },
+        &profiles,
+    )
+    .degraded
+    .unwrap()
+    .to_string();
+    let agents = [
+        planner,
+        team_agent("codex", "coder", "coder", "/repo/forge", 2),
+    ];
+    let warnings =
+        failed_team_restore_warnings(&agents, &teams, &profiles, &commands, false, |_| None);
+    assert_failed_team_notice(&warnings, "#forge", &cause, false);
+}
+
+fn failed_team_restore_warnings(
+    agents: &[AgentState],
+    teams: &TeamsConfig,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    fresh: bool,
+    definition_failure_for: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let (team, flat) = split_team_and_flat(
+        agents,
+        &NO_LOGINS,
+        &NO_ACCOUNTS,
+        teams,
+        profiles,
+        commands,
+        Some(Path::new("/repo")),
+        &WORKSPACE,
+        |_| true,
+        |_| true,
+        fresh,
+        &[],
+        dead,
+        definition_failure_for,
+    );
+    assert!(team.tabs.is_empty());
+    assert_eq!(flat, agents, "a failed cohort must still resume flat");
+    assert!(team.refilled.is_empty());
+    RecoveryPlan::new(teams.clone(), team, DetailedResumePlan::default()).warnings
+}
+
+fn assert_failed_team_notice(warnings: &[String], lane: &str, cause: &str, fresh: bool) {
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = &warnings[0];
+    for expected in ["forge", lane, cause] {
+        assert!(warning.contains(expected), "{warning}");
+    }
+    assert!(!warning.contains("/repo"), "{warning}");
+    if fresh {
+        assert!(warning.contains("not relaunched"), "{warning}");
+    } else {
+        assert!(warning.contains("individual sessions"), "{warning}");
+        assert!(warning.contains("layout and prompt layers"), "{warning}");
+    }
+}
+
+#[test]
 fn team_restore_forwards_skipped_field_warnings_into_recovery() {
     // Restore requires registered adapters; Copilot has no fast alternative.
     let (teams, mut profiles, commands) = team_configs();
@@ -200,7 +348,7 @@ fn team_restore_forwards_skipped_field_warnings_into_recovery() {
         profile.fast = Some(true);
     }
     let planner = team_agent("copilot", "planner", "planner", "/repo/forge", 1);
-    let (tabs, refilled) = plan_team_restore_tabs(
+    let team = plan_team_restore_tabs(
         &[planner],
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -214,9 +362,10 @@ fn team_restore_forwards_skipped_field_warnings_into_recovery() {
         true,
         &[],
         dead,
+        |_| None,
     );
-    assert_eq!(tabs.len(), 1);
-    let recovery = RecoveryPlan::new(teams, tabs, DetailedResumePlan::default(), refilled);
+    assert_eq!(team.tabs.len(), 1);
+    let recovery = RecoveryPlan::new(teams, team, DetailedResumePlan::default());
     assert_eq!(recovery.warnings.len(), 2, "{:?}", recovery.warnings);
     assert!(
         recovery
@@ -267,8 +416,9 @@ fn recorded_team_restore_keeps_role_layers() {
             false,
             &[],
             dead,
+            |_| None,
         )
-        .0;
+        .tabs;
         assert_eq!(tabs.len(), 1);
         let cell = tabs[0].layout.agent_cells().next().unwrap();
         assert!(cell.args.contains(&"--verbose".into()), "{:?}", cell.args);
@@ -1629,8 +1779,9 @@ fn team_restore_routes_fresh_seats_before_planning() {
             fresh,
             &[],
             dead,
+            |_| None,
         )
-        .0;
+        .tabs;
         assert_eq!(tabs.len(), 1);
         let cell = tabs[0].layout.agent_cells().next().unwrap();
         assert_eq!(cell.kind.as_str(), "codex");
@@ -1877,8 +2028,9 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
         false,
         &[],
         dead,
+        |_| None,
     )
-    .0;
+    .tabs;
     assert_eq!(tabs.len(), 1);
     let tab = &tabs[0];
     let panes = compile_layout_panes(
@@ -2112,7 +2264,7 @@ fn board_resume_does_not_replace_present_placeholders() {
 fn team_restore_does_not_reopen_a_placeholder_only_board() {
     let (root, member) = unregistered_team_board(Some("Stage: Plan"));
     let (teams, profiles, commands) = team_configs();
-    let (tabs, refilled) = plan_team_restore_tabs(
+    let team = plan_team_restore_tabs(
         &[member],
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -2126,9 +2278,10 @@ fn team_restore_does_not_reopen_a_placeholder_only_board() {
         false,
         &[],
         dead,
+        |_| None,
     );
-    assert!(tabs.is_empty());
-    assert!(refilled.is_empty());
+    assert!(team.tabs.is_empty());
+    assert!(team.refilled.is_empty());
 }
 
 #[test]
@@ -2823,7 +2976,7 @@ fn cohort_relaunch_presence_table() {
 
 /// A restorable team tab carries one seed per declared role, in the team's own
 /// layout order: a prior member resumes, a missing one launches fresh, and a
-/// group whose team no longer resolves is left alone entirely.
+/// group whose team no longer resolves is left for flat recovery.
 #[test]
 fn team_restore_tabs_seed_every_declared_role() {
     let (teams, profiles, commands) = team_configs();
@@ -2876,8 +3029,9 @@ fn team_restore_tabs_seed_every_declared_role() {
             false,
             &[],
             dead,
+            |_| None,
         )
-        .0;
+        .tabs;
 
         let Some(expected) = expected else {
             assert!(tabs.is_empty(), "{label}");
@@ -2901,7 +3055,7 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
     let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
     let flat = agent("codex", "flat", "/repo/other", 5);
 
-    let (tabs, flat_agents, _) = split_team_and_flat(
+    let (team, flat_agents) = split_team_and_flat(
         &[planner, flat],
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -2915,9 +3069,10 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
         false,
         &[],
         dead,
+        |_| None,
     );
 
-    assert_eq!(tabs.len(), 1);
+    assert_eq!(team.tabs.len(), 1);
     assert_eq!(flat_agents.len(), 1);
     assert_eq!(flat_agents[0].agent_id.as_str(), "flat");
 }
@@ -3289,7 +3444,7 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
         tier: Some(tier_stamp("opus")),
         ..team_agent("claude", "planner", "planner", "/repo/forge", 3)
     };
-    let (tabs, flat, _) = split_team_and_flat(
+    let (team, flat) = split_team_and_flat(
         std::slice::from_ref(&planner),
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -3303,8 +3458,9 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
         false,
         &[],
         dead,
+        |_| None,
     );
-    assert!(tabs.is_empty());
+    assert!(team.tabs.is_empty());
     assert_eq!(flat, [planner]);
 }
 

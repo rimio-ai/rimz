@@ -456,6 +456,7 @@ fn empty_lane_restore() -> Result<LaneRestoreConfig, LaneResumeError> {
         profiles: ProfilesConfig::default(),
         subagent_profiles: ProfilesConfig::default(),
         commands: CommandsConfig::default(),
+        failed_definitions: BTreeMap::new(),
     })
 }
 
