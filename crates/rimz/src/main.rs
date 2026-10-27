@@ -42,12 +42,14 @@ fn main() -> std::process::ExitCode {
     if let Some(code) = rimz::sandbox::run_bind_helper() {
         return code;
     }
-    // Completion runs before observability and build-id startup: every TAB is
-    // latency-sensitive, and clap_complete owns stdout for this request.
+    // Completion runs before observability: every TAB is latency-sensitive,
+    // and clap_complete owns stdout for this request.
     cli::complete_env();
     // Reporting can read the RimZ home, so restore scrubbed hooks before startup.
     #[cfg(unix)]
-    cli::restore_hook_environment();
+    let preparsed = cli::restore_hook_environment();
+    #[cfg(not(unix))]
+    let preparsed = None;
     // Background workers must not consume a signal pending across the exec handoff.
     #[cfg(unix)]
     let startup_mask = match rimz::child_process::CleanupSignalMask::block() {
@@ -57,9 +59,6 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    // Start reading the executable identity off-thread so the build-id Sentry
-    // tag is usually ready by the time `dispatch` sets the command scope.
-    rimz::build_id::warm();
     // Sentry is created before the subscriber so its reporting layer attaches to a
     // live client; the guard is held for the whole process and flushes on exit.
     let reporting = observability::init();
@@ -67,7 +66,7 @@ fn main() -> std::process::ExitCode {
     reporting.report();
     #[cfg(unix)]
     drop(startup_mask);
-    match cli::dispatch() {
+    match cli::dispatch(preparsed) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             cli::report(&error);

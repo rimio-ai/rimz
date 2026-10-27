@@ -704,7 +704,8 @@ path = "crates/rimz/src/cli"
 # open_existing_store_at supplies read-only per-room wake-card enrichment (+1).
 # Launch checkout and caller/lane facts move into the library (-4).
 # Supervised store creation and cross-repo consent move into the library (-2).
-surface-budget = 29
+# main reuses the hook-environment parse through Cli (+1).
+surface-budget = 30
 
 [[module]]
 path = "crates/rimz/src/config"
