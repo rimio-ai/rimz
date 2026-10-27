@@ -21,6 +21,64 @@ fn only_hook_feeds_need_environment_parsing() {
 }
 
 #[test]
+fn hot_cli_preserves_values_and_defers_help_and_errors() {
+    for args in [
+        vec!["rimz", "hooks", "feed", "--source", "claude"],
+        vec![
+            "rimz", "--mux", "tmux", "hooks", "feed", "--source", "codex", "--event", "Stop",
+        ],
+        vec![
+            "rimz",
+            "hooks",
+            "apply",
+            "--recover-from",
+            "frame",
+            "--with-lifetime-lock",
+        ],
+        vec![
+            "rimz",
+            "statusline",
+            "feed",
+            "--source",
+            "claude",
+            "--subagent",
+            "--color",
+            "never",
+        ],
+        vec![
+            "rimz",
+            "--root",
+            "/project",
+            "statusline",
+            "feed",
+            "--source",
+            "qwen",
+        ],
+    ] {
+        let actual = try_hot_cli(args.iter().map(OsString::from).collect());
+        assert!(actual.is_some(), "hot path was not parsed: {args:?}");
+        let (canonical, actual) = actual.unwrap();
+        let expected = Cli::parse_from(&args);
+        assert_eq!(canonical, parsed_scope(&args).0);
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{args:?}");
+    }
+    for args in [
+        vec!["rimz", "hooks", "feed", "--source", "claude", "--help"],
+        vec!["rimz", "hooks", "feed"],
+        vec!["rimz", "hooks", "feed", "--source", "claude", "--unknown"],
+        vec!["rimz", "--version", "hooks", "feed"],
+        vec!["rimz", "hooks", "install", "feed"],
+        vec!["rimz", "message", "@coder", "feed"],
+        vec!["rimz", "--attach", "hooks", "feed", "--source", "claude"],
+    ] {
+        assert!(
+            try_hot_cli(args.iter().map(OsString::from).collect()).is_none(),
+            "full parse must handle {args:?}"
+        );
+    }
+}
+
+#[test]
 fn caller_launch_anchors_at_the_recorded_checkout() {
     let checkout = tempfile::tempdir().unwrap();
     let scratch = tempfile::tempdir().unwrap();

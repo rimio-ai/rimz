@@ -171,3 +171,46 @@ fn cli_surface_is_stable() {
     render_command(&cmd, "rimz", &mut rendered);
     insta::assert_snapshot!("cli_surface", rendered);
 }
+
+#[test]
+fn hot_cli_arguments_match_full_tree() {
+    fn shapes(cmd: &Command, globals_only: bool) -> std::collections::BTreeMap<String, String> {
+        cmd.get_arguments()
+            .filter(|arg| !globals_only || arg.is_global_set())
+            .map(|arg| {
+                (
+                    arg.get_id().to_string(),
+                    format!(
+                        "{}; parser={:?}; short-aliases={:?}",
+                        render_arg(arg),
+                        arg.get_value_parser(),
+                        arg.get_all_short_aliases(),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    let mut full = Cli::command();
+    let mut hot = HotCli::command();
+    full.build();
+    hot.build();
+    assert_eq!(shapes(&hot, true), shapes(&full, true), "global flags");
+    for [command, verb] in [
+        ["hooks", "feed"],
+        ["hooks", "apply"],
+        ["statusline", "feed"],
+    ] {
+        let full = full
+            .find_subcommand(command)
+            .unwrap()
+            .find_subcommand(verb)
+            .unwrap();
+        let hot = hot
+            .find_subcommand(command)
+            .unwrap()
+            .find_subcommand(verb)
+            .unwrap();
+        assert_eq!(shapes(hot, false), shapes(full, false), "{command} {verb}");
+    }
+}
