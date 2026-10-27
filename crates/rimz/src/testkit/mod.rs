@@ -267,13 +267,26 @@ pub mod fleet {
     /// Representative retained history: 98% ended, 39% with pane argv, unique
     /// names and ids, and compact row sizes of about 4.8/13.2/35.9 kB (p50/p90/max).
     pub fn seed_ended_carryover(store: &crate::Store, rows: usize) -> crate::store::Result<()> {
-        seed_carryover(store, rows, false)
+        seed_carryover(store, rows, false, EndedText::Full)
+    }
+
+    /// The same history as [`seed_ended_carryover`] in the shape a rotation
+    /// writes today: ended rows keep only their prompt labels.
+    pub fn seed_trimmed_carryover(store: &crate::Store, rows: usize) -> crate::store::Result<()> {
+        seed_carryover(store, rows, false, EndedText::Trimmed)
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum EndedText {
+        Full,
+        Trimmed,
     }
 
     fn seed_carryover(
         store: &crate::Store,
         rows: usize,
         all_ended: bool,
+        ended_text: EndedText,
     ) -> crate::store::Result<()> {
         let at = jiff::Timestamp::now();
         let mut names = std::collections::BTreeMap::new();
@@ -311,6 +324,9 @@ pub mod fleet {
                     pane.foreground_cmdline = Some(prompt.clone());
                     pane.spawn_command = Some(prompt);
                 }
+                if ended_text == EndedText::Trimmed {
+                    agent.trim_ended_text();
+                }
                 agent
             })
             .collect();
@@ -342,7 +358,8 @@ pub mod fleet {
         room: ScaleRoom,
     ) -> io::Result<sidebar::frame::PaneFrame> {
         let store = crate::Store::open(paths.clone(), runtime.clone()).map_err(io::Error::other)?;
-        seed_carryover(&store, room.ended_sessions, true).map_err(io::Error::other)?;
+        seed_carryover(&store, room.ended_sessions, true, EndedText::Full)
+            .map_err(io::Error::other)?;
         let panes = synthetic_panes(room.panes);
         let bound = room.agents.min(room.panes);
         seed_fleet_store_with_panes(paths, &panes[..bound], bound).map_err(io::Error::other)?;
