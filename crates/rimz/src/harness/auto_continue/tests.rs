@@ -814,7 +814,7 @@ fn daily_scope_resumes_at_window_turn(scope: crate::harness::budget::DailyBudget
         Some(now),
         "the prior window's park must fire before enforcement clears it"
     );
-    crate::harness::budget::enforce(&snapshot, &runtime, None, &config);
+    crate::harness::budget::enforce(|_| false, &snapshot, &runtime, None, &config);
     assert_eq!(read_park(&park_path(&runtime)), None);
     assert_eq!(scope.read_ledger(&runtime, None).parked, None);
 }
@@ -921,7 +921,7 @@ fn account_budget_reset_reaches_every_room_but_an_early_raise_does_not(
             &[],
         );
         let first_nudge = read_park(&park_path(&room_a)).and_then(|record| record.last_nudge_at);
-        enforce(&snapshot_a, &room_a, None, &config);
+        enforce(|_| false, &snapshot_a, &room_a, None, &config);
         assert!(scope.read_ledger(&room_b, None).parked.is_none());
         project_parks(|_| false, &mut snapshot_b, &room_b, None, &config);
         assert!(snapshot_b.agents[0].budget_park.is_none());
@@ -992,7 +992,7 @@ fn month_turn_fires_continue_before_stale_publication_lifts_the_park() {
     let record = read_park(&park_path(&runtime)).expect("month resume record");
     assert_eq!(record.last_nudge_at, Some(now));
     assert_eq!(record.kind.reason(), "budget_month_reset");
-    crate::harness::budget::enforce(&snapshot, &runtime, None, &config);
+    crate::harness::budget::enforce(|_| false, &snapshot, &runtime, None, &config);
     assert_eq!(read_park(&park_path(&runtime)), None);
     let scope =
         crate::harness::budget::DailyBudgetScope::Account("claude@default".parse().unwrap());
@@ -1014,7 +1014,7 @@ fn exhausted_new_month_restamps_and_fires_at_most_once() {
         &config.resume,
         &[],
     );
-    crate::harness::budget::enforce(&snapshot, &runtime, None, &config);
+    crate::harness::budget::enforce(|_| false, &snapshot, &runtime, None, &config);
     let scope =
         crate::harness::budget::DailyBudgetScope::Account("claude@default".parse().unwrap());
     let stamp = scope.read_ledger(&runtime, None).parked.unwrap().at;
@@ -1067,7 +1067,7 @@ fn binding_month_cap_delays_fleet_day_resume_until_the_last_reset() {
         }),
     )
     .unwrap();
-    enforce(&snapshot, &runtime, None, &config);
+    enforce(|_| false, &snapshot, &runtime, None, &config);
     snapshot.now = day_reset;
     project_parks(|_| false, &mut snapshot, &runtime, None, &config);
     let park = snapshot.agents[0].budget_park.as_ref().unwrap();
@@ -1127,7 +1127,7 @@ fn raised_month_cap_does_not_swallow_a_fleet_day_reset() {
             }),
         )
         .unwrap();
-        enforce(&snapshot, &runtime, None, &config);
+        enforce(|_| false, &snapshot, &runtime, None, &config);
         config
             .accounts
             .budget
@@ -1151,7 +1151,7 @@ fn raised_month_cap_does_not_swallow_a_fleet_day_reset() {
             &[],
         );
         let record = read_park(&park_path(&runtime)).unwrap();
-        enforce(&snapshot, &runtime, None, &config);
+        enforce(|_| false, &snapshot, &runtime, None, &config);
         let park = snapshot.agents[0].budget_park.as_ref().unwrap();
         assert_eq!(record.last_nudge_at, (!stale).then_some(day_reset));
         assert_eq!(park.scope, crate::agents::BudgetScope::Fleet);
@@ -1185,7 +1185,7 @@ fn daily_scope_over_cap_after_rollover_restamps_and_does_not_resume_twice() {
             &config.resume,
             &[],
         );
-        enforce(&snapshot, &runtime, None, &config);
+        enforce(|_| false, &snapshot, &runtime, None, &config);
         let stamped_at = scope.read_ledger(&runtime, None).parked.expect("park").at;
 
         snapshot.now = ts(now.as_second() + 121);
@@ -1223,7 +1223,7 @@ fn daily_scope_armed_deadline_matches_projection_after_rollover() {
     ] {
         let (_dir, runtime) = temp_runtime();
         let (config, mut snapshot) = daily_scope_snapshot(&runtime, &scope, parked_at, now, 6.0);
-        enforce(&snapshot, &runtime, None, &config);
+        enforce(|_| false, &snapshot, &runtime, None, &config);
         let record = read_park(&park_path(&runtime)).expect("armed record");
         snapshot.now = reset;
         project_parks(|_| false, &mut snapshot, &runtime, None, &config);

@@ -40,6 +40,69 @@ fn held_ledger_projection_keeps_raw_values_until_checked_again() {
 }
 
 #[test]
+fn deferred_enforcement_preserves_agent_bytes_but_refreshes_global_scopes() {
+    let (_dir, runtime) = split_shared_roots();
+    let config: MachineConfig =
+        toml::from_str("timezone = 'UTC'\n[harness]\nbudget = '1/day'\n").unwrap();
+    let now: Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
+    let mut held = agent(2.0, AgentStatus::Idle, None);
+    held.budget = Some("10/day".to_owned());
+    let path = budget_ledger_path(&runtime, &held.kind, &held.agent_id);
+    let account = DailyBudgetScope::account(&account_catalog(&config), &held.login_key());
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![held.clone()], now);
+    snapshot.fleet_day_spend_epoch_secs = local_day_cutoff_secs(now, &config.time_zone());
+    let mut observations = Vec::new();
+    for (seconds, deferred, fleet_spend) in [
+        (0, false, 0.0),
+        (30, true, 2.0),
+        (60, false, 0.0),
+        (61, false, 2.0),
+    ] {
+        if seconds == 30 || seconds == 61 {
+            let mut external = read_ledger(&runtime, &held.kind, &held.agent_id).unwrap();
+            external.day_baseline = None;
+            external.raised_cap_usd = Some(if seconds == 30 { 50.0 } else { 60.0 });
+            write_ledger(&runtime, &held.kind, &held.agent_id, &external).unwrap();
+        }
+        account
+            .merge_park(
+                &runtime,
+                Some(BudgetParkStamp {
+                    at_cost: 5.0,
+                    at: now,
+                }),
+            )
+            .unwrap();
+        snapshot.fleet_day_spend_usd = Some(fleet_spend);
+        let before = std::fs::read(&path).ok();
+        enforce(|_| deferred, &snapshot, &runtime, None, &config);
+        if deferred {
+            assert_eq!(std::fs::read(&path).ok(), before, "deferred ledger bytes");
+        }
+        let ledger = read_ledger(&runtime, &held.kind, &held.agent_id).unwrap();
+        observations.push((
+            ledger.day_baseline.map(|baseline| baseline.cost_usd),
+            ledger.raised_cap_usd,
+            DailyBudgetScope::Fleet
+                .read_ledger(&runtime, None)
+                .parked
+                .is_some(),
+            account.read_ledger(&runtime, None).parked.is_some(),
+        ));
+    }
+    assert_eq!(
+        observations,
+        [
+            (Some(2.0), None, false, false),
+            (None, Some(50.0), true, false),
+            (Some(2.0), Some(50.0), false, false),
+            (Some(2.0), Some(60.0), true, false),
+        ]
+    );
+}
+
+#[test]
 fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
     for (raw, cap, window, display) in [
         ("5", 5.0, BudgetWindow::Session, "$5.00"),
@@ -191,7 +254,7 @@ fn monthly_applicability_exempts_subscription_pools_but_not_cold_or_daily_caps()
         );
         let mut snapshot =
             SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![state], now);
-        enforce(&snapshot, &runtime, None, &config);
+        enforce(|_| false, &snapshot, &runtime, None, &config);
         project_parks(|_| false, &mut snapshot, &runtime, None, &config);
         actual.push(
             snapshot.agents[0]
@@ -250,7 +313,7 @@ fn exhausted_month_pool_agrees_in_enforcement_launch_gate_and_tier_routing() {
                 &BTreeMap::new(),
                 &std::collections::BTreeSet::from([key.clone()]),
             );
-    enforce(&snapshot, &runtime, None, &config);
+    enforce(|_| false, &snapshot, &runtime, None, &config);
     assert!(
         scope.read_ledger(&runtime, Some(&state)).parked.is_some(),
         "month spend, not today's empty spend, must park"
@@ -764,7 +827,7 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
         worktree_branch: None,
     }]
     .into();
-    enforce(&snapshot, &runtime, None, &config);
+    enforce(|_| false, &snapshot, &runtime, None, &config);
     assert!(
         read_scope_state(&runtime)
             .turn
@@ -780,7 +843,7 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
     state.turn_started_at = Some(second);
     arm(&state);
     let snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![state.clone()], second);
-    enforce(&snapshot, &runtime, None, &config);
+    enforce(|_| false, &snapshot, &runtime, None, &config);
     assert!(
         !crate::harness::auto_continue::budget_park_armed(&runtime, &state.kind, &state.agent_id,),
         "all-under includes a rebased turn verdict"
@@ -855,7 +918,13 @@ fn disabling_turn_budget_clears_turn_scope_state() {
     .expect("scope state");
     let snapshot = SidebarSnapshot::build_with_agents(workspace_id, Vec::new(), turn);
 
-    enforce(&snapshot, &runtime, None, &MachineConfig::default());
+    enforce(
+        |_| false,
+        &snapshot,
+        &runtime,
+        None,
+        &MachineConfig::default(),
+    );
 
     assert!(read_scope_state(&runtime).turn.is_empty());
 }
@@ -1038,7 +1107,7 @@ fn fleet_park_projection_keeps_live_spend_parks_until_enforcement() {
                 .map(|park| (park.scope, park.spend_usd)),
             Some((BudgetScope::Fleet, displayed_spend)),
         );
-        enforce(&snapshot, &runtime, None, &config);
+        enforce(|_| false, &snapshot, &runtime, None, &config);
         assert_eq!(
             DailyBudgetScope::Fleet
                 .read_ledger(&runtime, None)
@@ -1067,7 +1136,7 @@ fn fleet_enforcement_arms_resume_after_interrupting_a_running_agent() {
     snapshot.fleet_day_spend_usd = Some(6.0);
     snapshot.fleet_day_spend_epoch_secs = Some(cutoff);
 
-    enforce(&snapshot, &runtime, None, &config);
+    enforce(|_| false, &snapshot, &runtime, None, &config);
     assert!(!crate::harness::auto_continue::budget_park_armed(
         &runtime,
         &idle.kind,
@@ -1100,7 +1169,7 @@ fn fleet_enforcement_arms_resume_after_interrupting_a_running_agent() {
     }]
     .into();
 
-    enforce(&snapshot, &runtime, None, &config);
+    enforce(|_| false, &snapshot, &runtime, None, &config);
     assert!(scope_interrupted(&read_scope_state(&runtime), &running));
     assert!(crate::harness::auto_continue::budget_park_armed(
         &runtime,
@@ -1916,7 +1985,7 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
     assert_eq!(scopes.daily.len(), 3);
     assert_eq!(binding_scope_park(&scopes, &default_key), None);
     assert_eq!(binding_scope_park(&scopes, &work_key), Some(now));
-    enforce(&snapshot, &runtime, None, &config);
+    enforce(|_| false, &snapshot, &runtime, None, &config);
     let scope = DailyBudgetScope::Account(work_key.clone());
     assert_eq!(
         scope
@@ -2092,7 +2161,7 @@ fn accounts_of_one_pool_share_a_ledger_and_park_together() {
     assert_eq!(binding_scope_park(&scopes, &keys[1]), Some(now));
     assert_eq!(binding_scope_park(&scopes, &keys[2]), None);
 
-    enforce(&snapshot, &runtime, None, &config);
+    enforce(|_| false, &snapshot, &runtime, None, &config);
     let work = DailyBudgetScope::account(&catalog, &keys[0]);
     assert_eq!(work, DailyBudgetScope::account(&catalog, &keys[1]));
     assert_eq!(work, DailyBudgetScope::account(&catalog, &pool));
