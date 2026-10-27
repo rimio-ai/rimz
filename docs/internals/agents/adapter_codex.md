@@ -453,6 +453,8 @@ The account probe reads `$CODEX_HOME/auth.json` first, so a readable file decide
 | `Logged in using` any other mode | logged in, metering unknown |
 | no recognized line, a timeout, or a binary that does not start | `Unavailable` |
 
+Prompt-cache defaults use this billing classification: a metered subscription gets 12h; an API key, Bedrock, AWS, or unknown sign-in gets 30m. The agent's own account evidence wins over the cached login record. At startup a missing account reading uses 30m until the account probe classifies it; observed split cache writes override these defaults and settings ([lifetime resolution](../../guide/configuration.md#idle-compaction)).
+
 ## Cost
 
 [`spend.rs`](../../../crates/rimz/src/agents/adapters/codex/spend.rs) parses Codex's full history for the [`SpendingWalker`](../../../crates/rimz/src/agents/spending/mod.rs), read-only and without network, into the windows described in [spending.md](./spending.md#cost-history). The stateful line parser is [`spend/parse.rs`](../../../crates/rimz/src/agents/adapters/codex/spend/parse.rs). It reads both the interactive rollout format and the headless flat `usage` format, and the live card's cost comes from the same parser ([local refresh](#local-refresh)).
