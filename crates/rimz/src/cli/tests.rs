@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn only_hook_feeds_need_environment_parsing() {
+    for (args, expected) in [
+        (vec!["statusline", "feed", "--source", "claude"], false),
+        (vec!["hooks", "feed", "--source", "claude"], true),
+        (
+            vec!["--mux", "tmux", "hooks", "feed", "--source", "claude"],
+            true,
+        ),
+        (vec!["message", "@coder", "feed"], false),
+        (vec!["hooks", "apply"], false),
+    ] {
+        assert_eq!(
+            needs_hook_environment(args.iter().map(OsString::from)),
+            expected,
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
 fn caller_launch_anchors_at_the_recorded_checkout() {
     let checkout = tempfile::tempdir().unwrap();
     let scratch = tempfile::tempdir().unwrap();

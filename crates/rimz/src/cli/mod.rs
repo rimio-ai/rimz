@@ -150,17 +150,13 @@ pub fn complete_env() {
 }
 
 #[cfg(unix)]
-pub fn restore_hook_environment() {
-    // Avoid a second CLI parse for ordinary commands; clap below verifies the feed.
-    if !std::env::args_os().skip(1).any(|arg| arg == "feed") {
-        return;
+pub(super) fn restore_hook_environment() -> Option<Cli> {
+    if !needs_hook_environment(std::env::args_os().skip(1)) {
+        return None;
     }
-    let Ok(Cli {
-        subcommand: Some(Subcmd::Hooks(args)),
-        ..
-    }) = Cli::try_parse()
-    else {
-        return;
+    let cli = Cli::try_parse().ok()?;
+    let Some(Subcmd::Hooks(args)) = &cli.subcommand else {
+        return None;
     };
     if let Err(error) = args.restore_owner_env() {
         let _ = writeln!(
@@ -168,16 +164,33 @@ pub fn restore_hook_environment() {
             "rimz: cannot restore hook owner environment: {error}; continuing with hook environment"
         );
     }
+    Some(cli)
+}
+
+fn needs_hook_environment(args: impl Iterator<Item = OsString>) -> bool {
+    let mut hooks = false;
+    let mut feed = false;
+    for arg in args {
+        hooks |= arg == "hooks";
+        feed |= arg == "feed";
+    }
+    hooks && feed
 }
 
 /// Entry point used by `main.rs`.
-pub fn dispatch() -> Result<()> {
+pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
     hooks::register_drainer();
     reject_removed_top_level_tokens()?;
-    let cmd = help::customize(<Cli as CommandFactory>::command());
-    let mut matches = cmd.get_matches();
-    let canonical_command = matches.subcommand_name().unwrap_or("start").to_owned();
-    let cli = Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|err| err.exit());
+    let (canonical_command, cli) = match preparsed {
+        Some(cli) => ("hooks".to_owned(), cli),
+        None => {
+            let cmd = help::customize(<Cli as CommandFactory>::command());
+            let mut matches = cmd.get_matches();
+            let canonical = matches.subcommand_name().unwrap_or("start").to_owned();
+            let cli = Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|err| err.exit());
+            (canonical, cli)
+        }
+    };
     let mut globals = cli.global;
     globals.normalize()?;
     globals.color.write_global();
@@ -519,7 +532,7 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
     bin_name = "rimz",
     about = "One room per project for agents, scripts, and humans."
 )]
-struct Cli {
+pub(super) struct Cli {
     #[command(flatten)]
     global: GlobalFlags,
 
