@@ -90,7 +90,7 @@ The renderer threads, in `crates/rimz/src/sidebar_pane/`:
 | [`app/focus_push.rs`](../../../crates/rimz/src/sidebar_pane/app/focus_push.rs) | Click-ordered jump leases, the priority focus push, and its verdict trace. |
 | [`app/cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The heavy-lane refresher. |
 | [`app/hidden_views.rs`](../../../crates/rimz/src/sidebar_pane/app/hidden_views.rs) | Debounced tmux hidden-view geometry repair. |
-| [`app/tmux_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/tmux_watch.rs), [`app/transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs) | The two host-run push channels. |
+| [`app/tmux_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/tmux_watch.rs), [`app/transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs) | The two host-run push channels. Transcripts use the [shared mutation watcher](../lsp.md#freshness). |
 | [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs), [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | The last-known-good commit gate and the debounced degraded-health verdict. |
 
 Start at `enrich.rs` to learn what a snapshot is made of, at `app/fetch.rs` to learn when it is built, and at `timing.rs` to learn how often.

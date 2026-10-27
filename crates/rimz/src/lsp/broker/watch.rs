@@ -189,6 +189,7 @@ pub(super) fn changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs_watch;
 
     #[test]
     fn python_arms_watch_configuration_basenames() {
@@ -294,7 +295,7 @@ mod tests {
             std::fs::create_dir(root.path().join(name)).unwrap();
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+        let mut watcher = fs_watch::recommended_watcher(move |event: notify::Result<Event>| {
             if event
                 .as_ref()
                 .is_ok_and(|event| !matches!(event.kind, EventKind::Access(_)))

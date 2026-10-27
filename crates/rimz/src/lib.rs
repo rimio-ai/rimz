@@ -33,6 +33,7 @@ pub mod daemon_view;
 pub mod diag;
 pub mod disk;
 pub mod forge;
+mod fs_watch;
 pub mod harness;
 pub mod ids;
 pub mod lane;

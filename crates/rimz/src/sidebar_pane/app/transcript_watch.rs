@@ -18,9 +18,9 @@ use std::time::{Duration, Instant, SystemTime};
 use notify::{RecursiveMode, Watcher};
 use tracing::debug;
 
-use crate::RuntimePaths;
 use crate::agents::context::record::AgentContextRecord;
 use crate::store::event_log::LogExtent;
+use crate::{RuntimePaths, fs_watch};
 
 /// Backoff between watcher init attempts, so a platform refusing watches
 /// (inotify limits, an unsupported filesystem) never spins the thread.
@@ -97,7 +97,7 @@ fn watch_transcripts(runtime: &RuntimePaths) -> notify::Result<()> {
         .map_err(|error| notify::Error::generic(&error.to_string()))?;
     let mut cursor = crate::sidebar::consumer::RollupCursor::new();
     let (event_tx, event_rx) = mpsc::channel::<PathBuf>();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+    let mut watcher = fs_watch::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
             for path in event.paths {
                 let _ = event_tx.send(path);
