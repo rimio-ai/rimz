@@ -136,6 +136,9 @@ impl PluginManifest {
                 "kind must match [a-z0-9-]+ and start and end with a letter or digit".into(),
             );
         }
+        if self.kind == "fallback" {
+            return Err("kind `fallback` is reserved for harness.prompt_cache_ttl.fallback".into());
+        }
         if super::super::registry::BUILTINS
             .iter()
             .any(|adapter| adapter.spec().kind == self.kind)
@@ -299,6 +302,8 @@ editing = ["write"]
                 .contains("kind must")
         );
         assert!(parse(&manifest("claude")).unwrap_err().contains("built-in"));
+        let reserved = parse(&manifest("fallback")).unwrap_err();
+        assert!(reserved.contains("reserved"), "{reserved}");
 
         let bad_tools =
             manifest("testbot").replace("editing = [\"write\"]", "editing = [\"edit\"]");

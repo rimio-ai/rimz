@@ -29,6 +29,9 @@ pub(super) fn run_register(args: RegisterArgs) -> Result<()> {
     if !rimz::agents::plugins::valid_kind(kind) {
         bail!("plugin kind must match [a-z0-9-]+ and start and end with a letter or digit");
     }
+    if kind == "fallback" {
+        bail!("kind `fallback` is reserved for harness.prompt_cache_ttl.fallback");
+    }
     if rimz::agents::all_definitions().any(|adapter| adapter.spec().kind == kind) {
         bail!("agent kind `{kind}` is built in and cannot be registered as a plugin");
     }

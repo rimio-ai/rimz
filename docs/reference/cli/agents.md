@@ -562,7 +562,7 @@ rimz agents check mybot --replay events.jsonl    # validate one plugin and repla
 rimz agents check mybot --spend-file session.jsonl   # also run the spend probe on a transcript
 ```
 
-The scaffold holds the manifest, a setup guide, the canonical forwarding shim, and stub probes. A valid plugin kind works anywhere a built-in kind does: inline layouts, profiles, teams, supervised runs, coverage, and messaging. The [agent plugin reference](../agent-plugins.md) defines the bundle and wire contracts.
+The scaffold holds the manifest, a setup guide, the canonical forwarding shim, and stub probes. Kinds must differ from built-ins and existing plugins; `fallback` is reserved for prompt-cache configuration and refuses without creating a scaffold. A valid plugin kind works anywhere a built-in kind does: inline layouts, profiles, teams, supervised runs, coverage, and messaging. The [agent plugin reference](../agent-plugins.md) defines the bundle and wire contracts.
 
 ## List and manage agents
 

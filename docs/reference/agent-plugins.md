@@ -26,7 +26,7 @@ edit agent.toml and README.md, then run `rimz agents register --check`
 
 The scaffold's `[probes]` entries are commented out, so the stub probes do nothing until you uncomment them; until then `rimz agents check` prints `probes: none declared`.
 
-`register` refuses a kind that breaks the [kind rules](#top-level-keys), a built-in kind such as `claude`, a kind a valid bundle already uses, and a directory that already exists.
+`register` refuses a kind that breaks the [kind rules](#top-level-keys), the reserved kind `fallback`, a built-in kind such as `claude`, a kind a valid bundle already uses, and a directory that already exists. `fallback` belongs to `[harness.prompt_cache_ttl]`, not an agent plugin.
 
 `rimz agents register --check` validates every bundle under `agents.d` and creates nothing. It prints `N agent plugin(s) valid`, or exits 1 listing each invalid manifest with its path and error.
 
@@ -159,7 +159,7 @@ Keys are kebab-case. RimZ ignores keys it does not recognise in every table, so 
 | Key | Required | Meaning |
 | --- | --- | --- |
 | `protocol` | yes | Must be `1`. |
-| `kind` | yes | The agent's name in `rimz agents <kind>`, profiles, and addresses. Lowercase letters, digits, and `-`, starting and ending with a letter or digit. Must equal the bundle directory name and differ from every built-in kind and every other plugin. |
+| `kind` | yes | The agent's name in `rimz agents <kind>`, profiles, and addresses. Lowercase letters, digits, and `-`, starting and ending with a letter or digit. Must equal the bundle directory name and differ from every built-in kind and every other plugin. `fallback` is reserved for prompt-cache configuration. |
 | `display-name` | yes | Name shown in the sidebar and reports. Must not be empty. |
 | `process-names` | yes | Process names RimZ matches to find the agent running in a pane. At least one, no duplicates. |
 | `emits` | yes | The canonical events the shim sends, from [Events](#events). Must include `session_start`, which creates the session. No duplicates or unknown names. |
@@ -276,7 +276,7 @@ Any event may carry these optional fields:
 | `session_end` | none | Ends the session and hides its card; the session stays available to resume. |
 | `context` | shared fields, plus the context fields below | Updates the card's context, cost, and rate limits without changing state. |
 
-A `context` event also accepts the optional fields of RimZ's [`AgentContext`](../../crates/rimz/src/agents/context.rs) record, including `session_name`, `session_preview`, `model_id`, `effort`, `fast`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. `fast` is a live boolean reading: `false` clears the fast-mode badge, while an absent value preserves the last live reading or launch fallback. The top-level `model`, token, `context_pct`, `total_cost_usd`, and `rate_limits` fields fill the same record when its own fields are absent. RimZ sets `source` and `observed_at` itself.
+A `context` event also accepts the optional fields of RimZ's [`AgentContext`](../../crates/rimz/src/agents/context.rs) record, including `session_name`, `session_preview`, `model_id`, `effort`, `fast`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `last_cache_write`, `pr`, and `account`. `fast` is a live boolean reading: `false` clears the fast-mode badge, while an absent value preserves the last live reading or launch fallback. `last_cache_write` is the newest cache-writing request's retention: `"5m"`, `"1h"`, or `"unsplit"`. A split observation overrides static lifetime settings, even `off`; `unsplit` falls through to them, and omission keeps the prior observation ([cache lifetimes](../guide/configuration.md#idle-compaction)). The top-level `model`, token, `context_pct`, `total_cost_usd`, and `rate_limits` fields fill the same record when its own fields are absent. RimZ sets `source` and `observed_at` itself.
 
 ### Dropped envelopes
 

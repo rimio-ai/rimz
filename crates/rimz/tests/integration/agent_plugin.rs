@@ -11,6 +11,17 @@ use crate::common::{CommandTimeoutExt, Env};
 fn plugin_scaffold_registry_doctor_and_start_warnings_work_end_to_end() {
     let env = Env::new();
     env.record(&env.project_root);
+    let reserved = env
+        .rimz()
+        .args(["agents", "register", "fallback"])
+        .bounded_output()
+        .expect("refuse reserved kind");
+    assert!(
+        !reserved.status.success()
+            && String::from_utf8_lossy(&reserved.stderr).contains("reserved")
+            && !env.rimz_home().join("agents.d/fallback").exists(),
+        "reserved kind must refuse without a scaffold: {reserved:?}"
+    );
     let output = env
         .rimz()
         .args(["agents", "register", "testbot"])
