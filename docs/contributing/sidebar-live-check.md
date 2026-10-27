@@ -569,6 +569,8 @@ Session-death recovery needs the same feed for every agent. The stub agents hold
 
 The feed exits 0 with no output, and it runs once per room: later `a` calls reuse the registered session. A SessionStart alone leaves the card fresh, and a fresh card has no subagents or waits line, so a wait armed now stays off the frame. To check delegation lines, also feed `UserPromptSubmit` (with a `prompt` field) and `Stop` for the same session before arming. The card then reads sleeping, with `⧖ waits (n)` and its entries. A fed hook lands asynchronously: before the step that reads it, poll `rz agents show '@coder#probe'` until its status reflects the hook.
 
+To give an agent a real prompt history, feed whole Claude lifecycles the way [Age a card into a stale line](#age-a-card-into-a-stale-line-with-an-expired-cache), [Land the team's worktree](#land-the-teams-worktree), and [Native subagent replay](#native-subagent-replay) do, each through `hooks feed --source claude`. A check that reads the store's checkpoints rather than a command's output finds them in the room's runtime directory, `$ROOT/runtime/rimz/ws/<room>/snapshots/`, where `<room>` is the one directory under `$ROOT/home/.rimz/ws/`. They publish on a pace, and `publish.stamp` is rewritten after `rollup.json` and `latest.json`, so wait until the stamp's modification time changes before reading either file.
+
 On both backends, both `wait` calls must resolve the caller to `@coder#probe`. The arming lines read like this, `--as` first and `--as-ancestor` second (wait names are random):
 
 ```console
