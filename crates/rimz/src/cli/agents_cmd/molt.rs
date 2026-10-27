@@ -1,6 +1,7 @@
 //! Agent-only fresh-session succession at the caller's recorded generation.
 
 use super::*;
+use rimz::config::effective::ProfileScope;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller, resolve_launch_caller};
 use rimz::harness::launch::ExecAction;
 
@@ -253,6 +254,12 @@ fn replacement_posture(
     alias: &str,
     room: Option<(&rimz::RuntimePaths, &rimz::StatePaths)>,
 ) -> Result<(AgentKind, ResumePosture)> {
+    let (scope, _) = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child())
+        .resolve_launch(
+            agent.profile.as_deref(),
+            &effective.profiles,
+            &effective.subagent_profiles,
+        );
     let spec = match (agent.team.as_deref(), agent.role.as_deref()) {
         (Some(team), Some(role)) => format!("{team}.{role}"),
         _ => agent
@@ -264,6 +271,7 @@ fn replacement_posture(
         None,
         machine,
         effective,
+        scope,
         Some(&spec),
         None,
         &LaunchOverrideArgs {
@@ -356,6 +364,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replacement_resolves_a_child_fork_and_its_alias_in_the_subagent_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.subagents.profiles = serde_json::from_value(serde_json::json!({
+            "worker": {"agent": "claude", "model": "opus"},
+            "replacement": {"agent": "codex", "model": "gpt-6.1-sol"}
+        }))
+        .unwrap();
+        let effective = rimz::config::effective::load(&machine, dir.path()).unwrap();
+        let mut agent = rimz::testkit::agent_state("claude", "fork", jiff::Timestamp::UNIX_EPOCH);
+        agent.profile = Some("worker".into());
+        agent.profile_scope = Some(ProfileScope::Subagents);
+        let actual = replacement_posture(&agent, &machine, &effective, "replacement", None)
+            .map(|(kind, posture)| (kind.to_string(), posture.launch.model))
+            .map_err(|error| error.to_string());
+        assert_eq!(actual, Ok(("codex".into(), Some("gpt-6.1-sol".into()))));
+    }
+
+    #[test]
     fn replacement_rebases_the_same_role_without_replaying_the_old_record() {
         let dir = tempfile::tempdir().unwrap();
         let role_prompt = dir.path().join("role.md");
@@ -415,6 +442,7 @@ mod tests {
             kind: AgentKind::new_unchecked("codex"),
             agent_id: "launch_root".into(),
         });
+        agent.profile_scope = Some(ProfileScope::Subagents);
         let posture = ResumePosture {
             launch: Default::default(),
             degraded: None,
@@ -443,6 +471,7 @@ mod tests {
         );
         assert_eq!(request.name, AgentLaunchName::Soft("fox".into()));
         assert!(request.run_id.is_none());
+        assert_eq!(request.launch.profile_scope, Some(ProfileScope::Subagents));
     }
 
     #[test]

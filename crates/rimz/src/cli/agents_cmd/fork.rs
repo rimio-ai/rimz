@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::cli::machine_config;
+use rimz::config::effective::ProfileScope;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 
 use super::placement::{PlacementErrors, PlacementRequest};
@@ -36,8 +37,6 @@ struct ForkSeed {
     kind: AgentKind,
     source_session_id: AgentSessionId,
     cwd: PathBuf,
-    /// The source is a launched child, whose profile names a subagent profile.
-    child: bool,
     launch: rimz::agents::LaunchParams,
 }
 
@@ -297,7 +296,8 @@ fn fork_posture(
     seed: &ForkSeed,
     effective: &rimz::config::effective::LaunchAgents,
 ) -> Result<ResumePosture> {
-    let profiles = effective.profiles_for_launch(seed.child, seed.launch.profile.as_deref());
+    let scope = ProfileScope::for_launch(seed.launch.profile_scope, false);
+    let profiles = effective.profiles_for_launch(scope, seed.launch.profile.as_deref());
     effective.block_failed_launch(
         &seed.kind,
         seed.launch.profile.as_deref(),
@@ -386,14 +386,15 @@ fn validate_fork_source(
             agent.agent_id
         );
     }
+    let scope = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
     Ok(ForkSeed {
         kind: agent.kind.clone(),
         source_session_id: agent.agent_id.clone(),
         cwd,
-        child: agent.is_launched_child(),
         launch: rimz::agents::LaunchParams {
             checkout: agent.checkout.clone(),
             profile: agent.profile.clone(),
+            profile_scope: (scope == ProfileScope::Subagents).then_some(scope),
             login,
             record: agent.record.clone(),
             tier: agent.tier.clone(),
@@ -492,7 +493,6 @@ mod tests {
             kind: AgentKind::new_unchecked(kind),
             source_session_id: AgentSessionId::from("session-1"),
             cwd: PathBuf::from("/repo/worktree"),
-            child: false,
             launch: rimz::agents::LaunchParams {
                 profile: profile.map(ToOwned::to_owned),
                 mode,
@@ -622,13 +622,14 @@ mod tests {
             },
         );
         let mut child = seed("claude", Some("explorer"), None);
-        child.child = true;
-
-        let posture = posture_with_tables(&child, &ProfilesConfig::default(), &explorer)
-            .expect("child posture");
-
-        assert_eq!(posture.launch.model.as_deref(), Some("opus"));
-        assert_eq!(posture.degraded, None);
+        child.launch.profile_scope = Some(ProfileScope::Subagents);
+        let twin = profiles("explorer", profile("codex"));
+        let actual = [&ProfilesConfig::default(), &twin].map(|agents| {
+            posture_with_tables(&child, agents, &explorer)
+                .map(|posture| (posture.launch.model, posture.degraded))
+                .map_err(|error| error.to_string())
+        });
+        assert_eq!(actual.to_vec(), vec![Ok((Some("opus".into()), None)); 2]);
     }
 
     #[test]
@@ -789,5 +790,45 @@ mod tests {
         assert_eq!(seed.launch.launch_depth, Some(3));
         assert_eq!(seed.launch.launched_by, None);
         assert_eq!(seed.launch.parent_agent_id, None);
+    }
+
+    #[test]
+    fn fork_validation_records_the_source_profile_doorway_transitively() {
+        let mut actual = Vec::new();
+        for (child, recorded, peer, team_role) in [
+            (true, false, false, false),
+            (true, false, false, true),
+            (false, true, false, false),
+            (false, false, false, false),
+            (false, false, true, false),
+        ] {
+            let mut agent = source("session-1");
+            if child || peer || recorded {
+                agent.launch_depth = Some(1);
+            }
+            if child {
+                agent.parent_agent_id = Some("parent".into());
+            }
+            if team_role {
+                agent.team = Some("forge".into());
+                agent.role = Some("coder".into());
+            }
+            if recorded {
+                agent.profile_scope = Some(ProfileScope::Subagents);
+            }
+            let seed =
+                validate_fork_source(&agent, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true).unwrap();
+            actual.push(seed.launch.profile_scope);
+        }
+        assert_eq!(
+            actual,
+            [
+                Some(ProfileScope::Subagents),
+                Some(ProfileScope::Subagents),
+                Some(ProfileScope::Subagents),
+                None,
+                None,
+            ]
+        );
     }
 }

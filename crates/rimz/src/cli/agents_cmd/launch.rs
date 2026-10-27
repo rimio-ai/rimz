@@ -69,6 +69,7 @@ pub(super) fn launch_layout(
             resolved_snapshot.as_ref(),
             &machine_config,
             &effective,
+            rimz::config::effective::ProfileScope::Agents,
             launch.spec.as_deref(),
             launch.prompt.as_deref(),
             &LaunchOverrideArgs::default(),

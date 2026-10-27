@@ -1572,14 +1572,16 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             },
         );
     }
-    for (profile, subagent, expected) in [
-        (Some("quiet"), false, false),
-        (Some("loud"), false, true),
-        (Some("quiet"), true, true),
-        (Some("child"), true, false),
-        (Some("team-child"), true, false),
-        (None, false, true),
-        (None, true, true),
+    for (profile, subagent, recorded, expected) in [
+        (Some("quiet"), false, false, false),
+        (Some("loud"), false, false, true),
+        (Some("quiet"), true, false, true),
+        (Some("child"), true, false, false),
+        (Some("team-child"), true, false, false),
+        (None, false, false, true),
+        (None, true, false, true),
+        (Some("child"), false, true, false),
+        (Some("quiet"), false, true, true),
     ] {
         let mut request = request(
             "claude",
@@ -1590,11 +1592,12 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
         );
         request.identity.params.profile = profile.map(str::to_owned);
         request.subagent = subagent;
+        request.identity.params.profile_scope = recorded.then_some(ProfileScope::Subagents);
         let reminders =
             exec_launch_reminders(&request, &machine_config, project.path(), config.path());
         assert_eq!(
             reminders.model, expected,
-            "{profile:?}, subagent={subagent}"
+            "{profile:?}, subagent={subagent}, recorded={recorded}"
         );
     }
 }
@@ -3439,6 +3442,47 @@ fn exec_scope_requires_cached_admission_even_when_explicitly_enabled() {
             available && cfg!(target_os = "linux")
         );
     }
+}
+
+#[test]
+fn fresh_exec_of_a_child_fork_judges_the_subagent_profile_definition() {
+    let root = tempfile::tempdir().unwrap();
+    let mut machine = crate::config::MachineConfig::default();
+    machine
+        .notices
+        .failed_definitions
+        .insert("worker".into(), [PathBuf::from("/tmp/worker.md")].into());
+    machine
+        .notices
+        .definition_errors
+        .push(crate::config::definitions::DefinitionErr {
+            path: PathBuf::from("/tmp/worker.md"),
+            message: "invalid frontmatter".into(),
+            cause: crate::config::definitions::DefinitionCause::Invalid,
+        });
+    machine.subagents.profiles = serde_json::from_value(serde_json::json!({
+        "worker": {"agent": "codex"}
+    }))
+    .unwrap();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, root.path(), &root.path().join("home"))
+            .unwrap();
+    let mut request = request(
+        "codex",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    request.identity.params = crate::agents::LaunchParams {
+        profile: Some("worker".into()),
+        profile_scope: Some(ProfileScope::Subagents),
+        ..Default::default()
+    };
+    assert_eq!(
+        definition_failure(&request, &machine, Some(&effective)),
+        None
+    );
 }
 
 #[test]

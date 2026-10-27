@@ -4,7 +4,10 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use crate::agents::LaunchPreset;
-use crate::config::{MachineConfig, effective::LaunchAgents};
+use crate::config::{
+    MachineConfig,
+    effective::{LaunchAgents, ProfileScope},
+};
 use crate::harness::budget::BudgetSpec;
 use crate::harness::plan::{
     LaunchFinalizeOptions, LaunchFinalizeWarning, PermissionModeChoice, ResolvedLaunch,
@@ -33,6 +36,7 @@ pub fn resolve_finalized_layout(
     snapshot: Option<&SidebarSnapshot>,
     machine_config: &MachineConfig,
     effective: &LaunchAgents,
+    scope: ProfileScope,
     spec: Option<&str>,
     prompt: Option<&str>,
     overrides: &LaunchOverrides,
@@ -53,7 +57,7 @@ pub fn resolve_finalized_layout(
             channel,
             team,
             &effective.teams,
-            &effective.profiles,
+            effective.profiles_for(scope),
             &machine_config.agents.commands,
         )?;
         if let Cow::Owned(qualified) = qualified {
@@ -73,7 +77,7 @@ pub fn resolve_finalized_layout(
     });
     let routed = effective.route(
         &machine_config.tiers,
-        crate::config::effective::ProfileScope::Agents,
+        scope,
         spec,
         overrides.tier,
         overrides.preset.model.as_deref(),
@@ -86,7 +90,7 @@ pub fn resolve_finalized_layout(
     )?;
     let mut resolved = crate::harness::plan::resolve_launch(
         &effective,
-        crate::config::effective::ProfileScope::Agents,
+        scope,
         &machine_config.agents.commands,
         spec,
         if routed {
@@ -100,6 +104,7 @@ pub fn resolve_finalized_layout(
         prompt,
         overrides,
         &effective,
+        scope,
         &machine_config.agents.commands,
         &resolved.layout,
         enforce_name_cardinality,
@@ -121,7 +126,10 @@ pub fn resolve_finalized_layout(
         },
     )?;
     Ok(FinalizedLaunch {
-        profiles: effective.profiles,
+        profiles: match scope {
+            ProfileScope::Agents => effective.profiles,
+            ProfileScope::Subagents => effective.subagent_profiles,
+        },
         resolved,
         preset,
         warnings,
@@ -169,11 +177,16 @@ pub fn resolve_launch_prompt_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 }
 
 /// Apply layout launch validation in its user-visible precedence order.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "validation keeps the selected profile scope beside its effective configuration"
+)]
 fn validate_resolved_launch_inputs(
     spec: Option<&str>,
     prompt: Option<&str>,
     overrides: &LaunchOverrides,
     effective: &crate::config::effective::LaunchAgents,
+    scope: ProfileScope,
     commands: &crate::config::CommandsConfig,
     layout: &LayoutSpec,
     enforce_name_cardinality: bool,
@@ -181,7 +194,7 @@ fn validate_resolved_launch_inputs(
     crate::harness::plan::reject_prompt_that_looks_like_spec(
         spec,
         prompt,
-        &effective.profiles,
+        effective.profiles_for(scope),
         commands,
         &effective.teams,
     )?;

@@ -9,7 +9,7 @@ use crate::agents::ProviderLogin;
 use crate::agents::account_links::ShareErr;
 use crate::agents::capabilities::SystemTextChannel;
 use crate::agents::skill_links::{self, Desired, SkillLinkErr, SkillLinkOutcome, SkillLinkPlan};
-use crate::config::effective::LaunchAgents;
+use crate::config::effective::{LaunchAgents, ProfileScope};
 use crate::config::{AccountsConfig, CommandsConfig, Isolation};
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::sandbox::{self, SandboxPlan};
@@ -426,7 +426,8 @@ fn definition_failure(
             )
             .err()
     };
-    let error = refusal(effective.profiles_for_launch(request.subagent, profile))?;
+    let scope = ProfileScope::for_launch(request.identity.params.profile_scope, request.subagent);
+    let error = refusal(effective.profiles_for_launch(scope, profile))?;
     let maybe_seat = request.subagent
         && request.identity.params.role.is_some()
         && profile.is_some_and(|name| effective.profiles.0.contains_key(name));
@@ -1066,8 +1067,8 @@ fn reminders(
             vec![LaunchPlanWarning::DefaultReminders],
         );
     };
-    let profiles =
-        effective.profiles_for_launch(request.subagent, request.identity.params.profile.as_deref());
+    let scope = ProfileScope::for_launch(request.identity.params.profile_scope, request.subagent);
+    let profiles = effective.profiles_for_launch(scope, request.identity.params.profile.as_deref());
     let lsp_configured = !effective.lsp_servers.is_empty();
     let model = request
         .identity

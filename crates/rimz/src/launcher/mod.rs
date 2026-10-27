@@ -405,6 +405,7 @@ pub fn prepare_layout(
         snapshot.as_ref(),
         &machine_config,
         &effective,
+        crate::config::effective::ProfileScope::Agents,
         args.launch.spec.as_deref(),
         args.launch
             .prompt
@@ -877,6 +878,7 @@ fn settle_layout(
                     snapshot.as_ref(),
                     &machine_config,
                     &effective,
+                    crate::config::effective::ProfileScope::Agents,
                     args.launch.spec.as_deref(),
                     None,
                     &matching_overrides,
