@@ -340,6 +340,8 @@ const ROLLUP_CACHE_VERSION: u32 = 45;
 pub(crate) struct RollupCache {
     pub version: u32,
     pub extent: event_log::LogExtent,
+    #[serde(default)]
+    file_id: Option<LogFileId>,
     pub raw_agents: Vec<AgentState>,
     #[serde(default)]
     pub resume_outcomes: Vec<ResumeOutcome>,
@@ -353,9 +355,8 @@ fn read_rollup_cache(path: &Path) -> Option<Arc<RollupCache>> {
     let meta = fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?;
     let len = meta.len();
-    // Only the *parse* is cached; every caller still folds against the live
-    // log from the cached extent, so even a stale serve costs a larger fold,
-    // never a wrong rollup (the [`ParseCache`] contract).
+    // Only the parse is cached; callers revalidate the generation, log file
+    // identity and extent against the live log before resuming from it.
     if let Some(cache) = ROLLUP_PARSE_CACHE.with(|cache| cache.get(path, mtime, len)) {
         return Some(cache);
     }
@@ -575,7 +576,8 @@ fn fold_delta(
 ///
 /// Served by this thread's held [`RollupCursor`]: the first read parses
 /// `snapshots/rollup.json` and the carryover, a read after an append folds only
-/// the new frames, and a read at an unchanged log and carryover opens no file.
+/// the new frames, and an unchanged log and carryover need only the bounded
+/// generation read and metadata checks, without reopening either fold input.
 /// The slot holds one workspace, keyed by the fold's input paths; a read of
 /// another workspace replaces it, so a thread holds at most one rollup.
 /// Read-only: the caller that owns a write serialization point (a locked
@@ -681,16 +683,15 @@ impl PendingRollup {
 fn catch_up_rollup_layered(
     paths: &StatePaths,
 ) -> Result<(RollupCache, AgentRollup, Vec<ResumeOutcome>)> {
-    let log_len = fs::metadata(&paths.events_log)
-        .map(|meta| meta.len())
-        .unwrap_or(0);
+    let generation = lifecycle_log_generation(paths);
+    let log = LogHead::new(generation, fs::metadata(&paths.events_log).ok());
     let base = paths
         .rollup_cache()
         .as_deref()
         .and_then(read_rollup_cache)
-        .filter(|cache| cache.extent.offset <= log_len)
+        .filter(|cache| log.accepts(cache))
         .map(owned_base);
-    catch_up_from(base, paths, workspace_carryover(paths)?)
+    catch_up_from(base, paths, workspace_carryover(paths)?, log)
 }
 
 /// The base-parameterized fold core every entry point shares: resume from
@@ -699,16 +700,17 @@ fn catch_up_rollup_layered(
 /// carryover-merged rollup. The disk-backed wrapper ([`catch_up_rollup`]) and
 /// the in-memory [`RollupCursor`] both delegate here — one implementation, so
 /// the keystone fold equivalence holds for every reader by construction.
-/// `base.extent.offset` must not exceed the live log; callers filter.
+/// Callers validate the base against `log`, stamped before reading any bytes.
 fn catch_up_from(
     base: Option<RollupCache>,
     paths: &StatePaths,
     carryover: Arc<FoldCarryover>,
+    log: LogHead,
 ) -> Result<(RollupCache, AgentRollup, Vec<ResumeOutcome>)> {
     let now = Timestamp::now();
     let project_root = carryover.project_root.clone();
     let project_root = project_root.as_deref();
-    let (seed, generation, start) = match base {
+    let (seed, start) = match base {
         Some(RollupCache {
             extent,
             raw_agents,
@@ -741,7 +743,6 @@ fn catch_up_from(
                     resume_outcomes: resume_seed,
                     saw_session_rebirth,
                 },
-                extent.generation,
                 extent.offset,
             )
         }
@@ -750,7 +751,6 @@ fn catch_up_from(
                 identity: carryover.agent_identity.clone(),
                 ..FoldDeltaSeed::default()
             },
-            lifecycle_log_generation(paths),
             0,
         ),
     };
@@ -771,9 +771,10 @@ fn catch_up_from(
     let refreshed = RollupCache {
         version: ROLLUP_CACHE_VERSION,
         extent: event_log::LogExtent {
-            generation,
+            generation: log.generation,
             offset: end,
         },
+        file_id: log.file_id,
         raw_agents: folded.raw_agents,
         resume_outcomes: folded.resume_outcomes,
         agent_identity: folded.agent_identity,
@@ -866,9 +867,10 @@ fn prune_resume_outcomes(
 
 /// Preserve retained audit identity before the active event log rotates.
 pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Result<usize> {
-    let current_bytes = match fs::metadata(&paths.events_log) {
-        Ok(meta) => meta.len(),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => 0,
+    let generation = lifecycle_log_generation(paths);
+    let meta = match fs::metadata(&paths.events_log) {
+        Ok(meta) => Some(meta),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => None,
         Err(source) => {
             return Err(event_log::EventLogErr::Io {
                 path: paths.events_log.clone(),
@@ -877,6 +879,8 @@ pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -
             .into());
         }
     };
+    let log = LogHead::new(generation, meta);
+    let current_bytes = log.len;
     if current_bytes == 0 || current_bytes < min_bytes {
         return Ok(read_carryover(&paths.agents_carryover)?.agents.len());
     }
@@ -885,12 +889,12 @@ pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -
         .rollup_cache()
         .as_deref()
         .and_then(read_rollup_cache)
-        .filter(|cache| cache.extent.offset <= current_bytes)
+        .filter(|cache| log.accepts(cache))
         .map(owned_base);
     let identity = super::assemble::WorkspaceSnapshotIdentity::from_paths(paths);
     let mut carryover = FoldCarryover::from_raw(read_carryover(&paths.agents_carryover)?);
     carryover.stamp_root_lane(identity.project_root.as_deref());
-    let (cache, agents, resume_outcomes) = catch_up_from(base, paths, Arc::new(carryover))?;
+    let (cache, agents, resume_outcomes) = catch_up_from(base, paths, Arc::new(carryover), log)?;
     let agents = retain_carryover_agents(agents.to_vec(), event_log::DEFAULT_RETENTION);
     let carryover_agents = agents.len();
     let agent_identity = cache
@@ -937,17 +941,17 @@ fn retain_carryover_agents(agents: Vec<AgentState>, older_than: Duration) -> Vec
 /// A long-lived reader's in-memory fold base: the last `RollupCache` this
 /// cursor folded to, the merged rollup it produced, and the identity of the
 /// log file it folded. A cursor folds each delta from memory — O(new bytes)
-/// per wakeup with one `stat` each of the log and the carryover, parsing
-/// neither base — and an unchanged log and carryover return the held rollup
-/// without opening a file. A long-lived reader (the sidebar fetch worker)
-/// owns its cursor across its loop; every other store read goes through the
-/// thread's one held cursor in `catch_up_rollup`.
+/// per wakeup with a bounded generation read and one `stat` each of the log
+/// and carryover, parsing neither base. An unchanged log and carryover return
+/// the held rollup without opening either fold input. A long-lived reader
+/// (the sidebar fetch worker) owns its cursor across its loop; every other
+/// store read goes through the thread's one held cursor in `catch_up_rollup`.
 ///
 /// Staleness is structural, not best-effort: a swapped log file — rotation's
 /// rename-and-recreate, the identity rewrite's rename-over — changes the
 /// `(dev, ino)` identity captured by the same `stat`, and an offset past the
-/// live length means the same, so either drops the in-memory base and
-/// reloads `rollup.json`, whose generation rotation bumps unconditionally.
+/// live length or a changed durable generation means the same, so any of
+/// these drops the in-memory base and reloads a validated `rollup.json`.
 /// A warm fold that errors retries cold once before propagating, so a stale
 /// base can never surface as corruption; an error out of the cold fold is
 /// the same real corruption every reader reports.
@@ -961,22 +965,17 @@ struct CursorState {
     cache: Arc<RollupCache>,
     merged: AgentRollup,
     resume_outcomes: Vec<ResumeOutcome>,
-    file_id: Option<LogFileId>,
     /// The carryover stamp observed before this base was folded: GC can
     /// prune the carryover while the log stands still, so an unchanged log
     /// alone does not make the held merge current.
     carryover: FileStamp,
 }
 
-/// Identity of the log file a cursor folded: device + inode on unix, so a
+/// Identity of the log file a base folded: device + inode on unix, so a
 /// recreated or renamed-over log reads as a different file even when the
 /// regrown log is longer than the held offset. Targets without that identity
-/// get `None`, and the cursor reloads from `rollup.json` every fold — a
-/// regrown swapped log would otherwise alias its bytes onto the stale base
-/// (the offset-regression guard cannot see a *longer* new file, and a
-/// frame-aligned offset folds cleanly rather than erroring), so the warm
-/// fold is traded away there rather than served wrong.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// get `None` and retain the generation and offset guards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct LogFileId {
     #[cfg(unix)]
     dev: u64,
@@ -997,6 +996,29 @@ impl LogFileId {
     #[cfg(not(unix))]
     fn of(_meta: &fs::Metadata) -> Option<Self> {
         None
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LogHead {
+    generation: u64,
+    len: u64,
+    file_id: Option<LogFileId>,
+}
+
+impl LogHead {
+    fn new(generation: u64, meta: Option<fs::Metadata>) -> Self {
+        Self {
+            generation,
+            len: meta.as_ref().map_or(0, fs::Metadata::len),
+            file_id: meta.as_ref().and_then(LogFileId::of),
+        }
+    }
+
+    fn accepts(self, cache: &RollupCache) -> bool {
+        cache.extent.generation == self.generation
+            && cache.file_id == self.file_id
+            && cache.extent.offset <= self.len
     }
 }
 
@@ -1023,22 +1045,16 @@ impl RollupCursor {
         &mut self,
         paths: &StatePaths,
     ) -> Result<(Arc<RollupCache>, AgentRollup, Vec<ResumeOutcome>)> {
-        let meta = fs::metadata(&paths.events_log).ok();
-        let file_id = meta.as_ref().and_then(LogFileId::of);
-        let log_len = meta.map(|meta| meta.len()).unwrap_or(0);
+        let generation = lifecycle_log_generation(paths);
+        let log = LogHead::new(generation, fs::metadata(&paths.events_log).ok());
         // Stamped before any read, so a carryover replaced mid-fold reads as
         // changed on the next call rather than hiding behind this one.
         let carryover_stamp = StampedPath::of(&paths.agents_carryover).stamp;
         if let Some(held) = self.held.take() {
-            // The held base serves warm only when the live log carries a real
-            // identity that matches the one it folded; without one (a missing
-            // log, a target with no dev+ino) the fold reloads `rollup.json`
-            // rather than risk folding a swapped file's bytes onto it.
-            let same_file = file_id.is_some() && held.file_id == file_id;
-            if same_file && held.cache.extent.offset == log_len && held.carryover == carryover_stamp
-            {
+            let current = log.accepts(&held.cache);
+            if current && held.cache.extent.offset == log.len && held.carryover == carryover_stamp {
                 // Nothing appended and the carryover unchanged: serve the
-                // held fold without opening a file.
+                // held fold without reopening the log or carryover.
                 let out = (
                     Arc::clone(&held.cache),
                     held.merged.clone(),
@@ -1050,19 +1066,19 @@ impl RollupCursor {
             // A warm fold that errors falls through to the cold reload: if
             // the log is genuinely corrupt the cold fold errors the same way,
             // so nothing is masked — only a stale base heals.
-            if same_file
-                && held.cache.extent.offset < log_len
+            if current
+                && held.cache.extent.offset < log.len
                 && let Ok(carryover) = workspace_carryover(paths)
                 && let Ok((cache, merged, resume_outcomes)) =
-                    catch_up_from(Some(owned_base(held.cache)), paths, carryover)
+                    catch_up_from(Some(owned_base(held.cache)), paths, carryover, log)
             {
-                return Ok(self.hold(cache, merged, resume_outcomes, file_id, carryover_stamp));
+                return Ok(self.hold(cache, merged, resume_outcomes, carryover_stamp));
             }
             // Identity changed, the offset regressed, or only the carryover
             // moved: the in-memory merge is stale, so reload from disk.
         }
         let (cache, merged, resume_outcomes) = catch_up_rollup_layered(paths)?;
-        Ok(self.hold(cache, merged, resume_outcomes, file_id, carryover_stamp))
+        Ok(self.hold(cache, merged, resume_outcomes, carryover_stamp))
     }
 
     fn hold(
@@ -1070,7 +1086,6 @@ impl RollupCursor {
         cache: RollupCache,
         merged: AgentRollup,
         resume_outcomes: Vec<ResumeOutcome>,
-        file_id: Option<LogFileId>,
         carryover: FileStamp,
     ) -> (Arc<RollupCache>, AgentRollup, Vec<ResumeOutcome>) {
         let cache = Arc::new(cache);
@@ -1078,7 +1093,6 @@ impl RollupCursor {
             cache: Arc::clone(&cache),
             merged: merged.clone(),
             resume_outcomes: resume_outcomes.clone(),
-            file_id,
             carryover,
         });
         (cache, merged, resume_outcomes)

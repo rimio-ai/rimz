@@ -8,7 +8,9 @@ use std::sync::Arc;
 use jiff::Timestamp;
 
 use super::Result;
-use super::fold::{ResumeOutcome, RollupCursor, catch_up_rollup, write_rollup_cache};
+use super::fold::{
+    ResumeOutcome, RollupCursor, catch_up_rollup, lifecycle_log_generation, write_rollup_cache,
+};
 use super::view::{SNAPSHOT_VERSION, SidebarSnapshot};
 use crate::agents::AgentState;
 use crate::disk::atomic::{self};
@@ -113,31 +115,30 @@ fn assemble_snapshot<'a>(
 /// in the active log.
 ///
 /// The verdict is the embedded extent stamp: the parsed snapshot must claim
-/// exactly the live log's byte length. The publish runs after the workspace
-/// lock releases, so file mtimes carry no ordering — the stamp is the one
-/// freshness authority. A write racing this read moves the log past the
-/// stamp; the guard then returns `None` and the caller folds the missing
-/// delta itself, so a just-appended event is never missed. Lock-free and
-/// O(snapshot): a torn or absent file deserializes to `None` and falls back,
-/// and the atomic rename means a readable `latest.json` is always a complete
-/// rollup.
+/// the durable generation and exactly the live log's byte length. The publish
+/// runs after the workspace lock releases, so file mtimes carry no ordering —
+/// the stamp is the one freshness authority. A write racing this read moves
+/// the log past the stamp; the guard then returns `None` and the caller folds
+/// the missing delta itself, so a just-appended event is never missed.
+/// Lock-free and O(snapshot): a torn or absent file deserializes to `None` and
+/// falls back, and the atomic rename means a readable `latest.json` is always
+/// a complete rollup.
 pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     let path = paths.latest_snapshot()?;
     fs::metadata(&path).ok()?;
+    let generation = lifecycle_log_generation(paths);
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
-    // The freshness-vs-log check runs below on the live mtimes; only the
+    // The freshness-vs-log check runs below on the live extent; only the
     // *parse* is cached ([`ParseCache`]), keeping the 100–500 KB deserialize
     // off the CPU on a delta storm — the read itself is page-cache-hot.
-    // Offset-only comparison is sound across rotations because the writer
-    // retracts `latest.json` before rebuilding the new generation (see
-    // `rotate_event_log`), and every publish re-stamps it — so a readable
-    // stamp always describes the live log, never a renamed-away one.
+    // Each runtime domain owns its copy, so generation validation also
+    // rejects views another domain's boundary could not retract.
     let stamp_is_current = |snapshot: &SidebarSnapshot| {
         snapshot
             .reflects_log
-            .is_some_and(|extent| extent.offset == log_len)
+            .is_some_and(|extent| extent.generation == generation && extent.offset == log_len)
     };
     let snapshot_is_current = |snapshot: &SidebarSnapshot| {
         stamp_is_current(snapshot) && snapshot.snapshot_version == SNAPSHOT_VERSION

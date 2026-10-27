@@ -415,6 +415,7 @@ fn fold_signals(
             &paths,
             &RollupCache {
                 version: 34,
+                file_id: None,
                 extent: event_log::LogExtent {
                     generation: 0,
                     offset: std::fs::metadata(&paths.events_log).unwrap().len(),

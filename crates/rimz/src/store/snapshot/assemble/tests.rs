@@ -384,6 +384,29 @@ fn read_fresh_latest_serves_only_when_it_reflects_the_log() {
 }
 
 #[test]
+fn read_fresh_latest_rejects_another_generation_even_at_the_same_length() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+    event_log::append(&paths.events_log, &lifecycle(&workspace, "a", None)).unwrap();
+    rebuild(&paths).unwrap();
+    assert!(read_fresh_latest(&paths).is_some());
+    atomic::write_temp_then_rename(&paths.log_generation, &serde_json::json!({"generation": 7}))
+        .unwrap();
+
+    let warm = read_fresh_latest(&paths);
+    let cold = read_fresh_latest_cold(&paths);
+    assert_eq!(
+        (warm.is_none(), cold.is_none()),
+        (true, true),
+        "neither a cached parse nor a cold read may alias equal offsets across generations"
+    );
+    rebuild(&paths).unwrap();
+    let current = read_fresh_latest(&paths).unwrap();
+    assert_eq!(current.reflects_log.unwrap().generation, 7);
+}
+
+#[test]
 fn read_fresh_latest_rejects_version_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
