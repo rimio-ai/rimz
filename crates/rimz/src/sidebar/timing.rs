@@ -6,6 +6,15 @@
 
 use std::time::Duration;
 
+#[expect(
+    dead_code,
+    reason = "foundation for the following hibernated cadence lanes"
+)]
+pub(crate) const HIBERNATED_CHECK_TTL: Duration = Duration::from_secs(60);
+
+#[expect(dead_code, reason = "foundation for the following hibernated git tier")]
+pub(super) const DIFF_STATS_HIBERNATED_TTL: Duration = Duration::from_secs(30 * 60);
+
 pub(super) const TRUNK_STATE_TTL: Duration = Duration::from_secs(5);
 
 use jiff::SignedDuration;

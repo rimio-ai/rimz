@@ -1348,7 +1348,8 @@ path = "crates/rimz/src/harness"
 # StepKind/kind, ChildError, execute_step and finish_script share command-step policy (+5).
 # WorkflowLaunchRecord, WorkflowLedger, load_workflows, Launch, and launched share typed launch memory with loop inspection (+5).
 # LoadedTask::key_for_root reuses the loop list's resolved root across key and row reads (+1).
-surface-budget = 1017
+# hibernation_entry shares the open-agent join with the transcript watcher (+1).
+surface-budget = 1018
 
 [[verdict]]
 kind = "item"
@@ -2365,7 +2366,8 @@ path = "crates/rimz/src/sidebar"
 # pane_is_focused and LAYOUT_FREEZE_PARKED share native-focus freeze deadlines (+2).
 # CLICK_GUARD gives the renderer's stale-frame hit window its shared cadence (+1).
 # FOCUS_MARKER_TMUX_DWELL and FOCUS_MARKER_ZELLIJ_DWELL own backend-specific consumer dwell (+2).
-surface-budget = 245
+# HIBERNATED_CHECK_TTL shares the held-agent cadence with the transcript watcher (+1).
+surface-budget = 246
 
 [[verdict]]
 kind = "item"
@@ -2699,7 +2701,23 @@ path = "crates/rimz/src/store"
 # RunSession preserves outgoing session bindings for a session run's total spend (+1).
 # MessageRecord::with_about_run links queued advisory notices to their child run (+1).
 # HookDrainerOutage and HookDrainerOutageAgent carry wrapper outage facts to the renderer (+2).
-surface-budget = 502
+# hibernate::read_cached shares per-fold record parses without changing locked reads (+1).
+surface-budget = 503
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::hibernation_entry"
+reason = "The sidebar projection and transcript watcher share one open-agent hibernation join."
+
+[[verdict]]
+kind = "item"
+key = "store::hibernate::read_cached"
+reason = "Read-only fold readers reuse atomic hibernation records; locked read-modify-writes stay uncached."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::HIBERNATED_CHECK_TTL"
+reason = "The transcript watcher shares the sidebar's hibernated per-agent cadence."
 
 [[verdict]]
 kind = "item"

@@ -18,9 +18,11 @@
 //! fold resumes from the cached extent, the freshness stamp is checked on
 //! the live log — so a stale serve costs a larger fold or a re-read, never
 //! a wrong result. A new caller must preserve that property: cache the
-//! parse, never a verdict. The one exception is a file only ever replaced by
-//! atomic rename, keyed by the full stamp: the temp file is a distinct inode
-//! while the old one is still linked, so no replacement can alias.
+//! parse, never a verdict. Files only replaced by atomic rename use the full
+//! stamp: the temp file has a distinct inode while the old one is still linked.
+//! A locked read-modify-write never uses this cache: a later rename can reuse
+//! a freed inode at equal length within one mtime tick, and publishing that
+//! stale parse would lose intervening writes.
 //!
 //! Callers hold one per thread (`thread_local!`), so the slot needs no lock
 //! and is never shared across threads.

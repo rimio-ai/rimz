@@ -3,8 +3,10 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::StatePaths;
+use crate::disk::parse_cache::ParseCache;
 use crate::disk::{atomic, lock};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 
@@ -36,7 +38,11 @@ pub struct Entry {
 #[derive(Serialize, Deserialize)]
 struct Record {
     version: u32,
-    entries: Vec<Entry>,
+    entries: Arc<Vec<Entry>>,
+}
+
+thread_local! {
+    static HIBERNATION_CACHE: ParseCache<Record> = const { ParseCache::new() };
 }
 
 pub fn read(paths: &StatePaths) -> Vec<Entry> {
@@ -44,7 +50,15 @@ pub fn read(paths: &StatePaths) -> Vec<Entry> {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
         .filter(|record| record.version == 1)
-        .map(|record| record.entries)
+        .map(|record| Arc::unwrap_or_clone(record.entries))
+        .unwrap_or_default()
+}
+
+pub(crate) fn read_cached(paths: &StatePaths) -> Arc<Vec<Entry>> {
+    HIBERNATION_CACHE
+        .with(|cache| cache.read_stamped_json(&paths.hibernation))
+        .filter(|record| record.version == 1)
+        .map(|record| Arc::clone(&record.entries))
         .unwrap_or_default()
 }
 
@@ -91,7 +105,7 @@ fn update(
         &paths.hibernation,
         &Record {
             version: 1,
-            entries,
+            entries: Arc::new(entries),
         },
     )?;
     Ok(dropped)
@@ -136,6 +150,21 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&paths.hibernation).unwrap()).unwrap();
         assert_eq!(wire["version"], 1);
         assert_eq!(wire["entries"][0]["pane_id"], "tmux:%3");
+    }
+
+    #[test]
+    fn cached_reads_share_the_parse_until_replacement_and_follow_withdrawal() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths =
+            StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        record(&paths, entry("a")).unwrap();
+        let first = read_cached(&paths);
+        assert!(std::sync::Arc::ptr_eq(&first, &read_cached(&paths)));
+        record(&paths, entry("b")).unwrap();
+        assert_eq!(*read_cached(&paths), [entry("a"), entry("b")]);
+        withdraw(&paths, &entry("a").kind, &"a".into()).unwrap();
+        assert_eq!(*read_cached(&paths), [entry("b")]);
+        assert_eq!(*first, [entry("a")]);
     }
 
     #[test]
