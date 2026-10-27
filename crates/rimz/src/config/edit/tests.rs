@@ -1062,9 +1062,14 @@ fn assert_first_prompt_cache_value_keeps_harness_comments(kind: &str, value: &st
 
     let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
     assert_harness_template_comments_stay_under_harness(&rendered);
+    let child = rendered
+        .find("\n[harness.prompt_cache_ttl.codex]\n")
+        .expect("child header");
+    let parent = rendered
+        .find("\n[harness.prompt_cache_ttl]\n")
+        .expect("parent header");
     assert!(
-        rendered.find("\n[harness.prompt_cache_ttl.codex]\n")
-            < rendered.find("\n[harness.prompt_cache_ttl]\n"),
+        child < parent,
         "the first parent header must follow its child: {rendered}"
     );
     let uncommented = rendered.replace(
