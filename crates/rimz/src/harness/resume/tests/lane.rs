@@ -228,6 +228,7 @@ fn fresh_lane_rebuilds_team_and_skips_flat_roots() {
             Ok(LaneRestoreConfig {
                 teams,
                 profiles,
+                subagent_profiles: ProfilesConfig::default(),
                 commands,
             })
         })
@@ -311,6 +312,7 @@ fn fresh_lane_materializes_new_team_launches() {
             Ok(LaneRestoreConfig {
                 teams,
                 profiles,
+                subagent_profiles: ProfilesConfig::default(),
                 commands,
             })
         })
@@ -670,6 +672,7 @@ fn lane_all_closed_restores_team_first_within_the_cap() {
                 Ok(LaneRestoreConfig {
                     teams,
                     profiles,
+                    subagent_profiles: ProfilesConfig::default(),
                     commands,
                 })
             })
@@ -726,6 +729,7 @@ fn lane_restore_gives_a_team_and_a_standalone_agent_in_one_channel_distinct_tabs
             Ok(LaneRestoreConfig {
                 teams,
                 profiles,
+                subagent_profiles: ProfilesConfig::default(),
                 commands,
             })
         })
@@ -759,6 +763,7 @@ fn lane_all_closed_drops_launched_children_of_team_and_flat_roots() {
             Ok(LaneRestoreConfig {
                 teams,
                 profiles,
+                subagent_profiles: ProfilesConfig::default(),
                 commands,
             })
         })
@@ -958,6 +963,7 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
             Ok(LaneRestoreConfig {
                 teams,
                 profiles,
+                subagent_profiles: ProfilesConfig::default(),
                 commands,
             })
         })

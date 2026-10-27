@@ -10,6 +10,7 @@ use jiff::Timestamp;
 
 use crate::Store;
 use crate::agents::AgentState;
+use crate::config::effective::ProfileScope;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::diag::DiagSink;
 use crate::diag::record::DiagEvent;
@@ -925,7 +926,7 @@ fn effective_teams_and_profiles(
     machine: &MachineConfig,
     project_root: &Path,
     availability: &crate::harness::plan::LaunchAvailability,
-) -> (TeamsConfig, ProfilesConfig) {
+) -> (TeamsConfig, ProfilesConfig, ProfilesConfig) {
     match crate::config::effective::load(machine, project_root) {
         Ok(mut launch) => {
             if let Err(error) = launch.route(
@@ -938,9 +939,13 @@ fn effective_teams_and_profiles(
                 |kind, model| availability.unavailable(kind, model),
             ) {
                 tracing::warn!(%error, "cannot route team restore profiles; recovering existing members only");
-                return (TeamsConfig::default(), machine.agents.profiles.clone());
+                return (
+                    TeamsConfig::default(),
+                    machine.agents.profiles.clone(),
+                    machine.subagents.profiles.clone(),
+                );
             }
-            (launch.teams, launch.profiles)
+            (launch.teams, launch.profiles, launch.subagent_profiles)
         }
         Err(err) => {
             let (config, detail) = err
@@ -953,7 +958,11 @@ fn effective_teams_and_profiles(
                 detail = %detail,
                 "effective agent config unavailable; recovering existing members with machine profiles only"
             );
-            (TeamsConfig::default(), machine.agents.profiles.clone())
+            (
+                TeamsConfig::default(),
+                machine.agents.profiles.clone(),
+                machine.subagents.profiles.clone(),
+            )
         }
     }
 }
@@ -969,12 +978,12 @@ fn plan_recovery(
     agents: &[AgentState],
     project_root: &Path,
     machine: &MachineConfig,
-    teams_and_profiles: &(TeamsConfig, ProfilesConfig),
+    teams_and_profiles: &(TeamsConfig, ProfilesConfig, ProfilesConfig),
     logins: Option<&crate::agents::RoomAccounts>,
     agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
     ambient: &BTreeMap<String, String>,
 ) -> RecoveryPlan {
-    let (teams, profiles) = teams_and_profiles;
+    let (teams, profiles, subagent_profiles) = teams_and_profiles;
     let recorded_logins =
         crate::agents::room_accounts(&paths.workspace_record, Some(project_root), machine)
             .unwrap_or_else(crate::agents::RoomAccounts::unavailable);
@@ -1134,6 +1143,9 @@ fn plan_recovery(
         {
             return true;
         }
+        let (_, profiles) =
+            ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child())
+                .resolve_launch(agent.profile.as_deref(), profiles, subagent_profiles);
         let posture = crate::harness::resume::resolve_posture(
             crate::harness::resume::PostureRequest {
                 record: agent.record.as_deref(),
@@ -1178,6 +1190,7 @@ fn plan_recovery(
             rimz_bin: &crate::proc::rimz_exe(),
             runtime,
             profiles,
+            subagent_profiles,
             max: machine.resume.max.saturating_sub(team_panes),
             logins,
             catalog: &catalog,

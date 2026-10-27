@@ -6,6 +6,78 @@ use crate::harness::resume::RecoveryEntry;
 use crate::ids::{MuxName, PaneId};
 
 #[test]
+#[cfg(target_os = "linux")]
+fn rebirth_recovers_a_child_fork_with_its_subagent_posture_and_isolation() {
+    if std::env::var_os("RIMZ_TEST_REBIRTH_FORK_SCOPE").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                concat!(
+                    "harness::rebirth::tests::",
+                    "rebirth_recovers_a_child_fork_with_its_subagent_posture_and_isolation"
+                ),
+                "--nocapture",
+            ])
+            .env("PATH", "/no-rimz-test-binaries")
+            .env("RIMZ_TEST_REBIRTH_FORK_SCOPE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(&[("fork", &root.path().join("work"), true)]);
+    fixture.conversation("fork");
+    let mut observation =
+        AgentLifecycleObservation::new(Some("fork".into()), LifecycleSignal::Registered);
+    observation.launch = crate::agents::LaunchParams {
+        profile: Some("worker".into()),
+        profile_scope: Some(ProfileScope::Subagents),
+        launch_depth: Some(1),
+        ..Default::default()
+    };
+    Store::open(fixture.paths.clone(), fixture.runtime.clone())
+        .unwrap()
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.paths.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let mut machine = MachineConfig::default();
+    machine.agents.isolation = Isolation::Scoped;
+    machine.subagents.profiles = serde_json::from_value(serde_json::json!({
+        "worker": {"agent": "claude", "model": "opus", "isolation": "host"}
+    }))
+    .unwrap();
+    let plan = fixture.inspect_with(&machine, false);
+    assert_eq!(
+        plan.preview().pane_count(),
+        1,
+        "the subagent profile's host isolation needs no scoped view"
+    );
+    let resumed = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
+    let argv = &resumed.tabs[0].layout.columns[0].panes[0].argv;
+    let payload = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
+        .unwrap();
+    let request = crate::harness::launch::decode_exec_request(&argv[3], None, payload).unwrap();
+    assert_eq!(request.isolation_default, Some(Isolation::Host));
+    assert_eq!(request.identity.params.model.as_deref(), Some("opus"));
+    assert_eq!(
+        request.identity.params.profile_scope,
+        Some(ProfileScope::Subagents)
+    );
+}
+
+#[test]
 fn rebirth_skips_an_invalid_shell_and_keeps_it_pending() {
     let root = tempfile::tempdir().unwrap();
     let fixture = Fixture::new(&[("lost", &root.path().join("work"), true)]);
@@ -500,7 +572,8 @@ fn invalid_effective_config_keeps_flat_recovery_without_fresh_team_seats() {
         &machine,
         Timestamp::UNIX_EPOCH,
     );
-    let (teams, profiles) = effective_teams_and_profiles(&machine, &fixture.project, &availability);
+    let (teams, profiles, _) =
+        effective_teams_and_profiles(&machine, &fixture.project, &availability);
     assert!(
         teams.0.is_empty(),
         "an unrouted fresh seat must not be planned"

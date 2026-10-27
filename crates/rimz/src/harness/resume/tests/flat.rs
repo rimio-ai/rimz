@@ -4,6 +4,57 @@
 use super::*;
 
 #[test]
+fn lane_resume_keeps_a_child_forks_profile_table_and_carries_its_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let mut machine = crate::config::MachineConfig::default();
+    machine.agents.profiles = serde_json::from_value(serde_json::json!({
+        "worker": {"agent": "claude", "model": "sonnet"}
+    }))
+    .unwrap();
+    machine.subagents.profiles = serde_json::from_value(serde_json::json!({
+        "worker": {"agent": "claude", "model": "opus"}
+    }))
+    .unwrap();
+    let mut fork = agent("claude", "fork", "/lane", 0);
+    fork.profile = Some("worker".into());
+    fork.launch_depth = Some(1);
+    fork.profile_scope = Some(ProfileScope::Subagents);
+    let mut legacy = agent("claude", "legacy", "/lane", 1);
+    legacy.profile = Some("worker".into());
+    let agents = [fork, legacy];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .restore(|| Ok(LaneRestoreConfig::load(&machine, root.path(), |_, _| None).unwrap()))
+        .run()
+        .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected restore")
+    };
+    let RecoveryEntry::Flat(tab) = &plan.recovery.entries[0] else {
+        panic!("expected flat tab")
+    };
+    let actual: Vec<_> = tab.tab.layout.columns[0]
+        .panes
+        .iter()
+        .map(|pane| {
+            let request = decode_exec_request(&pane.argv);
+            assert!(!request.subagent);
+            (
+                request.identity.params.model,
+                request.identity.params.profile_scope,
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (Some("opus".into()), Some(ProfileScope::Subagents)),
+            (Some("sonnet".into()), None),
+        ]
+    );
+}
+
+#[test]
 fn flat_resume_names_a_profiled_pane_by_profile() {
     let saved = AgentState {
         profile: Some("brainstormer".to_owned()),

@@ -1143,6 +1143,7 @@ fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
             rimz_bin: &env.rimz_bin(),
             runtime: &env.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
+            subagent_profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
             logins: &rimz::agents::RoomAccounts::default(),
             catalog: &rimz::agents::LoginCatalog::default(),

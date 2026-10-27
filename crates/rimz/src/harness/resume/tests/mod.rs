@@ -12,6 +12,8 @@ static NO_LOGINS: std::sync::LazyLock<RoomAccounts> =
     std::sync::LazyLock::new(RoomAccounts::default);
 static NO_ACCOUNTS: std::sync::LazyLock<LoginCatalog> =
     std::sync::LazyLock::new(LoginCatalog::default);
+static NO_SUBAGENT_PROFILES: std::sync::LazyLock<ProfilesConfig> =
+    std::sync::LazyLock::new(ProfilesConfig::default);
 static WORKSPACE: std::sync::LazyLock<WorkspaceId> =
     std::sync::LazyLock::new(|| WorkspaceId::from_project_root(Path::new("/repo")));
 static RUNTIME: std::sync::LazyLock<RuntimePaths> = std::sync::LazyLock::new(|| {
@@ -216,6 +218,7 @@ fn ctx<'a>(
         rimz_bin: Path::new(RIMZ_BIN),
         runtime: &RUNTIME,
         profiles,
+        subagent_profiles: &NO_SUBAGENT_PROFILES,
         max,
         logins: &NO_LOGINS,
         catalog: &NO_ACCOUNTS,
@@ -451,6 +454,7 @@ fn empty_lane_restore() -> Result<LaneRestoreConfig, LaneResumeError> {
     Ok(LaneRestoreConfig {
         teams: TeamsConfig::default(),
         profiles: ProfilesConfig::default(),
+        subagent_profiles: ProfilesConfig::default(),
         commands: CommandsConfig::default(),
     })
 }
