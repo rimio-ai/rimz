@@ -7,29 +7,22 @@ fn metric_entry_due_samples_missing_changed_and_legacy_entries_immediately() {
     let command = Some("zsh".to_owned());
     let entry = fresh_entry(42, 700, "zsh", 1_000);
 
-    assert!(metric_entry_due(None, &command, 1_000, false, false));
+    assert!(metric_entry_due(None, &command, 1_000, false));
     assert!(metric_entry_due(
         Some(&entry),
         &Some("cargo build".to_owned()),
         1_001,
         false,
-        false,
     ));
     assert!(
-        !metric_entry_due(Some(&entry), &command, 500, false, false),
+        !metric_entry_due(Some(&entry), &command, 500, false),
         "a clock that ran backwards reads fresh rather than busy-looping"
     );
 
     let mut entry = fresh_entry(42, 700, "cargo build", 1_000);
     entry.sample_version = 1;
     assert!(
-        metric_entry_due(
-            Some(&entry),
-            &Some("cargo build".to_owned()),
-            1_001,
-            false,
-            false
-        ),
+        metric_entry_due(Some(&entry), &Some("cargo build".to_owned()), 1_001, false),
         "single-process cache entries cannot seed pane-tree rates"
     );
 }
@@ -51,20 +44,17 @@ fn metric_entry_due_uses_viewed_or_background_ttl() {
             &command,
             1_000 + focused_ttl,
             true,
-            false,
         ));
         assert!(metric_entry_due(
             Some(&entry),
             &command,
             1_001 + focused_ttl,
             true,
-            false,
         ));
         assert!(!metric_entry_due(
             Some(&entry),
             &command,
             1_000 + background_ttl,
-            false,
             false,
         ));
         assert!(metric_entry_due(
@@ -72,44 +62,49 @@ fn metric_entry_due_uses_viewed_or_background_ttl() {
             &command,
             1_001 + background_ttl,
             false,
-            false,
         ));
     }
 }
 
 #[test]
-fn hibernated_metrics_wait_a_minute_and_resume_normal_ttls_on_thaw() {
-    let command = Some("claude".to_owned());
-    let entry = fresh_entry(42, 700, "claude", 1_000);
-    let results: Vec<_> = [false, true]
-        .into_iter()
-        .flat_map(|viewed| {
-            [30_000, 59_999, 60_000, 60_001]
-                .map(|age| metric_entry_due(Some(&entry), &command, 1_000 + age, viewed, true))
-        })
-        .collect();
-    assert_eq!(
-        results,
-        [false, false, true, true, false, false, true, true]
+fn hibernated_metrics_follow_the_shared_check_not_sample_age() {
+    let mut pidded = pane("terminal_1", Some("claude"), Some("/repo"));
+    pidded.pane_pid = Some(42);
+    let held = HashSet::from([pidded.pane_id.clone()]);
+    let mut frame = frame_from_panes(vec![pidded]);
+    let mut cache = MetricsSampleCache::default();
+    cache.entries.insert(
+        state(&frame, "terminal_1").pane_id.to_string(),
+        fresh_entry(42, 700, "claude", unix_now_ms().saturating_add(60_000)),
     );
-    assert!(metric_entry_due(
-        Some(&entry),
-        &command,
-        31_000,
-        false,
-        false
-    ));
-    assert!(metric_entry_due(None, &command, 1_000, false, true));
-    assert!(metric_entry_due(
-        Some(&entry),
-        &Some("codex".to_owned()),
-        1_001,
-        false,
-        true,
-    ));
-    let mut legacy = entry;
-    legacy.sample_version = 1;
-    assert!(metric_entry_due(Some(&legacy), &command, 1_001, true, true));
+    for viewed in [false, true] {
+        frame.viewed_panes = if viewed {
+            held.iter().cloned().collect()
+        } else {
+            Vec::new()
+        };
+        assert!(
+            pane_metrics_due(&frame, &cache, &held, &HashSet::new()),
+            "a due held check samples even when its wall-clock entry is fresh"
+        );
+        assert!(!pane_metrics_due(&frame, &cache, &held, &held));
+        assert!(!pane_metrics_due(
+            &frame,
+            &cache,
+            &HashSet::new(),
+            &HashSet::new()
+        ));
+        assert!(!enrich_pane_metrics(
+            &mut frame, SESSION, &mut cache, &held, &held
+        ));
+        assert!(enrich_pane_metrics(
+            &mut frame,
+            SESSION,
+            &mut cache,
+            &held,
+            &HashSet::new()
+        ));
+    }
 }
 
 #[test]
@@ -141,9 +136,10 @@ fn unbound_idle_panes_back_off_on_the_idle_ttl() {
         "rimz-test-no-such-session-for-metrics",
         &mut cache,
         &HashSet::new(),
+        &HashSet::new(),
     ));
     assert!(
-        !pane_metrics_due(&frame, &cache, &HashSet::new()),
+        !pane_metrics_due(&frame, &cache, &HashSet::new(), &HashSet::new()),
         "an unbound idle pane records a sample attempt instead of retrying the \
          table walk every produce"
     );
@@ -190,6 +186,7 @@ fn metrics_within_ttl_carries_matching_display_values_and_binding() {
         &mut frame,
         "rimz-query-engine",
         &mut cache,
+        &HashSet::new(),
         &HashSet::new(),
     ));
 
@@ -243,6 +240,7 @@ fn metrics_within_ttl_warms_changed_or_uncached_panes() {
         "rimz-query-engine",
         &mut cache,
         &HashSet::new(),
+        &HashSet::new(),
     ));
 
     assert_eq!(
@@ -283,6 +281,7 @@ fn metrics_due_path_resamples_and_restamps() {
         &mut frame,
         "rimz-query-engine",
         &mut cache,
+        &HashSet::new(),
         &HashSet::new(),
     ));
 

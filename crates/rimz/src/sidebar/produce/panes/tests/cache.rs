@@ -67,6 +67,8 @@ fn requested_pidless_pane_keeps_its_cached_binding_across_topology_frames() {
         sampled: false,
         hibernated_panes: &requested,
         native_tenants: &mut HashMap::new(),
+        held_checks: &mut HashMap::new(),
+        checked_panes: HashSet::new(),
     };
     for _ in 0..2 {
         let (fresh, _) = context.candidate(Some(&prior), true, None, false).unwrap();

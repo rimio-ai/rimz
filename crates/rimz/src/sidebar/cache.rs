@@ -2,9 +2,11 @@
 //!
 //! The host publishes the pane frame atomically in the workspace runtime directory. Passive readers consume it opportunistically; presence hints and the authoritative liveness probe keep their separate writers.
 
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -13,8 +15,29 @@ use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::ids::MuxName;
 use crate::mux::PRESENCE_STAMP_FRESH;
 use crate::sidebar::frame::PaneFrame;
-use crate::sidebar::timing::{EVENT_PANE_TTL, SNAPSHOT_CACHE_TTL};
+use crate::sidebar::timing::{EVENT_PANE_TTL, HIBERNATED_CHECK_TTL, SNAPSHOT_CACHE_TTL};
 use crate::utils::time::unix_now_ms;
+
+/// Held keys check immediately, then on their own cadence; unheld keys forget the stamp.
+pub(crate) fn hibernated_check_due<K: Eq + Hash>(
+    checks: &mut HashMap<K, Instant>,
+    key: K,
+    hibernated: bool,
+    now: Instant,
+) -> bool {
+    if !hibernated {
+        checks.remove(&key);
+        return true;
+    }
+    if checks
+        .get(&key)
+        .is_some_and(|at| now.duration_since(*at) < HIBERNATED_CHECK_TTL)
+    {
+        return false;
+    }
+    checks.insert(key, now);
+    true
+}
 
 // The runtime root scopes the workspace; `session_name` prevents cross-session reuse during detach or rotation. Store rollups remain event-fresh independently of the pane publication.
 thread_local! {

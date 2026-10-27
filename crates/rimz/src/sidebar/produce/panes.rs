@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::Result;
 use crate::diag::record::{
@@ -13,7 +13,8 @@ use crate::disk::atomic;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing, PaneReadConsistency};
 use crate::sidebar::cache::{
-    effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache, snapshot_cache_is_fresh,
+    effective_pane_ttl, hibernated_check_due, presence_stamp_age_ms, read_snapshot_cache,
+    snapshot_cache_is_fresh,
 };
 use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
 use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL};
@@ -39,6 +40,7 @@ pub(crate) struct PaneProducer {
     pub(super) prior: Option<Arc<PaneFrame>>,
     pub(super) hibernated_panes: HashSet<PaneId>,
     native_tenants: HashMap<PaneId, (u32, Option<String>)>,
+    held_checks: HashMap<PaneId, Instant>,
     metrics: MetricsSampleCache,
     presence_probed_at_ms: Option<u64>,
 }
@@ -62,6 +64,7 @@ impl PaneProducer {
             presence_probed_at_ms: None,
             hibernated_panes: HashSet::new(),
             native_tenants: HashMap::new(),
+            held_checks: HashMap::new(),
         }
     }
 
@@ -120,6 +123,17 @@ impl PaneProducer {
         {
             ttl = ttl.min(SNAPSHOT_CACHE_TTL);
         }
+        let hibernated: HashSet<PaneId> = self.prior.as_ref().map_or_else(HashSet::new, |frame| {
+            frame
+                .pane_states()
+                .filter(|pane| {
+                    self.hibernated_panes.contains(&pane.pane_id)
+                        && self.held_checks.contains_key(&pane.pane_id)
+                })
+                .map(|pane| pane.pane_id.clone())
+                .collect()
+        });
+        self.held_checks.retain(|pane, _| hibernated.contains(pane));
         let fresh = self.prior.as_ref().filter(|prior| {
             snapshot_cache_is_fresh(prior, unix_now_ms(), floor, ttl)
                 && matches!(
@@ -129,32 +143,18 @@ impl PaneProducer {
         });
         let frame = if let Some(prior) = fresh {
             let mut frame = Arc::clone(prior);
-            let hibernated = frame
-                .pane_states()
-                .filter(|pane| {
-                    self.hibernated_panes.contains(&pane.pane_id)
-                        && self
-                            .native_tenants
-                            .get(&pane.pane_id)
-                            .is_some_and(|(pid, spawn)| {
-                                pane.current.pid == Some(*pid)
-                                    && pane.current.spawn_command == *spawn
-                            })
-                })
-                .map(|pane| pane.pane_id.clone())
-                .collect();
-            if super::metrics::pane_metrics_due(&frame, &self.metrics, &hibernated)
+            if super::metrics::pane_metrics_due(&frame, &self.metrics, &hibernated, &hibernated)
                 && super::metrics::enrich_pane_metrics(
                     Arc::make_mut(&mut frame),
                     session,
                     &mut self.metrics,
                     &hibernated,
+                    &hibernated,
                 )
             {
-                annotate_elevated_agents(
-                    Arc::make_mut(&mut frame),
-                    &crate::proc::elevated_in_pane_agent,
-                );
+                with_due_panes(Arc::make_mut(&mut frame), Some(prior), &hibernated, |due| {
+                    annotate_elevated_agents(due, RepairReaders::system().elevated_agent);
+                });
                 write_metrics_sample_cache(runtime, &self.metrics);
                 publish_frame(
                     &runtime.pane_frame_path(),
@@ -180,6 +180,8 @@ impl PaneProducer {
             }
             frame
         } else {
+            let mut native_tenants = self.native_tenants.clone();
+            let mut held_checks = self.held_checks.clone();
             let mut ctx = FrameContext {
                 runtime,
                 mux,
@@ -189,7 +191,9 @@ impl PaneProducer {
                 metrics: &mut self.metrics,
                 sampled: false,
                 hibernated_panes: &self.hibernated_panes,
-                native_tenants: &mut self.native_tenants,
+                native_tenants: &mut native_tenants,
+                held_checks: &mut held_checks,
+                checked_panes: HashSet::new(),
             };
             let accepted = produce(&mut ctx, self.prior.as_deref());
             if ctx.sampled {
@@ -197,6 +201,8 @@ impl PaneProducer {
             }
             match accepted? {
                 Accepted::Fresh(mut frame) => {
+                    self.native_tenants = native_tenants;
+                    self.held_checks = held_checks;
                     publish_frame(
                         &runtime.pane_frame_path(),
                         &mut frame,
@@ -240,6 +246,8 @@ pub(crate) fn read_pane_frame(
         sampled: false,
         hibernated_panes: &HashSet::new(),
         native_tenants: &mut HashMap::new(),
+        held_checks: &mut HashMap::new(),
+        checked_panes: HashSet::new(),
     })
     .produce(prior.as_deref())?
     {
@@ -257,6 +265,8 @@ struct FrameContext<'a> {
     sampled: bool,
     hibernated_panes: &'a HashSet<PaneId>,
     native_tenants: &'a mut HashMap<PaneId, (u32, Option<String>)>,
+    held_checks: &'a mut HashMap<PaneId, Instant>,
+    checked_panes: HashSet<PaneId>,
 }
 
 /// Enumerate only the session's panes; the store rollup is read separately. The host amortizes this read across the fleet, while private CLI calls always invoke it.
@@ -358,54 +368,91 @@ fn stamp_pane_resumed_session_ids(
     }
 }
 
+struct RepairReaders<'a> {
+    cmdline: &'a dyn Fn(u32) -> Option<String>,
+    comm: &'a dyn Fn(u32) -> Option<String>,
+    children: &'a dyn Fn(u32) -> Vec<u32>,
+    hosted_process: &'a dyn Fn(u32) -> Option<crate::proc::HostedAgentProcess>,
+    cwd: &'a dyn Fn(u32) -> Option<PathBuf>,
+    resumed_session: &'a dyn Fn(u32) -> Option<AgentSessionId>,
+    root_start: &'a dyn Fn(&str, u32) -> Option<jiff::Timestamp>,
+    cwd_starts: &'a dyn Fn(&str, &str) -> Vec<jiff::Timestamp>,
+    hosted_absent: &'a dyn Fn(&str, u32) -> bool,
+    process_start: &'a dyn Fn(u32) -> Option<jiff::Timestamp>,
+    elevated_agent: &'a dyn Fn(u32) -> Option<crate::pane::ElevatedAgent>,
+    backfill_pids: &'a dyn Fn(&mut PaneFrame, &str),
+}
+
+impl RepairReaders<'_> {
+    fn system() -> Self {
+        Self {
+            cmdline: &crate::proc::cmdline,
+            comm: &crate::proc::comm,
+            children: &crate::proc::children,
+            hosted_process: &crate::proc::hosted_agent_process_for_root,
+            cwd: &crate::proc::cwd,
+            resumed_session: &crate::agents::resumed_session_id_for_root,
+            root_start: &crate::proc::in_pane_agent_start_for_root,
+            cwd_starts: &crate::proc::in_pane_agent_starts,
+            hosted_absent: &crate::proc::hosted_agent_absent_under_root,
+            process_start: &crate::proc::process_start,
+            elevated_agent: &crate::proc::elevated_in_pane_agent,
+            backfill_pids: &|frame, session| {
+                super::metrics::backfill_zellij_pane_pids_from_proc(frame, session);
+            },
+        }
+    }
+}
+
 fn repair_pane_frame(
     frame: &mut PaneFrame,
     prior: Option<&PaneFrame>,
     session: &str,
     metrics: Option<&mut MetricsSampleCache>,
     hibernated_panes: &HashSet<PaneId>,
+    skipped: &HashSet<PaneId>,
+    readers: &RepairReaders<'_>,
 ) -> (Vec<HostedCarryDrop>, bool) {
-    let unstamped = natively_unstamped(frame);
+    let mut unstamped = natively_unstamped(frame);
+    unstamped.retain(|pane| !skipped.contains(pane));
     rotate_from_prior(frame, prior);
     let sampled = if let Some(metrics) = metrics {
-        super::metrics::enrich_pane_metrics(frame, session, metrics, hibernated_panes)
+        super::metrics::enrich_pane_metrics(frame, session, metrics, hibernated_panes, skipped)
     } else {
-        super::metrics::backfill_zellij_pane_pids_from_proc(frame, session);
+        (readers.backfill_pids)(frame, session);
         false
     };
-    backfill_pane_commands(frame, &crate::proc::cmdline, &crate::proc::comm);
-    backfill_wrapper_spawn_commands(frame, &crate::proc::cmdline);
-    reconcile_active_commands(
-        frame,
-        &crate::proc::cmdline,
-        &crate::proc::comm,
-        &crate::proc::children,
-    );
-    stamp_hosted_agent_processes(frame, &crate::proc::hosted_agent_process_for_root);
-    backfill_pane_cwds(frame, &|pid| crate::proc::cwd(pid));
-    stamp_pane_resumed_session_ids(frame, &crate::agents::resumed_session_id_for_root);
-    stamp_pane_process_starts(
-        frame,
-        &unstamped,
-        &crate::proc::in_pane_agent_start_for_root,
-        &crate::proc::in_pane_agent_starts,
-    );
-    let hosted_carry_drops = carry_hosted_agent_stamps(
-        frame,
-        prior,
-        unix_now_ms(),
-        &crate::proc::hosted_agent_absent_under_root,
-    );
-    if crate::proc::process_start(std::process::id()).is_some() {
-        drop_reused_pid_bindings(
-            frame,
-            &crate::proc::in_pane_agent_start_for_root,
-            &crate::proc::process_start,
-        );
-    }
-    annotate_elevated_agents(frame, &crate::proc::elevated_in_pane_agent);
-    stamp_first_seen(frame);
-    (hosted_carry_drops, sampled)
+    let drops = repair_processes(frame, prior, &unstamped, skipped, readers);
+    (drops, sampled)
+}
+
+fn repair_processes(
+    frame: &mut PaneFrame,
+    prior: Option<&PaneFrame>,
+    unstamped: &HashSet<PaneId>,
+    skipped: &HashSet<PaneId>,
+    readers: &RepairReaders<'_>,
+) -> Vec<HostedCarryDrop> {
+    with_due_panes(frame, prior, skipped, |due| {
+        backfill_pane_commands(due, readers.cmdline, readers.comm);
+        backfill_wrapper_spawn_commands(due, readers.cmdline);
+        reconcile_active_commands(due, readers.cmdline, readers.comm, readers.children);
+        stamp_hosted_agent_processes(due, readers.hosted_process);
+        backfill_pane_cwds(due, readers.cwd);
+        stamp_pane_resumed_session_ids(due, readers.resumed_session);
+    });
+    // Held starts still participate in duplicate detection and the cwd census.
+    stamp_pane_process_starts(frame, unstamped, readers.root_start, readers.cwd_starts);
+    with_due_panes(frame, prior, skipped, |due| {
+        let hosted_carry_drops =
+            carry_hosted_agent_stamps(due, prior, unix_now_ms(), readers.hosted_absent);
+        if (readers.process_start)(std::process::id()).is_some() {
+            drop_reused_pid_bindings(due, readers.root_start, readers.process_start);
+        }
+        annotate_elevated_agents(due, readers.elevated_agent);
+        stamp_first_seen(due);
+        hosted_carry_drops
+    })
 }
 
 fn hibernated_panes_for(
@@ -426,6 +473,70 @@ fn hibernated_panes_for(
         })
         .map(|pane| pane.pane_id.clone())
         .collect()
+}
+
+fn held_panes_for_check(
+    frame: &PaneFrame,
+    hibernated: &HashSet<PaneId>,
+    checks: &mut HashMap<PaneId, Instant>,
+    now: Instant,
+) -> HashSet<PaneId> {
+    checks.retain(|pane, _| hibernated.contains(pane));
+    frame
+        .pane_states()
+        .filter(|pane| {
+            !hibernated_check_due(
+                checks,
+                pane.pane_id.clone(),
+                hibernated.contains(&pane.pane_id),
+                now,
+            )
+        })
+        .map(|pane| pane.pane_id.clone())
+        .collect()
+}
+
+fn with_due_panes<T>(
+    frame: &mut PaneFrame,
+    prior: Option<&PaneFrame>,
+    skipped: &HashSet<PaneId>,
+    repair: impl FnOnce(&mut PaneFrame) -> T,
+) -> T {
+    if skipped.is_empty() {
+        return repair(frame);
+    }
+    let previous: HashMap<_, _> = prior
+        .into_iter()
+        .flat_map(PaneFrame::pane_states)
+        .map(|pane| (&pane.pane_id, pane))
+        .collect();
+    let mut held = Vec::new();
+    for (tab_index, tab) in frame.tabs.iter_mut().enumerate() {
+        tab.panes = std::mem::take(&mut tab.panes)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, mut pane)| {
+                if !skipped.contains(&pane.pane_id) {
+                    return Some(pane);
+                }
+                if let Some(old) = previous.get(&pane.pane_id) {
+                    pane.current = old.current.clone();
+                    pane.previous = old.previous.clone();
+                    pane.children = old.children.clone();
+                    pane.metrics = old.metrics;
+                    pane.first_seen_at_ms = old.first_seen_at_ms;
+                    pane.hosted_carry_since_ms = old.hosted_carry_since_ms;
+                }
+                held.push((tab_index, index, pane));
+                None
+            })
+            .collect();
+    }
+    let result = repair(frame);
+    for (tab, index, pane) in held {
+        frame.tabs[tab].panes.insert(index, pane);
+    }
+    result
 }
 
 /// Name a pane the mux reported with a root pid but no command from that
@@ -533,8 +644,15 @@ pub fn repaired_pane_frame_for_binding(
         None,
     );
     emit_frame_diagnostics(&diag, diagnostics);
-    let (hosted_carry_drops, _) =
-        repair_pane_frame(&mut frame, prior.as_deref(), session, None, &HashSet::new());
+    let (hosted_carry_drops, _) = repair_pane_frame(
+        &mut frame,
+        prior.as_deref(),
+        session,
+        None,
+        &HashSet::new(),
+        &HashSet::new(),
+        &RepairReaders::system(),
+    );
     emit_hosted_carry_dropped(&diag, hosted_carry_drops);
     Ok(frame)
 }
@@ -856,12 +974,24 @@ impl FrameContext<'_> {
                 ))
             })
             .collect();
+        for pane in &self.checked_panes {
+            self.held_checks.remove(pane);
+        }
+        let skipped = held_panes_for_check(&frame, &hibernated, self.held_checks, Instant::now());
+        self.checked_panes.extend(
+            frame
+                .pane_states()
+                .filter(|pane| !skipped.contains(&pane.pane_id))
+                .map(|pane| pane.pane_id.clone()),
+        );
         let (hosted_carry_drops, sampled) = repair_pane_frame(
             &mut frame,
             prior,
             self.session,
             enrich_metrics.then_some(&mut *self.metrics),
             &hibernated,
+            &skipped,
+            &RepairReaders::system(),
         );
         self.sampled |= sampled;
         emit_hosted_carry_dropped(self.diag, hosted_carry_drops);
