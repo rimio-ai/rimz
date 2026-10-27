@@ -544,7 +544,7 @@ fn prepare(
     let head_start = if kind == AttemptKind::Script {
         None
     } else {
-        agent::head(&t.record.scope.path)
+        super::head(&t.record.scope.path)
     };
     t.now = Timestamp::now();
     if t.bound()? {

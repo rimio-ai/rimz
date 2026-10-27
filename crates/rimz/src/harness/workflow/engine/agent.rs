@@ -11,19 +11,6 @@ pub(super) fn identity() -> Host {
     }
 }
 
-pub(super) fn head(path: &Path) -> Option<String> {
-    let output = crate::proc::run_bounded_git_output(
-        path,
-        &["rev-parse", "HEAD"],
-        std::time::Duration::from_secs(2),
-    )
-    .ok()?;
-    if output.timed_out || !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8(output.stdout).ok()?.trim().to_owned())
-}
-
 pub(super) fn compose(
     record: &RunRecord,
     paths: &WorkflowPaths,
@@ -298,7 +285,7 @@ pub(super) fn finish(
         Some(run) => (host.stop(run)?, host.observe(run)?.cost_usd),
         None => (Children::default(), None),
     };
-    let head_end = head(&record.scope.path);
+    let head_end = super::super::head(&record.scope.path);
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut t = Transition {
         record: workflow::load(paths)?,

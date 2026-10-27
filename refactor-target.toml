@@ -9412,8 +9412,8 @@ reason = "Launch and stop admission publish the same PID/start-token ownership i
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::engine::agent::head"
-reason = "Agent preparation and settlement sample bounded checkout HEAD evidence."
+key = "harness::workflow::head"
+reason = "Agent attempt evidence and workflow CI fencing share one bounded checkout HEAD read."
 
 [[verdict]]
 kind = "item"

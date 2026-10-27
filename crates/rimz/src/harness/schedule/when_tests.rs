@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn ci_commits_only_reads_an_open_pr_with_a_known_head() {
+    for (state, head, ci_sha, expected) in [
+        ("open", Some("pr"), Some("ci"), Some(("pr", Some("ci")))),
+        ("open", Some("pr"), None, Some(("pr", None))),
+        ("open", Some("pr"), Some(""), Some(("pr", None))),
+        ("open", Some(""), Some("ci"), None),
+        ("open", None, Some("ci"), None),
+        ("merged", Some("pr"), Some("ci"), None),
+        ("closed", Some("pr"), Some("ci"), None),
+    ] {
+        let source = CiSource(
+            serde_json::from_value(serde_json::json!({
+                "branch_ci": {"/branch": "passing", "/scope": "passing"},
+                "states": {"/scope": {
+                    "state": state, "ci": "passing", "ci_sha": ci_sha,
+                    "open": head.map(|head| serde_json::json!({"head": head}))
+                }}
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            source.ci_commits(Path::new("/scope")),
+            expected,
+            "{state}, {head:?}, {ci_sha:?}"
+        );
+        assert_eq!(source.ci_commits(Path::new("/branch")), None);
+        let expression = WhenExpr::parse(&["ci=passed".into()]).unwrap();
+        for scope in ["/scope", "/branch"] {
+            assert!(
+                evaluate(
+                    &expression,
+                    Path::new(scope),
+                    Some(&source),
+                    None,
+                    None,
+                    &no_windows()
+                )
+                .ok,
+                "loop readings stay unchanged: {state}, {scope}"
+            );
+        }
+    }
+}
+
+#[test]
 fn workflow_truth_uses_kleene_logic_without_turning_unread_into_false() {
     let and = WhenExpr::parse(&["pr=merged && ci=passed".into()]).unwrap();
     let or = WhenExpr::parse(&["pr=merged || ci=passed".into()]).unwrap();
