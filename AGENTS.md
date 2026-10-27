@@ -106,7 +106,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - Stop a process you started by its PID (`$!`, `pgrep -x`), never with `pkill -f PATTERN`: the pattern matches the shell running `pkill` and kills it.
 - Brace a shell variable that a colon follows (`git show "${rev}:path"`): zsh reads `$rev:c` as a modifier on the variable and passes git a mangled revision.
 - zsh reserves `status` as a read-only alias of `$?`: name an exit-code variable `rc`.
-- A scope check against trunk diffs from the merge base, `git diff --stat origin/main...HEAD -- <path>` (three dots). Once trunk moves, a two-dot diff against `origin/main` lists trunk's own changes as the branch's.
+- A scope check against trunk diffs from the merge base, `git diff --stat origin/main...HEAD -- <path>` (three dots). Once trunk moves, a two-dot diff against `origin/main` lists trunk's own changes as the branch's. Fetch first (`git fetch origin main`): a stale local `origin/main` lists trunk's own commits as the branch's the same way.
 
 ## Testing
 
