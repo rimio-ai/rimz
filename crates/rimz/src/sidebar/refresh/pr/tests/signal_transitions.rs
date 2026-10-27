@@ -638,7 +638,7 @@ fn inherited_head_suppresses_only_non_trunk_branch_ci() {
 }
 
 #[test]
-fn checks_urls_use_remote_slug_and_observed_head() {
+fn checks_urls_use_remote_slug_and_the_verdict_commit() {
     for (remote, expected) in [
         (
             "git@github.com:actual/project.git",
