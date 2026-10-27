@@ -16,7 +16,10 @@ use rimz::store::message::{
     MessageStatus, WhenCondition,
 };
 
-use crate::common::{Env, trust_codex_preflight_hooks, zellij_trace_shim};
+use crate::common::{
+    DeliveryRendezvous, Env, TRACE_PANE, is_enter_key, is_paste, trace_lines,
+    trust_codex_preflight_hooks, wait_for_text_then_enter, zellij_trace_shim,
+};
 
 #[test]
 fn role_send_crosses_an_ended_molt_intermediate() {
@@ -7832,38 +7835,6 @@ fn delivery_releases_digest_claim_when_post_claim_run_scan_fails() {
     );
 }
 
-struct DeliveryRendezvous {
-    path: PathBuf,
-    listener: std::os::unix::net::UnixListener,
-}
-
-impl DeliveryRendezvous {
-    fn new(env: &Env, name: &str) -> Self {
-        let path = env.project_root.join(format!("{name}.sock"));
-        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        Self { path, listener }
-    }
-
-    fn arrive(&self) -> std::os::unix::net::UnixStream {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match self.listener.accept() {
-                Ok((stream, _)) => return stream,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "delivery never reached {:?}",
-                        self.path
-                    );
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => panic!("delivery rendezvous: {error}"),
-            }
-        }
-    }
-}
-
 #[test]
 fn sweep_delivers_partially_joined_subagent_report() {
     assert_subagent_report_delivered(&[true, false]);
@@ -12066,26 +12037,6 @@ fn run_traced_smart_compact(env: &Env, trace_log: &Path, text: &str) -> std::pro
     output
 }
 
-fn trace_lines(path: &Path) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .map(|raw| raw.lines().map(str::to_owned).collect())
-        .unwrap_or_default()
-}
-
-const TRACE_PANE: &str = "terminal_3";
-
-fn is_paste(line: &str, text: &str) -> bool {
-    let payload = text
-        .bytes()
-        .map(|byte| if byte == b'\n' { b'\r' } else { byte })
-        .map(|byte| byte.to_string())
-        .collect::<Vec<_>>()
-        .join("\t");
-    line.ends_with(&format!(
-        "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t91\t50\t48\t48\t126\t{payload}\t27\t91\t50\t48\t49\t126"
-    ))
-}
-
 fn user_message(text: &str) -> String {
     format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}")
 }
@@ -12101,10 +12052,6 @@ fn is_paste_to_any_pane(line: &str, text: &str) -> bool {
         && line.ends_with(&format!(
             "\t27\t91\t50\t48\t48\t126\t{payload}\t27\t91\t50\t48\t49\t126"
         ))
-}
-
-fn is_enter_key(line: &str) -> bool {
-    line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t13"))
 }
 
 fn is_compact_command(line: &str) -> bool {
@@ -12927,28 +12874,6 @@ fn wait_for_message_event_count(env: &Env, method: &str, count: usize, timeout: 
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {count} {method} events"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-/// Waits for a hook's detached `message deliver` to paste `text` and press its
-/// Enter: the record turns `Sent` between the two writes, so `Sent` alone does
-/// not cover the Enter.
-fn wait_for_text_then_enter(trace_log: &Path, text: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let lines = trace_lines(trace_log);
-        if lines
-            .iter()
-            .position(|line| is_paste(line, text))
-            .is_some_and(|at| lines[at..].iter().any(|line| is_enter_key(line)))
-        {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for a paste of `{text}` and its Enter; trace: {lines:?}"
         );
         std::thread::sleep(Duration::from_millis(25));
     }

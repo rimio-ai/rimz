@@ -454,6 +454,7 @@ fn launch_and_supervise(
             ),
             &request.identity.params,
         );
+        rewake_resumed(invocation, target, globals.mux, resume_since);
         match invocation
             .store()
             .and_then(|store| Ok(store.list_pending_messages()?))
@@ -476,9 +477,6 @@ fn launch_and_supervise(
             ),
             Err(error) => tracing::debug!(%error, "could not read resumed card's queued messages"),
         }
-    }
-    if let Some(target) = attach_target.as_ref() {
-        rewake_resumed(invocation, target, globals.mux, resume_since);
     }
     if let Some(context) = run_context {
         record_provider_process(context, child.id());
