@@ -690,7 +690,9 @@ fn apply_credits_cache_with(
             }
 
             let used = panel.spending.as_ref().map(|spending| spending.month.usd);
-            panel.extra_credits = Some(ExtraCredits::known(used, None, ceiling));
+            panel.extra_credits = panel
+                .is_api_key()
+                .then(|| ExtraCredits::known(used, None, ceiling));
             panel.reset_credits = None;
         });
     }

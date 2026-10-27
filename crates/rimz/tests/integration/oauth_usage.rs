@@ -1999,6 +1999,28 @@ fn silent_pi_account_rechecks_a_provider_append_only_after_the_provisional_floor
             .unwrap()
             .clone()
     };
+    // Pi history earns the login a panel, the one place API credits could land.
+    let history = rimz::agents::spending::SpendWindow {
+        usd: 3.0,
+        sessions: 1,
+        ..Default::default()
+    };
+    let mut spending = rimz::agents::spending::ProviderSpendingCache {
+        refreshed_at_ms: rimz::utils::time::unix_now_ms(),
+        ..Default::default()
+    };
+    spending.spending.by_login.insert(
+        key.clone(),
+        rimz::agents::spending::SpendTally {
+            month: history.clone(),
+            year: history,
+            ..Default::default()
+        },
+    );
+    assert!(rimz::agents::spending::write_provider_spending_cache(
+        &env.runtime_paths().shared_provider_spending_path(),
+        &spending
+    ));
     let first = show();
     let mut cache: AccountsCache =
         serde_json::from_value(read_json(env.runtime_paths().shared_accounts_path())).unwrap();
@@ -2018,6 +2040,11 @@ fn silent_pi_account_rechecks_a_provider_append_only_after_the_provisional_floor
     record.probed_at_ms = rimz::utils::time::unix_now_ms() - 10_001;
     env.publish_accounts(&cache);
     let retried = show();
+    assert_eq!(
+        [&first, &immediate].map(|report| report["extra_credits"].clone()),
+        [Value::Null, Value::Null],
+        "an undecided login shows no API credits"
+    );
     let outcomes: Vec<_> = [first, immediate, retried]
         .into_iter()
         .map(|report| (report["plan"].clone(), report["metered"].clone()))

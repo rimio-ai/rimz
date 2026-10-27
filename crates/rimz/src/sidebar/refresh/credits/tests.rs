@@ -1007,7 +1007,7 @@ fn credits_projection_suppresses_stale_plan_windows_and_credits_only_in_use() {
 }
 
 #[test]
-fn unmetered_projection_ignores_cached_entitlement_and_keeps_api_spend() {
+fn unmetered_projection_ignores_cached_entitlement_and_keeps_api_spend_unless_undecided() {
     let key: LoginKey = "claude@default".parse().unwrap();
     let cache = CreditsCache {
         logins: BTreeMap::from([(
@@ -1047,6 +1047,22 @@ fn unmetered_projection_ignores_cached_entitlement_and_keeps_api_spend() {
     assert_eq!(
         projected.extra_credits,
         Some(ExtraCredits::known(Some(12.5), None, Some(25.0)))
+    );
+
+    let mut undecided = panel;
+    undecided.undecided = true;
+    snapshot.providers = vec![undecided];
+    apply_credits_cache_with(
+        &mut snapshot,
+        &cache,
+        &accounts,
+        &RoomLoginSet::native(),
+        u64::MAX,
+    );
+    let projected = &snapshot.providers[0];
+    assert_eq!(
+        (&projected.extra_credits, &projected.reset_credits),
+        (&None, &None)
     );
 }
 

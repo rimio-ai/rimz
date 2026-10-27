@@ -362,14 +362,31 @@ fn monthly_views_project_api_bars_only_for_counting_in_use_month_caps() {
         );
         let panel = &mut snapshot.providers[0];
         panel.metered = metered;
-        panel.extra_credits = Some(ceiling.clone());
+        let mut undecided = snapshot.clone();
+        undecided.providers[0].undecided = true;
+        snapshot.providers[0].extra_credits = Some(ceiling.clone());
         let logins = RoomLoginSet::new(
             in_use.then(|| BTreeMap::new().into()),
             in_use.then(|| account_catalog(&config)),
             BTreeMap::new(),
         );
         project_budget_views(&mut snapshot, &runtime, None, &config, &provider, &logins);
+        project_budget_views(&mut undecided, &runtime, None, &config, &provider, &logins);
         let panel = &snapshot.providers[0];
+        let undecided = &undecided.providers[0];
+        assert_eq!(
+            (
+                undecided.month_budget.map(|view| view.cap_usd),
+                undecided.day_budget.map(|view| view.cap_usd),
+                &undecided.extra_credits,
+            ),
+            (
+                panel.month_budget.map(|view| view.cap_usd),
+                panel.day_budget.map(|view| view.cap_usd),
+                &None,
+            ),
+            "an undecided panel keeps the login's caps and takes no API credits"
+        );
         actual.push((
             panel
                 .month_budget
