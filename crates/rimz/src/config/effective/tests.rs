@@ -1861,6 +1861,87 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
 }
 
 #[test]
+fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    let base = crate::config::PromptSource::Text {
+        origin: config.path().join("agents/claude.md"),
+        text: "Kind base.".into(),
+    };
+    let mut actual = Vec::new();
+    for has_base in [true, false] {
+        let mut machine = MachineConfig::default();
+        if has_base {
+            machine.agents.profiles.0.insert(
+                "claude".into(),
+                Profile {
+                    system_prompt_file: Some(base.clone()),
+                    ..profile("claude", None)
+                },
+            );
+        }
+        for layer in [
+            "consensus-file = 'consensus.md'",
+            "append-system-prompt-files = ['pipeline.md']",
+        ] {
+            write_project_config(
+                &project,
+                &format!(
+                    "[profiles.worker]\nagent = 'claude'\n\
+                     [agents.teams.crew]\n{layer}\nlayout = 'lead'\n\
+                     roles = [{{role = 'lead', profile = 'worker', owns = ['Plan']}}]\n"
+                ),
+            );
+            crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
+            let loaded = load_with_roots(&machine, project.path(), config.path());
+            actual.push(loaded.as_ref().map(|_| ()).map_err(ToString::to_string));
+            let Ok(launch) = loaded else {
+                continue;
+            };
+            let resolved = crate::harness::spec::resolve_team(
+                "crew",
+                &launch.teams,
+                &launch.profiles,
+                &CommandsConfig::default(),
+            );
+            if !has_base {
+                assert!(
+                    matches!(
+                        &resolved,
+                        Err(crate::harness::spec::LayoutErr::TeamPromptWithoutBase {
+                            team, role, ..
+                        }) if team == "crew" && role == "lead"
+                    ),
+                    "{resolved:?}"
+                );
+                crate::harness::spec::resolve_profile("worker", &launch.profiles).unwrap();
+                continue;
+            }
+            let layout = resolved.unwrap();
+            let cell = layout.agent_cells().next().unwrap();
+            assert_eq!(cell.system_prompt_file.as_ref(), Some(&base));
+            let prompt = cell.team_prompt.as_ref().unwrap();
+            if layer.starts_with("consensus-file") {
+                assert_eq!(
+                    prompt.consensus,
+                    crate::harness::team_prompt::Consensus::File(
+                        project.path().join(".rimz/consensus.md")
+                    )
+                );
+            } else {
+                assert_eq!(
+                    prompt.files,
+                    [crate::config::PromptSource::File(
+                        project.path().join(".rimz/pipeline.md")
+                    )]
+                );
+            }
+        }
+    }
+    assert_eq!(actual, vec![Ok(()); 4]);
+}
+
+#[test]
 fn repo_team_roles_require_repo_profiles_even_for_builtin_kinds() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");

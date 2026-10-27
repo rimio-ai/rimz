@@ -184,7 +184,7 @@ Prompt order is kind base → ancestor crafts → seat craft → built-in consen
 
 ### The built-in consensus copy
 
-RimZ writes a read-only copy of the built-in consensus to `teams/consensus.md` under the definitions root, for reading and linking. `rimz setup` writes or refreshes it, and launching a team seat that runs under the built-in consensus refreshes it too, so an upgrade replaces a stale copy at the next team launch. A header line names the RimZ version that wrote it. RimZ never reads the file back: teams always run under the text compiled into the binary, and an edit to the copy changes nothing and is overwritten at the next refresh. To change a team's consensus, set `consensus-file` in a project TOML team.
+RimZ writes a read-only copy of the built-in consensus to `teams/consensus.md` under the definitions root, for reading and linking. `rimz setup` writes or refreshes it, and launching a team seat that runs under the built-in consensus refreshes it too, so an upgrade replaces a stale copy at the next team launch. A header line names the RimZ version that wrote it. RimZ never reads the file back: teams always run under the text compiled into the binary, and an edit to the copy changes nothing and is overwritten at the next refresh. To change a team's consensus, set `consensus-file` in a project TOML team. Every seat needs a base prompt, supplied by `system-prompt-file` on the role or its profile chain, or by its kind base (`agents/<kind>.md` under the definitions root). A seat without one refuses the team's launch; the project still loads.
 
 Because the definitions loader skips it, `teams/consensus.md` is never a team definition, and `consensus` is not available as a Markdown team file name.
 

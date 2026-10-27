@@ -540,6 +540,102 @@ fn agents_explain_refuses_a_project_profile_on_a_failed_kind_base() {
 }
 
 #[test]
+fn project_team_consensus_composes_the_kind_base() {
+    let env = Env::new();
+    let base = env.rimz_home().join("agents/claude.md");
+    write_machine_file(&base, "---\ndescription: Base\n---\nKind base.\n");
+    env.write_config(
+        &env.project_root,
+        "[profiles.worker]\nagent = 'claude'\n\
+         [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+         roles = [{role = 'lead', profile = 'worker', owns = ['Plan']}]\n",
+    );
+    let consensus = env.project_root.join(".rimz/consensus.md");
+    write_machine_file(&consensus, "Consensus text.\n");
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
+    let shell = crate::common::write_fake_login_shell(&env, "team-base-test-sh", &[]);
+    let path = format!(
+        "{}:{}",
+        agent_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
+    env.rimz()
+        .args(["agents", "explain", "crew"])
+        .env("SHELL", shell)
+        .env("PATH", path)
+        .assert()
+        .success()
+        .stdout(
+            contains("--system-prompt-file")
+                .and(contains("Kind base.\n\nConsensus text."))
+                .and(contains(consensus.display().to_string())),
+        );
+}
+
+#[test]
+fn project_team_consensus_reports_a_failed_kind_base() {
+    let env = Env::new();
+    let base = env.rimz_home().join("agents/claude.md");
+    write_machine_file(&base, "---\ndescription: Base\n---\n");
+    env.write_config(
+        &env.project_root,
+        "[profiles.worker]\nagent = 'claude'\n\
+         [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+         roles = [{role = 'lead', profile = 'worker', owns = ['Plan']}]\n",
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
+    env.rimz()
+        .args(["agents", "explain", "crew"])
+        .assert()
+        .code(1)
+        .stderr(
+            contains(format!(
+                "{}: kind base has no prompt body — write the system prompt every \
+                 claude definition starts from below the frontmatter",
+                base.display()
+            ))
+            .and(contains("add system-prompt-file").not()),
+        );
+}
+
+#[test]
+fn project_team_consensus_without_a_base_refuses_only_the_team() {
+    let env = Env::new();
+    let base = env.rimz_home().join("agents/claude.md");
+    env.write_config(
+        &env.project_root,
+        "[profiles.worker]\nagent = 'claude'\n\
+         [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+         roles = [{role = 'lead', profile = 'worker', owns = ['Plan']}]\n",
+    );
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
+    let shell = crate::common::write_fake_login_shell(&env, "team-base-test-sh", &[]);
+    let path = format!(
+        "{}:{}",
+        agent_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
+    env.rimz()
+        .args(["agents", "explain", "crew"])
+        .assert()
+        .code(1)
+        .stderr(contains(format!(
+            "team `crew` sets consensus-file or append-system-prompt-files but role `lead` \
+             (claude) has no base system prompt to compose them onto; add system-prompt-file to \
+             role lead or its profile, or create {} with a nonempty body as the claude kind base",
+            base.display()
+        )));
+    env.rimz()
+        .args(["agents", "explain", "worker"])
+        .env("SHELL", shell)
+        .env("PATH", path)
+        .assert()
+        .success();
+}
+
+#[test]
 fn agents_validate_refuses_a_non_prompt_craft_without_create_advice() {
     let env = Env::new();
     crate::common::write_definition(

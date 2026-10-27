@@ -525,12 +525,15 @@ fn restart_posture_refuses_undeliverable_team_prompt_layers() {
     assert_eq!(
         actual,
         [
-            Some(
+            Some(format!(
                 "team `forge` sets consensus-file or append-system-prompt-files but role \
-                 `reviewer` has no system-prompt-file to compose them onto; add \
-                 system-prompt-file to role reviewer or its profile"
-                    .into()
-            ),
+                     `reviewer` (claude) has no base system prompt to compose them onto; add \
+                     system-prompt-file to role reviewer or its profile, or create {} with a \
+                     nonempty body as the claude kind base",
+                rimz::disk::paths::agents_home()
+                    .join("agents/claude.md")
+                    .display()
+            )),
             Some(
                 "team `forge` sets consensus-file or append-system-prompt-files but declares no \
                  stages; add stages (or owns) or remove the team prompt fields"

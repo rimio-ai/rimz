@@ -2820,6 +2820,94 @@ fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
 }
 
 #[test]
+fn team_prompt_base_checks_wait_for_resolution_after_agent_rebase() {
+    let profiles = profiles([(
+        "planner",
+        Profile {
+            system_prompt_file: Some("/prompts/planner.md".into()),
+            ..profile("claude")
+        },
+    )]);
+    let mut actual = Vec::new();
+    for layout in [None, Some("worker".to_owned())] {
+        let mut candidate = team(vec![role("worker", "codex")]);
+        candidate.roles[0].owns = vec!["Plan".into()];
+        candidate.layout = layout;
+        candidate.consensus_file = Some("/prompts/consensus.md".into());
+        let teams = TeamsConfig(BTreeMap::from([("crew".into(), candidate)]));
+        actual.push(
+            validate_config(&profiles, &no_commands(), &teams)
+                .err()
+                .map(|err| err.to_string()),
+        );
+        for spec in ["crew", "crew.worker"] {
+            let refused = resolve_spec(Some(spec), &profiles, &no_commands(), &teams);
+            assert!(
+                matches!(
+                    &refused,
+                    Err(LayoutErr::TeamPromptWithoutBase { team, role, .. })
+                        if team == "crew" && role == "worker"
+                ),
+                "{refused:?}"
+            );
+            let rebased = resolve_spec_with_agent_override(
+                Some(spec),
+                &profiles,
+                &profiles,
+                &no_commands(),
+                &teams,
+                Some("planner"),
+            )
+            .unwrap();
+            assert_eq!(
+                agent_at(&rebased, 0, 0)
+                    .team_prompt
+                    .as_ref()
+                    .unwrap()
+                    .consensus,
+                crate::harness::team_prompt::Consensus::File("/prompts/consensus.md".into())
+            );
+        }
+    }
+    assert_eq!(actual, [None, None]);
+}
+
+#[test]
+fn team_prompt_without_base_names_the_kind_and_supported_fixes() {
+    let actual = ["claude", "amp"].map(|kind| {
+        let mut candidate = team(vec![role("worker", kind)]);
+        candidate.roles[0].owns = vec!["Plan".into()];
+        candidate.consensus_file = Some("/prompts/consensus.md".into());
+        resolve_team(
+            "crew",
+            &TeamsConfig(BTreeMap::from([("crew".into(), candidate)])),
+            &no_profiles(),
+            &no_commands(),
+        )
+        .unwrap_err()
+        .to_string()
+    });
+    assert_eq!(
+        actual,
+        [
+            format!(
+                "team `crew` sets consensus-file or append-system-prompt-files but role `worker` \
+                 (claude) has no base system prompt to compose them onto; add system-prompt-file \
+                 to role worker or its profile, or create {} with a nonempty body as the claude \
+                 kind base",
+                crate::disk::paths::agents_home()
+                    .join("agents/claude.md")
+                    .display()
+            ),
+            "team `crew` sets consensus-file or append-system-prompt-files but role `worker` \
+             (amp) has no base system prompt to compose them onto; add system-prompt-file to role \
+             worker or its profile"
+                .into(),
+        ]
+    );
+}
+
+#[test]
 fn staged_team_roles_with_a_base_prompt_carry_the_team_layer() {
     let profiles = profiles([(
         "planner",
@@ -2872,7 +2960,7 @@ fn staged_team_roles_with_a_base_prompt_carry_the_team_layer() {
     explicit.consensus_file = Some("/prompts/consensus.md".into());
     assert!(matches!(
         resolve(&explicit, "review", None),
-        Err(LayoutErr::TeamPromptWithoutBase { team, role }) if team == "review" && role == "coder"
+        Err(LayoutErr::TeamPromptWithoutBase { team, role, .. }) if team == "review" && role == "coder"
     ));
     explicit.roles.truncate(1);
     explicit.append_system_prompt_files = vec!["/prompts/pipeline.md".into()];

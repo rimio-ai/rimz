@@ -579,9 +579,14 @@ pub enum LayoutErr {
     )]
     TeamPromptWithoutStages { team: String },
     #[error(
-        "team `{team}` sets consensus-file or append-system-prompt-files but role `{role}` has no system-prompt-file to compose them onto; add system-prompt-file to role {role} or its profile"
+        "team `{team}` sets consensus-file or append-system-prompt-files but role `{role}` ({kind}) has no base system prompt to compose them onto; add system-prompt-file to role {role} or its profile{kind_base_fix}",
+        kind_base_fix = team_kind_base_fix(.kind)
     )]
-    TeamPromptWithoutBase { team: String, role: String },
+    TeamPromptWithoutBase {
+        team: String,
+        role: String,
+        kind: AgentKind,
+    },
     #[error("invalid scratch-files pattern {pattern:?} in team `{team}`: {reason}")]
     InvalidScratchPattern {
         team: String,
@@ -1009,7 +1014,8 @@ fn resolve_team_with_base_override(
         .0
         .get(name)
         .expect("team resolution called with a known team name");
-    let prepared = prepare_team(name, team, profiles, base_override)?;
+    let mut prepared = prepare_team(name, team, profiles, base_override)?;
+    resolve_team_prompts(name, &mut prepared)?;
     validate_flip_compact(
         name,
         &prepared,
@@ -1085,7 +1091,8 @@ fn resolve_team_role(
         .0
         .get(team_name)
         .expect("team role resolution called with a known team name");
-    let prepared = prepare_team(team_name, team, profiles, base_override)?;
+    let mut prepared = prepare_team(team_name, team, profiles, base_override)?;
+    resolve_team_prompts(team_name, &mut prepared)?;
     validate_flip_compact(
         team_name,
         &prepared,
@@ -2134,6 +2141,7 @@ pub(super) fn role_team_prompt(
     name: &str,
     team: &Team,
     role: &str,
+    kind: &AgentKind,
     role_has_base: bool,
 ) -> Result<Option<TeamPrompt>> {
     if crate::harness::team_prompt::declared(team) {
@@ -2146,10 +2154,26 @@ pub(super) fn role_team_prompt(
             return Err(LayoutErr::TeamPromptWithoutBase {
                 team: name.to_owned(),
                 role: role.to_owned(),
+                kind: kind.clone(),
             });
         }
     }
     Ok(TeamPrompt::for_role(team, role_has_base))
+}
+
+fn team_kind_base_fix(kind: &AgentKind) -> String {
+    if !crate::agents::find_definition(kind.as_str())
+        .is_some_and(|definition| definition.spec().launch.takes_system_prompt())
+    {
+        return String::new();
+    }
+    let path = crate::disk::paths::agents_home()
+        .join("agents")
+        .join(format!("{kind}.md"));
+    format!(
+        ", or create {} with a nonempty body as the {kind} kind base",
+        path.display()
+    )
 }
 
 fn prepare_team<'a>(
@@ -2267,19 +2291,13 @@ fn prepare_team<'a>(
                 definition: binding.profile.clone(),
             });
         }
-        let team_prompt = role_team_prompt(
-            name,
-            team,
-            &binding.role,
-            resolved.system_prompt_file.is_some(),
-        )?;
         let rendered = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
             role: binding.role.clone(),
             profile: binding.profile.clone(),
             resolved,
             rendered,
-            team_prompt,
+            team_prompt: None,
         });
     }
     if let Some(leader) = team.leader.as_deref()
@@ -2294,6 +2312,19 @@ fn prepare_team<'a>(
     }
     validate_team_signals(name, team)?;
     Ok(PreparedTeam { team, roles })
+}
+
+fn resolve_team_prompts(name: &str, prepared: &mut PreparedTeam<'_>) -> Result<()> {
+    for role in &mut prepared.roles {
+        role.team_prompt = role_team_prompt(
+            name,
+            prepared.team,
+            &role.role,
+            &role.resolved.kind,
+            role.resolved.system_prompt_file.is_some(),
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_flip_compact(
