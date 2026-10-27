@@ -201,11 +201,13 @@ impl Store {
                 state_entries_removed += remove_owned_except_runs(paths, &count)?;
             }
             let rollup = if hard {
-                RollupInvalidation::Forget
+                RollupInvalidation::Forget {
+                    replaced: rotation.is_rotated(),
+                }
             } else if rotation.is_rotated() {
-                RollupInvalidation::Reseed
+                RollupInvalidation::Replace
             } else {
-                RollupInvalidation::Keep
+                RollupInvalidation::Drop
             };
 
             Ok((

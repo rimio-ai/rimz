@@ -5163,12 +5163,7 @@ reason = "The parked wrapper's launch-aware watchdog resumes a raw, fold-free cu
 [[verdict]]
 kind = "item"
 key = "store::snapshot::fold::lifecycle_log_generation"
-reason = "The exec startup seed reads the generation header before taking its parent projection."
-
-[[verdict]]
-kind = "item"
-key = "store::snapshot::fold::lifecycle_log_generation_constant_memory"
-reason = "The parked watchdog's launch tail reads the generation without a file-sized allocation."
+reason = "Followers and the parked watchdog read the durable generation without loading a fold."
 
 [[verdict]]
 kind = "item"

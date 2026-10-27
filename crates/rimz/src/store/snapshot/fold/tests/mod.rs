@@ -36,6 +36,14 @@ fn recent(secs_ago: u64) -> jiff::Timestamp {
     jiff::Timestamp::now() - std::time::Duration::from_secs(secs_ago)
 }
 
+fn rotate(paths: &StatePaths) -> crate::store::writer::EventLogRotationOutcome {
+    let runtime = crate::disk::paths::RuntimePaths::for_state_under(paths, paths.home());
+    crate::store::Store::open(paths.clone(), runtime)
+        .unwrap()
+        .rotate_event_log(1, None)
+        .unwrap()
+}
+
 fn message_id(id: u64) -> MessageId {
     MessageId::parse(&format!("msg_{id:016x}")).expect("valid message id")
 }

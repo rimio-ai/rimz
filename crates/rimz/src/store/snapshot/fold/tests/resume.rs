@@ -255,7 +255,7 @@ fn cursor_warm_fold_picks_up_and_holds_resume_outcomes() {
 }
 
 #[test]
-fn carryover_resume_outcomes_merge_after_rotation_reseed() {
+fn carryover_resume_outcomes_merge_at_the_durable_generation() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -280,7 +280,7 @@ fn carryover_resume_outcomes_merge_after_rotation_reseed() {
         },
     )
     .unwrap();
-    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    fs::write(&paths.log_generation, br#"{"generation":1}"#).unwrap();
 
     let (cache, _, outcomes) = catch_up_rollup(&paths).unwrap();
     assert!(cache.resume_outcomes.is_empty());

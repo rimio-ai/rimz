@@ -1335,7 +1335,7 @@ fn rotate_event_log_writes_carryover_before_archiving_active_log() {
 }
 
 #[test]
-fn rotation_reseeds_before_archive_prune_error() {
+fn rotation_persists_generation_before_archive_prune_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
@@ -1370,13 +1370,14 @@ fn rotation_reseeds_before_archive_prune_error() {
     assert!(error.to_string().contains("events.prune-trap.jsonl"));
 
     let cache: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&paths.rollup_cache).expect("reseeded rollup cache survives prune error"),
+        &std::fs::read(&paths.rollup_cache).expect("rebuilt rollup cache survives prune error"),
     )
     .expect("parse rollup cache");
     assert_eq!(
         cache["extent"]["offset"], 0,
         "cache describes fresh active log"
     );
+    assert_eq!(snapshot::lifecycle_log_generation(&paths), 1);
 }
 
 #[cfg(target_os = "linux")]

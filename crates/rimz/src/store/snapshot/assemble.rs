@@ -20,7 +20,7 @@ use crate::workspace::RootClass;
 use crate::workspace::record::{self, WorkspaceRecordErr};
 
 /// Rebuild the snapshot caches from the live store: the rollup fold base
-/// (`rollup.json`) and its generation mirror, and the derived view (`latest.json`).
+/// (`rollup.json`) and the derived view (`latest.json`).
 /// The resulting JSON is what `rimz sidebar snapshot --json` reads on
 /// attach. Caller owns a write serialization point (the workspace lock, or
 /// the publish single-flight).
@@ -28,8 +28,8 @@ use crate::workspace::record::{self, WorkspaceRecordErr};
 /// Cost is O(delta bytes) per call: the fold resumes from the thread's held
 /// fold, or from the persisted base on the thread's first read.
 /// Archived event logs are never rescanned; rotation
-/// pre-projects the agent rollup into `agents.carryover.json` and reseeds
-/// the fold base, so the reducer stays bounded.
+/// pre-projects the agent rollup into `agents.carryover.json` before advancing
+/// the durable generation, so the reducer stays bounded.
 pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
     let snapshot = assemble_snapshot(paths, rollup.extent, agents.iter(), resume_outcomes)?;
@@ -128,7 +128,7 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     // *parse* is cached ([`ParseCache`]), keeping the 100–500 KB deserialize
     // off the CPU on a delta storm — the read itself is page-cache-hot.
     // Offset-only comparison is sound across rotations because the writer
-    // retracts `latest.json` before reseeding the new generation (see
+    // retracts `latest.json` before rebuilding the new generation (see
     // `rotate_event_log`), and every publish re-stamps it — so a readable
     // stamp always describes the live log, never a renamed-away one.
     let stamp_is_current = |snapshot: &SidebarSnapshot| {

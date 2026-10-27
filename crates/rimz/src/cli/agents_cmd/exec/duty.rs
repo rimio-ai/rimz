@@ -229,13 +229,9 @@ fn repair_digest(context: &RunExecContext, record: &rimz::store::run::RunRecord)
 
 pub(super) fn parent_cursor(paths: &rimz::StatePaths) -> Result<rimz::store::event_log::LogExtent> {
     let _guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
-    loop {
-        let generation = rimz::store::snapshot::lifecycle_log_generation(paths);
-        let offset = std::fs::metadata(&paths.events_log).map_or(0, |meta| meta.len());
-        if generation == rimz::store::snapshot::lifecycle_log_generation(paths) {
-            return Ok(rimz::store::event_log::LogExtent { generation, offset });
-        }
-    }
+    let generation = rimz::store::snapshot::lifecycle_log_generation(paths);
+    let offset = std::fs::metadata(&paths.events_log).map_or(0, |meta| meta.len());
+    Ok(rimz::store::event_log::LogExtent { generation, offset })
 }
 
 fn run_parent_probe(
