@@ -1,5 +1,6 @@
 //! Board commands through the CLI, durable store, and native hook delivery boundary.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -16,7 +17,7 @@ use rimz::store::message::{
 };
 use serde_json::json;
 
-use crate::common::Env;
+use crate::common::{DeliveryRendezvous, Env, wait_for_text_then_enter};
 
 const BOARD: &str = "# Work\nStage: Build (@coder)\n\n## Progress log\n- existing entry\n\n## Evidence\nKeep this section.\n";
 const CONFIG: &str = r#"leader: coder
@@ -1412,6 +1413,16 @@ impl Fixture {
 
     /// Start the resume wrapper without waiting for anything it writes.
     fn spawn_resume(&self, kind: &str, role: &str, session: &AgentSessionId) -> Wrapper {
+        self.spawn_resume_with_env(kind, role, session, &[])
+    }
+
+    fn spawn_resume_with_env(
+        &self,
+        kind: &str,
+        role: &str,
+        session: &AgentSessionId,
+        env: &[(&str, &Path)],
+    ) -> Wrapper {
         let shims = self.env.home_root.join("provider-shims");
         // The wrapper's informational `--version` probe gets a prompt failure (an unknown
         // version) instead of a provider that sleeps through the probe's timeout.
@@ -1455,6 +1466,7 @@ impl Fixture {
         };
         Wrapper(
             self.command()
+                .envs(env.iter().copied())
                 .args(crate::common::exec_args(&self.env, &request))
                 .arg("--root")
                 .arg(&self.env.project_root)
@@ -2876,14 +2888,68 @@ fn resumed_lazy_leader_gets_its_resume_prompt_then_its_stage() {
         .queue_message(&prompt, &workspace.session_name)
         .unwrap();
     fixture.live_panes_running("codex", &["terminal_3"]);
-    let _wrapper = fixture.resume("codex", "coder", &session);
-    let stage = fixture.stage_records()[0].clone();
-    fixture.sweep_until(&prompt.message_id, MessageStatus::Sent);
-    fixture.sweep_until(&stage.message_id, MessageStatus::Sent);
-    let trace = std::fs::read_to_string(&fixture.trace).unwrap();
-    let human = trace_position(&trace, "say hi").expect("resume prompt in mux writes");
-    let notice = trace_position(&trace, "Type: STAGE").expect("stage in mux writes");
-    assert!(human < notice, "the resume prompt goes first: {trace}");
+    let worktree = fixture.env.project_root.canonicalize().unwrap();
+    let board_lock = rimz::disk::lock::WorkspaceLock::acquire(
+        &fixture.env.runtime_paths().board_lock(&worktree),
+    )
+    .unwrap();
+    let before_claim = DeliveryRendezvous::new(&fixture.env, "resume-before-claim");
+    let _wrapper = fixture.spawn_resume_with_env(
+        "codex",
+        "coder",
+        &session,
+        &[("RIMZ_TEST_DELIVERY_BEFORE_CLAIM", &before_claim.path)],
+    );
+    fixture.wait_for(|events| {
+        events.iter().any(|event| {
+            matches!(event.kind(), EventKind::AgentLifecycle(payload)
+                if payload.event_name.as_deref() == Some("rimz.agent-resumed"))
+        })
+    });
+    // An early deliverer can reach its claim while the re-wake waits on this lock.
+    let early = before_claim.arrive_timeout(Duration::from_secs(2));
+    let mut delivery = if let Some(stream) = early {
+        stream
+    } else {
+        drop(board_lock);
+        before_claim.arrive()
+    };
+    let stages = fixture.stage_records();
+    assert_eq!(
+        stages.len(),
+        1,
+        "the Stage must be queued before the resume deliverer claims the prompt"
+    );
+    let stage = &stages[0];
+    assert_eq!(stage.status, MessageStatus::Queued);
+    assert_eq!(
+        fixture
+            .env
+            .store()
+            .list_messages()
+            .unwrap()
+            .iter()
+            .find(|message| message.message_id == prompt.message_id)
+            .unwrap()
+            .status,
+        MessageStatus::Queued
+    );
+    delivery.write_all(&[1]).unwrap();
+
+    let paste = format!(
+        "Type: USER_MESSAGE\nFrom: @user\nContent:\nsay hi\n\nType: STAGE\nFrom: @rimz\nContent:\n{}",
+        stage.text
+    );
+    wait_for_text_then_enter(&fixture.trace, &paste);
+    let messages = fixture.env.store().list_messages().unwrap();
+    for id in [&prompt.message_id, &stage.message_id] {
+        let message = messages
+            .iter()
+            .find(|message| &message.message_id == id)
+            .unwrap();
+        assert_eq!(message.status, MessageStatus::Sent);
+        assert_eq!(message.batch_id.as_ref(), Some(&prompt.message_id));
+    }
 }
 
 #[test]

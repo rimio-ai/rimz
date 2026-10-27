@@ -154,6 +154,91 @@ impl WrapperMemory {
     }
 }
 
+#[cfg(unix)]
+pub(crate) struct DeliveryRendezvous {
+    pub(crate) path: std::path::PathBuf,
+    listener: std::os::unix::net::UnixListener,
+}
+
+#[cfg(unix)]
+impl DeliveryRendezvous {
+    pub(crate) fn new(env: &Env, name: &str) -> Self {
+        let path = env.project_root.join(format!("{name}.sock"));
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        Self { path, listener }
+    }
+
+    pub(crate) fn arrive(&self) -> std::os::unix::net::UnixStream {
+        self.arrive_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|| panic!("delivery never reached {:?}", self.path))
+    }
+
+    pub(crate) fn arrive_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Option<std::os::unix::net::UnixStream> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match self.listener.accept() {
+                Ok((stream, _)) => return Some(stream),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("delivery rendezvous: {error}"),
+            }
+        }
+    }
+}
+
+pub(crate) fn trace_lines(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .map(|raw| raw.lines().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+pub(crate) const TRACE_PANE: &str = "terminal_3";
+
+pub(crate) fn is_paste(line: &str, text: &str) -> bool {
+    let payload = text
+        .bytes()
+        .map(|byte| if byte == b'\n' { b'\r' } else { byte })
+        .map(|byte| byte.to_string())
+        .collect::<Vec<_>>()
+        .join("\t");
+    line.ends_with(&format!(
+        "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t91\t50\t48\t48\t126\t{payload}\t27\t91\t50\t48\t49\t126"
+    ))
+}
+
+pub(crate) fn is_enter_key(line: &str) -> bool {
+    line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t13"))
+}
+
+/// Waits for a detached `message deliver` to paste `text` and press its Enter: the
+/// record turns `Sent` between the two writes, so `Sent` alone does not cover the Enter.
+pub(crate) fn wait_for_text_then_enter(trace_log: &std::path::Path, text: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let lines = trace_lines(trace_log);
+        if lines
+            .iter()
+            .position(|line| is_paste(line, text))
+            .is_some_and(|at| lines[at..].iter().any(|line| is_enter_key(line)))
+        {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for a paste of `{text}` and its Enter; trace: {lines:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
 pub(crate) fn append_frame(
     env: &Env,
     frame: rimz::store::ingress::HookIngress,
