@@ -98,7 +98,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - A scan command never passes `-r` to `rg`: it is `--replace`, so `rg -rn PATTERN` parses as `-r n` and rewrites every match to `n`. Single-quote any argument that starts with `=` or carries a glob character (`echo '==='`, `rg -g '*.rs'`), since the shell otherwise aborts the whole command before it runs. Both failures return plausible-looking output, so they cost a call each time.
 - A scan command never passes `-h` to `rg` to hide file names: it is `--help`. Use `--no-filename`.
 - Name only files you have listed; a glob that matches nothing aborts the command before it runs.
-- Search a snake_case field or function name with `rg -w`; a bare substring also matches every longer identifier that starts with it.
+- Search a snake_case field or function name with `rg -w`; a bare substring also matches every longer identifier that starts with it. Under `-w`, a pattern that ends in punctuation (`definitions\(`) misses every call whose next character is a word character (`definitions(kind)`), so search call sites with `rg '\bname\('`.
 - rustfmt splits long method chains one segment per line, so a grep for a field access through a path (`self.ui.freeze`) uses `rg -U 'self\s*\.ui\s*\.freeze'`; a single-line pattern misses the split form.
 - A scan command always names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` searches stdin and hangs until the tool timeout.
 - A tree-wide `rg` skips dot-directories: name `.github` as a path (or pass `--hidden`) when the question includes workflows.
