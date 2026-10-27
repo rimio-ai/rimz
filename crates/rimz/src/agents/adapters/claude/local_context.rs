@@ -1,10 +1,10 @@
-//! Resumable Claude transcript fold for session-cumulative token usage.
+//! Resumable Claude transcript fold for session-cumulative usage and cache-write retention.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::managed_pricing;
-use super::spend::{claude_config_dirs_from, parse_claude_spend};
+use super::spend::{claude_config_dirs_from, parse_claude_spend_with_retention};
 use crate::agents::pricing;
 use crate::agents::spending::SpendUpdate;
 use crate::agents::{
@@ -22,6 +22,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     let reuses_prior_path = ctx.prior_transcript_path.map(Path::new) == Some(path.as_path());
     let prior_fold = reuses_prior_path.then_some(ctx.prior_spend_fold).flatten();
     let mut fold = LocalSpendFold::resume(prior_fold, stat.len);
+    let restarted = prior_fold != Some(&fold);
     if reuses_prior_path
         && ctx
             .prior_transcript_stat
@@ -33,7 +34,9 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
 
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
     let prices = managed_pricing::overlay(&prices);
-    let parsed = parse_claude_spend(&path, Some(&fold.cursor), &prices);
+    let (parsed, last_cache_write) =
+        parse_claude_spend_with_retention(&path, Some(&fold.cursor), &prices);
+    let restarted = restarted || parsed.update == SpendUpdate::Rewritten;
     if parsed.update == SpendUpdate::Rewritten {
         fold = LocalSpendFold::default();
     }
@@ -50,6 +53,11 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     Some(LocalContextRefresh {
         context: LocalContextPatch {
             tokens,
+            last_cache_write: match last_cache_write {
+                Some(retention) => FieldPatch::Set(retention),
+                None if restarted => FieldPatch::Clear,
+                None => FieldPatch::Keep,
+            },
             ..LocalContextPatch::default()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),

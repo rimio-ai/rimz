@@ -4,6 +4,122 @@ use crate::agents::{
 };
 use std::io::Write as _;
 
+#[test]
+fn newest_main_chain_cache_write_sets_retention() {
+    use crate::agents::context::CacheWriteRetention::{FiveMinutes, OneHour, Unsplit};
+    let actual: Vec<_> = [
+        (Some((0, 100)), OneHour),
+        (Some((100, 0)), FiveMinutes),
+        (Some((50, 50)), FiveMinutes),
+        (None, Unsplit),
+    ]
+    .into_iter()
+    .map(|(split, _)| {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut write: Value = serde_json::from_str(&usage_line("write", 10, 5, 100, 0)).unwrap();
+        if let Some((five, hour)) = split {
+            write["message"]["usage"]["cache_creation"] = json!({
+                "ephemeral_5m_input_tokens": five, "ephemeral_1h_input_tokens": hour,
+            });
+        }
+        let mut sidechain = write.clone();
+        sidechain["isSidechain"] = json!(true);
+        sidechain["message"]["usage"]
+            .as_object_mut()
+            .unwrap()
+            .remove("cache_creation");
+        let advisor = usage_block_with_advisor_line("advisor", "msg-advisor", 0, 1, 0, 20);
+        std::fs::write(
+            &path,
+            format!(
+                "{write}\n{sidechain}\n{advisor}\n{}\n",
+                usage_line("read", 0, 1, 0, 100)
+            ),
+        )
+        .unwrap();
+        refresh(&path, None, None)
+            .unwrap()
+            .context
+            .last_cache_write
+            .into_set()
+    })
+    .collect();
+    assert_eq!(
+        actual,
+        [
+            Some(OneHour),
+            Some(FiveMinutes),
+            Some(FiveMinutes),
+            Some(Unsplit)
+        ]
+    );
+}
+
+#[test]
+fn cache_write_retention_keeps_on_resume_and_clears_on_replacement() {
+    use crate::agents::context::CacheWriteRetention::Unsplit;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    std::fs::write(&path, format!("{}\n", usage_line("write", 1, 1, 10, 0))).unwrap();
+    let first = refresh(&path, None, None).unwrap();
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap(),
+        "{}",
+        usage_line("read", 0, 1, 0, 10)
+    )
+    .unwrap();
+    let resumed = refresh(
+        &path,
+        first.transcript_stat.as_ref(),
+        first.spend_fold.as_set(),
+    )
+    .unwrap();
+    let replacement = format!("{}\n", usage_line("replacement", 0, 1, 0, 10));
+    std::fs::write(&path, &replacement).unwrap();
+    let rewritten = refresh(
+        &path,
+        resumed.transcript_stat.as_ref(),
+        resumed.spend_fold.as_set(),
+    )
+    .unwrap();
+    let new_path = dir.path().join("new.jsonl");
+    std::fs::write(&new_path, replacement).unwrap();
+    let moved = ClaudeAdapter
+        .local_context_refresh(
+            RefreshTrigger::Tick,
+            &LocalContextRefreshCtx {
+                agent_id: "session-1",
+                model_hint: None,
+                prior_session_name: None,
+                current_transcript_path: new_path.to_str(),
+                prior_transcript_path: path.to_str(),
+                prior_transcript_stat: resumed.transcript_stat.as_ref(),
+                prior_spend_fold: resumed.spend_fold.as_set(),
+                shared_pricing_cache_path: &dir.path().join("pricing.json"),
+                login_env: &BTreeMap::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            first.context.last_cache_write,
+            resumed.context.last_cache_write,
+            rewritten.context.last_cache_write,
+            moved.context.last_cache_write
+        ),
+        (
+            FieldPatch::Set(Unsplit),
+            FieldPatch::Keep,
+            FieldPatch::Clear,
+            FieldPatch::Clear
+        )
+    );
+}
+
 fn usage_line(request: &str, input: u64, output: u64, cache_write: u64, cache_read: u64) -> String {
     usage_block_line(
         request,
