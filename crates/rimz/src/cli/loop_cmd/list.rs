@@ -483,10 +483,22 @@ fn load(
             .map(schedule::last_stamps)
             .unwrap_or_default();
         let stats = held_stats.stats(&root, &now_zoned);
-        let ledger = StatePaths::for_project_root(&root)
-            .ok()
-            .and_then(|paths| launch_ledger::load(&paths).ok())
-            .unwrap_or_default();
+        let entries = catalog
+            .visible()
+            .values()
+            .map(LoadedTask::entry)
+            .filter(|entry| entry.resolved_root() == root)
+            .collect::<Vec<_>>();
+        let ledger = if entries.iter().any(|entry| entry.stay) {
+            load_launch_memory(&root, launch_ledger::load, &mut warnings)
+        } else {
+            Default::default()
+        };
+        let workflow_ledger = if entries.iter().any(|entry| entry.is_condition_workflow()) {
+            load_launch_memory(&root, launch_ledger::load_workflows, &mut warnings)
+        } else {
+            Default::default()
+        };
         let workflows = StatePaths::for_project_root(&root)
             .ok()
             .and_then(|paths| rimz::store::workflow::list(&paths).ok())
@@ -521,9 +533,16 @@ fn load(
                         .as_ref()
                         .and_then(|runtime| watcher_info(runtime, name).ok().flatten())
                         .map(|info| info.pid),
-                    launch: ledger
-                        .get(name)
-                        .and_then(|launches| launches.get(&task.entry().run_dir())),
+                    launch: match launch_ledger::launched(
+                        task.entry(),
+                        name,
+                        &task.entry().run_dir(),
+                        &ledger,
+                        &workflow_ledger,
+                    ) {
+                        Some(launch_ledger::Launch::Resident(launch)) => Some(launch),
+                        _ => None,
+                    },
                     now,
                 },
             );
@@ -535,7 +554,7 @@ fn load(
                     }
                     None => task.entry().run_dir() == workspace.worktree_root,
                 });
-            row.launched_count = ledger.get(name).map_or(0, BTreeMap::len);
+            row.launched_count = launched_count(task.entry(), name, &ledger, &workflow_ledger);
             row.attach_workflow_runs(WorkflowRunRow::of_task(&workflows, name, &root), now);
             tasks.push(row);
         }
@@ -587,6 +606,21 @@ fn load(
         caller_root,
         now,
         warnings,
+    })
+}
+
+fn load_launch_memory<T: Default>(
+    root: &Path,
+    read: impl FnOnce(&StatePaths) -> Result<T, launch_ledger::LedgerErr>,
+    warnings: &mut Vec<String>,
+) -> T {
+    let load = || -> Result<_> { Ok(read(&StatePaths::for_project_root(root)?)?) };
+    load().unwrap_or_else(|error| {
+        warnings.push(format!(
+            "cannot load loop launch memory in {}: {error:#}",
+            root.display()
+        ));
+        T::default()
     })
 }
 
@@ -946,12 +980,28 @@ fn acting_run_text(last: &LastRun, exit: Option<&str>, now: Timestamp) -> String
     }
 }
 
-/// One nonterminal workflow run a loop task started.
+fn launched_count(
+    entry: &TaskEntry,
+    task: &str,
+    residents: &launch_ledger::Ledger,
+    workflows: &launch_ledger::WorkflowLedger,
+) -> usize {
+    if entry.stay {
+        residents.get(task).map_or(0, BTreeMap::len)
+    } else if entry.is_condition_workflow() {
+        workflows.tasks.get(task).map_or(0, BTreeMap::len)
+    } else {
+        0
+    }
+}
+
+/// One ledgered or live workflow run, shared by list, show, and checkout joins.
 #[derive(Serialize)]
 pub(super) struct WorkflowRunRow {
     pub(super) id: rimz::ids::WorkflowRunId,
     pub(super) checkout: PathBuf,
     pub(super) state: &'static str,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub(super) node: String,
     pub(super) since: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -960,11 +1010,48 @@ pub(super) struct WorkflowRunRow {
     pub(super) text: Option<String>,
     #[serde(skip)]
     workflow: String,
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub(super) detail: String,
 }
 
 impl WorkflowRunRow {
+    pub(super) fn for_show(
+        records: &[rimz::store::workflow::RunRecord],
+        task: &str,
+        root: &Path,
+        launches: &BTreeMap<PathBuf, launch_ledger::WorkflowLaunchRecord>,
+    ) -> Vec<Self> {
+        let mut runs = Vec::new();
+        for (checkout, launch) in launches {
+            if runs.iter().any(|run: &Self| run.id == launch.run) {
+                continue;
+            }
+            runs.push(
+                records
+                    .iter()
+                    .find(|record| record.id == launch.run)
+                    .map(Self::of_record)
+                    .unwrap_or_else(|| Self {
+                        id: launch.run.clone(),
+                        checkout: checkout.clone(),
+                        state: "gone",
+                        node: String::new(),
+                        since: launch.at,
+                        reason: None,
+                        text: None,
+                        workflow: String::new(),
+                        detail: String::new(),
+                    }),
+            );
+        }
+        for run in Self::of_task(records, task, root) {
+            if !runs.iter().any(|listed| listed.id == run.id) {
+                runs.push(run);
+            }
+        }
+        runs
+    }
+
     pub(super) fn of_task(
         records: &[rimz::store::workflow::RunRecord],
         task: &str,
@@ -973,20 +1060,24 @@ impl WorkflowRunRow {
         records
             .iter()
             .filter(|record| record.started_by(task) && record.project_root == root)
-            .map(|record| Self {
-                id: record.id.clone(),
-                checkout: record.scope.path.clone(),
-                state: record.state.as_str(),
-                node: record.node.clone(),
-                since: record.entered_at,
-                reason: record.park.as_ref().map(|park| park.reason.as_str()),
-                text: record.park.as_ref().and_then(|park| park.text.clone()),
-                workflow: record.workflow.clone(),
-                detail: crate::cli::workflow::waiting(record)
-                    .or_else(|| record.park.as_ref().map(rimz::store::workflow::Park::label))
-                    .unwrap_or_default(),
-            })
+            .map(Self::of_record)
             .collect()
+    }
+
+    fn of_record(record: &rimz::store::workflow::RunRecord) -> Self {
+        Self {
+            id: record.id.clone(),
+            checkout: record.scope.path.clone(),
+            state: record.state.as_str(),
+            node: record.node.clone(),
+            since: record.entered_at,
+            reason: record.park.as_ref().map(|park| park.reason.as_str()),
+            text: record.park.as_ref().and_then(|park| park.text.clone()),
+            workflow: record.workflow.clone(),
+            detail: crate::cli::workflow::waiting(record)
+                .or_else(|| record.park.as_ref().map(rimz::store::workflow::Park::label))
+                .unwrap_or_default(),
+        }
     }
 
     /// `<workflow> <node> <reason>[: <text>] <age> <checkout-name>`.

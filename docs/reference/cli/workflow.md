@@ -104,6 +104,8 @@ for           = "3m"
 | `when`, `for`, schedules, `root` | As on any task. |
 | `budget`, `budget-per-day` | Ignored: a workflow fire is not gated on spend, and step costs are not counted against the task. The turn, room, and account caps still park a step agent like any agent in the room. |
 
+`loop show` joins each checkout to its recorded run, finished runs included. `loop list` keeps only active and parked runs; its launched-worktree count includes finished entries.
+
 `stay`, `takeover`, `subscribe`, `check`, and `judge` are refused, each with the workflow node that owns the concept. A `when` task launches its workflow once per checkout: subsequent scheduled fires start nothing and record nothing, whether that run is active, parked, or finished. Project-scoped launches cover all of the task's checkouts, including later ones. `rimz loop fire <task>` bypasses this memory and replaces the entry only when a new run starts. `rimz workflow run` starts an independent run without changing the task's entry. Task replacement preserves the entries; rename moves them and removal clears them. Removal also detaches the task's active and parked workflow runs, which continue as independent runs.
 
 An unrecorded checkout retries a sustained-true condition every five minutes. A fire that finds an active or parked run records `workflow skipped` with its id and adds no strike, checking before it reads the definition or prompt. If that run belongs to this task, the fire repairs its launch entry, so later scheduled fires are silent. A run started independently or by another task is not adopted, and the task retries until that run ends. Schedule, signal, and watch workflow tasks keep admitting a new run on each fire unless a live run holds the scope; finished runs do not block them.
@@ -149,7 +151,9 @@ The bare-`ci` commit fence sets `readings.ci` to null. When that makes the answe
 
 The local-HEAD reason takes precedence over the CI-commit reason; the pre-entry-probe reason takes precedence over both. The same text follows `unknown: ` in the waiting line and JSON `detail`, and remains in the journaled evaluation answer printed by `show` history.
 
-`rimz loop list --json` and `rimz loop show --json` carry `workflow_runs` for a workflow task: one object per active or parked run the task started in that room, `{id, checkout, state, node, since}` plus `reason` and `text` on a parked run. `since` is when the run entered its node.
+`rimz loop list --json` carries `workflow_runs` for a workflow task: one object per active or parked run the task started in that room, `{id, checkout, state, node, since}` plus `reason` and `text` on a parked run. Both list and show add `detail` when the waiting line or park label is nonempty. `since` is when the run entered its node.
+
+`rimz loop show --json` also includes every run named by the task's condition launch memory, each once, including terminal runs whose task was renamed. A run whose record is gone has only `id`, `checkout` (the launch entry's key), `state: "gone"`, and `since` (the launch time). Fan-out `worktrees[].run` repeats the matching `workflow_runs` object; project-scoped launches share one run across checkout rows. The human WORKTREES table names those runs, and RUNS lists only runs no worktree row names, folded rows included.
 
 ## Exit codes
 

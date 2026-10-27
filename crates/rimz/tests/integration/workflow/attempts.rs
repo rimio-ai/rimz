@@ -690,6 +690,10 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
     fire();
     assert_eq!(records::list(&paths).unwrap().len(), 1);
     assert_eq!(
+        workflow_task_history(&room, "review")["workflow_runs"][0]["state"],
+        "canceled"
+    );
+    assert_eq!(
         workflow_task_history(&room, "review")["runs"],
         history["runs"]
     );
@@ -699,6 +703,10 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
         .unwrap()
         .to_owned();
     assert_ne!(second, first.id.as_str());
+    assert_eq!(
+        workflow_task_history(&room, "review")["workflow_runs"][0]["id"],
+        second
+    );
     let list: Value = serde_json::from_str(&success(
         room.command(&["workflow", "list", "--json"])
             .output()
@@ -721,6 +729,10 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
     assert_eq!(records::list(&paths).unwrap().len(), 2);
     assert_eq!(
         workflow_launches(&room)["tasks"]["renamed"][key]["run"],
+        second
+    );
+    assert_eq!(
+        workflow_task_history(&room, "renamed")["workflow_runs"][0]["id"],
         second
     );
     let list: Value = serde_json::from_str(&success(
@@ -930,6 +942,11 @@ fn condition_project_workflow_covers_new_checkouts_even_after_finishing() {
     .clone();
     assert_eq!(entry["scope"], "project");
     assert_eq!(entry["run"], id.as_str());
+    assert_eq!(after["workflow_runs"].as_array().unwrap().len(), 1);
+    for row in after["worktrees"].as_array().unwrap() {
+        assert_eq!(row["state"], "launched", "{after}");
+        assert_eq!(row["run"], after["workflow_runs"][0]);
+    }
     condition_workflow(&room, "worktree", true);
     success(
         room.command(&["loop", "fire", "review"])
@@ -989,6 +1006,42 @@ fn condition_workflow_manual_fire_from_a_checkout_replaces_only_its_entry() {
             .unwrap(),
     );
     assert_eq!(workflow_launches(&room), before);
+    let shown = workflow_task_history(&room, "review");
+    assert_eq!(shown["launches"], json!({}));
+    assert_eq!(shown["workflow_runs"].as_array().unwrap().len(), 2);
+    for row in shown["worktrees"].as_array().unwrap() {
+        assert_eq!(row["state"], "launched", "{shown}");
+        let run = shown["workflow_runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["id"] == row["run"]["id"])
+            .unwrap();
+        assert_eq!(&row["run"], run);
+    }
+    let text = success(room.command(&["loop", "show", "review"]).output().unwrap());
+    assert!(
+        text.contains("1 canceled") && text.contains("RUN"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("\nRUNS\n") && !text.contains("LEADER"),
+        "{text}"
+    );
+    let listed: Value = serde_json::from_str(&success(
+        room.command(&["loop", "list", "--json"]).output().unwrap(),
+    ))
+    .unwrap();
+    let task = listed["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|room| room["tasks"].as_array().unwrap())
+        .find(|task| task["name"] == "review")
+        .unwrap();
+    assert_eq!(task["workflow_runs"].as_array().unwrap().len(), 1, "{task}");
+    let listed = success(room.command(&["loop", "list"]).output().unwrap());
+    assert!(listed.contains("2 worktrees"), "{listed}");
     success(
         room.command(&["loop", "fire", "review"])
             .current_dir(first)
@@ -1000,6 +1053,13 @@ fn condition_workflow_manual_fire_from_a_checkout_replaces_only_its_entry() {
     assert_eq!(
         after["tasks"]["review"][other],
         before["tasks"]["review"][other]
+    );
+    let shown = workflow_task_history(&room, "review");
+    assert!(
+        shown["worktrees"].as_array().unwrap().iter().any(|row| {
+            row["checkout"] == key && row["run"]["id"] == after["tasks"]["review"][key]["run"]
+        }),
+        "{shown}"
     );
 }
 

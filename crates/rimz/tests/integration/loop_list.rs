@@ -1500,6 +1500,104 @@ fn remote_malformed_instances_warn_and_skip_only_remote_room() {
 }
 
 #[test]
+fn malformed_launch_memory_warns_without_hiding_local_or_remote_tasks() {
+    for workflow in [true, false] {
+        for remote in [false, true] {
+            let env = Env::new();
+            let other = env.home_root.join("other-room");
+            std::fs::create_dir(&other).unwrap();
+            let root = if remote { &other } else { &env.project_root };
+            let entry = TaskEntry {
+                root: root.clone(),
+                when: Some(vec!["pr=open".into()]),
+                each_worktree: true,
+                workflow: workflow.then(|| "review".into()),
+                agent: (!workflow).then(|| "codex".into()),
+                prompt: (!workflow).then(|| "review".into()),
+                stay: !workflow,
+                ..TaskEntry::default()
+            };
+            let healthy = TaskEntry {
+                workflow: (!workflow).then(|| "review".into()),
+                agent: workflow.then(|| "codex".into()),
+                prompt: workflow.then(|| "review".into()),
+                stay: workflow,
+                ..entry.clone()
+            };
+            config(
+                &env,
+                BTreeMap::from([
+                    ("review".into(), entry),
+                    ("healthy".into(), healthy),
+                    ("ordinary".into(), task(root)),
+                ]),
+            );
+            let file = if workflow {
+                "loop-workflow-launches.json"
+            } else {
+                "loop-launches.json"
+            };
+            let path = env.state_path_for(root).root.join("records").join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "not json").unwrap();
+            let launch = if workflow {
+                json!({"at": Timestamp::now(), "leader": "@coder"})
+            } else {
+                json!({
+                    "at": Timestamp::now(),
+                    "run": rimz::ids::WorkflowRunId::new(),
+                    "scope": "worktree"
+                })
+            };
+            let tasks = json!({"healthy": {root.to_str().unwrap(): launch}});
+            let (healthy_file, ledger) = if workflow {
+                ("loop-launches.json", tasks)
+            } else {
+                (
+                    "loop-workflow-launches.json",
+                    json!({"version": 1, "tasks": tasks}),
+                )
+            };
+            std::fs::write(
+                env.state_path_for(root)
+                    .root
+                    .join("records")
+                    .join(healthy_file),
+                serde_json::to_vec(&ledger).unwrap(),
+            )
+            .unwrap();
+            for flags in [vec!["--all"], vec!["--all", "--json"]] {
+                let json = flags.contains(&"--json");
+                let output = env
+                    .rimz()
+                    .args(["loop", "list"])
+                    .args(flags)
+                    .output()
+                    .unwrap();
+                let error = String::from_utf8_lossy(&output.stderr);
+                let text = String::from_utf8_lossy(&output.stdout);
+                assert!(output.status.success(), "{file}, remote={remote}: {error}");
+                assert!(
+                    text.contains("review")
+                        && text.contains("ordinary")
+                        && text.contains("healthy"),
+                    "{text}"
+                );
+                if !json {
+                    assert!(text.contains("1 worktrees"), "{text}");
+                }
+                assert!(
+                    error.contains("warning:")
+                        && error.contains("cannot load loop launch memory")
+                        && error.contains(root.to_str().unwrap()),
+                    "{error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn each_worktree_uses_acting_history_and_launch_count() {
     let env = Env::new();
     let mut entry = task(&env.project_root);
