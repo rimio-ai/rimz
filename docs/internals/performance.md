@@ -167,11 +167,11 @@ Per agent, hook reporting is event-driven. An agent reports through a short-live
 
 Two debounced costs stay flat in agent count: event-log group `fdatasync` and snapshot publication. Both scale with rooms. Drain cursor publications are separate writes outside either debounce: known same-boot frames use cache-class rename; unstamped frames or an unknown drainer boot retain durable claim and applied writes. Skips, earlier-boot drops and resets are cache-class, with one publication per consecutive earlier-boot run within a read, while truncation retains its fdatasync. The hot runtime caches live under `$XDG_RUNTIME_DIR`, normally a tmpfs, so their churn is memory traffic. Without that variable RimZ falls back to `/tmp/rimz-<uid>` (`crates/rimz/src/disk/paths.rs::runtime_home_from`), whose churn reaches whatever filesystem holds `/tmp`.
 
-Display-plane CPU and RAM estimates across a fleet of 2 to 5 rooms follow. They exclude the elected hook drainer and its serial apply child, whose cost follows hook volume rather than fleet size.
+Except for the measured idle-CPU cell, these are display-plane CPU and RAM estimates across a fleet of 2 to 5 rooms. They exclude the elected hook drainer and its serial apply child, whose cost follows hook volume rather than fleet size. The idle figure covers one host with 50 agents and 20 sidebars, not a fleet; [Scale yardstick](#scale-yardstick) separates supervisors, tmux and child costs.
 
 | Resource | 20 agents | 50 agents | 100 agents | What sets it |
 | --- | --- | --- | --- | --- |
-| CPU, idle | ~0 | ~0 | ~0 | Loops block in `recv`; off-screen animation pauses |
+| CPU, idle | Not measured | 0.104 core (one host) | Not measured | No incoming frames, 25 roots initially working; not an all-finished room |
 | CPU, busy | <0.3 core | ~0.3 to 0.8 core | ~0.5 to 1.5 core | One producer per room, bursting on its git pass, never on the render thread |
 | RAM, resident | ~80 to 150 MiB | ~100 to 180 MiB | ~120 to 220 MiB | One host per room plus a small supervisor and local snapshot metadata per tab, shared rosters and rows, one spend walker, room-local rollups, prepared cell-pet grids |
 | Durable write | Event-volume dependent | Event-volume dependent | Event-volume dependent | Derived lifecycle frames, about 1 KiB per turn; raw ingress payload and environment; cursor publications |
@@ -342,11 +342,27 @@ The deterministic gates pin exact integers, never time. They live in `crates/rim
 | `concurrent_stops.rs` | 24 concurrent Stops through `rimz hooks feed` against a live `rimz hooks drain`, on an empty and a 40-agent store: once all 24 hooks have returned, every frame is in ingress or the event log, drain-through derives exactly one lifecycle event per Stop, and the fold sees all 24 agents. Its timing guard is the [hook budget](#the-hook-budget) |
 | `produce_budget.rs` | Zero subprocess spawns for a warm fleet-scale produce with fresh inputs, and for a produce over stale or missing heavy caches. A retained refresh cycle over mixed Codex and Claude sessions and linked worktrees also spawns zero, after one cold origin lookup and no branch subprocess |
 | `fold_incremental.rs` | Warm folds and produces read O(new bytes). A warm or unchanged fold parses zero carryover bytes, and a replaced carryover re-parses once |
+| `work_log.rs` | Cross-process work records from direct and drainer-spawned apply children; cold Prompt/Read/Stop frames on a fixed small room use 6/5/5 assemblies, 0/0/1 machine-config loads and one rollup parse |
 | `sidebar_diff_stats.rs` | Per-worktree git probes single-flight across CLI snapshot processes, counted through the `git-trace` shim |
 | `consumer_enrichment.rs`, `enrichment_cadence.rs`, `spending_incremental.rs` | Unchanged-room consumer cost, per-enrichment TTL stamps, and O(delta) spend IO |
 | Detached-helper and Codex transport unit tests | Spawn attempts include detached helpers, scope retries, and cold app-servers, so refresh budgets count these children too |
 
 The `cargo xtask invariants` check `ensure_sidebar_library_boundaries` keeps store writers, the run-wake sender, and the broker out of the sidebar data plane's imports, so the producer cannot grow write-side machinery unnoticed.
+
+The work-counter index below distinguishes thread-local reads from process totals and file channels. A counter in the bench coordinator never sees a separate apply child; the work log is the bridge. These are work counts, not allocation or disk-I/O totals.
+
+| Counter / channel | Scope | What it counts; what it omits |
+| --- | --- | --- |
+| `crates/rimz/src/proc/mod.rs::testkit::spawn_count` | Process | Attempts through the counted subprocess funnels; no endpoint attribution, raw spawns elsewhere or child work |
+| `crates/rimz/src/disk/atomic.rs::testkit::fsync_count` | Process | File/directory sync calls; no child syncs or duration |
+| `crates/rimz/src/store/event_log.rs::testkit` (`bytes_read`, `bytes_written`, `bytes_read_under`) | Process | Bytes scanned/appended, optionally reads under a path; not carryover, snapshots, physical disk traffic or children |
+| `crates/rimz/src/store/snapshot/fold.rs::testkit` (`carryover_bytes_parsed`, `rollup_rows_materialized`, `rollup_base_copies`) | Process | Raw carryover parses, flattened rows and shared-base deep copies; not every snapshot assembly or checkpoint parse |
+| `crates/rimz/src/store/sidecar.rs::testkit::read_counts` | Thread | Cumulative sidecar stats, enumerations and parses; not other threads or children, and absent from work records |
+| `crates/rimz/src/agents/pricing/mod.rs::testkit::book_loads` | Process | Price-book memo misses; not memo hits or a cross-process total, and absent from work records |
+| `crates/rimz/src/testkit/mod.rs::WorkCounters` (`snapshot_assemblies`, `snapshot_publishes`, `rollup_bytes_parsed`, `latest_bytes_parsed`, `machine_config_loads`) | Process | Assembly/rebuild calls, rollup/latest parser-input bytes and machine-config disk loads. Parse/load fields omit memo hits; no arbitrary JSON parses or sentry-only core-config reads |
+| `RIMZ_TEST_MACHINE_CONFIG_LOAD_LOG` | Cross-process file | One strict/lenient line per machine-config disk build, including reloads; no memo hits, pid or sentry-only core read |
+| `RIMZ_TEST_HOOK_DRAIN_TIMING=1` | Cross-process diagnostic file | Per-frame drainer claim/application timing in the room's drainer log; no apply-child CPU or file-parse counts |
+| `RIMZ_TEST_WORK_LOG` | Cross-process file | CPU/resources and work counters when `main` returns; no `std::process::exit` paths (including clap exits), signal-killed processes or thread-local sidecar counters. [Scale yardstick](#scale-yardstick) defines the records and attribution |
 
 ### Live client-byte guard
 
@@ -354,7 +370,7 @@ The `cargo xtask invariants` check `ensure_sidebar_library_boundaries` keeps sto
 
 ### Benchmarks
 
-`cargo xtask perf` runs the divan benches in `crates/rimz/benches/` over synthetic stores and pane frames, through the same entry points the sidebar uses. It launches no agents and spends no tokens. The benches stay out of `gate` and `ci`, so a busy CI runner never fails a build on their timing, but the regression ceilings below fail `cargo xtask perf` itself. Each failure prints the measured value and the ceiling.
+`cargo xtask perf` runs the divan benches in `crates/rimz/benches/` over synthetic stores and pane frames, through the same entry points the sidebar uses. It starts no providers and spends no tokens; the ignored host-scale bench runs a real private tmux room with parked agent stand-ins. The benches stay out of `gate` and `ci`, so a busy CI runner never fails a build on their timing, but the regression ceilings below fail `cargo xtask perf` itself. Each failure prints the measured value and the ceiling.
 
 Allocation counts are the steady regression signal, and medians move with host and load. The figures here were captured on `xlab-term`, a loaded LXC container on an AMD Ryzen 9 9950X with 28 online CPUs and the `performance` governor. Requested bytes and allocation requests come from the bench's counting allocator (`crates/rimz/benches/fleet.rs::counted`), which counts allocation and reallocation requests. Alloc/op is Divan's median `alloc` byte count, which excludes the grow bytes Divan reports separately.
 
@@ -386,6 +402,8 @@ To run it, build with `cargo build -p rimz --release --features testkit --bins`,
 The seeded sequential row is the slowest hook median of five quiet runs (medians 1.887 to 2.197 ms). Three runs beside 14 CPU hogs held hook medians of 2.555 to 2.746 ms against ceilings of 4.169 to 4.454 ms, and one of them hit a 9.934 ms hook maximum: the spike a max-based check would fail on. A scratch 4 ms sleep added to every hook sample fails the median at 6.220 ms. The 24-way exec baseline itself runs about 7 to 11 ms, so 4 ms is the sequential target, not a 24-way wall-time promise. After-return drain took 2.668 s on the seeded fixture and 80.468 s on the live-sized copy. These measurements predate boot-stamped cursor writes. Claims and applications now require additional durability work only for unstamped frames or an unknown drainer boot; other cursor writes are cache-class, and each emptied queue still pays a truncation fdatasync separately from the debounced event-log barrier.
 
 #### Fixtures
+
+`crates/rimz/benches/hotpath.rs::latency::Fixture` takes live and closed counts, holds a real owner process for every live root, and registers each through SessionStart. Its measurements use real feed, drainer and apply processes. `drainer_latency` and `drainer_backlog` retain 300 live roots and 1,500 closed rows; [Scale yardstick](#scale-yardstick) varies those dimensions for `apply_scale`.
 
 `crates/rimz/src/testkit/mod.rs::fleet::seed_scale_room` builds the fleet benches' rooms. It takes state paths, runtime paths, and `ScaleRoom { agents, panes, ended_sessions, orphan_contexts }`, publishes fresh producer inputs, and returns a frame for `produce_snapshot` or `enrich_workspace`. It binds the first live agents to the requested panes and leaves the remaining agents unbound, and each bound agent has its own synthetic branch. Orphan context sidecars have keys absent from the room's agents. Its carryover uses representative row sizes but ends every history session, so the agent, pane, and history dimensions stay independent. `crates/rimz/src/testkit/mod.rs::fleet::seed_ended_carryover` keeps a 98% ended distribution for the carryover benches.
 
@@ -589,6 +607,174 @@ At the incident-rate steps of 1 and 2 frames/s, trunk holds on this fixture in b
 
 Raw Divan rows, row-validation results, one-second build-process snapshots, CPU readings and deltas, scope identities, scripts, binary digest and compiler logs were retained outside the repository on the measuring host. The detached merge-base worktree and all fresh build targets were removed after measurement.
 
+#### Scale yardstick
+
+The Linux-only ignored `crates/rimz/benches/hotpath.rs::apply_scale` and `crates/rimz/benches/hotpath.rs::host_scale` benches measure cold hook application and a whole real tmux room. They report today's work, not a target ceiling. Build one release testkit CLI, then run the benches serially, without another build or test in this checkout:
+
+```sh
+cargo build -p rimz --release --features testkit --bins --locked
+RIMZ_XTASK_TIMEOUT=90m cargo xtask perf --bench hotpath -- apply_scale --ignored
+RIMZ_SCALE_COMPARE_SUPERVISOR=1 RIMZ_XTASK_TIMEOUT=180m cargo xtask perf --bench hotpath -- host_scale --ignored
+```
+
+Run long commands through `rimz wait --run` and retain their output under a unique directory in `$TMPDIR`. `RIMZ_HOOK_BUDGET_BIN` selects another release testkit CLI. `RIMZ_SCALE_ROOMS=50x300,200x1500` selects apply rooms as live agents × closed rows; `RIMZ_SCALE_ROOMS=50x20,200x80` selects host rooms as agents × sidebars. Unset, the selectors run the full grids below. The timed host is started by the bench, not by a sidebar supervisor; `RIMZ_SCALE_COMPARE_SUPERVISOR=1` adds 120 s `parity_idle` windows for both start modes on the first selected room (50/20 here: 5,470 / 6,070 host CPU ms/min, 58.42 / 58.17 fetch cycles/min and 237 / 236.5 host git `status` calls/min, bench-started / supervisor-started). Neither fixture reads the real home or starts a provider. The host uses logged-out Claude stand-ins, missing Codex probes, offline account usage and no transcripts or queued messages. Provider API/auth costs, transcript discovery and the stuck message-sweep-stamp defect are not represented.
+
+Each stdout JSON line is keyed by `apply_scale` or `host_scale`; extract it with `jq -Rc 'fromjson? | select(.apply_scale)'` or the host equivalent. Distributions carry nearest-rank `p50`, `p99`, and `max`. Apply rows are `fixture` (shape, build/version, file sizes, setup SessionStart wall/CPU), `frame` (50 direct cold children per event, wall/CPU and every work-counter distribution), and `drain` (100 Read frames from 25 working roots, one nudge, throughput and claim-to-applied distribution). The burst appends ingress under the workspace lock rather than spawning 100 feed producers, so it measures serial drain capacity, not feed launch capacity.
+
+Host rows are `room` (shape, total/hot worktrees, build/version, traced flag), `window` (untraced idle/busy or optional parity process deltas and spawns), `trace` (separate traced idle room, or a skip reason), and `work` (untraced host lifetime counters after exit, including warm-up). Each window has its own checkout: window 0 uses the main checkout and every other window a linked worktree. The 20-sidebar rooms have 20 hot and zero cold worktrees; the 80-sidebar room has 25 hot and 55 cold. All checkouts share one empty commit, so git child CPU is a floor; use git spawn counts for before/after comparisons of the git lane, not these figures as a real-repository CPU baseline. Each stub holds sixteen threads and completes a turn before measurement. Each host warms for 60 s, measures idle and busy for 120 s each, and feeds 240 frames during busy, two frames/s in staggered 20-frame turns over 25 roots. Warm-up requires host-parented git in every checkout. All agent bindings and sidebar attachments are asserted before and after every window; teardown asserts every room process is gone.
+
+"Per minute" covers the whole room, not one synchronized pass: fetch, refresher, watchers and renderers run independently. Host, serve-sum and room tmux-server CPU come from `/proc/<pid>/stat`; host-reaped children use `cutime + cstime`, and rimz-child CPU uses work records completed in the window, excluding `hooks feed`. Those child CPU figures can overlap, and omit killed or still-outstanding children. Process samples are sequential, not atomic room-wide cuts. Wakeups are voluntary plus involuntary task context-switch deltas, not timer firings; tasks that exit before the end are omitted and counted in `departed_tasks`. Reads are process `syscr` and `rchar`, not disk bytes, and need the per-path trace beside them. Fetch rates normalize diagnostic intervals ending in the window by their own covered seconds; those intervals may cross a phase boundary.
+
+Spawn rows group parent (`host`, `serve`, `other`), endpoint (`tmux`, `git`, `rimz`) and subcommand. PATH shims log tmux/git attempts with JSON argv and exec the real binary; rimz records count completed commands, not every spawn attempt. Other executables are not counted. PATH shims add their own logging/exec cost, so keep the fixture unchanged for before/after. The separate trace uses `strace -ff --seccomp-bpf -e trace=openat,clone,clone3` for a 120 s idle window after warm-up. It follows the host's `CLONE_THREAD` lineage, including new and transient threads but excluding forked helpers, and asserts coverage of every boundary-live host thread. `host_thread_files` counts the host-lineage trace files read so far, including startup, not concurrent threads. Open attempts, including failures, are filtered to the measurement interval; process/session/temporary IDs are normalized in non-`/proc` path classes. Trace CPU is discarded. Compare traced and untraced idle fetch rates before reading opens/minute as an untraced rate; opens/fetch-cycle is a ratio of rates from differently bounded intervals, not a direct per-cycle count, and cannot remove tracing's other effects.
+
+`RIMZ_TEST_WORK_LOG` names the cross-process JSONL channel (`crates/rimz/src/cli/work_log.rs::WorkLog::append`). Under `testkit`, each rimz process appends one record with one O_APPEND write when `main` returns, on success or error: pid/ppid, parsed subcommand path without payloads or positional values, start/end Unix milliseconds, `getrusage` CPU, peak RSS, minor faults and process work counters. It propagates through hook ingress into apply children and through inherited environments into helpers. Commands that leave through `std::process::exit` (including clap help, version and argument-error exits) and signal-killed processes write none. It has no sidecar thread-local counters or price-book loads, and no timing within a long-lived host. Unset costs one environment read; non-testkit binaries have no channel. `crates/rimz/tests/integration/performance/work_log.rs::cold_frame` pins 6/5/5 assemblies for prompt/Read/Stop, one config load and one rollup parse on its small fixed fixture, not a host ceiling. The larger bench fixture enables runtime Environment context and reports its own counts below.
+
+##### Baseline identity and load
+
+Clean release testkit CLIs on trunk merge base `b46dfb9dd` (`docs(agents): find running builds by process name, not pgrep -af`) plus `test(perf): measure real room-host work across fleet sizes`: apply build `8c93aa3c07b6` measured on 2026-10-27 UTC, and host build `4f3902cd6306` measured on 2026-10-27 to 28 UTC with supervisor comparison enabled. The apply figures retain the original run; the host figures use the corrected git/worktree fixture. Every fixture/room version is free of `.dirty`. The shared Linux x86-64 host had an AMD EPYC 7502P, 58 online logical CPUs, the `performance` governor and ZFS temporary storage. No load was induced; ambient builds/tests were active. Load is the one-minute average before/after each whole bench, including compilation and fixture setup, not a timed-window average. These are single-run baselines under shared load, not a paired speedup claim.
+
+| Bench | Load before / after |
+| --- | --- |
+| `apply_scale` | 22.97 / 10.85 |
+| `host_scale` | 28.00 / 30.32 |
+
+##### Apply baseline
+
+Setup sizes are bytes. Time triples are p50 / p99 / max in milliseconds. SessionStart counts equal each fixture's live count; each measured frame event has 50 samples.
+
+| Live / closed | Rollup | Raw carryover | Latest | Event log | SessionStart wall ms | SessionStart CPU ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 / 300 | 1,855,242 | 1,884,603 | 53,695 | 152,170 | 50.159 / 58.458 / 58.458 | 42.879 / 51.130 / 51.130 |
+| 200 / 300 | 1,957,803 | 1,884,546 | 192,807 | 268,703 | 63.066 / 89.583 / 97.856 | 55.346 / 80.162 / 88.586 |
+| 400 / 300 | 2,100,446 | 1,884,588 | 385,993 | 424,276 | 84.650 / 125.755 / 141.852 | 76.136 / 116.690 / 131.586 |
+| 200 / 1,500 | 9,278,336 | 9,428,159 | 260,639 | 724,341 | 197.266 / 241.509 / 242.532 | 176.943 / 220.671 / 222.031 |
+| 200 / 3,000 | 18,426,433 | 18,863,003 | 335,660 | 1,295,655 | 423.027 / 626.711 / 652.545 | 379.649 / 552.794 / 593.424 |
+
+Prompt means UserPromptSubmit; Read means non-mutating PostToolUse. The three parse/read byte columns are medians in decimal MB, not timing distributions.
+
+| Live / closed | Frame | Wall ms | CPU ms | Rollup parsed MB | Latest parsed MB | Trimmed carryover read MB |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 / 300 | Prompt | 66.649 / 172.159 / 172.159 | 54.237 / 150.367 / 150.367 | 1.866 | 0.068 | 1.814 |
+| 50 / 300 | Read | 74.767 / 98.667 / 98.667 | 64.210 / 78.523 / 78.523 | 1.874 | 0.078 | 1.814 |
+| 50 / 300 | Stop | 57.065 / 75.644 / 75.644 | 49.358 / 66.040 / 66.040 | 1.875 | 0.080 | 1.814 |
+| 200 / 300 | Prompt | 105.417 / 114.710 / 114.710 | 92.164 / 101.450 / 101.450 | 1.970 | 0.208 | 1.814 |
+| 200 / 300 | Read | 83.850 / 94.399 / 94.399 | 75.850 / 86.439 / 86.439 | 1.976 | 0.217 | 1.814 |
+| 200 / 300 | Stop | 91.781 / 195.859 / 195.859 | 82.291 / 126.548 / 126.548 | 1.977 | 0.218 | 1.814 |
+| 400 / 300 | Prompt | 167.885 / 183.607 / 183.607 | 153.788 / 168.855 / 168.855 | 2.106 | 0.393 | 1.814 |
+| 400 / 300 | Read | 134.177 / 145.820 / 145.820 | 125.001 / 136.710 / 136.710 | 2.113 | 0.403 | 1.814 |
+| 400 / 300 | Stop | 134.821 / 150.137 / 150.137 | 125.626 / 140.780 / 140.780 | 2.115 | 0.405 | 1.814 |
+| 200 / 1,500 | Prompt | 240.478 / 268.068 / 268.068 | 210.445 / 240.165 / 240.165 | 9.283 | 0.268 | 9.076 |
+| 200 / 1,500 | Read | 228.118 / 259.409 / 259.409 | 205.744 / 238.494 / 238.494 | 9.291 | 0.276 | 9.076 |
+| 200 / 1,500 | Stop | 230.024 / 281.513 / 281.513 | 208.311 / 257.597 / 257.597 | 9.292 | 0.279 | 9.076 |
+| 200 / 3,000 | Prompt | 419.842 / 501.071 / 501.071 | 373.387 / 460.443 / 460.443 | 18.432 | 0.343 | 18.158 |
+| 200 / 3,000 | Read | 420.872 / 473.386 / 473.386 | 382.102 / 436.854 / 436.854 | 18.439 | 0.351 | 18.158 |
+| 200 / 3,000 | Stop | 399.886 / 604.927 / 604.927 | 359.891 / 530.552 / 530.552 | 18.440 | 0.353 | 18.158 |
+
+Across 750 measured cold children, machine-config loads had median/max 1/1 in every event/shape. Assembly median/max was 7/7 for Prompt and 5/5 for Read and Stop in these runtime-context-enabled rooms; the fixed small gate fixture's 6/5/5 is a different environment. Snapshot rebuilds had median 0 and maximum 1 per child. Rollup parse bytes track one checkpoint file per cold child, not one file per assembly; the checkpoint grows slightly between frames. Raw carryover parse bytes were zero, but median trimmed-carryover reads ranged from 1.814 to 18.158 MB. Median materialized rollup rows were live + closed (350, 500, 700, 1,700, 3,200), with an observed maximum of 6,400; shared-base copies had median/max 1/1 throughout. This does not support a claim that every snapshot assembly re-parses the rollup.
+
+Each drain row applies 100 Read frames from 25 working roots after warm-up. Seconds run from first append to the reader's last applied timing observation; frames/s is burst drain throughput, not an open-loop sustainable-arrival guarantee.
+
+| Live / closed | Seconds | Frames/s | Claim to applied ms |
+| --- | --- | --- | --- |
+| 50 / 300 | 5.710 | 17.513 | 56.098 / 62.004 / 63.184 |
+| 200 / 300 | 11.078 | 9.027 | 104.745 / 145.247 / 150.373 |
+| 400 / 300 | 13.496 | 7.410 | 135.526 / 147.464 / 148.570 |
+| 200 / 1,500 | 26.332 | 3.798 | 245.452 / 368.594 / 369.466 |
+| 200 / 3,000 | 41.686 | 2.399 | 400.340 / 514.256 / 519.410 |
+
+##### Host baseline
+
+Each room has 300 closed rows, and each untraced phase lasts 120 s. Idle means no incoming frames, not an all-finished roster: setup marks 25 roots working. Every busy window sent 240 frames; the maximum send lag across rooms was 1.214 ms. CPU is milliseconds per wall-clock minute; serve is the sum of all sidebar supervisors. Do not add reaped-child CPU to rimz-child CPU, because they may overlap.
+
+| Agents / sidebars | Phase | Host threads | Host CPU | Serve CPU | Tmux CPU | Host-reaped CPU | Rimz-child CPU |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 50 / 20 | idle | 52 | 6,210 | 180 | 875 | 2,780 | 0 |
+| 50 / 20 | busy | 53 | 7,720 | 190 | 820 | 2,770 | 6,194 |
+| 200 / 20 | idle | 52 | 10,230 | 185 | 1,645 | 2,505 | 0 |
+| 200 / 20 | busy | 52 | 17,175 | 175 | 2,180 | 2,835 | 9,667 |
+| 400 / 20 | idle | 52 | 17,045 | 155 | 2,155 | 2,675 | 0 |
+| 400 / 20 | busy | 52 | 21,890 | 190 | 2,400 | 2,785 | 15,947 |
+| 200 / 80 | idle | 172 | 18,350 | 580 | 3,375 | 6,300 | 0 |
+| 200 / 80 | busy | 173 | 23,440 | 675 | 4,055 | 6,475 | 10,142 |
+
+Wakeups, read syscalls and logical read MB below are per minute, each cell host / serve. Every departed-task count was zero in this run.
+
+| Agents / sidebars | Phase | Wakeups, host / serve | Read calls, host / serve | rchar MB, host / serve |
+| --- | --- | --- | --- | --- |
+| 50 / 20 | idle | 61,177.5 / 5,994 | 322,489.8 / 77 | 187.706 / 0.064 |
+| 50 / 20 | busy | 70,908 / 5,981.5 | 359,777.8 / 77 | 191.626 / 0.064 |
+| 200 / 20 | idle | 87,127.9 / 5,977.5 | 487,890.7 / 79 | 268.265 / 0.142 |
+| 200 / 20 | busy | 210,196.4 / 5,987 | 1,048,148.9 / 81 | 581.405 / 0.145 |
+| 400 / 20 | idle | 148,078.9 / 6,000.5 | 793,745.1 / 74 | 432.814 / 0.239 |
+| 400 / 20 | busy | 245,265.4 / 6,008.5 | 1,302,945.3 / 134 | 703.176 / 0.428 |
+| 200 / 80 | idle | 145,813.9 / 23,919 | 721,818.6 / 110.5 | 319.872 / 0.257 |
+| 200 / 80 | busy | 300,708.8 / 23,958 | 1,073,813.4 / 229 | 599.753 / 0.534 |
+
+Fetch diagnostics retain their own covered duration; all other columns here are per minute.
+
+| Agents / sidebars | Phase | Cycles | fold_ms | Content reductions | Unchanged reductions | Covered s |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 / 20 | idle | 50.4 | 9,564.9 | 0 | 100.7 | 121.5 |
+| 50 / 20 | busy | 86.1 | 11,475.6 | 81.6 | 48.3 | 120.6 |
+| 200 / 20 | idle | 52.6 | 8,469.1 | 58.5 | 96.3 | 120.9 |
+| 200 / 20 | busy | 45.9 | 33,056 | 40.5 | 51.4 | 121.5 |
+| 400 / 20 | idle | 49.5 | 15,226.5 | 26.7 | 89.1 | 121.2 |
+| 400 / 20 | busy | 33 | 43,515.6 | 22.8 | 43.2 | 123.6 |
+| 200 / 80 | idle | 50.5 | 9,215.7 | 0 | 101 | 60.6 |
+| 200 / 80 | busy | 45.7 | 34,199.4 | 40.8 | 50.1 | 122.1 |
+
+Spawn rates per minute below preserve every observed tracked bucket. Host git commands are `status` and `worktree`, in that order: status scales with due worktrees, while worktree enumeration is room-wide. Host tmux commands are `<options>` (options-only), `display-message`, `list-clients`, `list-panes`, in that order; serve is tmux `list-panes`. Other columns are git `rev-parse` and rimz `hooks apply`.
+
+| Agents / sidebars | Phase | Host git: status / worktree | Host tmux: options / display / clients / panes | Serve panes | Other git rev-parse | Other hooks apply |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 / 20 | idle | 227.5 / 1 | 6 / 240 / 54 / 54 | 1 | 0 | 0 |
+| 50 / 20 | busy | 227 / 1 | 6 / 240 / 46 / 46 | 1 | 124 | 120 |
+| 200 / 20 | idle | 217 / 1 | 6 / 240 / 53 / 18 | 1 | 0 | 0 |
+| 200 / 20 | busy | 236 / 1 | 6 / 239.5 / 56.5 / 56.5 | 1 | 121 | 120 |
+| 400 / 20 | idle | 235.5 / 1 | 6 / 231 / 50.5 / 17 | 0.5 | 0 | 0 |
+| 400 / 20 | busy | 225.5 / 1 | 6 / 240 / 34 / 34 | 1 | 121 | 120 |
+| 200 / 80 | idle | 305.5 / 1 | 6 / 960 / 53 / 18.5 | 0.5 | 0 | 0 |
+| 200 / 80 | busy | 293.5 / 1 | 6 / 960 / 54.5 / 54.5 | 1 | 122.5 | 120 |
+
+Additional tracked buckets, also per minute: 50/20 busy had host rimz `gc` 0.5, other git `for-each-ref` 0.5 and `worktree` 1, and other tmux `list-panes` 0.5. The 200/80 busy window had other git `worktree` 0.5 and other tmux `list-panes` 0.5. No other tracked bucket was observed.
+
+All four separately traced rooms passed without skips. Traced and untraced idle fetch rates sit together below; `/proc` opens/cycle divides opens/minute by the traced rate, with the interval caveat above. File opens exclude `/proc`. Host thread-file counts cover startup and transient threads, not just the concurrent set.
+
+| Agents / sidebars | Idle cycles/min | Traced cycles/min | Host thread files | /proc opens/min | /proc opens/cycle | File opens/min |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 / 20 | 50.35 | 53.94 | 728 | 69,316 | 1,285.1 | 28,990 |
+| 200 / 20 | 52.59 | 43.84 | 447 | 189,296 | 4,318.2 | 66,082 |
+| 400 / 20 | 49.50 | 31.21 | 593 | 318,790 | 10,216 | 97,811 |
+| 200 / 80 | 50.51 | 36.75 | 824 | 183,700 | 4,998.2 | 57,267 |
+
+Each `/proc` kind cell is opens/minute / opens per traced fetch cycle. These include failed open attempts.
+
+| Agents / sidebars | children | stat | io | status | task | other |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 / 20 | 26,744 / 495.8 | 21,986 / 407.6 | 884 / 16.4 | 6,307 / 116.9 | 1,934 / 35.9 | 11,461 / 212.5 |
+| 200 / 20 | 85,684 / 1,954.6 | 62,139 / 1,417.5 | 3,229 / 73.7 | 8,791 / 200.5 | 5,539 / 126.4 | 23,914 / 545.5 |
+| 400 / 20 | 154,437 / 4,949.1 | 98,841 / 3,167.5 | 6,432 / 206.1 | 12,427 / 398.2 | 9,792 / 313.8 | 36,861 / 1,181.3 |
+| 200 / 80 | 79,745 / 2,169.7 | 56,773 / 1,544.7 | 2,918 / 79.4 | 12,071 / 328.4 | 5,684 / 154.7 | 26,507 / 721.2 |
+
+The leading non-`/proc` path classes were the same in every room (attempts/minute). Full `trace` rows retain the remaining normalized paths; an open attempt is not proof of a successful JSON parse.
+
+| Normalized path class | 50 / 20 | 200 / 20 | 400 / 20 | 200 / 80 |
+| --- | --- | --- | --- | --- |
+| `<runtime>/rimz/ws/<workspace>/lanes/budget.<id>.json` | 10,300 | 35,300 | 55,200 | 27,900 |
+| `<runtime>/rimz/ws/<workspace>/live/agent_context/ctx.<id>.json` | 2,600 | 9,400 | 16,000 | 7,500 |
+| `<runtime>/rimz/ws/<workspace>/lanes/auto-continue.<id>.json` | 2,600 | 9,400 | 16,000 | 7,500 |
+
+Finally, the prestarted hosts' `work` rows cover their whole lifetime, including startup, warm-up, the first room's parity window and shutdown, not one phase or pass. Rebuild counts are calls to the snapshot publisher.
+
+| Agents / sidebars | Lifetime s | Assemblies | Rebuilds | Rollup parsed MB | Latest parsed MB | Config loads |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 / 20 | 430.9 | 383 | 0 | 7.501 | 12.636 | 1 |
+| 200 / 20 | 311.2 | 219 | 0 | 8.070 | 42.483 | 1 |
+| 400 / 20 | 311.2 | 149 | 0 | 8.832 | 75.585 | 1 |
+| 200 / 80 | 311.8 | 649 | 0 | 6.054 | 42.247 | 1 |
+
+These host figures establish no regression ceiling: they include scheduling and ambient process-population effects, independent cadences and a deliberately incomplete provider workload. The fixed-fixture counter gates remain the deterministic ratchets.
+
 ## Making a performance change
 
 1. **Name the thread the cost lands on.** If it is the render/input loop, the change is wrong until the work moves off it.
@@ -597,7 +783,7 @@ Raw Divan rows, row-validation results, one-second build-process snapshots, CPU 
 4. **Keep single-flight.** A new fetch trigger is a room event through `RoomEvents::dispatch` ([`app/plane.rs`](../../crates/rimz/src/sidebar_pane/app/plane.rs)) or a pane observation through its `FetchHandle` ([`app/fetch.rs`](../../crates/rimz/src/sidebar_pane/app/fetch.rs)), never a bare send or spawn, so the worker merges it with the rest.
 5. **Measure the idle case.** A change that speeds the busy path by adding idle work is usually a net loss.
 6. **Prove it.** `cargo xtask ci` stays green, the tick budgets and the cost map move with the change, and `cargo xtask perf` refreshes the figures when the change touches a measured path. A before/after comparison rests on the bench's allocation counts. Ordinarily quote a wall-time delta only from runs on an idle host, since medians move with load ([Benchmarks](#benchmarks)). A controlled loaded experiment may instead report paired, interleaved runs with the same fixture and load command, observed placement, sustained-load evidence, raw distributions and misses, as in [the drainer experiment](#per-frame-drainer-latency-under-build-load); conflicting pairs do not establish a speedup. Such an experiment records, for each run, the CPU the host spent outside the run's own scopes over the timed window, and states its speedup rule before the first run. A candidate in a stack of commits is measured against its own parent commit, since a merge-base comparison credits it with the earlier commits' gains. When comparing two builds' wall times, warm both, then run them interleaved (base, branch, base, branch) and compare paired ratios, because a sequential pair measures host load. A change to a bench fixture compares against base rerun with the same fixture, since a comparison across fixtures is not evidence.
-7. **Measure the file you fixed.** For an I/O fix, `strace -f -e trace=openat` filtered on the target path across several ticks shows whether that file is still re-read. `/proc/<pid>/io` `rchar` is the process total, mixing every other read, so report it beside the per-path count, never alone.
+7. **Measure the file you fixed.** For an I/O fix, `strace -f --seccomp-bpf -e trace=openat` filtered on the target path across several ticks shows whether that file is still re-read; `--seccomp-bpf` stops the target only at the traced call, where plain `strace` stops it at every syscall and slows a busy host. Even so, a traced host can cycle slower than an untraced one (the [host-scale traced room](#scale-yardstick) at 400 agents ran 31.2 fetch cycles a minute against 49.5 untraced), so compare its cycle rate before reading an open count as a rate. `/proc/<pid>/io` `rchar` is the process total, mixing every other read, so report it beside the per-path count, never alone. With `kernel.yama.ptrace_scope=1`, an unprivileged tracer normally must start its target or trace a descendant, rather than attach to an unrelated room host. `perf_event_paranoid >= 2` disallows kernel profiling; stricter settings can also block userspace events (this measurement host's value 4 denied `perf stat -e task-clock -- true`). The [host-scale traced room](#scale-yardstick) starts its host under strace instead of attaching to an existing one.
 
 ### Perceived response time
 

@@ -73,7 +73,7 @@ These pages cut across every subsystem above: where the evidence lands when some
 | Page | What it owns |
 | --- | --- |
 | [diagnostics.md](./diagnostics.md) | Diagnostic evidence: the durable logs and the record envelope, the event taxonomy with each kind's severity and doctor state, retention and frame captures, the frame-stream observer, the focus trace, presence-plugin telemetry, reading the log, investigating an episode, inspecting a live card, and off-box error reporting. |
-| [performance.md](./performance.md) | The cost model: the workload, where work runs, the principles, the cost map, fleet overhead, anti-patterns, deferred and rejected work, the guards that hold the budget, and how to make a performance change. |
+| [performance.md](./performance.md) | The cost model: the workload, where work runs, the principles, the cost map, fleet overhead, anti-patterns, deferred and rejected work, counter scopes and budget guards, apply and room-host scale yardsticks, and how to make a performance change. |
 | [profiling.md](./profiling.md) | The field guide for measuring a live fleet: what RimZ already publishes, finding the host, measuring the process, building a profilable binary, choosing a tool, turning a finding into a guard, and the release baseline. |
 
 ## From source code to its page
