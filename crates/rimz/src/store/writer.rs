@@ -223,11 +223,7 @@ impl Store {
     fn refresh_message_wake(&self, messages: &[message::MessageRecord], now: jiff::Timestamp) {
         let refresh = || -> Result<()> {
             let path = self.runtime_paths().message_wake_path();
-            match messages
-                .iter()
-                .filter_map(|message| message.wake_deadline(now))
-                .min()
-            {
+            match message::queue_wake_deadline(messages, now) {
                 Some(next) => crate::disk::atomic::write_temp_then_rename_cache(&path, &Some(next))
                     .map_err(message::MessageStoreErr::from)?,
                 None => remove_file_if_exists(&path)?,

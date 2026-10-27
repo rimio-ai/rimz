@@ -50,6 +50,7 @@ fn refresh_loop(
     );
     let mut daemon_checked_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
     let mut refresh_state = crate::sidebar::refresh::ProducerRefreshState::default();
+    let mut last_message_sweep = None;
     loop {
         std::thread::sleep(data_tick().unwrap_or_else(|| tick_for(config.tick_seconds)));
         if data_tick().is_none() {
@@ -60,7 +61,7 @@ fn refresh_loop(
             Err(err) => {
                 debug!(error = %err, "sidebar cache refresh state paths unavailable");
                 let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
-                fire_timers(&runtime, config.mux, &now);
+                fire_timers(&runtime, config.mux, &now, &mut last_message_sweep);
                 continue;
             }
         };
@@ -87,7 +88,7 @@ fn refresh_loop(
             debug!(error = %err, "sidebar cache refresh failed");
         }
         let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
-        fire_timers(&runtime, config.mux, &now);
+        fire_timers(&runtime, config.mux, &now, &mut last_message_sweep);
         if daemon_checked_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
             daemon_checked_at = Instant::now();
             daemon_tracker.maintain(
@@ -98,7 +99,12 @@ fn refresh_loop(
     }
 }
 
-fn fire_timers(runtime: &RuntimePaths, mux: crate::ids::MuxName, now: &jiff::Zoned) {
+fn fire_timers(
+    runtime: &RuntimePaths,
+    mux: crate::ids::MuxName,
+    now: &jiff::Zoned,
+    last_message_sweep: &mut Option<(jiff::Timestamp, jiff::Timestamp)>,
+) {
     let ci_source = crate::harness::schedule::when::CiSource::read(runtime);
     crate::harness::schedule::fire::fire_due_tasks(
         runtime,
@@ -107,7 +113,7 @@ fn fire_timers(runtime: &RuntimePaths, mux: crate::ids::MuxName, now: &jiff::Zon
         crate::harness::schedule::fire::LoopRunHost::Detached,
         Some(&ci_source),
     );
-    crate::message::fire::wake_due_messages(runtime, mux, now);
+    crate::message::fire::wake_due_messages(runtime, mux, now, last_message_sweep);
 }
 
 fn refresh_guarded(
