@@ -25,7 +25,7 @@ fn timed(name: &str, entry: TaskEntry, arming: Option<Arming>, last: Option<Time
     );
     let mut row = row(name);
     row.state = TaskState::observe(&timing, false, true);
-    row.head = trigger_text(&entry, &timing, row.state, now()).0;
+    row.head = trigger_text(&entry, &entry.run_dir(), &timing, row.state, now()).0;
     row.next_at = timing.next_timestamp();
     row.timing = Some(timing);
     row

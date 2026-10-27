@@ -9,6 +9,50 @@ struct Reading {
     source: Option<CiSource>,
 }
 
+pub(super) struct RoomReadings<'a> {
+    source: Option<CiSource>,
+    windows: WindowReadings<'a>,
+    states: BTreeMap<String, when::WhenState>,
+}
+
+impl<'a> RoomReadings<'a> {
+    pub(super) fn new(runtime: Option<&'a RuntimePaths>, open: bool, now: Timestamp) -> Self {
+        Self {
+            source: runtime.filter(|_| open).map(CiSource::read),
+            windows: WindowReadings::new(runtime, now),
+            states: runtime
+                .map(schedule::fire::last_when_states)
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(super) fn observe(
+        &self,
+        name: &str,
+        entry: &TaskEntry,
+        scope: &Path,
+        timing: schedule::TaskTiming,
+        now: Timestamp,
+    ) -> schedule::TaskTiming {
+        let Ok(schedule::ParsedTrigger {
+            trigger: schedule::Trigger::Condition { expr, .. },
+            ..
+        }) = timing.parsed()
+        else {
+            return timing;
+        };
+        let verdict = when::evaluate(
+            expr,
+            scope,
+            self.source.as_ref(),
+            entry.provider.as_ref(),
+            entry.account.as_ref(),
+            &self.windows,
+        );
+        timing.with_condition(&verdict, self.states.get(name), now)
+    }
+}
+
 pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
     if clauses.is_empty() {
         return Ok(());
@@ -92,18 +136,22 @@ pub(super) fn observe(
     timing: schedule::TaskTiming,
     now: Timestamp,
 ) -> schedule::TaskTiming {
-    let Ok(schedule::ParsedTrigger {
-        trigger: schedule::Trigger::Condition { expr, .. },
-        ..
-    }) = timing.parsed()
-    else {
+    if !timing
+        .parsed()
+        .is_ok_and(|parsed| matches!(parsed.trigger, schedule::Trigger::Condition { .. }))
+    {
         return timing;
-    };
-    let verdict = reading(entry, expr);
-    let states = runtime_for_root(&entry.resolved_root())
-        .map(|runtime| schedule::fire::last_when_states(&runtime))
-        .unwrap_or_default();
-    timing.with_condition(&verdict, states.get(name), now)
+    }
+    let root = entry.resolved_root();
+    let runtime = runtime_for_root(&root);
+    let open = runtime.as_ref().is_some_and(fresh_sidebar_present);
+    RoomReadings::new(runtime.as_ref(), open, Timestamp::now()).observe(
+        name,
+        entry,
+        &entry.run_dir(),
+        timing,
+        now,
+    )
 }
 
 pub(super) fn write_receipt(

@@ -260,7 +260,8 @@ impl WakeRow {
         if self.entry.dir.is_none() || self.entry.run_dir() == current_root {
             return String::new();
         }
-        worktree_name(&self.entry).map_or_else(String::new, |name| format!(" · in {name}"))
+        worktree_name(&self.entry, &self.entry.run_dir())
+            .map_or_else(String::new, |name| format!(" · in {name}"))
     }
 }
 
@@ -313,7 +314,7 @@ pub(super) fn write_self(
             let worktrees = members
                 .iter()
                 .filter(|row| row.entry.dir.is_some() && row.entry.run_dir() != current_root)
-                .filter_map(|row| worktree_name(&row.entry))
+                .filter_map(|row| worktree_name(&row.entry, &row.entry.run_dir()))
                 .collect::<BTreeSet<_>>();
             let suffix = if worktrees.is_empty() {
                 String::new()
@@ -584,7 +585,7 @@ fn signal_names(mut signals: Vec<String>) -> String {
         .join(" ")
 }
 
-pub(super) fn worktree_name(entry: &TaskEntry) -> Option<String> {
+pub(super) fn worktree_name(entry: &TaskEntry, run_dir: &Path) -> Option<String> {
     if let Some(name) = &entry.worktree {
         return Some(name.clone());
     }
@@ -592,7 +593,7 @@ pub(super) fn worktree_name(entry: &TaskEntry) -> Option<String> {
         entry
             .dir
             .as_ref()
-            .map(|_| checkout_name(&entry.run_dir()))
+            .map(|_| checkout_name(run_dir))
             .or_else(|| {
                 entry.wait.as_ref().and_then(|target| {
                     target
@@ -601,7 +602,7 @@ pub(super) fn worktree_name(entry: &TaskEntry) -> Option<String> {
                         .map(|(_, channel)| channel.to_owned())
                 })
             })
-            .unwrap_or_else(|| checkout_name(&entry.resolved_root()))
+            .unwrap_or_else(|| checkout_name(run_dir))
     })
 }
 
