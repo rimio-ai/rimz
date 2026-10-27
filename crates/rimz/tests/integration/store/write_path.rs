@@ -438,7 +438,7 @@ fn a_reader_recovers_a_commit_that_never_published() {
 }
 
 #[test]
-fn rotation_bumps_the_generation_and_reseeds_the_fold() {
+fn rotation_persists_the_generation_and_rebuilds_the_fold() {
     let h = crate::common::Harness::new();
     std::fs::write(h.store.paths().cache_dir.join("dead-reap.stamp"), b"")
         .expect("defer dead-owner reap");
@@ -561,7 +561,7 @@ fn reset_retracts_the_published_view_and_rebuilds_by_mode() {
 #[test]
 fn rotation_retracts_the_published_snapshot_and_republishes_fresh() {
     // The published stamp describes the renamed-away log, so rotation
-    // retracts `latest.json` before reseeding (a crash mid-rotation leaves
+    // retracts `latest.json` before rebuilding (a crash mid-rotation leaves
     // readers folding for themselves, never trusting an aliasable stamp) and
     // the rebuild republishes it under the new generation. A workspace that
     // never published — no `latest.json` at all — rotates the same way.

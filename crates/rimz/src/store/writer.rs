@@ -198,14 +198,12 @@ pub(super) struct HookTransaction {
 }
 
 enum RollupInvalidation {
-    /// Log renamed away: reseed a new generation and rebuild.
-    Reseed,
+    /// Log replaced: advance the durable generation and rebuild.
+    Replace,
     /// Log cut in place: drop the rollup and rebuild.
     Drop,
-    /// Nothing moved: keep the rollup and rebuild.
-    Keep,
     /// History forgotten: drop the rollup and publish nothing.
-    Forget,
+    Forget { replaced: bool },
 }
 
 fn remove_file_if_exists(path: &Path) -> Result<()> {
@@ -290,7 +288,7 @@ impl Store {
     /// workspace → publish lock order. When the log changed, retract the
     /// published view before touching the rollup cache so a crash leaves
     /// readers folding for themselves, never trusting an offset that can alias
-    /// into the fresh log after it regrows. The mutation selects the policy; Forget retracts and drops without rebuilding.
+    /// into the fresh log after it regrows. Forget drops without rebuilding.
     fn commit_boundary<T, F>(&self, mutation: F) -> Result<T>
     where
         F: FnOnce(&StatePaths) -> Result<(T, Option<RollupInvalidation>)>,
@@ -300,16 +298,16 @@ impl Store {
         let _publish_guard = lock::WorkspaceLock::acquire(&paths.publish_lock)?;
         let (value, rollup) = mutation(paths)?;
         if let Some(rollup) = rollup {
+            if matches!(
+                rollup,
+                RollupInvalidation::Replace | RollupInvalidation::Forget { replaced: true }
+            ) {
+                snapshot::advance_log_generation(paths)?;
+            }
             remove_file_if_exists(&paths.latest_snapshot)?;
             publish::retract_publish_stamp(paths);
-            match rollup {
-                RollupInvalidation::Reseed => snapshot::reseed_rollup_cache_for_rotation(paths)?,
-                RollupInvalidation::Drop | RollupInvalidation::Forget => {
-                    remove_file_if_exists(&paths.rollup_cache)?;
-                }
-                RollupInvalidation::Keep => {}
-            }
-            if !matches!(rollup, RollupInvalidation::Forget) {
+            remove_file_if_exists(&paths.rollup_cache)?;
+            if !matches!(rollup, RollupInvalidation::Forget { .. }) {
                 snapshot::rebuild(paths)?;
             }
         }
@@ -527,7 +525,7 @@ impl Store {
             record::write(paths, &record)?;
             Ok((
                 (messages_rewritten, events_rewritten),
-                Some(RollupInvalidation::Reseed),
+                Some(RollupInvalidation::Replace),
             ))
         })?;
 
@@ -959,15 +957,12 @@ impl Store {
     /// 1. Project the current event log's agent rollup, merge it with the
     ///    existing carryover, and persist before the rename so a rotation
     ///    crash leaves both files coherent.
-    /// 2. Rename the active log into `events.log.archive/`. UUIDv7 filenames
+    /// 2. Rename the active log into `log/archive/`. UUIDv7 filenames
     ///    keep archives sorted chronologically without an external index.
-    /// 3. Retract the published `latest.json` — its extent stamp describes
-    ///    the renamed-away log, so a crash before the rebuild below leaves
-    ///    readers folding for themselves rather than trusting a stamp that
-    ///    could alias into the fresh log.
-    /// 4. Reseed the rollup fold base as a new generation and rebuild the
-    ///    persisted snapshot (`latest.json`) from the merged rollup so
-    ///    neither depends on the rotated log.
+    /// 3. Advance the durable generation.
+    /// 4. Retract the published `latest.json` and drop the fold base, then
+    ///    rebuild both from the merged rollup so neither depends on the
+    ///    rotated log.
     ///
     /// After the boundary releases the publish lock, reacquire the workspace
     /// lock and prune archives older than `archive_older_than` when set.
@@ -993,7 +988,7 @@ impl Store {
             let carryover_agents = snapshot::stage_carryover_for_rotation(paths, min_bytes)?;
 
             let rotation = rotate(&paths.events_log, &paths.events_archive_dir, min_bytes)?;
-            let rollup = rotation.is_rotated().then_some(RollupInvalidation::Reseed);
+            let rollup = rotation.is_rotated().then_some(RollupInvalidation::Replace);
             Ok(((rotation, carryover_agents), rollup))
         })?;
         let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
@@ -1032,7 +1027,7 @@ impl Store {
     /// After a cut, both persisted fold bases are retracted before the
     /// rebuild: their extents describe bytes the truncation removed, and once
     /// the log regrows an offset-only stamp could alias into fresh frames —
-    /// the same hazard rotation answers by retract-and-reseed. The rebuild
+    /// the same hazard rotation answers by retract-and-rebuild. The rebuild
     /// re-folds the repaired log from zero and republishes both. An
     /// in-memory cursor heals itself: its offset either regresses (a
     /// reload), or its warm fold lands mid-frame in regrown bytes, fails the

@@ -418,6 +418,25 @@ fn launch_tail_preserves_seed_through_rotation_before_first_poll() {
 }
 
 #[test]
+fn removing_the_checkpoint_does_not_move_followers_backward() {
+    let (_dir, store, paths) = fixture();
+    append(&store, LifecycleSignal::Registered);
+    store.rotate_event_log(1, None).unwrap();
+    append(&store, LifecycleSignal::TurnStarted { turn_id: None });
+    let mut follower = EventFollower::open(paths.clone(), false).unwrap();
+    let mut tail = LaunchTail::from_cursor(paths.clone(), follower.cursor);
+    fs::remove_dir_all(&paths.snapshots_dir).unwrap();
+    let batch = follower.poll().unwrap();
+    assert!(batch.warnings.is_empty(), "{:?}", batch.warnings);
+    assert!(batch.events.is_empty());
+    let mut events = Vec::new();
+    let warnings = tail.poll(|event| events.push(event)).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(events.is_empty());
+    assert_eq!([follower.cursor.generation, tail.cursor.generation], [1, 1]);
+}
+
+#[test]
 fn poll_before_the_generation_bump_waits_then_drains_the_tail_once() {
     let (_dir, store, paths) = fixture();
     append(&store, LifecycleSignal::Registered);
@@ -429,15 +448,16 @@ fn poll_before_the_generation_bump_waits_then_drains_the_tail_once() {
     // the generation: replay that window by restoring the old marker. The
     // short-active-log guard answers it; the rename racing the open
     // itself is pinned in `read_from_offset_resume_cases`.
-    let old_rollup = fs::read(&paths.rollup_cache).unwrap();
+    let old_generation =
+        fs::read(&paths.log_generation).unwrap_or_else(|_| br#"{"generation":0}"#.to_vec());
     store.rotate_event_log(1, None).unwrap();
-    let new_rollup = fs::read(&paths.rollup_cache).unwrap();
-    fs::write(&paths.rollup_cache, &old_rollup).unwrap();
+    let new_generation = fs::read(&paths.log_generation).unwrap();
+    fs::write(&paths.log_generation, &old_generation).unwrap();
     assert!(!paths.events_log.exists());
     assert!(follower.poll().unwrap().events.is_empty());
     assert_eq!(follower.cursor.offset, cursor);
 
-    fs::write(&paths.rollup_cache, &new_rollup).unwrap();
+    fs::write(&paths.log_generation, &new_generation).unwrap();
     let batch = follower.poll().unwrap();
     assert!(batch.warnings.is_empty());
     assert_eq!(batch.events.len(), 1);

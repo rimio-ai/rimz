@@ -65,16 +65,6 @@ pub struct ResumeOutcome {
 pub mod testkit {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    #[cfg(test)]
-    thread_local! {
-        pub(super) static GENERATION_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    }
-
-    #[cfg(test)]
-    pub(super) fn generation_parse_count() -> usize {
-        GENERATION_PARSES.get()
-    }
-
     static CARRYOVER_BYTES_PARSED: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_BASE_COPIES: AtomicU64 = AtomicU64::new(0);
@@ -394,89 +384,41 @@ pub(crate) fn lifecycle_follow_seed(
     Ok((cache.extent, agents))
 }
 
-#[derive(Deserialize)]
-struct RollupGenerationHeader {
-    version: u32,
-    extent: event_log::LogExtent,
-}
-
 #[derive(Serialize, Deserialize)]
-struct RollupGenerationStamp {
-    version: u32,
+struct LogGeneration {
     generation: u64,
-    rollup: FileStamp,
-    boot_id: String,
 }
 
-fn stamped_generation(paths: &StatePaths) -> Option<u64> {
+/// Read the durable active-log generation without caching or loading the fold.
+/// Missing, undecodable or oversized records read as zero. The bounded read
+/// also serves the parked wrapper without a log- or fold-sized allocation.
+pub fn lifecycle_log_generation(paths: &StatePaths) -> u64 {
+    read_log_generation(paths).unwrap_or(0)
+}
+
+fn read_log_generation(paths: &StatePaths) -> Option<u64> {
     use std::io::Read;
 
-    const MAX_STAMP_BYTES: u64 = 1_024;
-    let boot_id = crate::proc::boot_id()?;
-    let before = FileStamp::from_metadata(&fs::metadata(&paths.rollup_cache).ok()?);
+    const MAX_RECORD_BYTES: u64 = 1_024;
     let mut bytes = Vec::new();
-    fs::File::open(&paths.rollup_generation)
+    fs::File::open(&paths.log_generation)
         .ok()?
-        .take(MAX_STAMP_BYTES + 1)
+        .take(MAX_RECORD_BYTES + 1)
         .read_to_end(&mut bytes)
         .ok()?;
-    if bytes.len() as u64 > MAX_STAMP_BYTES {
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
         return None;
     }
-    let stamp: RollupGenerationStamp = serde_json::from_slice(&bytes).ok()?;
-    let after = FileStamp::from_metadata(&fs::metadata(&paths.rollup_cache).ok()?);
-    (before == after
-        && after == stamp.rollup
-        && stamp.version == ROLLUP_CACHE_VERSION
-        && stamp.boot_id == boot_id)
-        .then_some(stamp.generation)
+    let record: LogGeneration = serde_json::from_slice(&bytes).ok()?;
+    Some(record.generation)
 }
 
-fn rollup_generation(header: Option<RollupGenerationHeader>) -> u64 {
-    header
-        .filter(|cache| cache.version == ROLLUP_CACHE_VERSION)
-        .map(|cache| cache.extent.generation)
-        .unwrap_or(0)
-}
-
-/// Read the active log generation without using the long-lived parse cache.
-///
-/// A follower polls this across rotations, where a same-size cache rewrite must
-/// still become visible even on filesystems with coarse modification times.
-/// On Linux a bounded, boot- and file-identity-bound generation mirror avoids
-/// parsing the rollup. A miss reads and validates the whole document from one
-/// buffer. Thin callers that never load the rollup must use
-/// `lifecycle_log_generation_constant_memory` instead.
-pub fn lifecycle_log_generation(paths: &StatePaths) -> u64 {
-    if let Some(generation) = stamped_generation(paths) {
-        return generation;
-    }
-    #[cfg(test)]
-    testkit::GENERATION_PARSES.set(testkit::GENERATION_PARSES.get() + 1);
-    rollup_generation(
-        fs::read(&paths.rollup_cache)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok()),
-    )
-}
-
-/// Read the active log generation in constant memory for callers that never load
-/// the rollup, preserving the parked wrapper's private-memory budget.
-///
-/// Bypass the parse cache so same-size rewrites remain visible even with coarse
-/// modification times. The same bounded Linux mirror is tried first; a miss
-/// streams and validates the whole document without retaining a file-sized buffer.
-pub(crate) fn lifecycle_log_generation_constant_memory(paths: &StatePaths) -> u64 {
-    if let Some(generation) = stamped_generation(paths) {
-        return generation;
-    }
-    #[cfg(test)]
-    testkit::GENERATION_PARSES.set(testkit::GENERATION_PARSES.get() + 1);
-    rollup_generation(
-        fs::File::open(&paths.rollup_cache)
-            .ok()
-            .and_then(|file| serde_json::from_reader(io::BufReader::new(file)).ok()),
-    )
+/// Durably add one to the active-log generation. Only `Store::commit_boundary`
+/// calls this, under the workspace lock, after a mutation replaced the log.
+pub(crate) fn advance_log_generation(paths: &StatePaths) -> Result<()> {
+    let generation = lifecycle_log_generation(paths).saturating_add(1);
+    write_temp_then_rename(&paths.log_generation, &LogGeneration { generation })?;
+    Ok(())
 }
 
 thread_local! {
@@ -489,25 +431,6 @@ thread_local! {
 pub(super) fn write_rollup_cache(paths: &StatePaths, cache: &RollupCache) -> Result<()> {
     let _ = atomic::sweep_stale_temp_siblings(&paths.rollup_cache, Duration::from_secs(3_600));
     atomic::write_temp_then_rename_cache_compact(&paths.rollup_cache, cache)?;
-    if let Some(boot_id) = crate::proc::boot_id() {
-        let publish_stamp = || -> Result<()> {
-            let metadata = fs::metadata(&paths.rollup_cache).map_err(|source| SnapshotErr::Io {
-                path: paths.rollup_cache.clone(),
-                source,
-            })?;
-            let stamp = RollupGenerationStamp {
-                version: cache.version,
-                generation: cache.extent.generation,
-                rollup: FileStamp::from_metadata(&metadata),
-                boot_id,
-            };
-            atomic::write_temp_then_rename_cache_compact(&paths.rollup_generation, &stamp)?;
-            Ok(())
-        };
-        if let Err(error) = publish_stamp() {
-            tracing::debug!(%error, "could not publish rollup generation mirror");
-        }
-    }
     Ok(())
 }
 
@@ -821,7 +744,7 @@ fn catch_up_from(
                 identity: carryover.agent_identity.clone(),
                 ..FoldDeltaSeed::default()
             },
-            0,
+            lifecycle_log_generation(paths),
             0,
         ),
     };
@@ -1000,33 +923,6 @@ fn retain_carryover_agents(agents: Vec<AgentState>, older_than: Duration) -> Vec
                     .is_some_and(runtime::owner_is_live)
         })
         .collect()
-}
-
-/// Reseed `snapshots/rollup.json` for the next log generation. Called by
-/// rotation under the workspace lock, right after the old log's rollup is
-/// merged into the carryover: the new generation starts with an empty fold
-/// at offset zero, and the bumped generation keeps any in-flight reader's
-/// pre-rotation extent from aliasing the fresh log.
-#[must_use = "atomicity barrier; check the result"]
-pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()> {
-    let generation = read_rollup_cache(&paths.rollup_cache)
-        .map(|cache| cache.extent.generation)
-        .unwrap_or(0);
-    let carryover = read_carryover(&paths.agents_carryover)?;
-    write_rollup_cache(
-        paths,
-        &RollupCache {
-            version: ROLLUP_CACHE_VERSION,
-            extent: event_log::LogExtent {
-                generation: generation + 1,
-                offset: 0,
-            },
-            raw_agents: Vec::new(),
-            resume_outcomes: Vec::new(),
-            agent_identity: carryover.agent_identity,
-            saw_session_rebirth: false,
-        },
-    )
 }
 
 /// A long-lived reader's in-memory fold base: the last `RollupCache` this

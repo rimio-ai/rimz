@@ -37,8 +37,7 @@ fn rotation_commits_reborn_ordinals_before_the_next_registration() {
     let (cache, _, _) = catch_up_rollup(&paths).unwrap();
     write_rollup_cache(&paths, &cache).unwrap();
     stage_carryover_for_rotation(&paths, 1).unwrap();
-    event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
-    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    rotate(&paths);
     event_log::append(
         &paths.events_log,
         &lifecycle_at(
@@ -131,8 +130,7 @@ fn legacy_ended_carryover_folds_and_stages_only_labels() {
         read_carryover(&paths.agents_carryover).unwrap().agents,
         vec![expected.clone()]
     );
-    event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
-    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    rotate(&paths);
     event_log::append(
         &paths.events_log,
         &EventEnvelope::new(
@@ -157,7 +155,7 @@ fn cursor_reloads_across_a_rotation() {
     // Rotation renames the log away and recreates it; a regrown log can pass
     // the held offset, so the cursor's reload guard is the file identity, not
     // the length. After the swap the cursor must drop its in-memory base and
-    // reload `rollup.json`, whose bumped generation rotation reseeded.
+    // reload the fold using the durable generation.
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -177,7 +175,7 @@ fn cursor_reloads_across_a_rotation() {
     let (warm_extent, _, _) = cursor.fold(&paths).unwrap();
     assert_eq!(warm_extent.generation, 0);
 
-    // Rotate: carryover the rollup, swap the log file, reseed the base —
+    // Rotate: carry over the rollup, swap the log file, rebuild the base —
     // then regrow the new log *past* the held offset, the case a
     // length-only guard would misread as appended frames.
     let (cache, _, _) = catch_up_rollup(&paths).unwrap();
@@ -190,12 +188,11 @@ fn cursor_reloads_across_a_rotation() {
         },
     )
     .unwrap();
-    let rotation = event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
+    let rotation = rotate(&paths).rotation;
     assert!(
         rotation.is_rotated(),
         "the test must exercise the production rename-and-recreate rotation"
     );
-    reseed_rollup_cache_for_rotation(&paths).unwrap();
     event_log::append(&paths.events_log, &lifecycle("codex", "b")).unwrap();
     event_log::append(&paths.events_log, &lifecycle("codex", "c")).unwrap();
     assert!(
@@ -326,7 +323,7 @@ fn cursor_drops_rows_pruned_from_the_carryover_on_an_unchanged_log() {
 }
 
 #[test]
-fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
+fn post_rotation_rebuild_equals_a_cold_fold_at_the_durable_generation() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -347,21 +344,16 @@ fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
     assert_eq!(cache.extent.generation, 0);
     assert!(cache.extent.offset > 0);
 
-    // Rotation: the old log's rollup moves into the carryover, the active
-    // log is renamed away, and the fold base reseeds for the new generation.
-    write_carryover(
-        &paths.agents_carryover,
-        &EventCarryover {
-            agents: cache.raw_agents.clone(),
-            agent_identity: cache.agent_identity.clone(),
-            resume_outcomes: Vec::new(),
-        },
-    )
-    .unwrap();
-    std::fs::remove_file(&paths.events_log).unwrap();
-    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    rotate(&paths);
 
     let (fresh, agents, _) = catch_up_rollup(&paths).unwrap();
+    std::fs::remove_file(&paths.rollup_cache).unwrap();
+    let (cold, cold_agents, _) = catch_up_rollup(&paths).unwrap();
+    assert_eq!(
+        serde_json::to_value(&fresh).unwrap(),
+        serde_json::to_value(cold).unwrap()
+    );
+    assert_eq!(sorted_value(agents.clone()), sorted_value(cold_agents));
     assert_eq!(
         fresh.extent,
         event_log::LogExtent {
@@ -420,17 +412,13 @@ fn thread_fold_serves_across_a_rotation() {
     drop(held);
 
     stage_carryover_for_rotation(&paths, 1).unwrap();
-    event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
-    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    rotate(&paths);
     event_log::append(&paths.events_log, &registered("after")).unwrap();
 
     let (cache, served, _) = thread_catch_up(&paths).unwrap();
     let (cold_extent, cold, _) = RollupCursor::new().fold(&paths).unwrap();
     assert_eq!(cache.extent, cold_extent);
-    assert_eq!(
-        cache.extent.generation, 1,
-        "the reseeded generation is read"
-    );
+    assert_eq!(cache.extent.generation, 1, "the durable generation is read");
     assert_eq!(sorted_value(served.to_vec()), sorted_value(cold.to_vec()));
     let ids = served
         .iter()
