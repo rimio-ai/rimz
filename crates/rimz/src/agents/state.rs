@@ -785,6 +785,9 @@ pub struct AgentState {
     /// sender-attribution identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Profile lookup doorway retained when a fork no longer has its source's parentage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_scope: Option<crate::config::effective::ProfileScope>,
     /// The provider account stamped by the launch event and carried forward like `profile`; `None` is the provider's own `default` home, including legacy rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<LoginName>,
@@ -1254,6 +1257,7 @@ impl AgentState {
             parent_agent_kind: None,
             launch_depth: None,
             launched_by: None,
+            profile_scope: None,
             worktree_path: None,
             checkout: None,
             worktree_branch: None,

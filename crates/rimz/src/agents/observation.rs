@@ -216,6 +216,9 @@ pub struct LaunchParams {
     /// card handle when no role is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Profile lookup doorway when the launch's lineage does not identify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_scope: Option<crate::config::effective::ProfileScope>,
     /// The provider account the process runs under. Store ignores this field on a launch request and stamps the allocated identity from its explicit login selection. `None` is the provider's own `default` home, including legacy rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<crate::ids::LoginName>,

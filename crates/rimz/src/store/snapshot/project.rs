@@ -722,6 +722,7 @@ fn carried_base(
         state.parent_agent_kind = prior.parent_agent_kind.clone();
         state.launch_depth = prior.launch_depth;
         state.launched_by = prior.launched_by.clone();
+        state.profile_scope = prior.profile_scope;
         state.task = prior.task.clone();
         state.first_prompt = prior.first_prompt.clone();
         state.prompt = prior.prompt.clone();
@@ -774,6 +775,9 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     }
     if let Some(profile) = &launch.profile {
         state.profile = Some(profile.clone());
+    }
+    if let Some(scope) = launch.profile_scope {
+        state.profile_scope = Some(scope);
     }
     if let Some(login) = &launch.login {
         state.login = Some(login.clone());
@@ -1011,6 +1015,7 @@ fn inherit_launch_identity(
         .launch_warnings
         .clone_from(&predecessor.launch_warnings);
     successor.profile.clone_from(&predecessor.profile);
+    successor.profile_scope = predecessor.profile_scope;
     successor.login.clone_from(&predecessor.login);
     successor.tier.clone_from(&predecessor.tier);
     successor.record.clone_from(&predecessor.record);

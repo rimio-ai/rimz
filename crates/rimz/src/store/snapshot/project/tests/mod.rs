@@ -5,6 +5,7 @@ use super::*;
 use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentStatus, LaunchParams, PermissionMode, SessionOrigin};
+use crate::config::effective::ProfileScope;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
@@ -1027,6 +1028,48 @@ fn launched_peer_generation_survives_provider_adoption_without_parenting() {
     );
     assert!(!peer.is_launched_child());
     assert!(!peer.is_provider_subagent());
+}
+
+#[test]
+fn fork_profile_scope_survives_sparse_events_and_session_rotation() {
+    let mut payload = launch_payload("launch_fork", "coder");
+    payload.launch_id = Some("launch_fork".into());
+    payload.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "launch_fork",
+        100,
+        Some("agent-start".into()),
+    ));
+    payload.launch = LaunchParams {
+        profile_scope: Some(ProfileScope::Subagents),
+        ..Default::default()
+    };
+    payload.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+    let events = [
+        launch_event("codex", payload),
+        same_process_registration("registered", "coder", 1, "tmux:%1", 100),
+        raw_lifecycle_at(
+            "codex",
+            2,
+            json!({"agent_id": "registered", "signal": {"signal": "turn_started"}}),
+        ),
+        same_process_registration("rotated", "coder", 3, "tmux:%1", 100),
+        attach_event("codex", "rotated", None, "tmux:%1", None, 100),
+        launch_event("codex", launch_payload("rotated", "coder")),
+    ];
+    let scopes: Vec<_> = (1..=events.len())
+        .map(|end| {
+            let agents = reduce_agent_states(&events[..end]);
+            let params = events[end - 1].params_value();
+            let id = params["agent_id"].as_str().unwrap();
+            let agent = agents
+                .iter()
+                .find(|agent| agent.agent_id == id)
+                .unwrap_or_else(|| panic!("prefix {end}: {agents:?}"));
+            agent.profile_scope
+        })
+        .collect();
+    assert_eq!(scopes, vec![Some(ProfileScope::Subagents); events.len()]);
 }
 
 #[test]
