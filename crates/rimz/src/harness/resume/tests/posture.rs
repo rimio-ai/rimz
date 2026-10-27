@@ -347,6 +347,97 @@ fn recorded_mode_beats_the_profile_default() {
 }
 
 #[test]
+fn absent_record_effort_adopts_kind_default_and_replays_it() {
+    let mut worker = profile("claude");
+    worker.kind_defaults = true;
+    let profiles = profiles("worker", worker);
+    let matcher = find_definition("claude")
+        .unwrap()
+        .spec()
+        .launch
+        .preset_arg_matcher(crate::agents::PresetField::Effort)
+        .unwrap();
+    for base in [None, Some("worker")] {
+        let mut record = crate::agents::LaunchRecord {
+            model: Some("opus".into()),
+            agent: base.map(str::to_owned),
+            ..Default::default()
+        };
+        let expected = crate::agents::LaunchRecord {
+            effort: Some("xhigh".into()),
+            ..record.clone()
+        };
+        for _ in 0..2 {
+            let posture = resolve_posture(
+                PostureRequest {
+                    record: Some(&record),
+                    profile: Some("worker"),
+                    kind: &AgentKind::new_unchecked("claude"),
+                    stamped_mode: None,
+                    stamped_tier: None,
+                },
+                &profiles,
+            );
+            assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+            assert_eq!(posture.launch.effort.as_deref(), Some("xhigh"));
+            assert_eq!(posture.launch.model.as_deref(), Some("opus"));
+            assert_eq!(posture.launch.record.as_deref(), Some(&expected));
+            assert_eq!(
+                matcher
+                    .occurrences(&posture.launch.args)
+                    .into_iter()
+                    .map(|arg| arg.value)
+                    .collect::<Vec<_>>(),
+                ["xhigh"]
+            );
+            record = *posture.launch.record.unwrap();
+        }
+    }
+}
+
+#[test]
+fn absent_record_effort_canonicalizes_declared_and_raw_profile_args() {
+    let mut planner = profile("claude");
+    planner.effort = Some("medium".into());
+    planner.args = Some("--effort low".into());
+    let profiles = profiles("planner", planner);
+    let record = crate::agents::LaunchRecord {
+        model: Some("opus".into()),
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &profiles,
+    );
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    let matcher = find_definition("claude")
+        .unwrap()
+        .spec()
+        .launch
+        .preset_arg_matcher(crate::agents::PresetField::Effort)
+        .unwrap();
+    assert_eq!(
+        matcher
+            .occurrences(&posture.launch.args)
+            .into_iter()
+            .map(|arg| arg.value)
+            .collect::<Vec<_>>(),
+        ["medium"]
+    );
+    assert_eq!(posture.launch.effort.as_deref(), Some("medium"));
+    assert_eq!(
+        posture.launch.record.unwrap().effort.as_deref(),
+        Some("medium")
+    );
+}
+
+#[test]
 fn absent_record_effort_preserves_raw_profile_args() {
     let mut planner = profile("claude");
     planner.args = Some("--effort high".into());
@@ -365,6 +456,9 @@ fn absent_record_effort_preserves_raw_profile_args() {
         },
         &profiles,
     );
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert!(posture.launch.effort.is_none());
+    assert!(posture.launch.record.as_ref().unwrap().effort.is_none());
     assert!(
         posture
             .launch

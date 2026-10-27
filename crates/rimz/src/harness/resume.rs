@@ -328,12 +328,13 @@ pub struct ResumeSkip {
 ///
 /// A profile is durable, named configuration, so a session that launched as
 /// `@planner` comes back as a planner. A launch with a durable record replays
-/// the record's model and effort, and fast mode where supported; without one,
-/// one-off `--model` / `--effort` flags typed at the original launch stay out. A
-/// resume may pass its own `--model`, `--effort`, `--fast` / `--no-fast`, and
-/// `--ask` / `--yolo`; the exec wrapper records the model, effort, and fast
-/// mode it launched with, so a later resume replays them, and `--isolation`
-/// is recorded the same way.
+/// the record's model and effort, and fast mode where supported. A record
+/// without effort takes the profile's declared effort and saves it on relaunch.
+/// Without a record, one-off `--model` / `--effort` flags typed at the original
+/// launch stay out. A resume may pass its own `--model`, `--effort`,
+/// `--fast` / `--no-fast`, and `--ask` / `--yolo`; the exec wrapper records the
+/// model, effort, and fast mode it launched with, so a later resume replays
+/// them, and `--isolation` is recorded the same way.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePosture {
     pub launch: ResumeLaunchPosture,
@@ -528,6 +529,8 @@ fn resolve_posture_with_role(
     }
     cell.launch.tier = request.stamped_tier.cloned().map(Box::new);
     if let Some(record) = request.record {
+        let mut record = record.clone();
+        record.effort = record.effort.or_else(|| cell.launch.effort.clone());
         // Only RimZ's own switch is the record's to replace: an off record
         // strips the switch the profile's `fast` field rendered, and leaves a
         // switch the profile writes in raw `args` alone, as a fresh launch does.

@@ -879,6 +879,64 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
 }
 
 #[test]
+fn absent_record_effort_reaches_the_cohort_exec_request() {
+    let mut planner = profile("claude");
+    planner.effort = Some("medium".into());
+    let profiles = profiles("planner", planner);
+    let mut agent = agent("claude", "a1", "/repo", 1);
+    agent.profile = Some("planner".into());
+    agent.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: Some("opus".into()),
+        ..Default::default()
+    }));
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+    ));
+    let seeds = [CohortSeed::Resume(Box::new(agent))];
+    restore_routed_cells(&mut layout, &seeds, &profiles, &Default::default()).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    let panes = compile_layout_panes(
+        &layout,
+        LayoutPaneParams {
+            pick_session: false,
+            runtime: &runtime,
+            cwd: root.path(),
+            cleanup_worktree: false,
+            in_place: false,
+            resume_seeds: Some(&seeds),
+            launch_identities: &[],
+            fallback_channel: None,
+            loop_reminder: None,
+            leader_run: None,
+        },
+    )
+    .unwrap();
+    let request = decode_exec_request(&panes.columns[0].panes[0].argv);
+    let params = &request.identity.params;
+    assert_eq!(params.effort.as_deref(), Some("medium"));
+    assert_eq!(
+        params.record.as_ref().unwrap().effort.as_deref(),
+        Some("medium")
+    );
+    let matcher = find_definition("claude")
+        .unwrap()
+        .spec()
+        .launch
+        .preset_arg_matcher(crate::agents::PresetField::Effort)
+        .unwrap();
+    assert_eq!(
+        matcher
+            .occurrences(request.action.extra_args())
+            .into_iter()
+            .map(|arg| arg.value)
+            .collect::<Vec<_>>(),
+        ["medium"]
+    );
+}
+
+#[test]
 fn resume_overrides_keep_provider_args_and_record_in_sync() {
     use crate::config::tiers::ModelTier;
     let mut profiles = profiles("planner", routed_profile(None));
