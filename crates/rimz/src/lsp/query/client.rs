@@ -69,6 +69,7 @@ pub enum Output {
         name: String,
         symbols: Vec<SymbolInformation>,
         unresolved: usize,
+        listed_symbols: usize,
     },
 }
 
@@ -367,16 +368,7 @@ fn recover_outline(
         })
         .flatten()
         .collect();
-    let matches = match match_symbols(&entry.root, name, candidates)? {
-        SymbolResolution::Missing { .. } => return Ok(None),
-        found => found.into_symbols(),
-    };
-    let mut matches = prefer_exact(&entry.root, name, matches)?;
-    Ok(Some(if matches.len() == 1 {
-        SymbolResolution::Unique(matches.remove(0))
-    } else {
-        SymbolResolution::Ambiguous(matches)
-    }))
+    Ok(match_preferred_symbols(&entry.root, name, candidates)?)
 }
 
 pub fn execute(
@@ -413,15 +405,13 @@ pub fn execute(
         }
         (_, Target::Position { path, position }) => (uri(&entry.root, path)?, *position),
         (_, Target::Symbol(name)) => {
-            let mut resolution = resolve_symbol(
-                &entry.root,
-                name,
-                request(
-                    entry,
-                    "workspace/symbol",
-                    json!({"query": name_segments(name).last().cloned().unwrap_or_default()}),
-                )?,
+            let symbols = request(
+                entry,
+                "workspace/symbol",
+                json!({"query": name_segments(name).last().cloned().unwrap_or_default()}),
             )?;
+            let listed_symbols = symbols.as_array().map_or(0, Vec::len);
+            let mut resolution = resolve_symbol(&entry.root, name, symbols)?;
             let mut enriched = false;
             let mut outlines = BTreeMap::new();
             if let SymbolResolution::Missing { candidates } = &resolution
@@ -484,6 +474,7 @@ pub fn execute(
                             name: name.clone(),
                             symbols: resolution.into_symbols(),
                             unresolved,
+                            listed_symbols,
                         });
                     }
                 }

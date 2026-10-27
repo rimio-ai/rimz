@@ -26,6 +26,7 @@ fn outcomes_classify_raw_answers_lookup_results_and_failures() {
         ),
         (
             Ok(Output::NotFound {
+                listed_symbols: 0,
                 name: "f".into(),
                 symbols: vec![],
                 unresolved: 0,

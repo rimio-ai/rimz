@@ -3056,6 +3056,46 @@ fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
 }
 
 #[test]
+fn lsp_bare_crowded_name_suggests_qualifying_or_a_file_head() {
+    let env = outline_recovery_fixture();
+    let (mut broker, directory) = editor_broker(&env, "20m");
+    env.rimz()
+        .args(["lsp", "def", "method"])
+        .assert()
+        .code(5)
+        .stderr("")
+        .stdout(concat!(
+            "not found: method\n",
+            "hint: the server listed 1 symbol, none named exactly method; ",
+            "add the item's type or module, or start with its file, ",
+            "to search the files it lives in\n",
+        ));
+    let output = env
+        .rimz()
+        .args(["lsp", "def", "method", "--json"])
+        .assert()
+        .code(5)
+        .stderr("");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.get_output().stdout).unwrap(),
+        json!({"outcome":"not-found","name":"method","candidates":[],"total":0,"truncated":false})
+    );
+    for target in ["Wrong::method", "lib.rs::Wrong::method"] {
+        env.rimz()
+            .args(["lsp", "def", target])
+            .assert()
+            .code(5)
+            .stderr("")
+            .stdout(format!("not found: {target}\n"));
+    }
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+}
+
+#[test]
 fn lsp_outline_recovery_finds_crowded_methods() {
     for target in ["Type::method", "lib.rs::Type::method"] {
         let requests = recovered_definition(target, "lib.rs", 3, &[]);
@@ -3281,7 +3321,10 @@ fn lsp_outline_recovery_agrees_with_anchor_checks() {
     env.rimz()
         .args(["lsp", "check", "notes.md"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicates::str::contains(
+            "2 ok, 0 failed, 0 unchecked, 0 external",
+        ));
     for (target, expected) in [
         ("lib.rs::Type::method", "lib.rs:4:8  fn method() {}\n"),
         ("remote.rs::item", "remote.rs:2:8  fn item() {}\n"),
