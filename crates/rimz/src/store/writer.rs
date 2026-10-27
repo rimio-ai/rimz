@@ -308,9 +308,13 @@ impl Store {
             ) {
                 snapshot::advance_log_generation(paths)?;
             }
-            remove_file_if_exists(&paths.latest_snapshot)?;
+            if let Some(path) = paths.latest_snapshot() {
+                remove_file_if_exists(&path)?;
+            }
             publish::retract_publish_stamp(paths);
-            remove_file_if_exists(&paths.rollup_cache)?;
+            if let Some(path) = paths.rollup_cache() {
+                remove_file_if_exists(&path)?;
+            }
             if !matches!(rollup, RollupInvalidation::Forget { .. }) {
                 snapshot::rebuild(paths)?;
             }

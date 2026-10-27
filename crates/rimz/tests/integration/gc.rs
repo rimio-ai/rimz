@@ -798,15 +798,16 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
     let rt = env.runtime_paths();
     rt.ensure_dirs().expect("runtime dirs");
     let state = env.state_path_for(&env.project_root);
-    std::fs::create_dir_all(&state.snapshots_dir).expect("mkdir snapshots");
     let state_shared = env.rimz_home().join("cache").join("providers");
     std::fs::create_dir_all(&state_shared).expect("mkdir state shared");
 
     let nonce = "00000000000000000000000000000000";
     let old_state_shared = state_shared.join(format!("spending.json.tmp.1.{nonce}"));
     let old_state_rollup = state
-        .snapshots_dir
+        .cache_dir
+        .join("snapshots")
         .join(format!("rollup.json.tmp.1.{nonce}"));
+    std::fs::create_dir_all(old_state_rollup.parent().unwrap()).expect("mkdir legacy snapshots");
     let old_runtime_shared = rt
         .shared_root
         .join(format!("rate_limits.json.tmp.1.{nonce}"));
@@ -903,7 +904,10 @@ fn gc_preserves_owned_state_when_the_rollup_needs_repair() {
     let first_newline = bytes.iter().position(|byte| *byte == b'\n').unwrap();
     bytes[..first_newline].fill(0);
     std::fs::write(&paths.events_log, &bytes).unwrap();
-    for cache in [&paths.latest_snapshot, &paths.rollup_cache] {
+    for cache in [
+        &paths.latest_snapshot().unwrap(),
+        &paths.rollup_cache().unwrap(),
+    ] {
         let _ = std::fs::remove_file(cache);
     }
 

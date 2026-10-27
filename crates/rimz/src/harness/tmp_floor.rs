@@ -180,11 +180,13 @@ fn room_inventory(paths: &StatePaths) -> Result<Vec<TmpUnit>, TmpFloorErr> {
 fn inventory(root: &Path, lock: bool) -> Result<Vec<Candidate>, TmpFloorErr> {
     let mut candidates = Vec::new();
     for room in crate::workspace::known_workspaces_under(root)? {
-        let paths = StatePaths::under_named(
+        let mut paths = StatePaths::under_named(
             room.workspace_id,
             room.dir_name,
             &crate::disk::paths::rimz_home(),
         );
+        let runtime = RuntimePaths::for_state_under(&paths, &crate::disk::paths::runtime_home());
+        paths.bind_runtime_checkpoint(&runtime);
         let units = (|| {
             let _guard = if lock {
                 Some(crate::disk::lock::WorkspaceLock::acquire(

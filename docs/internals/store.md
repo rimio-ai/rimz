@@ -89,6 +89,7 @@ Room files have one lifetime class per directory, and only `disk/paths.rs` const
 | `sock/` | Runtime | Remove sockets whose connect probe is refused, after the sidebar heartbeat TTL startup grace. |
 | `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days). Renderer-instance claims also expire by heartbeat liveness. Two exceptions: agent telemetry stays while its room is live, because the external exporter holds its inode open, and `hibernate/admission.json` stays until room teardown, since only birth republishes it. |
 | `lanes/` | Runtime | No age sweep. Reset, teardown, room death, and reboot reclaim this coordination state, including quiet schedules and user choices. |
+| `snapshots/` | Runtime | Rebuildable store checkpoints and publish pacing. No age sweep. Soft reset and teardown keep the class; hard reset drops its checkpoint files. Whole-room runtime removal reclaims it. Only runtime setup creates the directory; checkpoint writers skip a missing directory. |
 
 ### The workspace store
 
@@ -128,10 +129,9 @@ audit/notify.log.jsonl                        notification diagnostics
 audit/plugin-presence.log.jsonl               presence diagnostics
 audit/binding.log.jsonl                       binding diagnostics
 team-notes/<run>/                             team board, notes, and run.json manifest
-cache/snapshots/{latest,rollup}.json          view-model checkpoint and fold base
 cache/doctor-cleared.json                     cleared-incident watermark
 cache/auto-gc.json                            daily sweep stamp
-cache/{publish,log-sync,dead-reap}.stamp      off-lock tail debounce
+cache/{log-sync,dead-reap}.stamp              durable-work debounce
 cache/auto-rotate.stamp                       rotation debounce
 cache/skills/<sha256>/                        immutable rewritten skills, shared by the room
 cache/ssh-config/<sha256>/                    shared system SSH Include-graph snapshots
@@ -207,6 +207,8 @@ The runtime tier is `${XDG_RUNTIME_DIR}/rimz/ws/<workspace-dir>/`, or `/tmp/rimz
 sock/run.<short_run_id>.sock                  per-run wakeup socket, bound by a supervised-run waiter
 sock/host.<digest>.wake.sock                  room event socket, bound by each sidebar host
 sock/codex-app-server.sock                    the per-session Codex broker socket
+snapshots/{latest,rollup}.json                 view-model checkpoint and fold base
+snapshots/publish.stamp                       checkpoint publish pacing
 live/heartbeat/sidebar.*.json                 renderer liveness
 live/read-marks/marks.json                    room read marks
 live/{agent_context,subagent_context}/        enrichment
@@ -382,11 +384,11 @@ Then the lock releases. When the mutation appended an event or forced a publish,
 6. Publish the snapshot checkpoint, when due.
 7. Reap provably dead sessions, debounced to once per `REAP_INTERVAL` (60 seconds).
 
-Steps 5 through 7 are gated by stamp files in `cache/`: `log-sync.stamp`, `publish.stamp`, and `dead-reap.stamp`. A missing, unreadable, or future-dated stamp reads as due, so clock and I/O uncertainty costs one redundant run instead of a skipped one. The gates are best-effort, not ceilings: the stamp check and the stamp touch are separate steps (`crates/rimz/src/store/writer/debounce.rs::claim`, `sync_log_debounced`), so two concurrent tails can both pass. One `fdatasync` flushes the inode's dirty pages whoever wrote them, so in steady state one writer per interval makes the whole fleet's appends durable.
+Steps 5 and 7 use state stamps `cache/log-sync.stamp` and `cache/dead-reap.stamp`; step 6 uses runtime `snapshots/publish.stamp`. A missing, unreadable, or future-dated stamp reads as due, so clock and I/O uncertainty costs one redundant run instead of a skipped one. The gates are best-effort, not ceilings: the stamp check and the stamp touch are separate steps (`crates/rimz/src/store/writer/debounce.rs::claim`, `sync_log_debounced`), so two concurrent tails can both pass. One `fdatasync` flushes the inode's dirty pages whoever wrote them, so in steady state one writer per interval makes the whole fleet's appends durable.
 
 Wakeups go out before the publish on purpose. Consumers fold the log tail from their own cursor, so checkpoint cadence tunes cold-start latency and never gates freshness.
 
-Mutations that replace, cut, or forget the active log run `Store::commit_boundary` instead. It holds the workspace lock and then the publish lock and runs the mutation. When the mutation reports a `RollupInvalidation`, it deletes `cache/snapshots/latest.json` and the publish stamp before it touches the rollup cache. A crash in between leaves readers folding for themselves instead of trusting an offset that could alias into a regrown log.
+Mutations that replace, cut, or forget the active log run `Store::commit_boundary` instead. It holds the workspace lock and then the publish lock and runs the mutation. When the mutation reports a `RollupInvalidation`, it deletes `snapshots/latest.json` and the publish stamp before it touches the rollup cache. A crash in between leaves readers folding for themselves instead of trusting an offset that could alias into a regrown log.
 
 | Mutation | Policy | Rollup cache | Rebuild |
 | --- | --- | --- | --- |
@@ -409,7 +411,7 @@ Every disk write falls into one of ten classes, and one line sorts them: **durab
 | Durable workflow appends | `owned/workflows/<run-id>/journal.jsonl` | Data-synced append under the workspace lock, before the durable record replace. New directories sync their ancestors. | Survives. A crash before record publication can repeat a sequence. Torn or unknown rows are skipped when inspecting history. |
 | Framed logs | `log/events.log.jsonl`, `log/hook-ingress.log.jsonl` | One CRC-framed buffer per record or ordered batch, including each staged hook lifecycle batch, with no per-record fsync. The event log's off-lock tail issues a debounced group `fdatasync` about once a second, and rotation syncs before the rename. The ingress codec has no group-sync tail. | Intact through the last sync. The trailing window can be lost, and the frame CRC detects corruption. Event-log repair truncates it, and the drainer truncates an unterminated ingress tail and skips corrupt terminated rows with diagnostic evidence. |
 | Audit appends | `audit/messages/<bucket-start>.jsonl`, `audit/transcript/*.jsonl`, `out/<reader>/<wait-name>.output` | `O_APPEND`, no per-record fsync. History and transcript append under the workspace lock. A queue transaction commits `messages.jsonl` before it appends history and event frames, so a history append failure warns and never undoes the queue transition ([messaging.md → Storage and audit](./harness/messaging.md#storage-and-audit)). A wait log takes no store lock: `rimz wait` creates it at arm time, and the one watcher holding that wait's `locks/loop-watch-<name>.lock` is its only writer after that. A check watcher truncates and rewrites it for each run, keeping only the latest output ([loops.md → Watched commands](./harness/loops.md#watched-commands)). | Trailing records can be lost. The cost is history completeness, never queue correctness. For wait output, the run record keeps the last 4 KiB, and the delivered message carries the file path, estimated tokens, and line count. A file pattern match also includes a matched-line preview. |
-| Cache write | `cache/snapshots/*.json`, `records/live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. The roster is the named best-effort exception among records: it is not rebuildable history. | Caches rebuild or refresh. Losing the roster's latest write can narrow recovery. |
+| Cache write | Runtime `snapshots/*.json`, `records/live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. Checkpoints never create a directory. The roster is the named best-effort exception among records: it is not rebuildable history. | Caches rebuild or refresh. Losing the roster's latest write can narrow recovery. |
 | Usage appends | `records/lsp-usage.jsonl` | One `O_APPEND` write under a shared append lock, no fsync. Compaction tries the exclusive lock without waiting and durably replaces counted rows. | Trailing appends can be lost, and compacted counts survive. Malformed rows are skipped. |
 | Drain cursor | `records/hook-drain.json` | Claim and applied writes for unstamped frames or an unknown drainer boot use temp file, fsync, rename and directory sync. Same-boot claim/applied writes, corrupt-row skips, other-boot drops and post-truncation resets use cache-class rename without fsync. Truncation retains fdatasync before reset. | Surviving stamped frames from an older boot drop before application, regardless of the surviving cursor. Unstamped recovery stays unchanged. |
 | Durable records | `records/messages/messages.jsonl`, `owned/runs/<run_id>.json`, `out/<reader>/<name>[.<n>\|.<run_id>].output` child and peer responses, `workspace.json`, `records/agents-carryover.json`, `records/log-generation.json`, `records/loop-instances.json`, `records/idle-stop.json`, `records/pending-recovery.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. A child or peer response goes through `crates/rimz/src/harness/run.rs::publish_response`. | Survives. |
@@ -430,7 +432,9 @@ Supervised-run waiters are woken separately. `wake_run` in [`run.rs`](../../crat
 
 Reads take no lock. `snapshot::rebuild` and the [`snapshot/assemble.rs`](../../crates/rimz/src/store/snapshot/assemble.rs) entry points fold the log into the agent rollup, then project that into the sidebar view-model ([sidebar.md](./sidebar/sidebar.md#from-store-to-screen) owns the projection).
 
-The fold is resumable from two checkpoints ([`snapshot/fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs)). `cache/snapshots/rollup.json` holds a fold base and the `LogExtent` it reflects, and a reader resumes from it when its offset does not exceed the live log's length, folding only the missing tail. `cache/snapshots/latest.json` holds the published view-model and the extent it was built from. `read_fresh_latest` serves it only when its stamped offset equals the live log's length and its `snapshot_version` is current. A cold reader pays one full fold and a warm reader pays only the new bytes; boundary writers retract and rebuild their checkpoints after changing the log under the publish lock.
+The fold is resumable from two runtime checkpoints ([`snapshot/fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs)). `snapshots/rollup.json` holds a fold base and the `LogExtent` it reflects, and a reader resumes from it when its offset does not exceed the live log's length, folding only the missing tail. `snapshots/latest.json` holds the published view-model and the extent it was built from. `read_fresh_latest` serves it only when its stamped offset equals the live log's length and its `snapshot_version` is current. A cold reader pays one full fold and a warm reader pays only the new bytes; boundary writers retract and rebuild their checkpoints after changing the log under the publish lock.
+
+`StatePaths` binds checkpoints to one `RuntimePaths` domain. Ambient constructors bind the ambient runtime; explicit-home constructors stay unbound. Store opens rebind to their supplied runtime, including read-only existing-store opens. An unbound path always misses and skips checkpoint writes. Runtime setup alone creates `snapshots/` beneath the validated private room root; publishing into a missing directory skips without failing a commit. Soft reset rebuilds there while removing sock, live and lanes; hard reset leaves no checkpoint or publish stamp. Losing the runtime checkpoint never loses the durable generation or carryover.
 
 Every store read on a thread goes through that thread's one held `RollupCursor`: `Store::snapshot`, `Store::runtime_projection`, the writer's identity and lifecycle reads, and `snapshot::rebuild`. A read after an append folds only the new frames, and a read at an unchanged log and carryover opens no file and copies no row. The slot is keyed by the workspace's log, rollup, and carryover paths, so a read of another workspace replaces it and a thread holds at most one rollup. A long-lived reader that must not share that slot (the sidebar fetch worker) owns its own cursor instead. Callers share the held rows, and only a caller that changes or keeps a row copies it.
 
@@ -533,7 +537,7 @@ The rename cannot detach a process inside a scoped view, whose `/tmp` is a bind 
 
 A soft reset keeps `audit/`, `owned/`, `tmp/`, `shared/`, `team-notes/`, `out/`, the log archive, and every record it does not name above, standing fleet budget choices included. `--hard` also removes the active log, carryover, `audit/`, `owned/` except `owned/runs/`, `tmp/`, `shared/`, `team-notes/`, and `out/`, and keeps the log archive it just wrote. Neither removes state `locks/`. Provider-owned sessions stay outside this boundary.
 
-Teardown removes the disposable runtime classes and no state class, so `tmp/`, `shared/`, and `out/` wait for GC. Allocating a handle to a new agent row removes any `tmp/<handle>/` and `out/<handle>/` an earlier holder of that name left behind. That removal runs after the launch commits, outside the workspace lock, and a failure logs a warning instead of failing the launch.
+Teardown removes the runtime `sock/`, `live/`, and `lanes/` classes and no state class, so `tmp/`, `shared/`, and `out/` wait for GC. Allocating a handle to a new agent row removes any `tmp/<handle>/` and `out/<handle>/` an earlier holder of that name left behind. That removal runs after the launch commits, outside the workspace lock, and a failure logs a warning instead of failing the launch.
 
 ### Garbage collection
 
@@ -579,7 +583,7 @@ Room and machine stamps both use `{ "swept_at": <Timestamp> }` and record failed
 
 ## What survives what
 
-Reset, teardown, and reboot each draw a fixed line through the classes, and age-based GC runs independently of all three. A soft reset drops `cache/`, the runtime classes, and the active log after archiving it. A hard reset also drops carryover, `audit/`, `owned/` except `owned/runs/`, `tmp/`, `shared/`, `team-notes/`, and `out/` ([Reset](#reset)). Workflow homes under `owned/workflows/` therefore survive a soft reset but not a hard one. Both resets keep state lock inodes. Reboot and teardown drop runtime and keep state. Whole-room deletion and `uninstall --state` or `--all` remove team archives with the room, and a default uninstall keeps room state.
+Reset, teardown, and reboot each draw a fixed line through the classes, and age-based GC runs independently of all three. A soft reset drops `cache/`, the runtime `sock/`, `live/`, and `lanes/`, and the active log after archiving it. A hard reset also drops carryover, `audit/`, `owned/` except `owned/runs/`, `tmp/`, `shared/`, `team-notes/`, and `out/` ([Reset](#reset)). Workflow homes under `owned/workflows/` therefore survive a soft reset but not a hard one. Both resets keep state lock inodes. Teardown drops those three runtime classes and keeps `snapshots/` and state; reboot drops all of runtime and keeps state. Whole-room deletion and `uninstall --state` or `--all` remove team archives with the room, and a default uninstall keeps room state.
 
 | Event | Store | Live sockets and heartbeats | Multiplexer session |
 | --- | --- | --- | --- |

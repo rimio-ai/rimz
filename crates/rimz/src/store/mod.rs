@@ -139,9 +139,10 @@ pub enum StoreErr {
 pub(crate) type Result<T> = std::result::Result<T, StoreErr>;
 
 impl Store {
-    pub fn open(paths: StatePaths, mut runtime: RuntimePaths) -> Result<Self> {
+    pub fn open(mut paths: StatePaths, mut runtime: RuntimePaths) -> Result<Self> {
         crate::disk::paths::check_workspace_layout(&paths.root)?;
         runtime.bind_state_locks(&paths);
+        paths.bind_runtime_checkpoint(&runtime);
         paths.ensure_dirs()?;
         runtime.ensure_dirs()?;
         Ok(Self {
@@ -153,11 +154,12 @@ impl Store {
 
     /// Open a room with a readable workspace record without creating directories.
     #[must_use]
-    pub fn open_existing(paths: StatePaths, mut runtime: RuntimePaths) -> Option<Self> {
+    pub fn open_existing(mut paths: StatePaths, mut runtime: RuntimePaths) -> Option<Self> {
         if crate::workspace::record::read(&paths.workspace_record).is_err() {
             return None;
         }
         runtime.bind_state_locks(&paths);
+        paths.bind_runtime_checkpoint(&runtime);
         Some(Self {
             inner: Arc::new(StoreInner { paths, runtime }),
             ingress: None,
@@ -331,9 +333,14 @@ mod tests {
         let paths = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
         let runtime = RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap();
 
-        Store::open(paths.clone(), runtime.clone()).unwrap();
+        let store = Store::open(paths.clone(), runtime.clone()).unwrap();
 
-        for path in [&paths.snapshots_dir, &paths.runs_dir, &paths.cache_dir] {
+        assert_eq!(
+            store.paths().snapshots_dir(),
+            Some(crate::disk::paths::Class::Snapshots.path_under(&runtime.root))
+        );
+
+        for path in [&paths.runs_dir, &paths.cache_dir] {
             assert!(path.is_dir(), "{} was not created", path.display());
         }
         for path in [
@@ -452,6 +459,7 @@ mod tests {
         let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         let store = Store::open(paths.clone(), runtime.clone()).unwrap();
+        let paths = store.paths().clone();
         let at = Timestamp::now();
         for index in 0..2 {
             let context = AgentContext {
@@ -484,7 +492,8 @@ mod tests {
             .collect::<Vec<_>>()
             .into();
         Arc::make_mut(&mut raw.agents)[0].retired_context_tokens = Some(42);
-        crate::disk::atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &raw).unwrap();
+        crate::disk::atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &raw)
+            .unwrap();
         let full = store.snapshot_cached().unwrap();
         let own = |kind: &AgentKind, id: &AgentSessionId| kind == "claude" && id == "agent-0";
         let selected = store.snapshot_with_context(own).unwrap();
@@ -565,14 +574,13 @@ mod tests {
         let workspace_id = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        runtime.ensure_dirs().unwrap();
+        let store = Store::open(paths, runtime).unwrap();
+        let paths = store.paths();
         for index in 0..16 {
             event_log::append(&paths.events_log, &lifecycle(&workspace_id, index)).unwrap();
         }
         let log_len = std::fs::metadata(&paths.events_log).unwrap().len();
-        snapshot::rebuild(&paths).unwrap();
-        let store = Store::open(paths.clone(), runtime).unwrap();
+        snapshot::rebuild(paths).unwrap();
 
         let warm_before = event_log::testkit::bytes_read();
         let projection = store

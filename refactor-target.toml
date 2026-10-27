@@ -933,7 +933,8 @@ allowed-dependencies = [
 # WorkflowPaths::check_log owns per-evaluation shell output paths (+1).
 # RuntimePaths::hook_drainer_outages_dir owns wrapper outage lease locations (+1).
 # WorkflowPaths::step_log owns command-step output paths (+1).
-surface-budget = 283
+# Runtime checkpoint binding, path accessors, Snapshots and its never-create writer (+7).
+surface-budget = 290
 
 [[verdict]]
 kind = "item"
@@ -3073,7 +3074,18 @@ path = "crates/rimz/src/disk/atomic.rs"
 allowed-dependencies = []
 # Checked executable copying shares the durable publication funnel.
 # symlink_dir_atomically keeps archive link publication in the durable write funnel (+1).
-surface-budget = 21
+# write_checkpoint publishes runtime checkpoints without making directories (+1).
+surface-budget = 22
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::write_checkpoint"
+reason = "Store checkpoints publish into existing, validated runtime directories only."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::Class::Snapshots"
+reason = "Runtime store checkpoints have no age sweep and survive disposable resets."
 
 [[module]]
 path = "crates/rimz/src/store/gc"

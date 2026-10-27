@@ -39,7 +39,9 @@ pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
     // cache-class — crash-durability lives in the event log; a
     // torn-after-power-cut cache parses to a miss and cold-rebuilds.
     write_rollup_cache(paths, &rollup)?;
-    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &snapshot)?;
+    if let Some(path) = paths.latest_snapshot() {
+        atomic::write_checkpoint(&path, &snapshot)?;
+    }
     Ok(snapshot)
 }
 
@@ -120,7 +122,8 @@ fn assemble_snapshot<'a>(
 /// and the atomic rename means a readable `latest.json` is always a complete
 /// rollup.
 pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
-    fs::metadata(&paths.latest_snapshot).ok()?;
+    let path = paths.latest_snapshot()?;
+    fs::metadata(&path).ok()?;
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
@@ -143,7 +146,7 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     // (device and inode included) keys the parse: a same-tick, equal-length
     // republish is a distinct inode and never serves the prior parse, whose
     // stale extent would decline the fast path until the next publish.
-    let stamped = StampedPath::of(&paths.latest_snapshot);
+    let stamped = StampedPath::of(&path);
     if let Some(snapshot) = LATEST_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped)) {
         // The snapshot's projection clock is reader-local, so a shared cached
         // parse becomes owned at this mutation point.
@@ -155,7 +158,7 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
         snapshot.now = Timestamp::now();
         return snapshot_is_current(&snapshot).then_some(snapshot);
     }
-    let bytes = fs::read(&paths.latest_snapshot).ok()?;
+    let bytes = fs::read(&path).ok()?;
     let mut snapshot: SidebarSnapshot = serde_json::from_slice(&bytes).ok()?;
     snapshot.now = Timestamp::now();
     // The parse cache is identity-keyed, not a freshness verdict — a

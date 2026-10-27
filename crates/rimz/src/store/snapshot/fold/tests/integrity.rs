@@ -7,7 +7,7 @@ fn ended_labels_survive_lifecycle_and_launch_revival_in_every_fold() {
     for launch_revival in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
         paths.ensure_dirs().unwrap();
         let first = format!("first\n {}", "é🦊".repeat(100));
         let latest = format!("latest\n {}", "different ".repeat(30));
@@ -80,8 +80,8 @@ fn ended_labels_survive_lifecycle_and_launch_revival_in_every_fold() {
             let (warm_cache, warm, _) = catch_up_rollup(&paths).unwrap();
             let (cursor_extent, cursor_rows, _) = cursor.fold(&paths).unwrap();
             let (thread_cache, thread_rows, _) = thread_catch_up(&paths).unwrap();
-            if paths.rollup_cache.exists() {
-                fs::remove_file(&paths.rollup_cache).unwrap();
+            if paths.rollup_cache().unwrap().exists() {
+                fs::remove_file(paths.rollup_cache().unwrap()).unwrap();
             }
             let (cold_cache, cold, _) = catch_up_rollup(&paths).unwrap();
             assert_eq!(warm, cold);
@@ -126,7 +126,7 @@ fn catch_up_rollup_rejects_a_zeroed_middle_frame() {
     // `docs/internals/performance.md` leans on.
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
 
     let mut frame_ends = Vec::new();
@@ -187,7 +187,7 @@ proptest::proptest! {
 
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
         paths.ensure_dirs().unwrap();
 
         let events: Vec<_> = seq
@@ -226,7 +226,7 @@ proptest::proptest! {
         let (cursor_extent, cursor_merged, _) = cursor.fold(&paths).unwrap();
         let (thread_cache, thread_merged, _) = thread_catch_up(&paths).unwrap();
 
-        std::fs::remove_file(&paths.rollup_cache).unwrap();
+        std::fs::remove_file(paths.rollup_cache().unwrap()).unwrap();
         let (cold_cache, cold, _) = catch_up_rollup(&paths).unwrap();
 
         prop_assert_eq!(

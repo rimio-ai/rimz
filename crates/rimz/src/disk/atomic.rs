@@ -201,6 +201,21 @@ pub fn write_temp_then_rename_cache_compact<T: Serialize>(path: &Path, value: &T
     write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Compact, None)
 }
 
+/// Publish compact checkpoint JSON without creating a directory or syncing.
+/// A missing runtime directory skips publication; other failures propagate.
+pub(crate) fn write_checkpoint<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let publish = publish_temp_existing(path, Fsync::Skip, |tmp| {
+        write_temp_file(tmp, Fsync::Skip, None, |writer| {
+            serde_json::to_writer(&mut *writer, value)?;
+            writer.write_all(b"\n").map_err(AtomicErr::io(tmp))
+        })
+    });
+    match publish {
+        Err(AtomicErr::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 #[derive(Clone, Copy)]
 enum JsonStyle {
     Pretty,
@@ -262,6 +277,14 @@ fn publish_temp<E: From<AtomicErr>>(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(AtomicErr::io(parent))?;
     }
+    publish_temp_existing(path, fsync, materialize)
+}
+
+fn publish_temp_existing<E: From<AtomicErr>>(
+    path: &Path,
+    fsync: Fsync,
+    materialize: impl FnOnce(&Path) -> std::result::Result<(), E>,
+) -> std::result::Result<(), E> {
     let tmp = temp_sibling(path);
     let mut temp_guard = TempFileGuard::new(tmp.clone());
     materialize(&tmp)?;

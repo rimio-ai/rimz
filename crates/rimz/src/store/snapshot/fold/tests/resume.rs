@@ -4,7 +4,7 @@ use super::*;
 fn terminal_resume_prompt_events_fold_into_rollup() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let enqueued = recent(60);
     let updated = recent(30);
@@ -78,7 +78,7 @@ fn terminal_resume_prompt_events_fold_into_rollup() {
 fn resume_outcomes_default_missing_enqueued_at_to_event_time() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let updated = recent(30);
 
@@ -107,7 +107,7 @@ fn resume_outcomes_default_missing_enqueued_at_to_event_time() {
 fn resume_outcomes_keep_every_message_and_latest_event_per_id() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let older_enqueued = recent(120);
     let newer_enqueued = recent(60);
@@ -189,7 +189,7 @@ fn resume_outcomes_keep_every_message_and_latest_event_per_id() {
 fn resume_outcomes_prune_after_seven_days() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let old = recent(8 * 24 * 60 * 60);
     let fresh = recent(60);
@@ -229,7 +229,7 @@ fn resume_outcomes_prune_after_seven_days() {
 fn cursor_warm_fold_picks_up_and_holds_resume_outcomes() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut cursor = RollupCursor::new();
     let (_, _, first) = cursor.fold(&paths).unwrap();
@@ -258,7 +258,7 @@ fn cursor_warm_fold_picks_up_and_holds_resume_outcomes() {
 fn carryover_resume_outcomes_merge_at_the_durable_generation() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let enqueued = recent(60);
     let carried_updated = recent(30);

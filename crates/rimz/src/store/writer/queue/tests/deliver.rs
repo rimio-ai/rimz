@@ -283,7 +283,7 @@ fn no_op_queue_transaction_changes_no_durable_surface() {
     let queue_path = q.inner.paths.messages_dir.join("messages.jsonl");
     let queue_before = std::fs::read(&queue_path).unwrap();
     let events_before = std::fs::read(&q.inner.paths.events_log).unwrap();
-    let _ = std::fs::remove_file(&q.inner.paths.latest_snapshot);
+    let _ = std::fs::remove_file(q.inner.paths.latest_snapshot().unwrap());
 
     let report = q
         .reconcile_stale_messages("session", Timestamp::now(), 3)
@@ -296,7 +296,7 @@ fn no_op_queue_transaction_changes_no_durable_surface() {
         std::fs::read(&q.inner.paths.events_log).unwrap(),
         events_before
     );
-    assert!(!q.inner.paths.latest_snapshot.exists());
+    assert!(!q.inner.paths.latest_snapshot().unwrap().exists());
 }
 
 #[test]

@@ -266,8 +266,10 @@ fn collect_room_state<Owner: Fn(&crate::agents::AgentState) -> Option<String>>(
     temp_owners: &impl Fn(&crate::store::snapshot::AgentRollup) -> Owner,
     report: &mut GcReport,
 ) -> Result<()> {
+    let mut paths = paths.clone();
+    paths.bind_runtime_checkpoint(runtime);
     let (classes, waits_removed) = classes::collect_state(
-        paths,
+        &paths,
         policy,
         dry_run,
         &|name| watcher_is_live(runtime, name),

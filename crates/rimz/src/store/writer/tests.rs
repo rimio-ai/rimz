@@ -1258,11 +1258,13 @@ fn record_workspace_republishes_only_when_snapshot_record_fields_change() {
     let paths = StatePaths::under(first.workspace_id.clone(), dir.path()).expect("state");
     let runtime = RuntimePaths::under(first.workspace_id.clone(), dir.path()).expect("runtime");
     let store = Store::open(paths.clone(), runtime).expect("open store");
+    let paths = store.paths().clone();
 
     store
         .record_workspace(&first)
         .expect("record first workspace");
-    let initial_bytes = std::fs::read(&paths.latest_snapshot).expect("initial latest snapshot");
+    let initial_bytes =
+        std::fs::read(paths.latest_snapshot().unwrap()).expect("initial latest snapshot");
     let initial: snapshot::SidebarSnapshot =
         serde_json::from_slice(&initial_bytes).expect("parse initial snapshot");
     assert_eq!(initial.display_name, "first-project");
@@ -1271,7 +1273,7 @@ fn record_workspace_republishes_only_when_snapshot_record_fields_change() {
         .record_workspace(&first)
         .expect("re-record identical workspace");
     assert_eq!(
-        std::fs::read(&paths.latest_snapshot).expect("unchanged latest snapshot"),
+        std::fs::read(paths.latest_snapshot().unwrap()).expect("unchanged latest snapshot"),
         initial_bytes,
         "an identical record must not republish latest.json",
     );
@@ -1279,7 +1281,8 @@ fn record_workspace_republishes_only_when_snapshot_record_fields_change() {
     store
         .record_workspace(&second)
         .expect("record changed workspace");
-    let changed_bytes = std::fs::read(&paths.latest_snapshot).expect("changed latest snapshot");
+    let changed_bytes =
+        std::fs::read(paths.latest_snapshot().unwrap()).expect("changed latest snapshot");
     let changed: snapshot::SidebarSnapshot =
         serde_json::from_slice(&changed_bytes).expect("parse changed snapshot");
     assert_eq!(changed.display_name, "second-project");
@@ -1341,6 +1344,7 @@ fn rotation_persists_generation_before_archive_prune_error() {
     let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
     let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
     let store = Store::open(paths.clone(), runtime).expect("open store");
+    let paths = store.paths().clone();
     event_log::append(
         &paths.events_log,
         &EventEnvelope::new(
@@ -1370,7 +1374,8 @@ fn rotation_persists_generation_before_archive_prune_error() {
     assert!(error.to_string().contains("events.prune-trap.jsonl"));
 
     let cache: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&paths.rollup_cache).expect("rebuilt rollup cache survives prune error"),
+        &std::fs::read(paths.rollup_cache().unwrap())
+            .expect("rebuilt rollup cache survives prune error"),
     )
     .expect("parse rollup cache");
     assert_eq!(

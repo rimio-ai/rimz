@@ -1,6 +1,7 @@
 use std::time::SystemTime;
 
 use super::*;
+use crate::store::snapshot::testkit::checkpoint_paths;
 
 use crate::agents::AgentStatus;
 use crate::agents::lifecycle::LifecycleSignal;
@@ -35,7 +36,7 @@ fn write_workspace_record(paths: &StatePaths, project_root: PathBuf, root_class:
 fn display_name_normalizes_a_legacy_dotted_root() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace, dir.path()).expect("state paths");
+    let paths = checkpoint_paths(workspace, dir.path()).expect("state paths");
     paths.ensure_dirs().expect("state dirs");
     write_workspace_record(
         &paths,
@@ -55,7 +56,7 @@ fn display_name_normalizes_a_legacy_dotted_root() {
 fn display_name_falls_back_to_the_id_for_a_root_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).expect("state paths");
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).expect("state paths");
     paths.ensure_dirs().expect("state dirs");
     write_workspace_record(&paths, PathBuf::from("/tmp/.."), RootClass::Directory);
 
@@ -69,7 +70,7 @@ fn display_name_falls_back_to_the_id_for_a_root_path() {
 fn build_applies_workspace_identity_from_one_record() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace, dir.path()).expect("state paths");
+    let paths = checkpoint_paths(workspace, dir.path()).expect("state paths");
     paths.ensure_dirs().expect("state dirs");
     let project_root = PathBuf::from("/srv/projects/identity");
     write_workspace_record(&paths, project_root.clone(), RootClass::Marker);
@@ -84,7 +85,7 @@ fn build_applies_workspace_identity_from_one_record() {
 #[test]
 fn workspace_identity_reuses_the_parse_until_the_record_is_replaced() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let paths = checkpoint_paths(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     write_workspace_record(&paths, PathBuf::from("/srv/root-a"), RootClass::Repo);
     let first = WorkspaceSnapshotIdentity::from_paths(&paths);
@@ -108,7 +109,7 @@ fn workspace_identity_reuses_the_parse_until_the_record_is_replaced() {
 fn missing_or_malformed_workspace_record_uses_identity_fallback() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).expect("state paths");
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).expect("state paths");
     paths.ensure_dirs().expect("state dirs");
 
     for corrupt in [false, true] {
@@ -132,7 +133,7 @@ fn build_from_expels_dead_pid_agent_like_the_live_read() {
     // filter expels without over-filtering.
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
 
     // No captured pid: the owner is unknown, so the agent abstains and stays.
@@ -180,7 +181,7 @@ fn build_from_expels_dead_pid_agent_like_the_live_read() {
 fn assemble_keeps_ended_launched_child_on_live_parent_card() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace, dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
 
     let now = Timestamp::now();
@@ -231,7 +232,7 @@ fn assemble_keeps_ended_launched_child_on_live_parent_card() {
 fn build_from_fences_dead_pid_agent_before_reap() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
 
     event_log::append(
@@ -258,7 +259,7 @@ fn build_from_fences_dead_pid_agent_before_reap() {
 fn published_snapshot_carries_fenced_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
 
     let live = lifecycle(&workspace, "sess-live", None);
@@ -343,7 +344,7 @@ fn populated_snapshot_preserves_json_round_trip() {
 fn read_fresh_latest_serves_only_when_it_reflects_the_log() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
 
     // Absent `latest.json`: nothing to serve, so the caller re-projects.
@@ -386,7 +387,7 @@ fn read_fresh_latest_serves_only_when_it_reflects_the_log() {
 fn read_fresh_latest_rejects_version_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     event_log::append(&paths.events_log, &lifecycle(&workspace, "a", None)).unwrap();
     rebuild(&paths).unwrap();
@@ -395,10 +396,10 @@ fn read_fresh_latest_rejects_version_mismatch() {
         "rebuilt snapshots carry the current version"
     );
 
-    let bytes = std::fs::read(&paths.latest_snapshot).unwrap();
+    let bytes = std::fs::read(paths.latest_snapshot().unwrap()).unwrap();
     let mut legacy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     legacy["snapshot_version"] = serde_json::json!(57);
-    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
 
     // Rewriting the version keeps the byte length identical. A production
     // version change is always a cold-cache event — a new binary rebuilds
@@ -419,7 +420,7 @@ fn read_fresh_latest_rejects_version_mismatch() {
 fn pre_molt_latest_snapshot_refolds_the_succession_link() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     event_log::append(&paths.events_log, &EventEnvelope::new(
         workspace, "session", "claude", "agent", "agent.launched",
@@ -431,7 +432,7 @@ fn pre_molt_latest_snapshot_refolds_the_succession_link() {
     for agent in Arc::make_mut(&mut legacy.agents) {
         agent.molted_from = None;
     }
-    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
     assert!(
         read_fresh_latest_cold(&paths).is_none(),
         "a pre-molt latest.json cannot serve a lost succession link"
@@ -453,7 +454,7 @@ fn pre_molt_latest_snapshot_refolds_the_succession_link() {
 fn pre_supersession_latest_snapshot_reprojects_the_molt_chain() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     for (id, name, predecessor, pane) in [
         ("launch_old", "predecessor", None, "tmux:%3"),
@@ -471,7 +472,7 @@ fn pre_supersession_latest_snapshot_reprojects_the_molt_chain() {
     for agent in legacy["agents"].as_array_mut().unwrap() {
         agent.as_object_mut().unwrap().remove("molt_superseded");
     }
-    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
     assert!(
         read_fresh_latest_cold(&paths).is_none(),
         "a pre-42 latest.json cannot restore a superseded role holder"
@@ -491,11 +492,11 @@ fn pre_supersession_latest_snapshot_reprojects_the_molt_chain() {
 fn pre_rewarm_estimate_snapshot_is_stale() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace, dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
     legacy["snapshot_version"] = serde_json::json!(42);
-    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
     assert!(
         read_fresh_latest_cold(&paths).is_none(),
         "pre-estimate snapshots must be reprojected"
@@ -506,7 +507,7 @@ fn pre_rewarm_estimate_snapshot_is_stale() {
 fn a_reaped_unended_molt_successor_keeps_its_predecessor_superseded() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace, dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let now = Timestamp::now();
     let mut predecessor = crate::testkit::agent_state("claude", "predecessor", now);
@@ -549,12 +550,12 @@ fn a_reaped_unended_molt_successor_keeps_its_predecessor_superseded() {
 fn pre_workflow_snapshot_is_not_a_fresh_view() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace, dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let snapshot = rebuild(&paths).unwrap();
     let mut legacy = serde_json::to_value(snapshot).unwrap();
     legacy["snapshot_version"] = serde_json::json!(44);
-    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
     assert!(
         read_fresh_latest_cold(&paths).is_none(),
         "a pre-workflow view must be refolded"

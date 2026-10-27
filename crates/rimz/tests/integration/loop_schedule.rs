@@ -3169,7 +3169,7 @@ fn resident_takeover_case(case: Takeover) {
     }
     if case == Takeover::ClosedPane {
         // Make the final live-owner hook publish even inside the cadence window.
-        std::fs::File::open(store.paths().cache_dir.join("publish.stamp"))
+        std::fs::File::open(store.paths().snapshots_dir().unwrap().join("publish.stamp"))
             .unwrap()
             .set_modified(std::time::SystemTime::UNIX_EPOCH)
             .unwrap();

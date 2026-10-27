@@ -9,6 +9,7 @@ fn fixture() -> (tempfile::TempDir, Store, StatePaths) {
     let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
     let runtime = RuntimePaths::under(workspace_id, dir.path()).unwrap();
     let store = Store::open(paths.clone(), runtime).unwrap();
+    let paths = store.paths().clone();
     (dir, store, paths)
 }
 
@@ -425,7 +426,7 @@ fn removing_the_checkpoint_does_not_move_followers_backward() {
     append(&store, LifecycleSignal::TurnStarted { turn_id: None });
     let mut follower = EventFollower::open(paths.clone(), false).unwrap();
     let mut tail = LaunchTail::from_cursor(paths.clone(), follower.cursor);
-    fs::remove_dir_all(&paths.snapshots_dir).unwrap();
+    fs::remove_dir_all(paths.snapshots_dir().unwrap()).unwrap();
     let batch = follower.poll().unwrap();
     assert!(batch.warnings.is_empty(), "{:?}", batch.warnings);
     assert!(batch.events.is_empty());

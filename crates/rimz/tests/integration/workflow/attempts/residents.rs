@@ -208,17 +208,24 @@ fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
     .unwrap();
     let mut owner = dummy_agent_process();
     // Publish the live owner even when the launch fell inside the cadence window.
-    fs::File::open(room.env.store().paths().cache_dir.join("publish.stamp"))
-        .unwrap()
-        .set_modified(std::time::SystemTime::UNIX_EPOCH)
-        .unwrap();
+    fs::File::open(
+        room.env
+            .store()
+            .paths()
+            .snapshots_dir()
+            .unwrap()
+            .join("publish.stamp"),
+    )
+    .unwrap()
+    .set_modified(std::time::SystemTime::UNIX_EPOCH)
+    .unwrap();
     room.hook_with_owner(
         &id,
         &run,
         owner.id(),
         json!({"hook_event_name":"SessionStart"}),
     );
-    let state = room.env.state_path_for(&room.env.project_root);
+    let state = room.env.store().paths().clone();
     {
         let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
         let paths = state.workflow(&id.parse().unwrap());

@@ -267,7 +267,7 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
             }
             let store = env.store();
             let mut cache: serde_json::Value = serde_json::from_reader(
-                std::fs::File::open(&store.paths().rollup_cache).expect("rollup cache"),
+                std::fs::File::open(store.paths().rollup_cache().unwrap()).expect("rollup cache"),
             )
             .expect("rollup document");
             cache.as_object_mut().expect("rollup object").insert(
@@ -275,7 +275,7 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
                 serde_json::json!("x".repeat(21 * 1024 * 1024)),
             );
             rimz::disk::atomic::write_temp_then_rename_cache_compact(
-                &store.paths().rollup_cache,
+                &store.paths().rollup_cache().unwrap(),
                 &cache,
             )
             .expect("large ignored rollup payload");

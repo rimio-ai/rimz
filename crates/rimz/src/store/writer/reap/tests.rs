@@ -479,7 +479,7 @@ fn on_screen_switches_and_background_asks_survive_durable_reap_and_rotation() {
         if rotate {
             let _ = store.rotate_event_log(0, None).unwrap();
         }
-        std::fs::remove_file(&store.paths().rollup_cache).ok();
+        std::fs::remove_file(store.paths().rollup_cache().unwrap()).ok();
         let cold = Store::open(store.paths().clone(), store.runtime_paths().clone()).unwrap();
         assert_eq!(owner(&cold), "a");
         let audit = cold.runtime_projection(RuntimeScope::Audit).unwrap();
@@ -557,7 +557,7 @@ fn unstamped_managed_resume_does_not_reap_its_new_conversation() {
         if rotate {
             store.rotate_event_log(0, None).unwrap();
         }
-        std::fs::remove_file(&store.paths().rollup_cache).ok();
+        std::fs::remove_file(store.paths().rollup_cache().unwrap()).ok();
         let cold = Store::open(store.paths().clone(), store.runtime_paths().clone()).unwrap();
         assert_eq!(owner(&cold), "b");
     }

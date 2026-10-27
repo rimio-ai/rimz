@@ -130,7 +130,7 @@ fn snapshot_replay_and_cacheless_fold_agree_on_the_transition() {
             ),
             (replay.next, replay.opened_turn, replay.waiting_cleared)
         );
-        std::fs::remove_file(&store.paths().rollup_cache).ok();
+        std::fs::remove_file(store.paths().rollup_cache().unwrap()).ok();
         let cold = Store::open(store.paths().clone(), store.runtime_paths().clone()).unwrap();
         let rows = cold.runtime_projection(crate::RuntimeScope::Audit).unwrap();
         let row = &rows.agents[0];

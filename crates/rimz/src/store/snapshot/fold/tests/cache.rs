@@ -6,7 +6,7 @@ use super::*;
 fn pre_workflow_cache_refolds_attempt_identity() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let workflow = crate::agents::WorkflowAttemptRef {
         run: crate::ids::WorkflowRunId::new(),
@@ -70,7 +70,7 @@ fn pre_workflow_cache_refolds_attempt_identity() {
 fn pre_molt_rollup_cache_refolds_the_succession_link() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     event_log::append(&paths.events_log, &EventEnvelope::new(
         workspace, "session", "claude", "agent", "agent.launched",
@@ -109,7 +109,7 @@ fn picker_revive_links_survive_rollup_cache_and_carryover() {
     for carryover in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
         paths.ensure_dirs().unwrap();
         for (method, params) in [
             (
@@ -145,8 +145,7 @@ fn picker_revive_links_survive_rollup_cache_and_carryover() {
         }
         let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
         let resumed_paths = if carryover {
-            let resumed =
-                StatePaths::under(workspace.clone(), &dir.path().join("resumed")).unwrap();
+            let resumed = checkpoint_paths(workspace.clone(), &dir.path().join("resumed")).unwrap();
             resumed.ensure_dirs().unwrap();
             write_carryover(
                 &resumed.agents_carryover,
@@ -217,7 +216,7 @@ fn materialized_rows_count_flattening_but_not_borrowed_iteration() {
 fn pre_rebirth_registration_names_agree_with_a_persisted_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut continuing = agent("claude", "continuing", AgentStatus::Idle, 1_000);
     continuing.name = Some("x".to_owned());
@@ -254,7 +253,7 @@ fn pre_rebirth_registration_names_agree_with_a_persisted_checkpoint() {
     )
     .unwrap();
     let (_, warm, _) = catch_up_rollup(&paths).unwrap();
-    std::fs::remove_file(&paths.rollup_cache).unwrap();
+    std::fs::remove_file(paths.rollup_cache().unwrap()).unwrap();
     let (_, cold, _) = catch_up_rollup(&paths).unwrap();
     let name = |agents: &[AgentState]| {
         agents
@@ -283,15 +282,17 @@ fn pre_rebirth_registration_names_agree_with_a_persisted_checkpoint() {
 #[test]
 fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let paths = checkpoint_paths(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
-    let path = paths.rollup_cache.clone();
+    let path = paths.rollup_cache().unwrap();
     let nonce = "00000000000000000000000000000000";
     let stale = paths
-        .snapshots_dir
+        .snapshots_dir()
+        .unwrap()
         .join(format!("rollup.json.tmp.1.{nonce}"));
     let other = paths
-        .snapshots_dir
+        .snapshots_dir()
+        .unwrap()
         .join(format!("other.json.tmp.1.{nonce}"));
     std::fs::write(&stale, b"stale").unwrap();
     std::fs::write(&other, b"other").unwrap();
@@ -338,7 +339,7 @@ fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
 fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     event_log::append(
         &paths.events_log,
@@ -397,7 +398,7 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
 fn version_twelve_tombstone_cache_refolds_ended_row_from_live_log() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     for event in [
         lifecycle_at(
@@ -419,7 +420,7 @@ fn version_twelve_tombstone_cache_refolds_ended_row_from_live_log() {
     }
     let full_len = std::fs::metadata(&paths.events_log).unwrap().len();
     std::fs::write(
-        &paths.rollup_cache,
+        paths.rollup_cache().unwrap(),
         serde_json::to_vec(&serde_json::json!({
             "version": 12,
             "extent": { "generation": 0, "offset": full_len },
@@ -444,9 +445,9 @@ fn version_twelve_tombstone_cache_refolds_ended_row_from_live_log() {
 #[test]
 fn rollup_parse_cache_hits_on_same_identity_and_misses_when_republish_changes_identity() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let paths = checkpoint_paths(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
-    let path = paths.rollup_cache.clone();
+    let path = paths.rollup_cache().unwrap();
     let cache_with = |id: &str| RollupCache {
         version: ROLLUP_CACHE_VERSION,
         extent: event_log::LogExtent {
@@ -541,7 +542,7 @@ fn carryover_parse_is_shared_per_identity_and_corruption_errors_until_replaced()
 fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     event_log::append(
         &paths.events_log,
@@ -590,7 +591,7 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
 fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut carried =
         agent("claude", "old-session", AgentStatus::Idle, 1_000).in_pane("terminal_1");
@@ -651,7 +652,7 @@ fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
 fn registered_workspace(agent_id: &str) -> (tempfile::TempDir, WorkspaceId, StatePaths) {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     append_registered(&workspace, &paths, agent_id);
     (dir, workspace, paths)

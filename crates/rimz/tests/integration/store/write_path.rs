@@ -173,7 +173,13 @@ fn is_session_start(event: &EventEnvelope) -> bool {
 /// the test-side lever for asserting what a due publish reflects, the same
 /// way tests age `abandon-sweep.stamp` to force the sweep.
 fn force_next_publish(h: &crate::common::Harness) {
-    let _ = std::fs::remove_file(h.store.paths().cache_dir.join("publish.stamp"));
+    let _ = std::fs::remove_file(
+        h.store
+            .paths()
+            .snapshots_dir()
+            .unwrap()
+            .join("publish.stamp"),
+    );
 }
 
 #[cfg(unix)]
@@ -383,7 +389,7 @@ fn concurrent_writers_group_commit_the_newest_state() {
     // skipped saw a smaller unpublished tail, and any that crossed the
     // budget published (PUBLISH_BYTE_BUDGET, writer.rs).
     let checkpoint: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&h.store.paths().latest_snapshot).expect("checkpoint exists"),
+        &std::fs::read(h.store.paths().latest_snapshot().unwrap()).expect("checkpoint exists"),
     )
     .expect("checkpoint parses");
     let published_offset = checkpoint["reflects_log"]["offset"]
@@ -528,16 +534,45 @@ fn soft_reset_keeps_closed_identity_and_hard_reset_forgets_it() {
 }
 
 #[test]
+fn a_missing_runtime_checkpoint_does_not_get_recreated_by_a_commit() {
+    let h = crate::common::Harness::new();
+    h.store
+        .append_event(&lifecycle(&h, "SessionStart", "retained"))
+        .unwrap();
+    let paths = h.store.paths();
+    let directory = paths.snapshots_dir().unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    h.store
+        .rotate_event_log(1, None)
+        .expect("commit without a checkpoint directory");
+    assert!(
+        !directory.exists(),
+        "checkpoint publication never creates a directory"
+    );
+    assert!(snapshot::read_fresh_latest(paths).is_none());
+    let snapshot = snapshot::build_with_cursor(paths, &mut snapshot::RollupCursor::new()).unwrap();
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == "retained")
+    );
+    assert_eq!(snapshot.reflects_log.unwrap().generation, 1);
+    assert!(!directory.exists());
+}
+
+#[test]
 fn reset_retracts_the_published_view_and_rebuilds_by_mode() {
     let h = crate::common::Harness::new();
     let paths = h.store.paths();
-    let stamp = paths.cache_dir.join("publish.stamp");
+    let stamp = paths.snapshots_dir().unwrap().join("publish.stamp");
 
     let outcome = h.store.reset_records(false).expect("empty soft reset");
     assert!(!outcome.rotation.is_rotated());
     assert!(!outcome.hard);
     assert!(!stamp.exists());
-    assert!(paths.latest_snapshot.exists());
+    assert!(paths.latest_snapshot().unwrap().exists());
+    assert!(paths.snapshots_dir().unwrap().is_dir());
 
     h.store
         .append_event(&lifecycle(&h, "SessionStart", "before-reset"))
@@ -552,8 +587,8 @@ fn reset_retracts_the_published_view_and_rebuilds_by_mode() {
 
     let outcome = h.store.reset_records(true).expect("hard reset");
     assert!(outcome.hard);
-    assert!(!paths.latest_snapshot.exists());
-    assert!(!paths.rollup_cache.exists());
+    assert!(!paths.latest_snapshot().unwrap().exists());
+    assert!(!paths.rollup_cache().unwrap().exists());
     assert!(!paths.events_log.exists());
     assert!(!stamp.exists());
 }
@@ -569,7 +604,8 @@ fn rotation_retracts_the_published_snapshot_and_republishes_fresh() {
     h.store
         .append_event(&lifecycle(&h, "SessionStart", "pre-rotation"))
         .expect("append");
-    std::fs::remove_file(&h.store.paths().latest_snapshot).expect("retract published snapshot");
+    std::fs::remove_file(h.store.paths().latest_snapshot().unwrap())
+        .expect("retract published snapshot");
 
     let outcome = h.store.rotate_event_log(1, None).expect("rotate");
     assert!(outcome.rotation.is_rotated());
@@ -722,8 +758,8 @@ fn corrupt_mid_frame_log() -> (crate::common::Harness, u64, u64) {
     file.write_all(&vec![0u8; hole]).expect("zero the frame");
     drop(file);
     // Drop the fold bases so reads must fold the corrupt region.
-    let _ = std::fs::remove_file(&h.store.paths().rollup_cache);
-    let _ = std::fs::remove_file(&h.store.paths().latest_snapshot);
+    let _ = std::fs::remove_file(h.store.paths().rollup_cache().unwrap());
+    let _ = std::fs::remove_file(h.store.paths().latest_snapshot().unwrap());
 
     (h, committed, total)
 }
@@ -806,7 +842,12 @@ fn checkpoint_publish_is_debounced_and_reads_stay_event_fresh() {
     // tail), and the skips cost readers nothing — the wakeup-then-fold path
     // is the freshness channel, the checkpoint a catch-up accelerator.
     let h = crate::common::Harness::new();
-    let stamp = h.store.paths().cache_dir.join("publish.stamp");
+    let stamp = h
+        .store
+        .paths()
+        .snapshots_dir()
+        .unwrap()
+        .join("publish.stamp");
 
     // First mutation on a quiet workspace: no cadence stamp, so the tail
     // publishes and seeds it.

@@ -4,7 +4,7 @@ use super::*;
 fn rotation_commits_reborn_ordinals_before_the_next_registration() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut continuing = agent("claude", "continuing", AgentStatus::Idle, 1_000);
     continuing.last_seen = recent(1);
@@ -70,7 +70,7 @@ fn rotation_commits_reborn_ordinals_before_the_next_registration() {
 fn legacy_ended_carryover_folds_and_stages_only_labels() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut carried = agent("claude", "ended", AgentStatus::Success, 1_000);
     carried.last_seen = recent(1);
@@ -158,7 +158,7 @@ fn cursor_reloads_across_a_rotation() {
     // reload the fold using the durable generation.
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let lifecycle = |kind: &str, id: &str| {
         lifecycle_at(
@@ -201,7 +201,7 @@ fn cursor_reloads_across_a_rotation() {
     );
 
     let (extent, merged, _) = cursor.fold(&paths).unwrap();
-    std::fs::remove_file(&paths.rollup_cache).unwrap();
+    std::fs::remove_file(paths.rollup_cache().unwrap()).unwrap();
     let (cold_cache, cold, _) = catch_up_rollup(&paths).unwrap();
     assert_eq!(extent.generation, 1, "the reloaded base carries the bump");
     assert_eq!(extent.offset, cold_cache.extent.offset);
@@ -219,7 +219,7 @@ fn cursor_reloads_on_an_offset_regression() {
     // base is past the log too) and the cursor re-folds what remains.
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut frame_ends = Vec::new();
     for id in ["a", "b"] {
@@ -265,7 +265,7 @@ fn cursor_drops_rows_pruned_from_the_carryover_on_an_unchanged_log() {
     // "nothing appended" fast path must still see the carryover change.
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut carried = agent("claude", "carried", AgentStatus::Idle, 1_000);
     carried.last_seen = recent(1);
@@ -326,7 +326,7 @@ fn cursor_drops_rows_pruned_from_the_carryover_on_an_unchanged_log() {
 fn post_rotation_rebuild_equals_a_cold_fold_at_the_durable_generation() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     event_log::append(
         &paths.events_log,
@@ -347,7 +347,7 @@ fn post_rotation_rebuild_equals_a_cold_fold_at_the_durable_generation() {
     rotate(&paths);
 
     let (fresh, agents, _) = catch_up_rollup(&paths).unwrap();
-    std::fs::remove_file(&paths.rollup_cache).unwrap();
+    std::fs::remove_file(paths.rollup_cache().unwrap()).unwrap();
     let (cold, cold_agents, _) = catch_up_rollup(&paths).unwrap();
     assert_eq!(
         serde_json::to_value(&fresh).unwrap(),
@@ -395,7 +395,7 @@ fn post_rotation_rebuild_equals_a_cold_fold_at_the_durable_generation() {
 fn thread_fold_serves_across_a_rotation() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let registered = |agent_id: &str| {
         lifecycle_at(

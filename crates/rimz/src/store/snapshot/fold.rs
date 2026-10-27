@@ -429,8 +429,11 @@ thread_local! {
 
 #[must_use = "atomicity barrier; check the result"]
 pub(super) fn write_rollup_cache(paths: &StatePaths, cache: &RollupCache) -> Result<()> {
-    let _ = atomic::sweep_stale_temp_siblings(&paths.rollup_cache, Duration::from_secs(3_600));
-    atomic::write_temp_then_rename_cache_compact(&paths.rollup_cache, cache)?;
+    let Some(path) = paths.rollup_cache() else {
+        return Ok(());
+    };
+    let _ = atomic::sweep_stale_temp_siblings(&path, Duration::from_secs(3_600));
+    atomic::write_checkpoint(&path, cache)?;
     Ok(())
 }
 
@@ -607,7 +610,7 @@ struct ThreadRollup {
 #[derive(PartialEq, Eq)]
 struct FoldInputs {
     events_log: PathBuf,
-    rollup_cache: PathBuf,
+    rollup_cache: Option<PathBuf>,
     agents_carryover: PathBuf,
 }
 
@@ -615,7 +618,7 @@ impl FoldInputs {
     fn of(paths: &StatePaths) -> Self {
         Self {
             events_log: paths.events_log.clone(),
-            rollup_cache: paths.rollup_cache.clone(),
+            rollup_cache: paths.rollup_cache(),
             agents_carryover: paths.agents_carryover.clone(),
         }
     }
@@ -681,7 +684,10 @@ fn catch_up_rollup_layered(
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
-    let base = read_rollup_cache(&paths.rollup_cache)
+    let base = paths
+        .rollup_cache()
+        .as_deref()
+        .and_then(read_rollup_cache)
         .filter(|cache| cache.extent.offset <= log_len)
         .map(owned_base);
     catch_up_from(base, paths, workspace_carryover(paths)?)
@@ -875,7 +881,10 @@ pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -
         return Ok(read_carryover(&paths.agents_carryover)?.agents.len());
     }
 
-    let base = read_rollup_cache(&paths.rollup_cache)
+    let base = paths
+        .rollup_cache()
+        .as_deref()
+        .and_then(read_rollup_cache)
         .filter(|cache| cache.extent.offset <= current_bytes)
         .map(owned_base);
     let identity = super::assemble::WorkspaceSnapshotIdentity::from_paths(paths);

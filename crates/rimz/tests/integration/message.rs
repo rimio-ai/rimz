@@ -6469,7 +6469,7 @@ fn message_me_rejects_unidentified_shell_and_snapshot_only_owner() {
     for snapshot_only_owner in [false, true] {
         if snapshot_only_owner {
             rimz::disk::atomic::write_temp_then_rename_cache(
-                &store.paths().latest_snapshot,
+                &store.paths().latest_snapshot().unwrap(),
                 &snapshot,
             )
             .expect("seed snapshot-only owner");
