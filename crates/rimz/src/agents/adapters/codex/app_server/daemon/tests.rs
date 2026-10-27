@@ -62,7 +62,10 @@ fn dedicated_writer_is_not_clear() {
     )
     .expect("rename");
     assert!(app_server_runs_under(home.path()));
-    let env = BTreeMap::from([("CODEX_HOME".into(), home.path().display().to_string())]);
+    let env = BTreeMap::from([
+        ("CODEX_HOME".into(), home.path().display().to_string()),
+        ("RIMZ_TEST_CODEX_LOADED_THREADS_MS".into(), "30000".into()),
+    ]);
     assert_eq!(writes_history(&env), DaemonSessions::Unknown);
     let _daemon = StandInDaemon::serve(home.path(), serde_json::json!({"data": ["thread"]}));
     assert_eq!(
@@ -78,6 +81,8 @@ fn pending_restore_refuses_without_opening_socket() {
     std::fs::create_dir_all(&state).expect("mkdir");
     std::fs::write(state.join("loaded-threads.json"), b"{}").expect("handoff");
     let daemon = StandInDaemon::serve(home.path(), serde_json::json!({"data": []}));
+    let timeout = super::super::loaded_threads_timeout(&BTreeMap::new());
+    let sessions_under = |home: &Path| sessions_under(home, timeout);
     assert_eq!(sessions_under(home.path()), DaemonSessions::Unknown);
     write_app_record(
         home.path(),
@@ -656,9 +661,17 @@ fn a_live_daemon_answers_with_the_threads_its_own_socket_lists() {
         extra
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .chain([("CODEX_HOME".to_owned(), home.display().to_string())])
+            .chain([
+                ("CODEX_HOME".to_owned(), home.display().to_string()),
+                (
+                    "RIMZ_TEST_CODEX_LOADED_THREADS_MS".to_owned(),
+                    "30000".to_owned(),
+                ),
+            ])
             .collect()
     };
+    let timeout = super::super::loaded_threads_timeout(&env(&[]));
+    let sessions_under = |home: &Path| sessions_under(home, timeout);
 
     assert_eq!(sessions_under(home), DaemonSessions::Unknown, "no socket");
 

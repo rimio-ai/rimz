@@ -161,19 +161,21 @@ pub fn updater_skew(login_env: &BTreeMap<String, String>) -> Option<UpdaterSkew>
 pub fn writes_history(login_env: &BTreeMap<String, String>) -> DaemonSessions {
     CodexAdapter
         .config_home(login_env)
-        .map_or(DaemonSessions::Clear, |home| sessions_under(&home))
+        .map_or(DaemonSessions::Clear, |home| {
+            sessions_under(&home, super::loaded_threads_timeout(login_env))
+        })
 }
 
 /// Asks the control socket under `home` alone: the socket override of the
 /// login env could name another account's daemon.
-fn sessions_under(home: &Path) -> DaemonSessions {
+fn sessions_under(home: &Path, timeout: Duration) -> DaemonSessions {
     if home.join("app-server-daemon/loaded-threads.json").exists() {
         return DaemonSessions::Unknown;
     }
     if !app_server_runs_under(home) {
         return DaemonSessions::Clear;
     }
-    let loaded = super::CodexAppServer::connect_daemon_at(&control_socket(home))
+    let loaded = super::CodexAppServer::connect_daemon_at(&control_socket(home), timeout)
         .and_then(|mut client| client.loaded_threads().ok());
     match loaded {
         None => DaemonSessions::Unknown,
