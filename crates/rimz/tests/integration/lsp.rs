@@ -272,55 +272,76 @@ fn assert_recycles_after_request(with_editor: bool) {
     };
     assert_eq!(result[0]["name"], "grown");
     let deadline = Instant::now() + Duration::from_secs(15);
-    let history_path = env.rimz_home().join("lsp-history.jsonl");
-    let mut next_request = 2;
-    let mut recycled_warning = false;
-    let history = loop {
-        let history = std::fs::read_to_string(&history_path)
-            .ok()
-            .filter(|history| history.ends_with('\n'));
-        if let Some(editor) = &mut editor {
-            editor.send(json!({"jsonrpc":"2.0","id":next_request,"method":"workspace/symbol","params":{"query":"x"}}));
-            loop {
-                let frame = rimz::lsp::protocol::read_frame(&mut editor.0).unwrap();
-                assert_ne!(frame["method"], "window/showMessage", "{frame}");
-                assert!(
-                    frame.get("error").is_none(),
-                    "request across recycle failed: {frame}"
-                );
-                if frame["method"] == "experimental/serverStatus"
-                    && frame["params"]["health"] == "warning"
+    let missed = "over-ceiling ready server must recycle and answer the next request";
+    if let Some(editor) = &mut editor {
+        // Housekeeping skips a recycle while any request is outstanding, so a request sent
+        // before the pushed warning could cover every 5 s sample in the window.
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "{missed}");
+            editor
+                .0
+                .get_mut()
+                .set_read_timeout(Some(remaining))
+                .unwrap();
+            let frame = match rimz::lsp::protocol::read_frame(&mut editor.0) {
+                Err(rimz::lsp::LspErr::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
                 {
-                    assert_eq!(
-                        frame["params"]["message"],
-                        "language server rust stopped: recycled; the next request restarts it"
-                    );
-                    recycled_warning = true;
+                    panic!("{missed}")
                 }
-                if frame["id"] == next_request {
-                    assert_eq!(frame["result"][0]["name"], "x");
-                    break;
-                }
-            }
-            // The history was read before this request, so its reply proves the restart path.
-            if recycled_warning && let Some(history) = history {
-                break history;
-            }
-            next_request += 1;
-        } else {
-            let status = editor_rpc(&directory, json!({"op":"status"}));
-            if status["state"]["dormant"]["reason"] == "recycled"
-                && let Some(history) = history
+                frame => frame.unwrap(),
+            };
+            assert_ne!(frame["method"], "window/showMessage", "{frame}");
+            assert!(
+                frame.get("error").is_none(),
+                "editor frame before the recycle failed: {frame}"
+            );
+            if frame["method"] == "experimental/serverStatus"
+                && frame["params"]["health"] == "warning"
             {
-                break history;
+                assert_eq!(
+                    frame["params"]["message"],
+                    "language server rust stopped: recycled; the next request restarts it"
+                );
+                break;
             }
         }
-        assert!(
-            Instant::now() < deadline,
-            "over-ceiling ready server must recycle and answer the next request"
+        editor
+            .0
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_secs(40)))
+            .unwrap();
+        editor.send(
+            json!({"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"x"}}),
         );
-        std::thread::sleep(Duration::from_millis(if with_editor { 2 } else { 20 }));
-    };
+        loop {
+            let frame = rimz::lsp::protocol::read_frame(&mut editor.0).unwrap();
+            assert_ne!(frame["method"], "window/showMessage", "{frame}");
+            assert!(
+                frame.get("error").is_none(),
+                "request across recycle failed: {frame}"
+            );
+            if frame["id"] == 2 {
+                assert_eq!(frame["result"][0]["name"], "x");
+                break;
+            }
+        }
+    } else {
+        while editor_rpc(&directory, json!({"op":"status"}))["state"]["dormant"]["reason"]
+            != "recycled"
+        {
+            assert!(Instant::now() < deadline, "{missed}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert_eq!(editor_query(&directory, "x")[0]["name"], "x");
+    // `serve_inner` writes the stop record before it starts the next lifetime, so once a
+    // restarted server has answered, the history holds the recycle.
+    let history = std::fs::read_to_string(env.rimz_home().join("lsp-history.jsonl")).unwrap();
     let last: Value = serde_json::from_str(history.lines().last().unwrap()).unwrap();
     assert_eq!(last["reason"], "recycled");
     let records = lsp_records(&env, "recycled");
@@ -329,7 +350,6 @@ fn assert_recycles_after_request(with_editor: bool) {
     let ceiling = details["ceiling_kb"].as_u64().unwrap();
     assert!(details["rss_kb"].as_u64().unwrap() + details["swap_kb"].as_u64().unwrap() > ceiling);
     assert_eq!(ceiling, 2 * details["ready_footprint_kb"].as_u64().unwrap());
-    assert_eq!(editor_query(&directory, "x")[0]["name"], "x");
     assert_eq!(
         editor_rpc(&directory, json!({"op":"status"}))["restarts"],
         1
