@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use super::super::context::{RateLimitWindow, WindowSource};
+use super::super::context::{CacheWriteRetention, RateLimitWindow, WindowSource};
 
 /// Pi's compaction cause, added to extension events in 0.79.10.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -81,6 +81,9 @@ pub(super) struct PiHookPayload {
     pub cache_read_input_tokens: Option<u64>,
     /// Latest provider call: cache-write/cache-creation input.
     pub cache_write_input_tokens: Option<u64>,
+    /// Last active-branch write, absent on older installed extensions.
+    #[serde(default, deserialize_with = "deserialize_cache_write")]
+    pub last_cache_write: Option<CacheWriteRetention>,
     /// Compaction events: manual `/compact`, threshold compaction, or overflow
     /// recovery. Older Pi releases omit this field.
     pub compaction_reason: Option<PiCompactionReason>,
@@ -91,6 +94,13 @@ pub(super) struct PiHookPayload {
         deserialize_with = "deserialize_rate_limits"
     )]
     pub rate_limits: Vec<PiRateLimitWindow>,
+}
+
+fn deserialize_cache_write<'de, D>(deserializer: D) -> Result<Option<CacheWriteRetention>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
 }
 
 #[derive(Debug)]

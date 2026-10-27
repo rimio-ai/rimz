@@ -825,6 +825,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<super::ContextOb
         && sub_provider.is_none()
         && parsed.session_name.is_none()
         && parsed.effort.is_none()
+        && parsed.last_cache_write.is_none()
         && tokens.is_none()
         && cost.is_none()
         && rate_limits.is_none()
@@ -837,6 +838,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<super::ContextOb
         sub_provider,
         effort: parsed.effort,
         fast: parsed.fast,
+        last_cache_write: parsed.last_cache_write,
         cost,
         tokens,
         rate_limits,
