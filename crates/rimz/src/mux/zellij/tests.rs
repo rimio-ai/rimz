@@ -819,7 +819,8 @@ exit 0
         .with_health_probe_timeout_for_test(Duration::from_millis(50))
         .open_sidebar(&room.sidebar_options(120), None);
 
-    assert!(opened.is_err(), "{opened:?}");
+    let err = opened.expect_err("an uninspectable live room refuses the sidebar");
+    assert!(err.to_string().contains("topology unavailable"), "{err}");
     assert_eq!(command_count(&shim_log(&temp), "delete-session"), 0);
 }
 
