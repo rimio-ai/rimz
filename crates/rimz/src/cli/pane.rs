@@ -404,10 +404,7 @@ fn list(
     } else {
         panes
     };
-    let agents: Vec<&AgentState> = overlay
-        .as_ref()
-        .map(|snapshot| snapshot.pane_bound_roots().collect())
-        .unwrap_or_default();
+    let agents: Vec<&AgentState> = overlay.as_ref().map(pane_handle_peers).unwrap_or_default();
     // Bind through the snapshot so the overlay matches the room the sidebar
     // renders: the same stamped-id + process-start guard, never a bare pane-id
     // lookup that a reused pane could mislabel.
@@ -858,6 +855,10 @@ fn parse_key(raw: &str) -> std::result::Result<NamedKey, String> {
     raw.parse::<NamedKey>().map_err(|err| err.to_string())
 }
 
+fn pane_handle_peers(snapshot: &rimz::store::snapshot::SidebarSnapshot) -> Vec<&AgentState> {
+    rimz::address::addressable_agents(snapshot)
+}
+
 fn pane_table(
     panes: &[PaneRef],
     overlay: Option<&rimz::store::snapshot::SidebarSnapshot>,
@@ -865,9 +866,7 @@ fn pane_table(
     all: bool,
 ) -> (render::Table, usize) {
     let mut table = render::Table::new(["AGENT", "STATUS", "COMMAND", "CWD", "PANE"]);
-    let peers: Vec<_> = overlay
-        .map(|snapshot| snapshot.pane_bound_roots().collect())
-        .unwrap_or_default();
+    let peers: Vec<_> = overlay.map(pane_handle_peers).unwrap_or_default();
     let mut headings = HashMap::new();
     let mut hidden = 0;
     for tab in group_by_tab(panes) {

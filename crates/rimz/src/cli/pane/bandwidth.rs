@@ -142,9 +142,7 @@ fn pane_profiles(
     children: &HashMap<u32, Vec<u32>>,
     overlay: Option<&SidebarSnapshot>,
 ) -> Vec<PaneProfile> {
-    let peers: Vec<_> = overlay
-        .map(|snapshot| snapshot.pane_bound_roots().collect())
-        .unwrap_or_default();
+    let peers: Vec<_> = overlay.map(super::pane_handle_peers).unwrap_or_default();
     panes
         .into_iter()
         .filter_map(|pane| {
@@ -554,6 +552,36 @@ mod tests {
         );
         pane.command = Some("zsh".to_owned());
         assert_eq!(pane_label(&pane, None, &[]), "brainstormer - zsh");
+    }
+
+    #[test]
+    fn pane_profiles_root_and_launched_child_handles_round_trip() {
+        let (snapshot, panes) = super::super::tests::root_and_launched_child_panes();
+        let children = HashMap::from([(101, vec![201]), (102, vec![202]), (103, vec![203])]);
+        let profiles = pane_profiles(panes.clone(), &children, Some(&snapshot));
+        assert_eq!(profiles.len(), panes.len());
+        let context = rimz::address::AddressContext {
+            channel: Some("main".to_owned()),
+            origin: rimz::address::ChannelOrigin::Explicit,
+        };
+        for ((profile, pane), expected) in
+            profiles
+                .iter()
+                .zip(&panes)
+                .zip(["@codex-1#main", "@codex-2#main", "@codex-3#main"])
+        {
+            assert_eq!(profile.pane_id, pane.pane_id);
+            assert_eq!(profile.label, expected);
+            assert_eq!(
+                rimz::address::resolve_one(&snapshot, &profile.label, None, &context)
+                    .expect("handle resolves uniquely")
+                    .agent_id,
+                snapshot
+                    .agent_bound_to_pane(pane)
+                    .expect("pane bound")
+                    .agent_id
+            );
+        }
     }
 
     #[test]

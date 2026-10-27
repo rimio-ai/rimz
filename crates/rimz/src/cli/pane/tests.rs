@@ -18,6 +18,7 @@ use clap::Parser;
 use jiff::Timestamp;
 use rimz::agents::AgentStatus;
 use rimz::ids::{AgentSessionId, MuxName};
+use rimz::store::snapshot::SidebarSnapshot;
 
 #[derive(Debug, Parser)]
 struct Harness {
@@ -360,22 +361,123 @@ fn pane_json_annotates_the_bound_agent_with_its_handle() {
 }
 
 #[test]
-fn pane_list_role_handle_ignores_historical_roots() {
-    let mut live = agent_on("terminal_1", "codex", "main");
-    live.role = Some("coder".to_owned());
-    let mut historical = rimz::testkit::agent_state("codex", "sess-historical", Timestamp::now());
-    historical.role = Some("coder".to_owned());
-    let pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
+fn pane_list_role_handle_counts_only_same_lane_historical_roots() {
+    for same_lane in [false, true] {
+        let mut live = agent_on("terminal_1", "codex", "main");
+        live.role = Some("coder".to_owned());
+        let mut historical =
+            rimz::testkit::agent_state("codex", "sess-historical", Timestamp::now());
+        historical.role = Some("coder".to_owned());
+        if same_lane {
+            historical.worktree_path = Some("/repo/main".to_owned());
+            historical.worktree_branch = Some("main".to_owned());
+        }
+        let pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
+            vec![live, historical],
+            Timestamp::now(),
+        )
+        .with_live_panes(vec![pane.clone()], None);
+
+        let peers = pane_handle_peers(&snapshot);
+        let live = snapshot
+            .agent_bound_to_pane(&pane)
+            .expect("live agent bound");
+        let handle = pane_json(&pane, Some(live), &peers, false)
+            .agent
+            .expect("bound agent")
+            .handle;
+        if same_lane {
+            assert_ne!(handle, "@coder#main");
+        } else {
+            assert_eq!(handle, "@coder#main");
+        }
+        let context = rimz::address::AddressContext {
+            channel: Some("main".to_owned()),
+            origin: rimz::address::ChannelOrigin::Explicit,
+        };
+        assert_eq!(
+            rimz::address::resolve_one(&snapshot, &handle, None, &context)
+                .expect("handle resolves uniquely")
+                .agent_id,
+            live.agent_id
+        );
+    }
+}
+
+pub(super) fn root_and_launched_child_panes() -> (SidebarSnapshot, Vec<PaneRef>) {
+    let mut root = agent_on("terminal_1", "codex", "main");
+    root.agent_id = AgentSessionId::from("sess-root");
+    root.profile = Some("explorer".to_owned());
+    let mut parent = agent_on("terminal_3", "codex", "main");
+    parent.agent_id = AgentSessionId::from("sess-parent");
+    parent.kind_ordinal = Some(3);
+    let mut child = agent_on("terminal_2", "codex", "main");
+    child.agent_id = AgentSessionId::from("sess-child");
+    child.kind_ordinal = Some(2);
+    child.profile = Some("explorer".to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.launch_depth = Some(1);
+    child.launch_id = Some(AgentSessionId::from("launch-child"));
+    assert!(child.is_launched_child());
+
+    let mut panes = vec![
+        pane("terminal_1", "tab_0", "#main", "codex", "/repo/main"),
+        pane("terminal_2", "tab_0", "#main", "codex", "/repo/main"),
+        pane("terminal_3", "tab_0", "#main", "codex", "/repo/main"),
+    ];
+    for (pane, pid) in panes.iter_mut().zip(101..) {
+        pane.pane_pid = Some(pid);
+    }
     let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
-        vec![live, historical],
+        vec![root, child, parent],
         Timestamp::now(),
     )
-    .with_live_panes(vec![pane.clone()], None);
+    .with_live_panes(panes.clone(), None);
+    (snapshot, panes)
+}
 
-    let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
-    let json = pane_json(&pane, Some(peers[0]), &peers, false);
-    assert_eq!(json.agent.expect("bound agent").handle, "@coder#main");
+#[test]
+fn pane_list_root_and_launched_child_profile_handles_round_trip() {
+    let (snapshot, panes) = root_and_launched_child_panes();
+    let peers = pane_handle_peers(&snapshot);
+    let (table, _) = pane_table(&panes, Some(&snapshot), None, false);
+    let mut out = Vec::new();
+    table.render(&mut out).unwrap();
+    let raw = String::from_utf8(out).unwrap();
+    let text = anstream::adapter::strip_str(&raw).to_string();
+    let context = rimz::address::AddressContext {
+        channel: Some("main".to_owned()),
+        origin: rimz::address::ChannelOrigin::Explicit,
+    };
+    for (pane, (agent_id, expected)) in panes.iter().zip([
+        ("sess-root", "@codex-1#main"),
+        ("sess-child", "@codex-2#main"),
+        ("sess-parent", "@codex-3#main"),
+    ]) {
+        let agent = snapshot.agent_bound_to_pane(pane).expect("pane bound");
+        assert_eq!(agent.agent_id.as_str(), agent_id);
+        let json_handle = pane_json(pane, Some(agent), &peers, false)
+            .agent
+            .expect("agent JSON")
+            .handle;
+        let text_handle = text
+            .lines()
+            .find(|line| line.contains(&pane.pane_id.to_string()))
+            .and_then(|line| line.split_whitespace().next())
+            .expect("agent table row");
+        for handle in [json_handle.as_str(), text_handle] {
+            assert_eq!(handle, expected);
+            assert_eq!(
+                rimz::address::resolve_one(&snapshot, handle, None, &context)
+                    .expect("handle resolves uniquely")
+                    .agent_id,
+                agent.agent_id
+            );
+        }
+    }
 }
 
 #[test]
@@ -394,7 +496,7 @@ fn pane_list_live_overlay_keeps_ordinal_disambiguation() {
         Timestamp::now(),
     )
     .with_live_panes(vec![first_pane.clone(), second_pane.clone()], None);
-    let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
+    let peers = pane_handle_peers(&snapshot);
 
     let first = snapshot
         .agent_bound_to_pane(&first_pane)
