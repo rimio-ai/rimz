@@ -890,7 +890,7 @@ fn plan_settlement(
         ambient,
     );
     if let Some(warning) = warning {
-        planned.warnings.push(warning);
+        planned.warnings.insert(0, warning);
     }
     candidates.retain(|agent| {
         !planned
