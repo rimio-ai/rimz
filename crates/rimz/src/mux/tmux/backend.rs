@@ -24,14 +24,10 @@ use crate::mux::{
     PaneListOptions, PaneListing, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result,
     ResumeTab, ResumeTabShape, ResumeTabUnconfirmed, SessionOptions, SidebarLivenessSource,
     SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement,
-    SplitTarget, TabOptions, WidthStep, WidthSyncOptions, confirm_resume_tab_shapes,
-    ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes, memoized_version,
+    SplitTarget, TabOptions, WidthSyncOptions, confirm_resume_tab_shapes, ensure_pane_backend,
+    execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
-
-/// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
-/// column amount — its step is Zellij's own ~5%-of-view increment.
-const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
 
 struct StackLayoutRead {
     raw: String,
@@ -778,27 +774,6 @@ impl MuxBackend for TmuxBackend {
             .args(["resize-pane", "-Z", "-t", pane.raw()])
             .run()
             .map(|_| ())
-    }
-
-    fn sidebar_width_step(
-        &self,
-        _runtime: &crate::disk::paths::RuntimePaths,
-        _session: &str,
-        pane: &PaneId,
-        _min_observed_at_ms: Option<u64>,
-    ) -> Result<WidthStep> {
-        ensure_pane_backend(pane, MuxName::Tmux)?;
-        // The window width comes from this live tmux query, so it cannot predate a caller's floor.
-        Ok(WidthStep {
-            cols: SIDEBAR_RESIZE_STEP_COLS,
-            stop_step_cols: 1,
-            exact: true,
-            view_cols: self
-                .window_width(pane.raw())
-                .and_then(|cols| u16::try_from(cols).ok())
-                .unwrap_or(0),
-            fullscreen_active: None,
-        })
     }
 
     fn nudge_sidebar_width(

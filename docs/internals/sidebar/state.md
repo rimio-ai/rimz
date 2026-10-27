@@ -97,7 +97,7 @@ Start at `enrich.rs` to learn what a snapshot is made of, at `app/fetch.rs` to l
 
 ## The room data plane
 
-Every tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints all of them. The panes of a session share one process, one data plane, and the host's room socket for external events. Each pane still has its own heartbeat, bounded wake channel, and frame loop, and none waits on another to paint.
+Every tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints all of them. The panes of a session share one process, one data plane, and the host's room socket for external events. Each pane still has its own heartbeat, bounded wake channel, and frame loop; shared capability and geometry probes can hold those loops while sampling.
 
 ### The room host and its attachments
 
@@ -108,6 +108,8 @@ The supervisor keeps the pane's tty and hands the host only the pane's output. I
 | Supervisor, one per pane | Terminal modes, the input and resize reader, the attach connection, self-close confirmation against the mux, the pane-liveness probe, its own re-exec onto a new build. |
 | Attachment, one per pane, in the host | The heartbeat (`instance_id` the supervisor's, `pane_id` the pane's, `build` the host's, `size` read from the pane fd), bounded wake channel, frame loop, geometry, own-tab marking, width control, self-close, render caches and last-painted hit maps. |
 | Host, one per session | The room event socket and the data plane ([`app/plane.rs`](../../../crates/rimz/src/sidebar_pane/app/plane.rs)): one fetch worker, one cache refresher, one tmux watch and hidden-view sweep, one transcript watch, one observer writer, and the client-view registry under one mutex. |
+
+The plane also owns shared width memos, separate from the client-view mutex: Zellij's stamped topology table and tmux's single session-wide geometry attempt. Every attachment retains its own width-control state and inputs. tmux idle backstops share successes and failures for `IDLE_RETRY` (5 seconds); structural floors and floorless requests keep their live-read freshness ([width](../multiplexers.md#width)).
 
 An attachment has no terminal state of its own to touch. Geometry comes from `tcgetwinsize` on the pane fd and is read again on every `resize` word. A pane the mux has not laid out yet reports `0x0`: its heartbeat carries no `size`, and nothing is drawn until the first resize sizes it. A write error on the fd, which is how a closed pane first shows, closes the attachment exactly as the supervisor's end of stream does. A panic in one attachment closes that attachment alone.
 

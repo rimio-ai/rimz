@@ -171,7 +171,7 @@ impl Attachment {
         );
         state.pane.titled = titled;
         state.pane.room_caps = plane.caps.clone();
-        state.share_width_geometry(plane.geometry.clone());
+        state.share_width_geometry(plane.geometry.clone(), plane.tmux_geometry.clone());
         state.views.events = plane.events.clone();
         state.room_events = Some(plane.room_events(&runtime));
         state.share_views(plane.views.clone(), subscription.revision);
@@ -226,14 +226,14 @@ impl Attachment {
         // time on a 16 ms grid until it settles. The grid stays warm while
         // there is something to show (`active`) and relaxes to the `tick`
         // backstop when idle, snapping back the instant an event or animation
-        // arrives. Fetches run off-thread. Width geometry probes still
-        // fork on target refresh, structural, classification, and commit events
-        // (or tmux's first press without cached geometry), never on cached
-        // presses or resize feedback; on Zellij the opening press of a burst
-        // re-reads the topology memo and room share, a stat and one small
-        // share-file read, no fork. Width commits and trailing capability
-        // refreshes run once after their bursts settle; resize actuators run
-        // off-thread.
+        // arrives. Fetches run off-thread. tmux width backstops share one
+        // plane-wide attempt; target refresh, structural, classification, and
+        // commit events need fresh samples, as does a first press without stored
+        // geometry. Cached presses and resize feedback never fork. On Zellij
+        // the opening press of a burst re-reads the topology memo and room share,
+        // a stat and one small share-file read, no fork. Width commits and
+        // trailing capability refreshes run once after their bursts settle;
+        // resize actuators run off-thread.
         let mut inbox = WakeupInbox::new(inbox).with_input(input);
         let loop_result: Result<()> = (|| {
             while !state.pane.should_exit && !close_requested.load(Ordering::SeqCst) {

@@ -1154,16 +1154,6 @@ pub trait MuxBackend: Send + Sync {
     /// the selected id to the presence plugin because an out-of-pane CLI
     /// fullscreen action does not affect the attached client.
     fn toggle_fullscreen(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
-    /// Report the backend-native step one sidebar width keypress represents.
-    /// Reject cached geometry older than `min_observed_at_ms`; a backend whose
-    /// geometry read is always live may ignore the floor.
-    fn sidebar_width_step(
-        &self,
-        runtime: &crate::disk::paths::RuntimePaths,
-        session: &str,
-        pane: &PaneId,
-        min_observed_at_ms: Option<u64>,
-    ) -> Result<WidthStep>;
     /// Move one sidebar pane toward an absolute target. Zellij performs one
     /// native relative step; tmux can apply the target exactly.
     fn nudge_sidebar_width(

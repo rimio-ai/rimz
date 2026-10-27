@@ -506,7 +506,7 @@ fn wait_for_heartbeat_after(path: &Path, prior: jiff::Timestamp) -> jiff::Timest
 }
 
 #[test]
-fn sidebar_width_step_is_exact_two_columns() {
+fn sidebar_width_sample_is_exact_two_columns() {
     require_tmux!();
     let session = "width-step";
     let server = TmuxServer::new();
@@ -520,11 +520,9 @@ fn sidebar_width_step_is_exact_two_columns() {
         )
         .expect("open sidebar");
     let pane = wait_for_sidebar_pane(&server, session, None);
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-width-step"));
-    let runtime = RuntimePaths::under(workspace_id, server._tempdir.path()).expect("runtime");
-    let step = server
-        .backend
-        .sidebar_width_step(&runtime, session, &pane, None)
+    let mut geometry = rimz::mux::tmux::WidthMemo::new(TmuxBackend::with_socket(&server.socket));
+    let step = geometry
+        .step(session, &pane, rimz::mux::tmux::WidthRequest::Fresh(0))
         .expect("read sidebar step");
     assert_eq!(step.cols, 2);
     assert!(step.exact);

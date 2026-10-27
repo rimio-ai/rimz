@@ -11,6 +11,7 @@ use crate::diag::record::{
 };
 use crate::ids::{MuxName, PaneId};
 use crate::mux::WidthAdjust;
+use crate::mux::tmux::WidthRequest;
 use crate::mux::width::{sidebar_width_off_spec, width_step_regressed};
 use crate::{RuntimePaths, diag::DiagSink};
 use tracing::{debug, warn};
@@ -364,6 +365,7 @@ struct WidthKeyBurst {
 #[derive(Debug)]
 pub(super) struct WidthController {
     pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
+    pub(super) tmux_geometry: Arc<Mutex<crate::mux::tmux::WidthMemo>>,
     runtime: RuntimePaths,
     session_name: String,
     /// The pane this controller may resize. `None` keeps width control idle
@@ -396,6 +398,7 @@ impl WidthController {
         let baseline_probe_deadline = pane.as_ref().map(|_| Instant::now());
         Self {
             geometry: Arc::default(),
+            tmux_geometry: Arc::default(),
             runtime,
             session_name,
             pane,
@@ -775,7 +778,16 @@ impl WidthController {
             } else if self.convergence.retries_when_idle() {
                 let deadline = self.idle_retry_deadline.get_or_insert(now + IDLE_RETRY);
                 if now >= *deadline {
-                    let _ = self.refresh_target(None, true);
+                    let elapsed = Instant::now().saturating_duration_since(*deadline);
+                    let deadline_ms = crate::utils::time::unix_now_ms()
+                        .saturating_sub(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX));
+                    let _ = self.refresh_target_for(
+                        WidthRequest::Backstop {
+                            deadline_ms,
+                            max_age: IDLE_RETRY,
+                        },
+                        true,
+                    );
                     if self.convergence.needs_adjustment(cols) {
                         self.convergence.retry_idle();
                         self.observe(cols, SidebarWidthControlTrigger::IdleRetry, diag);
@@ -934,14 +946,29 @@ impl WidthController {
         pane: &PaneId,
         floor: Option<u64>,
     ) -> crate::mux::Result<crate::mux::WidthStep> {
+        let request = floor.map_or_else(
+            || WidthRequest::Fresh(crate::utils::time::unix_now_ms()),
+            WidthRequest::After,
+        );
+        self.width_step_for(pane, request)
+    }
+
+    fn width_step_for(
+        &self,
+        pane: &PaneId,
+        request: WidthRequest,
+    ) -> crate::mux::Result<crate::mux::WidthStep> {
         if self.mux != MuxName::Zellij {
-            return crate::mux::backend_for(self.mux).sidebar_width_step(
-                &self.runtime,
-                &self.session_name,
-                pane,
-                floor,
-            );
+            return self
+                .tmux_geometry
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .step(&self.session_name, pane, request);
         }
+        let floor = match request {
+            WidthRequest::After(floor) => Some(floor),
+            _ => None,
+        };
         self.geometry
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -962,17 +989,31 @@ impl WidthController {
         floor: Option<u64>,
         remember_default: bool,
     ) -> Option<(crate::mux::WidthStep, NonZeroU16)> {
+        let request = floor.map_or_else(
+            || WidthRequest::Fresh(crate::utils::time::unix_now_ms()),
+            WidthRequest::After,
+        );
+        self.refresh_target_for(request, remember_default)
+    }
+
+    fn refresh_target_for(
+        &mut self,
+        request: WidthRequest,
+        remember_default: bool,
+    ) -> Option<(crate::mux::WidthStep, NonZeroU16)> {
         let pane = self.pane.as_ref()?;
-        let step = self.width_step(pane, floor).ok()?;
+        let step = self.width_step_for(pane, request).ok()?;
         let view_cols = NonZeroU16::new(step.view_cols)?;
         self.convergence.seed_native_step(step);
         self.current_view_cols = Some(view_cols.get());
         if self.key_burst.is_some() {
             return Some((step, view_cols));
         }
-        let target = match floor {
-            Some(_) => crate::mux::width_target::adopt(&self.runtime, self.width, view_cols),
-            None => {
+        let target = match request {
+            WidthRequest::After(_) => {
+                crate::mux::width_target::adopt(&self.runtime, self.width, view_cols)
+            }
+            _ => {
                 crate::mux::width_target::resolve(&self.runtime, self.width, Some(view_cols.get()))
             }
         }

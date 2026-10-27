@@ -1,5 +1,22 @@
 use super::*;
 
+#[test]
+fn width_request_freshness_boundaries() {
+    assert!(!WidthRequest::After(10).accepts(9));
+    assert!(!WidthRequest::After(10).accepts(10));
+    assert!(WidthRequest::After(10).accepts(11));
+    assert!(!WidthRequest::Fresh(10).accepts(9));
+    assert!(WidthRequest::Fresh(10).accepts(10));
+    assert!(WidthRequest::Fresh(10).accepts(11));
+    let backstop = WidthRequest::Backstop {
+        deadline_ms: 10_000,
+        max_age: Duration::from_secs(5),
+    };
+    assert!(!backstop.accepts(5_000));
+    assert!(backstop.accepts(5_001));
+    assert!(backstop.accepts(10_001));
+}
+
 #[cfg(unix)]
 #[test]
 fn fit_views_isolates_read_and_fit_failures_in_input_order() {
