@@ -229,8 +229,55 @@ fn worktree_probe_paths_exclude_completed_checkouts_without_canonicalizing() {
         ..Default::default()
     };
     assert_eq!(
-        probe_paths(&entry, "fixer", &owned, &ledger),
+        probe_paths(&entry, "fixer", &owned, &ledger, &Default::default()),
         vec![std::path::PathBuf::from("/alias/two")]
+    );
+}
+
+#[test]
+fn workflow_probe_paths_ignore_resident_memory_and_exclude_workflow_launches() {
+    use super::super::launch_ledger::{LaunchRecord, WorkflowLaunchRecord, WorkflowLedger};
+    use crate::store::workflow::ScopeKind;
+    let owned = vec!["/alias/spare/../one".into(), "/alias/spare/../two".into()];
+    let resident = BTreeMap::from([(
+        "land".into(),
+        BTreeMap::from([(
+            "/alias/two".into(),
+            LaunchRecord {
+                at: Timestamp::now(),
+                leader: "otter".into(),
+                destination: None,
+            },
+        )]),
+    )]);
+    let mut workflows = WorkflowLedger::default();
+    let record = WorkflowLaunchRecord {
+        at: Timestamp::now(),
+        run: crate::ids::WorkflowRunId::new(),
+        scope: ScopeKind::Worktree,
+    };
+    workflows.tasks.insert(
+        "land".into(),
+        BTreeMap::from([("/alias/one".into(), record.clone())]),
+    );
+    let entry = crate::config::TaskEntry {
+        workflow: Some("review".into()),
+        each_worktree: true,
+        when: Some(vec!["pr=open".into()]),
+        ..Default::default()
+    };
+    let worktree = probe_paths(&entry, "land", &owned, &resident, &workflows);
+    workflows.tasks.get_mut("land").unwrap().insert(
+        "/project".into(),
+        WorkflowLaunchRecord {
+            scope: ScopeKind::Project,
+            ..record
+        },
+    );
+    let project = probe_paths(&entry, "land", &owned, &resident, &workflows);
+    assert_eq!(
+        (worktree, project),
+        (vec![std::path::PathBuf::from("/alias/two")], vec![])
     );
 }
 

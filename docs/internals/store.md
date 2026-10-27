@@ -110,6 +110,7 @@ records/agents-carryover.json                 agent rollup carried across rotati
 records/messages/messages.jsonl               live message queue
 records/loop-instances.json                   loop and wait rows
 records/loop-launches.json                    resident loop launches by task and checkout
+records/loop-workflow-launches.json           condition workflow launches by task and checkout, version 1
 records/boot.json                             last host boot id
 records/live-roster.json                      producer's last pane-backed live agent set
 records/pending-recovery.json                 lost agents awaiting the user's recovery decision
@@ -160,6 +161,7 @@ This page owns the log, the caches derived from it, hook ingress, and the worksp
 | `owned/runs/` | [scripting.md](./harness/scripting.md#the-record) |
 | `owned/workflows/` | [workflow.md](./harness/workflow.md#storage-and-isolation-boundary) |
 | `records/loop-instances.json`, `out/<reader>/wait-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
+| `records/loop-launches.json`, `records/loop-workflow-launches.json` | [loops.md](./harness/loops.md#the-launch-ledger) |
 | `records/idle-stop.json` | [loops.md](./harness/loops.md#recovery-the-host-runs) |
 | `records/hibernation.json` | [hibernate.md](./harness/hibernate.md) |
 | `records/lsp-usage.jsonl` | [lsp.md](./lsp.md#query-usage) |

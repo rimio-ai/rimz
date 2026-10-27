@@ -1,4 +1,4 @@
-//! Read-only resident launch and decline records shared with the sidebar planner.
+//! Read-only resident and condition workflow launch memory, plus judge declines.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -16,6 +16,88 @@ pub struct LaunchRecord {
 }
 
 pub type Ledger = BTreeMap<String, BTreeMap<PathBuf, LaunchRecord>>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowLaunchRecord {
+    pub at: Timestamp,
+    pub run: crate::ids::WorkflowRunId,
+    pub scope: crate::store::workflow::ScopeKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowLedger {
+    version: u32,
+    pub tasks: BTreeMap<String, BTreeMap<PathBuf, WorkflowLaunchRecord>>,
+}
+
+impl Default for WorkflowLedger {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            tasks: BTreeMap::new(),
+        }
+    }
+}
+
+pub(super) fn workflow_path(paths: &crate::StatePaths) -> PathBuf {
+    crate::StatePaths::class_path(
+        &paths.root,
+        crate::disk::paths::Class::Records,
+        "loop-workflow-launches.json",
+    )
+}
+
+pub fn load_workflows(paths: &crate::StatePaths) -> Result<WorkflowLedger, LedgerErr> {
+    let ledger: WorkflowLedger = match std::fs::read(workflow_path(paths)) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(WorkflowLedger::default());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if ledger.version != 1 {
+        return Err(LedgerErr::Version(ledger.version));
+    }
+    Ok(ledger)
+}
+
+pub(super) fn load_workflows_room(
+    runtime: &crate::RuntimePaths,
+    root: Option<&std::path::Path>,
+) -> Result<WorkflowLedger, LedgerErr> {
+    let paths = match root {
+        Some(root) => crate::StatePaths::for_project_root(root)?,
+        None => crate::StatePaths::for_workspace(runtime.workspace_id.clone())?,
+    };
+    load_workflows(&paths)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Launch<'a> {
+    Resident(&'a LaunchRecord),
+    Workflow(&'a WorkflowLaunchRecord),
+}
+
+pub fn launched<'a>(
+    entry: &crate::config::TaskEntry,
+    task: &str,
+    checkout: &std::path::Path,
+    residents: &'a Ledger,
+    workflows: &'a WorkflowLedger,
+) -> Option<Launch<'a>> {
+    if entry.stay {
+        return residents.get(task)?.get(checkout).map(Launch::Resident);
+    }
+    if !entry.is_condition_workflow() {
+        return None;
+    }
+    let launches = workflows.tasks.get(task)?;
+    launches
+        .values()
+        .find(|record| record.scope == crate::store::workflow::ScopeKind::Project)
+        .or_else(|| launches.get(checkout))
+        .map(Launch::Workflow)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct DeclineRecord {
@@ -124,10 +206,12 @@ pub(super) fn holding_decline<'a>(
 pub enum LedgerErr {
     #[error(transparent)]
     Paths(#[from] crate::disk::paths::PathErr),
-    #[error("reading resident loop ledger: {0}")]
+    #[error("reading loop ledger: {0}")]
     Read(#[from] std::io::Error),
-    #[error("decoding resident loop ledger: {0}")]
+    #[error("decoding loop ledger: {0}")]
     Decode(#[from] serde_json::Error),
+    #[error("unsupported workflow loop ledger version {0}")]
+    Version(u32),
 }
 
 pub(super) fn load_room(

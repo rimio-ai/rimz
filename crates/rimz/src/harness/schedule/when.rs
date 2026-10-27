@@ -18,6 +18,7 @@ fn probe_paths(
     name: &str,
     owned: &[std::path::PathBuf],
     ledger: &super::launch_ledger::Ledger,
+    workflows: &super::launch_ledger::WorkflowLedger,
 ) -> Vec<std::path::PathBuf> {
     if !entry.each_worktree {
         return vec![entry.run_dir()];
@@ -26,9 +27,7 @@ fn probe_paths(
         .iter()
         .map(|path| crate::utils::path::normalize_path_lexical(path))
         .filter(|path| {
-            !ledger
-                .get(name)
-                .is_some_and(|launches| launches.contains_key(path))
+            super::launch_ledger::launched(entry, name, path, ledger, workflows).is_none()
         })
         .collect()
 }
@@ -55,17 +54,37 @@ pub(crate) fn probe_demand(
             expr.reads_forge().then_some((name, task))
         })
         .collect();
-    let ledger = if tasks.iter().any(|(_, task)| task.entry().each_worktree) {
+    let ledger = if tasks
+        .iter()
+        .any(|(_, task)| task.entry().each_worktree && task.entry().stay)
+    {
         match super::launch_ledger::load_room(runtime, project_root) {
             Ok(ledger) => ledger,
             Err(error) => {
                 tracing::warn!(%error, "resident loop ledger unavailable for probes");
-                tasks.retain(|(_, task)| !task.entry().each_worktree);
+                tasks.retain(|(_, task)| !(task.entry().each_worktree && task.entry().stay));
                 BTreeMap::new()
             }
         }
     } else {
         BTreeMap::new()
+    };
+    let workflows = if tasks
+        .iter()
+        .any(|(_, task)| task.entry().each_worktree && task.entry().is_condition_workflow())
+    {
+        match super::launch_ledger::load_workflows_room(runtime, project_root) {
+            Ok(ledger) => ledger,
+            Err(error) => {
+                tracing::warn!(%error, "workflow loop ledger unavailable for probes");
+                tasks.retain(|(_, task)| {
+                    !(task.entry().each_worktree && task.entry().is_condition_workflow())
+                });
+                Default::default()
+            }
+        }
+    } else {
+        Default::default()
     };
     let owned = tasks
         .iter()
@@ -94,7 +113,7 @@ pub(crate) fn probe_demand(
             continue;
         };
         let branches = expr.forge_branches().collect::<BTreeSet<_>>();
-        for scope in probe_paths(task.entry(), &name, &owned, &ledger)
+        for scope in probe_paths(task.entry(), &name, &owned, &ledger, &workflows)
             .into_iter()
             .filter(|scope| scope.is_dir())
         {

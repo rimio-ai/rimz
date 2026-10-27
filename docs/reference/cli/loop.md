@@ -472,7 +472,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | `completed`, `delivered`, `launched` otherwise | Resets the count. |
 | `skipped` whose last answered guard stage passed | Resets the count. |
 | `skipped` whose last answered guard stage failed or is absent, or a sibling signal | Neutral. |
-| `skipped` by a workflow fire whose checkout already has an active or parked run (`workflow_skipped` in JSON) | Neutral. |
+| `skipped` by a workflow fire whose scope already has an active or parked run (`workflow_skipped` in JSON); condition tasks with a recorded launch are silent instead | Neutral. |
 | `budget skipped`, `surplus skipped`, `account skipped`, `throttle skipped`, `takeover blocked`, `overlapped`, `deferred`, `canceled`, `expired`, `target gone` | Neutral. |
 | `start failed` — the fire left no run behind, so the occurrence is spent without one: either the runner was never spawned, or it exited before it could record anything | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
@@ -529,7 +529,7 @@ Replace uses the same cancellation and SIGTERM ladder as `loop stop`, without es
 
 Newest and oldest go by firing time, not by the order busy runners reach the task: a signal trigger fired when its signal was emitted, so every task woken by one emit shares that time, and a clock trigger fired when its runner started. Triggers that fired at the same instant keep the order they arrived in. Coalescing keeps the newest signal name and payload. If both payloads have the same signal name, carry `from` and `to`, and agree on every other key, it preserves the oldest `from`. Otherwise the newest payload stands whole. The served run records `absorbed` for the number of earlier triggers folded in (omitted when zero). Clock triggers merge only their count. Queued triggers keep their individual payloads.
 
-Every explicit policy, including `skip`, is refused for `--stay`, `--when`, one-shots (including `--once` or a deadline), `--wait`, and workflows. Residents launch once per checkout, conditions are not clock or signal triggers, one-shots retire their task row, deliveries have no run to overlap, and workflows own admission. `--overlap-limit` is refused without `queue`, or at zero. Project tasks accept the same settings. Manual `loop fire` never enqueues: it still refuses a busy task with the stop hint.
+Every explicit policy, including `skip`, is refused for `--stay`, `--when`, one-shots (including `--once` or a deadline), `--wait`, and workflows. Residents and condition workflow tasks launch once per checkout, conditions are not clock or signal triggers, one-shots retire their task row, deliveries have no run to overlap, and workflows own admission. `--overlap-limit` is refused without `queue`, or at zero. Project tasks accept the same settings. Manual `loop fire` never enqueues: it still refuses a busy task with the stop hint.
 
 ## Read run history
 
@@ -636,9 +636,9 @@ A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind)
 
 Condition runs in `loop logs` include `when: <expression> · held <duration>` and a JSON readings line in expression order (map order if a stored expression cannot be parsed). The record keeps the canonical expression, configured hold, observed held milliseconds, and readings; manual fires do not synthesize readings. Signal runs include `signal: <name>` and, when the signal carried fields, a JSON payload line. Sibling signals appear only with `--heard`; their stored records are unchanged.
 
-`loop rename <name> <new-name>` moves the task to the new key in its store. Its live workflow runs, active or parked, follow it; finished runs keep the name they ran under. The new name must differ and be free. A task with recorded resident launches cannot be renamed because its resident leaders retain the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without recorded launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
+`loop rename <name> <new-name>` moves the task to the new key in its store. Its workflow launch entries and live workflow runs, active or parked, follow it; finished run records keep the name they ran under. The new name must differ and be free. A task with recorded resident launches cannot be renamed because its resident leaders retain the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without recorded launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
 
-`loop remove <name>...` deletes each task from its store and prints ``removed loop task `<name>` ``, or ``no loop task named `<name>` `` when none exists. Missing names do not stop later removals or cause a nonzero exit. Run history stays readable through `rimz loop logs <name>`. For a project task, both commands print the [trust result](#project-tasks).
+`loop remove <name>...` deletes each task from its store and prints ``removed loop task `<name>` ``, or ``no loop task named `<name>` `` when none exists. Missing names do not stop later removals or cause a nonzero exit. Removal clears the task's resident or workflow launch entries and detaches its active and parked workflow runs, which continue as independent runs. Re-adding a condition workflow task skips that independent run without adopting it, then permits a fresh launch after it ends. Replacing a task under the same name keeps its launch entries. Run history stays readable through `rimz loop logs <name>`. For a project task, both commands print the [trust result](#project-tasks).
 
 ## Timer
 

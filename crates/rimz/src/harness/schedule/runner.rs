@@ -863,15 +863,23 @@ impl<'a> TaskFire<'a> {
         if let Some(done) = self.prepare_run_lock(true)? {
             return Ok(TaskFirePlan::Done(done));
         }
+        if self.run_lock.is_some() && self.workflow_already_launched()? {
+            self.finished = true;
+            return Ok(TaskFirePlan::AlreadyLaunched);
+        }
         if let Some(done) = self.prepare_deadline()? {
             return Ok(TaskFirePlan::Done(done));
         }
         let root = self.entry.resolved_root();
         before_launch(&root)?;
-        if self.run_lock.is_none()
-            && let Some(done) = self.prepare_run_lock(false)?
-        {
-            return Ok(TaskFirePlan::Done(done));
+        if self.run_lock.is_none() {
+            if let Some(done) = self.prepare_run_lock(false)? {
+                return Ok(TaskFirePlan::Done(done));
+            }
+            if self.workflow_already_launched()? {
+                self.finished = true;
+                return Ok(TaskFirePlan::AlreadyLaunched);
+            }
         }
         let state = StatePaths::for_project_root(&root)?;
         let home = crate::disk::paths::workflows_dir().canonicalize()?;
@@ -911,14 +919,30 @@ impl<'a> TaskFire<'a> {
                         prompt: run.prompt.is_some(),
                     },
                 });
-                (LoopRunResult::Launched, run.id, None)
+                let error = self.record_workflow_launch(
+                    &state,
+                    &run.id,
+                    run.scope.kind,
+                    run.created_at,
+                    self.mode == LoopRunMode::Manual,
+                );
+                (LoopRunResult::Launched, run.id, error)
             }
             Err(error) => match &error {
-                crate::harness::workflow::WorkflowErr::Exists { run, .. } => (
-                    LoopRunResult::WorkflowSkipped,
-                    run.clone(),
-                    Some(error.to_string()),
-                ),
+                crate::harness::workflow::WorkflowErr::Exists {
+                    run, task, kind, ..
+                } => {
+                    let repair_error = if task.as_deref() == Some(self.name.as_str()) {
+                        self.record_workflow_launch(&state, run, *kind, self.now, false)
+                    } else {
+                        None
+                    };
+                    let reason = match repair_error {
+                        Some(repair) => format!("{error}; {repair}"),
+                        None => error.to_string(),
+                    };
+                    (LoopRunResult::WorkflowSkipped, run.clone(), Some(reason))
+                }
                 _ => return Err(error.into()),
             },
         };
@@ -933,6 +957,57 @@ impl<'a> TaskFire<'a> {
                 record.error = error;
             },
         )))
+    }
+
+    fn workflow_already_launched(&self) -> Result<bool> {
+        if self.mode != LoopRunMode::Scheduled || !self.entry.dedupes_checkout() {
+            return Ok(false);
+        }
+        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+        let workflows = super::launch_ledger::load_workflows(&paths)?;
+        Ok(super::launch_ledger::launched(
+            &self.entry,
+            &self.name,
+            &self.launch_checkout(),
+            &Default::default(),
+            &workflows,
+        )
+        .is_some())
+    }
+
+    fn record_workflow_launch(
+        &self,
+        paths: &StatePaths,
+        run: &crate::ids::WorkflowRunId,
+        scope: crate::store::workflow::ScopeKind,
+        at: Timestamp,
+        replace_project: bool,
+    ) -> Option<String> {
+        if !self.entry.dedupes_checkout() {
+            return None;
+        }
+        let checkout = match scope {
+            crate::store::workflow::ScopeKind::Project => self.entry.resolved_root(),
+            crate::store::workflow::ScopeKind::Worktree => self.launch_checkout(),
+        };
+        let record = super::launch_ledger::WorkflowLaunchRecord {
+            at,
+            run: run.clone(),
+            scope,
+        };
+        let Err(error) = super::launch_ledger_store::record_workflow(
+            paths,
+            &self.name,
+            &checkout,
+            record,
+            replace_project,
+        ) else {
+            return None;
+        };
+        tracing::warn!(
+            task = %self.name, %run, %error, "recording workflow loop launch failed"
+        );
+        Some(error.to_string())
     }
 
     fn prepare_resident(

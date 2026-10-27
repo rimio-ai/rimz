@@ -626,6 +626,410 @@ fn loop_project_scope_skips_before_reading_an_edited_definition() {
     );
 }
 
+fn condition_workflow(room: &Room, scope: &str, each: bool) {
+    let dir = room.env.rimz_home().join("workflows/review");
+    fs::write(
+        dir.join("workflow.toml"),
+        format!("[workflow]\nscope='{scope}'\nstart='pr'\n{WAIT}"),
+    )
+    .unwrap();
+    fs::write(dir.join("checks/pr.sh"), PENDING).unwrap();
+    fs::write(
+        room.env.rimz_home().join("loop.toml"),
+        format!(
+            concat!(
+                "[tasks.review]\nworkflow='review'\nroot={:?}\n",
+                "when=['pr=open']\neach-worktree={}\n"
+            ),
+            room.env.project_root, each,
+        ),
+    )
+    .unwrap();
+}
+
+fn workflow_launches(room: &Room) -> Value {
+    let state = room.env.state_path_for(&room.env.project_root);
+    let path = state.root.join("records/loop-workflow-launches.json");
+    let bytes = fs::read(&path).unwrap_or_default();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+fn workflow_task_history(room: &Room, name: &str) -> Value {
+    serde_json::from_str(&success(
+        room.command(&["loop", "show", name, "--json"])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap()
+}
+
+#[test]
+fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
+    let room = Room::new("");
+    condition_workflow(&room, "worktree", false);
+    let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
+    fire();
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let first = records::list(&paths).unwrap().remove(0);
+    let key = room.env.project_root.to_str().unwrap();
+    assert_eq!(
+        workflow_launches(&room)["tasks"]["review"][key]["run"],
+        first.id.as_str()
+    );
+    let history = workflow_task_history(&room, "review");
+    fire();
+    assert_eq!(
+        workflow_task_history(&room, "review")["runs"],
+        history["runs"]
+    );
+    success(
+        room.command(&["workflow", "cancel", first.id.as_str()])
+            .output()
+            .unwrap(),
+    );
+    fire();
+    assert_eq!(records::list(&paths).unwrap().len(), 1);
+    assert_eq!(
+        workflow_task_history(&room, "review")["runs"],
+        history["runs"]
+    );
+    success(room.command(&["loop", "fire", "review"]).output().unwrap());
+    let second = workflow_launches(&room)["tasks"]["review"][key]["run"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(second, first.id.as_str());
+    let list: Value = serde_json::from_str(&success(
+        room.command(&["workflow", "list", "--json"])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap();
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == second),
+        "{list}"
+    );
+    success(
+        room.command(&["loop", "rename", "review", "renamed"])
+            .output()
+            .unwrap(),
+    );
+    success(room.command(&["loop", "run", "renamed"]).output().unwrap());
+    assert_eq!(records::list(&paths).unwrap().len(), 2);
+    assert_eq!(
+        workflow_launches(&room)["tasks"]["renamed"][key]["run"],
+        second
+    );
+    let list: Value = serde_json::from_str(&success(
+        room.command(&["workflow", "list", "--json"])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap();
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == second),
+        "{list}"
+    );
+    assert_eq!(
+        records::list(&paths)
+            .unwrap()
+            .iter()
+            .find(|record| record.id.as_str() == second)
+            .unwrap()
+            .task
+            .as_deref(),
+        Some("renamed")
+    );
+    success(
+        room.command(&["workflow", "cancel", &second])
+            .output()
+            .unwrap(),
+    );
+    success(
+        room.command(&["loop", "remove", "renamed"])
+            .output()
+            .unwrap(),
+    );
+    assert!(workflow_launches(&room)["tasks"].get("renamed").is_none());
+    condition_workflow(&room, "worktree", false);
+    fire();
+    assert_eq!(records::list(&paths).unwrap().len(), 3);
+}
+
+#[test]
+fn condition_workflow_readded_while_its_removed_run_lives_starts_fresh_afterward() {
+    let room = Room::new("");
+    condition_workflow(&room, "worktree", false);
+    let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
+    fire();
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let old = records::list(&paths).unwrap().remove(0);
+    success(
+        room.command(&["loop", "remove", "review"])
+            .output()
+            .unwrap(),
+    );
+    condition_workflow(&room, "worktree", false);
+    fire();
+    let history = workflow_task_history(&room, "review");
+    assert!(
+        history["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { row["result"] == "workflow_skipped" && row["run_id"] == old.id.as_str() }),
+        "{history}"
+    );
+    assert!(
+        workflow_launches(&room)["tasks"].get("review").is_none(),
+        "a re-added task must not adopt the removed task's live run"
+    );
+    assert_eq!(records::list(&paths).unwrap().len(), 1);
+    success(
+        room.command(&["workflow", "cancel", old.id.as_str()])
+            .output()
+            .unwrap(),
+    );
+    fire();
+    let runs = records::list(&paths).unwrap();
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let new = runs.iter().find(|run| run.id != old.id).unwrap();
+    assert_eq!(new.task.as_deref(), Some("review"));
+    assert_eq!(
+        workflow_launches(&room)["tasks"]["review"][room.env.project_root.to_str().unwrap()]["run"],
+        new.id.as_str()
+    );
+}
+
+#[test]
+fn condition_workflow_repairs_its_own_live_run_once() {
+    let room = Room::new("");
+    condition_workflow(&room, "worktree", false);
+    let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
+    fire();
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let id = records::list(&paths).unwrap().remove(0).id;
+    let path = paths.root.join("records/loop-workflow-launches.json");
+    if path.exists() {
+        fs::remove_file(path).unwrap();
+    }
+    fire();
+    let rows = workflow_task_history(&room, "review")["runs"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let repaired = workflow_launches(&room)["tasks"]["review"]
+        [room.env.project_root.to_str().unwrap()]["run"]
+        == id.as_str();
+    fire();
+    assert!(
+        repaired
+            && rows
+                .iter()
+                .filter(|row| row["result"] == "workflow_skipped")
+                .count()
+                == 1
+            && workflow_task_history(&room, "review")["runs"] == json!(rows),
+        "repaired={repaired}, rows={rows:?}, after={}",
+        workflow_task_history(&room, "review")
+    );
+}
+
+#[test]
+fn condition_workflow_does_not_adopt_a_foreign_run() {
+    let room = Room::new("");
+    condition_workflow(&room, "worktree", false);
+    let foreign = success(
+        room.command(&["workflow", "run", "review"])
+            .env("RIMZ_BIN", "/bin/true")
+            .output()
+            .unwrap(),
+    );
+    let foreign = foreign.lines().next().unwrap();
+    success(room.command(&["loop", "run", "review"]).output().unwrap());
+    assert!(workflow_launches(&room)["tasks"].get("review").is_none());
+    let rows = workflow_task_history(&room, "review");
+    assert!(
+        rows["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["result"] == "workflow_skipped" && row["run_id"] == foreign),
+        "{rows}"
+    );
+    success(
+        room.command(&["workflow", "cancel", foreign])
+            .output()
+            .unwrap(),
+    );
+    success(room.command(&["loop", "run", "review"]).output().unwrap());
+    let entry = workflow_launches(&room)["tasks"]["review"]
+        [room.env.project_root.to_str().unwrap()]
+    .clone();
+    assert!(
+        entry["run"].as_str().is_some_and(|id| id != foreign),
+        "{entry}"
+    );
+}
+
+#[test]
+fn condition_project_workflow_covers_new_checkouts_even_after_finishing() {
+    let room = Room::new("");
+    if crate::common::git::git_missing() {
+        return;
+    }
+    crate::common::git::init_repo(&room.env.project_root);
+    condition_workflow(&room, "project", true);
+    success(room.command(&["worktree", "new", "one"]).output().unwrap());
+    let first = rimz::worktree::discover_owned(&room.env.project_root)
+        .unwrap()
+        .remove(0)
+        .marker
+        .worktree_path;
+    let fire = |checkout: &Path| {
+        success(
+            room.command(&["loop", "run", "review", "--cwd"])
+                .arg(checkout)
+                .output()
+                .unwrap(),
+        )
+    };
+    fire(&first);
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let id = records::list(&paths).unwrap().remove(0).id;
+    let before = workflow_task_history(&room, "review")["runs"].clone();
+    success(room.command(&["worktree", "new", "two"]).output().unwrap());
+    let second = rimz::worktree::discover_owned(&room.env.project_root)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.marker.worktree_path != first)
+        .unwrap()
+        .marker
+        .worktree_path;
+    fire(&second);
+    let live_unchanged = workflow_task_history(&room, "review")["runs"] == before;
+    success(
+        room.command(&["workflow", "cancel", id.as_str()])
+            .output()
+            .unwrap(),
+    );
+    fire(&second);
+    let after = workflow_task_history(&room, "review");
+    assert!(
+        live_unchanged && after["runs"] == before && records::list(&paths).unwrap().len() == 1,
+        "live_unchanged={live_unchanged}, {after}"
+    );
+    let entry = workflow_launches(&room)["tasks"]["review"]
+        [room.env.project_root.to_str().unwrap()]
+    .clone();
+    assert_eq!(entry["scope"], "project");
+    assert_eq!(entry["run"], id.as_str());
+    condition_workflow(&room, "worktree", true);
+    success(
+        room.command(&["loop", "fire", "review"])
+            .current_dir(&second)
+            .output()
+            .unwrap(),
+    );
+    let entries = workflow_launches(&room)["tasks"]["review"].clone();
+    assert!(
+        entries
+            .get(room.env.project_root.to_str().unwrap())
+            .is_none(),
+        "{entries}"
+    );
+    let checkout = rimz::utils::path::normalize_path_lexical(&second);
+    assert_eq!(entries[checkout.to_str().unwrap()]["scope"], "worktree");
+}
+
+#[test]
+fn condition_workflow_manual_fire_from_a_checkout_replaces_only_its_entry() {
+    let room = Room::new("");
+    if crate::common::git::git_missing() {
+        return;
+    }
+    crate::common::git::init_repo(&room.env.project_root);
+    condition_workflow(&room, "worktree", true);
+    for name in ["one", "two"] {
+        success(room.command(&["worktree", "new", name]).output().unwrap());
+    }
+    let owned: Vec<_> = rimz::worktree::discover_owned(&room.env.project_root)
+        .unwrap()
+        .into_iter()
+        .map(|row| rimz::utils::path::normalize_path_lexical(&row.marker.worktree_path))
+        .collect();
+    for checkout in &owned {
+        success(
+            room.command(&["loop", "run", "review", "--cwd"])
+                .arg(checkout)
+                .output()
+                .unwrap(),
+        );
+    }
+    let first = &owned[0];
+    let key = first.to_str().unwrap();
+    let other = owned[1].to_str().unwrap();
+    let before = workflow_launches(&room);
+    assert!(
+        before["tasks"]["review"][key]["run"].is_string(),
+        "{before}"
+    );
+    let id = before["tasks"]["review"][key]["run"].as_str().unwrap();
+    success(room.command(&["workflow", "cancel", id]).output().unwrap());
+    success(
+        room.command(&["loop", "run", "review", "--cwd"])
+            .arg(first)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(workflow_launches(&room), before);
+    success(
+        room.command(&["loop", "fire", "review"])
+            .current_dir(first)
+            .output()
+            .unwrap(),
+    );
+    let after = workflow_launches(&room);
+    assert_ne!(after["tasks"]["review"][key]["run"], id);
+    assert_eq!(
+        after["tasks"]["review"][other],
+        before["tasks"]["review"][other]
+    );
+}
+
+#[test]
+fn condition_workflow_ledger_write_failure_keeps_the_launched_history_and_repairs() {
+    let room = Room::new("");
+    condition_workflow(&room, "worktree", false);
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let lock = paths.root.join("locks/loop-workflow-launches.lock");
+    fs::create_dir_all(&lock).unwrap();
+    success(room.command(&["loop", "run", "review"]).output().unwrap());
+    let history = workflow_task_history(&room, "review");
+    let rows = history["runs"].as_array().unwrap();
+    assert!(
+        rows.iter().any(|row| row["result"] == "launched"
+            && row["run_id"].is_string()
+            && row["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("loop-workflow-launches.lock"))),
+        "{history}"
+    );
+    fs::remove_dir(lock).unwrap();
+    success(room.command(&["loop", "run", "review"]).output().unwrap());
+    assert!(
+        workflow_launches(&room)["tasks"]["review"][room.env.project_root.to_str().unwrap()]["run"]
+            .is_string()
+    );
+    assert_eq!(records::list(&paths).unwrap().len(), 1);
+}
+
 #[test]
 fn loop_workflow_creation_duplicate_and_finished_scopes() {
     let room = Room::new("");

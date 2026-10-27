@@ -100,11 +100,13 @@ for           = "3m"
 | --- | --- |
 | `workflow` | The definition name under `~/.rimz/workflows/`. Conflicts with `agent` and `wait`. |
 | `prompt`, `prompt-file` | The run's prompt. |
-| `each-worktree` | Fire once per RimZ-owned checkout. A worktree-scoped run without it scopes to the task's `dir`, else its root; a project-scoped run always scopes to the root, so subsequent checkout fires skip the held run. |
+| `each-worktree` | Expand each fire over RimZ-owned checkouts. With `when`, launch once per checkout. A worktree-scoped run without it scopes to the task's `dir`, else its root; a project-scoped condition launch covers all checkouts permanently, while other triggers skip only a live held run. |
 | `when`, `for`, schedules, `root` | As on any task. |
 | `budget`, `budget-per-day` | Ignored: a workflow fire is not gated on spend, and step costs are not counted against the task. The turn, room, and account caps still park a step agent like any agent in the room. |
 
-`stay`, `takeover`, `subscribe`, `check`, and `judge` are refused, each with the workflow node that owns the concept. A fire that finds an active or parked run for its scope records `workflow skipped` with the existing run id and adds no strike, and it checks for that run before it reads the definition or the prompt, so editing either (including the scope kind) while a run holds the scope never errors a fire; a finished run does not block the next fire. While the task's `when` stays true it re-fires at the resident retry cadence and records a skipped row each time, so prefer a condition that goes false when the work is done (`pr=open`).
+`stay`, `takeover`, `subscribe`, `check`, and `judge` are refused, each with the workflow node that owns the concept. A `when` task launches its workflow once per checkout: subsequent scheduled fires start nothing and record nothing, whether that run is active, parked, or finished. Project-scoped launches cover all of the task's checkouts, including later ones. `rimz loop fire <task>` bypasses this memory and replaces the entry only when a new run starts. `rimz workflow run` starts an independent run without changing the task's entry. Task replacement preserves the entries; rename moves them and removal clears them. Removal also detaches the task's active and parked workflow runs, which continue as independent runs.
+
+An unrecorded checkout retries a sustained-true condition every five minutes. A fire that finds an active or parked run records `workflow skipped` with its id and adds no strike, checking before it reads the definition or prompt. If that run belongs to this task, the fire repairs its launch entry, so later scheduled fires are silent. A run started independently or by another task is not adopted, and the task retries until that run ends. Schedule, signal, and watch workflow tasks keep admitting a new run on each fire unless a live run holds the scope; finished runs do not block them.
 
 ## Park reasons
 

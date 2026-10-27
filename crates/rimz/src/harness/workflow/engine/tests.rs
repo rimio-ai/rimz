@@ -99,6 +99,38 @@ fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, WorkflowSpe
 }
 
 #[test]
+fn detaching_a_task_preserves_foreign_and_finished_runs() {
+    for (run_state, live) in [
+        (RunState::Active, true),
+        (RunState::Parked, true),
+        (RunState::Done, false),
+        (RunState::Failed, false),
+        (RunState::Canceled, false),
+    ] {
+        for task in ["review", "other"] {
+            let (_home, state, mut record, _) = fixture(
+                "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.pending='@wait'\n",
+            );
+            record.task = Some(task.into());
+            record.state = run_state;
+            let paths = state.workflow(&record.id);
+            {
+                let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+                workflow::write(&paths, &record, &guard).unwrap();
+            }
+            let expected = if live && task == "review" {
+                record.task = None;
+                vec![record.id.clone()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(reassign_task(&state, "review", None).unwrap(), expected);
+            assert_eq!(workflow::load(&paths).unwrap(), record);
+        }
+    }
+}
+
+#[test]
 fn bound_routes_stop_when_waiting_or_inactive() {
     for target in ["@wait", "@user", "@done", "@failed"] {
         let text = format!(
@@ -201,6 +233,8 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
     })).unwrap()).unwrap();
     for status in [RunState::Active, RunState::Parked] {
         record.state = status;
+        record.task = Some("land".into());
+        record.scope.kind = ScopeKind::Project;
         {
             let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
             workflow::write(&state.workflow(&record.id), &record, &guard).unwrap();
@@ -225,8 +259,9 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
             )
         );
         assert!(
-            matches!(&error, WorkflowErr::Exists { run, workflow, scope }
-            if run == &record.id && workflow == &record.workflow && scope == home.path()),
+            matches!(&error, WorkflowErr::Exists { run, workflow, scope, task, kind }
+            if run == &record.id && workflow == &record.workflow && scope == home.path()
+                && task == &record.task && kind == &record.scope.kind),
             "{error:?}"
         );
     }

@@ -727,7 +727,8 @@ upward-dependencies = [
 # Machine hibernation policy and its duration validation serve admission (+1 net).
 # Hibernation enabled/explicit accessors preserve default-on provenance (+2).
 # Schedule and its final-step, target and due calculations share gradual reclaim policy (+4).
-# TaskEntry::repeats_while_true shares sustained workflow/resident retry policy (+1).
+# TaskEntry::dedupes_checkout shares launch-memory routing and condition retry policy (+1).
+# TaskEntry::is_condition_workflow unifies workflow launch-memory routing (+1).
 # GcConfig::tmp_floor_bytes shares the validated free-space reserve (+1).
 # HistoryRetention carries transcript and team-note archive policies through GC (+1).
 # Isolation::is_scoped shares the mount-view predicate with harness and CLI (+1).
@@ -738,7 +739,7 @@ upward-dependencies = [
 # AccountCap, its parser error/accessors, and budget validation reach config and launch (+6).
 # Profile::effective_effort preserves listing defaults without baking launch values (+1).
 # Per-agent lifetime resolution and its static provenance replace the kind-only lookup (+4).
-surface-budget = 223
+surface-budget = 224
 
 [[verdict]]
 kind = "item"
@@ -802,8 +803,13 @@ reason = "Single legacy-aware guard reader for the scheduler and loop presentati
 
 [[verdict]]
 kind = "item"
-key = "config::loop_::TaskEntry::repeats_while_true"
-reason = "Workflow and resident tasks share the sustained-condition retry cadence."
+key = "config::loop_::TaskEntry::dedupes_checkout"
+reason = "Residents and condition workflows share checkout dedupe and sustained-condition retries."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::TaskEntry::is_condition_workflow"
+reason = "Condition workflows share one ledger-routing predicate across schedule and CLI readers."
 
 [[verdict]]
 kind = "item"
@@ -1304,7 +1310,33 @@ path = "crates/rimz/src/harness"
 # AgentShellResolution::missing_saved_path explains the per-launch fallback in doctor (+1).
 # AgentShellPersistence carries the birth's shell-lookup save policy (+1).
 # StepKind/kind, ChildError, execute_step and finish_script share command-step policy (+5).
-surface-budget = 1011
+# WorkflowLaunchRecord, WorkflowLedger, load_workflows, Launch, and launched share typed launch memory with loop inspection (+5).
+surface-budget = 1016
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::WorkflowLaunchRecord"
+reason = "Workflow launch ids, scope kinds and times feed the planner and CLI without agent-shaped records."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::WorkflowLedger"
+reason = "Read-only task/checkout launch memory is shared with loop inspection."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::load_workflows"
+reason = "Planner, runner and CLI share strict versioned workflow launch reads."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::Launch"
+reason = "The launched query carries the selected resident or workflow record to its consumer."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::launched"
+reason = "One kind-aware checkout query shares resident and project-covering workflow admission."
 
 [[verdict]]
 kind = "item"
@@ -9164,7 +9196,7 @@ reason = "The workflow CLI invokes harness-owned admission and locked run transi
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::rename_task"
+key = "harness::workflow::reassign_task"
 reason = "The loop catalog delegates live workflow provenance rewrites to the locked transition owner."
 
 [[verdict]]
