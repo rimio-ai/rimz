@@ -17,8 +17,60 @@ fn live_session_refresh_spawns_no_helpers() {
         std::sync::Arc::make_mut(&mut snapshot.agents).push(root_agent("codex", session, None));
     }
     let before = crate::proc::testkit::spawn_count();
-    refresh_live_sessions(&snapshot, &runtime);
+    refresh_live_sessions(&snapshot, &runtime, &mut HashMap::new());
     assert_eq!(crate::proc::testkit::spawn_count() - before, 0);
+}
+
+#[test]
+fn held_session_refreshes_use_independent_checks_and_resume_on_thaw() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let mut snapshot = snapshot_with_panels(workspace, Vec::new());
+    let held = crate::agents::state::Hibernation {
+        frozen_at: snapshot.now,
+        reclaimed_bytes: 0,
+        step: 0,
+        wake_error: None,
+    };
+    let mut a = root_agent("codex", "a", None);
+    a.hibernation = Some(held.clone());
+    let b = root_agent("codex", "b", None);
+    let mut ended = root_agent("codex", "ended", None);
+    ended.ended_at = Some(snapshot.now);
+    snapshot.agents = vec![a, b, ended].into();
+    let now = Instant::now();
+    let mut checks = HashMap::new();
+    let mut observed = Vec::new();
+    for seconds in [0, 30, 60, 61] {
+        if seconds == 30 {
+            std::sync::Arc::make_mut(&mut snapshot.agents)[1].hibernation = Some(held.clone());
+        } else if seconds == 61 {
+            std::sync::Arc::make_mut(&mut snapshot.agents)[1].hibernation = None;
+        }
+        let mut refreshed = Vec::new();
+        for_each_due_session(
+            &snapshot,
+            &mut checks,
+            &|| now + Duration::from_secs(seconds),
+            |session| refreshed.push(session.session_id),
+        );
+        observed.push(refreshed);
+    }
+    assert_eq!(
+        observed,
+        [
+            vec!["a", "b", "ended"],
+            vec!["b", "ended"],
+            vec!["a", "ended"],
+            vec!["b", "ended"],
+        ]
+    );
+    std::sync::Arc::make_mut(&mut snapshot.agents).remove(0);
+    for_each_due_session(&snapshot, &mut checks, &|| now, |_| {});
+    assert!(
+        checks.is_empty(),
+        "departed and thawed keys lose their stamps"
+    );
 }
 
 #[test]

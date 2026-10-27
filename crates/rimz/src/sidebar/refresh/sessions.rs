@@ -1,8 +1,11 @@
 //! Producer-owned live-session context refresh.
 //!
-//! Heavy-lane refresh asks each live root session's adapter for cheap, stat-gated transcript-tail refreshes. Rich-context helpers run only at hook boundaries or on explicit refresh.
+//! Heavy-lane refresh asks selected root sessions' adapters for stat-gated
+//! transcript-tail refreshes, deferring hibernated sessions between checks.
+//! Rich-context helpers run only at hook boundaries or on explicit refresh.
 
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 
@@ -11,7 +14,7 @@ use crate::agents::{
     AgentState, AgentTurnError, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx,
     RefreshSpawn, RefreshTrigger,
 };
-use crate::ids::{LoginKey, LoginName, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, LoginKey, LoginName, PaneId};
 
 use super::SidebarSnapshot;
 
@@ -20,10 +23,14 @@ const CODEX_TURN_DEATH_RETRY_WINDOW: Duration = Duration::from_secs(10 * 60);
 
 type SessionRefreshResult<T> = std::result::Result<T, crate::disk::atomic::AtomicErr>;
 
-/// Refresh every live root session's adapter-owned context sidecar from the
-/// producer using inline transcript reads with their adapter stat gate.
-pub(super) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
-    for refresh in live_session_refreshes(snapshot) {
+/// Refresh each due root session's adapter-owned context sidecar using inline
+/// transcript reads with their adapter stat gate and the caller's hold clock.
+pub(super) fn refresh_live_sessions(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    checks: &mut HashMap<(AgentKind, AgentSessionId), Instant>,
+) {
+    for_each_due_session(snapshot, checks, &Instant::now, |refresh| {
         if let Err(err) = refresh_session_transcript_context_core(
             Some(snapshot),
             runtime,
@@ -36,6 +43,40 @@ pub(super) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &Runtim
         ) {
             warn_session_transcript_merge(&refresh.kind, &refresh.session_id, &err);
         }
+    });
+}
+
+fn for_each_due_session(
+    snapshot: &SidebarSnapshot,
+    checks: &mut HashMap<(AgentKind, AgentSessionId), Instant>,
+    clock: &dyn Fn() -> Instant,
+    mut refresh: impl FnMut(LiveSessionRefresh),
+) {
+    let sessions = live_session_refreshes(snapshot);
+    let active: HashSet<_> = sessions
+        .iter()
+        .map(|session| (session.kind.as_str(), session.session_id.as_str()))
+        .collect();
+    checks.retain(|(kind, id), _| active.contains(&(kind.as_str(), id.as_str())));
+    let held: HashSet<_> = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_none() && agent.hibernation.is_some())
+        .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str()))
+        .collect();
+    for session in sessions {
+        if !super::super::cache::hibernated_check_due(
+            checks,
+            (
+                AgentKind::new_unchecked(session.kind.clone()),
+                session.session_id.clone().into(),
+            ),
+            held.contains(&(session.kind.as_str(), session.session_id.as_str())),
+            clock(),
+        ) {
+            continue;
+        }
+        refresh(session);
     }
 }
 

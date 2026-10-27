@@ -104,6 +104,7 @@ pub struct ProducerRefreshState {
     auto_gc: crate::harness::auto_gc::AutoGcMemo,
     auto_continue_checks: HashMap<(AgentKind, AgentSessionId), Instant>,
     budget_checks: HashMap<(AgentKind, AgentSessionId), Instant>,
+    session_checks: HashMap<(AgentKind, AgentSessionId), Instant>,
     /// Spawns per step of the last `refresh_heavy_lanes` pass, handed to the
     /// tick meter once.
     pass_spawns: BTreeMap<String, u64>,
@@ -285,7 +286,9 @@ pub(super) fn refresh_heavy_lanes(
         panels
     });
 
-    steps.step("sessions", || refresh_live_sessions(base, runtime));
+    steps.step("sessions", || {
+        refresh_live_sessions(base, runtime, &mut state.session_checks)
+    });
     steps.step("account_usage", || {
         refresh_account_usage(&panels, runtime, &logins)
     });
