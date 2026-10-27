@@ -3,5 +3,12 @@ channel = "1.97.1"
 components = ["rustfmt", "clippy", "llvm-tools-preview", "rust-analyzer"]
 # This exact pin, the vendored presence wasm, and its provenance sidecar move
 # together; a pin bump runs `cargo xtask plugin-refresh` in the same commit.
-# The plugin compiles to WASI, and rustup auto-installs every listed target.
-targets = ["wasm32-wasip1", "aarch64-apple-darwin", "x86_64-apple-darwin"]
+# The plugin needs WASI, release cross-builds need Darwin, and CI type-checks
+# musl and aarch64 Linux. rustup auto-installs every listed target.
+targets = [
+    "wasm32-wasip1",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+]
