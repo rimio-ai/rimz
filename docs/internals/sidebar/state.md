@@ -6,7 +6,7 @@
 
 A room holds one store and one sidebar pane per tab. One room host per mux session paints every one of those panes, several times a second, so each session's data plane has exactly one owner ([room admission](../multiplexers.md#room-admission)).
 
-Half the inputs are cheap. The store rollup is `cache/snapshots/latest.json` when its recorded log offset equals the live log's length and its `SNAPSHOT_VERSION` matches (`crates/rimz/src/store/snapshot/assemble.rs::read_fresh_latest`, [store.md → truth and cache](../store.md#truth-and-cache)), and otherwise an incremental fold of the log through the host's warm rollup cursor (`crates/rimz/src/sidebar/consumer.rs::rollup_snapshot`). The runtime sidecars and lane caches are small JSON files behind stat gates.
+Half the inputs are cheap. The store rollup is `snapshots/latest.json` when its recorded log offset equals the live log's length and its `SNAPSHOT_VERSION` matches (`crates/rimz/src/store/snapshot/assemble.rs::read_fresh_latest`, [store.md → truth and cache](../store.md#truth-and-cache)), and otherwise an incremental fold of the log through the host's warm rollup cursor (`crates/rimz/src/sidebar/consumer.rs::rollup_snapshot`). The runtime sidecars and lane caches are small JSON files behind stat gates.
 
 Every producer and consumer enrichment fold also probes the wrapper-held hook-drainer outage leases through `crates/rimz/src/harness/drainer_outage.rs::read`. The snapshot's optional `hook_drainer_outage` carries the earliest start as a `jiff::Timestamp` in `since`, converted once from the runtime record's `since_ms`, and the agents in start order; free, unreadable, malformed, and unknown-version leases contribute nothing. Changes to that set are content, never a clock-only update. Diagnostic logs are not an input.
 
@@ -520,7 +520,7 @@ Unless marked, these live in the workspace runtime directory.
 | `records/live-roster.json` (state directory) | The producer's pane-backed live root-agent set, read by rebirth recovery and written best-effort after each produced final fold ([sidebar.md → Resume-on-rebirth](./sidebar.md#resume-on-rebirth), [store.md → session death](../store.md#session-death)). |
 | `audit/diag.log.jsonl` (state directory) | Typed anomaly records ([diagnostics.md](../diagnostics.md)). |
 
-`cache/snapshots/latest.json` and `cache/snapshots/rollup.json` are not sidebar files: the store's write tail publishes them into the state directory ([store.md → the read path](../store.md#the-read-path)).
+`snapshots/latest.json` and `snapshots/rollup.json` are not sidebar files: the store's write tail publishes them into the runtime room's `snapshots` class ([store.md → the read path](../store.md#the-read-path)).
 
 The body lens codec is `BodyLens` in [`body_filter.rs`](../../../crates/rimz/src/sidebar/body_filter.rs), for example `{"filter":{"kind":"status","status":"waiting"},"query":"auth"}`. Both fields are optional, and writing an empty lens removes the file. An absent or malformed file, including the older single-filter shape, loads as an empty lens. A typing draft belongs to its client view and is never written here.
 

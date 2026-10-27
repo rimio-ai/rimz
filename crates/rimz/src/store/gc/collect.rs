@@ -62,7 +62,7 @@ pub(super) fn collect_runtime_classes(
         let dir = class.path_under(workspace_root);
         match class {
             Class::Live => collect_live(workspace_root, Some(older_than), sweep, &mut removed)?,
-            Class::Lanes => {}
+            Class::Lanes | Class::Snapshots => {}
             Class::Sock => collect_sock(&dir, sweep, &mut removed)?,
             _ => unreachable!("only runtime classes are selected above"),
         }

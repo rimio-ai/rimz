@@ -18,9 +18,22 @@ use crate::agents::{
     TurnErrorClass, TurnSettle, TurnSettleOutcome,
 };
 use crate::agents::{AgentState, AgentStatus, ProviderCapacity};
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::store::event::EventEnvelope;
+
+pub(super) fn checkpoint_paths(
+    workspace_id: WorkspaceId,
+    home: &Path,
+) -> crate::store::Result<StatePaths> {
+    let mut state = StatePaths::under(workspace_id, home)?;
+    let runtime = RuntimePaths::for_state_under(&state, home);
+    state.bind_runtime_checkpoint(&runtime);
+    state.ensure_dirs()?;
+    runtime.ensure_dirs()?;
+    Ok(state)
+}
 
 /// The suite's fixed "now": an arbitrary instant every fixture offsets from
 /// and every scenario projects at, so the tests are deterministic on any

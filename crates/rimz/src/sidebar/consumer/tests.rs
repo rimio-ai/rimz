@@ -335,9 +335,10 @@ fn read_published_snapshot_folds_caches_without_forking() {
     // is excluded; a sibling pane becomes a row.
     let mut rollup = SidebarSnapshot::build(workspace.clone(), Vec::new(), Timestamp::now());
     rollup = rollup.with_project_root(Some(worktree.clone()));
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
-    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    state.bind_runtime_checkpoint(&runtime);
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &rollup).unwrap();
     let panes = vec![
         pane("terminal_0", "zsh", &wt),
         pane("terminal_own", "rimz-sidebar", &wt),
@@ -459,11 +460,12 @@ fn read_published_snapshot_binds_safe_local_session_intersection() {
     let frame = assemble_frame(panes.clone(), unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
 
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
     let rollup = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
         .with_project_root(Some(worktree.clone()));
-    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &rollup).unwrap();
 
     let published_panes = vec![
         panes[0].clone(),
@@ -531,8 +533,9 @@ fn published_wiring_admits_a_hook_only_idle_pane_without_provider_config() {
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
     let worktree = dir.path().join("wt");
     std::fs::create_dir_all(&worktree).unwrap();
     let frame = assemble_frame(
@@ -543,7 +546,7 @@ fn published_wiring_admits_a_hook_only_idle_pane_without_provider_config() {
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
     let rollup = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
         .with_project_root(Some(worktree));
-    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &rollup).unwrap();
     atomic::write_temp_then_rename_cache(
         &runtime.agent_projection_path(),
         &crate::sidebar::agent_projection::AgentProjectionPublication {
@@ -590,8 +593,9 @@ fn read_published_snapshot_folds_subagent_context() {
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
 
     let worktree = dir.path().join("wt");
     std::fs::create_dir_all(&worktree).unwrap();
@@ -614,7 +618,7 @@ fn read_published_snapshot_folds_subagent_context() {
         generation: 0,
         offset: 0,
     });
-    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &rollup).unwrap();
 
     let base = assemble_frame(vec![live_pane], unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &base).unwrap();
@@ -686,8 +690,9 @@ fn read_published_snapshot_carries_a_launched_child_parked_on_a_limit() {
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
 
     let worktree = dir.path().join("wt");
     std::fs::create_dir_all(&worktree).unwrap();
@@ -729,7 +734,7 @@ fn read_published_snapshot_carries_a_launched_child_parked_on_a_limit() {
         generation: 0,
         offset: 0,
     });
-    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &rollup).unwrap();
     let frame = assemble_frame(vec![parent_pane, child_pane], unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
 
@@ -776,10 +781,11 @@ fn consumer_own_view_counts_siblings_in_its_own_tab() {
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &base).unwrap();
     // The rollup the consumer folds the panes over: an empty room, published
     // to `latest.json` where the consumer reads it fresh.
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
     let rollup = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
-    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &rollup).unwrap();
 
     let orphan_own = PaneId::from_parts(MuxName::Zellij, "orphan_sb");
     let snapshot = read_published_snapshot(
@@ -806,15 +812,16 @@ fn read_published_snapshot_is_frameless_until_the_producer_publishes() {
     // No published pane set yet (the producer hasn't run), so the consumer
     // read folds the store rollup without pane-admitted cards rather than
     // reporting a failed snapshot.
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
     let mut rollup = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     rollup.display_name = "cold-room".to_owned();
     rollup.reflects_log = Some(crate::store::event_log::LogExtent {
         generation: 0,
         offset: 0,
     });
-    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &rollup).unwrap();
 
     let snapshot = read_published_snapshot(
         &mut RollupCursor::new(),
@@ -836,8 +843,9 @@ fn read_published_snapshot_reports_why_the_store_was_unreadable() {
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let state = StatePaths::under(workspace, dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace, dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
     // A directory where the event log should be: the row scan's read fails,
     // and with no `latest.json` the rollup read has no fallback.
     std::fs::create_dir_all(&state.events_log).unwrap();
@@ -931,8 +939,9 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
 
     // A published (and never re-published) pane cache.
     let panes = assemble_frame(Vec::new(), unix_now_ms(), "rimz-test");
@@ -947,7 +956,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
     let mut alpha = SidebarSnapshot::build(workspace.clone(), Vec::new(), Timestamp::now());
     alpha.display_name = "alpha".to_owned();
     alpha.reflects_log = stamp;
-    atomic::write_temp_then_rename(&state.latest_snapshot, &alpha).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &alpha).unwrap();
     let first = read_published_snapshot(
         &mut RollupCursor::new(),
         &state,
@@ -963,7 +972,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
     let mut bravo = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     bravo.display_name = "bravo-the-second-rollup".to_owned();
     bravo.reflects_log = stamp;
-    atomic::write_temp_then_rename(&state.latest_snapshot, &bravo).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &bravo).unwrap();
     let second = read_published_snapshot(
         &mut RollupCursor::new(),
         &state,
@@ -983,9 +992,10 @@ fn published_reader_sees_republished_rollup_and_incremental_event_with_one_pane_
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
 
     let pane_frame = assemble_frame(Vec::new(), 12_345, "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &pane_frame).unwrap();
@@ -996,7 +1006,7 @@ fn published_reader_sees_republished_rollup_and_incremental_event_with_one_pane_
     let mut first_publish = SidebarSnapshot::build(workspace.clone(), Vec::new(), Timestamp::now());
     first_publish.display_name = "first".to_owned();
     first_publish.reflects_log = Some(empty_extent);
-    atomic::write_temp_then_rename(&state.latest_snapshot, &first_publish).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &first_publish).unwrap();
 
     let mut reader = PublishedSnapshotReader::new(runtime, "rimz-test", None);
     let first = reader.read(&state).expect("first publish");
@@ -1007,7 +1017,7 @@ fn published_reader_sees_republished_rollup_and_incremental_event_with_one_pane_
         SidebarSnapshot::build(workspace.clone(), Vec::new(), Timestamp::now());
     second_publish.display_name = "second-publish".to_owned();
     second_publish.reflects_log = Some(empty_extent);
-    atomic::write_temp_then_rename(&state.latest_snapshot, &second_publish).unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &second_publish).unwrap();
     let second = reader.read(&state).expect("republished latest snapshot");
     assert_eq!(second.display_name, "second-publish");
     assert_eq!(second.panes_produced_at_ms, Some(12_345));

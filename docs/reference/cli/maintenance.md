@@ -243,7 +243,7 @@ rimz reset [--yes] [--no-start] [--hard] [--account <KIND@NAME>]... [PATH]
 `reset` tears down the room for `PATH` (default `.`) and rebuilds it empty. Use it when a room is stuck, or came back wrong after a reboot. In order, it:
 
 1. deletes the room's multiplexer session and purges the multiplexer's resurrection cache for it;
-2. signals the room's orphaned processes and clears disposable runtime classes, keeping lock inodes;
+2. signals the room's orphaned processes and clears the runtime `sock/`, `live/`, and `lanes/` classes, keeping lock inodes;
 3. cancels the room's active supervised runs, which report `canceled` to anyone waiting on them, and drops every pending [`stop --when-idle`](./agents.md#stop) request;
 4. archives the active event log, clears rebuildable caches and its recorded provider accounts;
 5. starts the room again and attaches, with no prior agents recovered.

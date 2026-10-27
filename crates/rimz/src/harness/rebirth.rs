@@ -623,7 +623,7 @@ fn cancel_unserved_workflow_runs(store: &Store, paths: &StatePaths) {
     reason = "the boundary inspection's inputs, with the owner-exit bound a test shortens"
 )]
 fn inspect_at(
-    paths: StatePaths,
+    mut paths: StatePaths,
     runtime: RuntimePaths,
     current_boot: Option<String>,
     cache_sources: Vec<PathBuf>,
@@ -635,6 +635,7 @@ fn inspect_at(
     disabled: bool,
     owner_exit_bound: Duration,
 ) -> Result<RebirthPlan> {
+    paths.bind_runtime_checkpoint(&runtime);
     let owners_exited_by = Instant::now() + owner_exit_bound;
     let previous_boot = read_boot_marker(&paths.boot_marker);
     let reboot = boot_changed(previous_boot.as_deref(), current_boot.as_deref());

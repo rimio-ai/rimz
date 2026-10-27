@@ -1845,9 +1845,10 @@ impl FetchFixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = workspace();
-        let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let mut state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
         let runtime =
             RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+        state.bind_runtime_checkpoint(&runtime);
         state.ensure_dirs().unwrap();
         runtime.ensure_dirs().unwrap();
         Self {
@@ -2027,7 +2028,7 @@ fn fast_fold_replaces_the_retained_seed_and_failure_preserves_it() {
         offset: 0,
     });
     std::fs::write(
-        &fixture.state.latest_snapshot,
+        fixture.state.latest_snapshot().unwrap(),
         serde_json::to_vec(&rollup).unwrap(),
     )
     .unwrap();
@@ -2057,7 +2058,7 @@ fn fast_fold_replaces_the_retained_seed_and_failure_preserves_it() {
 
     rollup.display_name = "second-and-longer".to_owned();
     std::fs::write(
-        &fixture.state.latest_snapshot,
+        fixture.state.latest_snapshot().unwrap(),
         serde_json::to_vec(&rollup).unwrap(),
     )
     .unwrap();
@@ -2114,7 +2115,7 @@ fn fast_fold_posts_frameless_rollup_before_first_publish() {
         offset: 0,
     });
     std::fs::write(
-        &fixture.state.latest_snapshot,
+        fixture.state.latest_snapshot().unwrap(),
         serde_json::to_vec(&rollup).unwrap(),
     )
     .unwrap();

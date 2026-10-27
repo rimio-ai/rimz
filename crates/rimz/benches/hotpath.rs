@@ -278,7 +278,7 @@ mod latency {
                     agent.agent_id.as_str() == id && !agent.is_provider_subagent()
                 }));
             }
-            let rollup = bytes(&fixture.store.paths().rollup_cache);
+            let rollup = bytes(&fixture.store.paths().rollup_cache().unwrap());
             assert!(
                 rollup >= 1024 * 1024,
                 "retained MB-scale rollup required: {rollup}"

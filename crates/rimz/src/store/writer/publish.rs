@@ -30,18 +30,12 @@ const PUBLISH_INTERVAL: Duration = Duration::from_secs(1);
 /// whatever the stamp's age.
 const PUBLISH_BYTE_BUDGET: u64 = 64 * 1024;
 
-/// Stamp recording the last published checkpoint: the `LogExtent` the publish
-/// reflected as content, the publish instant as mtime.
-fn publish_stamp(paths: &StatePaths) -> std::path::PathBuf {
-    paths.cache_dir.join("publish.stamp")
-}
-
 fn write_publish_stamp(paths: &StatePaths, extent: Option<event_log::LogExtent>) {
-    let Some(extent) = extent else {
+    let Some((path, extent)) = paths.checkpoint_publish_stamp().zip(extent) else {
         return;
     };
     if let Ok(bytes) = serde_json::to_vec(&extent) {
-        let _ = std::fs::write(publish_stamp(paths), bytes);
+        let _ = std::fs::write(path, bytes);
     }
 }
 
@@ -51,7 +45,10 @@ fn publish_due(paths: &StatePaths) -> bool {
     use std::io::Read;
 
     // Missing or unreadable stamp: never published (or retracted) — due.
-    let Ok(mut stamp) = std::fs::File::open(publish_stamp(paths)) else {
+    let Some(path) = paths.checkpoint_publish_stamp() else {
+        return true;
+    };
+    let Ok(mut stamp) = std::fs::File::open(path) else {
         return true;
     };
     let Some(age) = stamp
@@ -95,7 +92,9 @@ fn should_publish(age: Duration, stamp_offset: u64, log_len: u64) -> bool {
 /// rotation, identity rewrite, repair — so the next mutation's gate reads
 /// "never published" instead of comparing offsets across two different files.
 pub(super) fn retract_publish_stamp(paths: &StatePaths) {
-    let _ = std::fs::remove_file(publish_stamp(paths));
+    if let Some(path) = paths.checkpoint_publish_stamp() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 impl Store {

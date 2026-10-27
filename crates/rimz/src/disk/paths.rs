@@ -141,6 +141,7 @@ pub(crate) enum Class {
     Sock,
     Live,
     Lanes,
+    Snapshots,
     Locks,
 }
 
@@ -157,7 +158,7 @@ impl Class {
         Self::Out,
         Self::Locks,
     ];
-    pub(crate) const RUNTIME: [Self; 3] = [Self::Sock, Self::Live, Self::Lanes];
+    pub(crate) const RUNTIME: [Self; 4] = [Self::Sock, Self::Live, Self::Lanes, Self::Snapshots];
 
     pub(crate) const fn dir_name(self) -> &'static str {
         match self {
@@ -173,6 +174,7 @@ impl Class {
             Self::Sock => "sock",
             Self::Live => "live",
             Self::Lanes => "lanes",
+            Self::Snapshots => "snapshots",
             Self::Locks => "locks",
         }
     }
@@ -194,6 +196,7 @@ pub struct HistoryPaths {
 pub struct StatePaths {
     home: PathBuf,
     empty_root: PathBuf,
+    checkpoint_dir: Option<PathBuf>,
     pub workspace_id: WorkspaceId,
     pub dir_name: WorkspaceDirName,
     pub root: PathBuf,
@@ -212,9 +215,6 @@ pub struct StatePaths {
     pub hook_drain_cursor: PathBuf,
     pub events_archive_dir: PathBuf,
     pub agents_carryover: PathBuf,
-    pub snapshots_dir: PathBuf,
-    pub latest_snapshot: PathBuf,
-    pub rollup_cache: PathBuf,
     pub(crate) log_generation: PathBuf,
     pub messages_dir: PathBuf,
     pub message_history_dir: PathBuf,
@@ -316,6 +316,35 @@ pub fn workflow_runs_under(home: &Path) -> Result<Vec<(StatePaths, WorkflowPaths
 }
 
 impl StatePaths {
+    /// This room's bound runtime checkpoint directory, when one is available.
+    pub fn snapshots_dir(&self) -> Option<PathBuf> {
+        self.checkpoint_dir.clone()
+    }
+
+    /// The published view in the bound runtime domain.
+    pub fn latest_snapshot(&self) -> Option<PathBuf> {
+        self.checkpoint_dir
+            .as_ref()
+            .map(|dir| dir.join("latest.json"))
+    }
+
+    /// The fold base in the bound runtime domain.
+    pub fn rollup_cache(&self) -> Option<PathBuf> {
+        self.checkpoint_dir
+            .as_ref()
+            .map(|dir| dir.join("rollup.json"))
+    }
+
+    pub(crate) fn checkpoint_publish_stamp(&self) -> Option<PathBuf> {
+        self.checkpoint_dir
+            .as_ref()
+            .map(|dir| dir.join("publish.stamp"))
+    }
+
+    pub(crate) fn bind_runtime_checkpoint(&mut self, runtime: &RuntimePaths) {
+        self.checkpoint_dir = Some(Class::Snapshots.path_under(&runtime.root));
+    }
+
     pub(crate) fn home(&self) -> &Path {
         &self.home
     }
@@ -381,7 +410,10 @@ impl StatePaths {
     /// Paths for the workspace born at `project_root`: its existing dir, else
     /// a freshly minted `<basename>-<hex>` name. Creates nothing.
     pub fn for_project_root(project_root: &Path) -> Result<Self> {
-        Self::for_project_root_under(project_root, &rimz_home())
+        let mut paths = Self::for_project_root_under(project_root, &rimz_home())?;
+        let runtime = RuntimePaths::for_state_under(&paths, &runtime_home());
+        paths.bind_runtime_checkpoint(&runtime);
+        Ok(paths)
     }
 
     /// [`Self::for_project_root`] under an explicit home.
@@ -398,7 +430,10 @@ impl StatePaths {
     /// [`Self::for_project_root`] names the room's own dir, and a write under
     /// each leaves two dirs for one workspace.
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
-        Self::under(workspace_id, &rimz_home())
+        let mut paths = Self::under(workspace_id, &rimz_home())?;
+        let runtime = RuntimePaths::for_state_under(&paths, &runtime_home());
+        paths.bind_runtime_checkpoint(&runtime);
+        Ok(paths)
     }
 
     /// [`Self::for_workspace`] under an explicit home, for tests that should not
@@ -416,7 +451,6 @@ impl StatePaths {
         let audit_dir = Class::Audit.path_under(&root);
         let history = Self::history_paths(&root);
         let owned_dir = Class::Owned.path_under(&root);
-        let snapshots_dir = cache_dir.join("snapshots");
         let messages_dir = records_dir.join("messages");
         let transcript_dir = audit_dir.join("transcript");
         let runs_dir = owned_dir.join("runs");
@@ -424,6 +458,7 @@ impl StatePaths {
         Self {
             home: home.to_owned(),
             empty_root: empty_dir_root_under(home),
+            checkpoint_dir: None,
             workspace_id,
             dir_name,
             agents_dir: owned_dir.join("agents"),
@@ -439,10 +474,7 @@ impl StatePaths {
             hook_drain_cursor: records_dir.join("hook-drain.json"),
             events_archive_dir: history.events_archive_dir,
             agents_carryover: records_dir.join("agents-carryover.json"),
-            latest_snapshot: history.latest_snapshot,
-            rollup_cache: snapshots_dir.join("rollup.json"),
             log_generation: records_dir.join("log-generation.json"),
-            snapshots_dir,
             messages_dir,
             message_history_dir: audit_dir.join("messages"),
             fleet_budget_record: records_dir.join("budget.fleet.json"),
@@ -510,7 +542,6 @@ impl StatePaths {
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
-        mkdir_p(&self.snapshots_dir)?;
         mkdir_p(&self.runs_dir)?;
         mkdir_p(&self.cache_dir)?;
         Ok(())
@@ -1370,6 +1401,7 @@ impl RuntimePaths {
     /// Prepare runtime publications without creating a room's state tree.
     pub fn ensure_runtime_dirs(&self) -> Result<()> {
         self.ensure_workspace_root()?;
+        mkdir_p(&Class::Snapshots.path_under(&self.root))?;
         ensure_private_runtime_dir(&self.shared_root)?;
         mkdir_p(&self.persistent_shared_root)?;
         mkdir_p(&self.sock_dir)?;

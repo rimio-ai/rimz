@@ -2,6 +2,61 @@ use super::*;
 use crate::ids::WorkspaceId;
 
 #[test]
+fn explicit_home_checkpoints_bind_only_to_the_supplied_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let home = dir.path().join("state");
+    let id = WorkspaceId::from_project_root(&project);
+    let mut paths = StatePaths::under(id.clone(), &home).unwrap();
+    let named = StatePaths::under_named(id.clone(), paths.dir_name.clone(), &home);
+    let rooted = StatePaths::for_project_root_under(&project, &home).unwrap();
+    let unbound = [
+        paths.snapshots_dir().is_none(),
+        named.snapshots_dir().is_none(),
+        rooted.snapshots_dir().is_none(),
+    ];
+    let runtime = RuntimePaths::under(id, &dir.path().join("runtime")).unwrap();
+    paths.bind_runtime_checkpoint(&runtime);
+    let expected = runtime.root.join("snapshots");
+    assert_eq!(
+        (
+            unbound,
+            paths.snapshots_dir(),
+            paths.latest_snapshot(),
+            paths.rollup_cache(),
+            Class::RUNTIME.contains(&Class::Snapshots)
+        ),
+        (
+            [true; 3],
+            Some(expected.clone()),
+            Some(expected.join("latest.json")),
+            Some(expected.join("rollup.json")),
+            true
+        )
+    );
+    assert!(!runtime.root.exists());
+}
+
+#[test]
+fn runtime_snapshots_survive_disposable_reset() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let snapshots = Class::Snapshots.path_under(&runtime.root);
+    assert!(!snapshots.exists());
+    runtime.ensure_runtime_dirs().unwrap();
+    assert!(
+        snapshots.is_dir(),
+        "runtime setup creates the checkpoint class"
+    );
+    runtime.remove_disposable_dirs().unwrap();
+    assert!(
+        snapshots.is_dir(),
+        "disposable reset keeps the checkpoint class"
+    );
+}
+
+#[test]
 fn park_files_stay_in_the_temp_unit_and_distinguish_launches_and_pids() {
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
@@ -41,9 +96,7 @@ impl StatePaths {
             self.hook_drainer_log(),
             self.events_archive_dir.clone(),
             self.agents_carryover.clone(),
-            self.snapshots_dir.clone(),
-            self.latest_snapshot.clone(),
-            self.rollup_cache.clone(),
+            self.log_generation.clone(),
             self.messages_dir.clone(),
             self.message_history_dir.clone(),
             self.fleet_budget_record.clone(),
@@ -74,6 +127,7 @@ impl RuntimePaths {
             self.sock_dir.clone(),
             self.live_dir.clone(),
             self.lanes_dir.clone(),
+            Class::Snapshots.path_under(&self.root),
             self.locks_dir.clone(),
             self.lock_path("workspace.lock"),
             self.lock_path("publish.lock"),
@@ -174,9 +228,7 @@ fn path_io_errors_name_the_path_that_failed() {
     );
     let id = WorkspaceId::from_project_root(dir.path());
     let state = StatePaths::under_named(id.clone(), WorkspaceDirName::fallback(&id), &blocker);
-    assert!(
-        matches!(state.ensure_dirs(), Err(PathErr::Io { path, .. }) if path == state.snapshots_dir)
-    );
+    assert!(matches!(state.ensure_dirs(), Err(PathErr::Io { path, .. }) if path == state.runs_dir));
 }
 
 #[test]
@@ -768,9 +820,20 @@ fn state_paths_resolve_under_the_home() {
             .join(WorkspaceDirName::fallback(&id).as_str())
     );
     assert_eq!(paths.events_log.file_name().unwrap(), "events.log.jsonl");
-    assert_eq!(paths.latest_snapshot.file_name().unwrap(), "latest.json");
-    assert_eq!(paths.rollup_cache.file_name().unwrap(), "rollup.json");
-    assert!(paths.rollup_cache.starts_with(&paths.snapshots_dir));
+    assert_eq!(
+        paths.latest_snapshot().unwrap().file_name().unwrap(),
+        "latest.json"
+    );
+    assert_eq!(
+        paths.rollup_cache().unwrap().file_name().unwrap(),
+        "rollup.json"
+    );
+    assert!(
+        paths
+            .rollup_cache()
+            .unwrap()
+            .starts_with(paths.snapshots_dir().unwrap())
+    );
     assert_eq!(paths.runs_dir.file_name().unwrap(), "runs");
     assert_eq!(paths.room_shared_dir, paths.root.join("shared"));
     assert_eq!(paths.out_dir, paths.root.join("out"));

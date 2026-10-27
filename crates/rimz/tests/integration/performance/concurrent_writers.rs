@@ -118,7 +118,7 @@ fn assert_burst_landed(h: &Harness, bytes: &BurstBytes, label: &str) {
         "{label}: the reader folds to the log's end"
     );
     let checkpoint: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&h.store.paths().latest_snapshot)
+        &std::fs::read(h.store.paths().latest_snapshot().unwrap())
             .unwrap_or_else(|err| panic!("{label}: checkpoint exists: {err}")),
     )
     .expect("checkpoint parses");

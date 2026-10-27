@@ -98,7 +98,7 @@ This section gives each lane's cost and the bound that holds it down. Reproducib
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Snapshot rollup | One stat while `cache/snapshots/latest.json` is unchanged and parse-cached; one whole-file parse after it is replaced; O(delta bytes) when writes outran it | The checkpoint's stamped `LogExtent`, whose offset a reader compares with the live log's length ([store.md → Truth and cache](./store.md#truth-and-cache)). A `RollupCursor` holds the parsed base: one per thread for store reads, and one owned by the sidebar fetch worker. The durable rotation carryover beneath it is parsed once per file identity per thread, and every fold shares its fold-ready rows without copying |
+| Snapshot rollup | One stat while `snapshots/latest.json` is unchanged and parse-cached; one whole-file parse after it is replaced; O(delta bytes) when writes outran it | The checkpoint's stamped `LogExtent`, whose offset a reader compares with the live log's length ([store.md → Truth and cache](./store.md#truth-and-cache)). A `RollupCursor` holds the parsed base: one per thread for store reads, and one owned by the sidebar fetch worker. The durable rotation carryover beneath it is parsed once per file identity per thread, and every fold shares its fold-ready rows without copying |
 | Event-log fold | Warm cursor: one stat of the log and one of the carryover, plus the appended frames; the projection clones only the rows it keeps. Unchanged log: shared handles only | Guard tests `delta_fold_is_o_new_bytes` and `warm_fold_parses_unchanged_carryover_zero_times` |
 | Workspace fold | One enrichment per cycle; every pane projects from it by reference ([The render thread](#the-render-thread)), with no seed serialization | Host views retain the seed fold |
 | Fold observations | One focus-anchor read and one body-filter read per real cycle, shared by every attachment | The painting view applies selection, confirmation, and read intent. A live nonce comparison guards retirement ([state.md](./sidebar/state.md#focus-intent)) |
@@ -203,7 +203,7 @@ The fold spine splits into renderer-independent [`enrich_workspace`](../../crate
 
 ### Truth arrives by event, the frame by coalescing
 
-The host delivers produced folds directly. The rollup is read event-fresh from `cache/snapshots/latest.json` on every fold, so a status change repaints within one wakeup while the host retains and shares its pane inputs.
+The host delivers produced folds directly. The rollup is read event-fresh from `snapshots/latest.json` on every fold, so a status change repaints within one wakeup while the host retains and shares its pane inputs.
 
 Every writer that knows about a change pushes. Store and sidecar writers post a `StoreDelta`. Both backends' presence streams feed one projector that emits typed pane events. The host's transcript watcher refreshes context mid-turn for every adapter that declares transcript-tail context ([state.md → Push channels](./sidebar/state.md#push-channels)).
 
@@ -211,7 +211,7 @@ Every writer that knows about a change pushes. Store and sidecar writers post a 
 
 The rollup persists a raw fold base stamped with its log extent, and catch-up seeks to the stamped offset and folds only new frames ([`fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs), [store.md → The read path](./store.md#the-read-path)). Runtime projection, resume outcomes, and smart-compact dedupe ride the same fold instead of rescanning `log/events.log.jsonl`.
 
-A per-thread parse cache returns `Arc<T>` handles, so an unchanged file costs neither a re-parse nor a deep clone ([`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs)). `lanes/snapshot.json` and `cache/snapshots/rollup.json` are keyed on `(path, mtime, len)`. `cache/snapshots/latest.json` and `records/agents-carryover.json` are keyed on the full `(len, mtime, dev, ino)` identity, which tells same-size replacements apart.
+A per-thread parse cache returns `Arc<T>` handles, so an unchanged file costs neither a re-parse nor a deep clone ([`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs)). `lanes/snapshot.json` and `snapshots/rollup.json` are keyed on `(path, mtime, len)`. `snapshots/latest.json` and `records/agents-carryover.json` are keyed on the full `(len, mtime, dev, ino)` identity, which tells same-size replacements apart.
 
 The carryover's cached form is fold-ready: identities backfilled, rows key-sorted, and ended rows reduced to bounded single-line prompt labels without recent-prompt history or pane-command text. The reducer applies the same rule when a session ends, and rotation writes the labels into durable carryover. Its reborn base is cached once per parse, and every fold layers live rows over the shared base without copying all history. A corrupt replacement is never cached, so every fold reports it until the file is replaced. The [read-path contract](./store.md#the-read-path) owns the prefix bound and revival from labels without text restoration.
 

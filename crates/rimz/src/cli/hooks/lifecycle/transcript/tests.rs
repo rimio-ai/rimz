@@ -1398,8 +1398,11 @@ fn effort_counts_only_appended_human_prompts_and_agent_messages() {
     shadowed.last_activity = now - std::time::Duration::from_secs(1);
     shadowed.turn_started_at = Some(now - std::time::Duration::from_secs(1));
     rows.push(shadowed);
-    rimz::disk::atomic::write_temp_then_rename_cache(&store.paths().latest_snapshot, &snapshot)
-        .unwrap();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &store.paths().latest_snapshot().unwrap(),
+        &snapshot,
+    )
+    .unwrap();
     rimz::store::agent_context::write(
         store.runtime_paths(),
         "codex",

@@ -68,9 +68,9 @@ fn rotation_persists_generation_without_the_checkpoint() {
         serde_json::from_slice(&fs::read(record_path(paths)).unwrap_or_default())
             .unwrap_or_default();
     assert_eq!(record, serde_json::json!({"generation": 1}));
-    fs::remove_dir_all(&paths.snapshots_dir).unwrap();
+    fs::remove_dir_all(paths.snapshots_dir().unwrap()).unwrap();
     assert_eq!(lifecycle_log_generation(paths), 1);
-    assert!(!paths.snapshots_dir.exists());
+    assert!(!paths.snapshots_dir().unwrap().exists());
     assert_eq!(catch_up_rollup(paths).unwrap().0.extent.generation, 1);
 }
 

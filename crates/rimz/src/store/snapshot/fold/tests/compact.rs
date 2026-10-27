@@ -31,7 +31,7 @@ fn compact_event(
 fn compact_command_events_stamp_the_agent_rollup() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     event_log::append(
         &paths.events_log,
@@ -70,7 +70,7 @@ fn compact_command_events_stamp_the_agent_rollup() {
 fn compact_command_stamp_can_match_by_agent_name_after_session_adoption() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut lifecycle = lifecycle_at(
         &workspace,
@@ -114,7 +114,7 @@ fn compact_command_events_stamp_carryover_agents_after_rotation() {
     for target_id in ["sess-a", "provisional"] {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
         paths.ensure_dirs().unwrap();
         let mut carried = agent("claude", "sess-a", AgentStatus::Idle, 0);
         carried.name = Some("lucid-atlas".to_owned());
@@ -168,7 +168,7 @@ fn carryover_compact_stamp_does_not_precede_earlier_lifecycle_events() {
 
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     write_carryover(
         &paths.agents_carryover,
@@ -241,7 +241,7 @@ fn carryover_compact_stamp_does_not_precede_earlier_lifecycle_events() {
 fn compact_marker_without_native_turn_starts_persists_but_does_not_latch() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let unhooked = agent("unregistered", "sess-unhooked", AgentStatus::Idle, 0);
     write_carryover(
@@ -283,7 +283,7 @@ fn compact_marker_needs_no_tokens_and_delayed_delivery_cannot_rearm_it() {
 
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let registered = lifecycle_at(
         &workspace,
@@ -326,7 +326,7 @@ fn compact_marker_needs_no_tokens_and_delayed_delivery_cannot_rearm_it() {
         let (_, agents, _) = catch_up_rollup(&paths).unwrap();
         assert_eq!(agents[0].compacted_awaiting_prompt, expected);
         assert_eq!(agents[0].last_compact_command_tokens, Some(80_000));
-        std::fs::remove_file(&paths.rollup_cache).unwrap();
+        std::fs::remove_file(paths.rollup_cache().unwrap()).unwrap();
         let (_, rebuilt, _) = catch_up_rollup(&paths).unwrap();
         assert_eq!(rebuilt[0].compacted_awaiting_prompt, expected);
     }
@@ -341,7 +341,7 @@ fn successful_compaction_at_rest_sets_the_prompt_marker() {
             for marked in [false, true] {
                 let dir = tempfile::tempdir().unwrap();
                 let workspace = WorkspaceId::from_project_root(dir.path());
-                let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+                let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
                 paths.ensure_dirs().unwrap();
                 event_log::append(
                     &paths.events_log,
@@ -398,7 +398,7 @@ fn fold_signals(
 ) -> AgentState {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     for signal in signals {
         let event = lifecycle_at(
@@ -503,7 +503,7 @@ fn deferred_triggerless_close_after_a_mid_turn_compaction_sets_no_marker() {
 fn unbracketed_triggerless_close_leaves_marker_and_turn_boundaries() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut prior = agent("claude", "sess-a", AgentStatus::Success, 0);
     prior.turn_started_at = Some(epoch());
@@ -541,7 +541,7 @@ fn manual_compaction_successor_marker_survives_rotation_until_a_prompt() {
 
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut observation = crate::agents::AgentLifecycleObservation::new(
         Some("successor".into()),
@@ -612,7 +612,7 @@ fn linked_successor_carries_the_compact_marker_without_a_trigger_bit() {
 
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut predecessor = agent("codex", "predecessor", AgentStatus::Idle, 0);
     predecessor.compacted_awaiting_prompt = Some(epoch());
