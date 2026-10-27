@@ -106,7 +106,9 @@ pub(in crate::sidebar) fn project_cache_clocks(
                         &prices,
                         model,
                         tokens,
-                        std::time::Duration::from_secs(u64::from(clock.ceiling_secs)),
+                        card.context
+                            .as_ref()
+                            .and_then(|context| context.last_cache_write),
                     )
                 });
                 clock

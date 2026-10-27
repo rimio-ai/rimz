@@ -97,6 +97,60 @@ fn sign_in_stamp_drives_cache_clocks_and_live_account_wins() {
 }
 
 #[test]
+fn rewarm_uses_the_hour_tier_only_for_an_observed_hour_write() {
+    use crate::agents::context::{CacheWriteRetention, SignIn};
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    crate::agents::PriceBook::write_fixture_cache(&runtime.shared_pricing_cache_path());
+    let actual: Vec<_> = [
+        ("claude", Some(CacheWriteRetention::OneHour)),
+        ("claude", None),
+        ("codex", None),
+        ("amp", None),
+    ]
+    .into_iter()
+    .map(|(kind, observed)| {
+        let mut agent = agent(kind, kind, None, Some(10));
+        agent.sign_in = Some(SignIn::Subscription);
+        let context = crate::agents::AgentContext {
+            last_cache_write: observed,
+            model_id: Some("claude-sonnet-4-6".into()),
+            tokens: Some(crate::agents::AgentTokenUsage {
+                current_context_tokens: Some(100_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        agent.context = Some(context.clone());
+        let mut snapshot = snapshot(&runtime, vec![agent]);
+        snapshot
+            .rows_mut()
+            .next()
+            .unwrap()
+            .as_agent_mut()
+            .unwrap()
+            .context = Some(context);
+        project_cache_clocks(
+            &mut snapshot,
+            &KeepWarmCache::default(),
+            &HarnessConfig::default(),
+            &runtime,
+        );
+        snapshot
+            .rows()
+            .find_map(|row| row.as_agent()?.cache)
+            .and_then(|clock| clock.rewarm_cost_usd)
+    })
+    .collect();
+    assert_eq!(actual, [Some(0.6), Some(0.375), Some(0.375), Some(0.375)]);
+}
+
+#[test]
 fn cache_clock_estimates_rewarm_from_the_api_model_and_context_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(
@@ -145,7 +199,7 @@ fn cache_clock_estimates_rewarm_from_the_api_model_and_context_tokens() {
         &runtime,
     );
     for (id, expected) in [
-        ("priced", Some(0.6)),
+        ("priced", Some(0.375)),
         ("codex", Some(0.125)),
         ("unpriced", None),
         ("empty", None),

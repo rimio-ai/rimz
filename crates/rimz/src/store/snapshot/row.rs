@@ -480,7 +480,7 @@ pub struct CacheClock {
     pub warm_until: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_since: Option<Timestamp>,
-    /// Producer-priced cache write of the card's current context at this TTL.
+    /// Producer-priced cache write of the card's current context at its observed write tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewarm_cost_usd: Option<f64>,
 }

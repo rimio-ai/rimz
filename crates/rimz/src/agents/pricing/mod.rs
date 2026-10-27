@@ -35,19 +35,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use super::context::CacheWriteRetention;
 use super::spending::is_priceable_model_name;
 
 const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
 const DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 200_000;
 
 /// Estimate rebuilding a context through the same cache-write pricing as spending.
+/// Only an observed one-hour write selects that tier, not a configured lifetime.
 pub fn cache_rewarm_cost_usd(
     book: &PriceBook,
     model: &str,
     context_tokens: u64,
-    ttl: std::time::Duration,
+    last_cache_write: Option<CacheWriteRetention>,
 ) -> Option<f64> {
-    let split = if ttl.as_secs() >= 3600 {
+    let split = if last_cache_write == Some(CacheWriteRetention::OneHour) {
         TokenSplit {
             cache_write_1h: context_tokens,
             ..TokenSplit::default()
@@ -750,16 +752,23 @@ mod tests {
     }
 
     #[test]
-    fn cache_rewarm_prices_the_ttl_bucket_without_guessing_unknown_models() {
+    fn cache_rewarm_prices_the_observed_tier_without_guessing_unknown_models() {
         let book = PriceBook::fixture();
-        let cost = |model, ttl| {
-            cache_rewarm_cost_usd(&book, model, 100000, std::time::Duration::from_secs(ttl))
-        };
-        assert_eq!(cost("claude-sonnet-4-6", 3600), Some(0.6));
-        assert_eq!(cost("claude-sonnet-4-6", 3599), Some(0.375));
-        assert_eq!(cost("gpt-5", 1800), Some(0.125));
-        assert_eq!(cost("future-unpriced-model", 3600), None);
-        assert_eq!(cost("<synthetic>", 1800), None);
+        let cost = |model, retention| cache_rewarm_cost_usd(&book, model, 100000, retention);
+        assert_eq!(
+            cost("claude-sonnet-4-6", Some(CacheWriteRetention::OneHour)),
+            Some(0.6)
+        );
+        assert_eq!(
+            cost("claude-sonnet-4-6", Some(CacheWriteRetention::FiveMinutes)),
+            Some(0.375)
+        );
+        assert_eq!(cost("gpt-5", None), Some(0.125));
+        assert_eq!(
+            cost("future-unpriced-model", Some(CacheWriteRetention::OneHour)),
+            None
+        );
+        assert_eq!(cost("<synthetic>", None), None);
     }
 
     #[test]
