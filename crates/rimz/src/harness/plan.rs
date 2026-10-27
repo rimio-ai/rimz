@@ -611,7 +611,10 @@ fn resolve_single_agent_spec(
             launch.block_failed_reference(unknown_cell(&err), None)?;
             return Err(err.into());
         }
-        Err(err) => return Err(err.into()),
+        Err(err) => {
+            block_failed_team_prompt(launch, &launch.profiles, &err, None)?;
+            return Err(err.into());
+        }
     };
     block_failed_kind_bases(launch, &launch.profiles, &layout, Some(spec), None)?;
     let cell_count: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
@@ -645,6 +648,28 @@ fn unknown_cell(err: &crate::harness::spec::LayoutErr) -> Option<&str> {
         crate::harness::spec::LayoutErr::UnknownCell(unknown) => Some(&unknown.word),
         _ => None,
     }
+}
+
+fn block_failed_team_prompt(
+    launch: &crate::config::effective::LaunchAgents,
+    profiles: &crate::config::ProfilesConfig,
+    err: &crate::harness::spec::LayoutErr,
+    agent_override: Option<&str>,
+) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
+    let crate::harness::spec::LayoutErr::TeamPromptWithoutBase { team, role, .. } = err else {
+        return Ok(());
+    };
+    // Base refusals name a role prepared from this same team table.
+    let binding = launch.teams.0[team]
+        .roles
+        .iter()
+        .find(|binding| binding.role == *role)
+        .expect("team prompt refusal names a prepared role");
+    launch.block_failed_profile(&binding.profile, &launch.profiles)?;
+    if let Some(name) = agent_override {
+        launch.block_failed_profile(name, profiles)?;
+    }
+    Ok(())
 }
 
 fn block_failed_kind_bases(
@@ -721,7 +746,10 @@ pub fn resolve_launch(
             }
             return Err(err.into());
         }
-        Err(err) => return Err(err.into()),
+        Err(err) => {
+            block_failed_team_prompt(launch, profiles, &err, agent_override)?;
+            return Err(err.into());
+        }
     };
     block_failed_kind_bases(launch, profiles, &layout, spec, agent_override)?;
     let team_name = spec

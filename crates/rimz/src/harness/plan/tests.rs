@@ -1665,6 +1665,86 @@ roles = [{role = 'worker', profile = 'no-base'}]
 }
 
 #[test]
+fn declared_team_layers_report_failed_kind_bases_at_each_launch_doorway() {
+    use crate::config::effective::ProfileScope;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(root.path().join("agents/claude.md"), "invalid frontmatter").unwrap();
+    let machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    let detail = machine.definition_failure_for("claude").unwrap();
+    let mut launch = effective_launch(&machine, root.path());
+    for (name, base) in [
+        ("worker", "claude"),
+        ("inherited", "worker"),
+        ("bare", "codex"),
+    ] {
+        launch.profiles.0.insert(
+            name.into(),
+            configured_profile(base, None, None, None, None, None),
+        );
+    }
+    launch.subagent_profiles = launch.profiles.clone();
+    launch.subagent_profiles.0.insert(
+        "child-override".into(),
+        configured_profile("claude", None, None, None, None, None),
+    );
+    for (name, profile) in [("crew", "inherited"), ("other", "bare")] {
+        launch.teams.0.insert(
+            name.into(),
+            toml::from_str(&format!(
+                "consensus-file = 'consensus.md'\n\
+                 roles = [{{role = 'lead', profile = '{profile}', owns = ['Plan']}}]"
+            ))
+            .unwrap(),
+        );
+    }
+    let mut actual = Vec::new();
+    for scope in [ProfileScope::Agents, ProfileScope::Subagents] {
+        for (spec, agent_override) in [
+            ("crew", None),
+            ("crew.lead", None),
+            ("crew", Some("codex")),
+            ("other", Some("worker")),
+            ("other.lead", Some("claude")),
+            ("other.lead", Some("inherited")),
+        ] {
+            actual.push(
+                super::resolve_launch(
+                    &launch,
+                    scope,
+                    &Default::default(),
+                    Some(spec),
+                    agent_override,
+                )
+                .err()
+                .map(|err| err.to_string()),
+            );
+        }
+    }
+    for spec in ["crew", "crew.lead"] {
+        actual.push(
+            resolve_single_agent_spec(spec, &launch, &Default::default())
+                .err()
+                .map(|err| err.to_string()),
+        );
+    }
+    actual.push(
+        super::resolve_launch(
+            &launch,
+            ProfileScope::Subagents,
+            &Default::default(),
+            Some("other.lead"),
+            Some("child-override"),
+        )
+        .err()
+        .map(|err| err.to_string()),
+    );
+    assert_eq!(actual, vec![Some(detail); 15]);
+}
+
+#[test]
 fn agent_launch_precondition_surfaces_definition_error() {
     let root = tempfile::tempdir().unwrap();
     let mut config = MachineConfig::default();

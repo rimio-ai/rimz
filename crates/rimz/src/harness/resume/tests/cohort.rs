@@ -540,12 +540,15 @@ fn member_posture_rejects_undeliverable_team_layers() {
     assert_eq!(
         actual,
         [
-            Some(
-                "team `forge` sets consensus-file or append-system-prompt-files but role `planner` \
-                 has no system-prompt-file to compose them onto; add system-prompt-file to role \
-                 planner or its profile"
-                    .into()
-            ),
+            Some(format!(
+                "team `forge` sets consensus-file or append-system-prompt-files but role \
+                     `planner` (claude) has no base system prompt to compose them onto; add \
+                     system-prompt-file to role planner or its profile, or create {} with a \
+                     nonempty body as the claude kind base",
+                crate::disk::paths::agents_home()
+                    .join("agents/claude.md")
+                    .display()
+            )),
             Some(
                 "team `forge` sets consensus-file or append-system-prompt-files but declares no \
                  stages; add stages (or owns) or remove the team prompt fields"
