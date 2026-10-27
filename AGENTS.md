@@ -106,6 +106,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - A tree-wide `rg` skips dot-directories: name `.github` as a path (or pass `--hidden`) when the question includes workflows.
 - A tree-wide `rg` also skips the paths the root `.ignore` lists (`docs/externals/`, `examples/`, `CHANGELOG.md`, `Cargo.lock`, `supply-chain/`) without saying so: a removal or rewording grep passes `--no-ignore-dot` or names `docs/externals` as a path.
 - Stop a process you started by its PID (`$!`, `pgrep -x`), never with `pkill -f PATTERN`: the pattern matches the shell running `pkill` and kills it.
+- Find a running build or gate by process name (`pgrep -ax cargo`, `pgrep -ax xtask`), never with `pgrep -af PATTERN`: an agent's launch command line quotes its whole brief, so `-af` also matches every agent whose brief names the tool.
 - Brace a shell variable that a colon follows (`git show "${rev}:path"`): zsh reads `$rev:c` as a modifier on the variable and passes git a mangled revision.
 - zsh reserves `status` as a read-only alias of `$?`: name an exit-code variable `rc`.
 - A scope check against trunk diffs from the merge base, `git diff --stat origin/main...HEAD -- <path>` (three dots). Once trunk moves, a two-dot diff against `origin/main` lists trunk's own changes as the branch's. Fetch first (`git fetch origin main`): a stale local `origin/main` lists trunk's own commits as the branch's the same way.
