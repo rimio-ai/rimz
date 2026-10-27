@@ -154,7 +154,9 @@ pub(super) fn restore_hook_environment() -> Option<Cli> {
     if !needs_hook_environment(std::env::args_os().skip(1)) {
         return None;
     }
-    let cli = Cli::try_parse().ok()?;
+    let cli = try_hot_cli(std::env::args_os().collect())
+        .map(|(_, cli)| cli)
+        .or_else(|| Cli::try_parse().ok())?;
     let Some(Subcmd::Hooks(args)) = &cli.subcommand else {
         return None;
     };
@@ -177,12 +179,56 @@ fn needs_hook_environment(args: impl Iterator<Item = OsString>) -> bool {
     hooks && feed
 }
 
+#[derive(Debug, Parser)]
+#[command(bin_name = "rimz")]
+struct HotCli {
+    #[command(flatten)]
+    global: GlobalFlags,
+    #[command(subcommand)]
+    subcommand: HotSubcmd,
+}
+
+#[derive(Debug, Subcommand)]
+enum HotSubcmd {
+    Hooks(hooks::HooksArgs),
+    Statusline(statusline::StatuslineArgs),
+}
+
+fn try_hot_cli(args: Vec<OsString>) -> Option<(String, Cli)> {
+    if !args.iter().any(|arg| arg == "hooks" || arg == "statusline")
+        || !args.iter().any(|arg| arg == "feed" || arg == "apply")
+    {
+        return None;
+    }
+    let hot = HotCli::try_parse_from(args).ok()?;
+    let (canonical, subcommand) = match hot.subcommand {
+        HotSubcmd::Hooks(args) if matches!(args.scope().0, "hooks feed" | "hooks apply") => {
+            ("hooks", Subcmd::Hooks(args))
+        }
+        HotSubcmd::Statusline(args) => ("statusline", Subcmd::Statusline(args)),
+        _ => return None,
+    };
+    Some((
+        canonical.to_owned(),
+        Cli {
+            global: hot.global,
+            attach: AttachFlags::default(),
+            no_resume: false,
+            refresh_ms: None,
+            subcommand: Some(subcommand),
+        },
+    ))
+}
+
 /// Entry point used by `main.rs`.
 pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
     hooks::register_drainer();
     reject_removed_top_level_tokens()?;
+    let preparsed = preparsed
+        .map(|cli| ("hooks".to_owned(), cli))
+        .or_else(|| try_hot_cli(std::env::args_os().collect()));
     let (canonical_command, cli) = match preparsed {
-        Some(cli) => ("hooks".to_owned(), cli),
+        Some(parsed) => parsed,
         None => {
             let cmd = help::customize(<Cli as CommandFactory>::command());
             let mut matches = cmd.get_matches();
