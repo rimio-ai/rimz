@@ -2400,18 +2400,23 @@ fn accounts_add_refuses_a_history_switch_only_while_the_codex_daemon_has_session
         .expect("ps");
     let state_dir = home.join("app-server-daemon");
     std::fs::create_dir_all(&state_dir).unwrap();
-    std::fs::write(
-        state_dir.join("app-server.pid"),
-        json!({
-            "pid": daemon.id(),
-            "processStartTime": String::from_utf8_lossy(&started.stdout).trim(),
-        })
-        .to_string(),
-    )
-    .unwrap();
+    let mut record = json!({
+        "pid": daemon.id(),
+        "processStartTime": String::from_utf8_lossy(&started.stdout).trim(),
+    });
+    if cfg!(target_os = "linux") {
+        record["processIdentity"] = json!({
+            "bootId": rimz::proc::boot_id().expect("Linux boot identity"),
+            "startTicks": rimz::proc::process_start_token(daemon.id())
+                .expect("Linux process start token")
+                .parse::<u64>()
+                .expect("numeric Linux start ticks"),
+        });
+    }
+    std::fs::write(state_dir.join("app-server.pid"), record.to_string()).unwrap();
 
-    // The daemon check reads the stand-in's start time with the host `ps`,
-    // which the hermetic provider `PATH` would hide; `add` probes no provider.
+    // Linux confirms the native identity without `ps`. Keep the host `PATH`
+    // for other platforms' text fallback; `add` probes no provider.
     let switch = |name: &str| {
         env.rimz()
             .env("RIMZ_TEST_CODEX_LOADED_THREADS_MS", "30000")
