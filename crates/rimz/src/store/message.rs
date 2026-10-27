@@ -987,6 +987,34 @@ pub fn queue_head<'a>(
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
 
+/// Earliest FIFO-head, independent cleanup, schedule, condition, or recovery wake.
+pub(super) fn queue_wake_deadline(pending: &[MessageRecord], now: Timestamp) -> Option<Timestamp> {
+    pending
+        .iter()
+        .filter_map(|message| {
+            let follower = message.status == MessageStatus::Queued
+                && message.gate != DeliveryGate::Resume
+                && message.is_deliverable(now)
+                && queue_head(
+                    pending.iter(),
+                    &message.kind,
+                    &message.agent_id,
+                    message.agent_name.as_deref(),
+                    now,
+                )
+                .is_some_and(|head| head.message_id != message.message_id);
+            if follower {
+                return message
+                    .expires_at()
+                    .into_iter()
+                    .chain(message.register_by.filter(|deadline| *deadline > now))
+                    .min();
+            }
+            message.wake_deadline(now)
+        })
+        .min()
+}
+
 fn holds_boundary(message: &MessageRecord, now: Timestamp) -> bool {
     message.status.is_open()
         || (message.status == MessageStatus::Sent
