@@ -194,6 +194,180 @@ fn show_text(view: &ShowView) -> String {
     anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
 }
 
+fn workflow_view() -> ShowView {
+    let mut view = show_view(true);
+    view.entry.agent = None;
+    view.entry.workflow = Some("review".into());
+    view.entry.stay = false;
+    view.entry.subscribe.clear();
+    view.launches.clear();
+    view.records.clear();
+    view.subscriptions.clear();
+    view.worktrees.clear();
+    let mut records = Vec::new();
+    let mut launches = BTreeMap::new();
+    for (index, state) in ["active", "parked", "failed", "done", "canceled", "gone"]
+        .into_iter()
+        .enumerate()
+    {
+        let id = rimz::ids::WorkflowRunId::new();
+        let at = Timestamp::from_second(10 + index as i64).unwrap();
+        let checkout = PathBuf::from(format!("/repo/{state}"));
+        if state != "gone" {
+            records.push(
+                serde_json::from_value(serde_json::json!({
+                    "version": 1, "id": id, "workflow": "review", "task": "sweep",
+                    "spec_dir": "/spec", "spec_digest": "digest", "scope": {
+                        "kind": "worktree", "path": checkout,
+                    },
+                    "project_root": "/repo", "created_at": at, "state": state,
+                    "park": (state == "parked").then(|| serde_json::json!({
+                        "reason": "user", "text": "review this", "at": at,
+                    })),
+                    "node": "gate", "entered_at": at + jiff::SignedDuration::from_secs(30),
+                    "visits": {}, "visit_grant": 0,
+                    "deadline_fired": false, "next_seq": 1,
+                }))
+                .unwrap(),
+            );
+        }
+        launches.insert(
+            checkout.clone(),
+            schedule::launch_ledger::WorkflowLaunchRecord {
+                at,
+                run: id.clone(),
+                scope: rimz::store::workflow::ScopeKind::Worktree,
+            },
+        );
+        view.worktrees.push(CheckoutCondition {
+            checkout,
+            name: state.into(),
+            state: CheckoutState::Workflow { run: id, at },
+        });
+    }
+    view.workflow_runs =
+        list::WorkflowRunRow::for_show(&records, "sweep", Path::new("/repo"), &launches);
+    view
+}
+
+#[test]
+fn workflow_run_projection_keeps_terminal_and_gone_launches() {
+    let view = workflow_view();
+    let json = serde_json::to_value(&view.workflow_runs).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 6, "{json}");
+    let gone = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["state"] == "gone")
+        .unwrap();
+    let CheckoutState::Workflow { run, at } = &view.worktrees[5].state else {
+        panic!("workflow fixture");
+    };
+    assert_eq!(
+        gone,
+        &serde_json::json!({
+            "id": run, "checkout": "/repo/gone", "state": "gone", "since": at,
+        })
+    );
+    assert_eq!(
+        json.as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["state"] == "active")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn workflow_worktrees_keep_attention_and_unfold_finished_runs() {
+    let mut view = workflow_view();
+    let text = show_text(&view);
+    assert!(text.contains("RUN") && !text.contains("LEADER"), "{text}");
+    for (index, state) in ["active", "parked", "failed"].into_iter().enumerate() {
+        let CheckoutState::Workflow { run, .. } = &view.worktrees[index].state else {
+            panic!("workflow fixture");
+        };
+        assert!(
+            text.lines()
+                .any(|line| line.contains(&format!("{run}  {state} · gate"))),
+            "{text}"
+        );
+    }
+    assert!(text.contains("· user: review this"), "{text}");
+    assert!(
+        text.contains("1 canceled") && text.contains("1 done") && text.contains("1 gone"),
+        "{text}"
+    );
+    assert!(
+        text.contains("newest gone") && text.contains("reasons and runs:"),
+        "{text}"
+    );
+    view.all = true;
+    let all = show_text(&view);
+    assert!(!all.contains("… 3 launched"), "{all}");
+    for (index, state) in ["done", "canceled", "gone"].into_iter().enumerate() {
+        let CheckoutState::Workflow { run, .. } = &view.worktrees[index + 3].state else {
+            panic!("workflow fixture");
+        };
+        assert!(
+            all.lines()
+                .any(|line| line.contains(&format!("{run}  {state}"))),
+            "{all}"
+        );
+    }
+}
+
+#[test]
+fn workflow_worktrees_json_joins_the_same_run_projection() {
+    let view = workflow_view();
+    let runs = serde_json::to_value(&view.workflow_runs).unwrap();
+    let worktrees = serde_json::to_value(worktrees_json(&view)).unwrap();
+    for row in worktrees.as_array().unwrap() {
+        let run = runs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["checkout"] == row["checkout"])
+            .unwrap();
+        let checkout = view
+            .worktrees
+            .iter()
+            .find(|checkout| serde_json::json!(checkout.checkout) == row["checkout"])
+            .unwrap();
+        let CheckoutState::Workflow { at, .. } = &checkout.state else {
+            panic!("workflow fixture");
+        };
+        let entered_at = if run["state"] == "gone" {
+            *at
+        } else {
+            *at + jiff::SignedDuration::from_secs(30)
+        };
+        assert_eq!(&row["run"], run, "{row}");
+        assert_eq!(row["since"], serde_json::json!(at));
+        assert_eq!(run["since"], serde_json::json!(entered_at));
+        for key in ["leader", "leader_status", "armed"] {
+            assert!(row.get(key).is_none(), "{row}");
+        }
+    }
+}
+
+#[test]
+fn workflow_runs_table_omits_worktree_runs_including_folded_rows() {
+    let mut view = workflow_view();
+    let text = show_text(&view);
+    assert!(!text.contains("\nRUNS\n"), "{text}");
+    view.entry.each_worktree = false;
+    view.worktrees.clear();
+    let text = show_text(&view);
+    assert!(text.contains("\nRUNS\n"), "{text}");
+    for run in &view.workflow_runs {
+        assert_eq!(text.matches(run.id.as_str()).count(), 1, "{text}");
+    }
+    assert!(text.contains("gone"), "{text}");
+}
+
 #[test]
 fn named_launch_rows_and_failed_attention_show_destination_not_scope() {
     let mut view = show_view(false);

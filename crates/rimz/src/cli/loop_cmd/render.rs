@@ -473,6 +473,7 @@ struct WorktreeRow<'a> {
     condition: &'a CheckoutCondition,
     blocked: Option<(Timestamp, CheckoutRefusals<'a>)>,
     leader_status: Option<rimz::agents::AgentStatus>,
+    run: Option<&'a list::WorkflowRunRow>,
     armed: usize,
     short: Vec<&'a str>,
 }
@@ -483,7 +484,7 @@ impl WorktreeRow<'_> {
             return "blocked";
         }
         match self.condition.state {
-            CheckoutState::Launched { .. } => "launched",
+            CheckoutState::Launched { .. } | CheckoutState::Workflow { .. } => "launched",
             CheckoutState::Declined { .. } => "declined",
             CheckoutState::Holding { .. } => "holding",
             CheckoutState::Ready { .. } => "ready",
@@ -510,9 +511,16 @@ impl WorktreeRow<'_> {
             {
                 3
             }
+            CheckoutState::Workflow { .. }
+                if self
+                    .run
+                    .is_some_and(|run| matches!(run.state, "active" | "parked" | "failed")) =>
+            {
+                3
+            }
             CheckoutState::Waiting { .. } => 4,
             CheckoutState::Declined { .. } => 5,
-            CheckoutState::Launched { .. } => 6,
+            CheckoutState::Launched { .. } | CheckoutState::Workflow { .. } => 6,
         }
     }
 }
@@ -526,7 +534,9 @@ fn worktree_expr(view: &ShowView) -> Option<&WhenExpr> {
 
 fn worktree_verdict(state: &CheckoutState) -> Option<&Verdict> {
     match state {
-        CheckoutState::Launched { .. } | CheckoutState::Declined { .. } => None,
+        CheckoutState::Launched { .. }
+        | CheckoutState::Workflow { .. }
+        | CheckoutState::Declined { .. } => None,
         CheckoutState::Holding { verdict, .. }
         | CheckoutState::Ready { verdict, .. }
         | CheckoutState::Waiting { verdict } => Some(verdict),
@@ -561,6 +571,12 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
                 CheckoutState::Launched { leader, .. } => view.leader_statuses.get(leader).copied(),
                 _ => None,
             };
+            let run = match &condition.state {
+                CheckoutState::Workflow { run, .. } => {
+                    view.workflow_runs.iter().find(|row| &row.id == run)
+                }
+                _ => None,
+            };
             let checkout = condition
                 .checkout
                 .canonicalize()
@@ -574,6 +590,7 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
                 condition,
                 blocked,
                 leader_status,
+                run,
                 armed,
                 short,
             }
@@ -634,9 +651,10 @@ fn write_worktrees(
         a.rank()
             .cmp(&b.rank())
             .then_with(|| match (&a.condition.state, &b.condition.state) {
-                (CheckoutState::Launched { at: a, .. }, CheckoutState::Launched { at: b, .. }) => {
-                    b.cmp(a)
-                }
+                (
+                    CheckoutState::Launched { at: a, .. } | CheckoutState::Workflow { at: a, .. },
+                    CheckoutState::Launched { at: b, .. } | CheckoutState::Workflow { at: b, .. },
+                ) => b.cmp(a),
                 _ => std::cmp::Ordering::Equal,
             })
             .then(a.condition.name.cmp(&b.condition.name))
@@ -648,9 +666,12 @@ fn write_worktrees(
     let source = runtime_for_root(&view.entry.resolved_root())
         .filter(|_| view.room_is_open)
         .map(|runtime| schedule::when::CiSource::read(&runtime));
-    let has_leader = rendered
-        .iter()
-        .any(|row| matches!(row.condition.state, CheckoutState::Launched { .. }));
+    let has_launch = rendered.iter().any(|row| {
+        matches!(
+            row.condition.state,
+            CheckoutState::Launched { .. } | CheckoutState::Workflow { .. }
+        )
+    });
     let has_reason = rendered.iter().any(|row| {
         row.blocked.is_some() || matches!(row.condition.state, CheckoutState::Declined { .. })
     });
@@ -662,21 +683,33 @@ fn write_worktrees(
             term.key.clone()
         }
     }));
-    if has_leader {
-        headers.push("LEADER".to_owned());
+    if has_launch {
+        headers.push(
+            if view.entry.workflow.is_some() {
+                "RUN"
+            } else {
+                "LEADER"
+            }
+            .to_owned(),
+        );
     }
     if has_reason {
         headers.push("REASON".to_owned());
     }
     let width = ui::terminal_columns(120);
-    let mut table = ui::Table::new(headers).indent(2).max_width(width);
+    let mut table = ui::Table::new(headers).indent(2);
+    if view.entry.workflow.is_none() || has_reason {
+        table = table.max_width(width);
+    }
     let now = view.now_zoned.timestamp();
     for row in rendered {
         let state = if let Some((since, _)) = &row.blocked {
             format!("ready · blocked {}", ui::rel_age(*since, now))
         } else {
             match &row.condition.state {
-                CheckoutState::Launched { at, .. } => format!("launched {}", ui::rel_age(*at, now)),
+                CheckoutState::Launched { at, .. } | CheckoutState::Workflow { at, .. } => {
+                    format!("launched {}", ui::rel_age(*at, now))
+                }
                 CheckoutState::Declined { at, .. } => format!("declined {}", ui::rel_age(*at, now)),
                 CheckoutState::Holding { since, hold, .. } => schedule::TaskTimingState::Holding {
                     elapsed: Duration::from_millis(
@@ -728,8 +761,17 @@ fn write_worktrees(
             let (glyph, style) = ui::verdict(role);
             cells.push(ui::cell(format!("{glyph} {value}")).fg(style));
         }
-        if has_leader {
-            let leader = if let CheckoutState::Launched { leader, .. } = &row.condition.state {
+        if has_launch {
+            let launch = if let Some(run) = row.run {
+                let mut text = format!("{}  {}", run.id, run.state);
+                if !run.node.is_empty() {
+                    text.push_str(&format!(" · {}", run.node));
+                }
+                if !run.detail.is_empty() {
+                    text.push_str(&format!(" · {}", run.detail));
+                }
+                text
+            } else if let CheckoutState::Launched { leader, .. } = &row.condition.state {
                 row.leader_status.map_or_else(
                     || format!("@{leader} ended"),
                     |status| {
@@ -743,7 +785,7 @@ fn write_worktrees(
             } else {
                 String::new()
             };
-            cells.push(ui::cell(leader));
+            cells.push(ui::cell(launch));
         }
         if has_reason {
             let reason = if let Some((_, refusal)) = &row.blocked {
@@ -791,7 +833,15 @@ fn write_worktree_folds(
             "  {}",
             ui::paint(
                 ui::palette::muted(),
-                &format!("→ reasons and leaders: rimz loop show {} --all", view.name)
+                &format!(
+                    "→ reasons and {}: rimz loop show {} --all",
+                    if view.entry.workflow.is_some() {
+                        "runs"
+                    } else {
+                        "leaders"
+                    },
+                    view.name
+                )
             )
         )?;
     }
@@ -845,16 +895,25 @@ fn fold_launched(rows: &[WorktreeRow<'_>], now: Timestamp) -> Option<String> {
     let mut counts = BTreeMap::new();
     let mut newest = None;
     for row in rows.iter().filter(|row| row.rank() == 6) {
-        let CheckoutState::Launched { at, leader } = &row.condition.state else {
-            continue;
+        let (at, subject, status) = match &row.condition.state {
+            CheckoutState::Launched { at, leader } => (
+                *at,
+                format!("@{leader}"),
+                row.leader_status.map_or("ended", |status| status.as_str()),
+            ),
+            CheckoutState::Workflow { at, run } => (
+                *at,
+                run.to_string(),
+                row.run.map_or("gone", |run| run.state),
+            ),
+            _ => continue,
         };
-        let status = row.leader_status.map_or("ended", |status| status.as_str());
         *counts.entry(status).or_insert(0usize) += 1;
-        if newest.is_none_or(|(_, _, latest)| *at > latest) {
-            newest = Some((&row.condition.name, leader, *at));
+        if newest.as_ref().is_none_or(|(_, _, latest)| at > *latest) {
+            newest = Some((&row.condition.name, subject, at));
         }
     }
-    let (name, leader, at) = newest?;
+    let (name, subject, at) = newest?;
     let count: usize = counts.values().sum();
     let mut counts = counts.into_iter().collect::<Vec<_>>();
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
@@ -864,7 +923,7 @@ fn fold_launched(rows: &[WorktreeRow<'_>], now: Timestamp) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" · ");
     Some(format!(
-        "… {count} launched: {breakdown} · newest {name} @{leader} {}",
+        "… {count} launched: {breakdown} · newest {name} {subject} {}",
         ui::rel_age(at, now)
     ))
 }
@@ -916,6 +975,8 @@ struct WorktreeJson<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     armed: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<&'a list::WorkflowRunRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     blocked: Option<BlockedJson<'a>>,
 }
 
@@ -949,6 +1010,7 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 leader: None,
                 leader_status: None,
                 armed: None,
+                run: row.run,
                 blocked: None,
             };
             match &row.condition.state {
@@ -983,6 +1045,7 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                     );
                 }
                 CheckoutState::Ready { since, .. } => json.since = Some(*since),
+                CheckoutState::Workflow { at, .. } => json.since = Some(*at),
                 CheckoutState::Waiting { .. } => {}
             }
             if let Some((since, refusal)) = row.blocked {
@@ -1152,7 +1215,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     }
     writeln!(out)?;
     write_show_facts(out, view)?;
-    write_workflow_runs(out, &view.workflow_runs, now)?;
+    write_workflow_runs(out, view, now)?;
     if let ShowThrottle::Full(readings) = &view.throttle {
         write_throttle_readings(out, readings)?;
     }
@@ -1483,6 +1546,11 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         BTreeMap::new()
     };
+    let workflow_ledger = if entry.is_condition_workflow() {
+        schedule::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?
+    } else {
+        Default::default()
+    };
     let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
     let backlog = if entry.overlap.unwrap_or_default() != rimz::config::OverlapPolicy::Skip {
         Some(
@@ -1501,7 +1569,14 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             .context("runtime paths unavailable")
             .and_then(|runtime| {
                 let ci_source = room_is_open.then(|| schedule::when::CiSource::read(runtime));
-                schedule::fanout::inspect(&args.name, &task, runtime, ci_source.as_ref(), now)
+                schedule::fanout::inspect(
+                    &args.name,
+                    &task,
+                    runtime,
+                    &workflow_ledger,
+                    ci_source.as_ref(),
+                    now,
+                )
             })
     } else {
         Ok(Vec::new())
@@ -1570,10 +1645,15 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         ShowThrottle::Off
     };
     let workflow_runs = if entry.workflow.is_some() {
-        list::WorkflowRunRow::of_task(
-            &rimz::store::workflow::list(&StatePaths::for_project_root(&root)?)?,
+        let paths = StatePaths::for_project_root(&root)?;
+        list::WorkflowRunRow::for_show(
+            &rimz::store::workflow::list(&paths)?,
             &args.name,
             &root,
+            workflow_ledger
+                .tasks
+                .get(&args.name)
+                .unwrap_or(&BTreeMap::new()),
         )
     } else {
         Vec::new()
@@ -1645,14 +1725,20 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     subscriptions_error.map_or(Ok(()), Err)
 }
 
-/// One line per nonterminal run the task started:
+/// One line per run not already named by a worktree, folded rows included:
 /// `<id> <checkout-name> <state> <node> <waiting line | park reason> <age>`.
-fn write_workflow_runs(
-    out: &mut impl Write,
-    runs: &[list::WorkflowRunRow],
-    now: Timestamp,
-) -> Result<()> {
-    if runs.is_empty() {
+fn write_workflow_runs(out: &mut impl Write, view: &ShowView, now: Timestamp) -> Result<()> {
+    let mut runs = view
+        .workflow_runs
+        .iter()
+        .filter(|record| {
+            !view.entry.each_worktree
+                || !view.worktrees.iter().any(|row| {
+                    matches!(&row.state, CheckoutState::Workflow { run, .. } if run == &record.id)
+                })
+        })
+        .peekable();
+    if runs.peek().is_none() {
         return Ok(());
     }
     writeln!(out, "\nRUNS")?;

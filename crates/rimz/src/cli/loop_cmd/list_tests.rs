@@ -2,6 +2,76 @@ use super::*;
 use unicode_width::UnicodeWidthStr;
 
 #[test]
+fn launched_counts_select_the_tasks_own_ledger() {
+    use launch_ledger::{LaunchRecord, WorkflowLaunchRecord, WorkflowLedger};
+    let at = Timestamp::from_second(100).unwrap();
+    let residents = BTreeMap::from([(
+        "review".into(),
+        BTreeMap::from([(
+            PathBuf::from("/repo/stale"),
+            LaunchRecord {
+                at,
+                leader: "fox".into(),
+                destination: None,
+            },
+        )]),
+    )]);
+    let mut workflows = WorkflowLedger::default();
+    workflows.tasks.insert(
+        "review".into(),
+        ["/repo/one", "/repo/two"]
+            .map(|path| {
+                (
+                    PathBuf::from(path),
+                    WorkflowLaunchRecord {
+                        at,
+                        run: rimz::ids::WorkflowRunId::new(),
+                        scope: rimz::store::workflow::ScopeKind::Worktree,
+                    },
+                )
+            })
+            .into(),
+    );
+    let mut entry = TaskEntry {
+        workflow: Some("review".into()),
+        when: Some(vec!["pr=open".into()]),
+        each_worktree: true,
+        ..TaskEntry::default()
+    };
+    assert_eq!(launched_count(&entry, "review", &residents, &workflows), 2);
+    entry.workflow = None;
+    entry.stay = true;
+    assert_eq!(launched_count(&entry, "review", &residents, &workflows), 1);
+    entry.stay = false;
+    assert_eq!(launched_count(&entry, "review", &residents, &workflows), 0);
+    entry.workflow = Some("review".into());
+    entry.when = None;
+    entry.every = Some("1h".into());
+    assert_eq!(launched_count(&entry, "review", &residents, &workflows), 0);
+}
+
+#[test]
+fn workflow_run_json_includes_only_nonempty_detail() {
+    let mut row = WorkflowRunRow {
+        id: rimz::ids::WorkflowRunId::new(),
+        checkout: "/repo".into(),
+        state: "parked",
+        node: "gate".into(),
+        since: Timestamp::from_second(100).unwrap(),
+        reason: Some("user"),
+        text: Some("review the probe".into()),
+        workflow: "review".into(),
+        detail: "user: review the probe".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&row).unwrap()["detail"],
+        "user: review the probe"
+    );
+    row.detail.clear();
+    assert!(serde_json::to_value(&row).unwrap().get("detail").is_none());
+}
+
+#[test]
 fn done_keeps_running_rows_above_the_finished_cut() {
     let now = Timestamp::from_second(1_000).unwrap();
     let mut tasks = Vec::new();
