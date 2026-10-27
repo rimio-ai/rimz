@@ -196,6 +196,7 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
         (false, planned(), None, Unavailable, "a failed probe"),
     ] {
         let record = ProviderRecord {
+            consecutive_failures: 0,
             version_probed_at_ms: None,
             inputs_stamp: None,
             profile: None,

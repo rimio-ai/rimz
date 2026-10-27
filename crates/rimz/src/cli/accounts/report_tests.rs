@@ -197,6 +197,7 @@ fn assemble_reports(
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        consecutive_failures: 0,
         version_probed_at_ms: None,
         inputs_stamp: None,
         profile: None,

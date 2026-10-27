@@ -51,11 +51,14 @@ pub struct AccountsCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderRecord {
     pub probed_at_ms: u64,
+    #[serde(default, skip_serializing_if = "super::is_zero_u32")]
+    pub consecutive_failures: u32,
     /// Start of the version read, aged independently of provisional retries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_probed_at_ms: Option<u64>,
-    /// A failed probe retries on `ACCOUNTS_RETRY_TTL`; a successful result rides
-    /// `ACCOUNTS_TTL`, or the retry floor while provisional or after its adapter's stamp moves.
+    /// A failed probe backs off from `ACCOUNTS_RETRY_TTL` to `ACCOUNTS_TTL`;
+    /// success rides `ACCOUNTS_TTL`, or the retry floor while provisional.
+    /// A moved adapter stamp makes either outcome due behind the retry floor.
     pub ok: bool,
     /// The adapter's inputs stamp read before the probe that wrote this record.
     /// Absent for an adapter without one and on a record an older build wrote,
@@ -834,9 +837,8 @@ pub(super) fn file_mtime_ms(path: &Path) -> Option<u64> {
 
 /// The outcome of an out-of-band account probe. A settled `Found` or `LoggedOut`
 /// answer rides the producer's long success TTL. A provisional `Found` retries
-/// on the short TTL, as does `Unavailable` — a binary that would not run, a
-/// non-zero exit, or an unreadable file — rather than pinning the dashboard
-/// empty for the full success window.
+/// on the short TTL. `Unavailable` backs off from the short TTL to the success
+/// TTL across consecutive failures, retaining the last-known account facts.
 #[derive(Debug)]
 #[expect(
     clippy::large_enum_variant,
@@ -850,7 +852,7 @@ pub enum AccountProbe {
     /// file naming no credential). Cache it like a success: it changes about never.
     LoggedOut,
     /// The probe could not complete — the binary is missing, it exited non-zero,
-    /// or its file was unreadable. Retry soon; absence here is not logged-out.
+    /// or its file was unreadable. Back off; absence here is not logged-out.
     Unavailable(AccountProbeError),
 }
 

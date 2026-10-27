@@ -974,6 +974,7 @@ fn lagging_published_hint_spawns_once_until_it_moves() {
         logins: BTreeMap::from([(
             key.clone(),
             ProviderRecord {
+                consecutive_failures: 0,
                 version_probed_at_ms: None,
                 inputs_stamp: None,
                 probed_at_ms: crate::utils::time::unix_now_ms(),
@@ -1056,6 +1057,7 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    consecutive_failures: 0,
                     version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
@@ -1131,6 +1133,7 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    consecutive_failures: 0,
                     version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
@@ -1208,6 +1211,7 @@ fn undecided_account_creates_no_synchronous_usage_claim_or_probe() {
                 key.clone(),
                 ProviderRecord {
                     ok: true,
+                    consecutive_failures: 0,
                     account: Some(AgentAccount {
                         provisional: true,
                         ..Default::default()
@@ -1317,6 +1321,7 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
             logins: std::collections::BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    consecutive_failures: 0,
                     version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
@@ -1376,6 +1381,7 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    consecutive_failures: 0,
                     version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
