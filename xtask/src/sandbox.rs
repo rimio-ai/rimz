@@ -630,10 +630,13 @@ fn reap_sandbox_processes(_root: &Path) {
     // arbitrary leaked child by its environment relies on Linux `/proc`.
 }
 
-/// Processes whose exec has published an environment naming the sandbox root.
+/// Processes other than this one whose readable environment names the sandbox root.
 ///
-/// A child spawned an instant earlier may be missing. A caller that spawns and then reaps
-/// waits until the child is listed before starting the reap.
+/// A process whose `/proc/<pid>/environ` reads empty or fails is left out, so a child spawned
+/// an instant earlier, before its exec published the environment, may be missing; a caller
+/// that spawns and then reaps waits until the child is listed before starting the reap. An
+/// exited process left as a zombie reads empty too, which is what lets `reap_sandbox_processes`
+/// end its rescans once every signalled process has exited.
 #[cfg(target_os = "linux")]
 fn sandbox_processes(root: &Path) -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
