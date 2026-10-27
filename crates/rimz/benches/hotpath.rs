@@ -280,8 +280,8 @@ mod latency {
             }
             let rollup = bytes(&fixture.store.paths().rollup_cache);
             assert!(
-                rollup >= 2 * 1024 * 1024,
-                "retained multi-MB rollup required: {rollup}"
+                rollup >= 1024 * 1024,
+                "retained MB-scale rollup required: {rollup}"
             );
             let sidecars: Vec<_> =
                 std::fs::read_dir(&fixture.store.runtime_paths().agent_context_dir)
@@ -299,7 +299,6 @@ mod latency {
                 "live_roots": live.len(), "owner_processes": fixture.owners.0.len(),
                 "history_rows": HISTORY_CARRYOVER, "rollup_bytes": rollup,
                 "carryover_bytes": bytes(&fixture.store.paths().agents_carryover),
-                "derived_carryover_bytes": bytes(&fixture.store.paths().carryover_cache),
                 "sidecar_count": sidecars.len(), "sidecar_bytes": sidecars.iter().sum::<u64>()}),
             );
             assert!(
@@ -1754,47 +1753,6 @@ fn carryover_fold_cold(bencher: Bencher, rows: usize) {
         .with_inputs(|| ended_carryover_fixture(rows, false))
         .bench_local_values(|mut fixture| {
             divan::black_box(fixture.cursor.fold(&fixture.paths).expect("cold fold"));
-            fixture
-        });
-}
-
-#[divan::bench(args = [3_300, 13_200], sample_count = 20, sample_size = 1, skip_ext_time)]
-fn carryover_fold_cold_derived(bencher: Bencher, rows: usize) {
-    bencher
-        .with_inputs(|| {
-            let fixture = ended_carryover_fixture(rows, false);
-            let paths = fixture.paths.clone();
-            let runtime = fixture._workspace.runtime.clone();
-            // Publish on another thread so the measured thread's parse cache stays cold.
-            std::thread::spawn(move || {
-                let store = rimz::Store::open(paths.clone(), runtime).expect("open store");
-                store
-                    .append_event(&rimz::testkit::fleet::registered_lifecycle(
-                        &paths.workspace_id,
-                        0,
-                    ))
-                    .expect("publish carryover");
-                assert!(paths.carryover_cache.exists());
-                // Keep precisely the raw bench's fold inputs, plus the derived copy.
-                for path in [
-                    &paths.events_log,
-                    &paths.rollup_cache,
-                    &paths.latest_snapshot,
-                ] {
-                    std::fs::remove_file(path).expect("remove publication scaffolding");
-                }
-            })
-            .join()
-            .expect("publish thread");
-            fixture
-        })
-        .bench_local_values(|mut fixture| {
-            divan::black_box(
-                fixture
-                    .cursor
-                    .fold(&fixture.paths)
-                    .expect("cold derived fold"),
-            );
             fixture
         });
 }

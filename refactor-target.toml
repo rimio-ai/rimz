@@ -282,7 +282,8 @@ upward-dependencies = ["address"]
 # AccountUsageKey, its parser error and constructor, and scoped CreditsCache lookups (+5).
 # AgentAccount::is_undecided shares the no-backing-credential classification (+1).
 # CacheWriteRetention and SignIn share per-agent lifetime inputs (+2).
-surface-budget = 1165
+# AgentState::trim_ended_text shares ended-row labels with reducer and carryover reads (+1).
+surface-budget = 1166
 
 [[verdict]]
 kind = "item"

@@ -68,7 +68,7 @@ fn rotation_commits_reborn_ordinals_before_the_next_registration() {
 }
 
 #[test]
-fn rotation_preserves_ended_text_after_trimmed_folds_and_hydration() {
+fn legacy_ended_carryover_folds_and_stages_only_labels() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -78,8 +78,8 @@ fn rotation_preserves_ended_text_after_trimmed_folds_and_hydration() {
     carried.ended_at = Some(carried.last_seen);
     carried.name = Some("lucid-atlas".to_owned());
     carried.kind_ordinal = Some(1);
-    carried.first_prompt = Some(format!("{}\nsecond line", "first prompt ".repeat(30)));
-    carried.prompt = Some("latest prompt".to_owned());
+    carried.first_prompt = Some(format!("first\n {}", "x".repeat(300)));
+    carried.prompt = Some("latest\n prompt".to_owned());
     carried.recent_prompts = vec!["first prompt".to_owned(), "latest prompt".to_owned()];
     let mut stamp = pane("%7", "claude", "/repo");
     stamp.foreground_cmdline = Some("foreground prompt".to_owned());
@@ -94,12 +94,24 @@ fn rotation_preserves_ended_text_after_trimmed_folds_and_hydration() {
     )
     .unwrap();
     let before = read_carryover(&paths.agents_carryover).unwrap();
+    let mut expected = before.agents[0].clone();
+    expected.first_prompt = Some(format!("first {}", "x".repeat(154)));
+    expected.prompt = Some("latest prompt".to_owned());
+    expected.recent_prompts.clear();
+    let stamp = expected.pane.as_mut().unwrap();
+    stamp.foreground_cmdline = None;
+    stamp.spawn_command = None;
     let mut cursor = RollupCursor::new();
     let (_, folded, _) = cursor.fold(&paths).unwrap();
+    assert_eq!(folded.to_vec(), vec![expected.clone()]);
+    assert_eq!(catch_up_rollup(&paths).unwrap().1, vec![expected.clone()]);
     assert_eq!(
-        folded.iter().next().unwrap().first_prompt,
-        Some("first prompt ".repeat(30).chars().take(160).collect()),
-        "cold fold retains only the bounded first line"
+        thread_catch_up(&paths).unwrap().1.to_vec(),
+        vec![expected.clone()]
+    );
+    assert_eq!(
+        read_carryover(&paths.agents_carryover).unwrap().agents,
+        before.agents
     );
     event_log::append(
         &paths.events_log,
@@ -117,7 +129,7 @@ fn rotation_preserves_ended_text_after_trimmed_folds_and_hydration() {
     stage_carryover_for_rotation(&paths, 1).unwrap();
     assert_eq!(
         read_carryover(&paths.agents_carryover).unwrap().agents,
-        before.agents
+        vec![expected.clone()]
     );
     event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
     reseed_rollup_cache_for_rotation(&paths).unwrap();
@@ -136,7 +148,6 @@ fn rotation_preserves_ended_text_after_trimmed_folds_and_hydration() {
     cursor.fold(&paths).unwrap();
     stage_carryover_for_rotation(&paths, 1).unwrap();
     let after = read_carryover(&paths.agents_carryover).unwrap();
-    let mut expected = before.agents[0].clone();
     expected.launch_warnings = vec!["new warning".to_owned()];
     assert_eq!(after.agents, vec![expected]);
 }

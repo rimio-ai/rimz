@@ -3,11 +3,11 @@
 
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -76,7 +76,6 @@ pub mod testkit {
     }
 
     static CARRYOVER_BYTES_PARSED: AtomicU64 = AtomicU64::new(0);
-    static DERIVED_CARRYOVER_BYTES_READ: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_BASE_COPIES: AtomicU64 = AtomicU64::new(0);
 
@@ -111,17 +110,6 @@ pub mod testkit {
         CARRYOVER_BYTES_PARSED.fetch_add(n, Ordering::Relaxed);
         crate::lane::count_event_log_bytes_read(n);
     }
-
-    /// Trimmed carryover cache bytes read since process start, including misses.
-    #[cfg(feature = "testkit")]
-    pub fn derived_carryover_bytes_read() -> u64 {
-        DERIVED_CARRYOVER_BYTES_READ.load(Ordering::Relaxed)
-    }
-
-    pub(super) fn count_derived_bytes(n: u64) {
-        DERIVED_CARRYOVER_BYTES_READ.fetch_add(n, Ordering::Relaxed);
-        crate::lane::count_event_log_bytes_read(n);
-    }
 }
 
 fn read_carryover(path: &Path) -> Result<EventCarryover> {
@@ -151,11 +139,9 @@ fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result<()> {
 /// identities backfilled and rows key-sorted with unique keys (the last row
 /// for a duplicated key wins, as the fold's keyed maps always did). Shared
 /// read-only by every fold on this thread until the file changes. The cached
-/// form keeps a bounded first-line prompt label on ended rows and drops their
-/// other prompt and pane-command text; prune and reseed read
-/// the raw file through [`read_carryover`], and rotation staging folds against
-/// its own untrimmed copy and writes the merged rows, so an identity backfilled
-/// here is persisted at the next rotation.
+/// form applies [`AgentState::trim_ended_text`] to legacy ended rows too.
+/// Rotation staging writes these labels and backfilled identities into the
+/// durable carryover.
 #[derive(Clone, Debug, Default)]
 struct FoldCarryover {
     agents: Vec<AgentState>,
@@ -163,15 +149,14 @@ struct FoldCarryover {
     /// The file's identity state as written — the cold fold's seed.
     agent_identity: AgentIdentityState,
     resume_outcomes: Vec<ResumeOutcome>,
-    source_path: Option<PathBuf>,
-    raw_source: Option<FileStamp>,
     reborn: OnceLock<Arc<Self>>,
 }
 
-const CARRIED_FIRST_PROMPT_MAX_CHARS: usize = 160;
-
 impl FoldCarryover {
     fn from_raw(mut raw: EventCarryover) -> Self {
+        for agent in &mut raw.agents {
+            agent.trim_ended_text();
+        }
         backfill_agent_identities(&mut raw.agents, raw.agent_identity.clone());
         let agents = raw
             .agents
@@ -185,35 +170,8 @@ impl FoldCarryover {
             project_root: None,
             agent_identity: raw.agent_identity,
             resume_outcomes: raw.resume_outcomes,
-            source_path: None,
-            raw_source: None,
             reborn: OnceLock::new(),
         }
-    }
-
-    fn trimmed(mut self, source: &Path) -> Self {
-        self.source_path = Some(source.to_path_buf());
-        for agent in &mut self.agents {
-            if agent.ended_at.is_none() {
-                continue;
-            }
-            if let Some(prompt) = &mut agent.first_prompt {
-                *prompt = prompt
-                    .lines()
-                    .find(|line| !line.trim().is_empty())
-                    .unwrap_or_default()
-                    .chars()
-                    .take(CARRIED_FIRST_PROMPT_MAX_CHARS)
-                    .collect();
-            }
-            agent.prompt = None;
-            agent.recent_prompts = Vec::new();
-            if let Some(pane) = &mut agent.pane {
-                pane.foreground_cmdline = None;
-                pane.spawn_command = None;
-            }
-        }
-        self
     }
 
     fn stamp_root_lane(&mut self, project_root: Option<&Path>) {
@@ -247,8 +205,6 @@ impl FoldCarryover {
                 project_root: self.project_root.clone(),
                 agent_identity: self.agent_identity.clone(),
                 resume_outcomes: self.resume_outcomes.clone(),
-                source_path: self.source_path.clone(),
-                raw_source: self.raw_source,
                 reborn: OnceLock::new(),
             })
         }))
@@ -265,36 +221,15 @@ thread_local! {
 /// Rotation and prune replace the file by atomic rename, so a changed payload
 /// changes `(len, mtime, dev, ino)` and re-parses exactly once. An error is
 /// never cached: a corrupt replacement fails every fold until it is replaced.
-fn fold_carryover(
-    path: &Path,
-    project_root: Option<&Path>,
-    derived_path: Option<&Path>,
-) -> Result<Arc<FoldCarryover>> {
+fn fold_carryover(path: &Path, project_root: Option<&Path>) -> Result<Arc<FoldCarryover>> {
     let stamped = StampedPath::of(path);
     let (mut carryover, cached) =
         match CARRYOVER_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped)) {
             Some(carryover) => (carryover, true),
-            None => {
-                let derived = derived_path
-                    .filter(|_| path.exists())
-                    .and_then(|derived| read_derived_carryover(derived, stamped.stamp));
-                let carryover = match derived {
-                    Some(raw) => FoldCarryover {
-                        agents: raw.agents,
-                        agent_identity: raw.agent_identity,
-                        resume_outcomes: raw.resume_outcomes,
-                        source_path: Some(path.to_path_buf()),
-                        ..FoldCarryover::default()
-                    },
-                    None => {
-                        let mut carryover =
-                            FoldCarryover::from_raw(read_carryover(path)?).trimmed(path);
-                        carryover.raw_source = path.exists().then_some(stamped.stamp);
-                        carryover
-                    }
-                };
-                (Arc::new(carryover), false)
-            }
+            None => (
+                Arc::new(FoldCarryover::from_raw(read_carryover(path)?)),
+                false,
+            ),
         };
     if !cached || carryover.project_root.as_deref() != project_root {
         Arc::make_mut(&mut carryover).stamp_root_lane(project_root);
@@ -305,61 +240,7 @@ fn fold_carryover(
 
 fn workspace_carryover(paths: &StatePaths) -> Result<Arc<FoldCarryover>> {
     let identity = super::assemble::WorkspaceSnapshotIdentity::from_paths(paths);
-    fold_carryover(
-        &paths.agents_carryover,
-        identity.project_root.as_deref(),
-        Some(&paths.carryover_cache),
-    )
-}
-
-#[derive(Serialize, Deserialize)]
-struct DerivedCarryover {
-    version: u32,
-    source: FileStamp,
-    agents: Vec<AgentState>,
-    agent_identity: AgentIdentityState,
-    resume_outcomes: Vec<ResumeOutcome>,
-}
-
-fn read_derived_carryover(path: &Path, source: FileStamp) -> Option<EventCarryover> {
-    let bytes = fs::read(path).ok()?;
-    testkit::count_derived_bytes(bytes.len() as u64);
-    let cached: DerivedCarryover = serde_json::from_slice(&bytes).ok()?;
-    (cached.version == ROLLUP_CACHE_VERSION && cached.source == source).then_some(EventCarryover {
-        agents: cached.agents,
-        agent_identity: cached.agent_identity,
-        resume_outcomes: cached.resume_outcomes,
-    })
-}
-
-pub(super) fn write_carryover_cache(paths: &StatePaths) -> Result<()> {
-    static PUBLISHED: OnceLock<Mutex<HashSet<StampedPath>>> = OnceLock::new();
-    let carryover = workspace_carryover(paths)?;
-    let Some(source) = carryover.raw_source else {
-        return Ok(());
-    };
-    let stamped = StampedPath {
-        path: paths.agents_carryover.clone(),
-        stamp: source,
-    };
-    let mut published = PUBLISHED
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    if published.contains(&stamped) {
-        return Ok(());
-    }
-    let cached = DerivedCarryover {
-        version: ROLLUP_CACHE_VERSION,
-        source,
-        agents: carryover.agents.clone(),
-        agent_identity: carryover.agent_identity.clone(),
-        resume_outcomes: carryover.resume_outcomes.clone(),
-    };
-    let _ = atomic::sweep_stale_temp_siblings(&paths.carryover_cache, Duration::from_secs(3_600));
-    atomic::write_temp_then_rename_cache_compact(&paths.carryover_cache, &cached)?;
-    published.insert(stamped);
-    Ok(())
+    fold_carryover(&paths.agents_carryover, identity.project_root.as_deref())
 }
 
 /// The carryover-merged agent rollup, layered so a fold never copies history:
@@ -456,9 +337,9 @@ pub(crate) fn agent_rollup_with_carryover(
 }
 
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
-/// [`FoldCarryover::trimmed`]'s rules change — a
+/// [`AgentState::trim_ended_text`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 44;
+const ROLLUP_CACHE_VERSION: u32 = 45;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -668,7 +549,6 @@ fn fold_delta(
     // Hydrate continuing rows at rebirth, plus observed keys, linked predecessors,
     // and command receivers. Stamps persist in raw_agents, not the shared carryover.
     let (before_rebirth, after_rebirth) = events.split_at(rebirth.unwrap_or(0));
-    let mut full_rows: Option<BTreeMap<_, _>> = None;
     for delta in std::iter::once(before_rebirth)
         .filter(|delta| !delta.is_empty())
         .chain(std::iter::once(after_rebirth))
@@ -709,26 +589,7 @@ fn fold_delta(
                     continue;
                 }
                 if let Some(carried) = carryover.get(&key.0, &key.1) {
-                    let mut carried = carried.clone();
-                    if carried.ended_at.is_some()
-                        && let Some(source) = &carryover.source_path
-                    {
-                        if full_rows.is_none() {
-                            full_rows = Some(
-                                read_carryover(source)?
-                                    .agents
-                                    .into_iter()
-                                    .map(|agent| {
-                                        ((agent.kind.clone(), agent.agent_id.clone()), agent)
-                                    })
-                                    .collect(),
-                            );
-                        }
-                        if let Some(full) = full_rows.as_ref().and_then(|rows| rows.get(&key)) {
-                            restore_agent_text(&mut carried, full);
-                        }
-                    }
-                    seed.agents.insert(key, carried);
+                    seed.agents.insert(key, carried.clone());
                 }
             }
         }
@@ -781,47 +642,6 @@ fn fold_delta(
         resume_outcomes,
         merged_resume_outcomes,
     })
-}
-
-fn restore_agent_text(agent: &mut AgentState, full: &AgentState) {
-    agent.first_prompt.clone_from(&full.first_prompt);
-    agent.prompt.clone_from(&full.prompt);
-    agent.recent_prompts.clone_from(&full.recent_prompts);
-    if let Some(pane) = &mut agent.pane {
-        pane.foreground_cmdline = full
-            .pane
-            .as_ref()
-            .and_then(|pane| pane.foreground_cmdline.clone());
-        pane.spawn_command = full
-            .pane
-            .as_ref()
-            .and_then(|pane| pane.spawn_command.clone());
-    }
-}
-
-pub(crate) fn load_full_agent(paths: &StatePaths, agent: &AgentState) -> Result<AgentState> {
-    let mut loaded = agent.clone();
-    if agent.ended_at.is_none() {
-        return Ok(loaded);
-    }
-    if let Some(full) = read_carryover(&paths.agents_carryover)?
-        .agents
-        .into_iter()
-        .rev()
-        .find(|full| full.kind == agent.kind && full.agent_id == agent.agent_id)
-        && full.ended_at == agent.ended_at
-        && full.last_seen == agent.last_seen
-    {
-        let events = event_log::read_all(&paths.events_log)?;
-        let observed = decode_events(&events)
-            .iter()
-            .filter_map(agent_event_key)
-            .any(|(kind, agent_id)| kind == agent.kind && agent_id == agent.agent_id);
-        if !observed {
-            restore_agent_text(&mut loaded, &full);
-        }
-    }
-    Ok(loaded)
 }
 
 /// Catch the rollup up to the live log and return the fold base beside the

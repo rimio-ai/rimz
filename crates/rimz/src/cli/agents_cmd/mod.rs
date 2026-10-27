@@ -135,12 +135,7 @@ fn resolve_live_or_audit(
     let live_error =
         match super::resolve_agent_one_unhinted(Some(store), snapshot, reference, None, channel) {
             Ok(agent) => {
-                return Ok((
-                    store
-                        .load_full_agent(agent)
-                        .context("loading live agent text")?,
-                    true,
-                ));
+                return Ok((agent.clone(), true));
             }
             Err(error) if super::resolution_missed(&error) => error,
             Err(error) => return Err(error),

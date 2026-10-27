@@ -960,6 +960,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     if !state_snapshot && let Some(report) = &input.observation.background_shells {
         report.apply(&mut state.background_shells);
     }
+    state.trim_ended_text();
     state
 }
 

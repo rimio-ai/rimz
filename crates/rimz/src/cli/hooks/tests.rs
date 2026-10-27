@@ -272,7 +272,7 @@ fn opencode_snapshot_frames_leave_edge_consumers_untouched_on_apply_and_replay()
 
 #[test]
 fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
-    for derived_present in [true, false] {
+    for published_base in [true, false] {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         std::fs::create_dir(&repo).unwrap();
@@ -308,15 +308,14 @@ fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
         store.record_workspace(&workspace).unwrap();
         rimz::testkit::fleet::seed_ended_carryover(&store, 3_300).unwrap();
         let registration = rimz::testkit::fleet::registered_lifecycle(&paths.workspace_id, 0);
-        if derived_present {
+        if published_base {
             store.append_event(&registration).unwrap();
-            // A changed snapshot field makes record_workspace republish, which backfills the copy.
+            // Changing snapshot identity forces a persisted base before the cold frame.
             workspace.session_name.push_str("-seeded");
             store.record_workspace(&workspace).unwrap();
         } else {
             rimz::store::event_log::append(&paths.events_log, &registration).unwrap();
         }
-        assert_eq!(paths.carryover_cache.exists(), derived_present);
         let raw_len = std::fs::metadata(&paths.agents_carryover).unwrap().len();
         let mut env = rimz::workspace::pin_env(&paths.workspace_id, &repo);
         env.insert("HOME".into(), dir.path().display().to_string());
@@ -337,7 +336,6 @@ fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
         };
         std::thread::spawn(move || {
             let raw_before = rimz::testkit::carryover_bytes_parsed();
-            let derived_before = rimz::testkit::derived_carryover_bytes_read();
             let spawns_before = rimz::testkit::spawn_count();
             rimz::harness::hook_drain::with_frame_env(
                 &frame,
@@ -362,24 +360,10 @@ fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
             assert_eq!(agent.status, rimz::agents::AgentStatus::Running);
             assert_eq!(agent.prompt.as_deref(), Some("work"));
             assert_eq!(rimz::testkit::spawn_count() - spawns_before, 1);
-            if !paths.carryover_cache.exists() {
-                workspace.session_name.push_str("-published");
-                store.record_workspace(&workspace).unwrap();
-            }
-            assert!(
-                paths.carryover_cache.exists(),
-                "serialized publication backfills the copy"
-            );
             assert_eq!(
                 rimz::testkit::carryover_bytes_parsed() - raw_before,
-                if derived_present { 0 } else { raw_len }
+                raw_len
             );
-            let derived_len = std::fs::metadata(&paths.carryover_cache).unwrap().len();
-            let derived_bytes = rimz::testkit::derived_carryover_bytes_read() - derived_before;
-            assert!(derived_bytes <= derived_len);
-            if derived_present {
-                assert_eq!(derived_bytes, derived_len);
-            }
         })
         .join()
         .unwrap();

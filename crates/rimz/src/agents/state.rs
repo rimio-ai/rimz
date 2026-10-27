@@ -852,8 +852,8 @@ pub struct AgentState {
     /// the illegal combinations are unrepresentable here too.
     #[serde(default)]
     pub phase: TurnPhase,
-    /// Carried ended rows retain the pane id but omit `foreground_cmdline`
-    /// and `spawn_command` in memory; `Store::load_full_agent` restores them.
+    /// Ended rows retain the pane identity but omit `foreground_cmdline`
+    /// and `spawn_command`.
     pub pane: Option<PaneRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
@@ -889,14 +889,13 @@ pub struct AgentState {
     pub task: Option<String>,
     /// The session's first usable user prompt. Set once and carried for the
     /// whole session so an unnamed card has a stable label across later turns.
-    /// On carried ended rows in memory, only the first non-blank line's first 160
-    /// characters remain; use `Store::load_full_agent` for the full prompt.
+    /// Ended rows keep a normalized one-line label of at most 160 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_prompt: Option<String>,
     /// The user's latest prompt, carried forward across events (unlike the
     /// activity-bound `task`). Labels an unnamed session on the sidebar until a
     /// real session name exists.
-    /// Empty on carried ended rows in memory; use `Store::load_full_agent`.
+    /// Ended rows keep a normalized one-line label of at most 160 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     /// Launch-seeded card label (`rimz agents --description`), carried forward.
@@ -925,7 +924,7 @@ pub struct AgentState {
     /// Recent user prompts for this session, newest last, capped by the rollup.
     /// The sidebar row keeps only `prompt`; snapshot JSON exposes the history on
     /// `agents[]` for diagnostics and future panes.
-    /// Empty on carried ended rows in memory; use `Store::load_full_agent`.
+    /// Empty on ended rows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_prompts: Vec<String>,
     pub model: Option<String>,
@@ -1149,6 +1148,23 @@ impl AgentState {
             self.first_prompt = Some(prompt.to_owned());
         }
         append_recent_prompt(&mut self.recent_prompts, prompt);
+    }
+
+    /// Retain bounded presentation labels once a session has ended.
+    pub(crate) fn trim_ended_text(&mut self) {
+        if self.ended_at.is_none() {
+            return;
+        }
+        for prompt in [&mut self.first_prompt, &mut self.prompt] {
+            *prompt = prompt
+                .as_deref()
+                .and_then(|text| single_line_prefix(text, 160));
+        }
+        self.recent_prompts.clear();
+        if let Some(pane) = &mut self.pane {
+            pane.spawn_command = None;
+            pane.foreground_cmdline = None;
+        }
     }
 
     /// Request-start estimate shared by cache-aligned timers: the last real
@@ -2006,10 +2022,17 @@ impl AgentState {
 }
 
 /// Collapse whitespace and drop control characters, returning `None` for blank
-/// values. Callers keep the original borrowed field for precedence decisions and
-/// run this only at render boundaries.
+/// values. Used at render boundaries.
 pub fn single_line_description(value: &str) -> Option<String> {
+    single_line_prefix(value, usize::MAX)
+}
+
+/// [`single_line_description`] cut to at most `max_chars` characters without
+/// a trailing space, reading `value` only as far as the cut: an ended row's
+/// label costs the same for a kilobyte prompt as for a short one.
+fn single_line_prefix(value: &str, max_chars: usize) -> Option<String> {
     let mut out = String::new();
+    let mut chars = 0;
     let mut pending_space = false;
     for ch in value.chars() {
         if ch.is_whitespace() {
@@ -2021,11 +2044,16 @@ pub fn single_line_description(value: &str) -> Option<String> {
         if ch.is_control() {
             continue;
         }
+        let width = usize::from(pending_space) + 1;
+        if chars + width > max_chars {
+            break;
+        }
         if pending_space {
             out.push(' ');
             pending_space = false;
         }
         out.push(ch);
+        chars += width;
     }
     (!out.is_empty()).then_some(out)
 }

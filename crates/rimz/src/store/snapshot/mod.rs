@@ -35,8 +35,8 @@ pub(crate) use fold::lifecycle_log_generation_constant_memory;
 pub(crate) use fold::testkit as fold_testkit;
 pub use fold::{ResumeOutcome, RollupCursor};
 pub(super) use fold::{
-    catch_up_rollup, catch_up_with_pending, load_full_agent, prune_carryover,
-    reseed_rollup_cache_for_rotation, stage_carryover_for_rotation,
+    catch_up_rollup, catch_up_with_pending, prune_carryover, reseed_rollup_cache_for_rotation,
+    stage_carryover_for_rotation,
 };
 pub use panes::SidebarOwnView;
 pub use panes::{

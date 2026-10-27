@@ -324,14 +324,7 @@ pub(super) fn resolve_audit_agent(
         }
         Err(err) => return Err(err.into()),
     };
-    matches
-        .first()
-        .map(|agent| {
-            store
-                .load_full_agent(agent)
-                .context("loading audit agent text")
-        })
-        .transpose()
+    Ok(matches.first().map(|agent| (*agent).clone()))
 }
 
 fn is_false(value: &bool) -> bool {

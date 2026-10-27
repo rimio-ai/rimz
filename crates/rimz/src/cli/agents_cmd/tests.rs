@@ -1960,7 +1960,7 @@ mod render {
     use super::*;
 
     #[test]
-    fn live_resolution_loads_full_ended_child_text_but_does_not_read_for_a_live_parent() {
+    fn resolution_keeps_ended_child_labels_without_rereading_carryover() {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(dir.path());
         let paths = rimz::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
@@ -2021,17 +2021,16 @@ mod render {
                 .unwrap();
         assert!(live, "the ended child resolves on the live path");
         assert_eq!(
-            loaded.first_prompt, child.first_prompt,
-            "explicit reads restore the whole prompt"
+            loaded.first_prompt,
+            Some(format!("{}full", "full prompt ".repeat(13))),
         );
         assert_eq!(loaded.prompt, child.prompt);
-        assert_eq!(loaded.recent_prompts, child.recent_prompts);
-        assert_eq!(
-            rimz::testkit::carryover_bytes_parsed() - before,
-            std::fs::metadata(&store.paths().agents_carryover)
-                .unwrap()
-                .len(),
-        );
+        assert!(loaded.recent_prompts.is_empty());
+        let audit = show::resolve_audit_agent(&store, &workspace, &runtime, "@child", &channel)
+            .unwrap()
+            .unwrap();
+        assert_eq!(audit, loaded);
+        assert_eq!(rimz::testkit::carryover_bytes_parsed(), before);
     }
 
     #[test]

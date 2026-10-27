@@ -8,9 +8,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 
 use super::Result;
-use super::fold::{
-    ResumeOutcome, RollupCursor, catch_up_rollup, write_carryover_cache, write_rollup_cache,
-};
+use super::fold::{ResumeOutcome, RollupCursor, catch_up_rollup, write_rollup_cache};
 use super::view::{SNAPSHOT_VERSION, SidebarSnapshot};
 use crate::agents::AgentState;
 use crate::disk::atomic::{self};
@@ -22,9 +20,7 @@ use crate::workspace::RootClass;
 use crate::workspace::record::{self, WorkspaceRecordErr};
 
 /// Rebuild the snapshot caches from the live store: the rollup fold base
-/// (`rollup.json`) and its generation mirror, the derived view (`latest.json`),
-/// and a stamped trimmed carryover copy (`carryover.json`) when the fold parsed
-/// the raw carryover.
+/// (`rollup.json`) and its generation mirror, and the derived view (`latest.json`).
 /// The resulting JSON is what `rimz sidebar snapshot --json` reads on
 /// attach. Caller owns a write serialization point (the workspace lock, or
 /// the publish single-flight).
@@ -43,7 +39,6 @@ pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
     // cache-class — crash-durability lives in the event log; a
     // torn-after-power-cut cache parses to a miss and cold-rebuilds.
     write_rollup_cache(paths, &rollup)?;
-    write_carryover_cache(paths)?;
     atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &snapshot)?;
     Ok(snapshot)
 }

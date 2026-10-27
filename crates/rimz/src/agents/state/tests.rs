@@ -209,6 +209,69 @@ fn prior_launch_ids_decode_legacy_rows_and_skip_empty_lists() {
 }
 
 #[test]
+fn ended_text_keeps_canonical_bounded_labels_and_leaves_live_rows_whole() {
+    for (text, expected) in [
+        (
+            "first\n  second\tline".to_owned(),
+            Some("first second line".to_owned()),
+        ),
+        ("é🦊".repeat(200), Some("é🦊".repeat(80))),
+        (format!("{} b", "a".repeat(159)), Some("a".repeat(159))),
+        (" \n\t\u{0007}".to_owned(), None),
+        ("ship\u{0007}\n now".to_owned(), Some("ship now".to_owned())),
+        (
+            "<system-reminder>\ncontrol</system-reminder>".to_owned(),
+            Some("<system-reminder> control</system-reminder>".to_owned()),
+        ),
+    ] {
+        let mut agent = test_agent(AgentStatus::Idle, 1_000);
+        agent.first_prompt = Some(text.clone());
+        agent.prompt = Some(text);
+        agent.recent_prompts = vec!["history".to_owned()];
+        agent.task = Some("task stays".to_owned());
+        let mut pane = crate::pane::PaneRef::from_id("tmux:%7".parse().unwrap());
+        pane.spawn_command = Some("spawn argv".to_owned());
+        pane.foreground_cmdline = Some("foreground argv".to_owned());
+        agent.pane = Some(pane);
+        let live = agent.clone();
+        agent.trim_ended_text();
+        assert_eq!(agent, live);
+
+        agent.ended_at = Some(agent.last_seen);
+        agent.trim_ended_text();
+        assert_eq!(agent.first_prompt, expected);
+        assert_eq!(agent.prompt, expected);
+        assert!(agent.recent_prompts.is_empty());
+        let mut expected_pane = live.pane.unwrap();
+        expected_pane.spawn_command = None;
+        expected_pane.foreground_cmdline = None;
+        assert_eq!(agent.pane, Some(expected_pane));
+        assert_eq!(agent.task.as_deref(), Some("task stays"));
+        let once = agent.clone();
+        agent.trim_ended_text();
+        assert_eq!(agent, once, "ended labels are idempotent");
+    }
+}
+
+#[test]
+fn ended_labels_preserve_short_session_name_prefix_decisions() {
+    for text in ["short\n prompt", "ship\u{0007}\t now", "é🦊", " \n\t"] {
+        let mut agent = test_agent(AgentStatus::Idle, 1_000);
+        agent.first_prompt = Some(text.to_owned());
+        agent.ended_at = Some(agent.last_seen);
+        agent.trim_ended_text();
+        assert_eq!(agent.first_prompt, single_line_description(text));
+        for name in ["short", "short prompt", "ship now", "é", "different", ""] {
+            assert_eq!(
+                session_name_is_prompt_prefix(name, Some(text)),
+                session_name_is_prompt_prefix(name, agent.first_prompt.as_deref()),
+                "name={name:?}, prompt={text:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn recent_prompts_truncate_multibyte_text_before_deduplication() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     let prompt = "🦀".repeat(10_000);
