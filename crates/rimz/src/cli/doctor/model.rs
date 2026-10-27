@@ -43,6 +43,7 @@ pub(super) struct DoctorReport {
     pub(super) sandbox: Sandbox,
     pub(super) hibernate: rimz::harness::hibernate::PreflightReport,
     pub(super) hooks: Vec<HookRow>,
+    pub(super) prompt_cache_fallback: PromptCacheFallback,
     pub(super) accounts: Probe<Accounts>,
     pub(super) plugins: Vec<PluginRow>,
     pub(super) loop_tasks: LoopTasks,
@@ -602,6 +603,13 @@ pub(super) struct TopologyWriterConflict {
 pub(super) struct TopologyWriterId {
     pub(super) plugin_id: u32,
     pub(super) loaded_at_ms: u64,
+}
+
+/// Installed kinds using the static fallback for at least one sign-in mode.
+#[derive(Debug, Serialize)]
+pub(super) struct PromptCacheFallback {
+    pub(super) ttl: String,
+    pub(super) kinds: Vec<String>,
 }
 
 /// One adapter's RimZ-hook wiring state, with the fix to advance it.

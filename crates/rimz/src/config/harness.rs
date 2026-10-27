@@ -545,7 +545,8 @@ impl HarnessConfig {
         })
     }
 
-    fn fallback_lifetime(&self) -> Option<Duration> {
+    /// The configured fallback lifetime, or one hour when unset.
+    pub fn fallback_lifetime(&self) -> Option<Duration> {
         match self.prompt_cache_ttl.get("fallback") {
             Some(LifetimeSetting::Plain(ttl)) => *ttl,
             _ => Some(Duration::from_secs(3600)),

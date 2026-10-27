@@ -2133,6 +2133,24 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         detail(w, palette::faint(), reason)?;
     }
 
+    let fallback = &report.prompt_cache_fallback;
+    if !fallback.kinds.is_empty() {
+        note(
+            w,
+            Health::Neutral,
+            &format!(
+                "prompt-cache fallback {}: {}",
+                fallback.ttl,
+                fallback.kinds.join(", ")
+            ),
+        )?;
+        detail(
+            w,
+            palette::faint(),
+            "set per-kind lifetimes in [harness.prompt_cache_ttl]; settings and defaults only, an agent's own cache writes can override them",
+        )?;
+    }
+
     if !absent.is_empty() {
         absent.sort_unstable();
         note(
