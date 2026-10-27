@@ -36,6 +36,8 @@ struct ForkSeed {
     kind: AgentKind,
     source_session_id: AgentSessionId,
     cwd: PathBuf,
+    /// The source is a launched child, whose profile names a subagent profile.
+    child: bool,
     launch: rimz::agents::LaunchParams,
 }
 
@@ -295,7 +297,7 @@ fn fork_posture(
     seed: &ForkSeed,
     effective: &rimz::config::effective::LaunchAgents,
 ) -> Result<ResumePosture> {
-    let profiles = &effective.profiles;
+    let profiles = effective.profiles_for_launch(seed.child, seed.launch.profile.as_deref());
     effective.block_failed_launch(
         &seed.kind,
         seed.launch.profile.as_deref(),
@@ -388,6 +390,7 @@ fn validate_fork_source(
         kind: agent.kind.clone(),
         source_session_id: agent.agent_id.clone(),
         cwd,
+        child: agent.is_launched_child(),
         launch: rimz::agents::LaunchParams {
             checkout: agent.checkout.clone(),
             profile: agent.profile.clone(),
@@ -489,6 +492,7 @@ mod tests {
             kind: AgentKind::new_unchecked(kind),
             source_session_id: AgentSessionId::from("session-1"),
             cwd: PathBuf::from("/repo/worktree"),
+            child: false,
             launch: rimz::agents::LaunchParams {
                 profile: profile.map(ToOwned::to_owned),
                 mode,
@@ -506,9 +510,18 @@ mod tests {
     }
 
     fn posture_with_profiles(seed: &ForkSeed, profiles: &ProfilesConfig) -> Result<ResumePosture> {
+        posture_with_tables(seed, profiles, &ProfilesConfig::default())
+    }
+
+    fn posture_with_tables(
+        seed: &ForkSeed,
+        profiles: &ProfilesConfig,
+        subagent_profiles: &ProfilesConfig,
+    ) -> Result<ResumePosture> {
         let dir = tempfile::tempdir().unwrap();
         let mut machine = rimz::config::MachineConfig::default();
         machine.agents.profiles = profiles.clone();
+        machine.subagents.profiles = subagent_profiles.clone();
         let effective = rimz::config::effective::load_with_roots(
             &machine,
             dir.path(),
@@ -597,6 +610,25 @@ mod tests {
         assert_eq!(posture.launch.mode, Some(PermissionMode::Yolo));
         assert_eq!(posture.launch.model.as_deref(), Some("opus"));
         assert_eq!(posture.launch.effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn fork_posture_resolves_a_launched_child_in_the_subagent_table() {
+        let explorer = profiles(
+            "explorer",
+            Profile {
+                model: Some("opus".to_owned()),
+                ..profile("claude")
+            },
+        );
+        let mut child = seed("claude", Some("explorer"), None);
+        child.child = true;
+
+        let posture = posture_with_tables(&child, &ProfilesConfig::default(), &explorer)
+            .expect("child posture");
+
+        assert_eq!(posture.launch.model.as_deref(), Some("opus"));
+        assert_eq!(posture.degraded, None);
     }
 
     #[test]
