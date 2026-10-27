@@ -52,10 +52,7 @@ fn updater_only_records_do_not_name_a_writer() {
 fn dedicated_writer_is_not_clear() {
     let home = tempfile::tempdir().expect("tempdir");
     let pid = std::process::id();
-    write_app_record(
-        home.path(),
-        &serde_json::json!({"pid": pid, "processStartTime": start_time(pid)}).to_string(),
-    );
+    write_app_record(home.path(), &native_record(pid));
     std::fs::rename(
         home.path().join("app-server-daemon/app-server.pid"),
         home.path().join("app-server-daemon/daemon.pid"),
@@ -551,6 +548,20 @@ fn start_time(pid: u32) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+/// The record current Codex writes for `pid`: on Linux its native identity
+/// confirms the process from `/proc`, so a socket assertion spawns no `ps`
+/// under the 2 s `PID_PROBE_TIMEOUT` while a loaded host runs the stand-in.
+fn native_record(pid: u32) -> String {
+    let mut record = serde_json::json!({"pid": pid, "processStartTime": start_time(pid)});
+    if cfg!(target_os = "linux") {
+        record["processIdentity"] = serde_json::json!({
+            "bootId": crate::proc::boot_id().expect("boot id"),
+            "startTicks": crate::proc::stat_metrics(pid).expect("stat").start_ticks,
+        });
+    }
+    record.to_string()
+}
+
 #[cfg(unix)]
 #[test]
 fn an_app_server_runs_under_a_home_only_while_its_recorded_process_lives() {
@@ -654,8 +665,8 @@ fn a_live_daemon_answers_with_the_threads_its_own_socket_lists() {
     let mut process = Command::new("sleep").arg("60").spawn().expect("spawn");
     let pid = process.id();
     let record = |start: &str| format!(r#"{{"pid":{pid},"processStartTime":"{start}"}}"#);
-    let started = start_time(pid);
-    write_app_record(home, &record(&started));
+    let started = native_record(pid);
+    write_app_record(home, &started);
     let live = |count| DaemonSessions::Live(std::num::NonZeroUsize::new(count).expect("nonzero"));
     let env = |extra: &[(&str, &str)]| -> BTreeMap<String, String> {
         extra
@@ -712,7 +723,7 @@ fn a_live_daemon_answers_with_the_threads_its_own_socket_lists() {
     assert_eq!(sessions_under(home), DaemonSessions::Clear, "start time");
     std::fs::remove_file(home.join("app-server-daemon/app-server.pid")).expect("remove");
     assert_eq!(sessions_under(home), DaemonSessions::Clear, "no record");
-    write_app_record(home, &record(&started));
+    write_app_record(home, &started);
     process.kill().expect("kill");
     let deadline = Instant::now() + Duration::from_secs(5);
     while app_server_runs_under(home) {
