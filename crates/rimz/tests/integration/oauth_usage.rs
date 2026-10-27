@@ -2045,6 +2045,12 @@ fn silent_pi_account_rechecks_a_provider_append_only_after_the_provisional_floor
         [Value::Null, Value::Null],
         "an undecided login shows no API credits"
     );
+    // A missing key also reads as null, so the decided API-key answer must carry credits:
+    // otherwise the seeded spend made no panel and the checks above prove nothing.
+    assert!(
+        !retried["extra_credits"].is_null(),
+        "a decided API-key login shows API credits: {retried}"
+    );
     let outcomes: Vec<_> = [first, immediate, retried]
         .into_iter()
         .map(|report| (report["plan"].clone(), report["metered"].clone()))
