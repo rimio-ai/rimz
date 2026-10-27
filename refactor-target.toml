@@ -706,7 +706,23 @@ path = "crates/rimz/src/cli"
 # Launch checkout and caller/lane facts move into the library (-4).
 # Supervised store creation and cross-repo consent move into the library (-2).
 # main reuses the hook-environment parse through Cli (+1).
-surface-budget = 30
+# record_work_on_exit supplies main's testkit-only return guard (+1).
+surface-budget = 31
+
+[[verdict]]
+kind = "item"
+key = "cli::record_work_on_exit"
+reason = "The binary holds the testkit work-log guard from main entry through return."
+
+[[verdict]]
+kind = "item"
+key = "testkit::WorkCounters"
+reason = "Snapshot and configuration boundaries share process atomics with the work-log writer."
+
+[[verdict]]
+kind = "item"
+key = "testkit::WORK_COUNTERS"
+reason = "The testkit-only work log reads one counter set across all process threads."
 
 [[module]]
 path = "crates/rimz/src/config"

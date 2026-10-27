@@ -361,6 +361,10 @@ fn read_rollup_cache(path: &Path) -> Option<Arc<RollupCache>> {
         return Some(cache);
     }
     let bytes = fs::read(path).ok()?;
+    #[cfg(feature = "testkit")]
+    crate::testkit::WORK_COUNTERS
+        .rollup_bytes_parsed
+        .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
     let cache: RollupCache = serde_json::from_slice(&bytes).ok()?;
     let cache = (cache.version == ROLLUP_CACHE_VERSION).then_some(cache)?;
     let cache = Arc::new(cache);

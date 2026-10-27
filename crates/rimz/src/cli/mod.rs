@@ -56,6 +56,8 @@ mod usage;
 mod wait;
 mod wake_view;
 mod web;
+#[cfg(feature = "testkit")]
+mod work_log;
 mod workflow;
 mod workspace;
 mod worktree;
@@ -228,10 +230,16 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         .map(|cli| ("hooks".to_owned(), cli))
         .or_else(|| try_hot_cli(std::env::args_os().collect()));
     let (canonical_command, cli) = match preparsed {
-        Some(parsed) => parsed,
+        Some(parsed) => {
+            #[cfg(feature = "testkit")]
+            work_log::record_hot_command(&parsed.1);
+            parsed
+        }
         None => {
             let cmd = help::customize(<Cli as CommandFactory>::command());
             let mut matches = cmd.get_matches();
+            #[cfg(feature = "testkit")]
+            work_log::record_command(&matches);
             let canonical = matches.subcommand_name().unwrap_or("start").to_owned();
             let cli = Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|err| err.exit());
             (canonical, cli)
@@ -354,6 +362,12 @@ where
         }
     }
     Ok(())
+}
+
+/// Record testkit process work on return, including command failures.
+#[cfg(feature = "testkit")]
+pub fn record_work_on_exit() -> impl Drop {
+    work_log::start()
 }
 
 /// Low-cardinality Sentry scope facts for the resolved command: the command

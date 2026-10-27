@@ -33,6 +33,10 @@ use crate::workspace::record::{self, WorkspaceRecordErr};
 /// pre-projects the agent rollup into `agents.carryover.json` before advancing
 /// the durable generation, so the reducer stays bounded.
 pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
+    #[cfg(feature = "testkit")]
+    crate::testkit::WORK_COUNTERS
+        .snapshot_publishes
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
     let snapshot = assemble_snapshot(paths, rollup.extent, agents.iter(), resume_outcomes)?;
     // The fold base lands first: its extent always runs at or past
@@ -82,6 +86,10 @@ fn assemble_snapshot<'a>(
     agents: impl IntoIterator<Item = &'a AgentState>,
     resume_outcomes: Vec<ResumeOutcome>,
 ) -> Result<SidebarSnapshot> {
+    #[cfg(feature = "testkit")]
+    crate::testkit::WORK_COUNTERS
+        .snapshot_assemblies
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // The one clock read this projection makes: every window verdict below
     // (reap TTLs, stall, compaction) folds against this single instant.
     let now = Timestamp::now();
@@ -160,6 +168,10 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
         return snapshot_is_current(&snapshot).then_some(snapshot);
     }
     let bytes = fs::read(&path).ok()?;
+    #[cfg(feature = "testkit")]
+    crate::testkit::WORK_COUNTERS
+        .latest_bytes_parsed
+        .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
     let mut snapshot: SidebarSnapshot = serde_json::from_slice(&bytes).ok()?;
     snapshot.now = Timestamp::now();
     // The parse cache is identity-keyed, not a freshness verdict — a

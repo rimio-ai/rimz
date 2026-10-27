@@ -15,6 +15,20 @@ pub use crate::store::snapshot::fold_testkit::{
     carryover_bytes_parsed, rollup_base_copies, rollup_rows_materialized,
 };
 
+/// Process-wide work measured at the snapshot and configuration boundaries.
+#[derive(Default)]
+pub struct WorkCounters {
+    pub snapshot_assemblies: std::sync::atomic::AtomicU64,
+    pub snapshot_publishes: std::sync::atomic::AtomicU64,
+    pub rollup_bytes_parsed: std::sync::atomic::AtomicU64,
+    pub latest_bytes_parsed: std::sync::atomic::AtomicU64,
+    pub machine_config_loads: std::sync::atomic::AtomicU64,
+}
+
+/// Shared across threads; the binary's work log reads these on return from main.
+pub static WORK_COUNTERS: std::sync::LazyLock<WorkCounters> =
+    std::sync::LazyLock::new(WorkCounters::default);
+
 /// Stop a test subprocess at an I/O boundary until its controller releases it.
 pub(crate) fn rendezvous(env: &str) {
     use std::io::Read as _;
