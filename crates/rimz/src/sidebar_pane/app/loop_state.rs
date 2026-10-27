@@ -779,8 +779,10 @@ impl LoopState {
     pub(super) fn share_width_geometry(
         &mut self,
         geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
+        tmux_geometry: Arc<Mutex<crate::mux::tmux::WidthMemo>>,
     ) {
         self.pane.width_control.geometry = geometry;
+        self.pane.width_control.tmux_geometry = tmux_geometry;
     }
 
     /// The pane's cell aspect as its terminal reports it, read by whoever

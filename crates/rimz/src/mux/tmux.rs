@@ -18,6 +18,7 @@ mod window;
 
 pub use presence::{ControlLine, PresenceWatch, TmuxLayoutPane};
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -302,7 +303,101 @@ pub struct TmuxBackend {
     /// Memoized `tmux -V` stdout ([`MuxBackend::version`]).
     version: std::sync::OnceLock<String>,
     #[cfg(test)]
-    program: Option<PathBuf>,
+    pub(crate) program: Option<PathBuf>,
+}
+
+/// The freshness a sidebar geometry request needs, in Unix milliseconds.
+#[derive(Clone, Copy, Debug)]
+pub enum WidthRequest {
+    Backstop { deadline_ms: u64, max_age: Duration },
+    After(u64),
+    Fresh(u64),
+}
+
+impl WidthRequest {
+    fn accepts(self, started_at_ms: u64) -> bool {
+        match self {
+            Self::Backstop {
+                deadline_ms,
+                max_age,
+            } => Duration::from_millis(deadline_ms.saturating_sub(started_at_ms)) < max_age,
+            Self::After(floor) => started_at_ms > floor,
+            Self::Fresh(requested_at_ms) => started_at_ms >= requested_at_ms,
+        }
+    }
+}
+
+/// One session-wide width attempt, shared under the room plane's geometry mutex.
+#[derive(Debug, Default)]
+pub struct WidthMemo {
+    backend: TmuxBackend,
+    sample: Option<WidthSample>,
+}
+
+#[derive(Debug)]
+struct WidthSample {
+    started_at_ms: u64,
+    widths: Result<HashMap<crate::PaneId, u16>>,
+}
+
+/// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
+/// column amount — its step is Zellij's own ~5%-of-view increment.
+const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
+
+impl WidthMemo {
+    pub fn new(backend: TmuxBackend) -> Self {
+        Self {
+            backend,
+            sample: None,
+        }
+    }
+
+    pub fn step(
+        &mut self,
+        session: &str,
+        pane: &crate::PaneId,
+        request: WidthRequest,
+    ) -> Result<super::WidthStep> {
+        super::ensure_pane_backend(pane, crate::MuxName::Tmux)?;
+        // A fixed event floor must not pin a failed baseline probe forever.
+        if self.sample.as_ref().is_none_or(|sample| {
+            !request.accepts(sample.started_at_ms)
+                || (matches!(request, WidthRequest::After(_)) && sample.widths.is_err())
+        }) {
+            let started_at_ms = crate::utils::time::unix_now_ms();
+            let widths = self.backend.session_pane_geometries(session).map(|panes| {
+                panes
+                    .into_iter()
+                    .map(|pane| {
+                        (
+                            crate::PaneId::from_parts(crate::MuxName::Tmux, pane.pane_id),
+                            u16::try_from(pane.window_width).unwrap_or(0),
+                        )
+                    })
+                    .collect()
+            });
+            self.sample = Some(WidthSample {
+                started_at_ms,
+                widths,
+            });
+        }
+        let view_cols = match self.sample.as_ref().map(|sample| &sample.widths) {
+            Some(Ok(widths)) => widths.get(pane).copied().unwrap_or_else(|| {
+                self.backend
+                    .window_width(pane.raw())
+                    .and_then(|cols| u16::try_from(cols).ok())
+                    .unwrap_or(0)
+            }),
+            _ => 0,
+        };
+        Ok(super::WidthStep {
+            cols: SIDEBAR_RESIZE_STEP_COLS,
+            stop_step_cols: 1,
+            exact: true,
+            view_cols,
+            fullscreen_active: None,
+        })
+    }
 }
 
 impl Default for TmuxBackend {

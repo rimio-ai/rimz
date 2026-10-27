@@ -31,7 +31,7 @@ use crate::mux::{
     PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, ReconcilePane,
     ReconcilePaneRole, Result, ResumeTab, ResumeTabShape, ResumeTabUnconfirmed, SessionHealth,
     SessionLiveness, SessionOptions, SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery,
-    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthStep,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
     confirm_resume_tab_shapes, ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes,
     memoized_version,
 };
@@ -1290,22 +1290,6 @@ impl MuxBackend for ZellijBackend {
         let session =
             session.ok_or_else(|| output_error("fullscreen toggle requires a session name"))?;
         self.broadcast_presence_pipe(session, super::PRESENCE_TOGGLE_FULLSCREEN_PIPE, pane.raw())
-    }
-
-    fn sidebar_width_step(
-        &self,
-        runtime: &RuntimePaths,
-        session: &str,
-        pane: &PaneId,
-        min_observed_at_ms: Option<u64>,
-    ) -> Result<WidthStep> {
-        super::WidthMemo::default().step(
-            runtime,
-            session,
-            pane,
-            crate::utils::time::unix_now_ms(),
-            min_observed_at_ms,
-        )
     }
 
     fn nudge_sidebar_width(

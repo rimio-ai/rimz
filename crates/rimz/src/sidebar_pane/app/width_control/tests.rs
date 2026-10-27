@@ -124,6 +124,199 @@ fn forty_width_backstops_share_topology_but_keep_pane_inputs() {
     );
 }
 
+#[cfg(unix)]
+fn tmux_width_memo(panes: &str) -> (tempfile::TempDir, crate::mux::tmux::WidthMemo) {
+    let (dir, program) = crate::mux::zellij::tests::support::zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/argv"
+case "$4" in
+  list-panes) cat "$dir/panes" ;;
+  display-message) printf '333\n' ;;
+  *) exit 1 ;;
+esac
+"#,
+    );
+    std::fs::write(dir.path().join("panes"), panes).unwrap();
+    let mut backend = crate::mux::tmux::TmuxBackend::with_socket("/test/socket");
+    backend.program = Some(program);
+    (dir, crate::mux::tmux::WidthMemo::new(backend))
+}
+
+#[cfg(unix)]
+#[test]
+fn forty_tmux_width_backstops_share_one_session_sample() {
+    let panes: String = (1..=40)
+        .map(|n| format!("%{n} @{n} 50 {} 1\n", 199 + n))
+        .collect();
+    let (shim, memo) = tmux_width_memo(&panes);
+    let (_dir, runtime, _) = controller(MuxName::Tmux);
+    let geometry = Arc::new(Mutex::new(memo));
+    let now = Instant::now();
+    let diag = DiagSink::disabled();
+    for n in 1_u16..=40 {
+        let view_cols = 199 + n;
+        let own_cols = view_cols.div_ceil(4);
+        let mut own = WidthController::new(
+            runtime.clone(),
+            "rimz-test".to_owned(),
+            Some(PaneId::from_parts(MuxName::Tmux, format!("%{n}"))),
+            MuxName::Tmux,
+            crate::mux::SidebarWidth::default(),
+        );
+        own.tmux_geometry = geometry.clone();
+        own.baseline_probe_deadline = None;
+        own.convergence.retarget(Some(target(own_cols)));
+        own.convergence.idle = Some(WidthIdle {
+            at: own_cols,
+            reason: WidthIdleReason::ReachedTolerance,
+        });
+        own.idle_retry_deadline = Some(now);
+        own.backstop_at(Some(own_cols), None, None, &diag, now);
+        assert_eq!(own.current_view_cols, Some(view_cols));
+    }
+    let argv = std::fs::read_to_string(shim.path().join("argv")).unwrap();
+    assert_eq!(argv.lines().count(), 1, "one sample serves forty backstops");
+    assert!(argv.contains("list-panes -s -t rimz-test"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_width_floor_requires_a_sample_started_after_the_floor() {
+    let (shim, memo) = tmux_width_memo("%1 @1 50 200 1\n");
+    let (_dir, _runtime, mut own) = controller(MuxName::Tmux);
+    own.tmux_geometry = Arc::new(Mutex::new(memo));
+    let pane = own.pane.clone().unwrap();
+    let _ = own.width_step(&pane, None).unwrap();
+    let floor = crate::utils::time::unix_now_ms();
+    std::fs::write(shim.path().join("panes"), "%1 @1 50 320 1\n").unwrap();
+
+    let step = own.width_step(&pane, Some(floor)).unwrap();
+
+    assert_eq!(
+        step.view_cols, 320,
+        "pre-floor geometry cannot serve the event"
+    );
+    let argv = std::fs::read_to_string(shim.path().join("argv")).unwrap();
+    assert_eq!(argv.lines().count(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_width_floorless_request_reprobes_instead_of_reusing_old_geometry() {
+    let (shim, memo) = tmux_width_memo("%1 @1 50 200 1\n");
+    let (_dir, _runtime, mut own) = controller(MuxName::Tmux);
+    own.tmux_geometry = Arc::new(Mutex::new(memo));
+    let pane = own.pane.clone().unwrap();
+    let _ = own.width_step(&pane, None).unwrap();
+    // Equal millisecond stamps may share a sample; this request must be strictly later.
+    std::thread::sleep(Duration::from_millis(1));
+    std::fs::write(shim.path().join("panes"), "%1 @1 50 319 1\n").unwrap();
+
+    let step = own.width_step(&pane, None).unwrap();
+
+    assert_eq!(
+        step.view_cols, 319,
+        "a new floorless request needs live geometry"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shim.path().join("argv"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_width_missing_pane_falls_back_to_its_live_window() {
+    let (shim, memo) = tmux_width_memo("%2 @2 50 200 1\n");
+    let (_dir, _runtime, mut own) = controller(MuxName::Tmux);
+    own.tmux_geometry = Arc::new(Mutex::new(memo));
+    let pane = own.pane.clone().unwrap();
+
+    let step = own.width_step(&pane, None).unwrap();
+
+    assert_eq!(step.view_cols, 333);
+    assert_eq!(step.cols, 2);
+    assert_eq!(step.stop_step_cols, 1);
+    assert!(step.exact);
+    assert_eq!(step.fullscreen_active, None);
+    let argv = std::fs::read_to_string(shim.path().join("argv")).unwrap();
+    assert_eq!(argv.lines().count(), 2);
+    assert!(argv.contains("display-message -p -t %1 #{window_width}"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_width_backstops_share_failed_attempts_until_their_deadline_expires() {
+    use crate::mux::tmux::WidthRequest;
+
+    let (shim, mut memo) = tmux_width_memo("");
+    std::fs::remove_file(shim.path().join("panes")).unwrap();
+    let pane = PaneId::from_parts(MuxName::Tmux, "%1");
+    let deadline_ms = crate::utils::time::unix_now_ms();
+    for _ in 0..40 {
+        let step = memo
+            .step(
+                "rimz-test",
+                &pane,
+                WidthRequest::Backstop {
+                    deadline_ms,
+                    max_age: IDLE_RETRY,
+                },
+            )
+            .unwrap();
+        assert_eq!(step.view_cols, 0);
+    }
+    let argv = std::fs::read_to_string(shim.path().join("argv")).unwrap_or_default();
+    assert_eq!(argv.lines().count(), 1, "a failure is also single-flight");
+    memo.step(
+        "rimz-test",
+        &pane,
+        WidthRequest::Backstop {
+            deadline_ms: crate::utils::time::unix_now_ms() + 5_000,
+            max_age: IDLE_RETRY,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(shim.path().join("argv"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_width_baseline_recovers_after_a_post_floor_probe_failure() {
+    let (shim, memo) = tmux_width_memo("");
+    std::fs::remove_file(shim.path().join("panes")).unwrap();
+    let (_dir, _runtime, mut own) = controller(MuxName::Tmux);
+    own.tmux_geometry = Arc::new(Mutex::new(memo));
+    own.started_at_ms = crate::utils::time::unix_now_ms().saturating_sub(1_000);
+    let now = Instant::now();
+    let diag = DiagSink::disabled();
+    own.backstop_at(Some(72), None, None, &diag, now);
+    assert_eq!(own.current_view_cols, None);
+
+    std::fs::write(shim.path().join("panes"), "%1 @1 72 320 1\n").unwrap();
+    own.backstop_at(Some(72), None, None, &diag, now + FEEDBACK_TIMEOUT);
+
+    assert_eq!(own.current_view_cols, Some(320));
+    assert_eq!(own.convergence.target(), Some(target(72)));
+    assert_eq!(
+        std::fs::read_to_string(shim.path().join("argv"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+    );
+}
+
 #[test]
 fn exact_feedback_never_widens_the_native_tolerance() {
     let now = Instant::now();

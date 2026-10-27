@@ -1,5 +1,4 @@
 use super::rimz_api as rimz;
-use rimz::RuntimePaths;
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux as m;
 use rimz::pane::PaneRef;
@@ -126,15 +125,6 @@ impl m::MuxBackend for Backend {
     }
     fn toggle_fullscreen(&self, _pane: &PaneId, _session: Option<&str>) -> m::Result<()> {
         panic!("unexpected toggle_fullscreen")
-    }
-    fn sidebar_width_step(
-        &self,
-        _runtime: &RuntimePaths,
-        _session: &str,
-        _pane: &PaneId,
-        _min_observed_at_ms: Option<u64>,
-    ) -> m::Result<m::WidthStep> {
-        panic!("unexpected sidebar_width_step")
     }
     fn nudge_sidebar_width(
         &self,

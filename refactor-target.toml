@@ -2028,6 +2028,16 @@ surface-budget = 298
 
 [[verdict]]
 kind = "item"
+key = "mux::tmux::WidthMemo"
+reason = "The sidebar plane single-flights tmux geometry for its attachments; live tests inject a private server."
+
+[[verdict]]
+kind = "item"
+key = "mux::tmux::WidthRequest"
+reason = "Idle attempts may be shared, while event floors and floorless requests retain their own freshness rules."
+
+[[verdict]]
+kind = "item"
 key = "mux::CompanionAppendErr"
 reason = "The CLI abandons companion stack placement only when the backend proves no payload ran."
 
