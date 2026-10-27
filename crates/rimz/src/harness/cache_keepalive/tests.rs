@@ -21,6 +21,37 @@ fn sleeping() -> AgentState {
     agent
 }
 
+#[test]
+fn every_sleeping_ping_obeys_the_lifetime_floor_and_margin() {
+    use crate::agents::context::CacheWriteRetention::FiveMinutes;
+    let actual: Vec<_> = [
+        ("[prompt_cache_ttl]\nclaude = '5m'", false),
+        (
+            "keep_warm_min_ttl = 'off'\n[prompt_cache_ttl]\nclaude = '5m'",
+            false,
+        ),
+        ("", true),
+        ("keep_warm_min_ttl = 'off'", true),
+        (
+            "keep_warm_min_ttl = 'off'\nprompt_cache_margin = '5m'",
+            true,
+        ),
+    ]
+    .into_iter()
+    .map(|(raw, observed)| {
+        let mut agent = sleeping();
+        if observed {
+            agent.context = Some(crate::agents::AgentContext {
+                last_cache_write: Some(FiveMinutes),
+                ..Default::default()
+            });
+        }
+        should_keepalive(&agent, &toml::from_str(raw).unwrap(), None, ts(240))
+    })
+    .collect();
+    assert_eq!(actual, [false, true, false, true, false]);
+}
+
 /// The fold restamps `turn_ended_at` at a compaction close and sets the
 /// marker (`store::snapshot::fold::tests::compact`); this is that row.
 #[test]
@@ -195,7 +226,8 @@ fn keepalive_excludes_non_sleepers_and_disabled_or_unsafe_seats() {
     assert!(!should_keepalive(&changed, &config, None, ts(3540)));
     changed = agent.clone();
     changed.kind = AgentKind::new_unchecked("amp");
-    assert!(!should_keepalive(&changed, &config, None, ts(3540)));
+    let unresolved = toml::from_str("[prompt_cache_ttl]\nfallback = 'off'").unwrap();
+    assert!(!should_keepalive(&changed, &unresolved, None, ts(3540)));
     changed = agent.clone();
     changed.budget_park = Some(crate::agents::BudgetPark {
         cap_usd: 1.0,
@@ -572,7 +604,7 @@ fn keep_warm_horizon_follows_role_or_profile_and_ttl_admission() {
     let held = policy(two_hours, None);
     solo.profile = Some("warm".into());
     for (kind, harness, expected) in [
-        ("amp", "", None),
+        ("amp", "[prompt_cache_ttl]\nfallback = 'off'", None),
         ("codex", "", Some(TWO_HOURS)),
         ("amp", "[prompt_cache_ttl]\namp = \"20m\"", Some(TWO_HOURS)),
         ("claude", "[prompt_cache_ttl]\nclaude = \"5m\"", None),

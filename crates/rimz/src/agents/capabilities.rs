@@ -897,8 +897,12 @@ pub trait TranscriptCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait ContextCapability: CoreCapability {
-    /// Default provider prompt-cache lifetime, overridable in harness config.
-    fn prompt_cache_ttl(&self) -> Option<std::time::Duration> {
+    /// Provider default for this sign-in, below observations and harness settings.
+    /// Providers without a default use the harness fallback.
+    fn prompt_cache_ttl(
+        &self,
+        _sign_in: Option<super::context::SignIn>,
+    ) -> Option<std::time::Duration> {
         None
     }
 

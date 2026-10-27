@@ -272,7 +272,9 @@ fn keep_warm_warnings(
             });
         }
         let kind = &row.kind;
-        let ttl = harness.prompt_cache_ttl(&rimz::ids::AgentKind::new_unchecked(kind));
+        let ttl = harness
+            .configured_lifetime(&rimz::ids::AgentKind::new_unchecked(kind), None)
+            .ttl;
         let message = match ttl {
             _ if row.team.is_none() && row.namespace == "subagents" => {
                 "keep-warm has no effect on a subagents definition; set it on the agents definition or team role the seat launches from".to_owned()
@@ -470,7 +472,8 @@ mod tests {
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         let harness = |toml: &str| toml::from_str::<rimz::config::HarnessConfig>(toml).unwrap();
 
-        let defaults = keep_warm_warnings(&loaded, &harness(""));
+        let defaults =
+            keep_warm_warnings(&loaded, &harness("[prompt_cache_ttl]\nfallback = 'off'"));
         assert_eq!(defaults.len(), 1, "a 60m Claude cache clears the 15m floor");
         assert!(defaults[0].path.ends_with("unknown.md"));
         assert!(
@@ -493,7 +496,11 @@ mod tests {
             warm.message
         );
         assert_eq!(
-            keep_warm_warnings(&loaded, &harness("cache_keepalive_max = \"off\"")).len(),
+            keep_warm_warnings(
+                &loaded,
+                &harness("cache_keepalive_max = \"off\"\n[prompt_cache_ttl]\nfallback = 'off'")
+            )
+            .len(),
             1,
             "no maximum, no cap"
         );

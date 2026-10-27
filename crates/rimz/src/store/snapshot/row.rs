@@ -441,8 +441,8 @@ pub struct AgentCard {
     /// [`SidebarRow::own_last_activity`], never directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_last_activity: Option<Timestamp>,
-    /// The provider prompt-cache clock the card's age pin reads, stamped by
-    /// enrichment only for a provider with a known cache TTL.
+    /// The resolved per-agent cache clock the card's age pin reads, including
+    /// the fallback. Enrichment omits it only when no lifetime resolves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheClock>,
     /// Current children and prior-turn finished children, nested under the parent.
@@ -468,7 +468,9 @@ pub struct AgentCard {
     pub turn_error_label: Option<String>,
 }
 
-/// How long a card's prompt cache stays warm: the provider TTL and last request (pings included), plus the last real turn and finite maximum while keep-warm holds. A stage condition can release the hold before that maximum.
+/// How long a card's prompt cache stays warm: the resolved agent lifetime and
+/// last request (pings included), plus the last real turn and finite maximum
+/// while keep-warm holds. A stage condition can release the hold before that maximum.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CacheClock {
     pub ceiling_secs: u32,

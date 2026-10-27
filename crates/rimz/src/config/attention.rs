@@ -45,7 +45,7 @@ pub struct AttentionConfig {
     pub tool_repeat_attention_after: NonZeroU32,
     /// Seconds a calm or parked row may record no activity before the sidebar
     /// sinks it beneath hot work. Asks and failures stay hot while alive.
-    /// Defaults to one hour, the agent's prompt-cache window.
+    /// Defaults to one hour.
     pub inactive_after_secs: NonZeroU32,
     /// Seconds a calm or parked row may record no activity before the sidebar parks it in the
     /// archive partition, below hot and warm work. Values at or below

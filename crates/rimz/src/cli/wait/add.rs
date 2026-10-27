@@ -28,12 +28,21 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     if agent.agent_id.is_provisional() {
         bail!("the calling agent has not registered a real session yet");
     }
-    let config = rimz::config::MachineConfig::load_lenient();
-    let timeout = args.check_in.or_else(|| {
-        (!(config.harness.cache_keepalive
-            && config.harness.prompt_cache_ttl(&agent.kind).is_some()))
-        .then_some(Duration::from_secs(30 * 60))
-    });
+    let timeout = match args.check_in {
+        Some(timeout) => Some(timeout),
+        None => {
+            let config = rimz::config::MachineConfig::load_lenient();
+            let published = ctx.published_snapshot()?;
+            let ping_agent = published
+                .agents
+                .iter()
+                .find(|row| row.kind == agent.kind && row.agent_id == agent.agent_id)
+                .unwrap_or(agent);
+            (!(config.harness.cache_keepalive
+                && config.harness.ping_lifetime(ping_agent).is_some()))
+            .then_some(Duration::from_secs(30 * 60))
+        }
+    };
     let target = TaskTarget {
         kind: agent.kind.clone(),
         session: agent.agent_id.clone(),
