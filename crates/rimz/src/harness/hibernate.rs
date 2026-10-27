@@ -634,25 +634,30 @@ fn read_fire_record(path: &Path) -> FireRecord {
         .unwrap_or_default()
 }
 
+pub(crate) fn hibernation_entry<'a>(
+    agent: &AgentState,
+    entries: &'a [crate::store::hibernate::Entry],
+) -> Option<&'a crate::store::hibernate::Entry> {
+    if agent.ended_at.is_some() {
+        return None;
+    }
+    entries
+        .iter()
+        .find(|entry| entry.kind == agent.kind && entry.agent_id == agent.agent_id)
+}
+
 pub(crate) fn project_hibernation(
     snapshot: &mut crate::store::snapshot::SidebarSnapshot,
     paths: &crate::StatePaths,
 ) {
-    let entries = crate::store::hibernate::read(paths);
+    let entries = crate::store::hibernate::read_cached(paths);
     let projected = |agent: &crate::agents::state::AgentState| {
-        entries
-            .iter()
-            .find(|entry| {
-                agent.ended_at.is_none()
-                    && entry.kind == agent.kind
-                    && entry.agent_id == agent.agent_id
-            })
-            .map(|entry| crate::agents::state::Hibernation {
-                frozen_at: entry.frozen_at,
-                step: entry.step,
-                reclaimed_bytes: entry.reclaimed_bytes,
-                wake_error: entry.wake_error.clone(),
-            })
+        hibernation_entry(agent, &entries).map(|entry| crate::agents::state::Hibernation {
+            frozen_at: entry.frozen_at,
+            step: entry.step,
+            reclaimed_bytes: entry.reclaimed_bytes,
+            wake_error: entry.wake_error.clone(),
+        })
     };
     if snapshot
         .agents

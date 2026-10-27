@@ -611,6 +611,7 @@ fn enrich_core(
     // and the stall window all see the truer per-tool value rather than
     // the turn-grained event timestamp.
     if !snapshot.agents.is_empty() {
+        crate::harness::hibernate::project_hibernation(&mut snapshot, state);
         let keys = snapshot
             .agents
             .iter()
@@ -637,7 +638,6 @@ fn enrich_core(
             &machine_config,
         );
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
-        crate::harness::hibernate::project_hibernation(&mut snapshot, state);
     }
     snapshot.parked_workflows = parked_workflows(state);
     let outages = crate::harness::drainer_outage::read(runtime);

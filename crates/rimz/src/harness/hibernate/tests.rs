@@ -1064,6 +1064,34 @@ fn record_projection_clears_stale_state_and_preserves_real_status() {
     assert!(snapshot.agents[0].hibernation.is_none());
 }
 
+#[test]
+fn hibernation_entry_joins_only_open_agents_of_the_same_kind_and_session() {
+    let (_dir, _store, agent, _config, scope) = decision_fixture();
+    let entries = [crate::store::hibernate::Entry {
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        pane_id: "tmux:%3".parse().unwrap(),
+        scope: scope.scope.unwrap().as_path().into(),
+        provider_pid: 10,
+        frozen_at: agent.last_activity,
+        anon_at_freeze: 0,
+        step: 0,
+        wake_error: None,
+        reclaimed_bytes: 200,
+    }];
+    let mut ended = agent.clone();
+    ended.ended_at = Some(agent.last_activity);
+    let mut other_kind = agent.clone();
+    other_kind.kind = AgentKind::new_unchecked("codex");
+    let mut other_id = agent.clone();
+    other_id.agent_id = "different".into();
+    assert_eq!(
+        [&agent, &ended, &other_kind, &other_id]
+            .map(|row| hibernation_entry(row, &entries).is_some()),
+        [true, false, false, false]
+    );
+}
+
 #[cfg(target_os = "linux")]
 struct FakeHost {
     root: tempfile::TempDir,
