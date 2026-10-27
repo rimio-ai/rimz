@@ -146,6 +146,7 @@ const windowFromHeaders = (headers, prefix, defaultMins, capturedAt) => {
 export default function rimz(pi) {
   const launchReminders = claimLaunchReminders();
   const usageBySession = new Map();
+  const lastCacheWriteBySession = new Map();
   const costBySession = new Map();
   const standaloneCostBySession = new Map();
   const verdictBySession = new Map();
@@ -162,8 +163,16 @@ export default function rimz(pi) {
   let latestWindows = [];
   let latestWindowsProvider;
 
+  const recordCacheWrite = (id, usage) => {
+    const write = numberMaybe(usage?.cacheWrite);
+    if (!id || write == null || write <= 0) return;
+    const hour = numberMaybe(usage.cacheWrite1h);
+    lastCacheWriteBySession.set(id, hour == null ? "unsplit" : hour >= write ? "1h" : "5m");
+  };
+
   const recordUsage = (id, usage) => {
     if (!id || usage == null) return;
+    recordCacheWrite(id, usage);
     const gauge = {
       input: roundMaybe(usage.input),
       output: roundMaybe(usage.output),
@@ -215,7 +224,10 @@ export default function rimz(pi) {
           name = entry.name;
         }
         const message = entry?.message;
-        if (message?.role === "assistant") lastUsage = message.usage ?? lastUsage;
+        if (message?.role === "assistant") {
+          lastUsage = message.usage ?? lastUsage;
+          recordCacheWrite(id, message.usage);
+        }
         const usage =
           entry?.type === "message" && ["assistant", "toolResult"].includes(message?.role)
             ? message?.usage
@@ -298,6 +310,7 @@ export default function rimz(pi) {
       context_window: usage?.contextWindow,
       total_tokens: usage?.tokens == null ? undefined : Math.round(usage.tokens),
       total_cost_usd: totalSessionCost(id),
+      last_cache_write: lastCacheWriteBySession.get(id),
       ...usageFields(id),
       rate_limits: latestProvider && latestProvider === latestWindowsProvider &&
         latestWindows.length > 0 ? latestWindows : undefined,
@@ -517,9 +530,19 @@ export default function rimz(pi) {
     feed("after_provider_response", ctx, {});
   });
   pi.on("message_update", (_ev, ctx) => pushMessageUpdate(ctx));
-  pi.on("session_tree", (ev, ctx) =>
-    addSessionCost(sessionId(ctx), ev?.summaryEntry?.usage),
-  );
+  pi.on("session_tree", (ev, ctx) => {
+    const id = sessionId(ctx);
+    addSessionCost(id, ev?.summaryEntry?.usage);
+    try {
+      const branch = ctx?.sessionManager?.getBranch?.();
+      if (!Array.isArray(branch)) return;
+      for (const entry of branch) {
+        if (entry?.message?.role === "assistant") recordCacheWrite(id, entry.message.usage);
+      }
+    } catch {
+      // Older pi releases may not expose getBranch; keep the last observation.
+    }
+  });
   pi.on("session_info_changed", (ev, ctx) => {
     const id = sessionId(ctx);
     if (id) {
@@ -611,6 +634,7 @@ export default function rimz(pi) {
     feedChildStop(ctx, verdictBySession.get(sessionId(ctx)) ?? {});
     const id = sessionId(ctx);
     usageBySession.delete(id);
+    lastCacheWriteBySession.delete(id);
     costBySession.delete(id);
     standaloneCostBySession.delete(id);
     verdictBySession.delete(id);

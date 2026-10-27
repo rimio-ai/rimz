@@ -451,6 +451,38 @@ unknownHandlers.get("after_provider_response")({{
   headers: {{ "x-codex-primary-used-percent": "33" }},
 }}, unknownCtx);
 
+delete globalThis[Symbol.for("rimz.pi.primary-session")];
+delete process.env.RIMZ_PI_PARENT_SESSION;
+const {{ pi: cachePi, handlers: cacheHandlers }} = makePi();
+const cacheMessage = (usage) => ({{ type: "message", message: {{ role: "assistant", usage }} }});
+let cacheBranch = [
+  cacheMessage({{ cacheWrite: 100, cacheWrite1h: 100 }}),
+  cacheMessage({{ cacheWrite: 0 }}),
+];
+const cacheCtx = {{
+  sessionManager: {{
+    getSessionId: () => "sess-cache",
+    getCwd: () => "/repo",
+    getBranch: () => cacheBranch,
+  }},
+}};
+rimz(cachePi);
+cacheHandlers.get("session_start")({{ reason: "resume" }}, cacheCtx);
+for (const usage of [
+  {{ output: 1, cacheWrite: 100 }},
+  {{ output: 2, cacheWrite: 100, cacheWrite1h: 100 }},
+  {{ output: 3, cacheWrite: 100, cacheWrite1h: 50 }},
+  {{ output: 4, cacheWrite: 0 }},
+]) {{
+  cacheHandlers.get("turn_end")({{ message: {{ role: "assistant", usage }} }}, cacheCtx);
+}}
+cacheBranch = [cacheMessage({{ cacheWrite: 100, cacheWrite1h: 100 }})];
+cacheHandlers.get("session_tree")({{}}, cacheCtx);
+cacheHandlers.get("session_info_changed")({{ name: "hour-branch" }}, cacheCtx);
+cacheBranch = [cacheMessage({{ cacheWrite: 0 }})];
+cacheHandlers.get("session_tree")({{}}, cacheCtx);
+cacheHandlers.get("session_info_changed")({{ name: "read-only-branch" }}, cacheCtx);
+
 const readPayloads = async () => {{
   try {{
     const text = await fs.readFile({}, "utf8");
@@ -461,7 +493,7 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-const expectedPayloads = hasNativeSettled ? 48 : 42;
+const expectedPayloads = hasNativeSettled ? 55 : 49;
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= expectedPayloads) break;
@@ -476,6 +508,18 @@ if (payloads.length < expectedPayloads) {{
 const rootPayloads = payloads.filter((payload) =>
   payload.session_id === "sess-1" && !payload.hook_event_name.startsWith("subagent_"));
 const byEvent = Object.fromEntries(rootPayloads.map((payload) => [payload.hook_event_name, payload]));
+const cachePayloads = payloads.filter((payload) => payload.session_id === "sess-cache");
+const cacheStart = cachePayloads.find((payload) => payload.hook_event_name === "session_start");
+const cacheTurns = cachePayloads.filter((payload) => payload.hook_event_name === "turn_end")
+  .sort((a, b) => a.output_tokens - b.output_tokens);
+const cacheNames = ["hour-branch", "read-only-branch"].map((name) =>
+  cachePayloads.find((payload) => payload.session_name === name));
+assert.deepEqual([
+  cacheStart?.last_cache_write,
+  ...cacheTurns.map((payload) => payload.last_cache_write),
+  ...cacheNames.map((payload) => payload?.last_cache_write),
+], ["1h", "unsplit", "1h", "5m", "5m", "1h", "1h"],
+"newest active-branch cache write must survive read-only calls and branch switches");
 if (fastSupported !== null) {{
   const subprocessStart = payloads.find((payload) =>
     payload.session_id === "sess-subprocess" && payload.hook_event_name === "session_start");

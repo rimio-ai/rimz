@@ -2,6 +2,41 @@ use super::*;
 
 use crate::agents::AgentHookClass;
 
+#[test]
+fn cache_write_envelopes_are_tolerant_and_absence_keeps_the_observation() {
+    use crate::agents::context::CacheWriteRetention::{FiveMinutes, OneHour, Unsplit};
+    let actual: Vec<_> = ["5m", "1h", "unsplit"]
+        .map(|value| {
+            normalized_context(json!({"last_cache_write": value}))
+                .and_then(|context| context.last_cache_write)
+        })
+        .into_iter()
+        .collect();
+    let unknown = normalized_context(json!({"model": "kept", "last_cache_write": "30m"})).unwrap();
+    assert_eq!(
+        (actual, unknown.model_id, unknown.last_cache_write),
+        (
+            vec![Some(FiveMinutes), Some(OneHour), Some(Unsplit)],
+            Some("kept".to_owned()),
+            None,
+        )
+    );
+    let mut record = crate::agents::context::record::AgentContextRecord::new(
+        "pi",
+        "sess-1",
+        AgentContext {
+            last_cache_write: Some(OneHour),
+            ..AgentContext::default()
+        },
+    );
+    record.merge_observed(
+        "pi",
+        normalized_context(json!({"model": "new"})).unwrap(),
+        Timestamp::now(),
+    );
+    assert_eq!(record.context.last_cache_write, Some(OneHour));
+}
+
 /// Every context assertion runs through one frozen `observed_at` so the
 /// snapshot stays stable.
 fn normalized_context(mut payload: Value) -> Option<AgentContext> {

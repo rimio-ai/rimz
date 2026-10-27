@@ -37,6 +37,7 @@ The `envelope` helper stamps these fields on every event, then adds the event's 
 | `session_name` | the latest `/name` title, from `session_info_changed` or hydration |
 | `context_pct`, `context_window`, `total_tokens` | `ctx.getContextUsage()`, with the percentage and the token count rounded |
 | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens` | the latest assistant call's usage |
+| `last_cache_write` | newest active-branch assistant cache write: `5m`, `1h`, or `unsplit` ([Prompt-cache retention](#prompt-cache-retention)) |
 | `total_cost_usd` | the extension's running session cost ([Cost accrual](#cost-accrual)) |
 | `rate_limits` | the windows captured from the latest `after_provider_response`, only while the envelope's `provider` matches their header family's provider ([Account and balance](#account-and-balance)) |
 
@@ -231,9 +232,15 @@ Unlike launch reminders, fast stays in `process.env`: each in-process session an
 
 ## Context and transcript
 
-Pi's live context needs no transcript read (`transcript_tail_context: false`). `decode_hook` copies `model`, `effort`, the context gauge, and the token split onto each lifecycle observation. `pi_observed_context`, which `observe_context` also calls, builds an `AgentContext` from the same envelope: `session_name`, `model_id`, `sub_provider` (the envelope's `provider`), `effort`, `tokens` (window, used percentage, and the latest call's split), `cost`, and the rate-limit windows. It sets `cost` only for a total above zero, and returns nothing for an envelope that carries none of these fields. A provider-only envelope is context evidence. A changed `sub_provider` clears the sidecar's old rate-limit windows unless the same observation supplies replacements; an unchanged or absent provider alone leaves them intact. A virtual model selection can therefore be reported before an assistant message names the physical provider.
+Pi's live context needs no transcript read (`transcript_tail_context: false`). `decode_hook` copies `model`, `effort`, the context gauge, and the token split onto each lifecycle observation. `pi_observed_context`, which `observe_context` also calls, builds an `AgentContext` from the same envelope: `session_name`, `model_id`, `sub_provider` (the envelope's `provider`), `effort`, `tokens` (window, used percentage, and the latest call's split), `cost`, the rate-limit windows, and `last_cache_write`. It sets `cost` only for a total above zero, and returns nothing for an envelope that carries none of these fields. A provider-only envelope is context evidence. A changed `sub_provider` clears the sidecar's old rate-limit windows unless the same observation supplies replacements; an unchanged or absent provider alone leaves them intact. A virtual model selection can therefore be reported before an assistant message names the physical provider.
 
 The extension pushes a value change immediately on `model_select`, `thinking_level_select`, `session_info_changed`, `turn_end`, and `after_provider_response`. `message_update` fires per streaming delta, so `pushMessageUpdate` feeds it at most once per second per session, and only when the rounded gauge or the running cost differs from the last push. A change inside the second is sent by a trailing timer.
+
+### Prompt-cache retention
+
+The extension hydrates the newest write while walking `getBranch()` at session start, updates it on `turn_end`, and recomputes it on `session_tree`. Only assistant usage with `cacheWrite > 0` counts: missing `cacheWrite1h` is `unsplit`, a count at least as large as `cacheWrite` is `1h`, and anything smaller (including a mixed write) is `5m`. Pi's Anthropic Messages route turns a missing split into zero, so that case conservatively reads as five minutes. Read-only requests keep the last write.
+
+The value rides every subsequent envelope; a value-only envelope is context evidence. An absent or unknown wire value leaves the stored observation unchanged. An older installed extension sends no key, so the agent uses settings, defaults and the fallback until its hooks are updated with `rimz hooks install pi` or the managed-source upgrade flow. Switching to a branch with no write, or away from an Anthropic model, deliberately keeps the prior observation until another write arrives ([lifetime resolution](../../guide/configuration.md#idle-compaction)).
 
 ### Cost accrual
 
