@@ -104,6 +104,10 @@ impl Ctx {
         super::alive_snapshot(&self.store, &self.workspace.session_name)
     }
 
+    /// Fold the store rollup over the host's published pane frame and agent projection, then run
+    /// the consumer enrich spine: context sidecars, the machine-config fold over the published
+    /// account cache (which stamps each agent's sign-in), and the cache clocks. Forks no mux,
+    /// git, or provider probe and writes no publication.
     pub(crate) fn published_snapshot(&self) -> Result<SidebarSnapshot> {
         rimz::sidebar::consumer::PublishedSnapshotReader::new(
             self.runtime().clone(),
