@@ -1582,6 +1582,55 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
 }
 
 #[test]
+fn attention_core_load_matches_full_lenient_recovery_without_definitions() {
+    let tuned = AttentionConfig {
+        active_grace_secs: 61_u32.try_into().unwrap(),
+        stalled_after_secs: 2701_u32.try_into().unwrap(),
+        tool_repeat_warn_after: 4_u32.try_into().unwrap(),
+        tool_repeat_attention_after: 31_u32.try_into().unwrap(),
+        inactive_after_secs: 3601_u32.try_into().unwrap(),
+        archive_after_secs: 7201_u32.try_into().unwrap(),
+    };
+    let text = "[agents.attention]\nactive_grace_secs = 61\nstalled_after_secs = 2701\ntool_repeat_warn_after = 4\ntool_repeat_attention_after = 31\ninactive_after_secs = 3601\narchive_after_secs = 7201\n";
+    let cases = [
+        (None, false, AttentionConfig::default()),
+        (Some(text.to_owned()), false, tuned),
+        (
+            Some(format!("[agents]\nstartup-relaunches = 'invalid'\n{text}")),
+            false,
+            AttentionConfig::default(),
+        ),
+        (Some(text.to_owned()), true, tuned),
+    ];
+    let actual = cases
+        .iter()
+        .map(|(text, broken_definition, _)| {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            if let Some(text) = text {
+                std::fs::write(&path, text).unwrap();
+            }
+            if *broken_definition {
+                std::fs::create_dir_all(dir.path().join("agents")).unwrap();
+                std::fs::write(dir.path().join("agents/broken.md"), "---\nagent: [\n---\n")
+                    .unwrap();
+            }
+            (
+                AttentionConfig::load_lenient_from(&path),
+                MachineConfig::load_lenient_from(&path, dir.path(), &BTreeMap::new())
+                    .agents
+                    .attention,
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = cases
+        .iter()
+        .map(|(_, _, attention)| (*attention, *attention))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn attention_config_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(&dir, "")).expect("load");

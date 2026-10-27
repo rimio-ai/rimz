@@ -67,9 +67,7 @@ fn apply(
     at: jiff::Timestamp,
     event_name: &str,
 ) {
-    let grace_secs = rimz::config::MachineConfig::load_lenient()
-        .agents
-        .attention
+    let grace_secs = rimz::config::AttentionConfig::load_lenient()
         .active_grace_secs
         .get();
     let result = match op {
