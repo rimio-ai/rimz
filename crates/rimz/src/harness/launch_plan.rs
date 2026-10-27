@@ -395,6 +395,12 @@ pub fn prepare_exec(
 /// A child with a role whose profile `[agents.profiles]` also defines refuses only when that
 /// table refuses too: a direct team-seat child records its role but no team, so it cannot be
 /// told from an inline role, and its seat resolved in `[agents.profiles]`.
+///
+/// This is the one refusal a team restore's fresh seats meet
+/// (`resume::materialize_team_restore_tab` seeds them as `ExecAction::Launch` without the CLI
+/// gate), and restart of an agent whose session is gone, and every molt, reach it as `Launch`
+/// too. So the names judged here are the ones the relaunch posture consumes
+/// (`resume::resolve_posture_with_role`), never the bare kind alone.
 fn definition_failure(
     request: &ExecRequest,
     machine: &crate::config::MachineConfig,
