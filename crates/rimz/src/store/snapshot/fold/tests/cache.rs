@@ -43,6 +43,7 @@ fn pre_workflow_cache_refolds_attempt_identity() {
         &paths,
         &RollupCache {
             version: 33,
+            file_id: None,
             extent: event_log::LogExtent {
                 generation: 0,
                 offset: std::fs::metadata(&paths.events_log).unwrap().len(),
@@ -81,6 +82,7 @@ fn pre_molt_rollup_cache_refolds_the_succession_link() {
         &RollupCache {
             // The last version written without `molted_from`.
             version: 30,
+            file_id: None,
             extent: event_log::LogExtent {
                 generation: 0,
                 offset: std::fs::metadata(&paths.events_log).unwrap().len(),
@@ -310,6 +312,7 @@ fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
         &paths,
         &RollupCache {
             version: ROLLUP_CACHE_VERSION,
+            file_id: None,
             extent: event_log::LogExtent {
                 generation: 0,
                 offset: 10,
@@ -356,8 +359,9 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
 
     let ghost_cache = |version: u32, offset: u64| RollupCache {
         version,
+        file_id: LogFileId::of(&std::fs::metadata(&paths.events_log).unwrap()),
         extent: event_log::LogExtent {
-            generation: 7,
+            generation: 0,
             offset,
         },
         raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
@@ -392,6 +396,106 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
     // An extent past the live log is a rotation this cache predates.
     write_rollup_cache(&paths, &ghost_cache(ROLLUP_CACHE_VERSION, full_len + 999)).unwrap();
     assert_cold("extent past the log");
+}
+
+#[test]
+fn log_identity_mismatch_refolds_reads_and_rotation_staging() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+    let before = lifecycle_at(
+        &workspace,
+        "claude",
+        "SessionStart",
+        "before",
+        lifecycle::LifecycleSignal::Registered,
+    );
+    event_log::append(&paths.events_log, &before).unwrap();
+    let (cache, _, _) = catch_up_rollup(&paths).unwrap();
+    write_rollup_cache(&paths, &cache).unwrap();
+    let mut cursor = RollupCursor::new();
+    cursor.fold(&paths).unwrap();
+
+    let _old_log = std::fs::File::open(&paths.events_log).unwrap();
+    std::fs::remove_file(&paths.events_log).unwrap();
+    let mut after = lifecycle_at(
+        &workspace,
+        "claude",
+        "SessionStart",
+        "afterx",
+        lifecycle::LifecycleSignal::Registered,
+    );
+    after.timestamp = before.timestamp;
+    event_log::append(&paths.events_log, &after).unwrap();
+    assert_eq!(
+        std::fs::metadata(&paths.events_log).unwrap().len(),
+        cache.extent.offset,
+        "the old offset still fits, so only file identity rejects it"
+    );
+
+    let (_, read, _) = catch_up_rollup(&paths).unwrap();
+    let (_, held, _) = cursor.fold(&paths).unwrap();
+    stage_carryover_for_rotation(&paths, 1).unwrap();
+    let staged = read_carryover(&paths.agents_carryover).unwrap();
+    for (label, rows) in [
+        ("read", read),
+        ("cursor", held.to_vec()),
+        ("rotation staging", staged.agents),
+    ] {
+        let ids: Vec<_> = rows.iter().map(|row| row.agent_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["afterx"],
+            "{label} must reject the replaced log's base"
+        );
+    }
+}
+
+#[test]
+fn generation_mismatch_refolds_reads_and_rotation_staging() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            "real",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+    let (mut cache, _, _) = catch_up_rollup(&paths).unwrap();
+    let mut cursor = RollupCursor::new();
+    cursor.fold(&paths).unwrap();
+    cache.raw_agents[0].agent_id = "ghost".into();
+    write_rollup_cache(&paths, &cache).unwrap();
+    atomic::write_temp_then_rename(&paths.log_generation, &serde_json::json!({"generation": 7}))
+        .unwrap();
+
+    let (refreshed, read, _) = catch_up_rollup(&paths).unwrap();
+    let (extent, held, _) = cursor.fold(&paths).unwrap();
+    stage_carryover_for_rotation(&paths, 1).unwrap();
+    let staged = read_carryover(&paths.agents_carryover).unwrap();
+    assert_eq!(
+        (refreshed.extent.generation, extent.generation),
+        (7, 7),
+        "disk and held bases must follow the durable generation, not just the inode"
+    );
+    for (label, rows) in [
+        ("read", read),
+        ("cursor", held.to_vec()),
+        ("rotation staging", staged.agents),
+    ] {
+        let ids: Vec<_> = rows.iter().map(|row| row.agent_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["real"],
+            "{label} must reject the old generation's base"
+        );
+    }
 }
 
 #[test]
@@ -450,6 +554,7 @@ fn rollup_parse_cache_hits_on_same_identity_and_misses_when_republish_changes_id
     let path = paths.rollup_cache().unwrap();
     let cache_with = |id: &str| RollupCache {
         version: ROLLUP_CACHE_VERSION,
+        file_id: None,
         extent: event_log::LogExtent {
             generation: 0,
             offset: 10,
@@ -566,6 +671,7 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
         &paths,
         &RollupCache {
             version: ROLLUP_CACHE_VERSION,
+            file_id: LogFileId::of(&std::fs::metadata(&paths.events_log).unwrap()),
             extent: event_log::LogExtent {
                 generation: 0,
                 offset: 0,
