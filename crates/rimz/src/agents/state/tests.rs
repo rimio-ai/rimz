@@ -2,6 +2,36 @@ use super::*;
 use crate::agents::{ParkDemotion, TurnSettle};
 
 #[test]
+fn profile_scope_wire_is_optional_and_preserves_the_launch_doorway() {
+    let launch = crate::agents::LaunchParams::default();
+    let row = crate::testkit::agent_state("codex", "fork", Timestamp::UNIX_EPOCH);
+    let mut values = [
+        serde_json::to_value(launch).unwrap(),
+        serde_json::to_value(row).unwrap(),
+    ];
+    assert!(
+        values
+            .iter()
+            .all(|value| value.get("profile_scope").is_none())
+    );
+    for value in &mut values {
+        value["profile_scope"] = serde_json::json!("subagents");
+    }
+    let launch: crate::agents::LaunchParams = serde_json::from_value(values[0].clone()).unwrap();
+    let row: AgentState = serde_json::from_value(values[1].clone()).unwrap();
+    assert_eq!(
+        [
+            serde_json::to_value(launch).unwrap()["profile_scope"].clone(),
+            serde_json::to_value(row).unwrap()["profile_scope"].clone(),
+        ],
+        [
+            serde_json::json!("subagents"),
+            serde_json::json!("subagents")
+        ]
+    );
+}
+
+#[test]
 fn fast_mode_prefers_live_reading_then_launch_then_standard() {
     for (live, launch, expected) in [
         (Some(true), Some(false), true),

@@ -125,6 +125,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             launch_depth: Some(2),
             launched_by: None,
             profile: Some("codex-coder".to_owned()),
+            profile_scope: None,
             login: None,
             tier: None,
             mode: Some(crate::agents::PermissionMode::Yolo),

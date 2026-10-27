@@ -397,7 +397,7 @@ fn read_fresh_latest_rejects_version_mismatch() {
 
     let bytes = std::fs::read(&paths.latest_snapshot).unwrap();
     let mut legacy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    legacy["snapshot_version"] = serde_json::json!(56);
+    legacy["snapshot_version"] = serde_json::json!(57);
     atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
 
     // Rewriting the version keeps the byte length identical. A production

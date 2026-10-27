@@ -4,6 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::config::{
     AgentSpecSources, CommandsConfig, ConfigFileDiagnosis, MachineConfig, ProfilesConfig,
     TaskEntry, Tasks, TeamsConfig,
@@ -790,7 +792,8 @@ impl LaunchAgents {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProfileScope {
     Agents,
     Subagents,

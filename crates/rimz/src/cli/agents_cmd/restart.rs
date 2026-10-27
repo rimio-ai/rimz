@@ -317,6 +317,7 @@ pub(in crate::cli) fn relaunch_request(
         launch_depth: agent.launch_depth,
         launched_by: agent.launched_by.clone().map(Box::new),
         profile: agent.profile.clone(),
+        profile_scope: None,
         login: fresh_identity.map_or(login, |identity| identity.launch.login.clone()),
         tier: posture.launch.tier.clone(),
         role: agent.role.clone(),
