@@ -271,6 +271,7 @@ fn resume_selected(
         rimz_bin: &rimz::proc::rimz_exe(),
         runtime: ctx.runtime(),
         profiles: &config.profiles,
+        subagent_profiles: &config.subagent_profiles,
         max: machine.resume.max,
         logins: &logins,
         catalog: &catalog,

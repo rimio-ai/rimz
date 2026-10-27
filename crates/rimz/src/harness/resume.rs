@@ -24,6 +24,7 @@ use crate::agents::PermissionMode;
 use crate::agents::RoomAccounts;
 use crate::agents::find_definition;
 use crate::agents::{AgentState, LocalSessionObservation};
+use crate::config::effective::ProfileScope;
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::RuntimePaths;
 use crate::harness::plan::{
@@ -60,6 +61,7 @@ pub enum LaneResumeSelector {
 pub struct LaneRestoreConfig {
     pub teams: TeamsConfig,
     pub profiles: ProfilesConfig,
+    pub subagent_profiles: ProfilesConfig,
     pub commands: CommandsConfig,
 }
 
@@ -83,6 +85,7 @@ impl LaneRestoreConfig {
         Ok(Self {
             teams: launch.teams,
             profiles: launch.profiles,
+            subagent_profiles: launch.subagent_profiles,
             commands: machine.agents.commands.clone(),
         })
     }
@@ -111,14 +114,15 @@ pub struct LaneResumeRequest<'a> {
 impl<'a> LaneResumeRequest<'a> {
     /// The planning environment this lane request implies, against the profiles
     /// its members replay posture from.
-    fn context(&self, profiles: &'a ProfilesConfig) -> ResumeContext<'a> {
+    fn context(&self, restore: &'a LaneRestoreConfig) -> ResumeContext<'a> {
         ResumeContext {
             in_place: false,
             project_root: Some(self.project_root),
             workspace_id: self.workspace_id,
             rimz_bin: self.rimz_bin,
             runtime: self.runtime,
-            profiles,
+            profiles: &restore.profiles,
+            subagent_profiles: &restore.subagent_profiles,
             max: self.max,
             logins: self.logins,
             catalog: self.catalog,
@@ -1078,6 +1082,7 @@ impl ResumeCandidate {
                 name: None,
                 name_explicit: false,
                 profile: None,
+                profile_scope: None,
                 role: None,
                 team: None,
                 launch_group: None,
@@ -1265,7 +1270,7 @@ pub fn plan_lane_resume(
             &lane,
             discover_sessions(&lane.path),
             path_exists,
-            &restore.profiles,
+            &restore,
         );
     }
     if closed.is_empty() {
@@ -1290,7 +1295,7 @@ pub fn plan_lane_resume(
             closed,
             path_exists,
             session_backed,
-            &restore.profiles,
+            &restore,
         );
     }
     plan_closed_lane(
@@ -1544,7 +1549,7 @@ fn plan_discovered_lane(
     lane: &ResolvedLane,
     observations: Vec<LocalSessionObservation>,
     path_exists: impl Fn(&Path) -> bool,
-    profiles: &ProfilesConfig,
+    restore: &LaneRestoreConfig,
 ) -> Result<LaneResumeAction, LaneResumeError> {
     let observations = without_recorded_children(request.agents, observations);
     if observations.is_empty() {
@@ -1558,7 +1563,7 @@ fn plan_discovered_lane(
         .filter_map(ResumeCandidate::from_observation)
         .collect::<Vec<_>>();
     let (flat, _) =
-        plan_resume_candidates_detailed(candidates, request.context(profiles), path_exists, None);
+        plan_resume_candidates_detailed(candidates, request.context(restore), path_exists, None);
     let preflight_kinds = flat.resumed.iter().map(|(kind, _)| kind.clone()).collect();
     if flat.tabs.is_empty() {
         return Err(LaneResumeError::Nothing {
@@ -1583,12 +1588,12 @@ fn plan_live_lane_split(
     closed: Vec<AgentState>,
     path_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
-    profiles: &ProfilesConfig,
+    restore: &LaneRestoreConfig,
 ) -> Result<LaneResumeAction, LaneResumeError> {
     let flat = plan_resume(
         &closed,
         &BTreeSet::new(),
-        request.context(profiles),
+        request.context(restore),
         path_exists,
         &session_backed,
     );
@@ -1706,7 +1711,7 @@ fn plan_closed_lane(
             &BTreeSet::new(),
             ResumeContext {
                 max: request.max.saturating_sub(team_panes),
-                ..request.context(&restore.profiles)
+                ..request.context(&restore)
             },
             path_exists,
             &session_backed,
@@ -2146,6 +2151,25 @@ fn newest_cmp(
     right.cmp(&left).then_with(|| left_tie.cmp(right_tie))
 }
 
+/// The environment one resume plan is built against: where the room lives, what
+/// binary its panes re-enter through, how many panes it may seed, and the
+/// profiles its members replay their posture from.
+#[derive(Clone, Copy)]
+pub struct ResumeContext<'a> {
+    pub in_place: bool,
+    pub project_root: Option<&'a Path>,
+    pub workspace_id: &'a WorkspaceId,
+    pub rimz_bin: &'a Path,
+    pub runtime: &'a RuntimePaths,
+    pub profiles: &'a ProfilesConfig,
+    pub subagent_profiles: &'a ProfilesConfig,
+    pub max: usize,
+    /// The room's current account selection; sessions whose account is outside
+    /// its history pool are skipped.
+    pub logins: &'a RoomAccounts,
+    pub catalog: &'a LoginCatalog,
+}
+
 /// Plan the resume seeds for one reborn session from the durable agent rollup.
 ///
 /// `agents` is the audit rollup (including ended durable agents; the persisted
@@ -2166,24 +2190,6 @@ fn newest_cmp(
 /// that re-used a pane id collapses to its newest stamp — the same rule the live
 /// sidebar binds by (`PaneBindingIndex`, in `store::snapshot::panes`) —
 /// while distinct sessions without stamps each remain candidates.
-/// The environment one resume plan is built against: where the room lives, what
-/// binary its panes re-enter through, how many panes it may seed, and the
-/// profiles its members replay their posture from.
-#[derive(Clone, Copy)]
-pub struct ResumeContext<'a> {
-    pub in_place: bool,
-    pub project_root: Option<&'a Path>,
-    pub workspace_id: &'a WorkspaceId,
-    pub rimz_bin: &'a Path,
-    pub runtime: &'a RuntimePaths,
-    pub profiles: &'a ProfilesConfig,
-    pub max: usize,
-    /// The room's current account selection; sessions whose account is outside
-    /// its history pool are skipped.
-    pub logins: &'a RoomAccounts,
-    pub catalog: &'a LoginCatalog,
-}
-
 pub fn plan_resume(
     agents: &[AgentState],
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
@@ -2341,6 +2347,13 @@ fn plan_resume_candidates_detailed(
             plan.skip(&candidate, label, ResumeSkipReason::OverCap);
             continue;
         }
+        // Resume plans root sessions only, so no candidate is a launched child.
+        let (_, profiles) = ProfileScope::for_launch(candidate.identity.profile_scope, false)
+            .resolve_launch(
+                candidate.identity.profile.as_deref(),
+                ctx.profiles,
+                ctx.subagent_profiles,
+            );
         // The pane runs the supervised exec wrapper, not the agent CLI
         // directly: every agent launch funnels through `rimz agents exec`,
         // which replays the durable launch identity, applies trusted
@@ -2356,7 +2369,7 @@ fn plan_resume_candidates_detailed(
         let mut posture = if single.is_some_and(|options| options.overrides.agent.is_some()) {
             ResumePosture::default()
         } else {
-            resolve_posture(request, ctx.profiles)
+            resolve_posture(request, profiles)
         };
         if let Some(options) = single {
             let overrides = &options.overrides;
@@ -2372,7 +2385,7 @@ fn plan_resume_candidates_detailed(
                 match restore_resume_cell(
                     &mut cell,
                     request,
-                    ctx.profiles,
+                    profiles,
                     overrides,
                     Some(posture.launch),
                     true,
