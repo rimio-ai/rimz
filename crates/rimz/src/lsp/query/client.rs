@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-/// A qualifier matching more symbols than this skips the member fallback: each match costs an
-/// outline request, and a broad qualifier like `tests` matches hundreds of modules.
+/// Outline recovery skips qualifiers above this cap and keeps at most this many files.
+/// Each container costs a definition and implementation request; each file costs an outline.
 const MEMBER_CONTAINER_CAP: usize = 20;
 
 const QUERY_WORKERS: usize = 4;
@@ -149,12 +149,36 @@ fn request(entry: &Entry, method: &str, params: Value) -> std::result::Result<Va
     request_with_wait(entry, method, params, 110_000)
 }
 
+/// `request`, except that a server without `method` (MethodNotFound) answers `None`.
+fn request_if_supported(
+    entry: &Entry,
+    method: &str,
+    params: Value,
+) -> std::result::Result<Option<Value>, QueryErr> {
+    match reply(entry, method, params, 110_000)? {
+        Ok(result) => Ok(Some(result)),
+        Err(error) if error["code"] == -32601 => Ok(None),
+        Err(error) => Err(LspErr::Protocol(error.to_string()).into()),
+    }
+}
+
 fn request_with_wait(
     entry: &Entry,
     method: &str,
     params: Value,
     wait_ms: u64,
 ) -> std::result::Result<Value, QueryErr> {
+    reply(entry, method, params, wait_ms)?
+        .map_err(|error| LspErr::Protocol(error.to_string()).into())
+}
+
+/// The server's result, or the JSON-RPC error object it answered with.
+fn reply(
+    entry: &Entry,
+    method: &str,
+    params: Value,
+    wait_ms: u64,
+) -> std::result::Result<std::result::Result<Value, Value>, QueryErr> {
     // Outlast readiness by 5s; each main query request still reports before a 120s agent shell
     // timeout.
     let socket_timeout = Duration::from_millis(wait_ms) + Duration::from_secs(5);
@@ -198,11 +222,12 @@ fn request_with_wait(
             let reason = serde_json::from_value(error["message"].clone()).map_err(LspErr::from)?;
             return Err(QueryErr::stopped(entry, &reason));
         }
-        return Err(LspErr::Protocol(error.to_string()).into());
+        return Ok(Err(error.clone()));
     }
     response
         .get("result")
         .cloned()
+        .map(Ok)
         .ok_or_else(|| LspErr::Protocol("query response has no result".into()).into())
 }
 
@@ -224,14 +249,11 @@ pub fn classification_outline(entry: &Entry, path: &Path) -> std::result::Result
     )
 }
 
-fn request_outlines(
+fn request_outlines<'a>(
     entry: &Entry,
-    symbols: &[SymbolInformation],
+    uris: impl IntoIterator<Item = &'a str>,
 ) -> std::result::Result<BTreeMap<String, Symbols>, QueryErr> {
-    let uris: BTreeSet<_> = symbols
-        .iter()
-        .map(|symbol| symbol.location.uri.as_str())
-        .collect();
+    let uris: BTreeSet<_> = uris.into_iter().collect();
     if uris.len() > MEMBER_CONTAINER_CAP {
         return Ok(BTreeMap::new());
     }
@@ -250,6 +272,111 @@ fn request_outlines(
         )))
     })?;
     Ok(outlines.into_iter().flatten().collect())
+}
+
+fn recovery_files(entry: &Entry, name: &str) -> std::result::Result<Vec<String>, QueryErr> {
+    let (files, chain) = file_qualified(name).map_or((None, name), |(file, chain)| {
+        (Some(NamedFiles::new(&entry.root, Path::new(file))), chain)
+    });
+    if let Some(NamedFiles::Exact(path)) = &files {
+        return Ok(vec![uri(&entry.root, path)?]);
+    }
+    let mut qualifier = name_segments(chain);
+    qualifier.pop();
+    let Some(last) = qualifier.last() else {
+        return Ok(Vec::new());
+    };
+    let containers = resolve_symbol(
+        &entry.root,
+        &qualifier.join("::"),
+        request(entry, "workspace/symbol", json!({"query": last}))?,
+    )?;
+    let containers = match containers {
+        SymbolResolution::Missing { .. } => return Ok(Vec::new()),
+        found => found.into_symbols(),
+    };
+    if containers.len() > MEMBER_CONTAINER_CAP {
+        return Ok(Vec::new());
+    }
+    let locations = bounded_map(&containers, |container| {
+        let params = json!({
+            "textDocument": {"uri": container.location.uri},
+            "position": container.location.range.start,
+        });
+        let mut definitions: Vec<_> =
+            locations(request(entry, "textDocument/definition", params.clone())?)?
+                .into_iter()
+                .map(|location| location.uri)
+                .collect();
+        if definitions.is_empty() {
+            definitions.push(container.location.uri.clone());
+        }
+        let implementations = request_if_supported(entry, "textDocument/implementation", params)?;
+        let implementations: Vec<_> = locations(implementations.unwrap_or_default())?
+            .into_iter()
+            .map(|location| location.uri)
+            .collect();
+        Ok::<_, QueryErr>((definitions, implementations))
+    })?;
+    let mut files_seen = BTreeSet::new();
+    let mut uris = Vec::new();
+    for uri in locations
+        .iter()
+        .flat_map(|(definitions, _)| definitions)
+        .chain(
+            locations
+                .iter()
+                .flat_map(|(_, implementations)| implementations),
+        )
+    {
+        if let Some(files) = &files
+            && !files.contains(&entry.root, uri)?
+        {
+            continue;
+        }
+        if files_seen.insert(uri) {
+            uris.push(uri.clone());
+            if uris.len() == MEMBER_CONTAINER_CAP {
+                break;
+            }
+        }
+    }
+    Ok(uris)
+}
+
+fn recover_outline(
+    entry: &Entry,
+    name: &str,
+    outlines: &mut BTreeMap<String, Symbols>,
+) -> std::result::Result<Option<SymbolResolution>, QueryErr> {
+    let files = recovery_files(entry, name)?;
+    let missing = files
+        .iter()
+        .filter(|uri| !outlines.contains_key(*uri))
+        .map(String::as_str);
+    let fetched = request_outlines(entry, missing)?;
+    outlines.extend(fetched);
+    let chain = file_qualified(name).map_or(name, |(_, chain)| chain);
+    let member = name_segments(chain).pop().unwrap_or_default();
+    let candidates = files
+        .iter()
+        .filter_map(|uri| {
+            outlines
+                .get(uri)
+                .map(|outline| outline_candidates(uri, &member, outline))
+        })
+        .flatten()
+        .collect();
+    let matches = match match_symbols(&entry.root, name, candidates)? {
+        SymbolResolution::Missing { .. } => return Ok(None),
+        found => found.into_symbols(),
+    };
+    let mut matches = prefer_exact(&entry.root, name, matches)?;
+    Ok(Some(if matches.len() == 1 {
+        SymbolResolution::Unique(matches.remove(0))
+    } else {
+        SymbolResolution::Ambiguous(matches)
+    }))
 }
 
 pub fn execute(
@@ -296,11 +423,15 @@ pub fn execute(
                 )?,
             )?;
             let mut enriched = false;
+            let mut outlines = BTreeMap::new();
             if let SymbolResolution::Missing { candidates } = &resolution
                 && name_segments(name).len() > 1
             {
                 let narrowed = narrow_candidates(&entry.root, name, candidates)?;
-                let mut outlines = request_outlines(entry, &narrowed)?;
+                outlines = request_outlines(
+                    entry,
+                    narrowed.iter().map(|symbol| symbol.location.uri.as_str()),
+                )?;
                 let mut rematched = rematch_enriched(&entry.root, name, &narrowed, &outlines)?;
                 if rematched.is_none()
                     && candidates
@@ -317,7 +448,10 @@ pub fn execute(
                         .filter(|symbol| !requested.contains(&symbol.location.uri))
                         .cloned()
                         .collect();
-                    outlines.extend(request_outlines(entry, &remaining)?);
+                    outlines.extend(request_outlines(
+                        entry,
+                        remaining.iter().map(|symbol| symbol.location.uri.as_str()),
+                    )?);
                     rematched = rematch_enriched(&entry.root, name, candidates, &outlines)?;
                 }
                 if let Some(rematched) = rematched {
@@ -341,39 +475,9 @@ pub fn execute(
             let mut unresolved = 0;
             let resolution = match resolution {
                 SymbolResolution::Missing { candidates } => {
-                    let (file, chain) = file_qualified(name)
-                        .map_or((None, name.as_str()), |(file, chain)| (Some(file), chain));
-                    let mut qualifier = name_segments(chain);
-                    let member = qualifier.pop().unwrap_or_default();
-                    let mut members = Vec::new();
-                    if !qualifier.is_empty() {
-                        let container = qualifier.join("::");
-                        let containers = resolve_symbol(
-                            &entry.root,
-                            &file.map_or(container.clone(), |file| format!("{file}::{container}")),
-                            request(
-                                entry,
-                                "workspace/symbol",
-                                json!({"query": qualifier.last()}),
-                            )?,
-                        )?;
-                        let mut containers = match containers {
-                            SymbolResolution::Missing { .. } => Vec::new(),
-                            found => found.into_symbols(),
-                        };
-                        if containers.len() > MEMBER_CONTAINER_CAP {
-                            containers.clear();
-                        }
-                        containers.sort_by(|a, b| a.location.uri.cmp(&b.location.uri));
-                        let outlines = request_outlines(entry, &containers)?;
-                        for container in &containers {
-                            let Some(outline) = outlines.get(&container.location.uri) else {
-                                continue;
-                            };
-                            members.extend(outline_members(container, &member, outline));
-                        }
-                    }
-                    if members.is_empty() {
+                    if let Some(recovered) = recover_outline(entry, name, &mut outlines)? {
+                        recovered
+                    } else {
                         let (resolution, unresolved) =
                             collapse_ranked(&entry.root, name, candidates, definition)?;
                         return Ok(Output::NotFound {
@@ -382,16 +486,14 @@ pub fn execute(
                             unresolved,
                         });
                     }
-                    if members.len() == 1 {
-                        SymbolResolution::Unique(members.remove(0))
-                    } else {
-                        SymbolResolution::Ambiguous(members)
-                    }
                 }
                 SymbolResolution::Unique(symbol) => collapse_symbols(vec![symbol], definition)?,
                 SymbolResolution::Ambiguous(mut symbols) => {
                     if !enriched {
-                        let outlines = request_outlines(entry, &symbols)?;
+                        let outlines = request_outlines(
+                            entry,
+                            symbols.iter().map(|symbol| symbol.location.uri.as_str()),
+                        )?;
                         if enrich_containers(&mut symbols, &outlines) {
                             symbols = prefer_exact(&entry.root, name, symbols)?;
                         }

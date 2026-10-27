@@ -285,7 +285,10 @@ fn enriched_twin_names_resolve_to_their_own_items() {
         resolve_symbol(root, &names[1], serde_json::to_value(&indexed).unwrap()).unwrap(),
         SymbolResolution::Missing { .. }
     ));
-    let members = outline_members(&twin("tests", "a", None, 2), "load", &outline);
+    let candidates = outline_candidates("file:///checkout/src/a.rs", "load", &outline);
+    let members = match_symbols(root, &names[1], candidates)
+        .unwrap()
+        .into_symbols();
     assert_eq!(members.len(), 1);
     assert_eq!(members[0].location.range.start.line, 3);
     assert_eq!(Candidate::new(root, &members[0]).unwrap().name, names[1]);
@@ -430,7 +433,7 @@ fn module_narrowing_keeps_overlapping_file_module_prefixes() {
 }
 
 #[test]
-fn outline_members_use_selection_positions_and_direct_children() {
+fn outline_candidates_recover_whole_files_and_selection_positions() {
     let node = |name, kind, line, children| json!({"name":name,"kind":kind,"range":range(),"selectionRange":{"start":{"line":line,"character":0},"end":{"line":line,"character":4}},"children":children});
     let outline = json!([
         node(
@@ -457,22 +460,21 @@ fn outline_members_use_selection_positions_and_direct_children() {
             )])
         )
     ]);
-    for (name, parent, line, member_line, qualified) in [
-        ("Type", None, 3, 4, "module::Type::field"),
-        (
-            "Variant",
-            Some("Enum"),
-            9,
-            10,
-            "module::Enum::Variant::field",
-        ),
+    let outline: Symbols = serde_json::from_value(outline).unwrap();
+    let root = Path::new("/checkout");
+    for (name, member_line, qualified) in [
+        ("field", 4, "module::Type::field"),
+        ("field", 10, "module::Enum::Variant::field"),
+        ("grandchild", 5, "Type::grandchild"),
+        ("method", 7, "Type::method"),
     ] {
-        let container: SymbolInformation = serde_json::from_value(json!({"name":name,"kind":23,"containerName":parent,"location":{"uri":"file:///checkout/src/module.rs","range":{"start":{"line":line,"character":0},"end":{"line":line,"character":4}}}})).unwrap();
-        let members = outline_members(
-            &container,
-            "field",
-            &serde_json::from_value(outline.clone()).unwrap(),
+        let candidates = outline_candidates("file:///checkout/src/module.rs", name, &outline);
+        let resolution = match_symbols(root, qualified, candidates).unwrap();
+        assert!(
+            matches!(resolution, SymbolResolution::Unique(_)),
+            "{qualified}"
         );
+        let members = resolution.into_symbols();
         assert_eq!(members.len(), 1);
         assert_eq!(
             members[0].location.range.start,
@@ -481,35 +483,47 @@ fn outline_members_use_selection_positions_and_direct_children() {
                 character: 0
             }
         );
-        assert!(
-            render_ambiguous(Path::new("/checkout"), "field", &members)
-                .unwrap()
-                .contains(&format!(
-                    "field {qualified}  src/module.rs:{}:1",
-                    member_line + 1
-                ))
-        );
+        let printed = Candidate::new(root, &members[0]).unwrap().name;
         assert!(matches!(
-            resolve_symbol(
-                Path::new("/checkout"),
-                qualified,
-                serde_json::to_value(&members).unwrap()
-            )
-            .unwrap(),
+            match_symbols(root, &printed, members).unwrap(),
             SymbolResolution::Unique(_)
         ));
-        for missing in ["grandchild", "method", "nosuch"] {
-            assert!(
-                outline_members(
-                    &container,
-                    missing,
-                    &serde_json::from_value(outline.clone()).unwrap()
-                )
-                .is_empty()
-            );
-        }
-        assert!(outline_members(&container, "field", &Symbols::Flat(members)).is_empty());
     }
+    assert!(outline_candidates("file:///checkout/src/module.rs", "nosuch", &outline).is_empty());
+}
+
+#[test]
+fn outline_candidates_keep_flat_server_containers() {
+    let symbols = vec![
+        twin("field", "a", Some("Type"), 4),
+        twin("other", "a", None, 5),
+    ];
+    let candidates = outline_candidates(
+        "file:///checkout/src/a.rs",
+        "field",
+        &Symbols::Flat(symbols),
+    );
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].container_name.as_deref(), Some("Type"));
+    assert_eq!(candidates[0].location.range.start.line, 4);
+}
+
+#[test]
+fn outline_candidates_reduce_generic_and_trait_impl_ancestors() {
+    let node = |name, children| json!({"name":name,"kind":6,"range":range(),"selectionRange":range(),"children":children});
+    let outline = serde_json::from_value(json!([
+        node("impl<T> super::Type<T>", json!([node("method", json!([]))])),
+        node("impl Trait for Type", json!([node("method", json!([]))]))
+    ]))
+    .unwrap();
+    let candidates = outline_candidates("file:///checkout/src/a.rs", "method", &outline);
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|symbol| symbol.container_name.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("super::Type"), Some("Type")]
+    );
 }
 
 #[test]
@@ -2488,7 +2502,7 @@ fn file_qualified_names_resolve_among_the_named_files() {
 }
 
 #[test]
-fn outline_members_find_a_container_whose_range_is_the_whole_declaration() {
+fn outline_candidates_distinguish_nested_namesake_containers() {
     let span = |line, start, end| json!({"start":{"line":line,"character":start},"end":{"line":line,"character":end}});
     let node = |name, kind, line, start, children| json!({"name":name,"kind":kind,"range":span(line, 0, 30),"selectionRange":span(line, start, start + 7),"children":children});
     // class Greeter:          (line 0)
@@ -2517,15 +2531,19 @@ fn outline_members_find_a_container_whose_range_is_the_whole_declaration() {
         node("Other", 5, 6, 6, json!([node("greet", 6, 7, 8, json!([]))]))
     ]))
     .unwrap();
-    for (start, end, parent, member_line) in [
-        ((0, 0), (5, 0), None, 1),
-        ((3, 4), (5, 0), Some("Greeter"), 4),
-    ] {
-        let container: SymbolInformation = serde_json::from_value(json!({"name":"Greeter","kind":5,"containerName":parent,"location":{"uri":"file:///checkout/app.py","range":{"start":{"line":start.0,"character":start.1},"end":{"line":end.0,"character":end.1}}}})).unwrap();
-        let members = outline_members(&container, "greet", &outline);
-        assert_eq!(members.len(), 1);
-        assert_eq!(members[0].location.range.start.line, member_line);
-    }
+    let root = Path::new("/checkout");
+    let candidates = outline_candidates("file:///checkout/app.py", "greet", &outline);
+    let matched = match_symbols(root, "Greeter::greet", candidates.clone()).unwrap();
+    assert!(matches!(matched, SymbolResolution::Ambiguous(_)));
+    assert_eq!(
+        prefer_exact(root, "Greeter::greet", matched.into_symbols())
+            .unwrap()
+            .len(),
+        2
+    );
+    let matched = match_symbols(root, "Greeter::Greeter::greet", candidates).unwrap();
+    assert!(matches!(matched, SymbolResolution::Unique(_)));
+    assert_eq!(matched.into_symbols()[0].location.range.start.line, 4);
 }
 
 #[test]

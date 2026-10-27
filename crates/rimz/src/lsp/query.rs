@@ -396,17 +396,7 @@ fn enrich_containers(
         .iter()
         .map(|symbol| {
             let (_, ancestors) = outline_node(symbol, outlines.get(&symbol.location.uri)?)?;
-            let path: Vec<_> = ancestors
-                .into_iter()
-                .map(|name| {
-                    without_generics(name)
-                        .split_whitespace()
-                        .next_back()
-                        .unwrap_or("")
-                        .to_owned()
-                })
-                .collect();
-            Some((!path.is_empty()).then(|| path.join("::")))
+            Some(outline_container(&ancestors))
         })
         .collect();
     let Some(containers) = containers else {
@@ -512,30 +502,55 @@ fn outline_node<'a>(
         .map(|(node, ancestors)| (*node, ancestors.clone()))
 }
 
-fn outline_members(
-    container: &SymbolInformation,
-    name: &str,
-    outline: &Symbols,
-) -> Vec<SymbolInformation> {
-    let Some((node, _)) = outline_node(container, outline) else {
-        return Vec::new();
-    };
-    let mut path = container_path(container);
-    path.push(container.name.clone());
-    let container_name = path.join("::");
-    node.children
+fn outline_container(ancestors: &[&str]) -> Option<String> {
+    let path: Vec<_> = ancestors
         .iter()
-        .filter(|child| child.name == name)
-        .map(|child| SymbolInformation {
-            name: child.name.clone(),
-            kind: child.kind,
-            location: Location {
-                uri: container.location.uri.clone(),
-                range: child.selection_range,
-            },
-            container_name: Some(container_name.clone()),
+        .map(|name| {
+            without_generics(name)
+                .split_whitespace()
+                .next_back()
+                .unwrap_or("")
+                .to_owned()
         })
-        .collect()
+        .collect();
+    (!path.is_empty()).then(|| path.join("::"))
+}
+
+fn outline_candidates(uri: &str, name: &str, outline: &Symbols) -> Vec<SymbolInformation> {
+    let nodes = match outline {
+        Symbols::Flat(symbols) => {
+            return symbols
+                .iter()
+                .filter(|symbol| symbol.name == name)
+                .cloned()
+                .collect();
+        }
+        Symbols::Tree(nodes) => nodes,
+    };
+    let mut candidates = Vec::new();
+    let mut pending: Vec<_> = nodes.iter().rev().map(|node| (node, Vec::new())).collect();
+    while let Some((node, ancestors)) = pending.pop() {
+        if node.name == name {
+            candidates.push(SymbolInformation {
+                name: node.name.clone(),
+                kind: node.kind,
+                location: Location {
+                    uri: uri.to_owned(),
+                    range: node.selection_range,
+                },
+                container_name: outline_container(&ancestors),
+            });
+        }
+        let mut path = ancestors;
+        path.push(node.name.as_str());
+        pending.extend(
+            node.children
+                .iter()
+                .rev()
+                .map(|child| (child, path.clone())),
+        );
+    }
+    candidates
 }
 
 fn collapse_symbols(

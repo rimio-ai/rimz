@@ -9,12 +9,16 @@ fn main() {
     let mut adaptable = false;
     let mut hold_index = false;
     let mut reload_configuration = false;
+    let mut no_implementation = false;
+    let mut many_implementations = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--configuration-section" => sections.push(args.next().expect("section argument")),
             "--adaptable-replies" => adaptable = true,
             "--hold-index-progress" => hold_index = true,
             "--reload-configuration" => reload_configuration = true,
+            "--no-implementation" => no_implementation = true,
+            "--many-implementations" => many_implementations = true,
             _ => panic!("unknown stub argument: {arg}"),
         }
     }
@@ -46,6 +50,10 @@ fn main() {
             requests.push(message.clone());
         }
         let method = message["method"].as_str().unwrap_or("");
+        if method == "textDocument/implementation" && no_implementation {
+            write_frame(&mut output, &json!({"jsonrpc":"2.0","id":message["id"],"error":{"code":-32601,"message":"Method not found"}})).unwrap();
+            continue;
+        }
         if method.is_empty() {
             continue;
         }
@@ -167,7 +175,26 @@ fn main() {
                         "BroadType" => (0..21).map(|n| format!("broad{n}.rs")).collect(),
                         _ => vec!["lib.rs".to_owned()],
                     };
-                    json!(files.into_iter().map(|file| json!({"name":name,"kind":23,"location":{"uri":format!("{}/{file}", root.trim_end_matches('/')),"range":alias_location("alias")["range"]}})).collect::<Vec<_>>())
+                    let line = if name == "UniqueMember" { 8 } else { 0 };
+                    json!(files.into_iter().map(|file| json!({"name":name,"kind":23,"location":{"uri":format!("{}/{file}", root.trim_end_matches('/')),"range":{"start":{"line":line,"character":0},"end":{"line":line,"character":5}}}})).collect::<Vec<_>>())
+                } else if let Some(name @ ("remote" | "SplitType")) =
+                    message["params"]["query"].as_str()
+                {
+                    let line = if name == "remote" { 12 } else { 13 };
+                    json!([{
+                        "name":name,"kind":if name == "remote" {2} else {23},
+                        "location":{
+                            "uri":format!("{}/lib.rs", root.trim_end_matches('/')),
+                            "range":{
+                                "start":{"line":line,"character":0},
+                                "end":{"line":line,"character":5}
+                            }
+                        }
+                    }])
+                } else if let Some(name @ ("method" | "item" | "member")) =
+                    message["params"]["query"].as_str()
+                {
+                    json!([{"name":format!("{name}_near_match"),"kind":12,"location":{"uri":format!("{}/lib.rs", root.trim_end_matches('/')),"range":alias_location("alias")["range"]}}])
                 } else if message["params"]["query"] == "Many" {
                     json!((0..45).rev().map(|n| json!({"name":"Many","kind":12,"location":{"uri":format!("{root}/src/c{n:02}.rs"),"range":alias_location("alias")["range"]}})).collect::<Vec<_>>())
                 } else if message["params"]["query"] == "alias" {
@@ -195,6 +222,31 @@ fn main() {
                     continue;
                 }
                 json!({"contents": message["params"]["marker"].as_str().unwrap_or("fixture hover")})
+            }
+            "textDocument/documentSymbol"
+                if message["params"]["textDocument"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| {
+                        uri.ends_with("/remote.rs") || uri.ends_with("/split.rs")
+                    }) =>
+            {
+                let node = |name, line, children| json!({"name":name,"kind":12,"range":{"start":{"line":line,"character":0},"end":{"line":line+2,"character":1}},"selectionRange":{"start":{"line":line,"character":7},"end":{"line":line,"character":11}},"children":children});
+                if message["params"]["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("/split.rs")
+                {
+                    json!([node(
+                        "impl SplitType",
+                        0,
+                        json!([node("member", 1, json!([]))])
+                    )])
+                } else {
+                    json!([
+                        node("item", 1, json!([])),
+                        node("nested", 4, json!([node("item", 5, json!([]))]))
+                    ])
+                }
             }
             "textDocument/documentSymbol"
                 if message["params"]["textDocument"]["uri"]
@@ -265,23 +317,59 @@ fn main() {
                     let range = json!({"start":{"line":start,"character":0},"end":{"line":end,"character":1}});
                     json!({"name":name,"kind":kind,"range":range,"selectionRange":range,"children":children})
                 };
+                let uri = message["params"]["textDocument"]["uri"].as_str().unwrap();
+                let ty = if uri.ends_with("/a/lib.rs") || uri.ends_with("/b/lib.rs") {
+                    "TwinType"
+                } else {
+                    "Type"
+                };
+                let mut method = symbol("method", 6, 2, 5, json!([]));
+                method["selectionRange"] =
+                    json!({"start":{"line":3,"character":7},"end":{"line":3,"character":13}});
                 json!([
+                    symbol(ty, 23, 0, 1, json!([symbol("field", 8, 1, 1, json!([]))])),
+                    symbol(&format!("impl {ty}"), 19, 2, 5, json!([method])),
+                    symbol("saved", 12, 6, 6, json!([])),
                     symbol(
-                        "Type",
+                        "UniqueMember",
                         23,
-                        0,
-                        1,
-                        json!([symbol("field", 8, 1, 1, json!([]))])
+                        8,
+                        10,
+                        json!([symbol("field", 8, 9, 9, json!([]))])
                     ),
-                    symbol(
-                        "impl Type",
-                        19,
-                        2,
-                        5,
-                        json!([symbol("method", 6, 2, 5, json!([]))])
-                    ),
-                    symbol("saved", 12, 6, 6, json!([]))
+                    symbol("remote", 2, 12, 12, json!([])),
+                    symbol("SplitType", 23, 13, 13, json!([]))
                 ])
+            }
+            "textDocument/definition"
+                if message["params"]["textDocument"]["uri"]
+                    == format!("{}/lib.rs", root.trim_end_matches('/'))
+                    && message["params"]["position"]["line"] == 12 =>
+            {
+                json!([{"uri":format!("{}/remote.rs", root.trim_end_matches('/')),"range":alias_location("alias")["range"]}])
+            }
+            "textDocument/implementation" if many_implementations => {
+                json!((0..25).map(|n| json!({"uri":format!("{}/impl{n}.rs", root.trim_end_matches('/')),"range":alias_location("alias")["range"]})).collect::<Vec<_>>())
+            }
+            "textDocument/implementation"
+                if message["params"]["textDocument"]["uri"]
+                    == format!("{}/lib.rs", root.trim_end_matches('/'))
+                    && message["params"]["position"]["line"] == 13 =>
+            {
+                json!([{"targetUri":format!("{}/impls/split.rs", root.trim_end_matches('/')),"targetRange":alias_location("alias")["range"],"targetSelectionRange":alias_location("alias")["range"]}])
+            }
+            "textDocument/definition"
+                if message["params"]["textDocument"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| {
+                        uri.ends_with("/remote.rs") || uri.ends_with("/split.rs")
+                    })
+                    || (message["params"]["textDocument"]["uri"]
+                        == format!("{}/lib.rs", root.trim_end_matches('/'))
+                        && message["params"]["position"] == json!({"line":3,"character":7})) =>
+            {
+                let position = &message["params"]["position"];
+                json!([{"uri":message["params"]["textDocument"]["uri"],"range":{"start":position,"end":position}}])
             }
             "textDocument/completion" if adaptable => {
                 let snippets = capabilities["textDocument"]["completion"]["completionItem"]["snippetSupport"]
