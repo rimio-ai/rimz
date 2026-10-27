@@ -427,7 +427,7 @@ mod reaper {
         drop(sandbox);
         let root_exists = root.exists();
         let marker = std::fs::read_to_string(root.join("kept"));
-        let bystander_alive = alive(bystander.id());
+        let outlived = alive_after_cleanup(&[bystander.id()]);
         let _ = bystander.kill();
         bystander.wait().unwrap();
         if root_exists {
@@ -436,7 +436,10 @@ mod reaper {
 
         assert!(root_exists, "a marked sandbox must survive drop");
         assert_eq!(marker.unwrap(), REPORT);
-        assert!(!bystander_alive, "drop must stop the sandbox's HOME child");
+        assert!(
+            outlived.is_empty(),
+            "drop must stop the sandbox's HOME child within {CLEANUP_WITHIN:?}"
+        );
     }
 
     fn role_command(role: &str) -> Command {
@@ -509,6 +512,19 @@ mod reaper {
             stat.rsplit_once(')')
                 .is_some_and(|(_, rest)| !rest.trim_start().starts_with('Z'))
         })
+    }
+
+    // A reap stops matching a process once its environment is unreadable, which is before the
+    // process turns zombie, so a process the cleanup stopped can still read as alive for a while.
+    fn alive_after_cleanup(pids: &[u32]) -> Vec<u32> {
+        let deadline = Instant::now() + CLEANUP_WITHIN;
+        loop {
+            let living: Vec<u32> = pids.iter().copied().filter(|&pid| alive(pid)).collect();
+            if living.is_empty() || Instant::now() >= deadline {
+                return living;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     struct Owner {
@@ -592,16 +608,14 @@ mod reaper {
         );
         assert_eq!(owner.child.wait().unwrap().signal(), Some(15));
 
-        let deadline = Instant::now() + CLEANUP_WITHIN;
-        while alive(reaper.unwrap()) || alive(bystander) {
-            assert!(
-                Instant::now() < deadline,
-                "sandbox cleanup after owner's process-group SIGTERM timed out: reaper_alive={}, bystander_alive={}",
-                alive(reaper.unwrap()),
-                alive(bystander),
-            );
-            thread::sleep(Duration::from_millis(20));
-        }
+        let reaper = reaper.unwrap();
+        let outlived = alive_after_cleanup(&[reaper, bystander]);
+        assert!(
+            outlived.is_empty(),
+            "sandbox cleanup after owner's process-group SIGTERM timed out: reaper_alive={}, bystander_alive={}",
+            outlived.contains(&reaper),
+            outlived.contains(&bystander),
+        );
         assert_eq!(
             root.exists(),
             keep,
