@@ -19,6 +19,7 @@ fn native_logins() -> Vec<ProviderLogin> {
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        consecutive_failures: 0,
         version_probed_at_ms: None,
         inputs_stamp: None,
         profile: None,
@@ -899,6 +900,237 @@ fn provider_query_preserves_normal_per_provider_ttls() {
 
     assert_eq!(cached, expected);
     assert_eq!(probes.load(Ordering::SeqCst), 0);
+}
+
+struct AccountQuery {
+    _dir: tempfile::TempDir,
+    runtime: RuntimePaths,
+    logins: Vec<ProviderLogin>,
+    probes: BTreeMap<LoginKey, AtomicUsize>,
+}
+
+impl AccountQuery {
+    fn new(kinds: &[&str]) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_shared_dirs().unwrap();
+        let logins: Vec<_> = native_logins()
+            .into_iter()
+            .filter(|login| kinds.contains(&login.kind().as_str()))
+            .collect();
+        let probes = logins
+            .iter()
+            .map(|login| (login.key(), AtomicUsize::new(0)))
+            .collect();
+        Self {
+            _dir: dir,
+            runtime,
+            logins,
+            probes,
+        }
+    }
+
+    fn query(
+        &self,
+        mut cache: AccountsCache,
+        age_ms: u64,
+        stamp: Option<u64>,
+        outcome: impl Fn(&str) -> AccountProbe,
+    ) -> AccountsCache {
+        let now_ms = unix_now_ms();
+        for record in cache.logins.values_mut() {
+            record.probed_at_ms = now_ms - age_ms;
+        }
+        write_accounts_cache(&self.runtime.shared_accounts_path(), &cache);
+        query_provider_accounts_with(
+            &empty_snapshot(),
+            &self.runtime,
+            &self.logins,
+            false,
+            Duration::ZERO,
+            |_| stamp,
+            |_, _, due, cache, _| {
+                let results = due.iter().map(|key| {
+                    self.probes[key].fetch_add(1, Ordering::SeqCst);
+                    ProviderProbeResult {
+                        key: key.clone(),
+                        inputs_stamp: stamp,
+                        outcome: outcome(key.kind.as_str()),
+                        ..successful_probe(key.kind.as_str())
+                    }
+                });
+                merge_probe_results(cache, &BTreeSet::new(), now_ms, results)
+            },
+        )
+    }
+
+    fn calls(&self, kind: &str) -> usize {
+        self.probes[&key(kind)].load(Ordering::SeqCst)
+    }
+}
+
+fn unavailable_probe(_: &str) -> AccountProbe {
+    AccountProbe::Unavailable(crate::agents::account::AccountProbeError::TimedOut)
+}
+
+#[test]
+fn first_unavailable_probe_retries_after_ten_seconds() {
+    let query = AccountQuery::new(&["copilot"]);
+    let failed = query.query(AccountsCache::default(), 0, None, unavailable_probe);
+    assert_eq!(failed.logins[&key("copilot")].consecutive_failures, 1);
+    assert_eq!(query.calls("copilot"), 1);
+    let cached = query.query(failed, 9_000, None, unavailable_probe);
+    assert_eq!(query.calls("copilot"), 1);
+    let retried = query.query(cached, 11_000, None, unavailable_probe);
+    assert_eq!(query.calls("copilot"), 2);
+    assert_eq!(retried.logins[&key("copilot")].consecutive_failures, 2);
+}
+
+#[test]
+fn consecutive_unavailable_probes_back_off_to_the_success_ttl() {
+    let query = AccountQuery::new(&["copilot"]);
+    let mut cache = query.query(AccountsCache::default(), 0, None, unavailable_probe);
+    for (index, seconds) in [10, 20, 40, 80, 160, 320, 600, 600].into_iter().enumerate() {
+        let count = index + 1;
+        assert_eq!(
+            cache.logins[&key("copilot")].consecutive_failures,
+            count as u32
+        );
+        assert!(
+            due_provider_logins(
+                &cache,
+                &empty_snapshot(),
+                &query.logins,
+                &BTreeMap::new(),
+                cache.logins[&key("copilot")].probed_at_ms + seconds * 1_000,
+            )
+            .is_empty(),
+            "the retry deadline itself is not due"
+        );
+        cache = query.query(cache, seconds * 1_000 - 1_000, None, unavailable_probe);
+        assert_eq!(query.calls("copilot"), count, "before {seconds}s");
+        cache = query.query(cache, seconds * 1_000 + 1_000, None, unavailable_probe);
+        assert_eq!(query.calls("copilot"), count + 1, "after {seconds}s");
+    }
+    cache
+        .logins
+        .get_mut(&key("copilot"))
+        .unwrap()
+        .consecutive_failures = u32::MAX;
+    cache = query.query(cache, 599_000, None, unavailable_probe);
+    assert_eq!(query.calls("copilot"), 9);
+    cache = query.query(cache, 601_000, None, unavailable_probe);
+    assert_eq!(query.calls("copilot"), 10);
+    assert_eq!(cache.logins[&key("copilot")].consecutive_failures, u32::MAX);
+}
+
+#[test]
+fn confident_probe_resets_and_omits_the_failure_count() {
+    for logged_out in [false, true] {
+        let query = AccountQuery::new(&["copilot"]);
+        let previous = AccountsCache {
+            logins: [(
+                key("copilot"),
+                ProviderRecord {
+                    consecutive_failures: 8,
+                    ..record(0, false, None)
+                },
+            )]
+            .into(),
+        };
+        let recovered = query.query(previous, 601_000, None, |_| {
+            if logged_out {
+                AccountProbe::LoggedOut
+            } else {
+                AccountProbe::Found(AgentAccount::default())
+            }
+        });
+        assert_eq!(query.calls("copilot"), 1);
+        assert_eq!(recovered.logins[&key("copilot")].consecutive_failures, 0);
+        let written: serde_json::Value =
+            crate::disk::atomic::read_json_cache(&query.runtime.shared_accounts_path());
+        assert!(
+            written["logins"]["copilot@default"]
+                .get("consecutive_failures")
+                .is_none()
+        );
+        let failed = query.query(recovered, 601_000, None, unavailable_probe);
+        assert_eq!(query.calls("copilot"), 2);
+        assert_eq!(failed.logins[&key("copilot")].consecutive_failures, 1);
+    }
+}
+
+#[test]
+fn moved_inputs_stamp_bypasses_failure_backoff_after_the_retry_floor() {
+    let query = AccountQuery::new(&["pi"]);
+    let cache = AccountsCache {
+        logins: [(
+            key("pi"),
+            ProviderRecord {
+                consecutive_failures: u32::MAX,
+                inputs_stamp: Some(7),
+                ..record(0, false, None)
+            },
+        )]
+        .into(),
+    };
+    let cache = query.query(cache, 11_000, Some(7), unavailable_probe);
+    assert_eq!(query.calls("pi"), 0, "unchanged inputs keep the backoff");
+    let cache = query.query(cache, 9_000, Some(8), unavailable_probe);
+    assert_eq!(
+        query.calls("pi"),
+        0,
+        "changed inputs still wait out the floor"
+    );
+    let cache = query.query(cache, 11_000, Some(8), unavailable_probe);
+    assert_eq!(query.calls("pi"), 1);
+    assert_eq!(cache.logins[&key("pi")].inputs_stamp, Some(8));
+    assert_eq!(cache.logins[&key("pi")].consecutive_failures, u32::MAX);
+}
+
+#[test]
+fn legacy_failure_count_defaults_to_the_first_retry() {
+    let query = AccountQuery::new(&["copilot"]);
+    let legacy: AccountsCache = serde_json::from_value(serde_json::json!({
+        "logins": {"copilot@default": {"probed_at_ms": 1, "ok": false, "account": null}}
+    }))
+    .unwrap();
+    assert_eq!(legacy.logins[&key("copilot")].consecutive_failures, 0);
+    let cache = query.query(legacy, 9_000, None, unavailable_probe);
+    assert_eq!(query.calls("copilot"), 0);
+    let cache = query.query(cache, 11_000, None, unavailable_probe);
+    assert_eq!(query.calls("copilot"), 1);
+    assert_eq!(cache.logins[&key("copilot")].consecutive_failures, 1);
+}
+
+#[test]
+fn one_providers_failure_count_never_delays_another_provider() {
+    let query = AccountQuery::new(&["copilot", "pi"]);
+    let cache = AccountsCache {
+        logins: [
+            (
+                key("copilot"),
+                ProviderRecord {
+                    consecutive_failures: 8,
+                    ..record(0, false, None)
+                },
+            ),
+            (
+                key("pi"),
+                ProviderRecord {
+                    consecutive_failures: 1,
+                    ..record(0, false, None)
+                },
+            ),
+        ]
+        .into(),
+    };
+    let cache = query.query(cache, 11_000, None, unavailable_probe);
+    assert_eq!(query.calls("pi"), 1);
+    assert_eq!(query.calls("copilot"), 0);
+    assert_eq!(cache.logins[&key("copilot")].consecutive_failures, 8);
+    assert_eq!(cache.logins[&key("pi")].consecutive_failures, 2);
 }
 
 #[test]

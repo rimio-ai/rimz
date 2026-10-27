@@ -393,8 +393,14 @@ fn adapter_inputs_stamp(set: &RoomLoginSet, login: &ProviderLogin) -> Option<u64
     crate::agents::find_definition(login.kind().as_str())?.account_inputs_stamp(&set.env(login))
 }
 
-/// `inputs_stamps` holds the current stamps, read once per query: a
-/// successful record whose stored stamp differs is due behind the retry floor.
+fn account_failure_ttl(consecutive_failures: u32) -> Duration {
+    ACCOUNTS_RETRY_TTL
+        .saturating_mul(2_u32.saturating_pow(consecutive_failures.saturating_sub(1)))
+        .min(ACCOUNTS_TTL)
+}
+
+/// `inputs_stamps` holds the current stamps, read once per query: a record
+/// whose stored stamp differs is due behind the retry floor, even after failure.
 fn due_provider_logins(
     cache: &AccountsCache,
     snapshot: &SidebarSnapshot,
@@ -413,16 +419,18 @@ fn due_provider_logins(
                 return true;
             };
             let age_ms = now_ms.saturating_sub(record.probed_at_ms);
-            if !record.ok {
-                return age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64;
-            }
-            if age_ms > ACCOUNTS_TTL.as_millis() as u64 {
-                return true;
-            }
             let inputs_moved = record
                 .inputs_stamp
                 .zip(inputs_stamps.get(key))
                 .is_some_and(|(stored, current)| stored != *current);
+            if !record.ok {
+                return age_ms
+                    > account_failure_ttl(record.consecutive_failures).as_millis() as u64
+                    || (inputs_moved && age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64);
+            }
+            if age_ms > ACCOUNTS_TTL.as_millis() as u64 {
+                return true;
+            }
             let provisional = record
                 .account
                 .as_ref()
@@ -677,6 +685,13 @@ fn merge_probe_results(
             AccountProbe::Unavailable(_) => None,
         };
         let previous_record = previous.logins.get(&key);
+        let consecutive_failures = if ok {
+            0
+        } else {
+            previous_record
+                .map_or(0, |record| record.consecutive_failures)
+                .saturating_add(1)
+        };
         let profile = profile.or_else(|| previous_record.and_then(|record| record.profile.clone()));
         let version_probed_at_ms = version_probed_at_ms
             .or_else(|| previous_record.and_then(|record| record.version_probed_at_ms));
@@ -724,6 +739,7 @@ fn merge_probe_results(
         logins.insert(
             key,
             ProviderRecord {
+                consecutive_failures,
                 version_probed_at_ms: account_version(account.as_ref()).and(version_probed_at_ms),
                 inputs_stamp,
                 profile,

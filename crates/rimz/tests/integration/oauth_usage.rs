@@ -447,6 +447,7 @@ fn lagging_published_hint_does_not_repeat_the_usage_request_on_the_next_snapshot
         logins: std::collections::BTreeMap::from([(
             "claude@default".parse().unwrap(),
             rimz::agents::account::ProviderRecord {
+                consecutive_failures: 0,
                 version_probed_at_ms: None,
                 inputs_stamp: None,
                 probed_at_ms: rimz::utils::time::unix_now_ms(),

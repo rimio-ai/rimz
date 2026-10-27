@@ -160,6 +160,7 @@ fn accounts() -> AccountsCache {
             (
                 kind.to_owned(),
                 ProviderRecord {
+                    consecutive_failures: 0,
                     version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
@@ -175,6 +176,7 @@ fn accounts() -> AccountsCache {
     providers.insert(
         "claude".to_owned(),
         ProviderRecord {
+            consecutive_failures: 0,
             version_probed_at_ms: None,
             inputs_stamp: None,
             profile: None,
@@ -198,6 +200,7 @@ fn accounts() -> AccountsCache {
     providers.insert(
         "codex".to_owned(),
         ProviderRecord {
+            consecutive_failures: 0,
             version_probed_at_ms: None,
             inputs_stamp: None,
             profile: None,

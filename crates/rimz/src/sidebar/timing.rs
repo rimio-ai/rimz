@@ -153,11 +153,11 @@ pub(super) const WORKTREE_ROOTS_TTL: Duration = Duration::from_secs(60);
 /// `ACCOUNTS_RETRY_TTL`.
 pub(super) const ACCOUNTS_TTL: Duration = Duration::from_secs(10 * 60);
 
-/// How long the producer waits before re-probing after a *failed* probe (a
-/// binary that would not run, a non-zero exit, an unreadable file). Far shorter
-/// than the success TTL so a transient `claude auth status` error — or a binary
-/// installed just after the first probe — recovers within seconds instead of
-/// pinning an empty dashboard for the full success window.
+/// The first retry delay after a failed account probe, also the floor for
+/// provisional answers and changed adapter inputs. Consecutive failures double
+/// the delay up to `ACCOUNTS_TTL`, unless an inputs stamp moves. A newly installed
+/// binary can therefore wait the full success window after repeated failures;
+/// `rimz accounts --refresh` bypasses the wait.
 pub(super) const ACCOUNTS_RETRY_TTL: Duration = Duration::from_secs(10);
 
 /// How long the producer trusts a successful idle-tier repo PR-state probe
