@@ -114,6 +114,8 @@ A mode vector sets every provider config key its meaning depends on (`-c key=val
 
 Prove the launch `PromptStyle` live once: launch with a trivial prompt under a disposable `HOME` and confirm the pane submits it. An argv snapshot only proves the shape. OpenCode's and Kiro's TUIs silently dropped a `PositionalAfterDoubleDash` prompt that every unit test accepted, and a Commander root command treats a prompt equal to a subcommand name as that subcommand. Try a prompt that starts with `-` too, and name any form that has no working argv in the internals doc.
 
+Keep [`rimz events follow`](../reference/cli/events.md) running through the adapter's live check, its output written to a file, and read each line's `status` against the card: a line the card contradicts is a bug in the follower or the rollup. A live OpenCode check passed on the card while the follower printed `failed` for a conversation the card rested at Idle.
+
 ## Step 7 — Wire context enrichment
 
 Implement the context source(s) the worksheet found; either alone is valid, and enrichment is never correctness — a failure is an omitted field, never an error ([model.md → Enrichment](../internals/agents/model.md#enrichment)).
