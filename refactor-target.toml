@@ -281,7 +281,18 @@ upward-dependencies = ["address"]
 # AccountCapability::probe_account_usage_for names a backing credential for usage reads (+1).
 # AccountUsageKey, its parser error and constructor, and scoped CreditsCache lookups (+5).
 # AgentAccount::is_undecided shares the no-backing-credential classification (+1).
-surface-budget = 1163
+# CacheWriteRetention and SignIn share per-agent lifetime inputs (+2).
+surface-budget = 1165
+
+[[verdict]]
+kind = "item"
+key = "agents::context::CacheWriteRetention"
+reason = "Adapters, sidecars, config and cache clocks share the last cache write's retention."
+
+[[verdict]]
+kind = "item"
+key = "agents::context::SignIn"
+reason = "Account enrichment and harness configuration share a provider-neutral sign-in classification."
 
 [[verdict]]
 kind = "item"

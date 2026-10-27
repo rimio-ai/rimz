@@ -25,6 +25,35 @@ use super::definition::AgentSpec;
 
 pub mod record;
 
+/// Retention of the newest request that wrote prompt-cache tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CacheWriteRetention {
+    #[serde(rename = "5m")]
+    FiveMinutes,
+    #[serde(rename = "1h")]
+    OneHour,
+    #[serde(rename = "unsplit")]
+    Unsplit,
+}
+
+/// Billing classification used for provider prompt-cache defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignIn {
+    Subscription,
+    ApiKey,
+}
+
+impl SignIn {
+    /// The sign-in key used by prompt-cache settings and static-policy labels.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Subscription => "subscription",
+            Self::ApiKey => "api-key",
+        }
+    }
+}
+
 /// One rich-context reading paired with the provider session that owns it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContextObservation {
@@ -124,6 +153,8 @@ pub struct AgentContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<AgentCost>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_cache_write: Option<CacheWriteRetention>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<AgentTokenUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limits: Option<AgentRateLimits>,
@@ -218,6 +249,7 @@ impl Default for AgentContext {
             agent_version: None,
             exceeds_200k_tokens: None,
             cost: None,
+            last_cache_write: None,
             tokens: None,
             rate_limits: None,
             pr: None,
@@ -347,6 +379,7 @@ pub struct LocalContextPatch {
     pub fast: FieldPatch<bool>,
     pub tokens: LocalTokenPatch,
     pub cost: FieldPatch<AgentCost>,
+    pub last_cache_write: FieldPatch<CacheWriteRetention>,
     pub turn_error: FieldPatch<AgentTurnError>,
     pub settle: FieldPatch<TurnSettle>,
 }
@@ -385,6 +418,7 @@ impl LocalContextPatch {
             context.model_id.as_deref(),
         );
         self.cost.apply(&mut context.cost);
+        self.last_cache_write.apply(&mut context.last_cache_write);
         self.turn_error.apply(&mut context.turn_error);
         self.settle.apply(&mut context.settle);
     }

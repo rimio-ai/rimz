@@ -126,6 +126,7 @@ impl AgentContextRecord {
         }
         let observed_cost = context.cost.is_some();
         context.turn_opened_by = self.context.turn_opened_by.clone();
+        context.last_cache_write = self.context.last_cache_write;
         if context.cost.is_none() {
             context.cost.clone_from(&self.context.cost);
         }
@@ -201,6 +202,7 @@ impl AgentContextRecord {
         merge_optional!(model_id);
         merge_optional!(effort);
         merge_optional!(fast);
+        merge_optional!(last_cache_write);
         if context.sub_provider.is_some() && context.sub_provider != self.context.sub_provider {
             self.context.rate_limits = None;
             self.rate_limits_observed_at = None;

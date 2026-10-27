@@ -16,7 +16,7 @@ use crate::pane::{PaneRef, RuntimeOwner};
 
 use super::background_shell::BackgroundShell;
 use super::context::{
-    AgentContext, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettleOutcome,
+    AgentContext, AgentTokenUsage, AgentTurnError, SignIn, TurnErrorClass, TurnSettleOutcome,
 };
 use super::lifecycle::{
     self, AskKind, LifecycleSignal, LifecycleState, PingEdge, PriorTurnIds, Transition,
@@ -940,6 +940,9 @@ pub struct AgentState {
     /// Same enrich-only discipline as `context_pct`: display, never routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
+    /// Enrich-only sign-in classification from live context or the accounts cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<SignIn>,
     /// Runtime-ledger projection. The producer and consumers rebuild it from
     /// the budget cache; the event reducer never treats it as durable truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1269,6 +1272,7 @@ impl AgentState {
             budget: None,
             usage: AgentUsageSummary::default(),
             context: None,
+            sign_in: None,
             budget_park: None,
             pending_waits: Vec::new(),
             hibernation: None,

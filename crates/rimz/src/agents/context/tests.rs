@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn cache_write_survives_each_context_writer() {
+    let definition = crate::agents::spec_by_kind("claude").unwrap();
+    let now = Timestamp::now();
+    let mut record = record::AgentContextRecord::new("claude", "agent", AgentContext::default());
+    LocalContextPatch {
+        last_cache_write: FieldPatch::Set(CacheWriteRetention::OneHour),
+        ..LocalContextPatch::default()
+    }
+    .apply(&mut record.context, definition);
+    let local = record.context.last_cache_write;
+    record.apply_context_refresh("claude", "agent", AgentContext::new("claude", now), None);
+    let statusline = record.context.last_cache_write;
+    record.merge_observed(
+        "pi",
+        AgentContext {
+            last_cache_write: Some(CacheWriteRetention::FiveMinutes),
+            ..AgentContext::default()
+        },
+        now,
+    );
+    record.merge_observed("pi", AgentContext::default(), now);
+    assert_eq!(
+        (local, statusline, record.context.last_cache_write),
+        (
+            Some(CacheWriteRetention::OneHour),
+            Some(CacheWriteRetention::OneHour),
+            Some(CacheWriteRetention::FiveMinutes),
+        )
+    );
+}
+
+#[test]
 fn window_amount_wire_and_refill_preserve_the_limit() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let window: RateLimitWindow = serde_json::from_value(serde_json::json!({
