@@ -80,6 +80,12 @@ fn drainer_backlog(bencher: Bencher) {
 }
 
 #[cfg(target_os = "linux")]
+#[divan::bench(sample_count = 1, sample_size = 1, ignore)]
+fn apply_scale(bencher: Bencher) {
+    latency::run_apply_scale(bencher);
+}
+
+#[cfg(target_os = "linux")]
 mod latency {
     use super::*;
     use std::io::{BufRead as _, Read as _, Write as _};
@@ -92,7 +98,7 @@ mod latency {
     use std::time::{Duration, Instant};
 
     use rimz::agents::{AgentContext, AgentLifecycleObservation, LifecycleSignal};
-    use rimz::disk::lock::SharedAppendLock;
+    use rimz::disk::lock::{SharedAppendLock, WorkspaceLock};
     use rimz::harness::hook_drain::{Connection, DrainReceipt, HookDrainErr};
     use rimz::ids::{AgentKind, EventId};
     use rimz::store::event::{EventEnvelope, EventKind};
@@ -101,6 +107,7 @@ mod latency {
 
     const SAMPLES: usize = 300;
     const WAIT: Duration = Duration::from_secs(120);
+    const APPLY_KEY: &str = "apply_scale";
 
     struct Fixture {
         owners: SessionOwners,
@@ -123,7 +130,7 @@ mod latency {
     }
 
     impl Fixture {
-        fn new(row_key: &str) -> Self {
+        fn new(row_key: &str, live_count: usize, closed_count: usize) -> Self {
             assert!(
                 std::env::var_os("RIMZ_HOOK_BUDGET_HOME").is_none(),
                 "generated fixture only"
@@ -166,8 +173,18 @@ mod latency {
                 ("RIMZ_PROJECT_ROOT".into(), project.to_str().unwrap().into()),
                 ("RIMZ_BIN".into(), binary.to_str().unwrap().into()),
                 ("RIMZ_RUNTIME_ENV".into(), "1".into()),
+                (
+                    "RIMZ_CODEX_BIN".into(),
+                    "/nonexistent/rimz-fixture-codex".into(),
+                ),
                 ("RIMZ_TEST_HOOK_DRAIN_TIMING".into(), "1".into()),
             ]);
+            if row_key == APPLY_KEY {
+                env.insert(
+                    "RIMZ_TEST_WORK_LOG".into(),
+                    root.join("work.jsonl").to_str().unwrap().into(),
+                );
+            }
             // `systemd-run --user` reaches the manager only through
             // `$XDG_RUNTIME_DIR/systemd`, so the private runtime root links the caller's.
             if let Some(manager) = std::env::var_os("XDG_RUNTIME_DIR")
@@ -207,11 +224,11 @@ mod latency {
             store.record_workspace(&resolved).unwrap();
             rimz::testkit::fleet::seed_history_carryover(
                 &store,
-                HISTORY_CARRYOVER,
+                closed_count,
                 CARRYOVER_PROMPT_BYTES,
             )
             .unwrap();
-            for index in 0..HISTORY_CARRYOVER {
+            for index in 0..closed_count {
                 let id = format!("history-{index}");
                 let observation =
                     AgentLifecycleObservation::new(Some(id.clone().into()), LifecycleSignal::Ended);
@@ -236,7 +253,8 @@ mod latency {
                 store,
             };
             let mut fixture = fixture;
-            for index in 0..SAMPLES {
+            let mut registration_walls = Vec::new();
+            for index in 0..live_count {
                 let owner = Command::new("sleep")
                     .arg("86400")
                     .env_clear()
@@ -251,10 +269,12 @@ mod latency {
                 let frame = fixture.frame(index, json!({
                     "hook_event_name": "SessionStart", "session_id": session, "source": "startup",
                 }));
+                let start = Instant::now();
                 let output = output(
                     fixture.command(index).args(["hooks", "apply"]),
                     &serde_json::to_vec(&frame).unwrap(),
                 );
+                registration_walls.push(micros(start.elapsed()));
                 assert!(output.status.success(), "registration {index}: {output:?}");
                 agent_context::write(
                     fixture.store.runtime_paths(),
@@ -271,36 +291,56 @@ mod latency {
                 .iter()
                 .filter(|agent| agent.ended_at.is_none())
                 .collect();
-            assert_eq!(live.len(), SAMPLES);
-            for index in 0..SAMPLES {
+            assert_eq!(live.len(), live_count);
+            assert_eq!(snapshot.fenced_sessions.len(), closed_count);
+            for index in 0..live_count {
                 let id = format!("latency-{index}");
                 assert!(live.iter().any(|agent| {
                     agent.agent_id.as_str() == id && !agent.is_provider_subagent()
                 }));
             }
             let rollup = bytes(&fixture.store.paths().rollup_cache().unwrap());
-            assert!(
-                rollup >= 1024 * 1024,
-                "retained MB-scale rollup required: {rollup}"
-            );
+            if row_key != APPLY_KEY {
+                assert!(
+                    rollup >= 1024 * 1024,
+                    "retained MB-scale rollup required: {rollup}"
+                );
+            }
             let sidecars: Vec<_> =
                 std::fs::read_dir(&fixture.store.runtime_paths().agent_context_dir)
                     .unwrap()
                     .map(|entry| entry.unwrap().metadata().unwrap().len())
                     .collect();
-            assert_eq!(sidecars.len(), SAMPLES);
+            assert_eq!(sidecars.len(), live_count);
             let version = output(fixture.command(0).arg("--version"), &[]);
             assert!(version.status.success(), "{version:?}");
-            emit(
-                row_key,
+            let row = if row_key == APPLY_KEY {
+                let registrations: Vec<_> =
+                    work_records(Path::new(&fixture.env["RIMZ_TEST_WORK_LOG"]))
+                        .into_iter()
+                        .filter(|record| record["command"] == "hooks apply")
+                        .collect();
+                assert_eq!(registrations.len(), live_count);
+                let cpu: Vec<_> = registrations.iter().map(cpu_us).collect();
+                json!({"kind": "fixture", "live": live_count, "closed": closed_count,
+                    "build_id": rimz::build_id::of_file(&fixture.binary).unwrap(),
+                    "version": String::from_utf8(version.stdout).unwrap().trim(),
+                    "rollup_bytes": rollup,
+                    "carryover_bytes": bytes(&fixture.store.paths().agents_carryover),
+                    "latest_bytes": bytes(&fixture.store.paths().latest_snapshot().unwrap()),
+                    "event_log_bytes": bytes(&fixture.store.paths().events_log),
+                    "session_start_wall_us": distribution(&registration_walls),
+                    "session_start_cpu_us": distribution(&cpu)})
+            } else {
                 json!({"kind": "fixture", "binary": fixture.binary,
                 "build_id": rimz::build_id::of_file(&fixture.binary).unwrap(),
                 "version": String::from_utf8(version.stdout).unwrap().trim(),
                 "live_roots": live.len(), "owner_processes": fixture.owners.0.len(),
-                "history_rows": HISTORY_CARRYOVER, "rollup_bytes": rollup,
+                "history_rows": closed_count, "rollup_bytes": rollup,
                 "carryover_bytes": bytes(&fixture.store.paths().agents_carryover),
-                "sidecar_count": sidecars.len(), "sidecar_bytes": sidecars.iter().sum::<u64>()}),
-            );
+                "sidecar_count": sidecars.len(), "sidecar_bytes": sidecars.iter().sum::<u64>()})
+            };
+            emit(row_key, row);
             assert!(
                 !fixture
                     .store
@@ -411,6 +451,271 @@ mod latency {
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .filter_map(|record| record.get("hook_drain_timing").cloned())
             .collect()
+    }
+
+    pub(super) fn work_records(path: &Path) -> Vec<Value> {
+        std::fs::read_to_string(path)
+            .expect("work log")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("complete work record"))
+            .collect()
+    }
+
+    pub(super) fn scale_rooms(defaults: &[(usize, usize)]) -> Vec<(usize, usize)> {
+        let Some(rooms) = std::env::var_os("RIMZ_SCALE_ROOMS") else {
+            return defaults.to_vec();
+        };
+        rooms
+            .to_str()
+            .expect("RIMZ_SCALE_ROOMS must be UTF-8")
+            .split(',')
+            .map(|room| {
+                let (a, b) = room
+                    .split_once('x')
+                    .expect("RIMZ_SCALE_ROOMS: expected AxB");
+                let shape = (
+                    a.parse().expect("room dimension"),
+                    b.parse().expect("room dimension"),
+                );
+                assert!(defaults.contains(&shape), "unsupported room {room}");
+                shape
+            })
+            .collect()
+    }
+
+    fn cpu_us(record: &Value) -> u64 {
+        record["user_us"].as_u64().unwrap() + record["sys_us"].as_u64().unwrap()
+    }
+
+    pub(super) fn run_apply_scale(bencher: Bencher) {
+        let rooms = scale_rooms(&[
+            (50, 300),
+            (200, 300),
+            (400, 300),
+            (200, 1_500),
+            (200, 3_000),
+        ]);
+        bencher.bench_local(|| {
+            for &(live, closed) in &rooms {
+                let fixture = Fixture::new(APPLY_KEY, live, closed);
+                for (event, payload) in [
+                    (
+                        "UserPromptSubmit",
+                        json!({"prompt": "check the repository"}),
+                    ),
+                    (
+                        "PostToolUse",
+                        json!({"tool_name": "Read", "tool_input": {}, "tool_response": {}}),
+                    ),
+                    ("Stop", json!({"last_assistant_message": "done"})),
+                ] {
+                    scale_frames(&fixture, live, closed, event, payload);
+                }
+                scale_drain(&fixture, live, closed);
+            }
+        });
+    }
+
+    fn scale_frames(fixture: &Fixture, live: usize, closed: usize, event: &str, payload: Value) {
+        let mut walls = Vec::new();
+        let mut records = Vec::new();
+        for sequence in 0..50 {
+            let index = sequence % live;
+            let mut payload = payload.clone();
+            payload["hook_event_name"] = json!(event);
+            payload["session_id"] = json!(format!("latency-{index}"));
+            let frame = fixture.frame(index, payload);
+            let start = Instant::now();
+            let mut child = fixture
+                .command(index)
+                .args(["hooks", "apply"])
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&serde_json::to_vec(&frame).unwrap())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            walls.push(micros(start.elapsed()));
+            assert!(output.status.success(), "{event} {sequence}: {output:?}");
+            let matching: Vec<_> = work_records(Path::new(&fixture.env["RIMZ_TEST_WORK_LOG"]))
+                .into_iter()
+                .filter(|record| record["pid"] == pid)
+                .collect();
+            assert_eq!(matching.len(), 1, "one work record for apply {pid}");
+            let record = matching.into_iter().next().unwrap();
+            assert_eq!(record["command"], "hooks apply");
+            assert_eq!(record["ppid"], std::process::id());
+            records.push(record);
+        }
+        let cpu: Vec<_> = records.iter().map(cpu_us).collect();
+        let counters: BTreeMap<_, _> = [
+            "user_us",
+            "sys_us",
+            "max_rss_kb",
+            "minor_faults",
+            "spawns",
+            "fsyncs",
+            "event_log_bytes_read",
+            "carryover_bytes_parsed",
+            "rollup_rows_materialized",
+            "rollup_base_copies",
+            "snapshot_assemblies",
+            "snapshot_publishes",
+            "rollup_bytes_parsed",
+            "latest_bytes_parsed",
+            "machine_config_loads",
+        ]
+        .into_iter()
+        .map(|counter| {
+            let samples: Vec<_> = records
+                .iter()
+                .map(|record| record[counter].as_u64().unwrap())
+                .collect();
+            (counter, distribution(&samples))
+        })
+        .collect();
+        emit(
+            APPLY_KEY,
+            json!({"kind": "frame", "live": live, "closed": closed,
+            "event": event, "frames": records.len(), "wall_us": distribution(&walls),
+            "cpu_us": distribution(&cpu), "counters": counters}),
+        );
+    }
+
+    fn scale_drain(fixture: &Fixture, live: usize, closed: usize) {
+        for index in 0..25 {
+            let frame = fixture.frame(
+                index,
+                json!({"hook_event_name": "UserPromptSubmit",
+                "session_id": format!("latency-{index}"), "prompt": "check the repository"}),
+            );
+            let output = output(
+                fixture.command(index).args(["hooks", "apply"]),
+                &serde_json::to_vec(&frame).unwrap(),
+            );
+            assert!(output.status.success(), "working root {index}: {output:?}");
+        }
+        let cold = json!({"hook_event_name": "PostToolUse", "session_id": "latency-0",
+            "tool_name": "Read", "tool_input": {}, "tool_response": {}, "cwd": fixture.project});
+        let output = output(
+            fixture
+                .command(0)
+                .args(["hooks", "feed", "--source", "claude"]),
+            &serde_json::to_vec(&cold).unwrap(),
+        );
+        assert!(output.status.success(), "{output:?}");
+        let deadline = Instant::now() + WAIT;
+        let mut lease = loop {
+            match UnixStream::connect(fixture.store.runtime_paths().hook_drainer_socket_path()) {
+                Ok(stream) => break stream,
+                Err(error) => {
+                    assert!(Instant::now() < deadline, "drainer readiness: {error}");
+                    thread::sleep(POLL);
+                }
+            }
+        };
+        lease.set_read_timeout(Some(WAIT)).unwrap();
+        lease.set_write_timeout(Some(WAIT)).unwrap();
+        writeln!(
+            lease,
+            "{}",
+            json!({"through": 0, "reply_for": null,
+            "epoch": null, "stop": false, "lease": true})
+        )
+        .unwrap();
+        let mut line = String::new();
+        io::BufReader::new(&lease).read_line(&mut line).unwrap();
+        let _: DrainReceipt = serde_json::from_str(&line).unwrap();
+        let log = fixture.store.paths().hook_drainer_log();
+        while !timings(&log).iter().any(|record| record["applied"] == true) {
+            assert!(Instant::now() < deadline, "warm-up frame was not applied");
+            thread::sleep(POLL);
+        }
+        let mut reader = TimingReader::start(&log);
+        // Hold the consumer while the whole burst lands; feed itself nudges per frame.
+        let workspace = WorkspaceLock::acquire(&fixture.store.paths().workspace_lock).unwrap();
+        let snapshot = fixture.store.snapshot_cached().unwrap();
+        assert_eq!(snapshot.agents.len(), live);
+        assert_eq!(snapshot.fenced_sessions.len(), closed);
+        assert_eq!(
+            snapshot
+                .agents
+                .iter()
+                .filter(|agent| agent.status == rimz::agents::AgentStatus::Running)
+                .count(),
+            25,
+            "working roots before the burst",
+        );
+        let append = SharedAppendLock::acquire(&fixture.store.paths().hook_ingress_lock).unwrap();
+        let mut ids = std::collections::HashSet::new();
+        let mut through = 0;
+        let start = Instant::now();
+        for sequence in 0..100 {
+            let index = sequence % 25;
+            let frame = fixture.frame(
+                index,
+                json!({"hook_event_name": "PostToolUse",
+                "session_id": format!("latency-{index}"), "tool_name": "Read",
+                "tool_input": {}, "tool_response": {}}),
+            );
+            through = ingress::append(fixture.store.paths(), &frame, &append).unwrap();
+            ids.insert(frame.event_id.to_string());
+        }
+        drop(append);
+        drop(workspace);
+        Connection::connect(&fixture.store)
+            .unwrap()
+            .nudge(through)
+            .unwrap();
+        let deadline = Instant::now() + DRAIN_WAIT;
+        let samples = loop {
+            let records = reader.records.lock().unwrap();
+            let samples: Vec<_> = records
+                .iter()
+                .filter(|(_, record)| ids.contains(record["ingress"].as_str().unwrap()))
+                .cloned()
+                .collect();
+            if samples.len() == ids.len() {
+                break samples;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "burst drain: {}/100 applied",
+                samples.len()
+            );
+            drop(records);
+            thread::sleep(POLL);
+        };
+        reader.finish();
+        let mut claims = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (_, record) in &samples {
+            assert_eq!(record["applied"], true, "{record}");
+            assert!(
+                seen.insert(record["ingress"].as_str().unwrap()),
+                "duplicate timing: {record}"
+            );
+            claims.push(record["claim_to_applied_us"].as_u64().unwrap());
+        }
+        let seconds = samples
+            .iter()
+            .map(|(at, _)| *at)
+            .max()
+            .unwrap()
+            .duration_since(start)
+            .as_secs_f64();
+        emit(
+            APPLY_KEY,
+            json!({"kind": "drain", "live": live, "closed": closed,
+            "working": 25, "frames": samples.len(), "seconds": seconds,
+            "frames_per_second": samples.len() as f64 / seconds,
+            "claim_to_applied_us": distribution(&claims)}),
+        );
+        drop(lease);
     }
 
     #[derive(serde::Serialize)]
@@ -569,7 +874,7 @@ mod latency {
 
     pub(super) fn run(bencher: Bencher) {
         let row_key = "drainer_latency";
-        let fixture = Fixture::new(row_key);
+        let fixture = Fixture::new(row_key, SAMPLES, HISTORY_CARRYOVER);
         bencher.bench_local(|| {
             let (lease, drainer, sampler, log) = start(&fixture, row_key);
             let cold = json!({
@@ -1114,7 +1419,7 @@ mod latency {
     }
 
     pub(super) fn run_backlog(bencher: Bencher) {
-        let fixture = Fixture::new(BACKLOG_KEY);
+        let fixture = Fixture::new(BACKLOG_KEY, SAMPLES, HISTORY_CARRYOVER);
         bencher.bench_local(|| run_sweep(&fixture));
     }
 }
