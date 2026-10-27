@@ -15,6 +15,8 @@ pub(super) struct FakeHost {
     stale_after_evict: Cell<bool>,
     stops: Cell<usize>,
     evictions: Cell<usize>,
+    occupancies: Cell<usize>,
+    observations: Cell<usize>,
     on_stop: RefCell<Option<Box<dyn Fn()>>>,
     on_launch: RefCell<Option<Box<dyn Fn()>>>,
     pub(super) on_occupancy: RefCell<Option<Box<dyn Fn()>>>,
@@ -37,6 +39,8 @@ impl FakeHost {
             stale_after_evict: Cell::new(false),
             stops: Cell::new(0),
             evictions: Cell::new(0),
+            occupancies: Cell::new(0),
+            observations: Cell::new(0),
             on_stop: RefCell::new(None),
             on_launch: RefCell::new(None),
             on_occupancy: RefCell::new(None),
@@ -50,6 +54,7 @@ impl AttemptHost for FakeHost {
         _: &std::path::Path,
         _: &std::path::Path,
     ) -> Result<Occupancy, WorkflowErr> {
+        self.occupancies.set(self.occupancies.get() + 1);
         if let Some(check) = &*self.on_occupancy.borrow() {
             check();
         }
@@ -90,6 +95,7 @@ impl AttemptHost for FakeHost {
     }
 
     fn observe(&self, _: &AttemptRun) -> Result<Observed, WorkflowErr> {
+        self.observations.set(self.observations.get() + 1);
         Ok(self.observed.borrow().clone())
     }
 
@@ -103,6 +109,7 @@ impl AttemptHost for FakeHost {
 }
 
 mod attempts;
+mod commands;
 mod conditions;
 
 #[test]
@@ -522,11 +529,95 @@ fn validation_rejects_each_invalid_spec() {
             "a per-key bound does not bound the cycle: a check can name a new key every time; max-visits is needed",
         ),
     ];
+    let command = VALID
+        .replace("agent = \"claude\"", "shell = 'true'\ntimeout = '1m'")
+        .replace("prompt-file = \"prompts/build.md\"", "");
+    let command_cases = [
+        (
+            "step no runner",
+            VALID.replace("agent = \"claude\"", ""),
+            "steps.build",
+            "set exactly one of agent, run, or shell",
+        ),
+        (
+            "step two runners",
+            format!("{command}agent='claude'\n"),
+            "steps.build",
+            "set exactly one of agent, run, or shell",
+        ),
+        (
+            "agent prompt required",
+            VALID.replace("prompt-file = \"prompts/build.md\"", ""),
+            "steps.build.prompt-file",
+            "an agent step requires prompt-file",
+        ),
+        (
+            "shell timeout required",
+            command.replace("timeout = '1m'", ""),
+            "steps.build.timeout",
+            "a run or shell step requires timeout",
+        ),
+        (
+            "run timeout required",
+            command.replace("shell = 'true'\ntimeout = '1m'", "run = 'true'"),
+            "steps.build.timeout",
+            "a run or shell step requires timeout",
+        ),
+        (
+            "run argv",
+            command.replace("shell = 'true'", "run = \"'unclosed\""),
+            "steps.build.run",
+            "invalid run command",
+        ),
+        (
+            "run confinement",
+            command.replace("shell = 'true'", "run = 'sh /etc/passwd'"),
+            "steps.build.run",
+            "invalid workflow path",
+        ),
+        (
+            "shell blank",
+            command.replace("shell = 'true'", "shell = '  '"),
+            "steps.build.shell",
+            "set a nonempty shell command",
+        ),
+        (
+            "command takeover",
+            format!("{command}takeover=false\n"),
+            "steps.build.takeover",
+            "nothing to take over",
+        ),
+        (
+            "command lifecycle",
+            format!("{command}lifecycle='turn'\n"),
+            "steps.build.lifecycle",
+            "stay",
+        ),
+        (
+            "command window",
+            format!("{command}window='5h.left>=42'\n"),
+            "steps.build.window",
+            "windows gate provider usage",
+        ),
+        (
+            "command asked",
+            format!("{command}on.asked='@user'\n"),
+            "steps.build.on.asked",
+            "a command cannot ask",
+        ),
+        (
+            "command prompt",
+            format!("{command}prompt-file='prompts/build.md'\n"),
+            "steps.build.prompt-file",
+            "a command step takes no prompt",
+        ),
+    ];
     let mut missed = Vec::new();
     for (label, text, path, message) in cases
         .into_iter()
         .map(|(label, text, path)| (label, text, path, ""))
         .chain(keyed_cases)
+        .chain(command_cases)
     {
         let (home, dir) = fixture();
         fs::write(dir.join("workflow.toml"), text).unwrap();
@@ -539,6 +630,35 @@ fn validation_rejects_each_invalid_spec() {
         }
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));
+}
+
+#[test]
+fn validation_accepts_command_steps_without_agent_warnings() {
+    let results: Vec<_> = ["run", "shell"]
+        .into_iter()
+        .map(|runner| {
+            let (home, dir) = fixture();
+            let text = VALID
+                .replace(
+                    "agent = \"claude\"",
+                    &format!("{runner} = 'echo ready'\ntimeout='1m'"),
+                )
+                .replace("prompt-file = \"prompts/build.md\"", "");
+            fs::write(dir.join("workflow.toml"), text).unwrap();
+            let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+            let valid = report.errors.is_empty()
+                && report.warnings.is_empty()
+                && report.rows.iter().any(|row| {
+                    row.node == "build"
+                        && row.runner == runner
+                        && row.agent.is_none()
+                        && !row.do_background
+                        && row.edges.iter().all(|edge| edge.outcome != "asked")
+                });
+            (runner, valid, format!("{report:?}"))
+        })
+        .collect();
+    assert!(results.iter().all(|(_, valid, _)| *valid), "{results:#?}");
 }
 
 #[test]

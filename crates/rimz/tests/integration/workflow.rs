@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod attempts;
+mod commands;
 mod conditions;
 mod judges;
 mod scope;
@@ -1364,6 +1365,41 @@ fn validate_json_shape_errors_and_exit_status() {
     );
     let text = success(command(&env, &["workflow", "validate"]));
     assert!(text.contains("printf shell"), "{text}");
+    for runner in ["run", "shell"] {
+        fs::write(dir.join("workflow.toml"), format!(
+            "{HEADER}[checks.pr]\nshell='true'\non={{pass='@done',fail='@user'}}\n[steps.merge]\n{runner}='gh pr merge --auto'\nthen='pr'\ntimeout='1m'\nmax-visits=2\n"
+        )).unwrap();
+        let output = command(&env, &["workflow", "validate", "--json"]);
+        assert!(
+            output.status.success(),
+            "command steps must validate: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["errors"], json!([]));
+        assert_eq!(report["warnings"], json!([]));
+        let run = (runner == "run").then_some("gh pr merge --auto");
+        let shell = (runner == "shell").then_some("gh pr merge --auto");
+        assert_eq!(
+            report["rows"][1],
+            json!({
+                "workflow":"review", "node":"merge", "kind":"step", "runner":runner,
+                "run":run, "shell":shell,
+                "agent":null, "do_background":false,
+                "edges":[
+                    {"outcome":"cap", "target":"@user", "source":"default"},
+                    {"outcome":"deadline", "target":"@user", "source":"default"},
+                    {"outcome":"then", "target":"pr", "source":"explicit"}
+                ]
+            })
+        );
+        let text = success(command(&env, &["workflow", "validate"]));
+        let row = text
+            .lines()
+            .find(|line| line.contains("merge --auto"))
+            .unwrap();
+        assert!(row.contains("gh pr merge --auto  —"), "{text}");
+    }
     assert!(
         !env.rimz_home().join("ws").exists(),
         "validation must not birth a room"

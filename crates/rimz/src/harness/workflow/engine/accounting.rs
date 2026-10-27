@@ -135,11 +135,7 @@ fn diagnostic(record: &RunRecord, event: DiagEvent) {
 }
 
 pub(super) fn step(record: &RunRecord) {
-    let Some((attempt, run)) = record
-        .attempt
-        .as_ref()
-        .and_then(|attempt| Some((attempt, attempt.run.as_ref()?)))
-    else {
+    let Some(attempt) = &record.attempt else {
         return;
     };
     let visit = record
@@ -154,8 +150,8 @@ pub(super) fn step(record: &RunRecord) {
             step: record.node.clone(),
             visit,
             seq: attempt.seq,
-            handle: Some(run.handle.clone()),
-            run_id: Some(run.run_id.clone()),
+            handle: attempt.run.as_ref().map(|run| run.handle.clone()),
+            run_id: attempt.run.as_ref().map(|run| run.run_id.clone()),
         },
     });
 }

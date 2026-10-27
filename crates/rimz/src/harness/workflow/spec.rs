@@ -197,13 +197,13 @@ pub(super) const RESERVED_OUTCOMES: [&str; 6] =
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Step {
-    pub agent: String,
-    #[serde(default)]
-    pub lifecycle: crate::store::workflow::StepLifecycle,
-    pub prompt_file: String,
+    pub agent: Option<String>,
+    pub run: Option<String>,
+    pub shell: Option<String>,
+    pub lifecycle: Option<crate::store::workflow::StepLifecycle>,
+    pub prompt_file: Option<String>,
     pub window: Option<String>,
-    #[serde(default)]
-    pub takeover: bool,
+    pub takeover: Option<bool>,
     #[schemars(required)]
     pub then: Option<String>,
     #[serde(default)]
@@ -213,6 +213,23 @@ pub struct Step {
     #[schemars(range(min = 1))]
     pub max_visits_per_key: Option<u64>,
     pub timeout: Option<String>,
+}
+
+pub(super) enum StepKind<'a> {
+    Agent(&'a str),
+    Run(&'a str),
+    Shell(&'a str),
+}
+
+impl Step {
+    pub(super) fn kind(&self) -> Option<StepKind<'_>> {
+        match (&self.agent, &self.run, &self.shell) {
+            (Some(agent), None, None) => Some(StepKind::Agent(agent)),
+            (None, Some(run), None) => Some(StepKind::Run(run)),
+            (None, None, Some(shell)) => Some(StepKind::Shell(shell)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

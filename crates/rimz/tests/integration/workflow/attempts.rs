@@ -32,6 +32,14 @@ fn missing_leader_hooks_refuse_before_runs_or_panes() {
         attempts[0]["reason"],
         "`rimz agents -p` requires claude hooks so the supervised turn can report completion; run `rimz hooks install claude`"
     );
+    let text = success(command(&room.env, &["workflow", "show", &id]));
+    assert!(
+        text.contains(&format!(
+            "reason: {}",
+            attempts[0]["reason"].as_str().unwrap()
+        )),
+        "{text}"
+    );
     assert!(
         rimz::harness::run::list(&room.env.state_path_for(&room.env.project_root))
             .unwrap()

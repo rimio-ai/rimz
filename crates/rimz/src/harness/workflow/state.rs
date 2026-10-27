@@ -6,7 +6,7 @@ use super::spec::RESERVED_OUTCOMES;
 use crate::disk::paths::WorkflowPaths;
 use crate::store::workflow::{
     AttemptKind, AttemptOutcome, Children, EndCause, Ending, EvaluationOrigin, JournalEntry,
-    JournalEvent, Key, Park, ParkReason, PreviousAttempt, RunRecord, RunState, Wait,
+    JournalEvent, Key, LiveAttempt, Park, ParkReason, PreviousAttempt, RunRecord, RunState, Wait,
 };
 use crate::utils::time::{DurationUnit, TimeInputErr, parse_duration_units};
 
@@ -385,16 +385,30 @@ impl Transition<'_> {
 
     pub(super) fn stage_agent_end(&mut self, ending: Ending, observed: &super::Observed) {
         // Only published agent attempts enter the stop protocol.
-        let attempt = self
-            .record
+        let outcome = ending.outcome;
+        self.record
             .attempt
             .as_mut()
-            .expect("agent ending has an attempt");
-        let outcome = ending.outcome;
-        attempt.ending = Some(ending);
+            .expect("agent ending has an attempt")
+            .ending = Some(ending);
+        let mut previous = self.previous_attempt(outcome);
+        previous.children = Some(observed.children.clone());
+        previous.limited = (outcome == AttemptOutcome::Limited)
+            .then(|| observed.limited.clone())
+            .flatten();
+        previous.asked = (outcome == AttemptOutcome::Asked)
+            .then(|| observed.ask.clone())
+            .flatten();
+        previous.cost_usd = observed.cost_usd;
+        self.record.prev_attempt = Some(previous);
+    }
+
+    fn previous_attempt(&self, outcome: AttemptOutcome) -> PreviousAttempt {
+        // A step's live attempt and visit are published together by prepare.
+        let attempt = self.record.attempt.as_ref().expect("live step attempt");
         let visits = &self.record.visits[&attempt.node];
         let visit = visits.for_key(self.record.key.as_ref());
-        self.record.prev_attempt = Some(PreviousAttempt {
+        PreviousAttempt {
             step: attempt.node.clone(),
             outcome,
             seq: attempt.seq,
@@ -407,15 +421,13 @@ impl Transition<'_> {
             claim_path: self.paths.claim(attempt.seq),
             head_start: attempt.head_start.clone(),
             head_end: None,
-            children: Some(observed.children.clone()),
-            limited: (outcome == AttemptOutcome::Limited)
-                .then(|| observed.limited.clone())
-                .flatten(),
-            asked: (outcome == AttemptOutcome::Asked)
-                .then(|| observed.ask.clone())
-                .flatten(),
-            cost_usd: observed.cost_usd,
-        });
+            code: None,
+            log: None,
+            children: None,
+            limited: None,
+            asked: None,
+            cost_usd: None,
+        }
     }
 
     pub(super) fn settle_agent(
@@ -427,7 +439,7 @@ impl Transition<'_> {
     ) -> Result<(), TimeInputErr> {
         // stage_agent_end durably saves observations before stop can erase asks or limits.
         let attempt = self.record.attempt.take().expect("staged agent attempt");
-        let ending = attempt.ending.expect("staged agent ending");
+        let ending = attempt.ending.clone().expect("staged agent ending");
         let previous = self
             .record
             .prev_attempt
@@ -467,7 +479,17 @@ impl Transition<'_> {
         if ending.outcome != AttemptOutcome::Limited {
             previous.limited = None;
         }
-        let previous = previous.clone();
+        self.settle_step(attempt, ending, reason)
+    }
+
+    fn settle_step(
+        &mut self,
+        attempt: LiveAttempt,
+        ending: Ending,
+        reason: Option<String>,
+    ) -> Result<(), TimeInputErr> {
+        // Both step runners save their evidence before entering this shared routing tail.
+        let previous = self.record.prev_attempt.clone().expect("step end evidence");
         self.push(
             Some(attempt.seq),
             JournalEvent::Attempt {
@@ -481,7 +503,9 @@ impl Transition<'_> {
                 run_id: previous.run_id,
                 head_start: previous.head_start,
                 head_end: previous.head_end,
-                cost_usd,
+                code: previous.code,
+                log: previous.log,
+                cost_usd: previous.cost_usd,
                 children: previous.children,
                 limited: previous.limited,
                 asked: previous.asked.clone(),
@@ -511,7 +535,19 @@ impl Transition<'_> {
             );
         }
         if ending.outcome == AttemptOutcome::Asked {
-            return self.engine_route("asked", json!({"outcome":"asked", "reason":previous.asked.as_ref().map(|ask| &ask.text), "asked":previous.asked}), self.spec.steps[&self.record.node].on.asked.as_deref().unwrap_or("@user"), ParkReason::Asked);
+            return self.engine_route(
+                "asked",
+                json!({
+                    "outcome":"asked", "reason":previous.asked.as_ref().map(|ask| &ask.text),
+                    "asked":previous.asked
+                }),
+                self.spec.steps[&self.record.node]
+                    .on
+                    .asked
+                    .as_deref()
+                    .unwrap_or("@user"),
+                ParkReason::Asked,
+            );
         }
         let target = self.spec.steps[&self.record.node]
             .then
@@ -523,6 +559,42 @@ impl Transition<'_> {
             self.engine_object(self.record.input.clone().unwrap_or_else(|| json!({}))),
             ParkReason::User,
         )
+    }
+
+    pub(super) fn finish_script(
+        &mut self,
+        ending: Ending,
+        code: Option<i32>,
+        head_end: Option<String>,
+        reason: Option<String>,
+    ) -> Result<bool, TimeInputErr> {
+        if !self.spec.steps.contains_key(&self.record.node) {
+            self.abandon_check(if ending.outcome == AttemptOutcome::Timeout {
+                "timeout"
+            } else {
+                "canceled"
+            });
+            return Ok(false);
+        }
+        if self.record.attempt.is_none() {
+            return Ok(false);
+        }
+        if matches!(
+            ending.outcome,
+            AttemptOutcome::Timeout | AttemptOutcome::Canceled
+        ) {
+            self.kill_child();
+        }
+        let mut previous = self.previous_attempt(ending.outcome);
+        previous.code = code;
+        previous.head_end = head_end;
+        let log = self.paths.step_log(previous.seq);
+        previous.log = log.is_file().then_some(log);
+        self.record.prev_attempt = Some(previous);
+        // The live attempt was checked above and remains locked through settlement.
+        let attempt = self.record.attempt.take().expect("live command step");
+        self.settle_step(attempt, ending, reason)?;
+        Ok(true)
     }
 
     pub(super) fn abandon_check(&mut self, outcome: &str) {
@@ -585,6 +657,7 @@ impl Transition<'_> {
             .attempt
             .as_ref()
             .is_some_and(|attempt| attempt.kind == AttemptKind::Agent)
+            || self.host_owes_exit()
         {
             return Ok(false);
         }
@@ -592,7 +665,17 @@ impl Transition<'_> {
             && let Some(deadline) = self.record.deadline
             && deadline <= self.now
         {
-            self.abandon_check("canceled");
+            if self.finish_script(
+                Ending {
+                    outcome: AttemptOutcome::Canceled,
+                    cause: EndCause::Deadline,
+                },
+                None,
+                None,
+                None,
+            )? {
+                return Ok(true);
+            }
             self.record.deadline_fired = true;
             let target = self.spec.workflow.on.deadline.as_deref().unwrap_or("@user");
             self.engine_route(
@@ -606,7 +689,17 @@ impl Transition<'_> {
         if !self.timeout_at()?.is_some_and(|at| at <= self.now) {
             return Ok(false);
         }
-        self.abandon_check("timeout");
+        if self.finish_script(
+            Ending {
+                outcome: AttemptOutcome::Timeout,
+                cause: EndCause::Timeout,
+            },
+            None,
+            None,
+            None,
+        )? {
+            return Ok(true);
+        }
         let check = &self.spec.checks[&self.record.node];
         let edges = check.edges();
         let target = &edges["timeout"];
@@ -617,6 +710,21 @@ impl Transition<'_> {
             ParkReason::Timeout,
         )?;
         Ok(true)
+    }
+
+    /// Whether a live host still owes the exit status of its command step's child, which
+    /// exited on its own. A bound that fell due since then is the next prepare's, once the
+    /// host has settled the step by that status.
+    fn host_owes_exit(&self) -> bool {
+        let Some(attempt) = &self.record.attempt else {
+            return false;
+        };
+        let Some(child) = &attempt.child else {
+            return false;
+        };
+        self.spec.steps.contains_key(&self.record.node)
+            && !crate::proc::process_is_live(child.pid, child.start.as_deref())
+            && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
     }
 
     fn kill_child(&self) {

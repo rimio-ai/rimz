@@ -222,7 +222,7 @@ impl TaskAction {
                 (
                     entry.stay,
                     "stay",
-                    "a workflow run is not a resident agent; its steps launch and stop agents",
+                    "a workflow run is not a resident agent; its agent steps launch and stop agents",
                 ),
                 (
                     entry.takeover,

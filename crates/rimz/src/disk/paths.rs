@@ -262,6 +262,10 @@ impl WorkflowPaths {
         self.work.join(format!("{seq}.check.log"))
     }
 
+    pub fn step_log(&self, seq: u64) -> PathBuf {
+        self.work.join(format!("{seq}.step.log"))
+    }
+
     pub fn signs(&self, step: Option<&str>) -> PathBuf {
         let dir = self.work.join("signs");
         match step {

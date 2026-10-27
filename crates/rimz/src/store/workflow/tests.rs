@@ -49,7 +49,52 @@ fn durable_record_round_trip_and_json_shape() {
     let home = tempfile::tempdir().unwrap();
     let state =
         StatePaths::for_project_root_under(std::path::Path::new("/project"), home.path()).unwrap();
-    let record = record();
+    let mut value = serde_json::to_value(record()).unwrap();
+    value["prev_attempt"] = json!({
+        "step":"merge", "outcome":"died", "seq":1, "visit":1, "key":null,
+        "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:01Z",
+        "handle":null, "run_id":null, "claim_path":"/work/1.claim.json",
+        "head_start":"abc", "head_end":"def", "children":null,
+        "code":7, "log":"/work/1.step.log"
+    });
+    for field in ["limited", "asked", "cost_usd"] {
+        value["prev_attempt"][field] = Value::Null;
+    }
+    let record: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&record).unwrap()["prev_attempt"],
+        value["prev_attempt"]
+    );
+    let mut legacy = value["prev_attempt"].clone();
+    legacy.as_object_mut().unwrap().remove("code");
+    legacy.as_object_mut().unwrap().remove("log");
+    let legacy: PreviousAttempt = serde_json::from_value(legacy).unwrap();
+    let legacy = serde_json::to_value(legacy).unwrap();
+    assert_eq!(
+        (legacy.get("code"), legacy.get("log")),
+        (Some(&Value::Null), Some(&Value::Null))
+    );
+    let event = json!({
+        "event":"attempt", "seq":1, "at":"2026-01-01T00:00:01Z", "node":"merge",
+        "outcome":"died", "visit":1, "key":null, "digests":{},
+        "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:01Z",
+        "code":7, "log":"/work/1.step.log"
+    });
+    let decoded: JournalEntry = serde_json::from_value(event.clone()).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(
+        (&encoded["code"], &encoded["log"]),
+        (&event["code"], &event["log"])
+    );
+    let mut legacy = event;
+    legacy.as_object_mut().unwrap().remove("code");
+    legacy.as_object_mut().unwrap().remove("log");
+    let decoded: JournalEntry = serde_json::from_value(legacy).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(
+        (encoded.get("code"), encoded.get("log")),
+        (Some(&Value::Null), Some(&Value::Null))
+    );
     let paths = state.workflow(&record.id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     initialize(&state, &record, b"[workflow]", &guard).unwrap();
