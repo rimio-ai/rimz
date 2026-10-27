@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::agents::context::SignIn;
 use crate::agents::spending::SpendingCaches;
 use crate::forge::pr_state::{PrLink, PrQueueFact, read_pr_state_cache};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
@@ -1091,6 +1092,30 @@ pub(super) fn fold_machine_config_with(
     scope: PanelScope,
 ) -> SidebarSnapshot {
     snapshot.apply_machine_config(config);
+
+    let sign_in = |agent: &crate::agents::AgentState| {
+        agent
+            .context
+            .as_ref()
+            .and_then(|context| context.account.as_ref()?.metered)
+            .or_else(|| accounts.get(&agent.login_key())?.metered)
+            .map(|metered| {
+                if metered {
+                    SignIn::Subscription
+                } else {
+                    SignIn::ApiKey
+                }
+            })
+    };
+    if snapshot
+        .agents
+        .iter()
+        .any(|agent| agent.sign_in != sign_in(agent))
+    {
+        for agent in Arc::make_mut(&mut snapshot.agents) {
+            agent.sign_in = sign_in(agent);
+        }
+    }
 
     if matches!(scope, PanelScope::InUse) {
         // Producer work covers every in-use login, regardless of dashboard layout.
