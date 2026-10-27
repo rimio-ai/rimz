@@ -155,11 +155,7 @@ fn death_summary(marker: &LastDeathMarker) -> String {
 /// decision and the default recency filter; never gates correctness.
 fn activity_for(workspace_dir: &std::path::Path) -> Option<SystemTime> {
     let history = rimz::StatePaths::history_paths(workspace_dir);
-    let candidates = [
-        history.events_log,
-        history.latest_snapshot,
-        workspace_dir.join("workspace.json"),
-    ];
+    let candidates = [history.events_log, workspace_dir.join("workspace.json")];
     candidates
         .iter()
         .filter_map(|path| std::fs::metadata(path).ok())

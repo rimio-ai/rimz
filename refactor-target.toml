@@ -951,7 +951,8 @@ allowed-dependencies = [
 # RuntimePaths::hook_drainer_outages_dir owns wrapper outage lease locations (+1).
 # WorkflowPaths::step_log owns command-step output paths (+1).
 # Runtime checkpoint binding, path accessors, Snapshots and its never-create writer (+7).
-surface-budget = 290
+# StatePaths::legacy_snapshots_dir contains the retired checkpoint layout (+1).
+surface-budget = 291
 
 [[verdict]]
 kind = "item"

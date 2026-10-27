@@ -32,7 +32,6 @@ use crate::ids::{
 use crate::sock::SockBudget;
 
 const EVENTS_LOG_FILE: &str = "events.log.jsonl";
-const LATEST_SNAPSHOT_FILE: &str = "snapshots/latest.json";
 /// The per-agent directory of a launch or reader without a handle; `_` never
 /// occurs in a handle, so it cannot collide.
 const UNNAMED_DIR: &str = "_unnamed";
@@ -188,7 +187,6 @@ impl Class {
 pub struct HistoryPaths {
     pub events_log: PathBuf,
     pub events_archive_dir: PathBuf,
-    pub latest_snapshot: PathBuf,
     pub last_death_marker: PathBuf,
 }
 
@@ -333,6 +331,10 @@ impl StatePaths {
         self.checkpoint_dir
             .as_ref()
             .map(|dir| dir.join("rollup.json"))
+    }
+
+    pub(crate) fn legacy_snapshots_dir(&self) -> PathBuf {
+        self.cache_dir.join("snapshots")
     }
 
     pub(crate) fn checkpoint_publish_stamp(&self) -> Option<PathBuf> {
@@ -503,7 +505,6 @@ impl StatePaths {
         HistoryPaths {
             events_log: Class::Log.path_under(root).join(EVENTS_LOG_FILE),
             events_archive_dir: Class::Log.path_under(root).join("archive"),
-            latest_snapshot: Class::Cache.path_under(root).join(LATEST_SNAPSHOT_FILE),
             last_death_marker: Class::Records.path_under(root).join("last-death.json"),
         }
     }
