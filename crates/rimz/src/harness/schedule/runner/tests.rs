@@ -420,6 +420,68 @@ fn record_room(root: &Path) -> Result<()> {
 }
 
 #[test]
+fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
+    let mut outcomes = Vec::new();
+    for late in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let seed = || {
+            crate::disk::atomic::write_temp_then_rename(
+                &super::super::launch_ledger::workflow_path(&paths),
+                &serde_json::json!({"version":1,"tasks":{"land":{root.path().to_str().unwrap():{
+                    "at":Timestamp::now(), "run":crate::ids::WorkflowRunId::new(),
+                    "scope":"worktree"
+                }}}}),
+            )
+            .unwrap();
+        };
+        if !late {
+            record_room(root.path()).unwrap();
+            seed();
+        }
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut fire = TaskFire::new(
+            "land",
+            LoadedTask::new(
+                "land",
+                TaskEntry {
+                    root: root.path().to_owned(),
+                    workflow: Some("review".into()),
+                    when: Some(vec!["pr=open".into()]),
+                    ..Default::default()
+                },
+                catalog::TaskSource::Config,
+            ),
+            &catalog,
+            LoopRunMode::Scheduled,
+            false,
+            Timestamp::now(),
+            Arc::new(MachineConfig::default()),
+            None,
+            CheckEcho::Capture,
+            Instant::now(),
+        )
+        .unwrap();
+        let mut calls = 0;
+        let result = fire.prepare(&mut |_| {
+            calls += 1;
+            if !late {
+                bail!("room birth must not be reached");
+            }
+            record_room(root.path())?;
+            seed();
+            Ok(())
+        });
+        outcomes.push((
+            matches!(result, Ok(TaskFirePlan::AlreadyLaunched)),
+            calls,
+            fire.run_lock.is_some(),
+        ));
+    }
+    assert_eq!(outcomes, vec![(true, 0, true), (true, 1, true)]);
+}
+
+#[test]
 fn resident_fire_obeys_fleet_budget_and_deadline_before_launch() {
     let root = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();

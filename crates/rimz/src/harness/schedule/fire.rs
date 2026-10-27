@@ -87,6 +87,7 @@ pub(super) fn scope_key(name: &str, checkout: &Path) -> String {
 fn scoped_tasks(
     tasks: &BTreeMap<String, LoadedTask>,
     ledger: &super::launch_ledger::Ledger,
+    workflows: &super::launch_ledger::WorkflowLedger,
     owned: &[PathBuf],
     declines: &super::launch_ledger::Declines,
     when_states: &BTreeMap<String, WhenState>,
@@ -95,20 +96,20 @@ fn scoped_tasks(
     let mut scoped = BTreeMap::new();
     for (name, task) in tasks {
         let entry = task.entry();
-        let launches = entry.stay.then(|| ledger.get(name)).flatten();
         if !entry.each_worktree {
-            if entry.stay
-                && (launches.is_some_and(|launches| launches.contains_key(&entry.run_dir()))
-                    || (entry.guard().shell.is_none()
-                        && super::launch_ledger::holding_decline(
-                            declines,
-                            name,
-                            entry,
-                            &entry.run_dir(),
-                            when_states.get(name).map(|state| state.since),
-                            now,
-                        )
-                        .is_some()))
+            if super::launch_ledger::launched(entry, name, &entry.run_dir(), ledger, workflows)
+                .is_some()
+                || (entry.stay
+                    && entry.guard().shell.is_none()
+                    && super::launch_ledger::holding_decline(
+                        declines,
+                        name,
+                        entry,
+                        &entry.run_dir(),
+                        when_states.get(name).map(|state| state.since),
+                        now,
+                    )
+                    .is_some())
             {
                 continue;
             }
@@ -124,7 +125,7 @@ fn scoped_tasks(
         }
         for checkout in owned {
             let checkout = crate::utils::path::normalize_path_lexical(checkout);
-            if launches.is_some_and(|launches| launches.contains_key(&checkout)) {
+            if super::launch_ledger::launched(entry, name, &checkout, ledger, workflows).is_some() {
                 continue;
             }
             let key = scope_key(name, &checkout);
@@ -317,6 +318,21 @@ fn fire_tasks(
     } else {
         BTreeMap::new()
     };
+    let workflows = if tasks
+        .values()
+        .any(|task| task.entry().is_condition_workflow())
+    {
+        match super::launch_ledger::load_workflows_room(runtime, project_root) {
+            Ok(ledger) => ledger,
+            Err(error) => {
+                tracing::warn!(%error, "workflow loop ledger unavailable");
+                tasks.retain(|_, task| !task.entry().is_condition_workflow());
+                Default::default()
+            }
+        }
+    } else {
+        Default::default()
+    };
     let declines = if tasks.values().any(|task| task.entry().stay) {
         match super::launch_ledger::load_declines_room(runtime, project_root) {
             Ok(declines) => declines,
@@ -349,6 +365,7 @@ fn fire_tasks(
     let scoped = scoped_tasks(
         &tasks,
         &ledger,
+        &workflows,
         &owned,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -400,6 +417,7 @@ fn fire_tasks(
     let eligible = scoped_tasks(
         &definitions,
         &ledger,
+        &workflows,
         &owned,
         &declines,
         &next_when,
@@ -657,7 +675,7 @@ fn plan(
                 let elapsed =
                     u128::try_from(now.timestamp().duration_since(state.since).as_millis())
                         .unwrap_or(0);
-                let retry_due = task.entry().repeats_while_true()
+                let retry_due = task.entry().dedupes_checkout()
                     && now.timestamp().duration_since(last_fire).as_secs() >= RESIDENT_RETRY_SECS;
                 if (!state.fired || retry_due)
                     && elapsed >= hold.map_or(0, |duration| duration.as_millis())
@@ -826,15 +844,7 @@ pub(super) fn spawn_loop_run(
                     checkout,
                     before,
                 )
-                && !(task.entry().stay
-                    && super::launch_ledger::load_room(runtime, project_root).is_ok_and(|ledger| {
-                        let scope = checkout
-                            .map(Path::to_path_buf)
-                            .unwrap_or_else(|| task.entry().run_dir());
-                        ledger
-                            .get(name)
-                            .is_some_and(|launches| launches.contains_key(&scope))
-                    }))
+                && !recorded_launch(runtime, project_root, name, task.entry(), checkout)
             {
                 return record_start_failed(
                     task,
@@ -858,6 +868,29 @@ pub(super) fn spawn_loop_run(
         }
     }
     LaunchOutcome::Started
+}
+
+fn recorded_launch(
+    runtime: &RuntimePaths,
+    project_root: Option<&Path>,
+    name: &str,
+    entry: &crate::config::TaskEntry,
+    checkout: Option<&Path>,
+) -> bool {
+    let checkout = checkout
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| entry.run_dir());
+    if entry.stay {
+        return super::launch_ledger::load_room(runtime, project_root).is_ok_and(|ledger| {
+            super::launch_ledger::launched(entry, name, &checkout, &ledger, &Default::default())
+                .is_some()
+        });
+    }
+    entry.is_condition_workflow()
+        && super::launch_ledger::load_workflows_room(runtime, project_root).is_ok_and(|ledger| {
+            super::launch_ledger::launched(entry, name, &checkout, &BTreeMap::new(), &ledger)
+                .is_some()
+        })
 }
 
 pub(super) fn spawn_loop_drain(

@@ -423,17 +423,32 @@ impl TaskCatalog {
         let Some(task) = self.visible.get(name) else {
             return Ok(TaskMutation::default());
         };
-        let changed = remove_definition(name, task)?;
         let root = task.entry().resolved_root();
+        if root.is_absolute() && task.entry().workflow.is_some() {
+            super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
+        }
+        let changed = remove_definition(name, task)?;
         if changed && root.is_absolute() && task.entry().stay {
             super::launch_ledger_store::remove(&StatePaths::for_project_root(&root)?, name)?;
         }
         if changed && root.is_absolute() {
-            super::backlog_store::remove(&StatePaths::for_project_root(&root)?, name)?;
-            super::launch_ledger_store::remove_declines(
-                &StatePaths::for_project_root(&root)?,
-                name,
-            )?;
+            let paths = StatePaths::for_project_root(&root)?;
+            match super::launch_ledger_store::remove_workflows(&paths, name) {
+                Err(super::launch_ledger_store::LedgerWriteErr::Read(error))
+                    if task.entry().workflow.is_none() =>
+                {
+                    tracing::warn!(
+                        task = name,
+                        root = %root.display(),
+                        %error,
+                        "cannot clear workflow launch memory for a non-workflow task"
+                    );
+                }
+                result => result?,
+            }
+            super::backlog_store::remove(&paths, name)?;
+            super::launch_ledger_store::remove_declines(&paths, name)?;
+            crate::harness::workflow::reassign_task(&paths, name, None)?;
         }
         let key = task.key(name);
         let cleared_overlays = clear_overlays(&key)?;
@@ -451,6 +466,9 @@ impl TaskCatalog {
             return Ok(TaskMutation::default());
         };
         let root = task.entry().resolved_root();
+        if root.is_absolute() && task.entry().workflow.is_some() {
+            super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
+        }
         if root.is_absolute()
             && task.entry().stay
             && super::launch_ledger::load(&StatePaths::for_project_root(&root)?)?
@@ -478,16 +496,23 @@ impl TaskCatalog {
         };
         let old_key = task.key(name);
         if changed && root.is_absolute() {
+            if task.entry().workflow.is_some() {
+                super::launch_ledger_store::rename_workflows(
+                    &StatePaths::for_project_root(&root)?,
+                    name,
+                    new_name,
+                )?;
+            }
             super::backlog_store::rename(&StatePaths::for_project_root(&root)?, name, new_name)?;
             super::launch_ledger_store::rename_declines(
                 &StatePaths::for_project_root(&root)?,
                 name,
                 new_name,
             )?;
-            crate::harness::workflow::rename_task(
+            crate::harness::workflow::reassign_task(
                 &StatePaths::for_project_root(&root)?,
                 name,
-                new_name,
+                Some(new_name),
             )?;
         }
         let new_key = task.key(new_name);

@@ -906,7 +906,7 @@ The rest tune what one fire is allowed to do:
 
 A task that starts an agent also takes a turn in the start throttle, tuned by the file's top-level `[throttle]` table: `pace` (default `"10s"`, `"0s"` off) and `max-wait` (default `"30m"`), the caps `max-active` and `max-active-per-task`, the pressure limits `cpu-pressure`, `io-pressure`, and `memory-pressure` in percent, and the floors `min-memory` and `min-disk`. `rimz config set loop.throttle.pace 30s` writes one. A task's own `throttle = "off"` exempts it. The keys are explained in [pace agent starts](./loops.md#pace-agent-starts).
 
-A task can start a [workflow](./workflows.md) run instead of an agent. `workflow` names a definition under `~/.rimz/workflows/`, `prompt` or `prompt-file` becomes the run's prompt, and `each-worktree = true` starts one run per worktree. `rimz loop add` has no flag for it, so this is the one action you only write by hand:
+A task can start a [workflow](./workflows.md) run instead of an agent. `workflow` names a definition under `~/.rimz/workflows/`, `prompt` or `prompt-file` becomes the run's prompt, and `each-worktree = true` starts a run per worktree. With a `when` trigger, that launch happens once per checkout, even after its run finishes. `rimz loop add` has no flag for it, so this is the one action you only write by hand:
 
 ```toml
 [tasks.babysit-pr]

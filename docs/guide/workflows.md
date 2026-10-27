@@ -292,7 +292,7 @@ rimz workflow cancel "$RUN"
 
 `cancel` ends the run as `canceled` and stops whatever it is running: the check's script or shell command, the judge, a command step's process group, or every cell of an agent step's layout and its subagents. A run that already ended prints `already terminal; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
 
-A run started by a loop task can come back. The task starts a new run in any worktree that has none while its condition holds. To stop for good, end the condition or disable the task with `rimz loop disable <name>`.
+A run started by a condition loop task stays finished, even while its condition holds. To start another, run `rimz loop fire <name>` from that worktree, or start an independent run with `rimz workflow run`. Schedule, signal, and watch tasks can start another run on their next fire; disable the task with `rimz loop disable <name>` to prevent that.
 
 When you are done with the worktree, `rimz worktree remove feat-x` removes it. It refuses while the tree has uncommitted changes, while the branch holds commits that have not landed, or while an agent or pane is still in the tree, and names the fix. A check runs in the checkout, so files your suite writes there (a `__pycache__/`, a coverage report) count as changes unless `.gitignore` covers them. `--force` removes it anyway and deletes those commits with the branch. The [cleanup section](./worktrees.md#cleanup-once-work-lands) covers landing the work first.
 
@@ -311,7 +311,7 @@ when          = ["pr=open"]
 for           = "3m"
 ```
 
-Each firing starts a run in a worktree that has none. A worktree with an active or parked run is skipped, so it never gets two. A worktree whose run finished can get a new one. This differs from an agent task, which launches once per checkout. After the merge, `pr=open` turns false and the task stops firing there. Write this task by hand, since `rimz loop add` has no flag for it. The task's own `budget` does not apply; agent steps run under the room's budgets, and command steps use no provider. The [loop task reference](../reference/cli/workflow.md#loop-tasks) lists the fields a workflow task takes.
+This condition task starts its workflow once per checkout. An active, parked, or finished run prevents another automatic launch there, even if the condition turns false and true again, the room restarts, or you edit the task under the same name. Use `rimz loop fire babysit-pr` from the worktree to start another run after it ends, or `rimz workflow run babysit-pr` for an independent run. A workflow with project scope covers every checkout of the task, including new ones. Schedule, signal, and watch workflow tasks instead admit a new run on each fire unless a live run holds the scope. Write this task by hand, since `rimz loop add` has no flag for it. The task's own `budget` does not apply; agent steps run under the room's budgets, and command steps use no provider. The [loop task reference](../reference/cli/workflow.md#loop-tasks) lists the fields a workflow task takes.
 
 ## One run per project
 

@@ -16,7 +16,7 @@ use crate::harness::schedule::{
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, KeyVisits,
-    LiveAttempt, ParkReason, RunRecord, RunState, Scope,
+    LiveAttempt, ParkReason, RunRecord, RunState, Scope, ScopeKind,
 };
 
 mod accounting;
@@ -28,6 +28,8 @@ pub enum WorkflowErr {
         run: WorkflowRunId,
         workflow: String,
         scope: std::path::PathBuf,
+        task: Option<String>,
+        kind: ScopeKind,
     },
     #[error(transparent)]
     Store(#[from] workflow::WorkflowStoreErr),
@@ -159,6 +161,8 @@ fn refuse_existing(state: &StatePaths, name: &str, roots: &ScopeRoots) -> Result
             run: existing.id,
             workflow: name.into(),
             scope: existing.scope.path,
+            task: existing.task,
+            kind: existing.scope.kind,
         }),
         None => Ok(()),
     }
@@ -851,21 +855,25 @@ pub fn resume(
     spawn(&record)
 }
 
-pub(crate) fn rename_task(state: &StatePaths, old: &str, new: &str) -> Result<Vec<WorkflowRunId>> {
+pub(crate) fn reassign_task(
+    state: &StatePaths,
+    old: &str,
+    new: Option<&str>,
+) -> Result<Vec<WorkflowRunId>> {
     if !state.root.exists() {
         return Ok(Vec::new());
     }
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
-    let mut renamed = Vec::new();
+    let mut reassigned = Vec::new();
     for mut record in workflow::list(state)? {
         if !record.started_by(old) {
             continue;
         }
-        record.task = Some(new.into());
+        record.task = new.map(str::to_owned);
         workflow::write(&state.workflow(&record.id), &record, &guard)?;
-        renamed.push(record.id);
+        reassigned.push(record.id);
     }
-    Ok(renamed)
+    Ok(reassigned)
 }
 
 pub fn wake(state: &StatePaths, signal: &Signal) -> Result<()> {

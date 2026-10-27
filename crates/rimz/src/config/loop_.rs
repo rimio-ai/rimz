@@ -507,8 +507,12 @@ pub struct Guard<'a> {
 }
 
 impl TaskEntry {
-    pub fn repeats_while_true(&self) -> bool {
-        self.stay || self.workflow.is_some()
+    pub fn dedupes_checkout(&self) -> bool {
+        self.stay || self.is_condition_workflow()
+    }
+
+    pub fn is_condition_workflow(&self) -> bool {
+        self.workflow.is_some() && self.when.is_some()
     }
 
     pub fn guard(&self) -> Guard<'_> {

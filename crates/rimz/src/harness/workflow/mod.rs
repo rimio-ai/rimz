@@ -13,7 +13,7 @@ mod spec;
 mod state;
 mod validate;
 
-pub(crate) use engine::rename_task;
+pub(crate) use engine::reassign_task;
 pub use engine::{WorkflowErr, advance, cancel, create, resume, wake, wake_run};
 pub use spec::{
     Case, Check, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, WorkflowSpec, load,

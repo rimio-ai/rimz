@@ -98,7 +98,15 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
             },
         )]),
     )]);
-    let scopes = scoped_tasks(&tasks, &BTreeMap::new(), &owned, &declines, &clocks, now);
+    let scopes = scoped_tasks(
+        &tasks,
+        &BTreeMap::new(),
+        &Default::default(),
+        &owned,
+        &declines,
+        &clocks,
+        now,
+    );
     assert!(
         !scopes.contains_key(&key),
         "holding decline must suppress the helper"
@@ -106,7 +114,16 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
     assert_eq!(scopes.len(), 1, "another checkout remains eligible");
     clocks.get_mut(&key).unwrap().since = now;
     assert!(
-        scoped_tasks(&tasks, &BTreeMap::new(), &owned, &declines, &clocks, now).contains_key(&key)
+        scoped_tasks(
+            &tasks,
+            &BTreeMap::new(),
+            &Default::default(),
+            &owned,
+            &declines,
+            &clocks,
+            now
+        )
+        .contains_key(&key)
     );
     clocks.get_mut(&key).unwrap().since = since;
     if let Some(crate::config::TaskCheck::Agent(check)) = &mut entry.check {
@@ -124,6 +141,7 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
             scoped_tasks(
                 &tasks,
                 &BTreeMap::new(),
+                &Default::default(),
                 &owned,
                 &declines,
                 &clocks,
@@ -184,6 +202,7 @@ fn held_judges_suppress_helpers_only_without_a_shell_check() {
                 scoped_tasks(
                     &tasks,
                     &BTreeMap::new(),
+                    &Default::default(),
                     &owned,
                     &declines,
                     &BTreeMap::new(),
@@ -232,6 +251,7 @@ fn worktree_scopes_normalize_marker_components() {
     let scoped = scoped_tasks(
         &tasks,
         &BTreeMap::new(),
+        &Default::default(),
         &owned,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -265,6 +285,7 @@ fn workflow_scopes_ignore_a_previous_resident_launch_ledger() {
         scoped_tasks(
             &tasks,
             &ledger,
+            &Default::default(),
             &owned,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -273,6 +294,160 @@ fn workflow_scopes_ignore_a_previous_resident_launch_ledger() {
         .len(),
         2
     );
+}
+
+#[test]
+fn condition_workflow_scopes_use_only_workflow_memory_and_project_entries_cover_all() {
+    use super::super::launch_ledger::{WorkflowLaunchRecord, WorkflowLedger};
+    use crate::store::workflow::ScopeKind;
+    let (root, tasks, owned) = worktree_tasks(None);
+    let now = Timestamp::now();
+    let mut workflows = WorkflowLedger::default();
+    let record = WorkflowLaunchRecord {
+        at: now,
+        run: crate::ids::WorkflowRunId::new(),
+        scope: ScopeKind::Worktree,
+    };
+    let mut results = Vec::new();
+    for (stay, condition, each_worktree, project) in [
+        (false, true, true, false),
+        (false, true, false, false),
+        (false, true, true, true),
+        (false, false, true, false),
+        (true, true, true, false),
+    ] {
+        let entry = TaskEntry {
+            stay,
+            agent: stay.then(|| "claude".into()),
+            workflow: (!stay).then(|| "review".into()),
+            when: condition.then(|| vec!["team.stage=Done".into()]),
+            every: (!condition).then(|| "1h".into()),
+            each_worktree,
+            ..tasks[NAME].entry().clone()
+        };
+        let key = if project || !each_worktree {
+            root.path().to_owned()
+        } else {
+            owned[0].clone()
+        };
+        workflows.tasks.insert(
+            NAME.into(),
+            BTreeMap::from([(
+                key,
+                WorkflowLaunchRecord {
+                    scope: if project {
+                        ScopeKind::Project
+                    } else {
+                        ScopeKind::Worktree
+                    },
+                    ..record.clone()
+                },
+            )]),
+        );
+        results.push(
+            scoped_tasks(
+                &one(loaded(entry)),
+                &BTreeMap::new(),
+                &workflows,
+                &owned,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                now,
+            )
+            .len(),
+        );
+    }
+    assert_eq!(results, vec![1, 0, 0, 2, 2]);
+}
+
+#[test]
+fn malformed_workflow_memory_suppresses_only_condition_workflow_planning() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let mut tasks: BTreeMap<String, LoadedTask> = BTreeMap::new();
+    for (name, stay, workflow) in [
+        ("workflow", false, true),
+        ("resident", true, false),
+        ("ordinary", false, false),
+    ] {
+        tasks.insert(
+            name.into(),
+            loaded(TaskEntry {
+                root: root.path().to_owned(),
+                agent: (!workflow).then(|| "claude".into()),
+                prompt: Some("repair".into()),
+                stay,
+                workflow: workflow.then(|| "review".into()),
+                when: Some(vec!["team.stage=Done".into()]),
+                ..Default::default()
+            }),
+        );
+    }
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(
+        super::super::launch_ledger::workflow_path(&paths)
+            .parent()
+            .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        super::super::launch_ledger::workflow_path(&paths),
+        "malformed",
+    )
+    .unwrap();
+    write_temp_then_rename_cache(
+        &state_path(&runtime),
+        &tasks
+            .keys()
+            .map(|name| (name.clone(), seconds_before(now.timestamp(), 60)))
+            .collect::<BTreeMap<_, _>>(),
+    )
+    .unwrap();
+    assert_eq!(
+        fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks,
+            &now,
+            LoopRunHost::Detached,
+            None
+        ),
+        vec!["ordinary", "resident"]
+    );
+}
+
+#[test]
+fn workflow_launch_memory_accepts_a_silent_scope_handoff() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    crate::disk::atomic::write_temp_then_rename(
+        &super::super::launch_ledger::workflow_path(&paths),
+        &serde_json::json!({"version":1,"tasks":{"land":{root.path().to_str().unwrap():{
+            "at":Timestamp::now(),"run":crate::ids::WorkflowRunId::new(),"scope":"project"
+        }}}}),
+    )
+    .unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        workflow: Some("review".into()),
+        when: Some(vec!["pr=open".into()]),
+        ..Default::default()
+    };
+    assert!(recorded_launch(
+        &runtime,
+        Some(root.path()),
+        "land",
+        &entry,
+        Some(&root.path().join("later"))
+    ));
 }
 
 #[test]
@@ -296,6 +471,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
         let scoped = scoped_tasks(
             &tasks,
             &ledger,
+            &Default::default(),
             &owned,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -373,6 +549,7 @@ fn worktree_retries_use_each_checkouts_last_fire() {
     let scoped = scoped_tasks(
         &tasks,
         &BTreeMap::new(),
+        &Default::default(),
         &owned,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -443,6 +620,7 @@ fn worktree_holds_have_independent_clocks() {
     let scoped = scoped_tasks(
         &tasks,
         &BTreeMap::new(),
+        &Default::default(),
         &owned,
         &BTreeMap::new(),
         &BTreeMap::new(),

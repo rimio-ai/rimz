@@ -7619,20 +7619,40 @@ fn loop_rename_moves_live_workflow_runs() {
 
 #[test]
 fn loop_rename_without_a_room_does_not_create_state() {
+    for definition in [
+        "check = 'true'\nevery = '15m'",
+        "workflow = 'review'\nwhen = ['pr=open']",
+    ] {
+        let env = Env::new();
+        write_loop_config(
+            &env,
+            &format!("[tasks.old]\nroot = {:?}\n{definition}\n", env.project_root),
+        );
+        let paths = env.state_path_for(&env.project_root);
+        assert!(!paths.root.exists());
+
+        let receipt = loop_ok(&env, &["loop", "rename", "old", "new"]);
+        assert_eq!(receipt.trim(), "renamed loop task `old` to `new`");
+        assert!(!paths.root.exists(), "rename must not create room state");
+    }
+}
+
+#[test]
+fn loop_remove_workflow_without_a_room_does_not_create_state() {
     let env = Env::new();
     write_loop_config(
         &env,
         &format!(
-            "[tasks.old]\ncheck = \"true\"\nroot = {:?}\nevery = \"15m\"\n",
+            "[tasks.review]\nroot = {:?}\nworkflow = 'review'\nwhen = ['pr=open']\n",
             env.project_root
         ),
     );
     let paths = env.state_path_for(&env.project_root);
     assert!(!paths.root.exists());
 
-    let receipt = loop_ok(&env, &["loop", "rename", "old", "new"]);
-    assert_eq!(receipt.trim(), "renamed loop task `old` to `new`");
-    assert!(!paths.root.exists(), "rename must not create room state");
+    let receipt = loop_ok(&env, &["loop", "remove", "review"]);
+    assert_eq!(receipt.trim(), "removed loop task `review`");
+    assert!(!paths.root.exists(), "remove must not create room state");
 }
 
 #[test]
