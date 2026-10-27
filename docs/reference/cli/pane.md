@@ -56,7 +56,7 @@ process               -        zsh      ~/code/qe-wt/auth-refresh  zellij:termin
 +1 sidebar · --all shows it
 ```
 
-The `AGENT` column holds the agent's handle for a pane an agent lives in, `sidebar` for RimZ's sidebar, and `process` for any other pane. Only agent rows carry a status. `COMMAND` is the agent kind for agent rows, otherwise the foreground command or `-`. `(self)` marks the pane that ran the command, which is not necessarily the focused pane; the listing has no focus mark. Tab headings omit RimZ's status glyph suffix; repeated names get ` (2)`, ` (3)`, and so on. Tabs left with no visible rows are omitted.
+The `AGENT` column holds a handle naming that agent alone (launched children included), `sidebar` for RimZ's sidebar, and `process` for any other pane. Only agent rows carry a status. `COMMAND` is the agent kind for agent rows, otherwise the foreground command or `-`. `(self)` marks the pane that ran the command, which is not necessarily the focused pane; the listing has no focus mark. Tab headings omit RimZ's status glyph suffix; repeated names get ` (2)`, ` (3)`, and so on. Tabs left with no visible rows are omitted.
 
 `rimz pane list [SCOPE]` limits the listing to a channel (`#` optional), worktree, branch, or directory name. An agent pane matches through its agent's channel or worktree; sidebars and process panes match when they share a native tab with a matching agent. Other agent panes in that tab still need to match individually. A scope with no matching panes exits `0`: the table view prints a note on stderr and nothing on stdout, and `--json` prints the usual document with `"tabs": []`. Scoping a session without reachable agent records, including a foreign session, fails with the session name and exits `1`.
 
@@ -79,7 +79,7 @@ The JSON document has `session`, `mux`, and `tabs`. Each tab has `view_id` and `
 | `pane_id` | The pane id, usable as a target. |
 | `kind` | `agent`, `sidebar`, or `process`. |
 | `self` | `true` on the calling pane; absent elsewhere. |
-| `agent` | For `kind: "agent"`: `kind` (agent kind), `handle`, `status`, and `worktree`. |
+| `agent` | For `kind: "agent"`: `kind` (agent kind), `handle` (names that agent alone, launched children included), `status`, and `worktree`. |
 | `command` | The pane's foreground command. |
 | `cwd` | The pane's working directory. |
 | `pid` | The pane's root process id, when the backend reports it. |
@@ -178,7 +178,7 @@ TOTAL         5s sample                    42k/s
 per-pane rows are producer write-rate; muxes diff the focused tab and SSH compresses it, so WIRE(ssh) is the actual TCP payload on this room's SSH socket, usually far below the per-pane sum. WIRE is absent for local rooms.
 ```
 
-Each pane row is everything the pane's process tree wrote, including files such as transcripts. An agent pane is labelled by its handle, a sidebar `<tab> - sidebar`, and other panes `<tab> - <command>`. Tab names omit RimZ's status glyph suffix. Rows with a zero write rate are hidden unless `--all` is passed; a line after `TOTAL` counts the quiet panes not shown. `TOTAL` includes every pane, including quiet panes.
+Each pane row is everything the pane's process tree wrote, including files such as transcripts. An agent pane is labelled by its handle naming that agent alone (launched children included), a sidebar `<tab> - sidebar`, and other panes `<tab> - <command>`. Tab names omit RimZ's status glyph suffix. Rows with a zero write rate are hidden unless `--all` is passed; a line after `TOTAL` counts the quiet panes not shown. `TOTAL` includes every pane, including quiet panes.
 
 The two `WIRE(ssh)` rows are what actually crossed the SSH socket to and from attached clients, after the multiplexer redraws only the focused tab and SSH compresses the stream, so they sit far below the per-pane sum. They appear only when an SSH client is attached and `ss` can read the socket's counters. The caveat paragraph appears only with these rows. Full-screen programs that redraw constantly, such as an agent mid-turn or a system monitor, lead the report.
 

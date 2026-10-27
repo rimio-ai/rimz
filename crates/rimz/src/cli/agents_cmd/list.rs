@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_bound_roots_keeps_only_live_handle_peers() {
+    fn pane_bound_roots_keeps_only_live_roots() {
         let mut snapshot = SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
             vec![

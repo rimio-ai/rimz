@@ -402,18 +402,9 @@ impl SidebarSnapshot {
         changed
     }
 
-    /// Fold per-agent activity heartbeats into the rollup. The agent's hook
-    /// touches its heartbeat on every progress-proving event, so the freshest
-    /// touch is a truer `last_activity` than the turn-grained event log — it
-    /// advances per tool call, which is what keeps a busy agent's row animated,
-    /// recovers an answered ask, and dates a genuine stall. Latency, not truth:
-    /// a missing or older heartbeat leaves the event-log value untouched.
-    ///
-    /// Apply this before [`Self::with_live_panes`] so age, ranking, the
-    /// ask-fold guard, and the stall window all read the accurate value.
-    /// The root agent bound to this live pane, by the same stamped-id +
-    /// process-start rule the sidebar's card projection binds with
-    /// (`PaneBindingIndex`): a pane the multiplexer has since reused for a shell
+    /// The root agent, or otherwise a launched child, bound to this live pane.
+    /// Uses the same stamped-id + process-start rule as the sidebar's card
+    /// projection (`PaneBindingIndex`): a pane reused by the multiplexer for a shell
     /// never inherits the agent that once ran there, and a pane shared by two
     /// sessions resolves to the one the card shows. The CLI's `pane list`
     /// overlay reads through this so its annotations match the rendered room.
@@ -424,6 +415,15 @@ impl SidebarSnapshot {
             .or_else(|| index.stamped_launched_child(pane))
     }
 
+    /// Fold per-agent activity heartbeats into the rollup. The agent's hook
+    /// touches its heartbeat on every progress-proving event, so the freshest
+    /// touch is a truer `last_activity` than the turn-grained event log — it
+    /// advances per tool call, which is what keeps a busy agent's row animated,
+    /// recovers an answered ask, and dates a genuine stall. Latency, not truth:
+    /// a missing or older heartbeat leaves the event-log value untouched.
+    ///
+    /// Apply this before [`Self::with_live_panes`] so age, ranking, the
+    /// ask-fold guard, and the stall window all read the accurate value.
     pub fn with_agent_activity(mut self, activity: &[AgentActivity]) -> Self {
         for agent in Arc::make_mut(&mut self.agents) {
             let Some(touch) = activity
