@@ -437,11 +437,13 @@ An open link also carries a display-only `stack`, projected as the worktree grou
 
 The CI verdict comes from the most specific commit:
 
-| Target | Verdict source |
-| --- | --- |
-| Open PR | The PR head's check rollup. |
-| Merged PR | The merge commit's checks, falling back to the PR head's when the merge commit has none. GitHub rereads it on every due probe, so a CI rerun moves the verdict. Tea stops rereading an owned merged link once its verdict settles. |
-| Path without a PR, trunk included | The exact local HEAD commit, stored in the `branch_ci` map. |
+| Target | Verdict source | Commit kept with the verdict |
+| --- | --- | --- |
+| Open PR | The PR head's check rollup on GitHub, or combined status read by branch on Gitea. | `PrLink::ci_sha`: the GitHub rollup's `commit.oid`, or the Gitea response's `sha`, when supplied. |
+| Merged PR | The merge commit's checks, falling back to the PR head's when the merge commit has none. GitHub rereads it on every due probe, so a CI rerun moves the verdict. Tea stops rereading an owned merged link once its verdict settles. | `PrLink::ci_sha`: GitHub's `mergeCommit.oid` when its rollup answered, otherwise the PR rollup's `commit.oid`; on Gitea, the `sha` of whichever combined-status response answered. |
+| Path without a PR, trunk included | The exact local HEAD commit, stored in the `branch_ci` map. | The local head queried, kept in `head_seen`. |
+
+`ci_sha` is absent when the verdict or its commit is unknown. Older cache files without it still load with an unknown CI commit.
 
 #### When a repository is probed
 
@@ -467,7 +469,7 @@ Each publication is diffed against the previous one ([`refresh/pr/transitions.rs
 
 A transition counts only when the target stamp is continuous and the repository probe succeeded, so a branch switch or a failed probe emits nothing. PR links must belong to that stamp, and terminal PR transitions still require a prior open link. A PR-less path emits only for a commit the branch added: a known HEAD matching the worktree marker's base commit, or the cached merge base (an ancestor of the resolved trunk), is inherited and emits nothing. Trunk targets are exempt, and unknown facts keep emission on. The badge still shows the inherited verdict.
 
-The payload carries `path`, `branch`, and `repo`, plus `number`, `url`, and `state` when a link exists, and the observed `head` with a `checks_url` built from the target's `RemoteRepo` (GitHub's `/commit/<head>/checks` page, Gitea's commit page). The producer stays read-only: it spawns a detached `rimz events emit --source forge`, which appends the event durably and fires subscribed loop and wait tasks ([loops.md](../harness/loops.md#the-signal-vocabulary)).
+The payload carries `path`, `branch`, and `repo`, plus `number` and `url` when known; `pr.*` also carries `state`. For `ci.*`, `head` is the verdict's commit (`PrLink::ci_sha`, or the PR-less read's `head_seen`), never a fallback to the local head for a PR. `pr.*` keeps the local worktree HEAD. A known nonempty `head` adds a `checks_url` built from the target's `RemoteRepo` (GitHub's `/commit/<head>/checks` page, Gitea's commit page); an unknown commit omits both fields. The producer stays read-only: it spawns a detached `rimz events emit --source forge`, which appends the event durably and fires subscribed loop and wait tasks ([loops.md](../harness/loops.md#the-signal-vocabulary)).
 
 #### GitHub open-PR facts
 

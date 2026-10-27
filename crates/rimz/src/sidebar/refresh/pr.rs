@@ -363,6 +363,7 @@ impl Target {
         state: WorktreePrState,
         number: u64,
         ci: Option<WorktreeCi>,
+        ci_sha: Option<String>,
         merge_sha: Option<String>,
     ) -> PrLink {
         PrLink {
@@ -374,6 +375,7 @@ impl Target {
             number: Some(number),
             url: self.remote.pr_web_url(number),
             ci,
+            ci_sha,
             merge_sha,
         }
     }
@@ -680,7 +682,7 @@ fn assign_states(
         if let Some(candidate) = open_map.get(&target.branch) {
             states.insert(
                 target.path.clone(),
-                target.pr_link(WorktreePrState::Open, candidate.number, None, None),
+                target.pr_link(WorktreePrState::Open, candidate.number, None, None, None),
             );
             continue;
         }
@@ -1042,7 +1044,13 @@ fn project_github_group(
         {
             let link = match pr.state {
                 WorktreePrState::Open => {
-                    let mut link = target.pr_link(pr.state, pr.number, pr.head_ci, None);
+                    let mut link = target.pr_link(
+                        pr.state,
+                        pr.number,
+                        pr.head_ci,
+                        pr.head_ci_sha.clone(),
+                        None,
+                    );
                     link.open = pr.open.clone();
                     if let Some(facts) = &mut link.open
                         && facts.mergeability.is_none()
@@ -1061,9 +1069,14 @@ fn project_github_group(
                     pr.state,
                     pr.number,
                     pr.merge_ci.or(pr.head_ci),
+                    if pr.merge_ci.is_some() {
+                        pr.merge_sha.clone()
+                    } else {
+                        pr.head_ci_sha.clone()
+                    },
                     pr.merge_sha.clone(),
                 ),
-                WorktreePrState::Closed => target.pr_link(pr.state, pr.number, None, None),
+                WorktreePrState::Closed => target.pr_link(pr.state, pr.number, None, None, None),
             };
             states.insert(target.path.clone(), link);
             continue;
@@ -1159,10 +1172,11 @@ fn probe_tea_repo_group_with(
         for target in &group.targets {
             if let Some(link) = states.get_mut(&target.path) {
                 if link.state == WorktreePrState::Open
-                    && let Ok(ci) =
+                    && let Ok((ci, ci_sha)) =
                         probe_tea_ci_with(&group.worktree, repo_slug, &target.branch, &mut command)
                 {
                     link.ci = ci;
+                    link.ci_sha = ci_sha;
                 }
                 if !target.branch_only || link.state == WorktreePrState::Open {
                     continue;
@@ -1174,7 +1188,8 @@ fn probe_tea_repo_group_with(
                 target.head_sha.as_deref()
             };
             let Some(head) = head else { continue };
-            if let Ok(Some(ci)) = probe_tea_ci_with(&group.worktree, repo_slug, head, &mut command)
+            if let Ok((Some(ci), _)) =
+                probe_tea_ci_with(&group.worktree, repo_slug, head, &mut command)
             {
                 branch_ci.insert(target.path.clone(), ci);
             }
@@ -1346,7 +1361,7 @@ fn probe_tea_list_with(
         };
     }
     ProbeState {
-        state: Some(target.pr_link(candidate.state, candidate.number, None, None)),
+        state: Some(target.pr_link(candidate.state, candidate.number, None, None, None)),
         ok: true,
     }
 }
@@ -1382,9 +1397,9 @@ fn probe_tea_detail_with(
     let mut read_ci = |sha: &str| {
         probe_tea_ci_with(worktree, repo, sha, &mut command)
             .ok()
-            .flatten()
+            .filter(|(ci, _)| ci.is_some())
     };
-    let ci = (state == WorktreePrState::Merged)
+    let (ci, ci_sha) = (state == WorktreePrState::Merged)
         .then(|| {
             detail
                 .merged_sha
@@ -1400,9 +1415,10 @@ fn probe_tea_detail_with(
                     })
                 })
         })
-        .flatten();
+        .flatten()
+        .unwrap_or_default();
     Some(ProbeState {
-        state: Some(target.pr_link(state, number, ci, merge_sha)),
+        state: Some(target.pr_link(state, number, ci, ci_sha, merge_sha)),
         ok: true,
     })
 }
@@ -1412,7 +1428,7 @@ fn probe_tea_ci_with(
     repo_slug: &str,
     branch: &str,
     command: &mut impl FnMut(&Path, &str, &[&str]) -> Option<String>,
-) -> Result<Option<WorktreeCi>, String> {
+) -> Result<(Option<WorktreeCi>, Option<String>), String> {
     let endpoint = forge::tea_commit_status_endpoint(repo_slug, branch);
     let output = command(worktree, "tea", &["api", &endpoint])
         .ok_or_else(|| "tea combined commit-status probe failed".to_owned())?;

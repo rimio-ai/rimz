@@ -60,6 +60,7 @@ fn cached_fold_reads_channel_markers_from_the_roots_lane() {
             number: Some(91),
             url: None,
             ci: None,
+            ci_sha: None,
             merge_sha: None,
         },
     );
@@ -105,6 +106,7 @@ fn pr_stack_projection_matches_cache_and_clears_stale_groups() {
             number: Some(530),
             url: None,
             ci: None,
+            ci_sha: None,
             merge_sha: None,
         },
     );
@@ -170,6 +172,7 @@ fn pr_state_projection_uses_the_given_map() {
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
             ci: Some(crate::store::snapshot::WorktreeCi::Failing),
+            ci_sha: None,
             merge_sha: None,
         },
     );
@@ -212,6 +215,7 @@ fn pr_state_projection_uses_the_given_map() {
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
             ci: Some(crate::store::snapshot::WorktreeCi::Passing),
+            ci_sha: None,
             merge_sha: None,
         },
     );
@@ -242,6 +246,7 @@ fn pr_state_projection_uses_the_given_map() {
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
             ci: Some(crate::store::snapshot::WorktreeCi::Failing),
+            ci_sha: None,
             merge_sha: Some("merged-sha".to_owned()),
         },
     );
@@ -291,6 +296,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
             number: Some(91),
             url: None,
             ci: None,
+            ci_sha: None,
             merge_sha: Some("merged-sha".to_owned()),
         },
     );
@@ -323,6 +329,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
             number: Some(91),
             url: None,
             ci: None,
+            ci_sha: None,
             merge_sha: Some("merged-sha".to_owned()),
         },
     );
@@ -366,6 +373,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
                 number: Some(number),
                 url: Some(format!("https://github.com/org/repo/pull/{number}")),
                 ci: Some(crate::store::snapshot::WorktreeCi::Passing),
+                ci_sha: None,
                 merge_sha: Some(format!("sha-{number}")),
             },
         );

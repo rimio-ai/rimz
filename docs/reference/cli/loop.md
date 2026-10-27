@@ -335,7 +335,7 @@ A built-in signal carries only what `gh`, `tea`, `git`, or `rimz` cannot answer 
 | `team.failed` | `team.failed <instance> · <member>` |
 | `team.stage` | `team.stage <instance> · <from> -> <to>` |
 
-A segment whose field the payload lacks is left out with its separator, so a branch with no pull request reads `ci.failed on check-multi @88824c2`. A commit prints its first seven characters. `@<head>` is the worktree's HEAD when the verdict was read, which is the commit the verdict is about unless the branch has unpushed commits. Any other name in a built-in family prints its family's leading segment alone. `pr.dequeued` adds one line, `queue checks: <url>`, since nothing else names the queue commit.
+A segment whose field the payload lacks is left out with its separator, so a branch with no pull request reads `ci.failed on check-multi @88824c2`. A commit prints its first seven characters. `@<head>` is the commit the CI verdict is about, not an unpushed local HEAD; it is left out when the forge names no commit. Any other name in a built-in family prints its family's leading segment alone. `pr.dequeued` adds one line, `queue checks: <url>`, since nothing else names the queue commit.
 
 A signal outside the built-in families prints one `key: value` line per top-level payload field, in key order, under the verdict: a string bare and anything else as compact JSON. A key or a string holding a line break prints JSON-quoted, so one field is always one line. `rimz events emit deploy.finished --json '{"env":"prod","detail":{"a":1}}'` delivers:
 

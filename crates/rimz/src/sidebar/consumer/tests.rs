@@ -379,6 +379,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
             number: Some(91),
             url: None,
             ci: None,
+            ci_sha: None,
             merge_sha: None,
         },
     );

@@ -402,7 +402,7 @@ fn pending_ci_emits_passed_and_failed_signals() {
 
         assert_eq!(signal_names(&signals), vec![name]);
         assert!(!payload.contains_key("conclusion"));
-        assert_eq!(payload["head"], "head-2");
+        assert_eq!(payload["head"], "ci-2");
     }
 }
 
@@ -410,6 +410,7 @@ fn pending_ci_emits_passed_and_failed_signals() {
 fn changed_final_ci_on_a_new_head_emits_again() {
     let mut prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Passing));
     prior.head_seen.insert(PATH.to_owned(), "head-1".to_owned());
+    prior.states.get_mut(PATH).unwrap().ci_sha = Some("ci-1".to_owned());
     let next = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Failing));
 
     let signals = production_transitions(&prior, &next);
@@ -417,7 +418,7 @@ fn changed_final_ci_on_a_new_head_emits_again() {
 
     assert_eq!(signal_names(&signals), vec!["ci.failed"]);
     assert!(!payload.contains_key("conclusion"));
-    assert_eq!(payload["head"], "head-2");
+    assert_eq!(payload["head"], "ci-2");
 }
 
 #[test]
@@ -428,6 +429,85 @@ fn terminal_pr_and_finished_ci_emit_both_transitions() {
     let signals = production_transitions(&prior, &next);
 
     assert_eq!(signal_names(&signals), vec!["pr.merged", "ci.passed"]);
+    assert_eq!(signals[0].1["head"], "head-2");
+    assert_eq!(signals[1].1["head"], "ci-2");
+    assert_eq!(
+        signals[0].1["checks_url"],
+        "https://github.com/org/repo/commit/head-2/checks"
+    );
+    assert_eq!(
+        signals[1].1["checks_url"],
+        "https://github.com/org/repo/commit/ci-2/checks"
+    );
+}
+
+#[test]
+fn github_open_ci_signals_name_the_rollups_commit_not_the_local_head() {
+    let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
+    let group = super::repo_group(vec![super::target(PATH, "feature")]);
+    let plan = plan_github_queries(&group).remove(0);
+    let raw = json!({"data": {"repository": {
+        "pr0": {"nodes": [{"number": 42, "state": "OPEN",
+            "statusCheckRollup": {"state": "FAILURE", "commit": {"oid": "pushed"}}}]},
+        "facts0": null
+    }}});
+    let response = forge::parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+    let mut next = base_cache();
+    next.states = project_github_group(&group, &[(plan, response)], &prior.states).0;
+
+    let signals = production_transitions(&prior, &next);
+    assert_eq!(signal_names(&signals), vec!["ci.failed"]);
+    assert_eq!(signals[0].1["head"], "pushed");
+    assert_eq!(
+        signals[0].1["checks_url"],
+        "https://github.com/org/repo/commit/pushed/checks"
+    );
+    assert_eq!(next.head_seen[PATH], "head-2");
+}
+
+#[test]
+fn github_open_ci_without_a_rollup_commit_omits_head_and_checks_url() {
+    let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
+    let group = super::repo_group(vec![super::target(PATH, "feature")]);
+    for commit in [Value::Null, json!({"oid": "  "})] {
+        let plan = plan_github_queries(&group).remove(0);
+        let raw = json!({"data": {"repository": {
+            "pr0": {"nodes": [{"number": 42, "state": "OPEN",
+                "statusCheckRollup": {"state": "FAILURE", "commit": commit}}]},
+            "facts0": {"nodes": [{"number": 42, "headRefOid": "forge-head",
+                "mergeable": "MERGEABLE", "isCrossRepository": false}]}
+        }}});
+        let response = forge::parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+        let mut next = base_cache();
+        next.states = project_github_group(&group, &[(plan, response)], &prior.states).0;
+
+        let signals = production_transitions(&prior, &next);
+        assert_eq!(signal_names(&signals), vec!["ci.failed"]);
+        assert!(!signals[0].1.contains_key("head"));
+        assert!(!signals[0].1.contains_key("checks_url"));
+    }
+}
+
+#[test]
+fn github_merged_ci_keeps_the_commit_of_the_rollup_that_answered() {
+    let group = super::repo_group(vec![super::target(PATH, "feature")]);
+    for (merge_rollup, ci, sha) in [
+        (json!({"state": "SUCCESS"}), WorktreeCi::Passing, "merged"),
+        (Value::Null, WorktreeCi::Failing, "pushed"),
+    ] {
+        let plan = plan_github_queries(&group).remove(0);
+        let raw = json!({"data": {"repository": {
+            "pr0": {"nodes": [{"number": 42, "state": "MERGED",
+                "statusCheckRollup": {"state": "FAILURE", "commit": {"oid": "pushed"}},
+                "mergeCommit": {"oid": "merged", "statusCheckRollup": merge_rollup}}]},
+            "facts0": null
+        }}});
+        let response = forge::parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+        let (states, _) = project_github_group(&group, &[(plan, response)], &BTreeMap::new());
+        assert_eq!(states[PATH].ci, Some(ci));
+        assert_eq!(states[PATH].ci_sha.as_deref(), Some(sha));
+        assert_eq!(states[PATH].merge_sha.as_deref(), Some("merged"));
+    }
 }
 
 #[test]
@@ -585,12 +665,21 @@ fn checks_urls_use_remote_slug_and_observed_head() {
             };
             let signals = super::super::transitions::transitions(&prior, &next, &groups);
             let (_, payload) = &signals[0];
+            let expected = if with_pr {
+                expected.replace("head-2", "ci-2")
+            } else {
+                expected.to_owned()
+            };
             assert_eq!(payload["checks_url"], expected);
             assert_eq!(payload["repo"], REPO);
             for head in [None, Some("")] {
-                next.head_seen.remove(PATH);
-                if let Some(head) = head {
-                    next.head_seen.insert(PATH.to_owned(), head.to_owned());
+                if with_pr {
+                    next.states.get_mut(PATH).unwrap().ci_sha = head.map(str::to_owned);
+                } else {
+                    next.head_seen.remove(PATH);
+                    if let Some(head) = head {
+                        next.head_seen.insert(PATH.to_owned(), head.to_owned());
+                    }
                 }
                 let signals = super::super::transitions::transitions(&prior, &next, &groups);
                 let (_, payload) = &signals[0];
@@ -665,6 +754,7 @@ fn pr_cache(state: WorktreePrState, ci: Option<WorktreeCi>) -> PrStateCache {
             number: Some(42),
             url: Some("https://github.com/org/repo/pull/42".to_owned()),
             ci,
+            ci_sha: ci.map(|_| "ci-2".to_owned()),
             merge_sha: (state == WorktreePrState::Merged).then(|| "merge-42".to_owned()),
         },
     );

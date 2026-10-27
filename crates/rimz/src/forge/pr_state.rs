@@ -81,6 +81,9 @@ pub struct PrLink {
     pub url: Option<String>,
     #[serde(default)]
     pub ci: Option<WorktreeCi>,
+    /// The commit `ci` was read at, absent when the verdict or commit is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_sha: Option<String>,
     #[serde(default)]
     pub merge_sha: Option<String>,
     /// Same-repo open PRs stacked below and above this one; empty unless the
