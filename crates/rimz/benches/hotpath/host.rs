@@ -888,7 +888,20 @@ impl Room {
             .map(|record| record["event"]["interval_ms"].as_f64().unwrap() / 1000.0)
             .sum();
         assert!(seconds > 0.0, "no complete fetch diagnostic window");
-        let mut result = json!({"covered_seconds": seconds,
+        // A cell whose intervals cover under 90% of the phase reads like a whole one
+        // unless it is marked, so it carries a flag and warns on stderr.
+        let phase_seconds = (ended_ms - started_ms) as f64 / 1000.0;
+        let partial = seconds < phase_seconds * 0.9;
+        if partial {
+            writeln!(
+                io::stderr(),
+                "warning: fold intervals cover {seconds:.1}s of a {phase_seconds:.1}s phase; \
+                 folds_per_minute is partial"
+            )
+            .expect("benchmark warning");
+        }
+        let mut result = json!({"covered_seconds": seconds, "phase_seconds": phase_seconds,
+            "partial_coverage": partial,
             "scope": "diagnostic intervals ending in window; can cross phase boundary"});
         for name in [
             "cycles",
