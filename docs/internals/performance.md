@@ -708,7 +708,66 @@ Each burst drains 100 Read frames from 25 working roots. Claim-to-applied triple
 | 200 / 1,500 | H2 | 14.549 | 6.873 | 144.010 / 163.127 / 166.290 | 7.63 / 7.71 |
 | 200 / 1,500 | B2 | 21.345 | 4.685 | 207.853 / 295.776 / 301.517 | 9.40 / 10.28 |
 
-Both head drains at 200 / 1,500 fall below the planned 12 frames/s follow-up threshold. That threshold is twice an inferred peak of six frames/s (30 working agents emitting one frame per five-second tool call), not a measured arrival rate. These burst figures therefore trigger the planned resident-apply-worker investigation; they do not establish sustainable arrival capacity. A worker must preserve per-frame account-home isolation, which the cold child currently supplies ([runtime shape](../../ARCHITECTURE.md#runtime-shape)). Other live-fleet sizes and the room-host bench were not rerun.
+##### Shared-row hook comparison
+
+The preceding 6.873 to 6.893 frames/s result prompted investigation of a resident apply worker. The decision is **no resident worker**: share fold rows and narrow agent-sender context reads instead. Head now drains 13.141 to 13.351 frames/s at 200 / 1,500, above the 12 frames/s follow-up threshold. That threshold was twice an inferred six frames/s, not a measured arrival rate. A worker around the current fold would remove cold parsing but not the retained-key and name walks, and would need explicit per-frame environment and room-keyed process caches to preserve the account-home isolation that cold children supply ([runtime shape](../../ARCHITECTURE.md#runtime-shape)).
+
+Base is trunk `df40bb7a7` (`fix(loop): place a new loop task after a template's trailing comments`) plus `test(perf): bench agent-sent Prompt frames`, cherry-picked alone. Head adds `perf(store): share fold rows across catch-up` and `perf(hooks): resolve agent senders over launch members only`. Each side used its own standalone clone, target directory, same-tree bench and release testkit CLI, built with the Scale yardstick commands above. Measured CLI build IDs are `9c5153484d21` (base) and `d395de5bdae7` (head), identical across repeats and without `.dirty`. These are the fixture-reported IDs after the first bench command rebuilt each CLI, not the preceding standalone build's identity.
+
+Commands ran in B1, H1, H2, B2 order on 2026-10-28, 18:46:07 to 19:01:34 UTC, with `RIMZ_SCALE_ROOMS=200x300,200x1500`. The Linux x86-64 EPYC 7502P host had 58 available logical CPUs, the `performance` governor and ZFS temporary storage. No load was induced; ambient activity was uncontrolled. The per-cell load brackets below exclude compilation and AgentPrompt, which runs after the drain. These are paired observations under shared load, not an isolated speedup or a sustainable-arrival guarantee.
+
+The fixture is unchanged between sides: 200 production-shaped live rows with observed prompt text and team-member pane argv, plus closed rows present in both carryover and the raw rollup. That double retention overstates cold decode cost relative to a room where each closed row usually occupies only one of those files. Setup sizes are bytes; small repeat differences include generated paths and timestamps. Compact live-row bytes are equal in latest and rollup within each fixture, with means 1,699.620 to 1,700.710 and maxima 1,707 to 1,708.
+
+| Live / closed | Run | Rollup bytes | Carryover bytes | Latest bytes | Event-log bytes |
+| --- | --- | --- | --- | --- | --- |
+| 200 / 300 | B1 | 610,951 | 313,176 | 348,453 | 1,180,914 |
+| 200 / 300 | H1 | 610,913 | 313,200 | 348,419 | 1,180,893 |
+| 200 / 300 | H2 | 611,028 | 313,191 | 348,471 | 1,180,938 |
+| 200 / 300 | B2 | 610,887 | 313,155 | 348,441 | 1,180,897 |
+| 200 / 1,500 | B1 | 1,668,549 | 1,571,108 | 379,128 | 1,636,572 |
+| 200 / 1,500 | H1 | 1,668,600 | 1,571,120 | 379,121 | 1,636,589 |
+| 200 / 1,500 | H2 | 1,668,534 | 1,571,078 | 379,129 | 1,636,569 |
+| 200 / 1,500 | B2 | 1,668,645 | 1,571,153 | 379,137 | 1,636,605 |
+
+Each frame has 50 direct cold apply children per cell and run. Prompt is human UserPromptSubmit; AgentPrompt delivers a fresh batch-sent agent message; Read is PostToolUse(Read). Timing pairs are B1 / B2 or H1 / H2, in milliseconds. Base's small-cell Stop and AgentPrompt vary substantially between repeats; neither observation is discarded.
+
+| Live / closed | Frame | Base wall p50 | Head wall p50 | Base CPU p50 | Head CPU p50 |
+| --- | --- | --- | --- | --- | --- |
+| 200 / 300 | Prompt | 61.146 / 61.096 | 42.582 / 42.753 | 48.903 / 49.092 | 31.800 / 31.662 |
+| 200 / 300 | AgentPrompt | 77.913 / 119.908 | 45.231 / 44.575 | 69.926 / 104.124 | 38.486 / 37.936 |
+| 200 / 300 | Read | 54.950 / 56.372 | 37.541 / 36.618 | 47.474 / 48.952 | 31.225 / 30.375 |
+| 200 / 300 | Stop | 55.992 / 82.915 | 38.592 / 37.163 | 48.341 / 69.837 | 31.802 / 30.845 |
+| 200 / 1,500 | Prompt | 152.313 / 151.536 | 80.778 / 79.644 | 133.305 / 132.783 | 64.350 / 63.544 |
+| 200 / 1,500 | AgentPrompt | 190.451 / 192.428 | 83.773 / 83.293 | 176.965 / 177.414 | 72.550 / 72.393 |
+| 200 / 1,500 | Read | 144.575 / 142.752 | 72.849 / 73.727 | 131.495 / 130.101 | 62.350 / 63.036 |
+| 200 / 1,500 | Stop | 145.721 / 142.445 | 73.622 / 74.360 | 131.909 / 129.643 | 62.733 / 63.495 |
+
+Head's `fold_row_copies` is zero at p50 and maximum for all 800 measured cold children, at both history sizes. Base's former `rollup_base_copies` is 1 / 1 throughout, but counts whole-base copies rather than individual rows and is not comparable. The outside-fold row counter and assembly counts below are p50 / maximum, identical across history sizes and repeats except B2 Read at 200 / 1,500, whose row-copy maximum is 2,102. Full machine-config loads are zero at p50 and maximum throughout both sides.
+
+| Frame | Base outside-fold row copies | Head outside-fold row copies | Assemblies, both sides |
+| --- | --- | --- | --- |
+| Prompt | 404 / 404 | 404 / 404 | 2 / 2 |
+| AgentPrompt | 804 / 804 | 605 / 605 | 3 / 3 |
+| Read, Stop | 402 / 402 | 402 / 402 | 2 / 2 |
+
+The 199 fewer AgentPrompt row copies match replacing the full 200-row context-vector copy with one sender-launch member (`crates/rimz/src/address.rs::launch_rows`, `crates/rimz/src/store/mod.rs::Store::rows_with_live_context`). AgentPrompt still performs a third assembly. A cold child still decodes every persisted rollup and carryover row once; head Prompt's median parsed rollup grows from about 0.608 MB to 1.667 MB, and carryover from 0.313 MB to 1.571 MB. Sharing removes deep row copies, not retained-key container work and identity-name walks (`crates/rimz/src/store/snapshot/fold.rs::catch_up_from`, `crates/rimz/src/store/snapshot/project/identity.rs::CardIdentityAllocator::from_map_and_state`). The remaining CPU growth was not phase-timed in these runs.
+
+Each burst drains 100 Read frames from 25 working roots. Claim-to-applied triples are p50 / p99 / maximum in milliseconds. Load brackets each cell's setup, original frames and drain, as in the preceding comparison.
+
+| Live / closed | Run | Seconds | Frames/s | Claim to applied ms | Load before / after |
+| --- | --- | --- | --- | --- | --- |
+| 200 / 300 | B1 | 5.610 | 17.825 | 55.021 / 64.526 / 68.608 | 27.15 / 19.40 |
+| 200 / 300 | H1 | 3.876 | 25.802 | 38.061 / 43.206 / 43.578 | 26.94 / 23.34 |
+| 200 / 300 | H2 | 3.818 | 26.190 | 37.411 / 47.660 / 52.506 | 16.77 / 16.31 |
+| 200 / 300 | B2 | 7.142 | 14.002 | 68.836 / 88.333 / 95.311 | 15.06 / 25.45 |
+| 200 / 1,500 | B1 | 14.393 | 6.948 | 142.173 / 159.157 / 161.476 | 18.33 / 12.81 |
+| 200 / 1,500 | H1 | 7.490 | 13.351 | 73.389 / 91.282 / 93.004 | 23.34 / 17.01 |
+| 200 / 1,500 | H2 | 7.610 | 13.141 | 74.251 / 88.250 / 105.987 | 16.37 / 15.15 |
+| 200 / 1,500 | B2 | 14.630 | 6.835 | 144.202 / 169.910 / 173.378 | 27.17 / 25.70 |
+
+The retained-log arrival sample from the busiest room, covering 2026-10-23 to 28 UTC, counted distinct ingress IDs on event envelopes: peak 2.4 frames/s over one fixed UTC minute and 4.8 over five seconds. The peak minute, Oct 27 at 16:35 UTC, had 16 emitting sessions and 47 to 56 registered, not-ended sessions. These rates are lower bounds: ordinary nonblocking PreToolUse often appends no durable event. Adding one pre-tool frame per completed tool in that minute gives about 4.5 frames/s, a sensitivity estimate, not a measured correction. The persisted rollup held 711 rows, 660 ended, with no carryover. Thus neither the actual arrival peak nor that room's drain capacity is established by this larger double-retention fixture. Revisit a worker only when complete ingress-arrival measurements approach post-change capacity at real room shapes.
+
+Raw per-run frame distributions, all work counters, fixture sizes, build identities and command/load metadata were retained outside the repository on the measuring host. Other live-fleet sizes, the room-host bench and a loaded open-loop arrival sweep were not rerun. The focused-pane binding recovery's same-kind context-vector copy remains a follow-up (`crates/rimz/src/cli/hooks/binding.rs::recover_focused_pane_binding`).
 
 ##### Baseline identity and load
 
