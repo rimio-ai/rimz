@@ -2,6 +2,71 @@ use super::*;
 
 #[cfg(target_os = "linux")]
 #[test]
+fn production_memo_shares_primitive_and_composite_reads() {
+    use crate::testkit::host_pass::{Counter::*, thread_counters};
+
+    let counts = thread_counters();
+    counts.reset();
+    with_read_memo(|| {
+        let pid = std::process::id();
+        for _ in 0..2 {
+            assert!(stat_metrics(pid).is_some());
+            assert!(process_start(pid).is_some());
+            assert!(process_start_token(pid).is_some());
+            assert!(cmdline(pid).is_some());
+            assert!(argv(pid).is_some());
+            assert!(comm(pid).is_some());
+            assert!(cwd(pid).is_some());
+            assert!(io_bytes(pid).is_some());
+            assert!(write_bytes(pid).is_some());
+            assert!(real_uid(pid).is_some());
+            assert!(comm_and_ppid(pid).is_some());
+            hosted_agent_process_for_root(pid);
+            in_pane_agent_start_for_root("codex", pid);
+            hosted_agent_absent_under_root("codex", pid);
+            elevated_in_pane_agent(pid);
+        }
+    });
+    for kind in [
+        ProcStat,
+        ProcBootStat,
+        ProcCmdline,
+        ProcComm,
+        ProcCwd,
+        ProcIo,
+        ProcStatus,
+    ] {
+        assert_eq!(counts.get(kind), 1, "one open per production: {kind:?}");
+    }
+    assert_eq!(counts.get(ProcTaskDir), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn production_memo_retains_failed_reads_only_within_its_scope() {
+    use crate::testkit::host_pass::{Counter::*, thread_counters};
+
+    let counts = thread_counters();
+    counts.reset();
+    for pass in 1..=2 {
+        with_read_memo(|| {
+            for _ in 0..2 {
+                assert!(stat_metrics(u32::MAX).is_none());
+                assert!(process_start(u32::MAX).is_none());
+                assert!(cmdline(u32::MAX).is_none());
+                assert!(comm(u32::MAX).is_none());
+                assert!(cwd(u32::MAX).is_none());
+                assert!(children(u32::MAX).is_empty());
+            }
+        });
+        for kind in [ProcStat, ProcCmdline, ProcComm, ProcCwd, ProcTaskDir] {
+            assert_eq!(counts.get(kind), pass, "fresh scope: {kind:?}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn host_proc_counters_measure_open_attempts_including_composite_readers() {
     use crate::testkit::host_pass::{Counter::*, thread_counters};
     let counts = thread_counters();
@@ -55,7 +120,7 @@ fn host_proc_counters_measure_open_attempts_including_composite_readers() {
     children(std::process::id());
     assert!(counts.get(ProcChildren) > 0);
     assert_eq!(counts.get(ProcTaskDir), 1);
-    assert_eq!(counts.get(ProcStat), 0);
+    assert_eq!(counts.get(ProcStat), 1);
     counts.reset();
     process_start(u32::MAX);
     assert_eq!(
@@ -415,12 +480,25 @@ Uid:\t1000\t1000\t1000\t1000
             parse_stat_metrics(stat, 4),
             Some(StatMetrics {
                 state: 'S',
+                num_threads: 1,
                 cpu_ticks: 59, // 42 + 17
                 child_cpu_ticks: 0,
                 rss_kb: 8192, // 2048 pages × 4 KiB
                 start_ticks: 646_245_020,
             })
         );
+    }
+
+    #[test]
+    fn parse_stat_metrics_reads_single_and_multithreaded_counts() {
+        for num_threads in [1, 64] {
+            let stat =
+                format!("1 (agent) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 {num_threads} 0 100 500 3");
+            assert_eq!(
+                parse_stat_metrics(&stat, 4).unwrap().num_threads,
+                num_threads
+            );
+        }
     }
 
     #[test]
@@ -433,6 +511,7 @@ Uid:\t1000\t1000\t1000\t1000
             metrics,
             StatMetrics {
                 state: 'S',
+                num_threads: 1,
                 cpu_ticks: 15, // 10 + 5
                 child_cpu_ticks: 0,
                 rss_kb: 12, // 3 pages × 4 KiB
@@ -511,6 +590,7 @@ Uid:\t1000\t1000\t1000\t1000
         let stat = |pid| {
             Some(StatMetrics {
                 state: 'S',
+                num_threads: 1,
                 cpu_ticks: u64::from(pid),
                 child_cpu_ticks: 10,
                 rss_kb: u64::from(pid * 100),
@@ -549,6 +629,7 @@ Uid:\t1000\t1000\t1000\t1000
         let stat = |pid| {
             Some(StatMetrics {
                 state: 'S',
+                num_threads: 1,
                 cpu_ticks: u64::from(pid),
                 child_cpu_ticks: 0,
                 rss_kb: 1,

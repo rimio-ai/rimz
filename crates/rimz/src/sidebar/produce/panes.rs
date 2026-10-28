@@ -39,6 +39,7 @@ use super::metrics::{MetricsSampleCache, read_metrics_sample_cache, write_metric
 pub(crate) struct PaneProducer {
     pub(super) prior: Option<Arc<PaneFrame>>,
     pub(super) hibernated_panes: HashSet<PaneId>,
+    pub(super) agent_panes: HashSet<PaneId>,
     native_tenants: HashMap<PaneId, (u32, Option<String>)>,
     held_checks: HashMap<PaneId, Instant>,
     metrics: MetricsSampleCache,
@@ -63,6 +64,7 @@ impl PaneProducer {
             },
             presence_probed_at_ms: None,
             hibernated_panes: HashSet::new(),
+            agent_panes: HashSet::new(),
             native_tenants: HashMap::new(),
             held_checks: HashMap::new(),
         }
@@ -143,18 +145,28 @@ impl PaneProducer {
         });
         let frame = if let Some(prior) = fresh {
             let mut frame = Arc::clone(prior);
-            if super::metrics::pane_metrics_due(&frame, &self.metrics, &hibernated, &hibernated)
-                && super::metrics::enrich_pane_metrics(
+            let sampled = crate::proc::with_read_memo(|| {
+                if !super::metrics::pane_metrics_due(
+                    &frame,
+                    &self.metrics,
+                    &hibernated,
+                    &hibernated,
+                ) || !super::metrics::enrich_pane_metrics(
                     Arc::make_mut(&mut frame),
                     session,
                     &mut self.metrics,
                     &hibernated,
                     &hibernated,
-                )
-            {
+                    &self.agent_panes,
+                ) {
+                    return false;
+                }
                 with_due_panes(Arc::make_mut(&mut frame), Some(prior), &hibernated, |due| {
                     annotate_elevated_agents(due, RepairReaders::system().elevated_agent);
                 });
+                true
+            });
+            if sampled {
                 write_metrics_sample_cache(runtime, &self.metrics);
                 publish_frame(
                     &runtime.pane_frame_path(),
@@ -191,6 +203,7 @@ impl PaneProducer {
                 metrics: &mut self.metrics,
                 sampled: false,
                 hibernated_panes: &self.hibernated_panes,
+                agent_panes: &self.agent_panes,
                 native_tenants: &mut native_tenants,
                 held_checks: &mut held_checks,
                 checked_panes: HashSet::new(),
@@ -245,6 +258,7 @@ pub(crate) fn read_pane_frame(
         metrics: &mut metrics,
         sampled: false,
         hibernated_panes: &HashSet::new(),
+        agent_panes: &HashSet::new(),
         native_tenants: &mut HashMap::new(),
         held_checks: &mut HashMap::new(),
         checked_panes: HashSet::new(),
@@ -264,6 +278,7 @@ struct FrameContext<'a> {
     metrics: &'a mut MetricsSampleCache,
     sampled: bool,
     hibernated_panes: &'a HashSet<PaneId>,
+    agent_panes: &'a HashSet<PaneId>,
     native_tenants: &'a mut HashMap<PaneId, (u32, Option<String>)>,
     held_checks: &'a mut HashMap<PaneId, Instant>,
     checked_panes: HashSet<PaneId>,
@@ -404,6 +419,7 @@ impl RepairReaders<'_> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn repair_pane_frame(
     frame: &mut PaneFrame,
     prior: Option<&PaneFrame>,
@@ -411,19 +427,29 @@ fn repair_pane_frame(
     metrics: Option<&mut MetricsSampleCache>,
     hibernated_panes: &HashSet<PaneId>,
     skipped: &HashSet<PaneId>,
+    agent_panes: &HashSet<PaneId>,
     readers: &RepairReaders<'_>,
 ) -> (Vec<HostedCarryDrop>, bool) {
-    let mut unstamped = natively_unstamped(frame);
-    unstamped.retain(|pane| !skipped.contains(pane));
-    rotate_from_prior(frame, prior);
-    let sampled = if let Some(metrics) = metrics {
-        super::metrics::enrich_pane_metrics(frame, session, metrics, hibernated_panes, skipped)
-    } else {
-        (readers.backfill_pids)(frame, session);
-        false
-    };
-    let drops = repair_processes(frame, prior, &unstamped, skipped, readers);
-    (drops, sampled)
+    crate::proc::with_read_memo(|| {
+        let mut unstamped = natively_unstamped(frame);
+        unstamped.retain(|pane| !skipped.contains(pane));
+        rotate_from_prior(frame, prior);
+        let sampled = if let Some(metrics) = metrics {
+            super::metrics::enrich_pane_metrics(
+                frame,
+                session,
+                metrics,
+                hibernated_panes,
+                skipped,
+                agent_panes,
+            )
+        } else {
+            (readers.backfill_pids)(frame, session);
+            false
+        };
+        let drops = repair_processes(frame, prior, &unstamped, skipped, readers);
+        (drops, sampled)
+    })
 }
 
 fn repair_processes(
@@ -649,6 +675,7 @@ pub fn repaired_pane_frame_for_binding(
         prior.as_deref(),
         session,
         None,
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
         &RepairReaders::system(),
@@ -991,6 +1018,7 @@ impl FrameContext<'_> {
             enrich_metrics.then_some(&mut *self.metrics),
             &hibernated,
             &skipped,
+            self.agent_panes,
             &RepairReaders::system(),
         );
         self.sampled |= sampled;

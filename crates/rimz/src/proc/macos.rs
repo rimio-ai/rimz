@@ -119,6 +119,7 @@ pub(crate) fn stat_metrics(pid: u32) -> Option<StatMetrics> {
     process_with(pid, process_refresh_stat(), |process| {
         Some(StatMetrics {
             state: status_state(process.status()),
+            num_threads: 0,
             cpu_ticks: process.accumulated_cpu_time() / 10,
             // macOS/sysinfo exposes no waited-child CPU counter; short-lived
             // children between samples are invisible there.

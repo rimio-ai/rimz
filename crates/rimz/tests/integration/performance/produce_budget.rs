@@ -244,6 +244,7 @@ fn warm_fleet_produce_forks_zero_subprocesses() {
         exclude: None,
         min_pane_cache_ms: None,
         hibernated_panes: Default::default(),
+        agent_panes: Default::default(),
         diag: rimz::diag::DiagSink::disabled(),
     };
     let mut cursor = RollupCursor::new();
@@ -303,6 +304,7 @@ fn project_produce_over_stale_heavy_caches_forks_zero_subprocesses() {
         exclude: None,
         min_pane_cache_ms: None,
         hibernated_panes: Default::default(),
+        agent_panes: Default::default(),
         diag: rimz::diag::DiagSink::disabled(),
     };
     let mut cursor = RollupCursor::new();

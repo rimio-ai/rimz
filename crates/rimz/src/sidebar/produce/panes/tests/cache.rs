@@ -1,6 +1,75 @@
 use super::*;
 use crate::sidebar::produce::metrics;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn candidate_repair_shares_root_reads_across_all_process_probes() {
+    use crate::testkit::host_pass::{Counter::*, thread_counters};
+    let mut pane = pane("terminal_1", None, None);
+    pane.pane_pid = Some(std::process::id());
+    let mut candidate = frame(vec![pane.clone()]);
+    let agents = HashSet::from([first(&candidate).pane_id.clone()]);
+    let mut metrics = MetricsSampleCache::default();
+    let counts = thread_counters();
+    counts.reset();
+    repair_pane_frame(
+        &mut candidate,
+        None,
+        "s",
+        Some(&mut metrics),
+        &HashSet::new(),
+        &HashSet::new(),
+        &agents,
+        &RepairReaders::system(),
+    );
+    assert!(first(&candidate).current.command.is_some());
+    assert!(first(&candidate).current.cwd.is_some());
+    assert_eq!(
+        counts.get(ProcCmdline),
+        1,
+        "repair and composite walks share argv"
+    );
+    assert_eq!(
+        counts.get(ProcStat),
+        1,
+        "children and process_start share stat"
+    );
+    assert_eq!(counts.get(ProcBootStat), 1);
+    assert_eq!(counts.get(ProcCwd), 1);
+
+    let own = PaneId::from_parts(MuxName::Zellij, "terminal_99");
+    confirm_and_carry_with(
+        (candidate, true),
+        None,
+        Some(&own),
+        &mut |_, _, _| {
+            let mut confirmed = frame(vec![pane.clone()]);
+            repair_pane_frame(
+                &mut confirmed,
+                None,
+                "s",
+                Some(&mut metrics),
+                &HashSet::new(),
+                &HashSet::new(),
+                &agents,
+                &RepairReaders::system(),
+            );
+            Ok((confirmed, true))
+        },
+        &crate::diag::DiagSink::disabled(),
+        true,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        counts.get(ProcCmdline),
+        2,
+        "confirmation must reread the process argv"
+    );
+    assert_eq!(counts.get(ProcStat), 2);
+    assert_eq!(counts.get(ProcBootStat), 2);
+}
+
 fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::diag::record::DiagEvent> {
     std::fs::read_to_string(sink.log_path().unwrap())
         .expect("diagnostic log")
@@ -66,6 +135,7 @@ fn requested_pidless_pane_keeps_its_cached_binding_across_topology_frames() {
         metrics: &mut history,
         sampled: false,
         hibernated_panes: &requested,
+        agent_panes: &HashSet::new(),
         native_tenants: &mut HashMap::new(),
         held_checks: &mut HashMap::new(),
         checked_panes: HashSet::new(),
@@ -583,6 +653,7 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
 fn zombie_stat_metrics_do_not_prove_liveness() {
     let zombie = crate::proc::StatMetrics {
         state: 'Z',
+        num_threads: 1,
         cpu_ticks: 1,
         child_cpu_ticks: 0,
         rss_kb: 0,
@@ -590,6 +661,7 @@ fn zombie_stat_metrics_do_not_prove_liveness() {
     };
     let sleeping = crate::proc::StatMetrics {
         state: 'S',
+        num_threads: 1,
         cpu_ticks: 1,
         child_cpu_ticks: 0,
         rss_kb: 4,

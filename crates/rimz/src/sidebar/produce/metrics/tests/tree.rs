@@ -9,6 +9,7 @@ fn stat(
 ) -> crate::proc::StatMetrics {
     crate::proc::StatMetrics {
         state,
+        num_threads: 1,
         cpu_ticks,
         child_cpu_ticks,
         rss_kb,

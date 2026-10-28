@@ -792,6 +792,14 @@ impl FetchWorker {
                 .filter_map(|agent| agent.pane.as_ref().map(|pane| pane.pane_id.clone()))
                 .collect()
         });
+        let agent_panes = fast.as_ref().ok().map_or_else(Default::default, |fold| {
+            fold.workspace
+                .snapshot()
+                .agent_panes
+                .iter()
+                .map(|pane| pane.pane_id.clone())
+                .collect()
+        });
         self.publish_fast_fold(
             state,
             FastFold {
@@ -801,7 +809,7 @@ impl FetchWorker {
             sink,
         );
         if produce {
-            self.publish_produced_fold(state, request, hibernated_panes, sink);
+            self.publish_produced_fold(state, request, hibernated_panes, agent_panes, sink);
         }
         let views = sink
             .host_data
@@ -856,6 +864,7 @@ impl FetchWorker {
         state: &StatePaths,
         request: FetchRequest,
         hibernated_panes: std::collections::HashSet<PaneId>,
+        agent_panes: std::collections::HashSet<PaneId>,
         sink: &mut ResultSink,
     ) {
         let opts = crate::sidebar::produce::ProduceOptions {
@@ -864,6 +873,7 @@ impl FetchWorker {
             exclude: sink.witness(),
             min_pane_cache_ms: request.min_pane_cache_ms,
             hibernated_panes,
+            agent_panes,
             diag: self.diag.clone(),
         };
         let mut inputs = sink

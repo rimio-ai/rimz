@@ -30,7 +30,7 @@ struct MetricsSampleEntry {
     /// force one warmup sample while still allowing guarded root-pid restore.
     #[serde(default)]
     sample_version: u8,
-    /// The pane root pid whose tree was sampled. `0` records an unbound sample
+    /// The sampled pane root pid. `0` records an unbound sample
     /// attempt, so pidless panes that cannot be matched still respect the
     /// hot/idle retry cadence.
     stats_pid: u32,
@@ -186,30 +186,31 @@ pub(super) fn pane_metrics_due(
     })
 }
 
-/// Enrich each pane with process-tree resource metrics from the process backend, on the
+/// Retain each agent pane's root binding and enrich process rows with tree metrics, on the
 /// sampling cadence's own clock: viewed panes sample on
 /// [`METRICS_FOCUSED_SAMPLE_TTL`], background panes on
 /// [`METRICS_BACKGROUND_SAMPLE_TTL`]. Verified hibernated panes share the caller's
 /// repair check: skipped panes retain their samples; due panes sample regardless
 /// of sample age. Fresh entries carry their stored display values and the
-/// pane→root-pid binding the process-row name anchors on with zero process IO. Due entries
-/// read process counters to compute two-sample rates (CPU%, IO bytes/s) and
+/// pane→root-pid binding the process-row name anchors on with zero process IO. Due process
+/// rows read counters to compute two-sample rates (CPU%, IO bytes/s) and
 /// write a fresh stamped sample for the next window. Platforms without a
 /// process backend leave every pane's metric fields as `None`.
 ///
-/// The steady-state due sample is O(due pane trees) small process reads: each
-/// Zellij pane's root pid restores from the prior window's guarded binding
-/// ([`restore_cached_bindings`]), then descendants come from the full
-/// process-table child map when it was already paid for, or from each sampled
-/// process's direct-child query. The full process-table walk runs only while
-/// some due pane's binding is unknown — pane churn or a foreground change,
-/// exactly the moments a fresh roster was already paid for.
+/// A bound agent pane costs one root stat and no child or IO reads; its display
+/// does not consume tree metrics. Process rows still sample their full trees.
+/// Zellij root pids restore from guarded bindings ([`restore_cached_bindings`]);
+/// the production's process-read memo shares that guard's stat with sampling.
+/// Descendants use a child map already paid for, or direct-child queries (one
+/// children file for a single-threaded process, a task scan otherwise). A full
+/// process-table walk is needed only when a due pane's binding is unknown.
 pub(super) fn enrich_pane_metrics(
     frame: &mut PaneFrame,
     session_name: &str,
     prior: &mut MetricsSampleCache,
     hibernated: &HashSet<PaneId>,
     skipped: &HashSet<PaneId>,
+    agent_panes: &HashSet<PaneId>,
 ) -> bool {
     let now_ms = unix_now_ms();
     let viewed: HashSet<PaneId> = frame.viewed_panes.iter().cloned().collect();
@@ -263,9 +264,13 @@ pub(super) fn enrich_pane_metrics(
             }
             continue;
         }
-        let entry = sample_due_pane(
-            pane, prior, &pane_key, &children, needs_walk, clk_tck, now_ms,
-        );
+        let entry = if agent_panes.contains(&pane.pane_id) {
+            sample_agent_root(pane, now_ms)
+        } else {
+            sample_due_pane(
+                pane, prior, &pane_key, &children, needs_walk, clk_tck, now_ms,
+            )
+        };
         new_entries.insert(pane_key, entry);
     }
 
@@ -276,6 +281,17 @@ pub(super) fn enrich_pane_metrics(
         entries: new_entries,
     };
     true
+}
+
+fn sample_agent_root(pane: &mut PaneState, now_ms: u64) -> MetricsSampleEntry {
+    pane.metrics = PaneMetrics::default();
+    let mut entry = unbound_entry(pane.current.command.clone(), now_ms);
+    if let Some(pid) = pane.current.pid {
+        entry.stats_pid = pid;
+        entry.pane_pid = Some(pid);
+        entry.root_start_ticks = crate::proc::stat_metrics(pid).map(|stat| stat.start_ticks);
+    }
+    entry
 }
 
 fn sample_due_pane(

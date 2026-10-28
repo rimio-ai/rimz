@@ -282,6 +282,7 @@ fn failed_presence_attempt_stamp_suppresses_retries_until_ttl() {
         metrics: Default::default(),
         presence_probed_at_ms: None,
         hibernated_panes: HashSet::new(),
+        agent_panes: HashSet::new(),
         native_tenants: HashMap::new(),
         held_checks: HashMap::new(),
     };
