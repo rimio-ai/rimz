@@ -112,8 +112,22 @@ pub(crate) struct OpenPrFacts {
     pub(crate) behind_by: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) mergeability: Option<SettledMergeability>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) auto_merge: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) review: Option<PrReview>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) queue: Option<PrQueueFact>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PrReview {
+    Draft,
+    ChangesRequested,
+    Required,
+    Approved,
+    None,
 }
 
 /// Where an open PR stands with the merge queue. `at` and `reason` are the

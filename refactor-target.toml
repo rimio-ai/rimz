@@ -1248,7 +1248,8 @@ path = "crates/rimz/src/forge"
 # `PrLink::queue` is the one open-only reading of that fact for cadence, conditions, and the snapshot (+1).
 # BranchRow shares demanded branch readings between sidebar publication and conditions (+1).
 # UNSUPPORTED_REPO_KEY names the forge-cache marker for both its producer and readers (+1).
-surface-budget = 50
+# PrReview shares draft-first review facts with condition readers (+1).
+surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -10109,6 +10110,11 @@ reason = "TaskTiming projects pure conjunction progress through the expression's
 kind = "item"
 key = "forge::pr_state::UNSUPPORTED_REPO_KEY"
 reason = "The forge cache owns its unsupported-repository marker, shared by producer and readers."
+
+[[verdict]]
+kind = "item"
+key = "forge::pr_state::PrReview"
+reason = "The GitHub parser publishes draft-first review facts for condition readings."
 
 [[verdict]]
 kind = "item"
