@@ -10,7 +10,7 @@ use crate::diag::record::{
     DiagEvent, FrameRejectReason, ManagedPaneEvidence, PaneDropEvidence, PaneDropViewEvidence,
 };
 use crate::disk::atomic;
-use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
+use crate::ids::{AgentKind, MuxName, PaneId};
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing, PaneReadConsistency};
 use crate::sidebar::cache::{
     effective_pane_ttl, hibernated_check_due, presence_stamp_age_ms, read_snapshot_cache,
@@ -355,7 +355,7 @@ fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
 
 fn stamp_pane_resumed_session_ids(
     frame: &mut PaneFrame,
-    root_resume: &dyn Fn(u32) -> Option<AgentSessionId>,
+    root_resume: &dyn Fn(u32) -> crate::agents::ResumeProbe,
 ) {
     for pane in frame.pane_states_mut() {
         if pane.current.resumed_session_id.is_some() {
@@ -377,7 +377,9 @@ fn stamp_pane_resumed_session_ids(
         if !supports_resume_discovery {
             continue;
         }
-        if let Some(resumed) = pane.current.pid.and_then(root_resume) {
+        if let Some(crate::agents::ResumeProbe::Resumed(resumed)) =
+            pane.current.pid.map(root_resume)
+        {
             pane.current.resumed_session_id = Some(resumed);
         }
     }
@@ -389,7 +391,7 @@ struct RepairReaders<'a> {
     children: &'a dyn Fn(u32) -> Vec<u32>,
     hosted_process: &'a dyn Fn(u32) -> Option<crate::proc::HostedAgentProcess>,
     cwd: &'a dyn Fn(u32) -> Option<PathBuf>,
-    resumed_session: &'a dyn Fn(u32) -> Option<AgentSessionId>,
+    resumed_session: &'a dyn Fn(u32) -> crate::agents::ResumeProbe,
     root_start: &'a dyn Fn(&str, u32) -> Option<jiff::Timestamp>,
     cwd_starts: &'a dyn Fn(&str, &str) -> Vec<jiff::Timestamp>,
     hosted_absent: &'a dyn Fn(&str, u32) -> bool,

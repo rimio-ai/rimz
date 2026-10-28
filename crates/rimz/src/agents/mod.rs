@@ -137,11 +137,13 @@ pub use payload::{RimzBlock, SanitizedPrompt, peel_rimz_blocks};
 pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};
 pub use pricing::PriceBook;
 use pricing::TokenSplit;
+pub(crate) use registry::{
+    ResumeProbe, resumed_session_id_for_root, resumed_session_id_from_cmdline,
+};
 pub use registry::{
     all_definitions, compact_command, definition_by_kind, find_definition, known_kinds,
     spec_by_kind,
 };
-pub(crate) use registry::{resumed_session_id_for_root, resumed_session_id_from_cmdline};
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode};
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, AskDelivery, BudgetPark,

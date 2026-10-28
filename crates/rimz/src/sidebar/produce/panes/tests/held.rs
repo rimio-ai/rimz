@@ -22,7 +22,7 @@ fn assert_held_start_census(starts: &[i64], carried_due: Option<i64>, expected: 
         children: &|_| Vec::new(),
         hosted_process: &|_| None,
         cwd: &|_| None,
-        resumed_session: &|_| None,
+        resumed_session: &|_| crate::agents::ResumeProbe::Unsettled,
         root_start: &|kind, pid| {
             assert_eq!((kind, pid), ("claude", 2), "only the due root is probed");
             None
@@ -211,7 +211,7 @@ fn production_repair_reads_only_due_pane_trees_at_each_fleet_size() {
         };
         let resumed_session = |pid| {
             record(pid);
-            None
+            crate::agents::ResumeProbe::Unsettled
         };
         let root_start = |_: &str, pid| {
             record(pid);

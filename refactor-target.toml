@@ -304,7 +304,13 @@ upward-dependencies = ["address"]
 # AgentState::normalize_prompt_labels shares legacy row normalization with store readers (+1).
 # cached_provider_spending shares stamped provider parses with host projections (+1).
 # WindowStarts exposes shared history-zone window boundaries to the CLI (+1).
-surface-budget = 1171
+# ResumeProbe and its agents re-export share three-way resume discovery outcomes (+2).
+surface-budget = 1173
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::ResumeProbe"
+reason = "Pane repair distinguishes resumed, settled and retryable process-chain answers."
 
 [[verdict]]
 kind = "item"
@@ -2315,7 +2321,8 @@ upward-dependencies = [
 # path_copies shares distinct PATH installations with mux scans and shell diagnostics (+1).
 # git_command_uncounted lets host status set trace2 without double-counting bounded spawns (+1).
 # with_read_memo shares proc evidence within each candidate or metrics pass (+1).
-surface-budget = 146
+# launched_script_command lets the resume walk read a JS launcher's argv as its script's (+1).
+surface-budget = 147
 
 [[verdict]]
 kind = "item"
@@ -2331,6 +2338,11 @@ reason = "Mux scans and shell receipts/diagnostics share PATH order and canonica
 kind = "item"
 key = "proc::command::sole_agent_child"
 reason = "Resume identity and hibernation share the unambiguous child step past RimZ helpers."
+
+[[verdict]]
+kind = "item"
+key = "proc::command::launched_script_command"
+reason = "The resume walk stops at a JS launcher and parses the argv its script hands the agent."
 
 [[verdict]]
 kind = "item"

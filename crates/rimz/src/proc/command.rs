@@ -501,11 +501,7 @@ pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
             root_program: program,
         };
     }
-    // A JS launcher runs the script named by its first non-flag argument, so the
-    // agent is that script (`node /usr/bin/codex` → codex), not the launcher.
-    if LAUNCHERS.contains(&basename(program))
-        && let Some(script) = parsed.args.iter().find(|word| !word.text.starts_with('-'))
-    {
+    if let Some(script) = launched_script(&parsed) {
         return EffectiveProgram {
             program: script.text,
             root_program: program,
@@ -515,6 +511,24 @@ pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
         program,
         root_program: program,
     }
+}
+
+/// Flattened process argv from the script a JS launcher runs, which is the argv
+/// that script hands its agent: `/usr/bin/grok --resume X` for `node /usr/bin/grok
+/// --resume X`. `None` when the command runs no launcher script.
+pub(crate) fn launched_script_command(command: &str) -> Option<&str> {
+    let parsed = effective_program_and_args(command)?;
+    let script = launched_script(&parsed)?;
+    Some(&command[script.span.start..])
+}
+
+/// A JS launcher runs the script named by its first non-flag argument, so the
+/// agent is that script (`node /usr/bin/codex` → codex), not the launcher.
+fn launched_script<'p, 'a>(parsed: &'p ParsedCommand<'a>) -> Option<&'p Word<'a>> {
+    if !is_launcher(parsed.program.text) {
+        return None;
+    }
+    parsed.args.iter().find(|word| !word.text.starts_with('-'))
 }
 
 /// JS launchers whose agent identity is the script they run, not the launcher
@@ -769,6 +783,11 @@ mod tests {
             "/usr/bin/opencode"
         );
         assert_eq!(program_label("bun /usr/bin/opencode"), "opencode");
+        assert_eq!(
+            launched_script_command("node --inspect /usr/bin/grok --resume X"),
+            Some("/usr/bin/grok --resume X")
+        );
+        assert_eq!(launched_script_command("/usr/bin/grok --resume X"), None);
         assert_eq!(
             program_label("sudo -E -u root npm i -g @openai/codex"),
             "npm"

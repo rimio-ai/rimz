@@ -81,9 +81,14 @@ fn resume_and_process_start_stamping_dispatch_for_kiro_commands() {
         let mut frame = frame(vec![pane]);
         let unstamped = natively_unstamped(&frame);
         stamp_pane_resumed_session_ids(&mut frame, &|pid| {
-            (pid == 42).then(|| {
-                crate::ids::AgentSessionId::from("sess_11111111-1111-4111-8111-111111111111")
-            })
+            (pid == 42)
+                .then(|| {
+                    crate::ids::AgentSessionId::from("sess_11111111-1111-4111-8111-111111111111")
+                })
+                .map_or(
+                    crate::agents::ResumeProbe::Unsettled,
+                    crate::agents::ResumeProbe::Resumed,
+                )
         });
         stamp_pane_process_starts(
             &mut frame,
