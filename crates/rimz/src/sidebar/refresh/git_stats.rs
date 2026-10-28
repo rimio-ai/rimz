@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
@@ -45,17 +45,43 @@ pub struct DiffStatsCache {
 }
 
 /// Long-lived producer state for content-derived Git facts that do not belong
-/// in the renderer-consumed cache.
+/// in the renderer-consumed cache. Unneeded roots retain only unexpired lock windows.
 #[derive(Debug, Default)]
 pub(super) struct GitRefreshState {
     untracked: HashMap<String, UntrackedLineMemo>,
     hibernated: BTreeSet<String>,
+    index_refresh: HashMap<String, IndexRefreshState>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct IndexRefreshState {
+    stale_entries: u64,
+    last_locked_at: Option<Instant>,
+}
+
+const INDEX_REFRESH_STALE_THRESHOLD: u64 = 128;
+const INDEX_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+impl IndexRefreshState {
+    fn may_lock(&self, now: Instant) -> bool {
+        self.stale_entries >= INDEX_REFRESH_STALE_THRESHOLD
+            && self.last_locked_at.is_none_or(|started| {
+                now.saturating_duration_since(started) >= INDEX_REFRESH_INTERVAL
+            })
+    }
 }
 
 impl GitRefreshState {
     fn retain_needed(&mut self, needed: &[String]) {
         self.untracked
             .retain(|path, _| needed.iter().any(|needed| needed == path));
+        let now = Instant::now();
+        self.index_refresh.retain(|path, state| {
+            needed.iter().any(|needed| needed == path)
+                || state.last_locked_at.is_some_and(|started| {
+                    now.saturating_duration_since(started) < INDEX_REFRESH_INTERVAL
+                })
+        });
     }
 
     fn replace_if_successful(&mut self, path: String, memo: Option<UntrackedLineMemo>) {
@@ -447,11 +473,13 @@ fn refresh_diff_stats(
         // run in parallel across worktrees — and write once.
         Coalesced::Produce(_guard) => {
             let mut cache: DiffStatsCache = atomic::read_json_cache(cache_path);
-            let refreshed =
-                refresh_entries(&select(&cache), &cache, configured_trunk, &state.untracked);
+            let refreshed = refresh_entries(&select(&cache), &cache, configured_trunk, pass, state);
             let changed = !refreshed.is_empty();
-            for (path, entry, memo) in refreshed {
+            for (path, entry, memo, index_refresh) in refreshed {
                 cache.entries.insert(path.clone(), entry);
+                if pass == GitPass::Host {
+                    state.index_refresh.insert(path.clone(), index_refresh);
+                }
                 state.replace_if_successful(path, memo);
             }
             if changed && let Err(err) = atomic::write_temp_then_rename_cache(cache_path, &cache) {
@@ -463,10 +491,13 @@ fn refresh_diff_stats(
         // write — the producer's map will be fresher.
         Coalesced::ProduceLocal => {
             let mut cache = cache;
-            for (path, entry, memo) in
-                refresh_entries(&selection, &cache, configured_trunk, &state.untracked)
+            for (path, entry, memo, index_refresh) in
+                refresh_entries(&selection, &cache, configured_trunk, pass, state)
             {
                 cache.entries.insert(path.clone(), entry);
+                if pass == GitPass::Host {
+                    state.index_refresh.insert(path.clone(), index_refresh);
+                }
                 state.replace_if_successful(path, memo);
             }
             cache
@@ -663,6 +694,13 @@ const MAX_PARALLEL_GIT: usize = 8;
 /// are always selected, first.
 const MAX_HOST_PASS_ENTRIES: usize = 8;
 
+type RefreshedEntry = (
+    String,
+    DiffStatsCacheEntry,
+    Option<UntrackedLineMemo>,
+    IndexRefreshState,
+);
+
 /// Refresh several worktrees' due diff-stats facts concurrently, returning each
 /// path's merged entry. Independent worktrees run in parallel — bounded to
 /// [`MAX_PARALLEL_GIT`] live `git` chains at a time — while each path's own
@@ -672,18 +710,34 @@ fn refresh_entries(
     paths: &[(String, DueFacts)],
     cache: &DiffStatsCache,
     configured_trunk: Option<&str>,
-    prior_memos: &HashMap<String, UntrackedLineMemo>,
-) -> Vec<(String, DiffStatsCacheEntry, Option<UntrackedLineMemo>)> {
+    pass: GitPass,
+    state: &GitRefreshState,
+) -> Vec<RefreshedEntry> {
     crate::utils::parallel::bounded_map(
         crate::lane::current(),
         MAX_PARALLEL_GIT,
         paths,
         |(path, due)| {
             let prior = cache.entries.get(path.as_str()).cloned();
-            let prior_memo = prior_memos.get(path.as_str()).cloned().unwrap_or_default();
-            let (entry, memo) =
-                refresh_entry_with_memo(path, prior.as_ref(), *due, configured_trunk, &prior_memo);
-            (path.clone(), entry, memo)
+            let prior_memo = state
+                .untracked
+                .get(path.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let mut index_refresh = state
+                .index_refresh
+                .get(path.as_str())
+                .copied()
+                .unwrap_or_default();
+            let (entry, memo) = refresh_entry_with_memo(
+                path,
+                prior.as_ref(),
+                *due,
+                configured_trunk,
+                &prior_memo,
+                (pass == GitPass::Host).then_some(&mut index_refresh),
+            );
+            (path.clone(), entry, memo, index_refresh)
         },
     )
 }
@@ -699,7 +753,15 @@ fn refresh_entry(
     due: DueFacts,
     configured_trunk: Option<&str>,
 ) -> DiffStatsCacheEntry {
-    refresh_entry_with_memo(path, prior, due, configured_trunk, &Default::default()).0
+    refresh_entry_with_memo(
+        path,
+        prior,
+        due,
+        configured_trunk,
+        &Default::default(),
+        None,
+    )
+    .0
 }
 
 fn refresh_entry_with_memo(
@@ -708,6 +770,7 @@ fn refresh_entry_with_memo(
     due: DueFacts,
     configured_trunk: Option<&str>,
     prior_memo: &UntrackedLineMemo,
+    index_refresh: Option<&mut IndexRefreshState>,
 ) -> (DiffStatsCacheEntry, Option<UntrackedLineMemo>) {
     let mut entry = prior.cloned().unwrap_or_default();
     let worktree = Path::new(path);
@@ -742,9 +805,9 @@ fn refresh_entry_with_memo(
             base.as_deref(),
             measured_at,
             prior,
-            head.branch.clone(),
-            head.merge_in_progress,
+            &head,
             prior_memo,
+            index_refresh,
         );
         entry.added = local.stats.map(|stats| stats.added);
         entry.removed = local.stats.map(|stats| stats.removed);
@@ -857,11 +920,11 @@ fn refresh_local_facts(
     base: Option<&str>,
     measured_at: Option<(&str, &str)>,
     prior: Option<&DiffStatsCacheEntry>,
-    branch: Option<String>,
-    merge_in_progress: Option<bool>,
+    head: &HeadFacts,
     prior_memo: &UntrackedLineMemo,
+    index_refresh: Option<&mut IndexRefreshState>,
 ) -> LocalFacts {
-    let (status, untracked_memo) = worktree_status(worktree, prior_memo);
+    let (status, untracked_memo) = worktree_status(worktree, prior_memo, index_refresh);
     let clean = status.as_ref().map(|status| status.clean);
     let stats = reusable_diff_stats(prior, measured_at, clean)
         .or_else(|| base.and_then(|base| worktree_diff_stats(worktree, base)));
@@ -881,9 +944,9 @@ fn refresh_local_facts(
     LocalFacts {
         stats,
         stats_at,
-        branch,
+        branch: head.branch.clone(),
         clean,
-        merge_in_progress,
+        merge_in_progress: head.merge_in_progress,
         untracked_memo,
     }
 }
@@ -999,7 +1062,16 @@ fn git_path_from_rev_parse(worktree: &Path, raw: &str) -> std::path::PathBuf {
 fn worktree_diff_stats(worktree: &Path, base: &str) -> Option<DiffStats> {
     let output = git_output(
         worktree,
-        &["diff", "--no-ext-diff", "--numstat", base, "--"],
+        &[
+            "--no-optional-locks",
+            "-c",
+            "diff.autoRefreshIndex=false",
+            "diff",
+            "--no-ext-diff",
+            "--numstat",
+            base,
+            "--",
+        ],
     )?;
     if !output.status.success() {
         return None;
@@ -1033,6 +1105,30 @@ fn commits_ahead_behind(worktree: &Path, trunk: &str) -> Option<(u32, u32)> {
 struct WorktreeStatus {
     clean: bool,
     untracked_added: u32,
+    /// Entries a refresh scans but cannot bring up to date: worktree
+    /// modifications, type changes, intent-to-add paths, and worktree renames
+    /// or copies. Deletions fail `lstat` first, and refresh skips unmerged entries
+    /// (an unmerged `AA` or `UA` still counts, erring toward no lock).
+    scanned_changes: u64,
+}
+
+fn index_scan_count(stderr: &[u8]) -> u64 {
+    #[derive(Deserialize)]
+    struct TraceData<'a> {
+        event: &'a str,
+        category: &'a str,
+        key: &'a str,
+        value: &'a str,
+    }
+
+    stderr
+        .split(|&byte| byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<TraceData<'_>>(line).ok())
+        .find(|data| {
+            data.event == "data" && data.category == "index" && data.key == "refresh/sum_scan"
+        })
+        .and_then(|data| data.value.parse().ok())
+        .unwrap_or(0)
 }
 
 /// `git status --porcelain=v1 -z --untracked-files=all`: emptiness → clean, and
@@ -1040,26 +1136,38 @@ struct WorktreeStatus {
 /// `--untracked-files=all` lists files inside untracked directories
 /// individually so the count sees them; `-z` keeps newline-bearing filenames
 /// parseable (paths decode lossily, so a non-UTF-8 path still dirties the tree
-/// but counts no lines); and `--no-optional-locks` keeps this background probe
-/// from taking `index.lock`, so it never races the user's own git commands in
-/// the worktree.
+/// but counts no lines). Only host status enables trace2. Optional index locks
+/// stay disabled unless the prior status found at least 128 stale entries
+/// after subtracting the changed entries a refresh cannot fix, and no locked
+/// status started within 60 seconds. A contended attempt consumes that window
+/// too; one-shot callers never enable the lock.
 fn worktree_status(
     worktree: &Path,
     prior: &UntrackedLineMemo,
+    mut index_refresh: Option<&mut IndexRefreshState>,
 ) -> (Option<WorktreeStatus>, Option<UntrackedLineMemo>) {
-    let Some(output) = git_output(
-        worktree,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-        ],
-    ) else {
+    let mut command = crate::proc::git_command_uncounted(worktree);
+    let locked = if let Some(state) = index_refresh.as_deref_mut() {
+        command.env("GIT_TRACE2_EVENT", "1");
+        let started = Instant::now();
+        let locked = state.may_lock(started);
+        state.stale_entries = 0;
+        if locked {
+            state.last_locked_at = Some(started);
+        }
+        locked
+    } else {
+        false
+    };
+    if !locked {
+        command.arg("--no-optional-locks");
+    }
+    command.args(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    let Ok(output) = crate::proc::run_bounded_output(&mut command, super::GIT_COMMAND_TIMEOUT)
+    else {
         return (None, None);
     };
-    if !output.status.success() {
+    if output.timed_out || !output.status.success() {
         return (None, None);
     }
     let mut budget = UNTRACKED_READ_BUDGET;
@@ -1067,6 +1175,10 @@ fn worktree_status(
     let status = parse_status_entries(&String::from_utf8_lossy(&output.stdout), |path| {
         memoized_untracked_added_lines(worktree, path, prior, &mut next, &mut budget)
     });
+    if let Some(state) = index_refresh {
+        state.stale_entries =
+            index_scan_count(&output.stderr).saturating_sub(status.scanned_changes);
+    }
     (Some(status), Some(next))
 }
 
@@ -1136,6 +1248,7 @@ fn parse_status_entries(
 ) -> WorktreeStatus {
     let mut clean = true;
     let mut untracked_added: u32 = 0;
+    let mut scanned_changes = 0;
     let mut tokens = output.split('\0').filter(|token| !token.is_empty());
     while let Some(entry) = tokens.next() {
         clean = false;
@@ -1145,6 +1258,9 @@ fn parse_status_entries(
         if code.get(..2).is_some_and(|xy| xy.contains(['R', 'C'])) {
             tokens.next();
         }
+        if matches!(code.as_bytes()[1], b'M' | b'T' | b'A' | b'R' | b'C') {
+            scanned_changes += 1;
+        }
         if code.starts_with("??") {
             untracked_added = untracked_added.saturating_add(untracked_lines(path));
         }
@@ -1152,6 +1268,7 @@ fn parse_status_entries(
     WorktreeStatus {
         clean,
         untracked_added,
+        scanned_changes,
     }
 }
 

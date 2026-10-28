@@ -2302,7 +2302,8 @@ upward-dependencies = [
 # process_group_has_env proves a reaped workflow leader's surviving group ownership (+1).
 # sole_agent_child and its proc re-export share candidate descent across both walks (+2).
 # path_copies shares distinct PATH installations with mux scans and shell diagnostics (+1).
-surface-budget = 144
+# git_command_uncounted lets host status set trace2 without double-counting bounded spawns (+1).
+surface-budget = 145
 
 [[verdict]]
 kind = "item"
@@ -6095,6 +6096,11 @@ reason = "One owner sets the process group, drains both pipes, kills the group o
 kind = "item"
 key = "proc::run_bounded_git_output"
 reason = "Bounded git and git_command share git_command_uncounted but count at different spawn boundaries; merging the wrappers double-counts or loses spawn accounting (697574e38). (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::git_command_uncounted"
+reason = "Host status sets trace2 on its own command and counts once in the bounded runner, reusing the cached git path."
 
 [[verdict]]
 kind = "item"
