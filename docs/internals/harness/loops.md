@@ -580,7 +580,7 @@ Worktree creation emits after the Created hook succeeds, never on reuse. Removal
 
 ### Team signals
 
-`team_lifecycle_signals` derives cohort edges from the same event, right after the `agent.*` derivation and only when the transitioning agent has a `team`. It is pure. The hook calls `team_stage::react_to_lifecycle`, which passes the member row from the audit projection (which retains ended rows), the live cohort from `team_cohorts`, the complete pending message queue, and the set of sessions holding a pending one-shot wait.
+`team_lifecycle_signals` derives cohort edges from the same event, right after the `agent.*` derivation and only when the transitioning agent has a `team`. It is pure. The hook calls `team_stage::react_to_lifecycle`, which passes the member row from the audit projection (which retains ended rows), the live cohort from `team_cohorts`, the room's addressable agents from `Store::snapshot_cached`, the complete pending message queue, and the set of sessions holding a pending one-shot wait. The cached snapshot is read at most once per receipt, only on the team-signal path; a failed read warns and keeps cohort-only handle rendering without suppressing the signal.
 
 | Name | Edge |
 | --- | --- |
@@ -589,7 +589,7 @@ Worktree creation emits after the Created hook succeeds, never on reuse. Removal
 | `team.idle` | the live cohort is non-empty, every member is at rest (`Idle` or `Success`), and no live member has a queued message or a pending one-shot wait; emitted only on the false-to-true edge, where the prior view overlays `prior_status` on the member |
 | `team.ended` | a terminal event for the member, with no other live member left |
 
-The payload carries `team`, `instance` (`team#channel`), `member` (the qualified handle that tripped it), and `members` with each handle and status. Membership is whatever `team_cohorts` counts as live for that `team#channel`, and a provider-native subagent's transition derives nothing.
+The payload carries `team`, `instance` (`team#channel`), `member` (the qualified handle that tripped it), and `members` with each handle and status. A live agent's handle names only that agent among the room's addressable agents at emit. An ended member whose handle would resolve to another live agent, or to several, uses `@<session id>#<lane>` instead, without the suffix for a lane-less agent. Membership is whatever `team_cohorts` counts as live for that `team#channel`, plus the transitioning member even on a terminal edge; a provider-native subagent's transition derives nothing.
 
 `team.idle` is evaluated only on lifecycle events. Removing a pending wait, which only its owner can do, emits nothing by itself; the owner's next turn boundary re-evaluates the cohort, and with no further lifecycle event the evaluation waits for the next member event.
 
