@@ -114,7 +114,7 @@ cargo xtask atlas inspect --module crates/rimz/src/store --json --section verdic
 
 ## Index cache
 
-`inspect`, `index`, `diff`, and `survey --indexed` read a rust-analyzer SCIP index of the whole workspace, cached under `target/atlas/index-<key>.scip` where the key hashes every Rust source and `Cargo.lock`. The first run after any source change generates it, which takes over a minute and says so on stderr; later runs on the same tree reuse it. `diff` indexes `--base` in a temporary checkout under the same cache, so its first run generates twice. The two newest indexes are kept. Default `survey` and `conform` never build one.
+`inspect`, `index`, `diff`, and `survey --indexed` read a rust-analyzer SCIP index of the whole workspace, cached under `target/atlas/index-<key>.scip` where the key hashes every Rust source and `Cargo.lock`. The first run after any source change generates it, which takes over a minute (several minutes on a loaded host) and says so on stderr, so an agent runs a cold one under `rimz wait --run` rather than in the foreground; later runs on the same tree reuse it. `diff` indexes `--base` in a temporary checkout under the same cache, so its first run generates twice. The two newest indexes are kept. Default `survey` and `conform` never build one.
 
 ## Pass contract v2
 
