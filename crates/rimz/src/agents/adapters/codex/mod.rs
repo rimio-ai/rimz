@@ -310,7 +310,7 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         reason: "no background-task parking",
     },
     background_shells: ConcernCoverage::Unsupported {
-        reason: "shells run through code_mode exec/wait tools that fire no PreToolUse/PostToolUse, and Stop carries no task list",
+        reason: "Stop carries no task list",
     },
     session_end: ConcernCoverage::Partial {
         via: "pane liveness + rollup reaper",
