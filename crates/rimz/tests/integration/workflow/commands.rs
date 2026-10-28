@@ -225,9 +225,10 @@ fn command_bound(mode: &str) {
     crate::common::git::init_repo(&env.project_root);
     let head = crate::common::git::git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
     let id = start(&env);
-    let (live, child, descendant) = live_group(&env, &id);
-    assert_eq!(live["record"]["attempt"]["kind"], "script");
-    assert_eq!(live["record"]["attempt"]["head_start"], head);
+    let (live, child, descendant) = live_group(&env, &id, "build");
+    let attempt = &live["record"]["attempt"];
+    assert_eq!(attempt["kind"], "script");
+    assert_eq!(attempt["head_start"], head, "{attempt:#}");
     assert_eq!(context(&live)["visit"], 1);
     assert_eq!(context(&live)["visits"], 1);
     let host = live["record"]["attempt"]["host"]["pid"].as_u64().unwrap() as u32;
@@ -443,7 +444,7 @@ fn an_interrupted_command_whose_deadline_was_extended_is_canceled_then_checked()
         .env("RIMZ_TEST_WORKFLOW_RESULT_GATE", &socket)
         .spawn()
         .unwrap();
-    let (_, child, descendant) = live_group(&env, &id);
+    let (_, child, descendant) = live_group(&env, &id, "build");
     edit_record(&env, &id, |record| {
         record.deadline = Some(jiff::Timestamp::UNIX_EPOCH)
     });
