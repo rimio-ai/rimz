@@ -464,15 +464,23 @@ pub fn resolve_member_posture(
     let (team, binding) = team
         .zip(role)
         .and_then(|(name, role)| {
-            let team = teams.0.get(name)?;
-            let binding = team.roles.iter().find(|binding| binding.role == role)?;
-            Some(((name, team), binding))
+            member_binding(teams, name, role).map(|(team, binding)| ((name, team), binding))
         })
         .unzip();
     ResumePosture::degrade_to_bare(
         request,
         resolve_posture_with_role(request, profiles, binding, team),
     )
+}
+
+fn member_binding<'a>(
+    teams: &'a TeamsConfig,
+    name: &str,
+    role: &str,
+) -> Option<(&'a crate::config::Team, &'a crate::config::RoleBinding)> {
+    let team = teams.0.get(name)?;
+    let binding = team.roles.iter().find(|binding| binding.role == role)?;
+    Some((team, binding))
 }
 
 fn resolve_posture_with_role(
@@ -1597,8 +1605,13 @@ fn plan_discovered_lane(
         .iter()
         .filter_map(ResumeCandidate::from_observation)
         .collect::<Vec<_>>();
-    let (flat, _) =
-        plan_resume_candidates_detailed(candidates, request.context(restore), path_exists, None);
+    let (flat, _) = plan_resume_candidates_detailed(
+        candidates,
+        request.context(restore),
+        path_exists,
+        None,
+        None,
+    );
     let preflight_kinds = flat.resumed.iter().map(|(kind, _)| kind.clone()).collect();
     if flat.tabs.is_empty() {
         return Err(LaneResumeError::Nothing {
@@ -1625,13 +1638,33 @@ fn plan_live_lane_split(
     session_backed: impl Fn(&AgentState) -> bool,
     restore: &LaneRestoreConfig,
 ) -> Result<LaneResumeAction, LaneResumeError> {
-    let flat = plan_resume(
-        &closed,
-        &BTreeSet::new(),
+    // Handles disambiguate against the whole lane, live and closed alike.
+    let peers = live.iter().chain(closed.iter()).collect::<Vec<_>>();
+    let channel = lane
+        .channel
+        .clone()
+        .or_else(|| closed.first().and_then(AgentState::channel));
+    let candidates = closed
+        .iter()
+        .filter_map(|agent| {
+            ResumeCandidate::from_agent(agent, request.logins, request.catalog, || {
+                session_backed(agent)
+            })
+        })
+        .collect();
+    let flat = plan_resume_candidates_detailed(
+        candidates,
         request.context(restore),
         path_exists,
-        &session_backed,
-    );
+        None,
+        Some(SplitMemberRestore {
+            restore,
+            peers: &peers,
+            label: channel_label(channel.as_deref(), &lane.path),
+        }),
+    )
+    .0
+    .lower();
     let commands = flat
         .tabs
         .iter()
@@ -1652,17 +1685,11 @@ fn plan_live_lane_split(
         .ok_or(LaneResumeError::LiveNoPane)?
         .pane_id
         .clone();
-    // Handles disambiguate against the whole lane, live and closed alike.
-    let peers = live.iter().chain(closed.iter()).collect::<Vec<_>>();
     let live_labels = live
         .iter()
         .map(|agent| crate::address::agent_handle(agent, &peers, true))
         .collect();
     let preflight_kinds = flat.resumed.iter().map(|(kind, _)| kind.clone()).collect();
-    let channel = lane
-        .channel
-        .clone()
-        .or_else(|| closed.first().and_then(AgentState::channel));
     Ok(LaneResumeAction::SplitClosed {
         lane_label: lane.display,
         cwd: lane.path,
@@ -1963,6 +1990,14 @@ fn materialize_team_restore_tab(
     ))
 }
 
+fn failure_warning(team: &str, label: &str, reason: &str, consequence: &str) -> String {
+    if reason.contains('\n') {
+        format!("cannot restore team `{team}` in {label}: {consequence}\n{reason}")
+    } else {
+        format!("cannot restore team `{team}` in {label}: {reason}; {consequence}")
+    }
+}
+
 /// Plan restorable named-team tabs from prior full agent sessions.
 #[expect(
     clippy::too_many_arguments,
@@ -2006,18 +2041,11 @@ fn plan_team_restore_tabs(
         let Some(newest) = newest_agent(&group) else {
             continue;
         };
-        let failure_warning = |reason: String| {
-            let label = channel_label(newest.channel().as_deref(), &cwd);
-            let consequence = if fresh {
-                "members are not relaunched"
-            } else {
-                "members resume as individual sessions without the team's layout and prompt layers"
-            };
-            if reason.contains('\n') {
-                format!("cannot restore team `{team}` in {label}: {consequence}\n{reason}")
-            } else {
-                format!("cannot restore team `{team}` in {label}: {reason}; {consequence}")
-            }
+        let label = channel_label(newest.channel().as_deref(), &cwd);
+        let consequence = if fresh {
+            "members are not relaunched"
+        } else {
+            "members resume as individual sessions without the team's layout and prompt layers"
         };
         let layout = if teams.0.contains_key(&team) {
             crate::harness::spec::resolve_team(&team, teams, profiles, commands)
@@ -2030,7 +2058,8 @@ fn plan_team_restore_tabs(
         let mut layout = match layout {
             Ok(layout) => layout,
             Err(reason) => {
-                plan.warnings.push(failure_warning(reason));
+                plan.warnings
+                    .push(failure_warning(&team, &label, &reason, consequence));
                 continue;
             }
         };
@@ -2097,7 +2126,12 @@ fn plan_team_restore_tabs(
                 .map(|warning| warning.to_string())
                 .collect(),
             Err(reason) => {
-                plan.warnings.push(failure_warning(reason.to_string()));
+                plan.warnings.push(failure_warning(
+                    &team,
+                    &label,
+                    &reason.to_string(),
+                    consequence,
+                ));
                 continue;
             }
         };
@@ -2292,7 +2326,7 @@ pub fn plan_recorded_resume(
             .into_iter()
             .collect();
     let (plan, facts) =
-        plan_resume_candidates_detailed(candidates, ctx, worktree_exists, Some(options));
+        plan_resume_candidates_detailed(candidates, ctx, worktree_exists, Some(options), None);
     (plan.lower(), facts)
 }
 
@@ -2318,7 +2352,7 @@ pub fn plan_provider_resume(
         .into_iter()
         .collect();
     let (plan, facts) =
-        plan_resume_candidates_detailed(candidates, ctx, Path::is_dir, Some(options));
+        plan_resume_candidates_detailed(candidates, ctx, Path::is_dir, Some(options), None);
     let mut plan = plan.lower();
     // An unrecorded session has no RimZ row to end when its cwd is gone.
     plan.agents_to_end.clear();
@@ -2339,7 +2373,105 @@ pub(super) fn plan_resume_detailed(
             ResumeCandidate::from_agent(agent, ctx.logins, ctx.catalog, || session_backed(agent))
         })
         .collect();
-    plan_resume_candidates_detailed(candidates, ctx, worktree_exists, None).0
+    plan_resume_candidates_detailed(candidates, ctx, worktree_exists, None, None).0
+}
+
+struct SplitMemberRestore<'a> {
+    restore: &'a LaneRestoreConfig,
+    peers: &'a [&'a AgentState],
+    label: String,
+}
+
+struct SplitMemberWarning {
+    team: String,
+    cause: String,
+    handles: Vec<String>,
+}
+
+impl SplitMemberRestore<'_> {
+    fn posture(
+        &self,
+        candidate: &ResumeCandidate,
+        request: PostureRequest<'_>,
+        profiles: &ProfilesConfig,
+    ) -> (ResumePosture, Option<SplitMemberWarning>) {
+        let identity = &candidate.identity;
+        let Some((name, role)) = identity.team.as_deref().zip(identity.role.as_deref()) else {
+            return (resolve_posture(request, profiles), None);
+        };
+        let Some((team, binding)) = member_binding(&self.restore.teams, name, role) else {
+            let warning = self.warning(identity, name, self.unbound_cause(name, role));
+            return (resolve_posture(request, profiles), Some(warning));
+        };
+        match resolve_posture_with_role(request, profiles, Some(binding), Some((name, team))) {
+            Ok(launch) => (
+                ResumePosture {
+                    launch,
+                    degraded: None,
+                },
+                None,
+            ),
+            Err(reason) => {
+                let solo = resolve_posture(request, profiles);
+                // A solo posture that degrades too warns for itself, and a team
+                // notice would only repeat the broken profile.
+                let warning = solo
+                    .degraded
+                    .is_none()
+                    .then(|| self.warning(identity, name, reason.to_string()));
+                (solo, warning)
+            }
+        }
+    }
+
+    fn unbound_cause(&self, name: &str, role: &str) -> String {
+        let Some(team) = self.restore.teams.0.get(name) else {
+            return self
+                .restore
+                .failed_definitions
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| {
+                    format!("the config read for recovery has no definition for team `{name}`")
+                });
+        };
+        let valid_roles = if team.roles.is_empty() {
+            "none".into()
+        } else {
+            team.roles
+                .iter()
+                .map(|binding| binding.role.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        crate::harness::spec::LayoutErr::UnknownRoleInTeam {
+            team: name.to_owned(),
+            role: role.to_owned(),
+            valid_roles,
+            suggestion: "".into(),
+        }
+        .to_string()
+    }
+
+    fn warning(
+        &self,
+        identity: &ResumeLaunchIdentity,
+        team: &str,
+        cause: String,
+    ) -> SplitMemberWarning {
+        let handles = self
+            .peers
+            .iter()
+            .find(|agent| agent.kind == identity.kind && agent.agent_id == identity.session_id)
+            .map(|agent| crate::address::agent_handle(agent, self.peers, true))
+            .into_iter()
+            .collect();
+        SplitMemberWarning {
+            team: team.to_owned(),
+            cause,
+            handles,
+        }
+    }
 }
 
 fn plan_resume_candidates_detailed(
@@ -2347,6 +2479,7 @@ fn plan_resume_candidates_detailed(
     ctx: ResumeContext<'_>,
     worktree_exists: impl Fn(&Path) -> bool,
     single: Option<&SingleResumeOptions<'_>>,
+    split: Option<SplitMemberRestore<'_>>,
 ) -> (DetailedResumePlan, Option<ResumeLaunchFacts>) {
     candidates.sort_by(|left, right| {
         newest_cmp(
@@ -2360,6 +2493,7 @@ fn plan_resume_candidates_detailed(
     let mut seen: HashSet<ResumeCandidateKey> = HashSet::new();
     let mut plan = DetailedResumePlan::default();
     let mut tabs: Vec<PlannedResumeTab> = Vec::new();
+    let mut member_warnings: Vec<SplitMemberWarning> = Vec::new();
     let mut facts = None;
     for mut candidate in candidates {
         // An older relaunch that re-used a pane is superseded by the newest
@@ -2429,10 +2563,12 @@ fn plan_resume_candidates_detailed(
             stamped_mode: candidate.stamped_mode,
             stamped_tier: candidate.identity.tier.as_deref(),
         };
-        let mut posture = if single.is_some_and(|options| options.overrides.agent.is_some()) {
-            ResumePosture::default()
+        let (mut posture, member_warning) = if let Some(split) = &split {
+            split.posture(&candidate, request, profiles)
+        } else if single.is_some_and(|options| options.overrides.agent.is_some()) {
+            (ResumePosture::default(), None)
         } else {
-            resolve_posture(request, profiles)
+            (resolve_posture(request, profiles), None)
         };
         if let Some(options) = single {
             let overrides = &options.overrides;
@@ -2495,6 +2631,16 @@ fn plan_resume_candidates_detailed(
                 .as_ref()
                 .map(|reason| format!("{reason}; resuming bare")),
         );
+        if let Some(mut warning) = member_warning {
+            if let Some(prior) = member_warnings
+                .iter_mut()
+                .find(|prior| prior.team == warning.team && prior.cause == warning.cause)
+            {
+                prior.handles.append(&mut warning.handles);
+            } else {
+                member_warnings.push(warning);
+            }
+        }
         if let Some(options) = single {
             let isolation = crate::config::Isolation::resolve(
                 crate::harness::plan::effective_resume_isolation(
@@ -2593,6 +2739,16 @@ fn plan_resume_candidates_detailed(
             });
             plan.resumed.insert(resumed_key);
         }
+    }
+    if let Some(split) = split {
+        plan.warnings
+            .extend(member_warnings.into_iter().map(|warning| {
+                let consequence = format!(
+                    "members {} resume as individual sessions without the team's prompt layers",
+                    warning.handles.join(", ")
+                );
+                failure_warning(&warning.team, &split.label, &warning.cause, &consequence)
+            }));
     }
     disambiguate_resume_tab_labels(&mut tabs);
     plan.tabs = tabs;
