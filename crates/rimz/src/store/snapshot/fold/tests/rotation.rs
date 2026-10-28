@@ -180,7 +180,11 @@ fn cursor_reloads_across_a_rotation() {
     write_carryover(
         &paths.agents_carryover,
         &EventCarryover {
-            agents: cache.raw_agents.clone(),
+            agents: cache
+                .raw_agents
+                .iter()
+                .map(|row| row.as_ref().clone())
+                .collect(),
             agent_identity: cache.agent_identity.clone(),
             resume_outcomes: Vec::new(),
         },

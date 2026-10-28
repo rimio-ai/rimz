@@ -94,7 +94,7 @@ impl WorkLog {
             "event_log_bytes_read": testkit::bytes_read(),
             "carryover_bytes_parsed": testkit::carryover_bytes_parsed(),
             "rollup_rows_materialized": testkit::rollup_rows_materialized(),
-            "rollup_base_copies": testkit::rollup_base_copies(),
+            "fold_row_copies": testkit::fold_row_copies(),
             "snapshot_assemblies": WORK_COUNTERS.snapshot_assemblies.load(Relaxed),
             "snapshot_publishes": WORK_COUNTERS.snapshot_publishes.load(Relaxed),
             "rollup_bytes_parsed": WORK_COUNTERS.rollup_bytes_parsed.load(Relaxed),

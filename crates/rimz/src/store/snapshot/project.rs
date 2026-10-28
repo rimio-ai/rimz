@@ -3,6 +3,7 @@
 //! state forward.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use jiff::Timestamp;
 use tracing::debug;
@@ -28,6 +29,13 @@ use identity::{CardIdentity, CardIdentityAllocator};
 type AgentKey = (AgentKind, AgentSessionId);
 type LaunchInstanceKey = (AgentKind, crate::ids::PaneId, u32);
 
+pub(super) fn agent_mut(agent: &mut Arc<AgentState>) -> &mut AgentState {
+    if Arc::strong_count(agent) > 1 {
+        super::fold::testkit::count_row_copies(1);
+    }
+    Arc::make_mut(agent)
+}
+
 #[derive(Default)]
 struct LaunchIdentityIndex {
     by_instance: HashMap<LaunchInstanceKey, BTreeSet<AgentKey>>,
@@ -35,7 +43,7 @@ struct LaunchIdentityIndex {
 }
 
 impl LaunchIdentityIndex {
-    fn from_map(map: &BTreeMap<AgentKey, AgentState>) -> Self {
+    fn from_map(map: &BTreeMap<AgentKey, Arc<AgentState>>) -> Self {
         let mut index = Self::default();
         for (key, state) in map {
             index.replace(key, state);
@@ -73,7 +81,7 @@ impl LaunchIdentityIndex {
 
     fn predecessor<'a>(
         &self,
-        map: &'a BTreeMap<AgentKey, AgentState>,
+        map: &'a BTreeMap<AgentKey, Arc<AgentState>>,
         successor: &AgentState,
     ) -> Option<&'a AgentState> {
         let instance = launch_instance_key(successor)?;
@@ -99,6 +107,7 @@ impl LaunchIdentityIndex {
                     candidate.agent_id.clone(),
                 )
             })
+            .map(Arc::as_ref)
     }
 }
 
@@ -161,6 +170,7 @@ pub(super) fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
     )
     .0
     .into_values()
+    .map(Arc::unwrap_or_clone)
     .collect()
 }
 
@@ -183,8 +193,12 @@ pub(super) fn decode_events(events: &[EventEnvelope]) -> Vec<FoldEvent<'_>> {
 /// the boundary names a pane that no longer exists and the reborn session can
 /// reuse it. Sessions stay alive across the boundary; pane, on-screen and
 /// ordinal stamps are retired.
-pub(super) fn unstamp_for_rebirth<'a>(agents: impl IntoIterator<Item = &'a mut AgentState>) {
+pub(super) fn unstamp_for_rebirth<'a>(agents: impl IntoIterator<Item = &'a mut Arc<AgentState>>) {
     for agent in agents {
+        if agent.pane.is_none() && agent.on_screen_at.is_none() && agent.kind_ordinal.is_none() {
+            continue;
+        }
+        let agent = agent_mut(agent);
         agent.pane = None;
         agent.on_screen_at = None;
         agent.kind_ordinal = None;
@@ -203,7 +217,15 @@ pub(super) fn reduce_agent_states_seeded(
     events: &[EventEnvelope],
 ) -> BTreeMap<(AgentKind, AgentSessionId), AgentState> {
     let events = decode_events(events);
-    reduce_agent_states_seeded_with_identity(seed, AgentIdentityState::default(), &events).0
+    let seed = seed
+        .into_iter()
+        .map(|(key, row)| (key, Arc::new(row)))
+        .collect();
+    reduce_agent_states_seeded_with_identity(seed, AgentIdentityState::default(), &events)
+        .0
+        .into_iter()
+        .map(|(key, row)| (key, Arc::unwrap_or_clone(row)))
+        .collect()
 }
 
 /// The agent key for every event kind that needs its carried row hydrated
@@ -223,17 +245,17 @@ pub(super) fn agent_event_key(event: &FoldEvent<'_>) -> Option<(AgentKind, Agent
 }
 
 struct ReducerState {
-    map: BTreeMap<AgentKey, AgentState>,
+    map: BTreeMap<AgentKey, Arc<AgentState>>,
     identity: CardIdentityAllocator,
     launch_identity: LaunchIdentityIndex,
 }
 
 pub(super) fn reduce_agent_states_seeded_with_identity(
-    seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    seed: BTreeMap<(AgentKind, AgentSessionId), Arc<AgentState>>,
     identity_state: AgentIdentityState,
     events: &[FoldEvent<'_>],
 ) -> (
-    BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    BTreeMap<(AgentKind, AgentSessionId), Arc<AgentState>>,
     AgentIdentityState,
 ) {
     let mut state = ReducerState {
@@ -271,6 +293,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                     );
                     continue;
                 };
+                let agent = agent_mut(agent);
                 agent.launch_warnings.clone_from(&payload.warnings);
                 state.launch_identity.replace(&key, agent);
             }
@@ -301,7 +324,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
 impl ReducerState {
     fn insert(&mut self, key: AgentKey, state: AgentState) {
         self.launch_identity.replace(&key, &state);
-        self.map.insert(key, state);
+        self.map.insert(key, Arc::new(state));
     }
 
     fn reduce_agent_attach(
@@ -325,13 +348,14 @@ impl ReducerState {
         // wrapper knows enough durable identity to seed it before the provider
         // process starts, so the process can launch children immediately.
         let state = self.map.entry(key.clone()).or_insert_with(|| {
-            AgentState::seed(
+            Arc::new(AgentState::seed(
                 kind.clone(),
                 payload.agent_id.clone(),
                 AgentStatus::Idle,
                 event.timestamp,
-            )
+            ))
         });
+        let state = agent_mut(state);
         if let Some(launch_id) = &payload.launch_id {
             state.set_launch_id(launch_id.clone());
         }
@@ -425,7 +449,11 @@ impl ReducerState {
         let event_parent_agent_id =
             non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
         let event_task = non_empty_string(observation.task.as_deref());
-        let prior = self.map.get(&key).or(provisional_prior.as_ref());
+        let prior = self
+            .map
+            .get(&key)
+            .or(provisional_prior.as_ref())
+            .map(Arc::as_ref);
         if let Some(reason) = quarantine_reason(
             &signal,
             prior,
@@ -492,7 +520,7 @@ impl ReducerState {
         kind: &AgentKind,
         key: &(AgentKind, AgentSessionId),
         observation: &AgentLifecycleObservation,
-    ) -> Option<AgentState> {
+    ) -> Option<Arc<AgentState>> {
         if let Some(provisional_key) = observation.agent_name.as_deref().and_then(|name| {
             self.identity
                 .adoptable_owner_for_name(&self.map, kind, name, key)
@@ -516,7 +544,7 @@ impl ReducerState {
         if self
             .map
             .get(key)
-            .is_some_and(AgentState::is_provider_subagent)
+            .is_some_and(|state| state.is_provider_subagent())
         {
             return;
         }
@@ -536,11 +564,12 @@ impl ReducerState {
         if let Some(provisional) = self.retire_provisional(&provisional_key)
             && let Some(existing) = self.map.get_mut(key)
         {
-            if let Some(launch_id) = provisional.launch_id {
-                existing.set_launch_id(launch_id);
+            let existing = agent_mut(existing);
+            if let Some(launch_id) = &provisional.launch_id {
+                existing.set_launch_id(launch_id.clone());
             }
-            existing.record = provisional.record;
-            existing.tier = provisional.tier;
+            existing.record.clone_from(&provisional.record);
+            existing.tier.clone_from(&provisional.tier);
             existing.mode = provisional.mode;
             existing.isolation = provisional.isolation;
             existing.effective_isolation = provisional
@@ -550,7 +579,7 @@ impl ReducerState {
         }
     }
 
-    fn retire_provisional(&mut self, key: &AgentKey) -> Option<AgentState> {
+    fn retire_provisional(&mut self, key: &AgentKey) -> Option<Arc<AgentState>> {
         let prior = self.map.remove(key);
         self.launch_identity.remove(key);
         self.identity.release_key(key);
@@ -594,7 +623,7 @@ impl ReducerState {
         {
             return;
         }
-        let prior = self.map.get(&key);
+        let prior = self.map.get(&key).map(Arc::as_ref);
         let card_identity = self
             .identity
             .assign_launch(kind, &payload.agent_id, payload, prior);
@@ -658,16 +687,17 @@ pub(super) fn compact_command_agent_key<'a>(
 }
 
 fn stamp_compact_command(
-    agents: &mut BTreeMap<AgentKey, AgentState>,
+    agents: &mut BTreeMap<AgentKey, Arc<AgentState>>,
     payload: &MessageEventPayload,
     timestamp: Timestamp,
 ) {
-    let Some(key) = compact_command_agent_key(agents.values(), payload) else {
+    let Some(key) = compact_command_agent_key(agents.values().map(Arc::as_ref), payload) else {
         return;
     };
     let Some(agent) = agents.get_mut(&key) else {
         return;
     };
+    let agent = agent_mut(agent);
     if let Some(tokens) = payload.compacted_context_tokens {
         agent.last_compact_command_tokens = Some(tokens);
     }
@@ -965,7 +995,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
 }
 
 fn inherit_compaction_registration(
-    map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    map: &BTreeMap<(AgentKind, AgentSessionId), Arc<AgentState>>,
     continuation: &mut AgentState,
 ) {
     let Some(compacted_from) = continuation.compacted_from.as_ref() else {
@@ -993,7 +1023,7 @@ fn inherit_compaction_registration(
 /// field missing from this list is lost when `/clear` gives the pane a new
 /// conversation row.
 fn inherit_launch_identity(
-    map: &BTreeMap<AgentKey, AgentState>,
+    map: &BTreeMap<AgentKey, Arc<AgentState>>,
     launch_identity: &LaunchIdentityIndex,
     successor: &mut AgentState,
 ) {

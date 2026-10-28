@@ -14,7 +14,7 @@ pub use crate::proc::testkit::spawn_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_read_under, bytes_written};
 pub use crate::store::sidecar::testkit::read_counts as sidecar_read_counts;
 pub use crate::store::snapshot::fold_testkit::{
-    carryover_bytes_parsed, rollup_base_copies, rollup_rows_materialized,
+    carryover_bytes_parsed, fold_row_copies, rollup_rows_materialized,
 };
 
 /// Exercise stamped reads against real files without exporting the disk cache.

@@ -3,7 +3,7 @@
 //! The elder renderer runs `rimz::sidebar::produce::produce_workspace_snapshot` on its
 //! fetch worker once per data tick (docs/internals/performance.md, the 2026-06
 //! warm-producer pass). The contract: a warm steady-state produce — every
-//! fork-bearing input pre-published fresh, the rollup folding O(new bytes)
+//! fork-bearing input pre-published fresh, the rollup reading only new log bytes
 //! through the worker's cursor — forks no subprocess even with a fleet-scale
 //! store and pane set. These tests pin that count; the wall-clock side lives in
 //! the `fleet::produce_warm` bench (`cargo xtask perf`), because a timing

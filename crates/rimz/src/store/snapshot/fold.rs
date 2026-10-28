@@ -14,7 +14,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::project::{
-    AgentIdentityState, FoldEvent, agent_event_key, backfill_agent_identities,
+    AgentIdentityState, FoldEvent, agent_event_key, agent_mut, backfill_agent_identities,
     compact_command_agent_key, decode_events, reduce_agent_states_seeded_with_identity,
     unstamp_for_rebirth,
 };
@@ -67,9 +67,9 @@ pub mod testkit {
 
     static CARRYOVER_BYTES_PARSED: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
-    static ROLLUP_BASE_COPIES: AtomicU64 = AtomicU64::new(0);
+    static FOLD_ROW_COPIES: AtomicU64 = AtomicU64::new(0);
 
-    /// Row copies from flattening, pending seeds, runtime projections, shared
+    /// Row copies from flattening, runtime projections, shared
     /// context vectors, own-row reads and dispatch views; borrowed readers add nothing.
     #[cfg(any(test, feature = "testkit"))]
     pub fn rollup_rows_materialized() -> u64 {
@@ -80,15 +80,14 @@ pub mod testkit {
         ROLLUP_ROWS_MATERIALIZED.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Deep copies of a shared fold base since process start: a fold resumed
-    /// from a base another holder still shares.
+    /// Deep `AgentState` copies inside the fold since process start.
     #[cfg(any(test, feature = "testkit"))]
-    pub fn rollup_base_copies() -> u64 {
-        ROLLUP_BASE_COPIES.load(Ordering::Relaxed)
+    pub fn fold_row_copies() -> u64 {
+        FOLD_ROW_COPIES.load(Ordering::Relaxed)
     }
 
-    pub(super) fn count_base_copy() {
-        ROLLUP_BASE_COPIES.fetch_add(1, Ordering::Relaxed);
+    pub(in crate::store::snapshot) fn count_row_copies(n: u64) {
+        FOLD_ROW_COPIES.fetch_add(n, Ordering::Relaxed);
     }
 
     /// `agents.carryover.json` bytes parsed since process start.
@@ -135,7 +134,7 @@ fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result<()> {
 /// durable carryover.
 #[derive(Clone, Debug, Default)]
 struct FoldCarryover {
-    agents: Vec<AgentState>,
+    agents: Vec<Arc<AgentState>>,
     project_root: Option<PathBuf>,
     /// The file's identity state as written — the cold fold's seed.
     agent_identity: AgentIdentityState,
@@ -155,9 +154,9 @@ impl FoldCarryover {
             }
             agent.trim_ended_text();
         }
-        backfill_agent_identities(&mut raw.agents, raw.agent_identity.clone());
-        let agents = raw
-            .agents
+        let mut agents: Vec<_> = raw.agents.into_iter().map(Arc::new).collect();
+        backfill_agent_identities(&mut agents, raw.agent_identity.clone());
+        let agents = agents
             .into_iter()
             .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
             .collect::<BTreeMap<_, _>>()
@@ -176,15 +175,11 @@ impl FoldCarryover {
         self.project_root = project_root.map(Path::to_path_buf);
         self.reborn = OnceLock::new();
         for agent in &mut self.agents {
-            agent.root_lane = AgentState::is_root_lane(
-                agent.channel.as_deref(),
-                agent.lane_path().map(Path::new),
-                project_root,
-            );
+            stamp_root_lane(agent, project_root);
         }
     }
 
-    fn get(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> Option<&AgentState> {
+    fn get(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> Option<&Arc<AgentState>> {
         self.agents
             .binary_search_by(|agent| (&agent.kind, &agent.agent_id).cmp(&(kind, agent_id)))
             .ok()
@@ -206,6 +201,17 @@ impl FoldCarryover {
                 reborn: OnceLock::new(),
             })
         }))
+    }
+}
+
+fn stamp_root_lane(agent: &mut Arc<AgentState>, project_root: Option<&Path>) {
+    let root_lane = AgentState::is_root_lane(
+        agent.channel.as_deref(),
+        agent.lane_path().map(Path::new),
+        project_root,
+    );
+    if agent.root_lane != root_lane {
+        agent_mut(agent).root_lane = root_lane;
     }
 }
 
@@ -241,18 +247,18 @@ fn workspace_carryover(paths: &StatePaths) -> Result<Arc<FoldCarryover>> {
     fold_carryover(&paths.agents_carryover, identity.project_root.as_deref())
 }
 
-/// The carryover-merged agent rollup, layered so a fold never copies history:
-/// the shared fold-ready carryover beneath the live rows that win the merge
-/// (no carried row, or one observed no later than the live row). Iterates in
-/// `(kind, agent_id)` order, as the flat merge did; cloning shares both layers.
+/// The carryover-merged rollup: fold-ready carryover beneath the winning
+/// active-log rows, in `(kind, agent_id)` order. Both layers share individual
+/// rows; folds deep-copy only rows they change. A cold reader still decodes
+/// every persisted row before sharing it.
 #[derive(Clone, Debug, Default)]
 pub struct AgentRollup {
     base: Arc<FoldCarryover>,
-    live: Arc<[AgentState]>,
+    live: Arc<[Arc<AgentState>]>,
 }
 
 impl AgentRollup {
-    fn layered(base: Arc<FoldCarryover>, raw_agents: &[AgentState]) -> Self {
+    fn layered(base: Arc<FoldCarryover>, raw_agents: &[Arc<AgentState>]) -> Self {
         let live = raw_agents
             .iter()
             .filter(|live| {
@@ -265,6 +271,10 @@ impl AgentRollup {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &AgentState> + Clone {
+        self.iter_shared().map(Arc::as_ref)
+    }
+
+    fn iter_shared(&self) -> impl Iterator<Item = &Arc<AgentState>> + Clone {
         let mut base = self.base.agents.iter().peekable();
         let mut live = self.live.iter().peekable();
         std::iter::from_fn(move || match (base.peek(), live.peek()) {
@@ -309,7 +319,7 @@ impl From<Vec<AgentState>> for AgentRollup {
     fn from(rows: Vec<AgentState>) -> Self {
         Self {
             base: Arc::default(),
-            live: rows.into(),
+            live: rows.into_iter().map(Arc::new).collect(),
         }
     }
 }
@@ -350,7 +360,7 @@ pub(crate) struct RollupCache {
     pub extent: event_log::LogExtent,
     #[serde(default)]
     file_id: Option<LogFileId>,
-    pub raw_agents: Vec<AgentState>,
+    pub raw_agents: Vec<Arc<AgentState>>,
     #[serde(default)]
     pub resume_outcomes: Vec<ResumeOutcome>,
     #[serde(default)]
@@ -380,13 +390,9 @@ fn read_rollup_cache(path: &Path) -> Option<Arc<RollupCache>> {
     Some(cache)
 }
 
-/// The fold base a fold may consume: moved out when this is its only holder,
-/// copied (and counted) when the parse cache or a reader still shares it.
+/// The fold base a fold may consume, sharing rows with any remaining holders.
 fn owned_base(base: Arc<RollupCache>) -> RollupCache {
-    Arc::try_unwrap(base).unwrap_or_else(|shared| {
-        testkit::count_base_copy();
-        RollupCache::clone(&shared)
-    })
+    Arc::unwrap_or_clone(base)
 }
 
 /// Seed the lifecycle stream at the exact active-log extent its states reflect.
@@ -451,7 +457,7 @@ pub(super) fn write_rollup_cache(paths: &StatePaths, cache: &RollupCache) -> Res
 }
 
 struct FoldedDelta {
-    raw_agents: Vec<AgentState>,
+    raw_agents: Vec<Arc<AgentState>>,
     agent_identity: AgentIdentityState,
     saw_session_rebirth: bool,
     merged: AgentRollup,
@@ -461,7 +467,7 @@ struct FoldedDelta {
 
 #[derive(Default)]
 struct FoldDeltaSeed {
-    agents: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    agents: BTreeMap<(AgentKind, AgentSessionId), Arc<AgentState>>,
     identity: AgentIdentityState,
     resume_outcomes: BTreeMap<(AgentKind, AgentSessionId, MessageId), ResumeOutcome>,
     saw_session_rebirth: bool,
@@ -500,14 +506,17 @@ fn fold_delta(
                 if carried.ended_at.is_none() {
                     seed.agents
                         .entry((carried.kind.clone(), carried.agent_id.clone()))
-                        .or_insert_with(|| carried.clone());
+                        .or_insert_with(|| Arc::clone(carried));
                 }
             }
         }
         for event in delta {
             let key = match &event.kind {
                 EventKind::Message { payload, .. } => compact_command_agent_key(
-                    seed.agents.values().chain(carryover.agents.iter()),
+                    seed.agents
+                        .values()
+                        .chain(carryover.agents.iter())
+                        .map(Arc::as_ref),
                     payload,
                 ),
                 _ => agent_event_key(event),
@@ -528,7 +537,7 @@ fn fold_delta(
                     continue;
                 }
                 if let Some(carried) = carryover.get(&key.0, &key.1) {
-                    seed.agents.insert(key, carried.clone());
+                    seed.agents.insert(key, Arc::clone(carried));
                 }
             }
         }
@@ -541,7 +550,7 @@ fn fold_delta(
         reduce_resume_outcomes_seeded(seed.resume_outcomes, events, now)
             .into_values()
             .collect();
-    let mut raw_agents: Vec<AgentState> = map.into_values().collect();
+    let mut raw_agents: Vec<_> = map.into_values().collect();
     let provisional: Vec<_> = raw_agents
         .iter()
         .enumerate()
@@ -551,23 +560,25 @@ fn fold_delta(
     let reducer_identity = (!provisional.is_empty()).then(|| agent_identity.clone());
     let merged_resume_outcomes =
         merge_resume_outcomes(&carryover.resume_outcomes, &resume_outcomes, now);
-    let merged = if seed.saw_session_rebirth {
-        let carryover = if rebirth_precedes_delta {
-            carryover
-        } else {
-            carryover.unstamped_for_rebirth()
-        };
-        agent_identity = backfill_agent_identities(&mut raw_agents, agent_identity);
-        AgentRollup::layered(carryover, &raw_agents)
+    let carryover = if seed.saw_session_rebirth && !rebirth_precedes_delta {
+        carryover.unstamped_for_rebirth()
     } else {
-        AgentRollup::layered(carryover, &raw_agents)
+        carryover
     };
+    if seed.saw_session_rebirth {
+        agent_identity = backfill_agent_identities(&mut raw_agents, agent_identity);
+    }
+    for agent in &mut raw_agents {
+        stamp_root_lane(agent, carryover.project_root.as_deref());
+    }
+    let merged = AgentRollup::layered(carryover, &raw_agents);
 
     // Reducer-unassigned identities belong to the projection, not the next delta's claims.
     for (index, name, name_explicit) in provisional {
-        raw_agents[index].name = name;
-        raw_agents[index].name_explicit = name_explicit;
-        raw_agents[index].kind_ordinal = None;
+        let agent = agent_mut(&mut raw_agents[index]);
+        agent.name = name;
+        agent.name_explicit = name_explicit;
+        agent.kind_ordinal = None;
     }
     if let Some(identity) = reducer_identity {
         agent_identity = identity;
@@ -640,7 +651,7 @@ impl FoldInputs {
 
 /// [`catch_up_rollup`] with a hook transaction's staged, unappended events
 /// folded on top. With nothing staged the shared rollup passes through; with
-/// events staged the reducer folds them over its own copy of the rows.
+/// events staged the reducer shares the rows and copies only those it changes.
 pub(in crate::store) fn catch_up_with_pending(
     paths: &StatePaths,
     pending: &[EventEnvelope],
@@ -655,10 +666,9 @@ pub(in crate::store) fn catch_up_with_pending(
         });
     }
     let seed: BTreeMap<_, _> = agents
-        .iter()
+        .iter_shared()
         .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent.clone()))
         .collect();
-    testkit::count_rows_materialized(seed.len() as u64);
     let (agents, identity) = reduce_agent_states_seeded_with_identity(
         seed,
         base.agent_identity.clone(),
@@ -667,7 +677,10 @@ pub(in crate::store) fn catch_up_with_pending(
     Ok(PendingRollup {
         base,
         pending_identity: Some(identity),
-        agents: agents.into_values().collect::<Vec<_>>().into(),
+        agents: AgentRollup {
+            base: Arc::default(),
+            live: agents.into_values().collect(),
+        },
         resume_outcomes,
     })
 }
@@ -722,8 +735,6 @@ fn catch_up_from(
     log: LogHead,
 ) -> Result<(RollupCache, AgentRollup, Vec<ResumeOutcome>)> {
     let now = Timestamp::now();
-    let project_root = carryover.project_root.clone();
-    let project_root = project_root.as_deref();
     let (seed, start) = match base {
         Some(RollupCache {
             extent,
@@ -733,7 +744,7 @@ fn catch_up_from(
             saw_session_rebirth,
             ..
         }) => {
-            let seed: BTreeMap<(AgentKind, AgentSessionId), AgentState> = raw_agents
+            let seed: BTreeMap<_, _> = raw_agents
                 .into_iter()
                 .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
                 .collect();
@@ -770,18 +781,7 @@ fn catch_up_from(
     };
     let (delta, end) = event_log::read_from_offset(&paths.events_log, start)?;
     let decoded_delta = decode_events(&delta);
-    let mut folded = fold_delta(seed, carryover, &decoded_delta, now)?;
-    for agent in folded
-        .raw_agents
-        .iter_mut()
-        .chain(Arc::make_mut(&mut folded.merged.live))
-    {
-        agent.root_lane = AgentState::is_root_lane(
-            agent.channel.as_deref(),
-            agent.lane_path().map(Path::new),
-            project_root,
-        );
-    }
+    let folded = fold_delta(seed, carryover, &decoded_delta, now)?;
     let refreshed = RollupCache {
         version: ROLLUP_CACHE_VERSION,
         extent: event_log::LogExtent {
@@ -954,12 +954,14 @@ fn retain_carryover_agents(agents: Vec<AgentState>, older_than: Duration) -> Vec
 
 /// A long-lived reader's in-memory fold base: the last `RollupCache` this
 /// cursor folded to, the merged rollup it produced, and the identity of the
-/// log file it folded. A cursor folds each delta from memory — O(new bytes)
-/// per wakeup with a bounded generation read and one `stat` each of the log
-/// and carryover, parsing neither base. An unchanged log and carryover return
+/// log file it folded. A cursor reads only new log bytes per wakeup, with a
+/// bounded generation read and one `stat` each of the log and carryover,
+/// parsing neither base. An unchanged log and carryover return
 /// the held rollup without opening either fold input. A long-lived reader
 /// (the sidebar fetch worker) owns its cursor across its loop; every other
 /// store read goes through the thread's one held cursor in `catch_up_rollup`.
+/// Deltas still walk retained keys and names, sharing rows and copying only
+/// those they change. A cold reload decodes every persisted row once.
 ///
 /// Staleness is structural, not best-effort: a swapped log file — rotation's
 /// rename-and-recreate, the identity rewrite's rename-over — changes the
