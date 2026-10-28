@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table};
 
-use crate::config::{MachineConfig, TaskEntry};
+use crate::config::{MachineConfig, TaskEntry, remove_keeping_comments};
 use crate::disk::atomic::write_bytes_atomically;
 use crate::disk::paths::{agents_home, holds_rimz_home, rimz_home};
 use crate::trust::TrustState;
@@ -138,11 +138,7 @@ fn remove_at_root(store: TaskStore<'_>, name: &str, root: Option<&Path>) -> Resu
     let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
-    let removed = doc
-        .get_mut("tasks")
-        .and_then(Item::as_table_mut)
-        .map(|tasks| tasks.remove(name).is_some())
-        .unwrap_or(false);
+    let removed = remove_keeping_comments(&mut doc, &["tasks".to_owned(), name.to_owned()])?;
     if removed {
         let rendered = doc.to_string();
         if matches!(store, TaskStore::Project(_)) {

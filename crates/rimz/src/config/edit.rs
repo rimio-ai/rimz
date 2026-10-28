@@ -1159,6 +1159,22 @@ fn preserve_removed_table_comments(
     Ok(!removed.is_none())
 }
 
+pub(crate) fn remove_keeping_comments(doc: &mut DocumentMut, path: &[String]) -> Result<bool> {
+    let Some((leaf, parents)) = path.split_last() else {
+        return Ok(false);
+    };
+    preserve_removed_table_comments(doc, path, false, |doc| {
+        let mut table: &mut dyn TableLike = doc.as_table_mut();
+        for segment in parents {
+            let Some(parent) = table.get_mut(segment).and_then(Item::as_table_like_mut) else {
+                return Ok(Item::None);
+            };
+            table = parent;
+        }
+        Ok(table.remove(leaf).unwrap_or_default())
+    })
+}
+
 fn item_at<'a>(doc: &'a DocumentMut, path: &[String]) -> Option<&'a Item> {
     let (leaf, parents) = path.split_last()?;
     let mut table: &dyn TableLike = doc.as_table();
@@ -1363,13 +1379,7 @@ fn clear_account_use(
     let removed = selection.remove(kind.as_str()).is_some();
     if selection.is_empty() {
         let path = ["accounts".to_owned(), "use".to_owned()];
-        preserve_removed_table_comments(doc, &path, false, |doc| {
-            Ok(doc
-                .get_mut("accounts")
-                .and_then(Item::as_table_like_mut)
-                .and_then(|accounts| accounts.remove("use"))
-                .unwrap_or_default())
-        })?;
+        remove_keeping_comments(doc, &path)?;
     }
     Ok(removed)
 }

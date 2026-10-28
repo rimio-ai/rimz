@@ -1167,6 +1167,63 @@ fn replacing_implicit_parent_keeps_harness_template_comments() {
 }
 
 #[test]
+fn removing_loop_tasks_keeps_header_comments() {
+    let one = "[tasks.one]\ncheck = \"true\"\nevery = \"1h\"\n";
+    let two = "[tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n";
+    let three = "\n# Third task\n[tasks.three]\ncheck = \"true\"\nevery = \"1d\"\n";
+    let comments = "# every = \"30m\"   # faster cadence during release week\n# Weekly cleanup\n";
+    let header = "# Supervised scheduled turns without a task-specific timeout use two hours.\n\
+                  # default-timeout = \"2h\"\n\n";
+    let children = "# wait note\n[tasks.two.wait]\nrun = \"true\"\n\
+                    # match note\n[tasks.two.match]\nexit = 0\n\
+                    # first judge\n[[tasks.two.judge]]\nagent = \"claude\"\nprompt = \"a?\"\n\
+                    # second judge\n[[tasks.two.judge]]\nagent = \"claude\"\nprompt = \"b?\"\n";
+    let cases = [
+        (
+            format!("{one}{comments}{two}{three}"),
+            "tasks.two",
+            true,
+            format!("{one}{comments}{three}"),
+        ),
+        (
+            format!("{one}{comments}{two}"),
+            "tasks.two",
+            true,
+            format!("{one}{comments}"),
+        ),
+        (
+            format!("{header}{one}\n{two}"),
+            "tasks.one",
+            true,
+            format!("{header}{two}"),
+        ),
+        (
+            format!("{one}{comments}{two}{children}{three}"),
+            "tasks.two",
+            true,
+            format!(
+                "{one}{comments}# wait note\n# match note\n# first judge\n# second judge\n{three}"
+            ),
+        ),
+        (
+            format!("{header}{one}{two}"),
+            "tasks.missing",
+            false,
+            format!("{header}{one}{two}"),
+        ),
+    ];
+    let expected = cases
+        .each_ref()
+        .map(|(_, _, removed, text)| (*removed, text.clone()));
+    let rendered = cases.map(|(seed, key, _, _)| {
+        let mut doc: DocumentMut = seed.parse().unwrap();
+        let removed = remove_keeping_comments(&mut doc, &parse_key(key).unwrap()).unwrap();
+        (removed, doc.to_string())
+    });
+    assert_eq!(rendered, expected);
+}
+
+#[test]
 fn replacing_nested_blocks_and_array_entries_keeps_header_comments() {
     for (blocks, comments) in [
         (

@@ -87,6 +87,7 @@ pub(crate) use display::{
     BudgetBurnRateConfig, CardDensityMode, ContextBand, DisplayConfig, HighlightStepsConfig,
     ScrollbarMode,
 };
+pub(crate) use edit::remove_keeping_comments;
 pub use edit::{ConfigEditErr, ConfigEditor, MergeAction, MergeReport};
 pub(crate) use gc::GcConfig;
 pub use gc::{HistoryRetention, parse_older_than};
