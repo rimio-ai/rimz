@@ -87,8 +87,8 @@ pub(crate) use display::{
     BudgetBurnRateConfig, CardDensityMode, ContextBand, DisplayConfig, HighlightStepsConfig,
     ScrollbarMode,
 };
-pub(crate) use edit::remove_keeping_comments;
 pub use edit::{ConfigEditErr, ConfigEditor, MergeAction, MergeReport};
+pub(crate) use edit::{remove_keeping_comments, set_item_keeping_comments};
 pub(crate) use gc::GcConfig;
 pub use gc::{HistoryRetention, parse_older_than};
 pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
