@@ -146,6 +146,14 @@ pub(crate) fn model_shade(kind: &str, step: usize) -> anstyle::Style {
     THEME.style(resolve_provider_brand(kind, &THEME.providers).shade(&THEME.palette, step))
 }
 
+pub(crate) fn model_forecast(model: Option<(&str, usize)>) -> anstyle::Style {
+    let tone = model.map_or_else(
+        || THEME.palette.muted(),
+        |(kind, step)| resolve_provider_brand(kind, &THEME.providers).shade(&THEME.palette, step),
+    );
+    THEME.style(THEME.palette.forecast_tone(tone))
+}
+
 pub(crate) fn identity_name(kind: &str) -> String {
     resolve_provider_identity(kind, &THEME.providers).product_name
 }

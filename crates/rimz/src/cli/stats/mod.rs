@@ -1,7 +1,7 @@
 //! `rimz stats` — account-global spend, local-day activity, and model,
 //! provider, solo-profile, team, and subagent-profile breakdowns, readable in or out
 //! of a room or project.
-//! The held dashboard adds a model spend chart and compact activity summary.
+//! The held dashboard adds per-range model spend charts, a forecast, and grid-span activity.
 //! Internals: `docs/internals/stats.md`.
 //!
 //! Account-global: it reads the producer's published provider aggregate when
@@ -15,7 +15,7 @@
 //! in every mode, defaulting to today. It sets the held dashboard's initial tab.
 //! `--refresh` recomputes on a background thread, retries an unavailable first
 //! frame after five seconds, then repaints in place every minute and re-centres
-//! promptly after a width change.
+//! promptly after a terminal resize.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};

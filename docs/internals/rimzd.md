@@ -93,7 +93,7 @@ The mux never runs a configured command directly. A content pane runs `rimz daem
 
 `resolve_slot` answers what slot `n` runs now:
 
-- The reserved command `stats` expands to `rimz stats --refresh --hold` ([stats.md](./stats.md)).
+- The reserved command `stats` expands to `rimz stats --refresh --hold` ([stats.md](./stats.md)). Its range and reload keys work normally, but its hint omits quit and `q` and `Ctrl-C` do nothing.
 - Any other command is split with `shlex` and run without a shell.
 - An absolute `cwd` is used as written, a relative one is joined onto the worktree root, and an absent one means the worktree root.
 - An empty or unparseable command is skipped with a warning. When every pane is skipped, or the table is empty, the result is the single default stats pane.

@@ -2,6 +2,7 @@ use super::*;
 use crate::cli::stats::dashboard::{Dashboard, TabAssists};
 use rimz::harness::assist_log::{Assist, AssistRecord};
 
+mod charts;
 mod columns;
 
 const TODAY: i64 = 20_749;
@@ -59,6 +60,7 @@ pub(super) fn fixture() -> (Stats, TabAssists) {
         ..Default::default()
     };
     cache.chart.today = TODAY;
+    cache.chart.hour = 15;
     cache.spending.total = mock_tally(
         mock_window(24_571.4, 39_800_000_000, 96, 0, 6_873),
         mock_window(1_024.42, 3_010_000_000, 97, 0, 390),
@@ -209,6 +211,18 @@ pub(super) fn fixture() -> (Stats, TabAssists) {
                 })
                 .collect(),
         );
+    }
+    for ago in 0..=7 {
+        let hours = if ago == 0 { 16 } else { 24 };
+        for hour in 0..hours {
+            cache.chart.hours.insert(
+                (TODAY - ago) * 24 + hour,
+                cache.chart.days[&(TODAY - ago)]
+                    .iter()
+                    .map(|(id, usd)| (id.clone(), usd / hours as f64))
+                    .collect(),
+            );
+        }
     }
     let retained_usd = cache.days.values().map(|day| day.usd).sum::<f64>();
     cache
@@ -384,6 +398,8 @@ pub(super) fn frame(
         today: TODAY,
         dollars: false,
         glyphs: &panel_glyphs(),
+        hold: false,
+        color: true,
     }
     .frame(tab, cols, rows)
 }
@@ -411,18 +427,22 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
         }
     }
     let output = frame(&stats, &assists, Window::Month, 119, Some(40));
-    assert_eq!(output.text.lines().count(), 40);
+    assert_eq!(output.text.lines().count(), 39);
     let mut terminal = Vec::new();
     rimz::tui::replace_frame(&mut terminal, output.text.as_bytes()).unwrap();
     let mut parser = vt100::Parser::new(40.try_into().unwrap(), 119.try_into().unwrap(), 0);
     parser.process(&terminal);
     let screen = parser.screen().contents();
     assert!(
-        screen.lines().next().unwrap().contains("Today $1,024"),
+        screen
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap()
+            .contains("Token activity"),
         "{screen}"
     );
     assert!(
-        screen.lines().last().unwrap().contains("Assists  17 kinds"),
+        screen.lines().last().unwrap().contains("r reload · q quit"),
         "{screen}"
     );
 }
@@ -430,7 +450,7 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
 #[test]
 fn dashboard_mock_heights_and_snapshots() {
     let (stats, assists) = fixture();
-    for (rows, today_height, month_height) in [(76, 65, 73), (40, 39, 40)] {
+    for (rows, today_height, month_height) in [(76, 65, 73), (40, 38, 39)] {
         for tab in Window::TABS {
             let output = frame(&stats, &assists, tab, 119, Some(rows));
             let expected = if tab == Window::Today {
@@ -446,7 +466,12 @@ fn dashboard_mock_heights_and_snapshots() {
                 .map(str::trim_end)
                 .collect::<Vec<_>>()
                 .join("\n");
-            assert!(text.lines().next().unwrap().starts_with("   "));
+            assert!(
+                text.lines()
+                    .find(|line| !line.is_empty())
+                    .unwrap()
+                    .starts_with("   ")
+            );
             insta::assert_snapshot!(
                 format!("held_{}_{}", tab.label().to_lowercase(), rows),
                 text
@@ -514,7 +539,7 @@ fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
     );
     assert!(output.contains("5,995 sessions"));
     assert!(!output.contains("agent-time and messages"));
-    let short = strip_ansi(&frame(&stats, &assists, Window::Month, 119, Some(40)).text);
+    let short = strip_ansi(&frame(&stats, &assists, Window::Month, 119, Some(45)).text);
     let other = short
         .lines()
         .find(|line| line.contains("Other") && line.contains("1h40m"))
@@ -547,29 +572,21 @@ fn dashboard_single_tail_keeps_its_name_and_unknown_model_is_named() {
 }
 
 #[test]
-fn dashboard_charts_use_publication_cells_and_mute_unselected_days() {
+fn dashboard_charts_use_per_range_publication_cells() {
     let (stats, assists) = fixture();
     assert_eq!(
         stats.chart.days.len(),
         30,
         "chart survives the publication projection"
     );
+    let counts = Window::TABS.map(|tab| {
+        let text = strip_ansi(&frame(&stats, &assists, tab, 119, None).text);
+        let bottom = text.lines().rfind(|line| line.contains('┤')).unwrap();
+        bottom.split('┤').nth(1).unwrap().split_whitespace().count()
+    });
+    // The fixture's Year is sparse; use a complete publication for its bar count below.
+    assert_eq!(&counts[..3], &[24, 7, 30]);
     let month = frame(&stats, &assists, Window::Month, 119, None).text;
-    let today = frame(&stats, &assists, Window::Today, 119, None).text;
-    let chart = |text: &str| {
-        text.split("Spend per day")
-            .nth(1)
-            .unwrap()
-            .split("Token activity")
-            .next()
-            .unwrap()
-            .to_owned()
-    };
-    let month = chart(&month);
-    let today = chart(&today);
-    let opus = render::paint(render::palette::model_shade("claude", 0), "██");
-    assert!(month.matches(&opus).count() > today.matches(&opus).count());
-    assert!(today.contains(&render::paint(render::palette::muted(), "██")));
     let plain = strip_ansi(&month);
     let legend = plain.lines().find(|line| line.contains("Other")).unwrap();
     for name in [
@@ -581,10 +598,6 @@ fn dashboard_charts_use_publication_cells_and_mute_unselected_days() {
     ] {
         assert!(legend.contains(name), "{legend}");
     }
-    let bottom = month
-        .lines()
-        .find(|line| strip_ansi(line).contains("┤") && line.matches(&opus).count() == 30);
-    assert!(bottom.is_some(), "largest segment is at the bottom");
     assert!(month.contains(&render::paint(render::palette::accent(), "today")));
 }
 
@@ -593,7 +606,7 @@ fn dashboard_typical_counts_missing_days_and_titles_follow_the_active_tab() {
     let (mut stats, assists) = fixture();
     stats.by_day = BTreeMap::from([(TODAY, day(1, 24.0)), (TODAY - 1, day(1, 300.0))]);
     for (tab, expected) in [
-        (Window::Today, "today $1,024 so far · yesterday $300"),
+        (Window::Today, "today $1,024 so far · ~"),
         (Window::Week, "$162 a day"),
         (Window::Month, "$162 a day"),
         (Window::Year, "$162 per active day"),
@@ -601,18 +614,21 @@ fn dashboard_typical_counts_missing_days_and_titles_follow_the_active_tab() {
         let output = strip_ansi(&frame(&stats, &assists, tab, 119, None).text);
         assert!(output.contains(expected), "{tab:?}: {output}");
         assert!(!output.contains("vs prior"));
-        if tab != Window::Year {
+        if matches!(tab, Window::Week | Window::Month) {
             let lines: Vec<_> = output.lines().collect();
             let typical = lines
                 .iter()
-                .position(|line| line.contains("typical $10"))
+                .position(|line| line.contains('┤') && line.ends_with("$10"))
                 .expect(&output);
             assert!(
                 lines[typical + 1].contains("└─"),
                 "a mean under half a row sits on the bottom row: {output}"
             );
-        } else {
+        } else if tab == Window::Year {
             assert!(output.contains("Spend per week · last 52 weeks"));
+            assert!(!output.contains("typical"));
+        } else {
+            assert!(output.contains("by midnight · yesterday $300"));
             assert!(!output.contains("typical"));
         }
     }
@@ -683,6 +699,8 @@ fn dashboard_weekly_chart_survives_a_later_local_day() {
         today: TODAY + 1,
         dollars: false,
         glyphs: &panel_glyphs(),
+        hold: false,
+        color: true,
     }
     .frame(Window::Year, 119, None)
     .text;
@@ -811,7 +829,7 @@ fn dashboard_typical_never_exceeds_the_chart_ceiling() {
     stats.by_day.insert(TODAY - 30, day(1, 300_000.0));
     let output = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
     let chart = output.split("Spend per day").nth(1).unwrap();
-    assert!(chart.lines().nth(1).unwrap().contains("$20,000"), "{chart}");
+    assert!(chart.lines().nth(1).unwrap().contains("$12,000"), "{chart}");
     let typical = chart
         .lines()
         .find(|line| line.contains('┤') && line.contains("$10,785"))
@@ -823,7 +841,7 @@ fn dashboard_typical_never_exceeds_the_chart_ceiling() {
     let axis = chart.lines().find(|line| line.contains("└─")).unwrap();
     assert_eq!(
         display_width(&axis[..axis.find("today").unwrap()]),
-        94,
+        97,
         "bars keep 3-cell strides: {chart}"
     );
     let narrow = strip_ansi(&frame(&stats, &assists, Window::Month, 60, None).text);

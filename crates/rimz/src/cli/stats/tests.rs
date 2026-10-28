@@ -422,6 +422,8 @@ fn held_frame(stats: &Stats, assists: &AssistStats, active: Window, today: i64) 
         today,
         dollars: false,
         glyphs: &panel_glyphs(),
+        hold: false,
+        color: true,
     }
     .frame(active, 119, None)
     .text
@@ -2122,6 +2124,46 @@ fn held_stats_applies_window_keys_without_a_current_frame() {
 }
 
 #[test]
+fn held_stats_range_keys_stop_at_the_ends_and_jump_case_insensitively() {
+    let keys = [
+        KeyCode::Left,
+        KeyCode::Char('h'),
+        KeyCode::Right,
+        KeyCode::Char('l'),
+        KeyCode::Right,
+        KeyCode::Right,
+        KeyCode::Char('l'),
+        KeyCode::Char('t'),
+        KeyCode::Char('W'),
+        KeyCode::Char('m'),
+        KeyCode::Char('Y'),
+        KeyCode::Left,
+        KeyCode::Char('T'),
+        KeyCode::Char('w'),
+        KeyCode::Char('M'),
+        KeyCode::Char('y'),
+    ];
+    for hold in [false, true] {
+        let mut state = HeldStats::new(false, panel_glyphs(), hold, Window::Today);
+        let mut out = Vec::new();
+        let selected = keys.map(|key| {
+            state
+                .apply_key(KeyEvent::new(key, KeyModifiers::NONE), &mut out)
+                .unwrap();
+            state.active()
+        });
+        use Window::{Month, Today, Week, Year};
+        assert_eq!(
+            selected,
+            [
+                Today, Today, Week, Month, Year, Year, Year, Today, Week, Month, Year, Month,
+                Today, Week, Month, Year
+            ]
+        );
+    }
+}
+
+#[test]
 fn held_stats_preserves_reload_quit_and_hold_outcomes() {
     let mut out = Vec::new();
     let mut state = HeldStats::new(false, panel_glyphs(), false, Window::Today);
@@ -2623,7 +2665,7 @@ fn stats_json_lists_unpriced_usage_without_folding_or_empty_windows() {
 }
 
 #[test]
-fn today_dashboard_uses_day_breakdowns_and_year_activity_without_a_trend() {
+fn today_dashboard_uses_day_breakdowns_and_grid_activity_without_a_trend() {
     let today = 20_000;
     let mut current = tally(900, 60.0, 10);
     current.day = spend_window(30, 12.0, 20, 10, 5, 2);
@@ -2631,7 +2673,7 @@ fn today_dashboard_uses_day_breakdowns_and_year_activity_without_a_trend() {
     let old = tally(1_000, 100.0, 1);
     let stats = Stats {
         timezone: "UTC".into(),
-        refreshed_at_ms: 0,
+        refreshed_at_ms: today as u64 * 86_400_000,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
@@ -2642,7 +2684,10 @@ fn today_dashboard_uses_day_breakdowns_and_year_activity_without_a_trend() {
             (today - 1, day(50, 18.0)),
             (today - 100, day(900, 30.0)),
         ]),
-        chart: Default::default(),
+        chart: rimz::agents::spending::ChartSpend {
+            today,
+            ..Default::default()
+        },
         by_model: model_map([
             ("current-model".into(), current.clone()),
             ("old-model".into(), old.clone()),
@@ -2659,8 +2704,8 @@ fn today_dashboard_uses_day_breakdowns_and_year_activity_without_a_trend() {
         "Today $12",
         "Current Mod",
         "Codex",
-        "today $12 so far · yesterday $18",
-        "2 of last 28 days active",
+        "today $12 so far · ~$12 by midnight · yesterday $18",
+        "3 active days since",
         "streak 2 days",
         "busiest",
     ] {
@@ -2688,11 +2733,8 @@ fn model_rate_column_is_windowed_and_other_is_untimed_on_dashboard() {
             .any(|line| line.contains("Fable 5.1")
                 && line.split_whitespace().any(|cell| cell == "50"))
     );
-    let week_model = week
-        .lines()
-        .find(|line| line.contains("Opus 5.5") && !line.contains("Other"))
-        .expect(&week);
-    assert!(week_model.contains('–'), "{week_model}");
+    assert!(!week.contains("TOK/S"), "{week}");
+    assert!(year.contains("TOK/S"), "{year}");
     assert!(
         year.lines()
             .any(|line| line.contains("Other") && line.contains('–'))
