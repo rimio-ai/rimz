@@ -653,10 +653,14 @@ pub(super) fn agent_state(
     agent: &AgentDefinition,
     agent_id: &rimz::ids::AgentSessionId,
 ) -> Option<rimz::agents::AgentState> {
-    let snapshot = store
-        .snapshot_with_context(|kind, id| kind.as_str() == agent.spec().kind && id == agent_id)
-        .ok()?;
-    find_agent(&snapshot.agents, agent.spec().kind, agent_id).cloned()
+    store
+        .agent_with_context(
+            &agent.spec().kind_id(),
+            agent_id,
+            rimz::RuntimeScope::Runtime,
+        )
+        .ok()
+        .flatten()
 }
 
 fn stamp_parent(

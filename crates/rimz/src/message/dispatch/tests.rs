@@ -5,6 +5,77 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 
 #[test]
+fn dispatch_copies_only_live_rows_and_the_resuming_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = ResolvedWorkspace {
+        workspace_id: WorkspaceId::from_project_root(dir.path()),
+        project_root: dir.path().into(),
+        cwd_project_root: None,
+        root_class: crate::workspace::RootClass::Directory,
+        worktree_root: dir.path().into(),
+        worktree_branch: None,
+        session_name: "room".into(),
+        mux_hint: None,
+    };
+    let store = Store::open(
+        crate::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap(),
+        crate::RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap(),
+    )
+    .unwrap();
+    let mut ended = agent("ended", AgentStatus::Idle);
+    ended.ended_at = Some(now());
+    let mut cached = store.snapshot().unwrap();
+    cached.agents = vec![agent("live", AgentStatus::Idle), ended.clone()].into();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &store.paths().latest_snapshot().unwrap(),
+        &cached,
+    )
+    .unwrap();
+    let frame = store.for_hook_ingress(crate::ids::EventId::new(), now());
+    let held = frame.snapshot_cached().unwrap();
+    assert_eq!(held.agents.len(), 2);
+    let before = crate::store::snapshot::fold_testkit::rollup_rows_materialized();
+    let result = dispatch(
+        &workspace,
+        &frame,
+        DispatchRequest {
+            target: "@ended".into(),
+            text: "resume".into(),
+            target_scope: None,
+            current_channel: context(None),
+            caller: None,
+            sender: MessageSender::Human,
+            automated: false,
+            allow_fanout: false,
+            reply: None,
+            mux: None,
+            enter: true,
+            force: false,
+            auto_compact: Some(AutoCompact::Tokens(1)),
+            mode: DispatchMode::Boundary {
+                gate: DeliveryGate::Done,
+                not_before: None,
+                after: vec!["@all".into()],
+                when: Vec::new(),
+            },
+            resuming_recipient: Some(ended),
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(DispatchErr::Condition(ConditionErr::Broadcast { .. }))
+    ));
+    assert_eq!(
+        crate::store::snapshot::fold_testkit::rollup_rows_materialized() - before,
+        2,
+        "one live row plus the explicit resuming child, not the ended cached row"
+    );
+    let reused = frame.snapshot_cached().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&held.agents, &reused.agents));
+    assert_eq!(reused.agents, cached.agents);
+}
+
+#[test]
 fn fanout_matches_pin_panes_and_round_trip_recorded_agents() {
     let mut pane = owner_pane("unused", Some("coder"));
     pane.agent_id = None;

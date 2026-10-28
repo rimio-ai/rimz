@@ -57,7 +57,7 @@ pub mod writer;
 
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::disk::{lock, paths};
@@ -88,6 +88,30 @@ pub struct Store {
     inner: Arc<StoreInner>,
     ingress: Option<(crate::ids::EventId, jiff::Timestamp)>,
     hook_transaction: Option<Arc<writer::HookTransaction>>,
+    frame_read: Option<Arc<Mutex<FrameRead>>>,
+}
+
+/// Only the latest frame key is retained; ordinary handles never allocate this memo.
+#[derive(Debug, Default)]
+struct FrameRead {
+    key: Option<(event_log::LogExtent, usize)>,
+    rollup: Option<Arc<snapshot::PendingRollup>>,
+    snapshot: Option<SidebarSnapshot>,
+}
+
+impl FrameRead {
+    fn rollup(
+        &mut self,
+        paths: &StatePaths,
+        pending: &[EventEnvelope],
+    ) -> snapshot::Result<Arc<snapshot::PendingRollup>> {
+        if let Some(rollup) = &self.rollup {
+            return Ok(rollup.clone());
+        }
+        let rollup = Arc::new(snapshot::catch_up_with_pending(paths, pending)?);
+        self.rollup = Some(rollup.clone());
+        Ok(rollup)
+    }
 }
 
 #[derive(Debug)]
@@ -149,6 +173,7 @@ impl Store {
             inner: Arc::new(StoreInner { paths, runtime }),
             ingress: None,
             hook_transaction: None,
+            frame_read: None,
         })
     }
 
@@ -164,6 +189,7 @@ impl Store {
             inner: Arc::new(StoreInner { paths, runtime }),
             ingress: None,
             hook_transaction: None,
+            frame_read: None,
         })
     }
 
@@ -190,12 +216,11 @@ impl Store {
         &self,
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
-        let rollup =
-            snapshot::catch_up_with_pending(&self.inner.paths, &self.pending_hook_events())?;
+        let rollup = self.pending_rollup()?;
         Ok(runtime::RuntimeProjection::from_parts(
             &rollup.agents,
             scope,
-            rollup.resume_outcomes,
+            rollup.resume_outcomes.clone(),
         ))
     }
 
@@ -204,9 +229,9 @@ impl Store {
     /// persisted fold base.
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
         if self.hook_transaction.is_some() {
-            return Ok(snapshot::build_from_pending(
+            return Ok(snapshot::build_from_rollup(
                 &self.inner.paths,
-                &self.pending_hook_events(),
+                self.pending_rollup()?.as_ref(),
             )?);
         }
         Ok(snapshot::build_from(&self.inner.paths)?)
@@ -230,6 +255,34 @@ impl Store {
         self.snapshot_with_context(|_, _| true)
     }
 
+    /// Read one row with its current context, copying only that row.
+    /// Audit rows include ended sessions but carry no derived molt marks;
+    /// role decisions use [`Self::runtime_projection`] with [`RuntimeScope::Audit`].
+    pub fn agent_with_context(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        scope: RuntimeScope,
+    ) -> Result<Option<crate::agents::AgentState>> {
+        let row = match scope {
+            RuntimeScope::Runtime => {
+                let snapshot = self.cached_snapshot()?;
+                snapshot::find_agent(&snapshot.agents, kind, agent_id).cloned()
+            }
+            RuntimeScope::Audit => self.pending_rollup()?.agents.find(kind, agent_id).cloned(),
+        };
+        let Some(mut row) = row else {
+            return Ok(None);
+        };
+        snapshot::count_rows_materialized(1);
+        let context = agent_context::read_for_keys(
+            &self.inner.runtime,
+            std::iter::once((kind.as_str(), agent_id.as_str())),
+        );
+        row.attach_context(context.into_iter().next().map(|record| record.context));
+        Ok(Some(row))
+    }
+
     /// The same cached rows and membership as [`Self::snapshot_cached`], with
     /// context attached only to selected `(kind, agent_id)` keys. Unselected
     /// rows stay raw. An empty selection performs no sidecar read and leaves
@@ -238,15 +291,7 @@ impl Store {
         &self,
         mut select: impl FnMut(&AgentKind, &AgentSessionId) -> bool,
     ) -> Result<SidebarSnapshot> {
-        let snapshot = match self
-            .hook_transaction
-            .is_none()
-            .then(|| snapshot::read_fresh_latest(&self.inner.paths))
-            .flatten()
-        {
-            Some(snapshot) => snapshot,
-            None => self.snapshot()?,
-        };
+        let snapshot = self.cached_snapshot()?;
         let mut keys = snapshot
             .agents
             .iter()
@@ -258,6 +303,88 @@ impl Store {
         }
         let context = agent_context::read_for_keys(&self.inner.runtime, keys);
         Ok(snapshot.with_agent_context(context))
+    }
+
+    fn cached_snapshot(&self) -> Result<SidebarSnapshot> {
+        let pending = self.pending_hook_events();
+        let memo = self.frame_read(&pending)?;
+        if let Some(mut memo) = memo {
+            if let Some(snapshot) = &memo.snapshot {
+                let mut snapshot = snapshot.clone();
+                snapshot.now = jiff::Timestamp::now();
+                return Ok(snapshot);
+            }
+            let snapshot = match self
+                .hook_transaction
+                .is_none()
+                .then(|| snapshot::read_fresh_latest(self.paths()))
+                .flatten()
+            {
+                Some(snapshot) => snapshot,
+                None => snapshot::build_from_rollup(
+                    self.paths(),
+                    memo.rollup(self.paths(), &pending)?.as_ref(),
+                )?,
+            };
+            memo.snapshot = Some(snapshot.clone());
+            return Ok(snapshot);
+        }
+        if self.hook_transaction.is_none()
+            && let Some(snapshot) = snapshot::read_fresh_latest(self.paths())
+        {
+            return Ok(snapshot);
+        }
+        self.snapshot()
+    }
+
+    /// [`Self::repair_event_log`] truncates without advancing the log generation. A torn log
+    /// repaired and regrown to the same length could alias this key, but needs a concurrent
+    /// repair by another process within this one frame; that narrow race is accepted.
+    fn frame_read(&self, pending: &[EventEnvelope]) -> Result<Option<MutexGuard<'_, FrameRead>>> {
+        let Some(memo) = &self.frame_read else {
+            return Ok(None);
+        };
+        let mut memo = memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let generation = snapshot::lifecycle_log_generation(self.paths());
+        let offset = match std::fs::metadata(&self.paths().events_log) {
+            Ok(meta) => meta.len(),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => 0,
+            Err(source) => {
+                return Err(StoreErr::Io {
+                    path: self.paths().events_log.clone(),
+                    source,
+                });
+            }
+        };
+        let key = (event_log::LogExtent { generation, offset }, pending.len());
+        if memo.key != Some(key) {
+            *memo = FrameRead {
+                key: Some(key),
+                ..Default::default()
+            };
+        }
+        Ok(Some(memo))
+    }
+
+    fn pending_rollup(&self) -> Result<Arc<snapshot::PendingRollup>> {
+        let pending = self.pending_hook_events();
+        if let Some(mut memo) = self.frame_read(&pending)? {
+            return Ok(memo.rollup(self.paths(), &pending)?);
+        }
+        Ok(Arc::new(snapshot::catch_up_with_pending(
+            self.paths(),
+            &pending,
+        )?))
+    }
+
+    fn clear_frame_read(&self) {
+        if let Some(memo) = &self.frame_read {
+            *memo
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = FrameRead::default();
+        }
     }
 
     /// Whether a rebirth parked this agent for the user's recovery decision
@@ -553,12 +680,146 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hook_frame_reuses_reads_without_sharing_with_other_handles() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let store = Store::open(
+            StatePaths::under(id.clone(), dir.path()).unwrap(),
+            RuntimePaths::under(id.clone(), dir.path()).unwrap(),
+        )
+        .unwrap();
+        event_log::append(&store.paths().events_log, &lifecycle(&id, 0)).unwrap();
+        let frame = store.for_hook_ingress(crate::ids::EventId::new(), Timestamp::now());
+        let assemblies = &crate::testkit::WORK_COUNTERS.snapshot_assemblies;
+        let before = assemblies.load(Relaxed);
+        let first = frame.snapshot_with_context(|_, _| false).unwrap();
+        let second = frame.snapshot_with_context(|_, _| false).unwrap();
+        assert_eq!(second.agents, first.agents);
+        assert!(second.now >= first.now);
+        assert_eq!(
+            assemblies.load(Relaxed) - before,
+            1,
+            "one assembly per frame key"
+        );
+        store.snapshot_with_context(|_, _| false).unwrap();
+        store.snapshot_with_context(|_, _| false).unwrap();
+        assert_eq!(
+            assemblies.load(Relaxed) - before,
+            3,
+            "ordinary handles do not memoize"
+        );
+        let next_frame = store.for_hook_ingress(crate::ids::EventId::new(), Timestamp::now());
+        next_frame.snapshot_with_context(|_, _| false).unwrap();
+        assert_eq!(
+            assemblies.load(Relaxed) - before,
+            4,
+            "each frame owns its memo"
+        );
+
+        frame
+            .with_hook_transaction::<_, StoreErr>(|staged| {
+                assert_eq!(staged.snapshot_cached()?.agents.len(), 1);
+                let mut observation = AgentLifecycleObservation::new(
+                    Some("agent-1".into()),
+                    LifecycleSignal::Registered,
+                );
+                observation.pane_id = Some(crate::ids::PaneId::parse("tmux:%1").unwrap());
+                staged.append_agent_lifecycle(writer::AgentLifecycleIntent {
+                    session_name: "session",
+                    agent_kind: AgentKind::new_unchecked("claude"),
+                    event_name: "SessionStart",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })?;
+                assert_eq!(
+                    staged.snapshot_cached()?.agents.len(),
+                    2,
+                    "staged length invalidates"
+                );
+                let after_stage = assemblies.load(Relaxed);
+                staged.snapshot_cached()?;
+                assert_eq!(
+                    assemblies.load(Relaxed),
+                    after_stage,
+                    "staged reads reuse assembly"
+                );
+                assert_eq!(
+                    store.snapshot_cached()?.agents.len(),
+                    1,
+                    "staging stays private"
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            frame.snapshot_cached().unwrap().agents.len(),
+            2,
+            "committed offset invalidates"
+        );
+    }
+
+    #[test]
+    fn own_row_context_copies_one_row_and_reads_current_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let store = Store::open(
+            StatePaths::under(id.clone(), dir.path()).unwrap(),
+            RuntimePaths::under(id.clone(), dir.path()).unwrap(),
+        )
+        .unwrap()
+        .for_hook_ingress(crate::ids::EventId::new(), Timestamp::now());
+        for index in 0..3 {
+            event_log::append(&store.paths().events_log, &lifecycle(&id, index)).unwrap();
+        }
+        let raw = store.snapshot_with_context(|_, _| false).unwrap();
+        assert_eq!(raw.agents.len(), 3, "fixture rows: {:?}", raw.agents);
+        let kind = AgentKind::new_unchecked("claude");
+        let agent_id = AgentSessionId::from("agent-0");
+        for label in ["first", "replacement"] {
+            let mut context = AgentContext::new("claude", Timestamp::now());
+            context.session_name = Some(label.to_owned());
+            agent_context::write(store.runtime_paths(), "claude", "agent-0", &context, None)
+                .unwrap();
+            let before = snapshot::fold_testkit::rollup_rows_materialized();
+            let row = store
+                .agent_with_context(&kind, &agent_id, RuntimeScope::Runtime)
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.context.unwrap().session_name.as_deref(), Some(label));
+            assert_eq!(
+                snapshot::fold_testkit::rollup_rows_materialized() - before,
+                1,
+                "only the selected row is copied"
+            );
+        }
+        assert!(raw.agents.iter().all(|row| row.context.is_none()));
+        agent_context::remove(store.runtime_paths(), "claude", "agent-0").unwrap();
+        assert!(
+            store
+                .agent_with_context(&kind, &agent_id, RuntimeScope::Runtime)
+                .unwrap()
+                .unwrap()
+                .context
+                .is_none()
+        );
+        assert!(
+            store
+                .agent_with_context(&kind, &"missing".into(), RuntimeScope::Runtime)
+                .unwrap()
+                .is_none()
+        );
+    }
+
     fn lifecycle(workspace_id: &WorkspaceId, index: usize) -> EventEnvelope {
         let mut observation = AgentLifecycleObservation::new(
             Some(AgentSessionId::from(format!("agent-{index}"))),
             LifecycleSignal::Registered,
         );
         observation.agent_name = Some(format!("agent-{index}"));
+        observation.pane_id = Some(crate::ids::PaneId::parse(&format!("tmux:%{index}")).unwrap());
         EventEnvelope::agent_lifecycle(
             workspace_id.clone(),
             "session",

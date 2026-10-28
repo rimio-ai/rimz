@@ -10,10 +10,7 @@ use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId, EventId, LoginName, WorkspaceId};
 use crate::pane::{PaneRef, RuntimeOwner};
 use crate::store::event::{self, EventEnvelope};
-use crate::store::{
-    session_death,
-    snapshot::{self, AgentRollup},
-};
+use crate::store::{session_death, snapshot::AgentRollup};
 
 use super::{Store, debounce};
 use crate::store::Result;
@@ -145,7 +142,7 @@ impl Store {
         rotation_threshold: u64,
     ) -> Result<AgentLifecycleReceipt> {
         self.commit(|txn| {
-            let rollup = snapshot::catch_up_with_pending(txn.paths, &self.pending_hook_events())?;
+            let rollup = self.pending_rollup()?;
             let agents = &rollup.agents;
             let known_side = intent
                 .observation

@@ -58,16 +58,15 @@ pub(crate) fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     assemble_snapshot(paths, rollup.extent, agents.iter(), resume_outcomes)
 }
 
-pub(in crate::store) fn build_from_pending(
+pub(in crate::store) fn build_from_rollup(
     paths: &StatePaths,
-    pending: &[crate::store::event::EventEnvelope],
+    rollup: &super::fold::PendingRollup,
 ) -> Result<SidebarSnapshot> {
-    let rollup = super::fold::catch_up_with_pending(paths, pending)?;
     assemble_snapshot(
         paths,
         rollup.extent(),
         rollup.agents.iter(),
-        rollup.resume_outcomes,
+        rollup.resume_outcomes.clone(),
     )
 }
 

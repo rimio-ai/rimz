@@ -7,7 +7,7 @@ use crate::agents::lifecycle::{LifecycleState, PingEdge, TurnPhase};
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentSessionId, MuxName, PaneId, WorkspaceId};
 use crate::store::event::EventKind;
-use crate::store::snapshot::find_agent;
+use crate::store::snapshot::{self, find_agent};
 
 fn transition(kind: TransitionKind, compaction_closed: bool) -> Transition {
     Transition {

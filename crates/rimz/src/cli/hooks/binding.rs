@@ -71,7 +71,8 @@ pub(super) fn recover_focused_pane_binding(
     };
 
     let kind_id = AgentKind::new_unchecked(kind);
-    let snapshot = match store.snapshot_cached() {
+    let snapshot = match store.snapshot_with_context(|kind, id| kind == &kind_id && id != &agent_id)
+    {
         Ok(snapshot) => snapshot,
         Err(err) => {
             debug!(

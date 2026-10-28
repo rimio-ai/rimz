@@ -733,11 +733,11 @@ fn session_run_id(
     let agent_id = agent_id?;
     // SessionEnd has already removed the peer from the live snapshot.
     let peer = agent_state(store, agent, agent_id).or_else(|| {
-        let snapshot = store
-            .runtime_projection(rimz::RuntimeScope::Audit)
+        store
+            .agent_with_context(&agent.spec().kind_id(), agent_id, rimz::RuntimeScope::Audit)
             .inspect_err(|error| warn!(%error, "lifecycle: failed to read peer identity"))
-            .ok()?;
-        find_agent(&snapshot.agents, agent.spec().kind, agent_id).cloned()
+            .ok()
+            .flatten()
     })?;
     let open = if peer.is_team_seat() {
         rimz::harness::run::open_team_run(store.paths(), &peer)
