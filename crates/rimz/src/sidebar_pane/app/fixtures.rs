@@ -87,6 +87,7 @@ pub(super) fn fold(
         Arc::new(frame)
     });
     super::fetch::WorkspaceFold {
+        sampled_at: std::time::Instant::now(),
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
         frame,
     }
@@ -127,6 +128,7 @@ pub(in crate::sidebar_pane) fn remember_fold(
     frame: crate::sidebar::frame::PaneFrame,
 ) {
     plane.remember(super::fetch::WorkspaceFold {
+        sampled_at: std::time::Instant::now(),
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
         frame: Some(std::sync::Arc::new(frame)),
     });
@@ -138,6 +140,7 @@ pub(in crate::sidebar_pane) fn publish_fold(
     frame: crate::sidebar::frame::PaneFrame,
 ) {
     plane.publish_fold(super::fetch::WorkspaceFold {
+        sampled_at: std::time::Instant::now(),
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
         frame: Some(Arc::new(frame)),
     });

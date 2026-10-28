@@ -129,6 +129,8 @@ pub(super) enum SnapshotSource {
 /// One fold before its per-renderer projection.
 #[derive(Clone)]
 pub(super) struct WorkspaceFold {
+    /// Taken before this fold's first input read, not at publication.
+    pub(super) sampled_at: Instant,
     pub(super) workspace: WorkspaceSnapshot,
     pub(super) frame: Option<Arc<PaneFrame>>,
 }
@@ -753,6 +755,7 @@ impl FetchWorker {
             return;
         };
         self.window.cycles += 1;
+        let sampled_at = Instant::now();
         let now_ms = crate::utils::time::unix_now_ms();
         let inputs = sink
             .host_data
@@ -776,6 +779,7 @@ impl FetchWorker {
         let fold_started = Instant::now();
         let fast = HostInputs::fold(inputs.as_ref(), &mut self.cursor, state, &self.runtime).map(
             |workspace| WorkspaceFold {
+                sampled_at,
                 workspace,
                 frame: inputs.as_ref().map(|inputs| Arc::clone(&inputs.frame)),
             },
@@ -876,6 +880,7 @@ impl FetchWorker {
             agent_panes,
             diag: self.diag.clone(),
         };
+        let sampled_at = Instant::now();
         let mut inputs = sink
             .host_data
             .lock()
@@ -905,6 +910,7 @@ impl FetchWorker {
             Ok(produced) => {
                 let frame = produced.inputs.frame;
                 let fold = WorkspaceFold {
+                    sampled_at,
                     workspace: produced.workspace,
                     frame: Some(frame.clone()),
                 };

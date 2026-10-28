@@ -267,6 +267,7 @@ impl SharedPanes {
             .map(|client| client.pane_id.clone())
             .collect();
         let fold = WorkspaceFold {
+            sampled_at: Instant::now(),
             workspace: crate::sidebar::enrich::WorkspaceSnapshot(self.snapshot.clone()),
             frame: Some(Arc::new(frame)),
         };

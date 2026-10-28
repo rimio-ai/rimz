@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 use super::fetch::{FetchUpdate, WorkspaceFold};
@@ -31,6 +32,12 @@ pub(super) struct Views {
     activity: u64,
     sample_activity: u64,
     focus_event: Option<(u64, Vec<PaneId>)>,
+    fold_waiter: Option<FoldWaiter>,
+}
+
+struct FoldWaiter {
+    requested_at: Instant,
+    reply: SyncSender<Result<Arc<WorkspaceFold>, String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -159,6 +166,26 @@ struct ClientRoute {
 }
 
 impl Views {
+    pub(super) fn fresh_fold(&self, now: Instant, tick: Duration) -> Option<Arc<WorkspaceFold>> {
+        self.fold
+            .as_ref()
+            .filter(|fold| now.saturating_duration_since(fold.sampled_at) < tick)
+            .cloned()
+    }
+
+    /// One refresher waits at a time; retain its first qualifying outcome, not a queue.
+    pub(super) fn wait_for_fold(
+        &mut self,
+        requested_at: Instant,
+    ) -> Receiver<Result<Arc<WorkspaceFold>, String>> {
+        let (reply, receiver) = sync_channel(1);
+        self.fold_waiter = Some(FoldWaiter {
+            requested_at,
+            reply,
+        });
+        receiver
+    }
+
     pub(super) fn publish(&mut self, update: FetchUpdate) {
         let content = match &update {
             FetchUpdate::Shared { update, .. } => update.as_ref(),
@@ -167,8 +194,20 @@ impl Views {
         if let FetchUpdate::Fold { fold, .. } = content {
             self.fold = Some(fold.clone());
         }
+        let reply = self.fold_waiter.as_ref().and_then(|waiter| match content {
+            FetchUpdate::Fold { fold, .. } if fold.sampled_at > waiter.requested_at => {
+                Some(Ok(fold.clone()))
+            }
+            FetchUpdate::Failed { error } => Some(Err(error.clone())),
+            _ => None,
+        });
         self.revision += 1;
         self.latest.push(self.revision, update);
+        if let Some(reply) = reply
+            && let Some(waiter) = self.fold_waiter.take()
+        {
+            let _ = waiter.reply.try_send(reply);
+        }
     }
 
     pub(super) fn refresh(&mut self, now: Instant) {

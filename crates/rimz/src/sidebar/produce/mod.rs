@@ -1,6 +1,10 @@
 //! Host-owned production and private one-shot inspection.
 //!
-//! `produce_workspace_snapshot` folds the event-fresh store rollup over the host's retained pane frame and agent projection, plus group roots, sidecars, and published heavy lanes. The fetch worker shares these inputs with its fast fold and refresher, and retains delivered folds to seed attachments. [`produce_snapshot_with_refresh`] computes a private pane frame and projection, refreshing heavy lanes between two folds without publishing the host-owned inputs.
+//! `produce_workspace_snapshot` folds the event-fresh store rollup over the host's retained pane frame
+//! and agent projection, plus group roots, sidecars, and published heavy lanes. The fetch worker
+//! reuses these inputs for its fast fold, sharing sampled folds with the refresher and attachments.
+//! [`produce_snapshot_with_refresh`] computes a private pane frame and projection, refreshing heavy
+//! lanes between two folds without publishing the host-owned inputs.
 //!
 //! The module is read-only on store truth. Every write is cache-class via `write_temp_then_rename_cache`, rebuilt from truth rather than truth itself. `cargo xtask invariants` rejects store-writer, run-wake, and broker imports under this subtree.
 //! Passive publication reads and the shared fold core live in [`super::consumer`]; the performance model is in [docs/internals/performance.md](../../../../../docs/internals/performance.md).
@@ -416,20 +420,16 @@ fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
     Ok(snapshot)
 }
 
-/// Refresh heavy caches from the host's retained inputs, or, in a room with no previous publication, a frameless rollup before its first produce, without another pane read.
+/// Refresh heavy caches from an acquired worker fold and its matching frame, without refolding
+/// or reading panes. The host bounds sample age before calling; a cold fold may be frameless.
 pub fn refresh_producer_caches(
-    cursor: &mut RollupCursor,
+    workspace: WorkspaceSnapshot,
+    frame: Option<&PaneFrame>,
     state: &StatePaths,
     runtime: &RuntimePaths,
-    inputs: Option<&HostInputs>,
     refresh_state: &mut crate::sidebar::refresh::ProducerRefreshState,
 ) -> Result<()> {
-    let workspace = HostInputs::fold(inputs, cursor, state, runtime)?;
-    let base = crate::sidebar::enrich::project_local(
-        workspace,
-        inputs.map(|inputs| inputs.frame.as_ref()),
-        None,
-    );
+    let base = crate::sidebar::enrich::project_local(workspace, frame, None);
     let config = crate::config::MachineConfig::load_lenient();
     let _ = refresh_heavy_lanes(
         &base,

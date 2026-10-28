@@ -133,14 +133,13 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
 
     let frame: rimz::sidebar::frame::PaneFrame =
         serde_json::from_slice(&std::fs::read(runtime.pane_frame_path()).unwrap()).unwrap();
-    let inputs = rimz::sidebar::produce::HostInputs::from_frame(frame.clone());
     let mut cursor = RollupCursor::new();
     let mut refresh_state = rimz::sidebar::refresh::ProducerRefreshState::default();
     rimz::sidebar::produce::refresh_producer_caches(
-        &mut cursor,
+        super::workspace_for_refresh(&mut cursor, &state, &runtime, &frame),
+        Some(&frame),
         &state,
         &runtime,
-        Some(&inputs),
         &mut refresh_state,
     )
     .expect("refresh producer caches");
@@ -185,10 +184,10 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let accounts_bytes = std::fs::read(&accounts_path).expect("accounts cache");
     let diff_stats_bytes = std::fs::read(&diff_stats_path).expect("diff stats cache");
     rimz::sidebar::produce::refresh_producer_caches(
-        &mut cursor,
+        super::workspace_for_refresh(&mut cursor, &state, &runtime, &frame),
+        Some(&frame),
         &state,
         &runtime,
-        Some(&inputs),
         &mut refresh_state,
     )
     .expect("second refresh");

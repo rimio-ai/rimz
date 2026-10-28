@@ -194,6 +194,7 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
     let mut remembered = snapshot(&config.room.workspace_id);
     remembered.display_name = "seed".into();
     plane.remember(WorkspaceFold {
+        sampled_at: std::time::Instant::now(),
         workspace: WorkspaceSnapshot(remembered.clone()),
         frame: None,
     });

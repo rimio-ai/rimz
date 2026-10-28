@@ -686,6 +686,7 @@ fn clock_thresholds_reach_every_consumer_as_content() {
                 snapshot = snapshot.with_live_panes(vec![live_pane.clone()], None);
             }
             let projected = WorkspaceFold {
+                sampled_at: Instant::now(),
                 workspace: WorkspaceSnapshot(snapshot),
                 frame: Some(frame.clone()),
             };
@@ -819,6 +820,7 @@ fn publication_shares_agent_scaled_fields_at_room_scale() {
         let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
 
         let projected = WorkspaceFold {
+            sampled_at: Instant::now(),
             workspace: WorkspaceSnapshot(shared),
             frame: Some(Arc::new(crate::sidebar::frame::assemble_frame(
                 Vec::new(),
@@ -1016,6 +1018,7 @@ fn single_sink(host_data: Arc<Mutex<HostData>>, wake: SyncSender<Wakeup>) -> (Re
 
 fn frameless(snapshot: SidebarSnapshot) -> WorkspaceFold {
     WorkspaceFold {
+        sampled_at: Instant::now(),
         workspace: WorkspaceSnapshot(snapshot),
         frame: None,
     }
@@ -1207,6 +1210,7 @@ fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
         "rimz-test",
     ));
     let projected = WorkspaceFold {
+        sampled_at: Instant::now(),
         workspace: WorkspaceSnapshot(shared),
         frame: Some(frame),
     };
@@ -1311,6 +1315,7 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
         "rimz-test",
     ));
     let projected = WorkspaceFold {
+        sampled_at: Instant::now(),
         workspace: WorkspaceSnapshot(shared),
         frame: Some(frame),
     };
@@ -1690,6 +1695,24 @@ struct FetchFixture {
     state: StatePaths,
     runtime: RuntimePaths,
     host_data: Arc<Mutex<HostData>>,
+}
+
+#[test]
+fn retained_fold_is_stamped_before_its_first_input_read() {
+    let fixture = FetchFixture::new();
+    let mut worker = fixture.worker();
+    let read_at = Arc::new(Mutex::new(None));
+    let observed = read_at.clone();
+    worker.on_read = Some(Box::new(move || {
+        *observed.lock().unwrap() = Some(Instant::now())
+    }));
+    fixture.run_with(FetchRequest::default(), &mut worker);
+    let views = fixture.host_data.lock().unwrap().views.clone();
+    let sampled_at = views.lock().unwrap().fold.as_ref().unwrap().sampled_at;
+    assert!(
+        sampled_at <= read_at.lock().unwrap().unwrap(),
+        "a publication must include the time spent reading its inputs"
+    );
 }
 
 #[test]
@@ -3155,7 +3178,11 @@ fn completion_and_wakes_use_frozen_membership_but_content_is_room_shared() {
     )
     .unwrap();
     let frame = Some(inputs.frame);
-    let folded = WorkspaceFold { workspace, frame };
+    let folded = WorkspaceFold {
+        sampled_at: Instant::now(),
+        workspace,
+        frame,
+    };
 
     // The eldest leaves and a new pane arrives between fold and publication.
     unsubscribe(&subscribers, "01");

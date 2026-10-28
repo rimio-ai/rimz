@@ -56,6 +56,7 @@ fn deliver_sampled(
 ) {
     rig.deliver(FetchUpdate::Fold {
         fold: Arc::new(WorkspaceFold {
+            sampled_at: Instant::now(),
             workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
             frame: Some(Arc::new(frame)),
         }),
