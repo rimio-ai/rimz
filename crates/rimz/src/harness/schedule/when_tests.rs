@@ -92,6 +92,15 @@ fn scope_checkout_keys_include_nested_terms_but_not_named_branches_or_windows() 
             None,
         ),
         ("window.5h.left<50", None),
+        ("pr.mergeable=conflicting", Some("pr.mergeable")),
+        (
+            "!(pr.review=required || ci[topic]=passed)",
+            Some("pr.review"),
+        ),
+        (
+            "pr.mergeable[topic]=mergeable && pr.review[topic]=approved",
+            None,
+        ),
     ] {
         let stages = BTreeSet::from(["Done".to_owned()]);
         let expr = WhenExpr::parse_with_stages(&[input.to_owned()], Some(&stages)).unwrap();
@@ -203,6 +212,52 @@ fn unread_forge_reasons_follow_probe_status_before_empty_rows() {
         .insert("/checkout".into(), WorktreeCi::Passing);
     assert_eq!(source.unread_reason("ci", scope), None);
     assert_eq!(source.unread_reason("team.stage", scope), None);
+}
+
+#[test]
+fn unread_pr_facts_name_the_open_pr_not_ci() {
+    use serde_json::json;
+
+    let scope = Path::new("/checkout");
+    let mut reasons = Vec::new();
+    let mut expected = Vec::new();
+    for state in ["open", "merged", "closed"] {
+        let source = CiSource(
+            serde_json::from_value(json!({
+                "branch_ci": {}, "path_repos": {"/checkout": "repo"},
+                "repos": {"repo": {"ok": true, "refreshed_at_ms": 1_000}},
+                "states": {"/checkout": {"state": state}},
+                "branches": {"repo": {"main": {"pr": {"state": state}}}}
+            }))
+            .unwrap(),
+        );
+        for key in ["pr.mergeable", "pr.review", "pr.queue"] {
+            for branch in [false, true] {
+                let key = if branch {
+                    format!("{key}[main]")
+                } else {
+                    key.into()
+                };
+                let reason = super::super::condition::unread_reason(
+                    source.probe_unread_reason(&key, scope),
+                    Timestamp::from_millisecond(1_000).unwrap(),
+                );
+                reasons.push((key.clone(), state, reason));
+                let reason = match (state, branch) {
+                    ("open", false) => "not reported for this checkout's open PR",
+                    ("open", true) => "not reported for branch main's open PR",
+                    (_, false) => "no open PR for this checkout",
+                    (_, true) => "no open PR for branch main",
+                };
+                expected.push((key, state, reason.to_owned()));
+            }
+        }
+        assert_eq!(
+            source.probe_unread_reason("ci", scope),
+            Some(UnreadReason::NoCi { branch: None })
+        );
+    }
+    assert_eq!(reasons, expected);
 }
 
 #[test]
@@ -379,7 +434,171 @@ fn pr_reads_link_state_and_requires_a_scoped_link() {
     let error = WhenExpr::parse(&["pr=pending".to_owned()]).unwrap_err();
     assert!(error.to_string().contains("values: open, merged, closed"));
     let error = WhenExpr::parse(&["unknown=value".to_owned()]).unwrap_err();
-    assert!(error.to_string().contains("team.stage, ci, pr, pr.queue,"));
+    assert!(
+        error
+            .to_string()
+            .contains("team.stage, ci, pr, pr.queue, pr.mergeable, pr.review,")
+    );
+}
+
+#[test]
+fn pr_mergeable_requires_a_settled_answer_at_the_current_open_head() {
+    use serde_json::json;
+
+    let scope = Path::new("/checkout");
+    let mut readings = Vec::new();
+    let mut expected = Vec::new();
+    for (state, head, settled, reading) in [
+        (
+            "open",
+            "head-a",
+            Some(("mergeable", "head-a")),
+            Some("mergeable"),
+        ),
+        (
+            "open",
+            "head-a",
+            Some(("conflicting", "head-a")),
+            Some("conflicting"),
+        ),
+        ("open", "head-b", Some(("mergeable", "head-a")), None),
+        ("open", "head-b", Some(("conflicting", "head-a")), None),
+        ("open", "head-a", None, None),
+        ("open", "", Some(("conflicting", "")), None),
+        ("merged", "head-a", Some(("conflicting", "head-a")), None),
+        ("closed", "head-a", Some(("mergeable", "head-a")), None),
+    ] {
+        let mergeability = settled.map(|(state, head)| json!({"state": state, "head": head}));
+        let open = json!({"head": head, "mergeability": mergeability});
+        let link = json!({"state": state, "open": open});
+        let mut source = CiSource(
+            serde_json::from_value(json!({
+                "branch_ci": {}, "path_repos": {"/checkout": "repo"},
+                "states": {"/checkout": link},
+                "branches": {"repo": {"topic": {"pr": link}}}
+            }))
+            .unwrap(),
+        );
+        for key in ["pr.mergeable", "pr.mergeable[topic]"] {
+            let result = WhenExpr::parse(&[format!("{key}=conflicting")])
+                .map(|expr| {
+                    evaluate(&expr, scope, Some(&source), None, None, &no_windows()).readings[key]
+                        .clone()
+                })
+                .map_err(|error| error.to_string());
+            readings.push(result);
+            expected.push(Ok(reading.map(str::to_owned)));
+            source.0.states.clear();
+        }
+    }
+    for link in [json!({"state": "open"}), json!(null)] {
+        let source = CiSource(
+            serde_json::from_value(json!({"branch_ci": {},
+                "states": if link.is_null() { json!({}) } else { json!({"/checkout": link}) }
+            }))
+            .unwrap(),
+        );
+        for source in [None, Some(&source)] {
+            let reading = WhenExpr::parse(&["pr.mergeable=mergeable".into()])
+                .map(|expr| {
+                    let verdict = evaluate(&expr, scope, source, None, None, &no_windows());
+                    verdict.readings["pr.mergeable"].clone()
+                })
+                .map_err(|error| error.to_string());
+            readings.push(reading);
+            expected.push(Ok(None));
+        }
+    }
+    assert_eq!(readings, expected);
+}
+
+#[test]
+fn pr_review_keeps_never_fetched_distinct_from_none() {
+    use serde_json::json;
+
+    let scope = Path::new("/checkout");
+    let mut readings = Vec::new();
+    let mut expected = Vec::new();
+    for state in ["open", "merged", "closed"] {
+        for review in [
+            Some("draft"),
+            Some("changes_requested"),
+            Some("required"),
+            Some("approved"),
+            Some("none"),
+            None,
+        ] {
+            let link = json!({"state": state, "open": {"head": "head-a", "review": review}});
+            let mut source = CiSource(
+                serde_json::from_value(json!({
+                    "branch_ci": {}, "path_repos": {"/checkout": "repo"},
+                    "states": {"/checkout": link},
+                    "branches": {"repo": {"topic": {"pr": link}}}
+                }))
+                .unwrap(),
+            );
+            for key in ["pr.review", "pr.review[topic]"] {
+                let value = review.unwrap_or("none");
+                readings.push(
+                    WhenExpr::parse(&[format!("{key}={value}")])
+                        .map(|expr| {
+                            let verdict =
+                                evaluate(&expr, scope, Some(&source), None, None, &no_windows());
+                            (verdict.readings[key].clone(), verdict.ok)
+                        })
+                        .map_err(|error| error.to_string()),
+                );
+                let reading = review.filter(|_| state == "open");
+                expected.push(Ok((reading.map(str::to_owned), reading.is_some())));
+                source.0.states.clear();
+            }
+        }
+    }
+    let expr = WhenExpr::parse(&["pr.review=approved".into()]);
+    let factless = CiSource(
+        serde_json::from_value(json!({"branch_ci": {},
+            "states": {"/checkout": {"state": "open"}}
+        }))
+        .unwrap(),
+    );
+    for source in [
+        None,
+        Some(&CiSource(PrStateCache::default())),
+        Some(&factless),
+    ] {
+        readings.push(
+            expr.as_ref()
+                .map(|expr| {
+                    let verdict = evaluate(expr, scope, source, None, None, &no_windows());
+                    (verdict.readings["pr.review"].clone(), verdict.ok)
+                })
+                .map_err(|error| error.to_string()),
+        );
+        expected.push(Ok((None, false)));
+    }
+    assert_eq!(readings, expected);
+}
+
+#[test]
+fn pr_fact_value_refusals_list_the_readings() {
+    let cases = [
+        ("pr.mergeable", "mergeable, conflicting, unknown"),
+        (
+            "pr.review",
+            "draft, changes_requested, required, approved, none, unknown",
+        ),
+    ];
+    let errors = cases.map(|(key, _)| {
+        WhenExpr::parse(&[format!("{key}=invalid")])
+            .unwrap_err()
+            .to_string()
+    });
+    assert_eq!(
+        errors
+            .each_ref()
+            .map(|error| error.split_once("unknown ").unwrap().1),
+        cases.map(|(key, values)| format!("{key} value; values: {values}"))
+    );
 }
 
 #[test]
@@ -629,11 +848,11 @@ fn refusals_name_clause_position_and_fix() {
     for (input, hint) in [
         (
             "agent=idle",
-            "team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left",
+            "team.stage, ci, pr, pr.queue, pr.mergeable, pr.review, window.5h.left, window.7d.left",
         ),
         (
             "window.1h.left>=40",
-            "team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left",
+            "team.stage, ci, pr, pr.queue, pr.mergeable, pr.review, window.5h.left, window.7d.left",
         ),
         ("ci=green", "passed, failed, pending"),
         ("", "empty term"),
@@ -892,7 +1111,10 @@ fn branch_selector_refusals_suggest_parseable_fixes() {
             "{input}: {error}"
         );
         if input.starts_with("team") || input.starts_with("window") {
-            assert!(error.contains("only ci, pr, pr.queue"), "{error}");
+            assert!(
+                error.contains("only ci, pr, pr.queue, pr.mergeable, pr.review"),
+                "{error}"
+            );
         }
     }
 }

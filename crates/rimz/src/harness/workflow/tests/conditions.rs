@@ -194,12 +194,18 @@ fn condition_subscriptions_follow_checkout_terms_not_branches_or_windows() {
     for (terms, expected) in [
         ("ci=failed", vec!["ci.*"]),
         ("!pr=open || pr.queue=queued", vec!["pr.*"]),
+        ("pr.mergeable=conflicting", vec!["pr.*"]),
+        ("pr.review=changes_requested", vec!["pr.*"]),
         ("team.stage=Done && ci=passed", vec!["team.stage", "ci.*"]),
         (
             "ci[main]=passed || pr[main]=merged || pr.queue[main]=queued",
             vec![],
         ),
         ("window.5h.left>=40", vec![]),
+        (
+            "pr.mergeable[main]=mergeable || pr.review[main]=approved",
+            vec![],
+        ),
     ] {
         let check: Check = toml::from_str(&format!(
             "else='pending'\n[[cases]]\nwhen=['{terms}']\noutcome='ready'\n"

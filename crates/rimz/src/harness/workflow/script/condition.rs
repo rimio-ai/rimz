@@ -261,6 +261,10 @@ mod tests {
             ("ci[topic]", "passed"),
             ("pr[topic]", "merged"),
             ("pr.queue[topic]", "queued"),
+            ("pr.mergeable", "conflicting"),
+            ("pr.review", "required"),
+            ("pr.mergeable[topic]", "mergeable"),
+            ("pr.review[topic]", "approved"),
         ] {
             let clauses = [
                 format!("{key}={value}"),
@@ -451,6 +455,10 @@ mod tests {
             ("pr.queue", "dequeued"),
             ("pr[topic]", "merged"),
             ("pr.queue[topic]", "queued"),
+            ("pr.mergeable", "conflicting"),
+            ("pr.review", "required"),
+            ("pr.mergeable[topic]", "mergeable"),
+            ("pr.review[topic]", "approved"),
         ] {
             let clause = format!("{key}={value}");
             let check: Check = toml::from_str(&format!(
