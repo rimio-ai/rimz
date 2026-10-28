@@ -1,7 +1,39 @@
 ---
 source: crates/rimz/src/cli/stats/tests/held.rs
-expression: "strip_ansi(&frame(&stats, &assists, Window::Today, 119, Some(76)).text)"
+expression: "strip_ansi(&frame(&stats, &assists, Window::Today, 119,\nSome(76)).text).lines().map(str::trim_end).collect::<Vec<_>>().join(\"\\n\")"
 ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
                                            ██████╗ ██╗███╗   ███╗  ███████╗
                                            ██╔══██╗██║████╗ ████║  ╚══███╔╝
                                            ██████╔╝██║██╔████╔██║    ███╔╝
@@ -12,3 +44,5 @@ expression: "strip_ansi(&frame(&stats, &assists, Window::Today, 119, Some(76)).t
 
    No agent sessions recorded on this machine yet.
    Spend appears here after your first agent session; rimz stats reads it from each agent's own session files.
+
+   ←/→ range · t/w/m/y jump · r reload · q quit

@@ -93,17 +93,21 @@ After the role sections, the full report prints `No role recorded` as `max(0, fl
 
 ### Held dashboard rows
 
-The held dashboard has no Spend row. Its windows row is a tab bar of dollars for all four windows, with the selected tab highlighted, followed by the spend chart, heatmap, and breakdowns (`crates/rimz/src/cli/stats/dashboard.rs::Dashboard`). Models is full-width, Providers sits beside Where it went, Agents beside Subagents, then Teams full-width. Models has HIT, TOK/S, and TOKENS, and Teams has AGENT-TIME, MESSAGES, and TOKENS. Agents and Subagents rows carry only dollars, a share bar, and the share. A Providers row carries dollars, its fleet share (`<1%` below one percent), `N% hit` only from a 1% share up, and grouped sessions (`Dashboard::provider_lines`). Provider names come from provider descriptors and model names from `model_display::display_model`, with `Unknown model` for an empty id. Model markers and chart segments use `crates/rimz/src/cli/render/palette.rs::model_shade`, ranked within the published producing kind by Year dollars, then work tokens, then id. `Other` is muted.
+The held dashboard has no Spend row. After the optional wordmark it draws the heatmap, dollar tab rail, spend chart, breakdowns, Assists, and key hint (`crates/rimz/src/cli/stats/dashboard.rs::Dashboard`). Models is full-width, Providers sits beside Where it went, Agents beside Subagents, then Teams full-width. Models has HIT, optional TOK/S, and TOKENS, and Teams has AGENT-TIME, MESSAGES, and TOKENS. Agents and Subagents rows carry only dollars, a share bar, and the share. A Providers row carries dollars, its fleet share (`<1%` below one percent), `N% hit` only from a 1% share up, and grouped sessions (`crates/rimz/src/cli/stats/dashboard.rs::Dashboard::provider_lines`). Provider names come from provider descriptors and model names from `model_display::display_model`, with `Unknown model` for an empty id. Model markers and chart segments use `crates/rimz/src/cli/render/palette.rs::model_shade`, ranked within the published producing kind by Year dollars, then work tokens, then id. `Other` is muted.
 
-Folding is measured against each section's own admitted dollars, not fleet totals. `dashboard::fold` ranks rows by dollars, then work tokens, then key. Models and role sections keep named rows at 1% of their own section's dollars, and providers skip the threshold. The limit is four named rows, or two from fit step 5, plus `Other`. A single-entry tail keeps its name. `RoleWindow::merge` preserves spend, agent-time, and messages through folding. Where it went splits Teams, Subagents, Agents, and `max(0, fleet - roles)` as No role, normalizing that bar and its percentages to the parts' sum.
+Folding is measured against each section's own admitted dollars, not fleet totals. `dashboard::fold` ranks rows by dollars, then work tokens, then key. Models and role sections keep named rows at 1% of their own section's dollars, and providers skip the threshold. The limit is four named rows, or two from fit step 4, plus `Other`. A single-entry tail keeps its name. `RoleWindow::merge` preserves spend, agent-time, and messages through folding. Where it went splits Teams, Subagents, Agents, and `max(0, fleet - roles)` as No role, normalizing that bar and its percentages to the parts' sum.
 
-The chart stacks the drawn period's four largest models, largest at the bottom, plus Other (`dashboard::Dashboard::chart_lines`). Daily bars span 30 days; weekly bars span the newest 52 blocks that fit, anchored to the publication's `chart.today` so a midnight repaint or an unnamed system zone cannot shift their seven-day keys. Positive spend gets at least one cell. A daily dashed line averages the preceding 30 fleet days, missing days as zero, and the y ceiling rounds up over both that mean and the tallest bar. Bar stride reserves room only for the line's `┄ $X` tail: a caption too wide for the frame drops `typical`, and the bars never narrow for it. Days outside the selected window are muted, and the final axis label is accented.
+The chart stacks the drawn period's four largest models, largest at the bottom, plus Other (`crates/rimz/src/cli/stats/dashboard.rs::Dashboard::chart_lines`). Today draws 24 wall-clock hours from `chart.hours`; Week seven days and Month thirty from `chart.days`; Year the newest weekly blocks that fit, up to 52, from `chart.weeks`. All are anchored to the publication's `chart.today`, preserving their keys over a midnight repaint. The plot has seven rows while the heatmap shows. Bars round to eighth cells, with at least `▁` for positive spend. Week and Month's dashed typical line averages the preceding 30 fleet days, missing days as zero. The y ceiling is the smallest of `{1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8} × 10^k` covering the drawn bars, forecast, yesterday overlay, and typical line. Its label tops the plot; half the ceiling labels the fourth of seven rows from the bottom. Bar stride reserves the worded `┄ typical $X` caption whenever bars can remain at least two columns wide; otherwise it reserves only `┄ $X`, retaining the word if it still fits. The final axis label is accented; it starts under the newest bar when that bar is wide enough to hold it, and otherwise ends at the plot edge on every range. Date labels that would touch or overlap the previous label are skipped.
+
+The held-only forecast is today's dollars plus the previous seven local days' mean dollars in hours after the walk's local wall-clock hour, missing days as zero and clamped to at least spend so far (`crates/rimz/src/cli/stats/dashboard.rs::Dashboard::forecast`). The hour comes from `ChartSpend.hour`, taken at the same instant as `chart.today` and the day tally, not the later `refreshed_at_ms` or repaint time. Today prints `today X so far · ~F by midnight · yesterday Y`; yesterday's same-hour total draws faint cells above today's bar and fills future hours. Week, Month and Year's bar holding today extends by `F − X`. Its top segment's emitted model tone starts halfway toward the scheme background through `crates/rimz/src/theme/palette.rs::Palette::forecast_tone` and `crates/rimz/src/cli/render/palette.rs::model_forecast`, advancing when depth quantization would preserve the model tone or increase its contrast. It uses neither dim effects nor shade glyphs. No extension draws when `F = X`; an increase that rounds to no additional eighth leaves the spend tone unchanged. Today has no typical line or forecast extension.
+
+In a cell shared with an extension, the spent eighths keep their model-tone glyph over a forecast-tone background. A partial spend cell whose yesterday overlay continues above it similarly uses a faint background. Spend is measured at the cell's spent midpoint against actual dollars, never the projected bar. The background carries the comparison to the cell top, overstating it by less than one cell while keeping spent eighths exact. `HeldStats::repaint` passes the stream's colour choice to the dashboard. With colour off (`NO_COLOR`, `CLICOLOR=0`, or `--color never`), the overlay and extension are omitted from both the plot and its ceiling; the Today header keeps the forecast and yesterday text.
 
 The HIT column is `SpendWindow::cache_hit_percent`: `cache_read / (cache_read + input)`, where `input` already includes cache writes, rounded half up, and absent for a zero denominator. `CacheHealth::classify` colours it green at 90% and above, yellow from 70% to 89%, and red below.
 
-The rate column is `SpendWindow::tokens_per_sec`: `timed_output * 1000 / timed_ms` for the selected window, rounded half up. One-shot Providers and compact profile rows print it, with `-` for an untimed row. `SpendWindow::merge` sums both counters, so one-shot tails carry the ratio of sums. Held Models always keeps TOK/S, but `Other` prints a U+2013 placeholder. Held Providers and role rows omit the rate. Timing boundaries and filters belong to [spending.md](./agents/spending.md#response-timing).
+The rate column is `SpendWindow::tokens_per_sec`: `timed_output * 1000 / timed_ms` for the selected window, rounded half up. One-shot Providers and compact profile rows print it, with `-` for an untimed row. `SpendWindow::merge` sums both counters, so one-shot tails carry the ratio of sums. Held Models hides TOK/S when every named row is untimed; `Other` always prints a U+2013 placeholder when the column shows and does not count toward that decision. Held Providers and role rows omit the rate. Timing boundaries and filters belong to [spending.md](./agents/spending.md#response-timing).
 
-Held share bars use `panel::resolve_panel_glyphs` to resolve the filled and track meter roles through the machine theme, while colours stay on the CLI palette ([theme.md](./theme.md#glyphs)). Chart stacks use solid cells, and Where it went and the heatmap keep their density glyphs. Dollar totals use `fmt::fmt_usd`: whole dollars with thousands grouped from $10 up, and cents below (`$0.12`), so a small fleet never reads `$0`. Cost per session always keeps cents. Token units are uppercase.
+Held share bars use `panel::resolve_panel_glyphs` to resolve the filled and track meter roles through the machine theme, while colours stay on the CLI palette ([theme.md](./theme.md#glyphs)). Chart stacks use solid cells with eighth-block tops, and Where it went and the heatmap keep their density glyphs. Dollar totals use `fmt::fmt_usd`: whole dollars with thousands grouped from $10 up, and cents below (`$0.12`), so a small fleet never reads `$0`. Cost per session always keeps cents. Token units are uppercase.
 
 ### Recorded-since notes
 
@@ -113,7 +117,7 @@ The one-shot coverage line prints above the first visible profile section, and a
 
 ## Insights
 
-Activity comes from `panel::Activity::of`, and the heatmap key carries the compact summary:
+The one-shot activity summary and JSON's `active_days_28` keep `panel::Activity::of`. The one-shot heatmap key follows this table:
 
 | Figure | Today and Year | Week and Month |
 | --- | --- | --- |
@@ -124,28 +128,29 @@ Activity comes from `panel::Activity::of`, and the heatmap key carries the compa
 
 The current streak counts back from today, or from yesterday when today has no activity yet, so a quiet morning does not break a streak.
 
+The held heatmap instead counts active days and chooses the busiest within its drawn span, beginning at `Grid::col_monday(0)` and ending today. Its footer is identical on every tab: `N active days since Mon D · streak N days · busiest Mon D`, with singular `day` for one and `–` when no day is active. Both dates print `Mon D YYYY` when they fall in an earlier calendar year than today, keeping the day unpadded. The one-shot legend's date format is unchanged. The streak still reads the full history. A summary too wide beside the ramp key moves below it and wraps to the frame width.
+
 Both text surfaces use `panel::per_active_day`: dollars and days with tokens cover the same last 7, 30, or 364 local calendar days, today included. The one-shot average prints a U+2013 placeholder for Today. Chart titles compare Today with yesterday and show the shared average for Week, Month, and Year. One-shot Spend figures right-align to fixed column edges, so Week and Month trends run into the next column's padding without moving any figure. `panel::trend_label` caps changes above 999% as `↑999%+` so they fit those slots. Today and Year have no spend trend.
 
 ## Fitting the terminal
 
 The dashboard is a pure string renderer over published stats, per-tab assists, the active tab, and supplied terminal dimensions (`dashboard::Dashboard::frame`). crossterm appears only at the held loop's terminal edge (`tui::TerminalModeGuard`, `tui::replace_frame`, and key events), and the sidebar pane's ratatui widget stack is not on this path, so tests assert on rendered text.
 
-Width is `min(cols, 113)`, centred independently of the heatmap week count. Below 112 columns pairs stack and bars shrink. Every line is clipped by display width while preserving ANSI styles. The final frame joins lines without a trailing newline, so replacing a frame of exactly the terminal height cannot scroll its first row offscreen.
+Width is `min(cols, 113)`, centred independently of the heatmap week count. Below 112 columns pairs stack and bars shrink. Every line is clipped by display width while preserving ANSI styles. On a tty, top padding is `(rows − tallest_tab_height) / 2` at the chosen fit step, shared across tabs. The final frame joins lines without a trailing newline, so replacing a frame of exactly the terminal height cannot scroll its first row offscreen.
 
 The fitter renders all four tabs at each cumulative step and picks the first whose tallest frame fits. All tabs share that step:
 
 1. Full layout (step 0).
 2. Drop the wordmark (step 1).
 3. Collapse Assists (step 2).
-4. Reduce the chart from 12 to 8 rows (step 3).
-5. Drop Agents and Subagents (step 4).
-6. Reduce the named-row limit from four to two (step 5).
-7. Reduce the chart to 6 rows (step 6).
-8. Drop Teams (step 7).
-9. Reduce the chart to 4 rows (step 8).
-10. Drop the heatmap (step 9).
+4. Drop Agents and Subagents (step 3).
+5. Reduce the named-row limit from four to two (step 4).
+6. Drop Teams (step 5).
+7. Drop the heatmap (step 6).
+8. Reduce the plot from seven to four rows (step 7).
+9. Reduce the plot to two rows (step 8).
 
-Beyond the last step, the bottom is clipped to terminal height. An unknown row count uses the full layout. Empty history keeps the wordmark while it fits, then the fresh-machine copy and any assists. Sections have one blank separator and no bottom padding. Only the held dashboard fits: the one-shot report scrolls and has no row budget.
+Beyond the last step, the body is clipped to terminal height while the final hint stays. An unknown row count uses the full layout without vertical padding. Empty history keeps the wordmark while it fits, then the fresh-machine copy, any assists, and the hint. Sections have one blank separator and no bottom padding. Only the held dashboard fits: the one-shot report scrolls and has no row budget.
 
 ## The held dashboard
 
@@ -163,17 +168,19 @@ Each repaint picks one of three frames:
 | no frame yet, a refresh failed | the wordmark and a centred `Spending refresh unavailable - retrying. <cause>`, ellipsized to the panel width |
 | no outcome yet | nothing is written |
 
-A history with no usage and no profile activity paints the wordmark while it fits, `No agent sessions recorded on this machine yet.`, the explanation that spend appears after the first session and comes from each agent's session files, and any assist categories. A resize repaints the current frame, and the first successful refresh replaces the unavailable frame in place. Each repaint reads `assist_log::recent(root, None)` once, and `dashboard::TabAssists::from_records` folds a sorted suffix for each tab. The earliest retained record dates the Assists header only when later than the selected window's start. A tab switch does not reread spending, and the frames are the same under `--hold`.
+A history with no usage and no profile activity paints the wordmark while it fits, `No agent sessions recorded on this machine yet.`, the explanation that spend appears after the first session and comes from each agent's session files, any assist categories, and the hint. A resize repaints the current frame, and the first successful refresh replaces the unavailable frame in place. Each repaint reads `assist_log::recent(root, None)` once, and `dashboard::TabAssists::from_records` folds a sorted suffix for each tab. The earliest retained record dates the Assists header only when later than the selected window's start. A tab switch does not reread spending. Under `--hold` only quit handling and the hint differ.
 
 | Key | Outcome |
 | --- | --- |
-| `Tab` / `Shift-Tab` | cycle the window and repaint from the stats in hand |
+| `←` / `→`, `h` / `l` | move one range without wrapping and repaint from the stats in hand |
+| `t` / `w` / `m` / `y` (either case) | jump to Today / Week / Month / Year |
+| `Tab` / `Shift-Tab` | cycle the window with wrap and repaint from the stats in hand |
 | `r` / `R` | reload the binary in place |
 | `q`, `Ctrl-C` | quit, unless `--hold` is set |
 
 Reload re-execs `reload::current_reexec_target()` with the original arguments. The `r` key returns the reload outcome directly. `SIGUSR1` sets a flag that the cycle reads and clears, which is how `rimz reload` restarts running dashboards, and registering that handler replaces `SIGUSR1`'s default terminate disposition. When no re-exec target resolves, the dashboard keeps running.
 
-`--hold` is a hidden flag that requires `--refresh` and exists for the daemon view: `q` and `Ctrl-C` become no-ops, and closing the pane still ends the process. `daemon_content::stats_argv` is exactly `rimz stats --refresh --hold`. How `[daemon]` panes replace it, and how a pane-count change reaches a running room, are in [rimzd.md](./rimzd.md#the-content-supervisor).
+The final hint is `←/→ range · t/w/m/y jump · r reload · q quit`. `--hold` is a hidden flag that requires `--refresh` and exists for the daemon view: the hint omits `q quit`, `q` and `Ctrl-C` become no-ops, and closing the pane still ends the process. `daemon_content::stats_argv` is exactly `rimz stats --refresh --hold`. How `[daemon]` panes replace it, and how a pane-count change reaches a running room, are in [rimzd.md](./rimzd.md#the-content-supervisor).
 
 ## Machine-readable surfaces
 

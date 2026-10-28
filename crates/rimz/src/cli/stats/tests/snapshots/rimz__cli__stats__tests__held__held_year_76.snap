@@ -2,6 +2,9 @@
 source: crates/rimz/src/cli/stats/tests/held.rs
 expression: text
 ---
+
+
+
                                            ██████╗ ██╗███╗   ███╗  ███████╗
                                            ██╔══██╗██║████╗ ████║  ╚══███╔╝
                                            ██████╔╝██║██╔████╔██║    ███╔╝
@@ -9,24 +12,6 @@ expression: text
                                            ██║  ██║██║██║ ╚═╝ ██║  ███████╗
                                            ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝  ╚══════╝
                                         The control room for your coding agents
-
-   Today $1,024  ·  Week $5,239  ·  Month $24,571  ·  [ Year $56,300 ]
-
-   Spend per week · last 52 weeks                                                                $853 per active day
-   $50,000 ┤
-           ┤
-           ┤
-           ┤
-           ┤
-           ┤
-   $25,000 ┤                                                                           █
-           ┤                                                                           █
-           ┤                                                                           █
-           ┤                                                                           █
-           ┤                                                                           █                     █ █ █ █
-           ┤                                                                           █         █ █ █ █ █ █ █ █ █ █
-        $0 └─Oct 31                    Jan 30                    May 1                     Jul 31                now
-             █ Opus 5.5    █ GPT 6 Astra    █ Fable 5.1    █ GPT 6.1 Sol    █ Other
 
    Token activity
             Nov     Dec       Jan     Feb     Mar       Apr     May     Jun       Jul     Aug       Sep     Oct
@@ -37,7 +22,20 @@ expression: text
       Fri · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █ █
           · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █
           · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █
-     Less · ░ ▒ ▓ █ More                   28 of last 28 days active · streak 65 days · busiest Oct 22
+     Less · ░ ▒ ▓ █ More                   66 active days since Oct 27 2025 · streak 65 days · busiest Oct 22
+
+   Today $1,024  ·  Week $5,239  ·  Month $24,571  ·  [ Year $56,300 ]
+
+   Spend per week · last 52 weeks                                                                $853 per active day
+   $25,000 ┤                                                                           ▁
+           ┤                                                                           █
+           ┤                                                                           █
+   $12,500 ┤                                                                           █
+           ┤                                                                           █
+           ┤                                                                           █                     ▅ ▅ ▅ ▄
+           ┤                                                                           █         ▁ ▅ ▅ ▅ ▅ ▆ █ █ █ █
+        $0 └─Oct 31                    Jan 30                    May 1                     Jul 31                now
+             █ Opus 5.5    █ GPT 6 Astra    █ Fable 5.1    █ GPT 6.1 Sol    █ Other
 
    Models                                                                                  HIT       TOK/S  TOKENS
    █ Opus 5.5      $21,471  ━━━━━━━━━━━━━━━━━━──────────────────────────────  38%          96%          50   46.2B
@@ -75,3 +73,5 @@ expression: text
    Auto-continue: 680 (after 44.8h parked)  Auto-resume: 8 (240 agents)
    Auto-compact: 717                        Auto-gc: 117 (575 GB)
    Keepalive: 735
+
+   ←/→ range · t/w/m/y jump · r reload · q quit

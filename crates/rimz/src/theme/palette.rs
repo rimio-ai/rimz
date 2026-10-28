@@ -262,6 +262,26 @@ impl Palette {
         Tone::from_rgb(rgb, self.depth)
     }
 
+    /// Fade a model shade toward the scheme background for projected spend. Start halfway;
+    /// advance when depth quantization would erase the distinction or increase its contrast.
+    pub fn forecast_tone(&self, tone: Tone) -> Tone {
+        let base = emitted_rgb(tone);
+        let background = oklab::lightness(self.raw.background);
+        let contrast = (oklab::lightness(base) - background).abs();
+        for amount in 50..=100 {
+            let faded = self.rgb_tone(oklab::blend(
+                base,
+                self.raw.background,
+                amount as f32 / 100.0,
+            ));
+            if faded != tone && (oklab::lightness(emitted_rgb(faded)) - background).abs() < contrast
+            {
+                return faded;
+            }
+        }
+        self.rgb_tone(self.raw.background)
+    }
+
     pub fn good(&self) -> Tone {
         self.good
     }
@@ -437,6 +457,44 @@ pub(crate) fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forecast_tone_fades_model_shades_toward_each_schemes_background_at_both_depths() {
+        let mut cases = Vec::new();
+        for depth in [ColorDepth::Indexed, ColorDepth::Truecolor] {
+            for scheme in ["Tokyo Night", "Catppuccin Latte"] {
+                let config = ThemeConfig {
+                    scheme: Some(scheme.into()),
+                    ..Default::default()
+                };
+                let palette = Palette::resolve(&config, depth);
+                let background = oklab::lightness(palette.raw.background);
+                for kind in ["claude", "codex"] {
+                    let brand = super::super::resolve_provider_brand(kind, &Default::default());
+                    for rank in 0..4 {
+                        let model = brand.shade(&palette, rank);
+                        let forecast = palette.forecast_tone(model);
+                        let before = (oklab::lightness(emitted_rgb(model)) - background).abs();
+                        let after = (oklab::lightness(emitted_rgb(forecast)) - background).abs();
+                        let correct_depth = matches!(
+                            (depth, forecast),
+                            (ColorDepth::Indexed, Tone::Indexed(_))
+                                | (ColorDepth::Truecolor, Tone::Rgb(..))
+                        );
+                        cases.push((
+                            scheme,
+                            depth,
+                            kind,
+                            rank,
+                            forecast != model && after < before && correct_depth,
+                            (model, forecast, before, after),
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(cases.iter().all(|case| case.4), "{cases:?}");
+    }
 
     fn assert_fast_mode_contrast(name: &str) {
         let config = ThemeConfig {

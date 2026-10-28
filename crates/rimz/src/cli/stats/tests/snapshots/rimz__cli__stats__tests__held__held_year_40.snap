@@ -2,17 +2,6 @@
 source: crates/rimz/src/cli/stats/tests/held.rs
 expression: text
 ---
-   Today $1,024  ·  Week $5,239  ·  Month $24,571  ·  [ Year $56,300 ]
-
-   Spend per week · last 52 weeks                                                                $853 per active day
-   $50,000 ┤
-           ┤
-           ┤
-   $25,000 ┤                                                                           █
-           ┤                                                                           █
-           ┤                                                                           █         █ █ █ █ █ █ █ █ █ █
-        $0 └─Oct 31                    Jan 30                    May 1                     Jul 31                now
-             █ Opus 5.5    █ GPT 6 Astra    █ Fable 5.1    █ GPT 6.1 Sol    █ Other
 
    Token activity
             Nov     Dec       Jan     Feb     Mar       Apr     May     Jun       Jul     Aug       Sep     Oct
@@ -23,7 +12,20 @@ expression: text
       Fri · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █ █
           · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █
           · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █
-     Less · ░ ▒ ▓ █ More                   28 of last 28 days active · streak 65 days · busiest Oct 22
+     Less · ░ ▒ ▓ █ More                   66 active days since Oct 27 2025 · streak 65 days · busiest Oct 22
+
+   Today $1,024  ·  Week $5,239  ·  Month $24,571  ·  [ Year $56,300 ]
+
+   Spend per week · last 52 weeks                                                                $853 per active day
+   $25,000 ┤                                                                           ▁
+           ┤                                                                           █
+           ┤                                                                           █
+   $12,500 ┤                                                                           █
+           ┤                                                                           █
+           ┤                                                                           █                     ▅ ▅ ▅ ▄
+           ┤                                                                           █         ▁ ▅ ▅ ▅ ▅ ▆ █ █ █ █
+        $0 └─Oct 31                    Jan 30                    May 1                     Jul 31                now
+             █ Opus 5.5    █ GPT 6 Astra    █ Fable 5.1    █ GPT 6.1 Sol    █ Other
 
    Models                                                                                  HIT       TOK/S  TOKENS
    █ Opus 5.5      $21,471  ━━━━━━━━━━━━━━━━━━──────────────────────────────  38%          96%          50   46.2B
@@ -36,9 +38,6 @@ expression: text
    █ Codex      $25,983   46%   97% hit  17,985 sessions     ▒ Agents    $2,071   4%    ░ No role  $43,165  77%
    █ Pi           $0.09   <1%                 3 sessions
 
-   Teams            $7,212                                                          AGENT-TIME    MESSAGES  TOKENS
-   ● recon          $6,005  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────  83%       18h10m          34   13.5B
-   ● forge            $949  ━━━━━━──────────────────────────────────────────  13%        2h40m          10    1.8B
-   ● Other            $258  ━━──────────────────────────────────────────────   4%        1h40m   7 (1 you)    561M
-
    Assists  17 kinds · rimz stats --assists for the timeline
+
+   ←/→ range · t/w/m/y jump · r reload · q quit

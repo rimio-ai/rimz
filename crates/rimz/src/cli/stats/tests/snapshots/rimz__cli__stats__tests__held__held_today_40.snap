@@ -2,17 +2,6 @@
 source: crates/rimz/src/cli/stats/tests/held.rs
 expression: text
 ---
-   [ Today $1,024 ]  ·  Week $5,239  ·  Month $24,571  ·  Year $56,300
-
-   Spend per day · last 30 days                                               today $1,024 so far · yesterday $1,293
-    $2,000 ┤
-           ┤
-           ┤                                                                                     ██ ██
-    $1,000 ┤ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██                ██ ██
-           ┤ ██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄██┄ typical $785
-           ┤ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██
-        $0 └─Sep 24               Oct 1                Oct 8                Oct 15            today
-             █ Opus 5.5    █ GPT 6 Astra    █ Fable 5.1    █ GPT 6.1 Sol    █ Other
 
    Token activity
             Nov     Dec       Jan     Feb     Mar       Apr     May     Jun       Jul     Aug       Sep     Oct
@@ -23,7 +12,20 @@ expression: text
       Fri · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █ █
           · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █
           · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · █ █ █ █ █ █ █ █ █
-     Less · ░ ▒ ▓ █ More                   28 of last 28 days active · streak 65 days · busiest Oct 22
+     Less · ░ ▒ ▓ █ More                   66 active days since Oct 27 2025 · streak 65 days · busiest Oct 22
+
+   [ Today $1,024 ]  ·  Week $5,239  ·  Month $24,571  ·  Year $56,300
+
+   Spend per hour · today                               today $1,024 so far · ~$1,265 by midnight · yesterday $1,293
+       $80 ┤
+           ┤ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅ ▅▅▅
+           ┤ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ▆▆▆ ▆▆▆ ▆▆▆ ▆▆▆ ▆▆▆ ▆▆▆ ▆▆▆ ▆▆▆
+       $40 ┤ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███
+           ┤ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███
+           ┤ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███
+           ┤ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███ ███
+        $0 └─00                      06                      12                      18                  23
+             █ Opus 5.5    █ GPT 6.1 Sol    █ Unknown model    █ Small    █ Other
 
    Models                                                                                  HIT       TOK/S  TOKENS
    █ Opus 5.5         $688  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────────  67%          97%          88    1.3B
@@ -35,9 +37,6 @@ expression: text
    █ Claude        $691   67%   97% hit      42 sessions     █ Teams       $610  59%    ▓ Subagents   $233  23%
    █ Codex         $334   33%   97% hit     348 sessions     ▒ Agents       $66   6%    ░ No role     $116  11%
 
-   Teams              $610                                                          AGENT-TIME    MESSAGES  TOKENS
-   ● recon            $526  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━───────  86%       18h10m          34    1.0B
-   ● forge             $51  ━━━━────────────────────────────────────────────   8%        2h40m          10     97M
-   ● Other             $33  ━━━─────────────────────────────────────────────   5%        1h40m   7 (1 you)     56M
-
    Assists  7 kinds · rimz stats --assists for the timeline
+
+   ←/→ range · t/w/m/y jump · r reload · q quit

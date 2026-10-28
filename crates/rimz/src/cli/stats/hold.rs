@@ -178,6 +178,22 @@ impl HeldStats {
                 self.active = self.active.prev();
                 self.repaint(w)?;
             }
+            KeyOutcome::EarlierWindow => {
+                if self.active != Window::Today {
+                    self.active = self.active.prev();
+                }
+                self.repaint(w)?;
+            }
+            KeyOutcome::LaterWindow => {
+                if self.active != Window::Year {
+                    self.active = self.active.next();
+                }
+                self.repaint(w)?;
+            }
+            KeyOutcome::SelectWindow(window) => {
+                self.active = window;
+                self.repaint(w)?;
+            }
             KeyOutcome::Reload | KeyOutcome::Quit | KeyOutcome::Ignore => {}
         }
         Ok(outcome)
@@ -203,6 +219,8 @@ impl HeldStats {
                     today: stats.today_day(now.as_second().max(0) as u64),
                     dollars: self.dollars,
                     glyphs: &self.glyphs,
+                    hold: self.hold,
+                    color: choice != anstream::ColorChoice::Never,
                 };
                 let cols = render::terminal_columns(80);
                 let rows = stdout.is_terminal().then(|| render::terminal_rows(24));
@@ -259,7 +277,11 @@ pub(super) fn hold_cycle(
                     match state.apply_key(key, &mut std::io::stdout().lock())? {
                         KeyOutcome::Reload => return Ok(CycleExit::Reload),
                         KeyOutcome::Quit => return Ok(CycleExit::Quit),
-                        KeyOutcome::NextWindow | KeyOutcome::PrevWindow => {}
+                        KeyOutcome::NextWindow
+                        | KeyOutcome::PrevWindow
+                        | KeyOutcome::EarlierWindow
+                        | KeyOutcome::LaterWindow
+                        | KeyOutcome::SelectWindow(_) => {}
                         KeyOutcome::Ignore => {}
                     }
                 }
@@ -296,6 +318,9 @@ pub(super) enum KeyOutcome {
     Quit,
     NextWindow,
     PrevWindow,
+    EarlierWindow,
+    LaterWindow,
+    SelectWindow(Window),
     Ignore,
 }
 
@@ -304,6 +329,12 @@ pub(super) fn key_outcome(key: KeyEvent, hold: bool) -> KeyOutcome {
         KeyCode::Char('q') if !hold => KeyOutcome::Quit,
         KeyCode::Tab => KeyOutcome::NextWindow,
         KeyCode::BackTab => KeyOutcome::PrevWindow,
+        KeyCode::Left | KeyCode::Char('h') => KeyOutcome::EarlierWindow,
+        KeyCode::Right | KeyCode::Char('l') => KeyOutcome::LaterWindow,
+        KeyCode::Char('t' | 'T') => KeyOutcome::SelectWindow(Window::Today),
+        KeyCode::Char('w' | 'W') => KeyOutcome::SelectWindow(Window::Week),
+        KeyCode::Char('m' | 'M') => KeyOutcome::SelectWindow(Window::Month),
+        KeyCode::Char('y' | 'Y') => KeyOutcome::SelectWindow(Window::Year),
         KeyCode::Char('r') | KeyCode::Char('R') => KeyOutcome::Reload,
         KeyCode::Char('c') | KeyCode::Char('C') => {
             if key.modifiers.contains(KeyModifiers::CONTROL) && !hold {

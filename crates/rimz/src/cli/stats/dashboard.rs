@@ -37,6 +37,8 @@ pub(super) struct Dashboard<'a> {
     pub(super) today: i64,
     pub(super) dollars: bool,
     pub(super) glyphs: &'a PanelGlyphs,
+    pub(super) hold: bool,
+    pub(super) color: bool,
 }
 
 pub(super) struct Frame {
@@ -48,20 +50,36 @@ pub(super) struct Frame {
 impl Dashboard<'_> {
     pub(super) fn frame(&self, active: Window, cols: usize, rows: Option<usize>) -> Frame {
         let width = cols.min(113);
-        let step = rows.map_or(0, |rows| {
-            (0..=9)
-                .find(|&step| {
-                    Window::TABS
+        let (step, tallest) = rows.map_or((0, 0), |rows| {
+            (0..=8)
+                .map(|step| {
+                    let tallest = Window::TABS
                         .into_iter()
-                        .all(|tab| self.lines(tab, width, step).len() <= rows)
+                        .map(|tab| self.lines(tab, width, step).len())
+                        .max()
+                        .unwrap_or(0);
+                    (step, tallest)
                 })
-                .unwrap_or(9)
+                .find(|&(_, tallest)| tallest <= rows)
+                .unwrap_or((8, rows))
         });
         let margin = " ".repeat(cols.saturating_sub(width) / 2);
         let mut lines = self.lines(active, width, step);
-        lines.truncate(rows.unwrap_or(usize::MAX));
-        while lines.last().is_some_and(String::is_empty) {
-            lines.pop();
+        if let Some(rows) = rows {
+            if lines.len() > rows {
+                let hint = lines.pop();
+                lines.truncate(rows.saturating_sub(1));
+                while lines.last().is_some_and(String::is_empty) {
+                    lines.pop();
+                }
+                if rows > 0 {
+                    lines.extend(hint);
+                }
+            }
+            lines.splice(
+                0..0,
+                std::iter::repeat_n(String::new(), rows.saturating_sub(tallest) / 2),
+            );
         }
         let text = lines
             .into_iter()
@@ -82,6 +100,14 @@ impl Dashboard<'_> {
 
     fn lines(&self, active: Window, width: usize, step: usize) -> Vec<String> {
         let mut lines = Vec::new();
+        let hint = render::paint(
+            render::palette::muted(),
+            if self.hold {
+                "←/→ range · t/w/m/y jump · r reload"
+            } else {
+                "←/→ range · t/w/m/y jump · r reload · q quit"
+            },
+        );
         if step == 0 {
             lines.extend(header_lines(width).into_iter().skip(1));
         }
@@ -100,37 +126,40 @@ impl Dashboard<'_> {
                 lines.extend(render::wrap_words(copy, width));
             }
             section(&mut lines, self.assist_lines(active, width, step >= 2));
+            section(&mut lines, vec![hint]);
             return lines;
         }
-        lines.push(
-            Window::TABS
-                .into_iter()
-                .map(|tab| {
-                    let label = format!(
-                        "{} {}",
-                        tab.label(),
-                        fmt_usd(tab.select(&self.stats.total).usd)
-                    );
-                    if tab == active {
-                        render::paint(render::palette::accent().bold(), &format!("[ {label} ]"))
-                    } else {
-                        render::paint(render::palette::body(), &label)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(&render::paint(render::palette::muted(), "  ·  ")),
+        if step < 6 {
+            section(&mut lines, self.heatmap(width));
+        }
+        section(
+            &mut lines,
+            vec![
+                Window::TABS
+                    .into_iter()
+                    .map(|tab| {
+                        let label = format!(
+                            "{} {}",
+                            tab.label(),
+                            fmt_usd(tab.select(&self.stats.total).usd)
+                        );
+                        if tab == active {
+                            render::paint(render::palette::accent().bold(), &format!("[ {label} ]"))
+                        } else {
+                            render::paint(render::palette::body(), &label)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(&render::paint(render::palette::muted(), "  ·  ")),
+            ],
         );
         let chart_height = match step {
-            0..=2 => 12,
-            3..=5 => 8,
-            6..=7 => 6,
-            _ => 4,
+            0..=6 => 7,
+            7 => 4,
+            _ => 2,
         };
         section(&mut lines, self.chart_lines(active, width, chart_height));
-        if step < 9 {
-            section(&mut lines, self.heatmap(active, width));
-        }
-        let limit = if step >= 5 { 2 } else { 4 };
+        let limit = if step >= 4 { 2 } else { 4 };
         let models = fold(
             self.stats
                 .by_model
@@ -180,7 +209,7 @@ impl Dashboard<'_> {
         );
         let [agents, subagents, teams] =
             role_rows.map(|rows| fold(rows.into_iter().collect(), limit, true));
-        if step < 4 {
+        if step < 3 {
             section(
                 &mut lines,
                 pair(
@@ -190,17 +219,16 @@ impl Dashboard<'_> {
                 ),
             );
         }
-        if step < 7 && totals[2] > 0.0 {
+        if step < 5 && totals[2] > 0.0 {
             section(&mut lines, self.team_lines(&teams, width));
         }
         section(&mut lines, self.assist_lines(active, width, step >= 2));
+        section(&mut lines, vec![hint]);
         lines
     }
 
-    fn model_style(&self, id: &str) -> anstyle::Style {
-        let Some(model) = self.stats.by_model.get(id) else {
-            return render::palette::muted();
-        };
+    fn model_rank(&self, id: &str) -> Option<(&str, usize)> {
+        let model = self.stats.by_model.get(id)?;
         let rank = self
             .stats
             .by_model
@@ -217,18 +245,33 @@ impl Dashboard<'_> {
                         .is_gt()
             })
             .count();
-        render::palette::model_shade(&model.kind, rank)
+        Some((&model.kind, rank))
+    }
+
+    fn model_style(&self, id: &str) -> anstyle::Style {
+        self.model_rank(id)
+            .map_or_else(render::palette::muted, |(kind, rank)| {
+                render::palette::model_shade(kind, rank)
+            })
     }
 
     fn model_lines(&self, rows: &[Row], active: Window, width: usize) -> Vec<String> {
         if rows.is_empty() {
             return Vec::new();
         }
-        let columns = SpendColumns::new(rows, width.saturating_sub(63).min(48));
+        let show_rate = rows
+            .iter()
+            .any(|row| row.key.is_some() && row.value.spend.tokens_per_sec().is_some());
+        let columns = SpendColumns::new(
+            rows,
+            width
+                .saturating_sub(if show_rate { 63 } else { 51 })
+                .min(48),
+        );
         let mut lines = vec![columns_header(
             "Models",
             columns,
-            ["HIT", "TOK/S", "TOKENS"],
+            ["HIT", if show_rate { "TOK/S" } else { "" }, "TOKENS"],
         )];
         let total = active.select(&self.stats.total).usd;
         for row in rows {
@@ -252,7 +295,11 @@ impl Dashboard<'_> {
                 "{}{}{}{}",
                 self.spend_row(&name, row.value.spend.usd, total, columns, style, "█"),
                 pad_left(&hit(&row.value.spend), 13),
-                pad_left(&rate, 12),
+                if show_rate {
+                    pad_left(&rate, 12)
+                } else {
+                    String::new()
+                },
                 pad_left(&fmt_tokens(row.value.spend.display_tokens()), 8)
             ));
         }
@@ -438,7 +485,7 @@ impl Dashboard<'_> {
         lines
     }
 
-    fn heatmap(&self, active: Window, width: usize) -> Vec<String> {
+    fn heatmap(&self, width: usize) -> Vec<String> {
         let mut lines = Vec::new();
         panel::heatmap_lines(
             &mut lines,
@@ -456,23 +503,56 @@ impl Dashboard<'_> {
                 line.insert(0, ' ');
             }
         }
-        let activity = Activity::of(&self.stats.by_day, self.today, active);
+        let grid = panel::Grid::build(
+            &self.stats.by_day,
+            self.today,
+            weeks_for_terminal(width),
+            self.dollars,
+        );
+        let start = grid.col_monday(0);
+        let today_year = Timestamp::from_second(self.today * DAY_SECS)
+            .ok()
+            .map(|today| jiff::tz::TimeZone::UTC.to_datetime(today).year());
+        let date_label = |day| {
+            if let Ok(timestamp) = Timestamp::from_second(day * DAY_SECS) {
+                let date = jiff::tz::TimeZone::UTC.to_datetime(timestamp);
+                if today_year.is_some_and(|year| date.year() < year) {
+                    return format!("{} {}", fmt_day(day), date.strftime("%Y"));
+                }
+            }
+            fmt_day(day)
+        };
+        let active_days = self
+            .stats
+            .by_day
+            .range(start..=self.today)
+            .filter(|(_, day)| day.tokens > 0)
+            .collect::<Vec<_>>();
         let streak = Activity::of(&self.stats.by_day, self.today, Window::Year).current_streak;
-        let busiest = activity
-            .most_active
-            .map(fmt_day)
+        let busiest = active_days
+            .iter()
+            .max_by_key(|(_, day)| day.tokens)
+            .map(|(day, _)| date_label(**day))
             .unwrap_or_else(|| "–".into());
-        if let Some(key) = lines.last_mut() {
-            let summary = format!(
-                "{} of last {} days active · streak {} · busiest {busiest}",
-                activity.active_count,
-                activity.window_days,
-                panel::plural_days(streak)
-            );
-            *key = format!(
-                "{}{}",
-                pad_to(key, 40),
-                render::paint(render::palette::muted(), &summary)
+        let summary = format!(
+            "{} active days since {} · streak {} · busiest {busiest}",
+            active_days.len(),
+            date_label(start),
+            panel::plural_days(streak)
+        );
+        if 40 + display_width(&summary) <= width {
+            if let Some(key) = lines.last_mut() {
+                *key = format!(
+                    "{}{}",
+                    pad_to(key, 40),
+                    render::paint(render::palette::muted(), &summary)
+                );
+            }
+        } else {
+            lines.extend(
+                render::wrap_words(&summary, width)
+                    .into_iter()
+                    .map(|line| render::paint(render::palette::muted(), &line)),
             );
         }
         lines
@@ -518,12 +598,13 @@ impl Dashboard<'_> {
         let selected = active.select(&self.stats.total).usd;
         if active == Window::Today {
             return format!(
-                "today {} so far · yesterday {}",
+                "today {} so far · ~{} by midnight · yesterday {}",
                 fmt_usd(selected),
+                fmt_usd(self.forecast()),
                 fmt_usd(
                     self.stats
                         .by_day
-                        .get(&(self.today - 1))
+                        .get(&(self.stats.chart.today - 1))
                         .map_or(0.0, |day| day.usd)
                 )
             );
@@ -546,21 +627,40 @@ impl Dashboard<'_> {
         format!("{trend}{average} a day")
     }
 
+    fn forecast(&self) -> f64 {
+        let today = self.stats.chart.today;
+        let hour = i64::from(self.stats.chart.hour);
+        let remaining = (1..=7)
+            .flat_map(|ago| {
+                self.stats
+                    .chart
+                    .hours
+                    .range(((today - ago) * 24 + hour + 1)..((today - ago + 1) * 24))
+                    .map(|(_, cells)| cells.values().sum::<f64>())
+            })
+            .sum::<f64>()
+            / 7.0;
+        let so_far = self.stats.total.day.usd;
+        (so_far + remaining).max(so_far)
+    }
+
     fn chart_lines(&self, active: Window, width: usize, height: usize) -> Vec<String> {
         let weekly = active == Window::Year;
-        let (count, span, data) = if weekly {
-            (
+        let hourly = active == Window::Today;
+        let (count, span, data) = match active {
+            Window::Today => (24, 1, &self.stats.chart.hours),
+            Window::Week => (7, 1, &self.stats.chart.days),
+            Window::Month => (30, 1, &self.stats.chart.days),
+            Window::Year => (
                 width.saturating_sub(10).clamp(1, 52),
                 7,
                 &self.stats.chart.weeks,
-            )
-        } else {
-            (30, 1, &self.stats.chart.days)
+            ),
         };
-        let last_day = if weekly {
-            self.stats.chart.today
+        let last_day = if hourly {
+            self.stats.chart.today * 24 + 23
         } else {
-            self.today
+            self.stats.chart.today
         };
         let dates = (0..count)
             .map(|index| last_day - (count - 1 - index) as i64 * span)
@@ -586,8 +686,31 @@ impl Dashboard<'_> {
                     .map_or(0.0, |cells| cells.values().sum::<f64>())
             })
             .collect::<Vec<_>>();
-        let max = totals.iter().copied().fold(0.0, f64::max);
-        let typical = if weekly {
+        let yesterday: Vec<_> = dates
+            .iter()
+            .map(|hour| {
+                if hourly && self.color {
+                    data.get(&(hour - 24))
+                        .map_or(0.0, |cells| cells.values().sum::<f64>())
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let extension = if hourly || !self.color {
+            0.0
+        } else {
+            (self.forecast() - self.stats.total.day.usd).max(0.0)
+        };
+        let max = totals
+            .iter()
+            .copied()
+            .chain(yesterday.iter().copied())
+            .chain(std::iter::once(
+                totals.last().copied().unwrap_or(0.0) + extension,
+            ))
+            .fold(0.0, f64::max);
+        let typical = if weekly || hourly {
             0.0
         } else {
             self.stats
@@ -602,14 +725,19 @@ impl Dashboard<'_> {
         // k/height of the ceiling, so the line takes the row nearest the mean, never below row 1.
         let typical_row = (typical > 0.0)
             .then(|| ((typical / ceiling * height as f64).round() as usize).clamp(1, height) - 1);
-        // The bars keep room for the typical line's `┄ $X` tail; the word gives way before they
-        // narrow.
+        // Keep the typical label while daily bars can remain at least two columns wide.
         let figure = typical_row.map(|_| fmt_usd(typical));
-        let reserve = figure
-            .as_deref()
-            .map_or(0, |figure| 2 + display_width(figure));
-        let stride =
-            ((width.saturating_sub(10 + reserve) + 1) / count).clamp(1, if weekly { 2 } else { 3 });
+        let reserve = figure.as_deref().map_or(0, |figure| {
+            let short = 2 + display_width(figure);
+            let worded = short + "typical ".len();
+            if (width.saturating_sub(10 + worded) + 1) / count >= 3 {
+                worded
+            } else {
+                short
+            }
+        });
+        let stride = ((width.saturating_sub(10 + reserve) + 1) / count)
+            .clamp(1, if weekly { 2 } else { width.max(1) });
         let bar_width = if weekly {
             1
         } else {
@@ -625,10 +753,11 @@ impl Dashboard<'_> {
                 figure
             }
         });
-        let left = if weekly {
-            format!("Spend per week · last {count} weeks")
-        } else {
-            "Spend per day · last 30 days".into()
+        let left = match active {
+            Window::Today => "Spend per hour · today".into(),
+            Window::Week => "Spend per day · last 7 days".into(),
+            Window::Month => "Spend per day · last 30 days".into(),
+            Window::Year => format!("Spend per week · last {count} weeks"),
         };
         let right = self.chart_title(active);
         let mut lines = vec![format!(
@@ -644,8 +773,11 @@ impl Dashboard<'_> {
         let bars = dates
             .iter()
             .zip(&totals)
-            .map(|(day, total)| {
-                if *total <= 0.0 {
+            .zip(&yesterday)
+            .map(|((day, total), yesterday)| {
+                let extra = if *day == last_day { extension } else { 0.0 };
+                let projected = *total + extra;
+                if projected <= 0.0 {
                     return Vec::new();
                 }
                 let cells = data.get(day);
@@ -675,19 +807,40 @@ impl Dashboard<'_> {
                         .max(0.0),
                     )))
                     .collect::<Vec<_>>();
-                let bar_height =
-                    ((*total / ceiling * height as f64).ceil() as usize).clamp(1, height);
-                (0..bar_height)
+                let units = eighths(projected, ceiling, height);
+                let spent_units = eighths(*total, ceiling, height);
+                let top_id = if spent_units == 0 {
+                    None
+                } else {
+                    let top_fraction = (spent_units - 1) % 8 + 1;
+                    segment_at(
+                        &segments,
+                        (spent_units as f64 - top_fraction as f64 / 2.0) / spent_units as f64
+                            * total,
+                    )
+                };
+                let forecast_style =
+                    render::palette::model_forecast(top_id.and_then(|id| self.model_rank(id)));
+                let overlay_units = eighths(*yesterday, ceiling, height);
+                (0..units.div_ceil(8))
                     .map(|cell| {
-                        let at = (cell as f64 + 0.5) / bar_height as f64 * total;
-                        let mut sum = 0.0;
-                        segments
-                            .iter()
-                            .find_map(|(id, usd)| {
-                                sum += usd;
-                                (sum > at).then_some(*id)
-                            })
-                            .flatten()
+                        let projected = (units - cell * 8).min(8);
+                        let spent = spent_units.saturating_sub(cell * 8).min(8);
+                        if spent == 0 {
+                            return (BLOCKS[projected - 1], forecast_style);
+                        }
+                        let at =
+                            (cell as f64 * 8.0 + spent as f64 / 2.0) / spent_units as f64 * total;
+                        let style = segment_at(&segments, at)
+                            .map_or_else(render::palette::muted, |id| styles[id]);
+                        let background = if projected > spent {
+                            forecast_style.get_fg_color()
+                        } else if overlay_units.saturating_sub(cell * 8).min(8) > spent {
+                            render::palette::faint().get_fg_color()
+                        } else {
+                            None
+                        };
+                        (BLOCKS[spent - 1], style.bg_color(background))
                     })
                     .collect::<Vec<_>>()
             })
@@ -695,7 +848,7 @@ impl Dashboard<'_> {
         for row in (0..height).rev() {
             let label = if row == height - 1 {
                 fmt_usd(ceiling)
-            } else if row == height / 2 - 1 {
+            } else if row == (height - 1) / 2 {
                 fmt_usd(ceiling / 2.0)
             } else {
                 String::new()
@@ -703,18 +856,20 @@ impl Dashboard<'_> {
             let mut line = render::paint(render::palette::muted(), &format!("{label:>7} ┤ "));
             let baseline = if typical_row == Some(row) { "┄" } else { " " };
             for (index, bar) in bars.iter().enumerate() {
-                if let Some(id) = bar.get(row) {
-                    let lit = weekly || dates[index] > self.today - i64::from(active.span_days());
-                    let style = if lit {
-                        id.map_or_else(render::palette::muted, |id| styles[id])
-                    } else {
-                        render::palette::muted()
-                    };
-                    line.push_str(&render::paint(style, &"█".repeat(bar_width)));
+                if let Some(&(glyph, style)) = bar.get(row) {
+                    line.push_str(&render::paint(style, &glyph.to_string().repeat(bar_width)));
                 } else {
+                    let units = eighths(yesterday[index], ceiling, height)
+                        .saturating_sub(row * 8)
+                        .min(8);
+                    let glyph = if units > 0 {
+                        BLOCKS[units - 1].to_string()
+                    } else {
+                        baseline.into()
+                    };
                     line.push_str(&render::paint(
                         render::palette::faint(),
-                        &baseline.repeat(bar_width),
+                        &glyph.repeat(bar_width),
                     ));
                 }
                 if index + 1 < count {
@@ -731,15 +886,35 @@ impl Dashboard<'_> {
             }
             lines.push(line.trim_end().to_owned());
         }
-        let final_label = if weekly { "now" } else { "today" };
-        let final_start =
-            plot_width.saturating_sub(final_label.len() + if weekly { 0 } else { stride });
+        let final_label = if hourly {
+            "23"
+        } else if weekly {
+            "now"
+        } else {
+            "today"
+        };
+        let final_start = if bar_width >= final_label.len() {
+            (count - 1) * stride
+        } else {
+            plot_width.saturating_sub(final_label.len())
+        };
         let mut axis = String::new();
-        let every = if weekly { 13 } else { 7 };
+        let every = match active {
+            Window::Today => 6,
+            Window::Week => 1,
+            Window::Month => 7,
+            Window::Year => 13,
+        };
         for index in (0..count - 1).step_by(every) {
-            let label = fmt_day(dates[index]);
+            let label = if hourly {
+                format!("{:02}", dates[index].rem_euclid(24))
+            } else {
+                fmt_day(dates[index])
+            };
             let start = index * stride;
-            if start + label.len() + 1 >= final_start {
+            if (!axis.is_empty() && start < display_width(&axis) + 1)
+                || start + label.len() + 1 >= final_start
+            {
                 continue;
             }
             axis = pad_to(&axis, start);
@@ -886,7 +1061,11 @@ fn columns_header(label: &str, spend: SpendColumns, columns: [&str; 3]) -> Strin
             18 + spend.dollars + spend.bar + 5
         ),
         pad_left(columns[0], 13),
-        pad_left(columns[1], 12),
+        if columns[1].is_empty() {
+            String::new()
+        } else {
+            pad_left(columns[1], 12)
+        },
         pad_left(columns[2], 8)
     )
 }
@@ -941,11 +1120,33 @@ fn round_ceiling(max: f64) -> f64 {
         return 1.0;
     }
     let magnitude = 10_f64.powf(max.log10().floor());
-    [1.0, 2.0, 5.0, 10.0]
+    [1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
         .into_iter()
         .map(|step| step * magnitude)
         .find(|ceiling| *ceiling >= max)
         .unwrap_or(magnitude * 10.0)
+}
+
+const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+fn segment_at<'a>(segments: &[(Option<&'a str>, f64)], at: f64) -> Option<&'a str> {
+    let mut sum = 0.0;
+    segments
+        .iter()
+        .find_map(|(id, usd)| {
+            sum += usd;
+            (sum > at).then_some(*id)
+        })
+        .flatten()
+}
+
+fn eighths(usd: f64, ceiling: f64, height: usize) -> usize {
+    if usd <= 0.0 {
+        return 0;
+    }
+    (usd / ceiling * height as f64 * 8.0)
+        .round()
+        .clamp(1.0, (height * 8) as f64) as usize
 }
 
 fn clip(line: &str, width: usize) -> String {
