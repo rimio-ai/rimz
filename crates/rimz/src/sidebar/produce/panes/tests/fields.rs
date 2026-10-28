@@ -369,6 +369,25 @@ fn stamp_hosted_qwen_process_ignores_foreground_command_and_probes_once() {
 }
 
 #[test]
+fn stamp_hosted_agent_processes_skips_sidebar_chrome() {
+    let mut frame = frame(vec![
+        pane("terminal_1", Some(crate::pane::SIDEBAR_CHROME_TITLE), None),
+        pane("terminal_2", Some("zsh"), Some("/repo")),
+    ]);
+    for (pane, pid) in frame.pane_states_mut().zip([41, 42]) {
+        pane.current.pid = Some(pid);
+    }
+    let probed = std::cell::RefCell::new(Vec::new());
+
+    stamp_hosted_agent_processes(&mut frame, &|pid| {
+        probed.borrow_mut().push(pid);
+        None
+    });
+
+    assert_eq!(*probed.borrow(), [42]);
+}
+
+#[test]
 fn hosted_agent_process_fills_empty_cwd_for_wrapped_shell_pane() {
     let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
     let cwd = tempfile::tempdir().unwrap();
