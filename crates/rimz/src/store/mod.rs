@@ -55,6 +55,7 @@ pub mod subagent_context;
 pub mod workflow;
 pub mod writer;
 
+use std::borrow::Cow;
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -289,6 +290,42 @@ impl Store {
         );
         row.attach_context(context.into_iter().next().map(|record| record.context));
         Ok(Some(row))
+    }
+
+    /// Copies of the live `rows` with their current context, beside the ended
+    /// rows borrowed raw. Reads only the live rows' sidecars, and none when
+    /// every row has ended.
+    pub fn rows_with_live_context<'a>(
+        &self,
+        rows: impl IntoIterator<Item = &'a crate::agents::AgentState>,
+    ) -> Vec<Cow<'a, crate::agents::AgentState>> {
+        let mut rows: Vec<_> = rows
+            .into_iter()
+            .map(|row| {
+                if row.ended_at.is_some() {
+                    return Cow::Borrowed(row);
+                }
+                snapshot::count_rows_materialized(1);
+                Cow::Owned(row.clone())
+            })
+            .collect();
+        let mut live_keys = rows
+            .iter()
+            .filter(|row| matches!(row, Cow::Owned(_)))
+            .map(|row| (row.kind.as_str(), row.agent_id.as_str()))
+            .peekable();
+        if live_keys.peek().is_none() {
+            return rows;
+        }
+        for record in agent_context::read_for_keys(&self.inner.runtime, live_keys) {
+            let row = rows
+                .iter_mut()
+                .find(|row| row.kind == record.kind && row.agent_id == record.agent_id);
+            if let Some(Cow::Owned(row)) = row {
+                row.attach_context(Some(record.context));
+            }
+        }
+        rows
     }
 
     /// The same cached rows and membership as [`Self::snapshot_cached`], with
