@@ -578,8 +578,52 @@ mod latency {
                     scale_frames(&fixture, live, closed, event, payload);
                 }
                 scale_drain(&fixture, live, closed);
+                scale_frames(&fixture, live, closed, "AgentPrompt", Value::Null);
             }
         });
+    }
+
+    fn agent_prompt(fixture: &Fixture, index: usize, live: usize, sequence: usize) -> Value {
+        use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender};
+
+        let snapshot = fixture.store.snapshot().unwrap();
+        let target_id = format!("latency-{index}");
+        let sender_id = format!("latency-{}", (index + 1) % live);
+        let target = snapshot
+            .agents
+            .iter()
+            .find(|row| row.agent_id == target_id)
+            .unwrap();
+        let sender = snapshot
+            .agents
+            .iter()
+            .find(|row| row.agent_id == sender_id)
+            .unwrap();
+        let text = format!("review the repository, request {sequence}");
+        let message = MessageRecord::new(
+            fixture.store.paths().workspace_id.clone(),
+            target,
+            text.clone(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Agent {
+            kind: sender.kind.clone(),
+            agent_id: Some(sender.agent_id.clone()),
+            name: sender.name.clone(),
+            profile: None,
+            role: None,
+            channel: None,
+        });
+        fixture.store.queue_message(&message, "bench").unwrap();
+        fixture
+            .store
+            .record_sent_batch(std::slice::from_ref(&message), "bench")
+            .unwrap();
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": format!("Type: AGENT_MESSAGE\nFrom: @{}\nContent:\n{text}",
+                sender.name.as_deref().unwrap()),
+        })
     }
 
     fn scale_frames(fixture: &Fixture, live: usize, closed: usize, event: &str, payload: Value) {
@@ -587,8 +631,13 @@ mod latency {
         let mut records = Vec::new();
         for sequence in 0..50 {
             let index = sequence % live;
-            let mut payload = payload.clone();
-            payload["hook_event_name"] = json!(event);
+            let mut payload = if event == "AgentPrompt" {
+                agent_prompt(fixture, index, live, sequence)
+            } else {
+                let mut payload = payload.clone();
+                payload["hook_event_name"] = json!(event);
+                payload
+            };
             payload["session_id"] = json!(format!("latency-{index}"));
             let frame = fixture.frame(index, payload);
             let start = Instant::now();
