@@ -526,6 +526,116 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
     assert_eq!(query.matches(queue_fields).count(), 2);
     assert_eq!(query.matches("mergeQueueEntry").count(), 2);
     assert_eq!(query.matches("timelineItems").count(), 2);
+    assert_eq!(
+        (
+            query.matches("isDraft").count(),
+            query.matches("reviewDecision").count(),
+            facts
+                .filter(|alias| alias.contains("isDraft reviewDecision"))
+                .count(),
+        ),
+        (2, 2, 2),
+        "review fields belong to each existing facts alias: {query}"
+    );
+}
+
+#[test]
+fn parses_github_review_and_auto_merge_facts() {
+    use serde_json::json;
+
+    let mut readings = Vec::new();
+    let mut expected = Vec::new();
+    for (draft, decision, review) in [
+        (Some(true), Some("CHANGES_REQUESTED"), Some("draft")),
+        (Some(true), Some("REVIEW_REQUIRED"), Some("draft")),
+        (Some(true), Some("APPROVED"), Some("draft")),
+        (Some(true), None, Some("draft")),
+        (
+            Some(false),
+            Some("CHANGES_REQUESTED"),
+            Some("changes_requested"),
+        ),
+        (Some(false), Some("REVIEW_REQUIRED"), Some("required")),
+        (Some(false), Some("APPROVED"), Some("approved")),
+        (Some(false), None, Some("none")),
+        (None, Some("APPROVED"), None),
+        (None, None, None),
+    ] {
+        for request in [
+            json!(null),
+            json!({}),
+            json!({"enabledAt": "2026-10-03T13:00:00Z"}),
+        ] {
+            let mut facts = json!({"number": 42, "headRefOid": "head-a",
+                "mergeable": "MERGEABLE", "isCrossRepository": false,
+                "baseRef": null, "reviewDecision": decision, "autoMergeRequest": request});
+            if let Some(draft) = draft {
+                facts["isDraft"] = json!(draft);
+            }
+            let raw = json!({"data": {"repository": {
+                "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
+                "facts0": {"nodes": [facts]}
+            }}});
+            let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+            let open = serde_json::to_value(&response.prs[0].as_ref().unwrap().open).unwrap();
+            readings.push((open["review"].clone(), open["auto_merge"].clone()));
+            expected.push((
+                json!(review),
+                if request.is_null() {
+                    json!(null)
+                } else {
+                    json!(true)
+                },
+            ));
+        }
+    }
+    assert_eq!(readings, expected);
+}
+
+#[test]
+fn github_review_errors_are_scoped() {
+    use serde_json::json;
+
+    let mut readings = Vec::new();
+    for draft in [false, true] {
+        let facts = |number, is_draft| {
+            json!({"number": number, "headRefOid": "head-a",
+            "mergeable": "CONFLICTING", "isCrossRepository": false,
+            "baseRef": {"name": "main", "compare": {"behindBy": 2}},
+            "isDraft": is_draft, "reviewDecision": "APPROVED",
+            "mergeQueueEntry": {"enqueuedAt": "2026-10-03T13:00:00Z"},
+            "autoMergeRequest": {}})
+        };
+        let raw = json!({"data": {"repository": {
+            "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
+            "facts0": {"nodes": [facts(42, draft)]},
+            "pr1": {"nodes": [{"number": 43, "state": "OPEN"}]},
+            "facts1": {"nodes": [facts(43, false)]}
+        }}, "errors": [{"path": ["repository", "facts0", "nodes", 0, "reviewDecision"],
+            "message": "Review decision is unavailable"}]});
+        let response = parse_github_bulk_response(false, &raw.to_string(), 2, 0).unwrap();
+        let open = |index: usize| {
+            serde_json::to_value(&response.prs[index].as_ref().unwrap().open).unwrap()
+        };
+        let first = open(0);
+        readings.push((
+            first["review"].clone(),
+            open(1)["review"].clone(),
+            first["mergeability"].clone(),
+            first["queue"].clone(),
+            first["auto_merge"].clone(),
+        ));
+    }
+    let expected = [json!(null), json!("draft")].map(|review| {
+        (
+            review,
+            json!("approved"),
+            json!({"state": "conflicting", "head": "head-a"}),
+            json!({"state": "queued", "at": "2026-10-03T13:00:00Z"}),
+            json!(true),
+        )
+    });
+    assert_eq!(readings, expected);
 }
 
 #[test]
@@ -747,6 +857,8 @@ fn parses_github_open_pr_facts_and_unknown_bases() {
                     base,
                     behind_by,
                     mergeability: expected.clone(),
+                    auto_merge: false,
+                    review: None,
                     queue: None,
                 })
             );
@@ -762,6 +874,7 @@ fn github_facts_errors_are_scoped() {
         "pr0": {"nodes": [{"number": 14519, "state": "OPEN"}]},
         "facts0": {"nodes": [{"number": 14519, "headRefOid": "head-a",
             "mergeable": "CONFLICTING", "isCrossRepository": false,
+            "isDraft": false, "reviewDecision": "APPROVED",
             "baseRef": {"name": "trunk", "compare": null}}]}
     }}, "errors": [{"type": "NOT_FOUND",
         "path": ["repository", "facts0", "nodes", 0, "baseRef", "compare"],
@@ -770,6 +883,7 @@ fn github_facts_errors_are_scoped() {
     let pr = response.prs[0].as_ref().unwrap();
     assert_eq!(pr.number, 14519);
     let facts = pr.open.as_ref().unwrap();
+    assert_eq!(serde_json::to_value(facts).unwrap()["review"], "approved");
     assert_eq!(facts.behind_by, None);
     assert_eq!(
         facts.mergeability,

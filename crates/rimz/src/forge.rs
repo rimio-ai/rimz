@@ -602,7 +602,7 @@ pub(crate) fn github_bulk_query(
             graphql_string(branch)
         ));
         fields.push(format!(
-            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable isCrossRepository baseRef {{ name compare(headRef: {}) {{ behindBy }} }} mergeQueueEntry {{ enqueuedAt }} autoMergeRequest {{ enabledAt }} timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {{ nodes {{ ... on RemovedFromMergeQueueEvent {{ createdAt reason beforeCommit {{ oid }} }} }} }} }} }}",
+            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable isCrossRepository isDraft reviewDecision baseRef {{ name compare(headRef: {}) {{ behindBy }} }} mergeQueueEntry {{ enqueuedAt }} autoMergeRequest {{ enabledAt }} timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {{ nodes {{ ... on RemovedFromMergeQueueEvent {{ createdAt reason beforeCommit {{ oid }} }} }} }} }} }}",
             graphql_string(branch),
             graphql_string(branch)
         ));
@@ -661,6 +661,8 @@ pub(crate) fn parse_github_bulk_response(
         head_ref_oid: String,
         mergeable: String,
         is_cross_repository: bool,
+        is_draft: Option<bool>,
+        review_decision: Option<String>,
         base_ref: Option<BaseRef>,
         #[serde(default)]
         merge_queue_entry: Option<QueueEntry>,
@@ -761,6 +763,7 @@ pub(crate) fn parse_github_bulk_response(
 
     let response: Response = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let mut failed_facts = BTreeSet::new();
+    let mut failed_reviews = BTreeSet::new();
     for error in response.errors.iter().flatten() {
         let path = error.get("path").and_then(Value::as_array);
         let alias = path.and_then(|path| path.get(1)).and_then(Value::as_str);
@@ -780,7 +783,11 @@ pub(crate) fn parse_github_bulk_response(
         if path.is_some_and(|path| path.iter().any(queue_field)) {
             return Err("github GraphQL response has a merge-queue field error".to_owned());
         }
-        failed_facts.insert(alias);
+        if path.is_some_and(|path| path.iter().any(|segment| segment == "reviewDecision")) {
+            failed_reviews.insert(alias);
+        } else {
+            failed_facts.insert(alias);
+        }
     }
     let repository = response
         .data
@@ -858,6 +865,18 @@ pub(crate) fn parse_github_bulk_response(
                 "CONFLICTING" => Some(pr_state::SettledMergeability::Conflicting(head.clone())),
                 _ => None,
             };
+            let review = match (facts.is_draft, failed_reviews.contains(alias.as_str())) {
+                (Some(true), _) => Some(pr_state::PrReview::Draft),
+                (Some(false), false) => match facts.review_decision.as_deref() {
+                    Some("CHANGES_REQUESTED") => Some(pr_state::PrReview::ChangesRequested),
+                    Some("REVIEW_REQUIRED") => Some(pr_state::PrReview::Required),
+                    Some("APPROVED") => Some(pr_state::PrReview::Approved),
+                    None => Some(pr_state::PrReview::None),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let auto_merge = facts.auto_merge_request.is_some();
             let enabled_at = facts
                 .auto_merge_request
                 .and_then(|request| request.enabled_at)
@@ -900,6 +919,8 @@ pub(crate) fn parse_github_bulk_response(
                     .and_then(|base| base.compare)
                     .map(|compare| compare.behind_by),
                 mergeability,
+                auto_merge,
+                review,
                 queue,
             });
         }

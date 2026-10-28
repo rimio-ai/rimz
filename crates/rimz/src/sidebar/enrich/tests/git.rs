@@ -202,6 +202,8 @@ fn pr_state_projection_uses_the_given_map() {
                 base: None,
                 behind_by: None,
                 mergeability: None,
+                auto_merge: false,
+                review: None,
                 queue: Some(crate::forge::pr_state::PrQueueFact::Dequeued {
                     at: "2026-10-03T12:46:03Z".to_owned(),
                     reason: None,

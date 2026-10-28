@@ -621,6 +621,8 @@ fn github_projection_carries_only_owned_same_pr_settled_mergeability() {
         base: Some("main".into()),
         behind_by: Some(1),
         mergeability: Some(SettledMergeability::Conflicting("head-a".into())),
+        auto_merge: true,
+        review: Some(crate::forge::pr_state::PrReview::Approved),
         queue: None,
     });
     let project = |prior_link: PrLink, state, mergeability| {
@@ -634,6 +636,8 @@ fn github_projection_carries_only_owned_same_pr_settled_mergeability() {
                     base: Some("main".into()),
                     behind_by: Some(2),
                     mergeability,
+                    auto_merge: false,
+                    review: None,
                     queue: None,
                 }),
                 number: 42,
@@ -667,6 +671,8 @@ fn github_projection_carries_only_owned_same_pr_settled_mergeability() {
     );
     assert_eq!(carried.head, "head-b");
     assert_eq!(carried.behind_by, Some(2));
+    assert_eq!(carried.review, None);
+    assert!(!carried.auto_merge);
 
     for mismatched in [
         PrLink {
@@ -909,6 +915,8 @@ fn github_group_failure_carries_complete_prior_truth() {
             base: Some("main".into()),
             behind_by: None,
             mergeability: None,
+            auto_merge: false,
+            review: None,
             queue: Some(crate::forge::pr_state::PrQueueFact::Queued {
                 at: "2026-10-03T13:00:00Z".into(),
             }),
@@ -1436,6 +1444,13 @@ fn queue_fact_round_trips_and_caches_without_one_still_load() {
     )
     .unwrap();
     assert_eq!(old.states["/repo/a"].open.as_ref().unwrap().queue, None);
+    let legacy = serde_json::to_value(&old).unwrap();
+    assert!(
+        legacy["states"]["/repo/a"]["open"]
+            .get("auto_merge")
+            .is_none()
+    );
+    assert!(legacy["states"]["/repo/a"]["open"].get("review").is_none());
     assert!(
         serde_json::to_value(&old).unwrap()["states"]["/repo/a"]["open"]
             .get("queue")
@@ -1480,6 +1495,36 @@ fn queue_fact_round_trips_and_caches_without_one_still_load() {
         let decoded: PrStateCache = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded.states, cache.states);
     }
+
+    let mut readings = Vec::new();
+    let mut expected = Vec::new();
+    for review in ["draft", "changes_requested", "required", "approved", "none"] {
+        for auto_merge in [false, true] {
+            let mut encoded = legacy.clone();
+            encoded["states"]["/repo/a"]["open"]["review"] = serde_json::json!(review);
+            encoded["states"]["/repo/a"]["open"]["auto_merge"] = serde_json::json!(auto_merge);
+            encoded["branches"] = serde_json::json!({"gh:github.com:org/repo": {
+                "feature": {"pr": encoded["states"]["/repo/a"].clone()}
+            }});
+            let decoded: PrStateCache = serde_json::from_value(encoded).unwrap();
+            let encoded = serde_json::to_value(&decoded).unwrap();
+            for open in [
+                &encoded["states"]["/repo/a"]["open"],
+                &encoded["branches"]["gh:github.com:org/repo"]["feature"]["pr"]["open"],
+            ] {
+                readings.push((open["review"].clone(), open["auto_merge"].clone()));
+                expected.push((
+                    serde_json::json!(review),
+                    if auto_merge {
+                        serde_json::json!(true)
+                    } else {
+                        serde_json::json!(null)
+                    },
+                ));
+            }
+        }
+    }
+    assert_eq!(readings, expected);
 }
 
 #[test]
@@ -1530,6 +1575,8 @@ fn queued_pr_keeps_repo_on_hot_ttl_and_a_dequeued_one_does_not() {
             base: Some("main".into()),
             behind_by: None,
             mergeability: None,
+            auto_merge: false,
+            review: None,
             queue: Some(queue),
         });
         cache.states.insert(needed[0].clone(), link);
