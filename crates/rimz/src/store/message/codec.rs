@@ -3,6 +3,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tracing::warn;
 
@@ -13,6 +14,73 @@ use crate::disk::retention::TRANSCRIPT_FILE_DAYS;
 
 const QUEUE_FILE: &str = "messages.jsonl";
 const HISTORY_READ_LIMIT: usize = 500;
+
+thread_local! {
+    static PARSED_MESSAGES: crate::disk::parse_cache::KeyedParseCache<ParsedMessages> =
+        crate::disk::parse_cache::KeyedParseCache::default();
+}
+
+/// Nontransactional projection reads only; queue writers keep using `read_queue`.
+pub(crate) fn cached_messages(
+    paths: &crate::StatePaths,
+    include_history: bool,
+) -> Vec<Arc<MessageRecord>> {
+    let mut messages = Vec::new();
+    if let Ok(Some(records)) = cached_file(&queue_path(&paths.messages_dir))
+        && let Ok(records) = records.as_ref()
+    {
+        messages.extend(records.iter().cloned());
+    }
+    if !include_history {
+        return messages;
+    }
+    let Ok(mut files) = bucket_files(&paths.message_history_dir) else {
+        return messages;
+    };
+    files.sort();
+    let mut history = Vec::new();
+    for path in files.into_iter().rev() {
+        let parsed = match cached_file(&path) {
+            Ok(Some(parsed)) => parsed,
+            Ok(None) => continue,
+            Err(_) => {
+                history.clear();
+                break;
+            }
+        };
+        let Ok(records) = parsed.as_ref() else {
+            // Match list_history's all-or-nothing error handling.
+            history.clear();
+            break;
+        };
+        history.extend(
+            records
+                .iter()
+                .rev()
+                .take(HISTORY_READ_LIMIT - history.len())
+                .cloned(),
+        );
+        if history.len() == HISTORY_READ_LIMIT {
+            break;
+        }
+    }
+    history.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
+    messages.extend(history);
+    messages
+}
+
+type ParsedMessages = Result<Vec<Arc<MessageRecord>>>;
+
+fn cached_file(path: &Path) -> io::Result<Option<Arc<ParsedMessages>>> {
+    PARSED_MESSAGES.with(|cache| {
+        cache.read_with(path, |bytes| {
+            Some(
+                parse_queue_bytes(path, bytes)
+                    .map(|records| records.into_iter().map(Arc::new).collect()),
+            )
+        })
+    })
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum MessageStoreErr {
@@ -156,6 +224,10 @@ fn read_queue_file(path: &Path) -> Result<Vec<MessageRecord>> {
             });
         }
     };
+    parse_queue_bytes(path, &bytes)
+}
+
+fn parse_queue_bytes(path: &Path, bytes: &[u8]) -> Result<Vec<MessageRecord>> {
     let tail_terminated = bytes.ends_with(b"\n");
     let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
     let last_non_empty = lines.iter().rposition(|line| !line.trim_ascii().is_empty());

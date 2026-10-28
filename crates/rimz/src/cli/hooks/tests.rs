@@ -498,8 +498,10 @@ fn cold_plain_frames_read_a_constant_number_of_sidecars() {
         budgets.iter().map(|counts| counts[1]).collect::<Vec<_>>(),
         "prompt and Stop sidecar work must not grow with the fleet"
     );
+    // Parses include the direct reads that locked sidecar updates make; no frame
+    // enumerates the context directory.
     for counts in budgets {
-        assert_eq!((counts[0].1, counts[0].2), (0, 1), "{counts:?}");
+        assert_eq!((counts[0].1, counts[0].2), (0, 3), "{counts:?}");
     }
 }
 

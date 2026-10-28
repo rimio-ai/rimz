@@ -43,7 +43,7 @@ Caps take finite, non-negative dollar amounts with an optional `$` prefix. A lea
 
 ## Where a cap comes from
 
-An agent cap enters through launch identity and is then owned by its ledger. On each due agent check, `ledger_for_agent` reads the ledger fresh and copies the current launch spec onto it when it differs, so relaunching with a different `--budget` takes effect. A runtime change through `rimz agents budget` (an absolute cap, a raise, or `clear`) sets `raised_cap_usd` or `disabled`. Either one pins the ledger and stops that refresh, so the next check does not undo a CLI adjustment.
+An agent cap enters through launch identity and is then owned by its ledger. Each due agent check stats the ledger and reuses its parse while the full file stamp is unchanged, then copies the current launch spec onto it when it differs, so relaunching with a different `--budget` takes effect. A check that would write the ledger or interrupt the agent rereads fresh bytes and evaluates again first. A runtime change through `rimz agents budget` (an absolute cap, a raise, or `clear`) sets `raised_cap_usd` or `disabled`. Either one pins the ledger and stops that refresh, so the next check does not undo a CLI adjustment.
 
 The turn cap is read straight from machine config on every tick. It has no launch flag, profile field, runtime override, raise, clear, or waiver. Removing the key drops every turn entry on the next tick.
 

@@ -5,6 +5,7 @@
 //! Rich-context helpers run only at hook boundaries or on explicit refresh.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
@@ -38,6 +39,11 @@ pub(super) fn refresh_live_sessions(
             &refresh.kind,
             &refresh.session_id,
             refresh.model_hint.as_deref(),
+            crate::store::agent_context::read_cached_one(
+                runtime,
+                &refresh.kind,
+                &refresh.session_id,
+            ),
             false,
             RefreshTrigger::Tick,
         ) {
@@ -124,6 +130,7 @@ pub fn force_refresh_session_context(
         kind,
         session_id,
         model_hint,
+        crate::store::agent_context::read_one(runtime, kind, session_id).map(Arc::new),
         true,
         RefreshTrigger::Tick,
     )?;
@@ -161,7 +168,15 @@ fn refresh_session_transcript_context_with_snapshot(
     trigger: RefreshTrigger<'_>,
 ) {
     if let Err(err) = refresh_session_transcript_context_core(
-        snapshot, runtime, login, kind, session_id, model_hint, false, trigger,
+        snapshot,
+        runtime,
+        login,
+        kind,
+        session_id,
+        model_hint,
+        crate::store::agent_context::read_one(runtime, kind, session_id).map(Arc::new),
+        false,
+        trigger,
     ) {
         warn_session_transcript_merge(kind, session_id, &err);
     }
@@ -178,13 +193,13 @@ fn refresh_session_transcript_context_core(
     kind: &str,
     session_id: &str,
     model_hint: Option<&str>,
+    prior: Option<Arc<crate::agents::context::record::AgentContextRecord>>,
     force: bool,
     trigger: RefreshTrigger<'_>,
 ) -> SessionRefreshResult<bool> {
     let Some(adapter) = crate::agents::find_definition(kind) else {
         return Ok(false);
     };
-    let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
     let shared_pricing_cache_path = runtime.shared_pricing_cache_path();
     let kind_id = crate::ids::AgentKind::new_unchecked(kind);
     // A removed session account has no home to read; never fall back to the room default.
@@ -220,7 +235,7 @@ fn refresh_session_transcript_context_core(
             runtime,
             kind,
             session_id,
-            prior.as_ref(),
+            prior.as_deref(),
             &login_key,
         );
     };

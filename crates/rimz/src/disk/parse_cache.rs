@@ -1,20 +1,16 @@
-//! One thread's last parse of a JSON cache file, keyed by path plus byte
-//! identity `(mtime, len)` — the shared core behind every single-slot
-//! stat-gated parse cache (`rollup.json`, the published `snapshot.json`,
-//! and, under the full [`StampedPath`] identity, `latest.json` and
-//! `agents.carryover.json`).
+//! Stat-gated parsed file caches. [`ParseCache`] retains a single successful
+//! parse, while [`KeyedParseCache`] retains up to 1,024 paths, including missing
+//! and malformed files. Both share parsed values through `Arc`.
 //! [`FileStamp`] and [`StampedPath`] expose the same cheap identity outside a
 //! parse cache, extended with the device/inode pair on Unix so atomic
 //! replacements remain distinguishable at equal byte length and timestamp.
 //!
-//! Every file it fronts is republished by atomic rename of a fresh temp
-//! file, so a changed payload almost surely changes the identity; a hit
-//! returns a shared handle to the in-memory value instead of re-deserializing
-//! or deep-cloning 100–500 KB of JSON, and the read itself stays
-//! page-cache-hot. The
-//! identity is deliberately not airtight: two republishes inside one
+//! The keyed cache uses the full [`FileStamp`] on every read, distinguishing
+//! atomic replacements by inode and appended history by length. Other I/O errors
+//! are never cached. The single-slot cache also supports `(mtime, len)` keys.
+//! That identity is deliberately not airtight: two in-place rewrites inside one
 //! mtime-granularity tick at equal byte length can serve the older parse.
-//! Every caller therefore re-validates the value against live truth — the
+//! Every caller re-validates the value against live truth — the
 //! fold resumes from the cached extent, the freshness stamp is checked on
 //! the live log — so a stale serve costs a larger fold or a re-read, never
 //! a wrong result. A new caller must preserve that property: cache the
@@ -24,10 +20,13 @@
 //! a freed inode at equal length within one mtime tick, and publishing that
 //! stale parse would lose intervening writes.
 //!
-//! Callers hold one per thread (`thread_local!`), so the slot needs no lock
-//! and is never shared across threads.
+//! Callers normally hold one per thread (`thread_local!`); session-effort also
+//! keeps single-slot caches behind its process-wide mutex. These types provide
+//! no synchronization of their own.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -170,3 +169,117 @@ impl<T: DeserializeOwned> ParseCache<T> {
         Some(value)
     }
 }
+
+const KEYED_CACHE_LIMIT: usize = 1_024;
+
+pub(crate) struct KeyedParseCache<T> {
+    entries: RefCell<HashMap<PathBuf, KeyedEntry<T>>>,
+    order: RefCell<VecDeque<PathBuf>>,
+}
+
+struct KeyedEntry<T> {
+    stamp: Option<FileStamp>,
+    value: Option<Arc<T>>,
+}
+
+impl<T> Default for KeyedParseCache<T> {
+    fn default() -> Self {
+        Self {
+            entries: RefCell::default(),
+            order: RefCell::default(),
+        }
+    }
+}
+
+impl<T> KeyedParseCache<T> {
+    pub(crate) fn read_with(
+        &self,
+        path: &Path,
+        parse: impl FnOnce(&[u8]) -> Option<T>,
+    ) -> io::Result<Option<Arc<T>>> {
+        #[cfg(any(test, feature = "testkit"))]
+        testkit::stat();
+        let stamp = match std::fs::metadata(path) {
+            Ok(meta) => Some(FileStamp::from_metadata(&meta)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        self.read_entry(path, stamp, || std::fs::read(path), parse)
+    }
+
+    fn read_entry(
+        &self,
+        path: &Path,
+        stamp: Option<FileStamp>,
+        read: impl FnOnce() -> io::Result<Vec<u8>>,
+        parse: impl FnOnce(&[u8]) -> Option<T>,
+    ) -> io::Result<Option<Arc<T>>> {
+        if let Some(entry) = self.entries.borrow().get(path)
+            && entry.stamp == stamp
+        {
+            return Ok(entry.value.clone());
+        }
+        let value = if stamp.is_some() {
+            let bytes = match read() {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            #[cfg(any(test, feature = "testkit"))]
+            testkit::parse();
+            parse(&bytes).map(Arc::new)
+        } else {
+            None
+        };
+        let mut entries = self.entries.borrow_mut();
+        if !entries.contains_key(path) {
+            let mut order = self.order.borrow_mut();
+            if entries.len() == KEYED_CACHE_LIMIT
+                && let Some(oldest) = order.pop_front()
+            {
+                entries.remove(&oldest);
+            }
+            order.push_back(path.to_owned());
+        }
+        entries.insert(
+            path.to_owned(),
+            KeyedEntry {
+                stamp,
+                value: value.clone(),
+            },
+        );
+        Ok(value)
+    }
+}
+
+impl<T: DeserializeOwned> KeyedParseCache<T> {
+    pub(crate) fn read_json(&self, path: &Path) -> io::Result<Option<Arc<T>>> {
+        self.read_with(path, |bytes| serde_json::from_slice(bytes).ok())
+    }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) mod testkit {
+    use std::cell::Cell;
+
+    thread_local! {
+        static STATS: Cell<usize> = const { Cell::new(0) };
+        static PARSES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn stat() {
+        STATS.set(STATS.get() + 1);
+    }
+
+    pub(super) fn parse() {
+        PARSES.set(PARSES.get() + 1);
+    }
+
+    /// This thread's cumulative (metadata attempts, parse attempts).
+    pub fn read_counts() -> (usize, usize) {
+        (STATS.get(), PARSES.get())
+    }
+}
+
+#[cfg(test)]
+mod tests;

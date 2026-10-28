@@ -88,8 +88,7 @@ pub fn update(
 }
 
 thread_local! {
-    /// Per-thread parse cache. Every update lands via atomic rename of a
-    /// freshly-written temp file, so `(mtime, len)` validates content; the
+    /// Per-thread parse cache keyed by the full file stamp, including inode.
     /// Normal reads cost one stat per file; deferred caller checks retain
     /// the parse without metadata IO.
     static SUBAGENT_PARSE_CACHE: sidecar::ParseCache<SubagentContextRecord> =

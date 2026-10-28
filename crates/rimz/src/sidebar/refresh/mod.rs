@@ -149,7 +149,13 @@ pub(super) fn consumer_spending_caches(
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
 ) -> SpendingCaches {
-    let provider = crate::agents::spending::current_provider_spending_cache(runtime);
+    let provider =
+        crate::agents::spending::cached_provider_spending(&runtime.shared_provider_spending_path());
+    let provider = if provider.is_current_version() {
+        provider
+    } else {
+        Default::default()
+    };
     let scope = SpendScope::for_workspace(
         snapshot.project_root.as_deref(),
         &snapshot.worktree_roots,

@@ -5,19 +5,19 @@
 //! and durable truth stays in the store. File names digest
 //! `(kind, agent_id)` so a path-hostile session id maps to a safe fixed-width
 //! name; readers still confirm the on-disk key on direct lookups. Long-lived
-//! consumers keep a per-thread `(mtime, len)` parse cache, capping steady-state
+//! consumers keep a per-thread full-file-stamp parse cache, capping steady-state
 //! scans at one stat per file per tick.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
 use crate::disk::atomic;
+use crate::disk::parse_cache::FileStamp;
 use crate::disk::paths::RuntimePaths;
 
 #[cfg(any(test, feature = "testkit"))]
@@ -66,8 +66,7 @@ pub(super) trait SidecarRecord: Serialize + DeserializeOwned + Clone {
 }
 
 struct ParsedSidecar<R> {
-    mtime: SystemTime,
-    len: u64,
+    stamp: FileStamp,
     record: Option<R>,
 }
 
@@ -142,9 +141,10 @@ fn write_record<R: SidecarRecord>(dir: &Path, record: &R) -> Result<(), atomic::
 
 pub(super) fn read_one<R: SidecarRecord>(dir: &Path, kind: &str, agent_id: &str) -> Option<R> {
     let path = path(dir, R::FILE_PREFIX, kind, agent_id);
-    let record: R = fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
+    let bytes = fs::read(&path).ok()?;
+    #[cfg(any(test, feature = "testkit"))]
+    testkit::record_parse_read();
+    let record: R = serde_json::from_slice(&bytes).ok()?;
     (record.kind() == kind && record.agent_id() == agent_id).then_some(record)
 }
 
@@ -205,22 +205,22 @@ pub(super) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> V
         #[cfg(any(test, feature = "testkit"))]
         testkit::record_stat();
         let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mtime) = meta.modified() else { continue };
-        let len = meta.len();
+        let stamp = FileStamp::from_metadata(&meta);
         seen.insert(path.clone());
         let record = match cache.get(&path) {
-            Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
+            Some(parsed) if parsed.stamp == stamp => parsed.record.clone(),
             _ => {
+                let Ok(bytes) = fs::read(&path) else {
+                    cache.remove(&path);
+                    continue;
+                };
                 #[cfg(any(test, feature = "testkit"))]
                 testkit::record_parse_read();
-                let record = fs::read(&path)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+                let record = serde_json::from_slice(&bytes).ok();
                 cache.insert(
                     path,
                     ParsedSidecar {
-                        mtime,
-                        len,
+                        stamp,
                         record: record.clone(),
                     },
                 );
@@ -235,7 +235,7 @@ pub(super) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> V
 }
 
 /// Read only requested live identities, deduplicating their canonical paths.
-/// Each unchanged `(mtime, len)` serves the per-thread cached parse, including
+/// Each unchanged file stamp serves the per-thread cached parse, including
 /// cached failures; dropped keys and vanished files leave no cache entry.
 pub(super) fn read_for_keys<'a, R: SidecarRecord>(
     dir: &Path,
@@ -275,24 +275,21 @@ pub(super) fn read_for_keys_with_holds<'a, R: SidecarRecord>(
                 cache.remove(&record_path);
                 return None;
             };
-            let Ok(mtime) = meta.modified() else {
-                cache.remove(&record_path);
-                return None;
-            };
-            let len = meta.len();
+            let stamp = FileStamp::from_metadata(&meta);
             let record = match cache.get(&record_path) {
-                Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
+                Some(parsed) if parsed.stamp == stamp => parsed.record.clone(),
                 _ => {
+                    let Ok(bytes) = fs::read(&record_path) else {
+                        cache.remove(&record_path);
+                        return None;
+                    };
                     #[cfg(any(test, feature = "testkit"))]
                     testkit::record_parse_read();
-                    let record = fs::read(&record_path)
-                        .ok()
-                        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+                    let record = serde_json::from_slice(&bytes).ok();
                     cache.insert(
                         record_path,
                         ParsedSidecar {
-                            mtime,
-                            len,
+                            stamp,
                             record: record.clone(),
                         },
                     );

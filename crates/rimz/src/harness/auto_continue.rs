@@ -21,8 +21,9 @@
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`resume_park`].
-//! The caller owns per-agent deferral. Only display projection reuses raw park
-//! reads; arm/fire/clear always reread disk when their check is due.
+//! The caller owns per-agent deferral. Projection and no-op arm/fire probes
+//! reuse stamped park parses. A write, removal, or helper spawn rereads fresh
+//! bytes and recomputes its decision first.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,6 +37,7 @@ use crate::RuntimePaths;
 use crate::agents::{AgentCardRef, AgentState, AgentStatus, ProviderCapacity, TurnErrorClass};
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
+use crate::disk::parse_cache::KeyedParseCache;
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use crate::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
 #[cfg(test)]
@@ -282,7 +284,7 @@ pub(crate) fn resume_parked(
             }
             continue;
         }
-        if read_park(&path).is_some_and(|record| {
+        if cached_park(&path).is_some_and(|record| {
             matches!(
                 record.kind,
                 ParkKind::Budget { deadline } | ParkKind::BudgetMonth { deadline }
@@ -293,7 +295,7 @@ pub(crate) fn resume_parked(
             continue;
         }
         clear_budget_park(runtime, &agent.kind, &agent.agent_id);
-        if let Some(mut record) = read_park(&path)
+        if let Some(record) = cached_park(&path)
             && matches!(
                 record.kind,
                 ParkKind::RateLimit { .. } | ParkKind::Overloaded { .. }
@@ -306,15 +308,10 @@ pub(crate) fn resume_parked(
             {
                 continue;
             }
-            if turn_error.is_some_and(|(class, _)| {
-                class.is_limit() || class == TurnErrorClass::PausedOverloaded
-            }) && let Some(message) = latest_resume_message(resume_messages, agent, &record)
-                && nudged_turn_made_no_progress(agent, message.enqueued_at)
+            if rebased_record(record, agent, resume_messages).is_some()
+                && let Some(record) = read_park(&path)
+                    .and_then(|record| rebased_record(record, agent, resume_messages))
             {
-                record
-                    .attempts_since
-                    .get_or_insert(record.parked_at_activity);
-                record.parked_at_activity = agent.last_activity;
                 write_park(&path, &record);
             }
         }
@@ -338,7 +335,7 @@ pub(crate) fn resume_parked(
                 // chance to fire the persisted due record on the recovery
                 // frame; clear only stale records whose marker already moved on.
                 if limit_marker_active(agent) {
-                    if read_park(&path).is_none()
+                    if cached_park(&path).is_none()
                         && capacity_recovered(capacity, agent, now)
                         && !recent_resume_attempt(resume_messages, agent, now)
                     {
@@ -350,13 +347,41 @@ pub(crate) fn resume_parked(
                     }
                     fire_if_due(agent, &path, ctx);
                 } else if capacity_recovered(capacity, agent, now) {
-                    remove_park(&path);
+                    if cached_park(&path).is_some() && read_park(&path).is_some() {
+                        remove_park(&path);
+                    }
                 } else {
                     fire_if_due(agent, &path, ctx);
                 }
             }
         }
     }
+}
+
+fn rebased_record(
+    mut record: ParkRecord,
+    agent: &AgentState,
+    resume_messages: &[ResumeMessage],
+) -> Option<ParkRecord> {
+    if !matches!(
+        record.kind,
+        ParkKind::RateLimit { .. } | ParkKind::Overloaded { .. }
+    ) || still_parked(&record, agent.last_activity)
+        || !agent
+            .displayed_turn_error()
+            .is_some_and(|(class, _)| class.is_limit() || class == TurnErrorClass::PausedOverloaded)
+    {
+        return None;
+    }
+    let message = latest_resume_message(resume_messages, agent, &record)?;
+    if !nudged_turn_made_no_progress(agent, message.enqueued_at) {
+        return None;
+    }
+    record
+        .attempts_since
+        .get_or_insert(record.parked_at_activity);
+    record.parked_at_activity = agent.last_activity;
+    Some(record)
 }
 
 fn nudged_turn_made_no_progress(agent: &AgentState, enqueued_at: Timestamp) -> bool {
@@ -410,6 +435,7 @@ pub(crate) fn exhausted_parks(
 
 thread_local! {
     static PROJECTED_PARKS: RefCell<BTreeMap<PathBuf, Option<ParkRecord>>> = RefCell::default();
+    static PARSED_PARKS: KeyedParseCache<ParkRecord> = KeyedParseCache::default();
 }
 
 fn projected_park(path: &Path, deferred: bool) -> Option<ParkRecord> {
@@ -417,7 +443,7 @@ fn projected_park(path: &Path, deferred: bool) -> Option<ParkRecord> {
         if deferred {
             return memo.get(path).cloned().flatten();
         }
-        let raw = read_park(path);
+        let raw = cached_park(path);
         memo.insert(path.to_owned(), raw.clone());
         raw
     })
@@ -447,9 +473,23 @@ pub(crate) fn limit_marker_active(agent: &AgentState) -> bool {
 /// regressed park keeps both and preserves the prior activity baseline.
 /// Write-if-changed, so a frozen park costs one write, not one per frame.
 fn arm_park(path: &Path, kind: ParkKind, last_activity: Timestamp) {
+    let prior = cached_park(path);
+    if prior.as_ref() == Some(&armed_record(prior.as_ref(), kind.clone(), last_activity)) {
+        return;
+    }
     let prior = read_park(path);
+    let next = armed_record(prior.as_ref(), kind, last_activity);
+    if prior.as_ref() != Some(&next) {
+        write_park(path, &next);
+    }
+}
+
+fn armed_record(
+    prior: Option<&ParkRecord>,
+    kind: ParkKind,
+    last_activity: Timestamp,
+) -> ParkRecord {
     let carry = prior
-        .as_ref()
         .filter(|record| {
             record.parked_at_activity >= last_activity && same_park_class(&record.kind, &kind)
         })
@@ -463,15 +503,12 @@ fn arm_park(path: &Path, kind: ParkKind, last_activity: Timestamp) {
         });
     let (parked_at_activity, attempts_since, last_nudge_at, retries) =
         carry.unwrap_or((last_activity, None, None, 0));
-    let next = ParkRecord {
+    ParkRecord {
         kind,
         parked_at_activity,
         attempts_since,
         last_nudge_at,
         retries,
-    };
-    if prior.as_ref() != Some(&next) {
-        write_park(path, &next);
     }
 }
 
@@ -501,19 +538,64 @@ struct FireContext<'a> {
 /// still idle. A woken agent (activity advanced) clears the record; a pane that
 /// has not appeared yet, a condition still ahead, or a recent nudge each waits.
 fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
+    if cached_park(path).is_none_or(|record| park_action(&record, agent, ctx).is_none()) {
+        return;
+    }
     let Some(record) = read_park(path) else {
         return;
     };
-    if !still_parked(&record, agent.last_activity) {
+    let Some(action) = park_action(&record, agent, ctx) else {
+        return;
+    };
+    let ParkAction::Nudge {
+        pane_id,
+        retry_message_id,
+    } = action
+    else {
         remove_park(path);
         return;
+    };
+    let peers = crate::address::addressable_agents(ctx.snapshot);
+    let label = crate::address::agent_handle(agent, &peers, false);
+    if !spawn_auto_continue(
+        ctx.runtime,
+        &agent.kind,
+        &agent.agent_id,
+        &pane_id,
+        retry_message_id.as_ref(),
+        ctx.text,
+        AutoContinueFacts {
+            reason: record.kind.reason(),
+            parked_since: record.parked_at_activity,
+            label: Some(&label),
+        },
+    ) {
+        return;
+    }
+    write_park(path, &nudged_record(record, ctx.now));
+}
+
+enum ParkAction {
+    Clear,
+    Nudge {
+        pane_id: PaneId,
+        retry_message_id: Option<MessageId>,
+    },
+}
+
+fn park_action(
+    record: &ParkRecord,
+    agent: &AgentState,
+    ctx: FireContext<'_>,
+) -> Option<ParkAction> {
+    if !still_parked(record, agent.last_activity) {
+        return Some(ParkAction::Clear);
     }
     let retry_message_id =
-        if let Some(message) = latest_resume_message(ctx.resume_messages, agent, &record) {
+        if let Some(message) = latest_resume_message(ctx.resume_messages, agent, record) {
             match message.status {
                 MessageStatus::Delivered => {
-                    remove_park(path);
-                    return;
+                    return Some(ParkAction::Clear);
                 }
                 MessageStatus::Queued | MessageStatus::Claimed => Some(message.message_id.clone()),
                 MessageStatus::Sent
@@ -527,40 +609,22 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
         } else {
             None
         };
-    let reason = record.kind.reason();
     if ctx.text.is_empty() {
-        return;
+        return None;
     }
     if matches!(record.kind, ParkKind::RateLimit { .. })
         && recent_resume_attempt(ctx.resume_messages, agent, ctx.now)
     {
-        return;
+        return None;
     }
-    let attempts = evidenced_attempts(ctx.resume_messages, agent, &record);
-    if !nudge_due(&record, attempts, ctx.now, ctx.config) {
-        return;
+    let attempts = evidenced_attempts(ctx.resume_messages, agent, record);
+    if !nudge_due(record, attempts, ctx.now, ctx.config) {
+        return None;
     }
-    let Some(pane_id) = ctx.snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
-        return;
-    };
-    let peers = crate::address::addressable_agents(ctx.snapshot);
-    let label = crate::address::agent_handle(agent, &peers, false);
-    if !spawn_auto_continue(
-        ctx.runtime,
-        &agent.kind,
-        &agent.agent_id,
-        &pane_id,
-        retry_message_id.as_ref(),
-        ctx.text,
-        AutoContinueFacts {
-            reason,
-            parked_since: record.parked_at_activity,
-            label: Some(&label),
-        },
-    ) {
-        return;
-    }
-    write_park(path, &nudged_record(record, ctx.now));
+    Some(ParkAction::Nudge {
+        pane_id: ctx.snapshot.live_agent_pane(&agent.kind, &agent.agent_id)?,
+        retry_message_id,
+    })
 }
 
 struct AutoContinueFacts<'a> {
@@ -692,15 +756,9 @@ pub(crate) fn read_resume_messages(
         return messages;
     };
     messages.extend(
-        store
-            .list_messages()
-            .map(|messages| {
-                messages
-                    .iter()
-                    .filter_map(ResumeMessage::from_record)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default(),
+        crate::store::message::cached_messages(store.paths(), false)
+            .iter()
+            .filter_map(|record| ResumeMessage::from_record(record)),
     );
     messages
 }
@@ -724,8 +782,20 @@ fn latest_resume_message<'a>(
 }
 
 fn read_park(path: &Path) -> Option<ParkRecord> {
+    #[cfg(any(test, feature = "testkit"))]
+    crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::ParkRead);
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+fn cached_park(path: &Path) -> Option<ParkRecord> {
+    PARSED_PARKS.with(|cache| {
+        cache
+            .read_json(path)
+            .ok()
+            .flatten()
+            .map(|value| (*value).clone())
+    })
 }
 
 fn write_park(path: &Path, record: &ParkRecord) {
@@ -770,6 +840,14 @@ pub(super) fn arm_budget_park(
 
 pub fn clear_budget_park(runtime: &RuntimePaths, kind: &AgentKind, agent_id: &AgentSessionId) {
     let path = park_record_path(runtime, kind, agent_id);
+    if !cached_park(&path).is_some_and(|record| {
+        matches!(
+            record.kind,
+            ParkKind::Budget { .. } | ParkKind::BudgetMonth { .. }
+        )
+    }) {
+        return;
+    }
     if read_park(&path).is_some_and(|record| {
         matches!(
             record.kind,

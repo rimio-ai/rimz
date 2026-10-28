@@ -302,7 +302,8 @@ upward-dependencies = ["address"]
 # AgentState::trim_ended_text shares ended-row labels with reducer and carryover reads (+1).
 # RateLimitsCache::shared_path and shared_lock bind shared names to the cache format (+2).
 # AgentState::normalize_prompt_labels shares legacy row normalization with store readers (+1).
-surface-budget = 1169
+# cached_provider_spending shares stamped provider parses with host projections (+1).
+surface-budget = 1170
 
 [[verdict]]
 kind = "item"
@@ -665,7 +666,8 @@ path = "crates/rimz/src/agents/spending"
 # SharedName shares model and tool names across public spending rows (+1).
 # ToolCounts exposes compact, canonical counts on public spending rows (+1).
 # utc_month_start_secs shares the walk and budget reader's UTC cutoff (+1).
-surface-budget = 110
+# cached_provider_spending shares stamped provider parses with host projections (+1).
+surface-budget = 111
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -1062,7 +1064,8 @@ allowed-dependencies = [
 # WorkflowPaths::step_log owns command-step output paths (+1).
 # Runtime checkpoint binding, path accessors, Snapshots and its never-create writer (+7).
 # StatePaths::legacy_snapshots_dir contains the retired checkpoint layout (+1).
-surface-budget = 291
+# KeyedParseCache, its two readers, and testkit parse-cache counters (+5).
+surface-budget = 296
 
 [[verdict]]
 kind = "item"
@@ -2822,7 +2825,9 @@ path = "crates/rimz/src/store"
 # Workflow held sessions, turn identities, saved verdicts, and turn-end actions cross the engine/inspection seam (+4).
 # count_rows_materialized includes dispatch's retained roster and resume-child copies (+1).
 # AuditRows, its read/lookup surface and marked cohort copies share durable rows (+5).
-surface-budget = 513
+# message::cached_messages shares nontransactional queue/history projection reads (+1).
+# agent_context::read_cached_one isolates due-session reads from held projection records (+1).
+surface-budget = 515
 
 [[verdict]]
 kind = "item"
@@ -6196,6 +6201,51 @@ reason = "Sidebar refresh usage tests compare their timeout budgets to this crat
 kind = "item"
 key = "disk::parse_cache::FileStamp"
 reason = "Crate-visible field type of StampedPath.stamp; private_interfaces retains the type. Identity remains mtime/length plus dev/inode, unlike the separately verdicted per-walk FileIdentity. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::parse_cache::KeyedParseCache"
+reason = "Projection readers share bounded, full-stamp parsed and negative outcomes without widening disk dependencies."
+
+[[verdict]]
+kind = "item"
+key = "disk::parse_cache::testkit"
+reason = "Cache counters are re-exported through testkit without a disk-to-testkit dependency."
+
+[[verdict]]
+kind = "item"
+key = "disk::parse_cache::testkit::read_counts"
+reason = "Integration tests and benches measure this thread's cache stats and parses."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::publish::cached_provider_spending"
+reason = "Host budget and spending projections share provider parses; mutation readers remain uncached."
+
+[[verdict]]
+kind = "item"
+key = "store::message::codec::cached_messages"
+reason = "Auto-continue and budget enforcement reuse queue/history parses; queue transactions stay uncached."
+
+[[verdict]]
+kind = "item"
+key = "store::agent_context::read_cached_one"
+reason = "Due-session refresh shares bounded stamped context parses without evicting the projection's held records."
+
+[[verdict]]
+kind = "item"
+key = "testkit::read_cached_json"
+reason = "Real-filesystem identity tests exercise the private keyed cache without exporting its type."
+
+[[verdict]]
+kind = "item"
+key = "testkit::park_demotion"
+reason = "Fleet cache tests supply explicit auto-continue configuration without exporting the private harness module."
+
+[[verdict]]
+kind = "item"
+key = "testkit::resume_parked"
+reason = "Fleet cache tests exercise live auto-continue with explicit config and time without exporting the harness module."
 
 [[verdict]]
 kind = "item"
