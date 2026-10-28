@@ -146,6 +146,15 @@ jq -c 'select(.event.kind == "fetch_reduction_stats") | .event | {cycles, interv
   "$ROOT/home/.rimz/ws/$SESSION/audit/diag.log.jsonl"
 ```
 
+To count what the host reads, such as its `/proc` opens per pass, trace it with `strace`. Yama's default `ptrace_scope` of 1 refuses `strace -p` on the host, which is not your descendant, so start the room under `strace -f` instead:
+
+```sh
+strace -f -qq -ttt -e trace=openat,clone,clone3,fork,vfork -s 256 \
+  -o "$TMPDIR/room.strace" cargo xtask sandbox room --mux tmux --for 20m
+```
+
+The trace follows every process the room starts, and each line opens with the id of the thread that made the call. Take the host's PID from the `ps` above: its lines are those under an id listed in `/proc/<host-pid>/task`, or under a thread id that one of those threads' `clone` lines returns later. `-ttt` stamps each line in epoch seconds, so count between two stamps for a window, and `-s 256` keeps each path whole where strace's default cuts it at 32 bytes. Tracing slows every process in the room, so take CPU figures from an untraced room.
+
 Six checks cover what a unit test cannot:
 
 1. **Host death.** Kill the host by PID with `kill -9`. Each supervisor reads the end of its stream, clears its pane to `sidebar: host went away` and `retrying in 1s`, then attaches to a successor host one of them starts. Check both a young host and one that has painted for over a minute: both follow notice-and-retry, with delays doubling to 60 seconds on repeated failures. Look on each tab, then repeat the `ps` and confirm one new host and the same supervisors. No supervisor paints cards while the host is unavailable. The successor host starts with no fold, so each sidebar paints the placeholder until its first fold arrives. When you time successive kills, wait more than 60 seconds between them. `RIMZ_TEST_SIDEBAR_STABLE_RUN_MS` shortens that window on a testkit build, but `sandbox room` strips every `RIMZ_*` variable from the room it holds, so it cannot be set there; space the kills instead. A kill that lands inside the previous host's first minute gets the doubled retry delay, not the 1 s first retry, and its timing measures the backoff.
