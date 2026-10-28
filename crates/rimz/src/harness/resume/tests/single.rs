@@ -331,6 +331,33 @@ fn invalid_explicit_overrides_refuse_instead_of_resuming_bare() {
 
 #[test]
 fn unsupported_explicit_preset_refuses_instead_of_resuming_bare() {
+    let mut saved = agent("droid", "saved", "/repo", 0);
+    saved.profile = Some("worker".into());
+    let (plan, facts) = single(
+        &saved,
+        &profiles("worker", profile("droid")),
+        SingleResumeOptions {
+            overrides: ResumeOverrides {
+                preset: LaunchPreset {
+                    model: Some("custom".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    assert!(plan.tabs.is_empty());
+    assert_eq!(
+        plan.skipped[0].reason.label(),
+        "droid does not support --model; remove it or put provider-specific flags in `args`"
+    );
+    assert!(plan.warnings.is_empty());
+    assert!(facts.is_none());
+}
+
+#[test]
+fn unsupported_explicit_effort_warns_and_resumes() {
     let mut saved = agent("kimi", "saved", "/repo", 0);
     saved.profile = Some("worker".into());
     let (plan, facts) = single(
@@ -347,13 +374,13 @@ fn unsupported_explicit_preset_refuses_instead_of_resuming_bare() {
             ..Default::default()
         },
     );
-    assert!(plan.tabs.is_empty());
+    assert_eq!(plan.tabs.len(), 1);
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
     assert_eq!(
-        plan.skipped[0].reason.label(),
-        "kimi does not support --effort; remove it or put provider-specific flags in `args`"
+        plan.warnings,
+        ["warning: `worker` effort high is unsupported on kimi; launching without it"]
     );
-    assert!(plan.warnings.is_empty());
-    assert!(facts.is_none());
+    assert!(facts.is_some());
 }
 
 #[test]

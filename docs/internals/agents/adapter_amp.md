@@ -91,8 +91,8 @@ Profile presets render through `PresetMatchers`:
 | --- | --- |
 | `model` | `--mode <value>`, passed verbatim. Amp accepts `low`, `medium`, `high`, `ultra`, or a plugin mode by key or label ([modes](../../externals/agent-adapter/amp-reference.md#models-modes-and-effort)) |
 | `fast` | `--fast` |
-| `effort` | refused at launch (`PresetErr::UnsupportedField`). Amp rejects `--effort` as an unknown option, and each mode's effort is set in Amp's Mode Dial settings |
-| `auto-compact` | skipped with a warning at launch; unsupported `effort` still refuses |
+| `effort` | skipped with a warning at launch. Amp rejects `--effort` as an unknown option, and each mode's effort is set in Amp's Mode Dial settings |
+| `auto-compact` | skipped with a warning at launch |
 
 RimZ passes no permission-mode flag. Amp's default posture runs tools without approval, and its CLI has no flag for an ask or plan posture, so user settings and plugins own any approval UI.
 

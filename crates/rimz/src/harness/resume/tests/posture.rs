@@ -981,8 +981,10 @@ fn posture_reports_a_provider_switch_rather_than_refusing() {
 }
 
 #[test]
-fn unrenderable_record_effort_degrades_to_the_bare_posture() {
-    let profiles = profiles("worker", profile("kimi"));
+fn unsupported_record_effort_replays_without_degrading() {
+    let mut worker = profile("kimi");
+    worker.args = Some("--raw profile".into());
+    let profiles = profiles("worker", worker);
     let record = crate::agents::LaunchRecord {
         effort: Some("high".into()),
         ..Default::default()
@@ -997,18 +999,78 @@ fn unrenderable_record_effort_degrades_to_the_bare_posture() {
         },
         &profiles,
     );
+    assert_eq!(posture.degraded, None);
+    assert_eq!(posture.launch.effort, None);
+    assert_eq!(posture.launch.record.as_deref().unwrap().effort, None);
+    let mut expected = vec!["--raw".to_owned(), "profile".to_owned()];
+    expected.extend(yolo_argv("kimi"));
+    assert_eq!(posture.launch.args, expected);
+}
+
+#[test]
+fn unsupported_profile_effort_replays_without_degrading() {
+    let mut worker = profile("kimi");
+    worker.effort = Some("high".into());
+    worker.args = Some("--raw profile".into());
+    let profiles = profiles("worker", worker);
+    let record = crate::agents::LaunchRecord::default();
+    for record in [None, Some(&record)] {
+        let posture = resolve_posture(
+            PostureRequest {
+                record,
+                profile: Some("worker"),
+                kind: &AgentKind::new_unchecked("kimi"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+        );
+        assert_eq!(posture.degraded, None);
+        assert_eq!(posture.launch.effort, None);
+        assert!(
+            posture
+                .launch
+                .record
+                .as_deref()
+                .is_none_or(|record| record.effort.is_none())
+        );
+        assert_eq!(posture.launch.args, ["--raw", "profile"]);
+    }
+}
+
+#[test]
+fn invalid_record_effort_degrades_to_the_bare_posture() {
+    let profiles = profiles("worker", profile("hermes"));
+    let record = crate::agents::LaunchRecord {
+        effort: Some("bogus".into()),
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("worker"),
+            kind: &AgentKind::new_unchecked("hermes"),
+            stamped_mode: Some(PermissionMode::Yolo),
+            stamped_tier: None,
+        },
+        &profiles,
+    );
     assert_eq!(
         posture,
         ResumePosture {
             launch: ResumeLaunchPosture {
-                args: yolo_argv("kimi"),
+                args: yolo_argv("hermes"),
                 mode: Some(PermissionMode::Yolo),
                 ..Default::default()
             },
             degraded: Some(PostureDegrade::Unresolved {
                 profile: "worker".into(),
-                reason: "kimi does not support --effort; remove it or put provider-specific flags in `args`"
-                    .into(),
+                reason: crate::agents::PresetErr::UnsupportedValue {
+                    agent: "hermes",
+                    field: "effort",
+                    value: "bogus".into(),
+                }
+                .to_string(),
             }),
         }
     );

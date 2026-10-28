@@ -3330,13 +3330,33 @@ fn explain_kind_override_uses_only_the_final_kinds_defaults() {
             "description: Reviewer\nagent: claude\ntools: [Read]\neffort: high",
             "Review the code.",
         );
-        env.rimz()
+        let output = env
+            .rimz()
             .args(["agents", "explain", "reviewer", "--agent", kind, "--json"])
             .assert()
-            .code(1)
+            .success()
             .stderr(contains(format!(
-                "invalid profile `reviewer`: agent `{kind}` does not support profile field `effort`; remove it or put provider-specific flags in `args`"
-            )));
+                "warning: `reviewer` effort high is unsupported on {kind}; launching without it"
+            )))
+            .get_output()
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["kind"], kind);
+        assert!(report["effort"].is_null(), "{report}");
+        assert!(
+            report["provider_argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|arg| arg != "--effort" && arg != "high"),
+            "{report}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.matches("effort high is unsupported").count(),
+            1,
+            "{stderr}"
+        );
     }
 }
 

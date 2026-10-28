@@ -231,7 +231,7 @@ Under `agents.isolation = "scoped"` (Linux), RimZ binds each agent's config home
 
 ## Launch flags
 
-RimZ launches each agent with the provider's own flags. An unsupported typed `model`, `effort`, or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `auto-compact` and `fast` warn and launch without that setting; invalid auto-compact counts still refuse. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. Headless loop and workflow judges also check the resolved binary before spawning; an unreadable version passes without a verdict.
+RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, and `fast` warn and launch without that setting; Hermes refuses effort outside its supported level list, and invalid auto-compact counts still refuse. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. Headless loop and workflow judges also check the resolved binary before spawning; an unreadable version passes without a verdict.
 
 OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup/install, and doctor refuse an older readable version with `opencode upgrade --major`; an unreadable version passes without a verdict. From 2.0.13, RimZ-launched sessions start with the native session tab strip off: RimZ sets `tabs.mode = "off"` over whatever `cli.json` or an exported `OPENCODE_CLI_CONFIG_CONTENT` sets and keeps every other setting. Older releases keep their tabs, and OpenCode started by hand is unchanged. Fork is unsupported. Model selection uses a checked [session step](../internals/agents/adapter_opencode.md), verified on OpenCode 2.1.4. Plan adds no arguments; select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
 
@@ -325,21 +325,21 @@ OMP Plan uses the same conservative approval flags as Ask, not native plan mode.
 | Claude Code | `--model <model>` | `--effort <level>` |
 | Codex | `--model <model>` | `-c model_reasoning_effort=<level>` |
 | Pi | `--model <model>` | `--thinking <level>` |
-| OpenCode | session step, checked | refused |
+| OpenCode | session step, checked | skipped with a warning |
 | Antigravity | `--model <model>` | `--effort <level>` |
 | Copilot | `--model <model>` | `--reasoning-effort <level>` |
-| Droid | refused | refused |
-| Cursor | `--model <model>` | refused |
-| Amp | `--mode <model>` | refused |
+| Droid | refused | skipped with a warning |
+| Cursor | `--model <model>` | skipped with a warning |
+| Amp | `--mode <model>` | skipped with a warning |
 | Kiro | `--model <model>` | `--effort <level>` |
-| Qwen | `--model <model>` | refused |
+| Qwen | `--model <model>` | skipped with a warning |
 | Qoder | `--model <model>` | `--reasoning-effort <effort>` |
-| Kimi | `--model <model>` | refused |
+| Kimi | `--model <model>` | skipped with a warning |
 | Grok | `--model <model>` | `--reasoning-effort <level>` |
 | Hermes | `--model <model>` | `--reasoning <level>`; levels other than `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` are refused |
 | OMP | `--model <model>` | `--thinking <level>` |
 | Muse | `--model <model>` | `--reasoning-effort <level>` |
-| MiniMax Code | `--model <provider/model[#variant]>` | refused |
+| MiniMax Code | `--model <provider/model[#variant]>` | skipped with a warning |
 | Process plugin | declared by bundle | declared by bundle |
 
 Amp has no model flag; its `--mode` selects the agent mode, and the `model` value is passed there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).

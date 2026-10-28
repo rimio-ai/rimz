@@ -11519,11 +11519,11 @@ fn loop_add_saves_and_warns_for_unsupported_fast() {
 }
 
 #[test]
-fn loop_add_rejects_unsupported_effort_before_saving() {
+fn loop_add_saves_and_warns_for_unsupported_effort() {
     let env = Env::new();
     env.install_agent_hooks("cursor");
     write_loop_config(&env, "");
-    let (_, error) = loop_fail(
+    let (_, error) = loop_ok_with_stderr(
         &env,
         &[
             "loop",
@@ -11541,13 +11541,76 @@ fn loop_add_rejects_unsupported_effort_before_saving() {
     );
     assert!(
         error.contains(
-            "cursor does not support --effort; remove it or put provider-specific flags in `args`"
+            "warning: `cursor` effort high is unsupported on cursor; launching without it"
         ),
         "{error}"
     );
     let config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert!(!config.tasks.0.contains_key("bad-effort"));
+    assert_eq!(config.tasks.0["bad-effort"].effort.as_deref(), Some("high"));
+    assert_eq!(
+        error.matches("effort high is unsupported").count(),
+        1,
+        "{error}"
+    );
+}
+
+#[test]
+fn loop_add_saves_and_warns_for_unsupported_effort_on_team_member() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
+    env.write_config(
+        &env.project_root,
+        r#"
+        [profiles.lead]
+        agent = "claude"
+        [profiles.helper]
+        agent = "cursor"
+        [[agents.teams.forge.roles]]
+        role = "lead"
+        profile = "lead"
+        [[agents.teams.forge.roles]]
+        role = "helper"
+        profile = "helper"
+        "#,
+    );
+    loop_ok(&env, &["trust", "grant"]);
+    write_loop_config(&env, "");
+    let (_, error) = loop_ok_with_stderr(
+        &env,
+        &[
+            "loop",
+            "add",
+            "effort-team",
+            "--agent",
+            "forge",
+            "--stay",
+            "--effort",
+            "high",
+            "--when",
+            "pr=open",
+            "--prompt",
+            "p",
+        ],
+    );
+    assert!(
+        error.contains(
+            "warning: `cursor` effort high is unsupported on cursor; launching without it"
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        error.matches("effort high is unsupported").count(),
+        1,
+        "{error}"
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    assert_eq!(
+        config.tasks.0["effort-team"].effort.as_deref(),
+        Some("high")
+    );
 }
 
 #[test]

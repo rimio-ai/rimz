@@ -3422,7 +3422,8 @@ allowed-dependencies = [
 # LayoutRunParams lowers the leader's supervised binding through the shared pane compiler (+1).
 # run_exit_policy shares fresh and resumed run wrapper policy (+1).
 # LaunchFinalizeWarning::take_cell_notices shares restart warning conversion (+1).
-surface-budget = 52
+# normalize_cell_preset shares tuning normalization with replay (+1).
+surface-budget = 53
 
 [[verdict]]
 kind = "item"

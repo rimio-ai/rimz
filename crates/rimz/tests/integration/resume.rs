@@ -748,13 +748,13 @@ mod agent_ref {
                 _ => None,
             })
             .unwrap();
-        saved.agent_id = "kimi-session".into();
-        saved.launch_id = Some("kimi-launch".into());
+        saved.agent_id = "droid-session".into();
+        saved.launch_id = Some("droid-launch".into());
         saved.agent_name = "bright-hawk".into();
         saved.launch.profile = None;
         saved.launch.record = None;
         saved.launch.mode = None;
-        let kind = AgentKind::new_unchecked("kimi");
+        let kind = AgentKind::new_unchecked("droid");
         store
             .append_event(&EventEnvelope::agent_launched(
                 workspace.workspace_id.clone(),
@@ -764,7 +764,7 @@ mod agent_ref {
             ))
             .unwrap();
         let mut ended =
-            AgentLifecycleObservation::new(Some("kimi-session".into()), LifecycleSignal::Ended);
+            AgentLifecycleObservation::new(Some("droid-session".into()), LifecycleSignal::Ended);
         ended.transcript_path = Some(fixture.transcript.display().to_string());
         store
             .append_event(&EventEnvelope::agent_lifecycle(
@@ -776,7 +776,7 @@ mod agent_ref {
             ))
             .unwrap();
         let output = fixture
-            .command_args(&["kimi", "--resume=kimi-session", "--effort", "high"])
+            .command_args(&["droid", "--resume=droid-session", "--model", "custom"])
             .bounded_output()
             .unwrap();
         assert_eq!(output.status.code(), Some(1));
@@ -788,7 +788,7 @@ mod agent_ref {
         assert_eq!(
             reason,
             Some(
-                "kimi does not support --effort; remove it or put provider-specific flags in `args`"
+                "droid does not support --model; remove it or put provider-specific flags in `args`"
             ),
             "{stderr}"
         );

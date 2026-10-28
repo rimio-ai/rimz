@@ -36,7 +36,8 @@ Some launch text and profile settings never reach Qoder:
 
 | Launch input | What happens |
 | --- | --- |
-| system-prompt replacement and every preset field other than model and effort | refused: `presets` declares only the model and effort matchers |
+| system-prompt replacement | refused: `presets` declares no system-prompt matcher |
+| auto-compact and fast | skipped with a launch warning: `presets` declares no switches for them |
 | headless command | refused: `launch.headless` is `None`, so Qoder cannot run a headless judge or check |
 | hook-context replies, including the deadline stop rung | not sent: `hook_context` is `None`, so a supervised run's stop rung goes through the pane (`crates/rimz/src/harness/deadline.rs::stop_channel`) |
 | per-turn prompt context | not sent: `prompt_context` is `false` |
