@@ -1,37 +1,36 @@
-//! Read-only Console OAuth usage for OpenCode Go subscriptions.
+//! Read-only Zen Go usage with best-effort Console OAuth tier enrichment.
 
 use jiff::Timestamp;
-use serde::Deserialize;
-use std::num::NonZeroU64;
+use serde_json::{Map, Value};
 
 use crate::agents::AccountUsageSnapshot;
-use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowAmount, WindowSource};
+use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::{
-    AccountUsageFault, AccountUsageReportable, HttpErrKind, oauth_http_get, trusted_usage_url,
+    AccountUsageFault, AccountUsageReportable, HttpErrKind, oauth_http_get, oauth_http_get_once,
+    trusted_usage_url,
 };
 
-const DEFAULT_USAGE_URL: &str = "https://opencode.ai/console/api/go/status";
+const DEFAULT_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const URL_ENV: &str = "RIMZ_OPENCODE_GO_USAGE_URL";
 
 #[derive(Debug, thiserror::Error)]
 pub(in crate::agents) enum GoUsageErr {
-    #[error("OpenCode Go subscription unavailable")]
-    NoSubscription,
     #[error("OpenCode Go usage URL override refused")]
     UntrustedUsageUrl,
-    #[error("OpenCode Go status HTTP {kind}")]
+    #[error("OpenCode Go usage HTTP {kind}")]
     Http { kind: HttpErrKind },
-    #[error("OpenCode Go status schema drift")]
-    Schema,
+    #[error("OpenCode Go usage schema drift at {location}: {problem}")]
+    Schema {
+        location: String,
+        problem: &'static str,
+    },
 }
 
 impl AccountUsageReportable for GoUsageErr {
     fn fault(&self) -> AccountUsageFault {
         match self {
-            Self::NoSubscription | Self::UntrustedUsageUrl => AccountUsageFault::NoCredentials,
-            Self::Http { kind } if kind.is_auth_rejected() || *kind == HttpErrKind::Status(404) => {
-                AccountUsageFault::NoCredentials
-            }
+            Self::UntrustedUsageUrl => AccountUsageFault::NoCredentials,
+            Self::Http { kind } if kind.is_auth_rejected() => AccountUsageFault::NoCredentials,
             _ => AccountUsageFault::Transient,
         }
     }
@@ -54,13 +53,38 @@ fn fetch_usage_with_url(
 ) -> Result<AccountUsageSnapshot> {
     let mut headers = vec![("Authorization", format!("Bearer {access_token}"))];
     if let Some(org_id) = org_id.filter(|id| !id.is_empty()) {
-        headers.push(("x-org-id", org_id.to_owned()));
+        headers.push(("x-opencode-org-id", org_id.to_owned()));
     }
     // Query freshness precedes I/O; expiry is checked after it.
     let observed_at = Timestamp::now();
-    let body = oauth_http_get(url, &headers, "OpenCode Go status fetch")
+    let body = oauth_http_get(url, &headers, "OpenCode Go usage fetch")
         .map_err(|error| GoUsageErr::Http { kind: error.kind })?;
-    parse_response(&body, observed_at, Timestamp::now())
+    let mut snapshot = parse_response(&body, observed_at)?;
+    snapshot.plan = fetch_plan(url, access_token, org_id);
+    // The tier read is the last I/O before publication, so it can outlast
+    // the running window's remaining time.
+    clear_inactive_five_hour(&mut snapshot, observed_at, Timestamp::now());
+    Ok(snapshot)
+}
+
+fn fetch_plan(usage_url: &str, access_token: &str, org_id: Option<&str>) -> Option<String> {
+    let origin = url::Url::parse(usage_url)
+        .ok()?
+        .origin()
+        .ascii_serialization();
+    let url = format!("{origin}/console/api/go/status");
+    let mut headers = vec![("Authorization", format!("Bearer {access_token}"))];
+    if let Some(org_id) = org_id.filter(|id| !id.is_empty()) {
+        headers.push(("x-org-id", org_id.to_owned()));
+    }
+    let body = oauth_http_get_once(&url, &headers, "OpenCode Go tier fetch").ok()?;
+    let value: Value = serde_json::from_str(&body).ok()?;
+    value
+        .get("product")?
+        .as_str()
+        .map(str::trim)
+        .filter(|product| !product.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn resolve_usage_url(override_url: Option<&str>) -> Result<String> {
@@ -74,88 +98,75 @@ fn resolve_usage_url(override_url: Option<&str>) -> Result<String> {
     Ok(candidate.to_owned())
 }
 
-#[derive(Deserialize)]
-struct StatusWire {
-    product: Option<String>,
-    access: Option<AccessWire>,
+fn schema(location: &str, problem: &'static str) -> GoUsageErr {
+    GoUsageErr::Schema {
+        location: location.to_owned(),
+        problem,
+    }
 }
 
-#[derive(Deserialize)]
-struct AccessWire {
-    meters: MetersWire,
+fn required<'a>(value: Option<&'a Value>, location: &str) -> Result<&'a Value> {
+    match value {
+        None => Err(schema(location, "missing")),
+        Some(Value::Null) => Err(schema(location, "null")),
+        Some(value) => Ok(value),
+    }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MetersWire {
-    five_hour: Option<MeterWire>,
-    week: MeterWire,
-    month: MeterWire,
+fn object<'a>(value: Option<&'a Value>, location: &str) -> Result<&'a Map<String, Value>> {
+    required(value, location)?
+        .as_object()
+        .ok_or_else(|| schema(location, "wrong type"))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MeterWire {
-    used_micro_cents: String,
-    limit_micro_cents: String,
-    resets_at: Timestamp,
-}
-
-fn parse_response(
-    body: &str,
-    observed_at: Timestamp,
-    now: Timestamp,
-) -> Result<AccountUsageSnapshot> {
-    let status: StatusWire = serde_json::from_str(body).map_err(|_| GoUsageErr::Schema)?;
-    let access = status.access.ok_or(GoUsageErr::NoSubscription)?;
-    let product = status
-        .product
-        .filter(|product| !product.trim().is_empty())
-        .ok_or(GoUsageErr::Schema)?;
+fn parse_response(body: &str, observed_at: Timestamp) -> Result<AccountUsageSnapshot> {
+    let value: Value = serde_json::from_str(body).map_err(|_| schema("body", "not JSON"))?;
+    let body = object(Some(&value), "body")?;
+    let usage = object(body.get("usage"), "usage")?;
+    let windows = [("rolling", 300), ("weekly", 10_080), ("monthly", 43_200)]
+        .into_iter()
+        .map(|(name, duration)| window(usage, name, duration, observed_at))
+        .collect::<Result<Vec<_>>>()?;
     Ok(AccountUsageSnapshot {
-        plan: Some(product),
-        rate_limits: Some(AgentRateLimits {
-            windows: vec![
-                window(access.meters.five_hour, 300, observed_at, now)?,
-                window(Some(access.meters.week), 10_080, observed_at, now)?,
-                window(Some(access.meters.month), 43_200, observed_at, now)?,
-            ],
-        }),
+        rate_limits: Some(AgentRateLimits { windows }),
         ..Default::default()
     })
 }
 
 fn window(
-    meter: Option<MeterWire>,
+    usage: &Map<String, Value>,
+    name: &str,
     duration_mins: u32,
     observed_at: Timestamp,
-    now: Timestamp,
 ) -> Result<RateLimitWindow> {
-    let (mut amount, mut resets_at) = match meter {
-        Some(meter) => (
-            Some(WindowAmount {
-                used: meter
-                    .used_micro_cents
-                    .parse()
-                    .map_err(|_| GoUsageErr::Schema)?,
-                limit: meter
-                    .limit_micro_cents
-                    .parse::<NonZeroU64>()
-                    .map_err(|_| GoUsageErr::Schema)?
-                    .get(),
-            }),
-            Some(meter.resets_at),
-        ),
-        None => (None, None),
+    let location = format!("usage.{name}");
+    let meter = object(usage.get(name), &location)?;
+    let status_location = format!("{location}.status");
+    let status = required(meter.get("status"), &status_location)?
+        .as_str()
+        .ok_or_else(|| schema(&status_location, "wrong type"))?;
+    let limited = match status {
+        "ok" => false,
+        "rate-limited" => true,
+        _ => return Err(schema(&status_location, "invalid value")),
     };
-    if duration_mins == 300 && resets_at.is_some_and(|reset| reset <= now) {
-        amount = amount.map(|amount| WindowAmount { used: 0, ..amount });
-        resets_at = None;
-    }
+    let percent_location = format!("{location}.percent");
+    let percent = required(meter.get("percent"), &percent_location)?
+        .as_f64()
+        .ok_or_else(|| schema(&percent_location, "wrong type"))?;
+    let reset_location = format!("{location}.resetsAt");
+    let reset = required(meter.get("resetsAt"), &reset_location)?
+        .as_str()
+        .ok_or_else(|| schema(&reset_location, "wrong type"))?
+        .parse()
+        .map_err(|_| schema(&reset_location, "invalid value"))?;
     Ok(RateLimitWindow {
-        used_percentage: Some(amount.map_or(0, WindowAmount::used_percentage)),
-        amount,
-        resets_at,
+        used_percentage: Some(if limited {
+            100
+        } else {
+            percent.clamp(0.0, 100.0).floor().min(99.0) as u8
+        }),
+        resets_at: Some(reset),
         duration_mins: Some(duration_mins),
         observed_at: Some(observed_at),
         source: WindowSource::Authoritative,
@@ -166,15 +177,30 @@ fn window(
     })
 }
 
+fn clear_inactive_five_hour(
+    snapshot: &mut AccountUsageSnapshot,
+    observed_at: Timestamp,
+    now: Timestamp,
+) {
+    let windows = snapshot
+        .rate_limits
+        .iter_mut()
+        .flat_map(|limits| &mut limits.windows);
+    for window in windows.filter(|window| window.duration_mins == Some(300)) {
+        if window.resets_at.is_some_and(|reset| reset <= now) || window.not_started(observed_at) {
+            window.used_percentage = Some(0);
+            window.resets_at = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::context::{WindowAmount, WindowSource};
     use serde_json::{Value, json};
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::time::Duration;
 
     fn now() -> Timestamp {
@@ -183,42 +209,33 @@ mod tests {
 
     fn fixture() -> Value {
         json!({
-            "product": "go",
-            "subscriberUserId": "private-user",
-            "access": {
-                "startsAt": "2026-10-25T06:00:00Z",
-                "endsAt": "2026-11-25T06:00:00Z",
-                "meters": {
-                    "fiveHour": {
-                        "startsAt": "2026-10-25T06:00:00Z",
-                        "resetsAt": "2026-10-25T11:00:00Z",
-                        "limitMicroCents": "1200000000",
-                        "usedMicroCents": "1199999999"
-                    },
-                    "week": {
-                        "resetsAt": "2026-10-26T00:00:00Z",
-                        "limitMicroCents": "3000000000",
-                        "usedMicroCents": "244233"
-                    },
-                    "month": {
-                        "resetsAt": "2026-11-25T06:00:00Z",
-                        "limitMicroCents": "6000000000",
-                        "usedMicroCents": "6000000001"
-                    }
+            "private-response-key": "private-response-value",
+            "usage": {
+                "rolling": {
+                    "status": "ok", "percent": 42.9,
+                    "resetsAt": "2026-10-25T11:00:00Z"
+                },
+                "weekly": {
+                    "status": "ok", "percent": 0,
+                    "resetsAt": "2026-10-26T00:00:00Z"
+                },
+                "monthly": {
+                    "status": "rate-limited", "percent": 37,
+                    "resetsAt": "2026-11-25T06:00:00Z"
                 }
             }
         })
     }
 
     #[test]
-    fn go_status_keeps_product_integer_amounts_and_stable_authoritative_windows() {
-        let response = parse_response(&fixture().to_string(), now(), now());
+    fn zen_usage_publishes_percentage_only_authoritative_windows() {
+        let response = parse_response(&fixture().to_string(), now());
         assert!(
             response.is_ok(),
-            "Go status should produce windows: {response:?}"
+            "Zen usage should produce windows: {response:?}"
         );
         let snapshot = response.unwrap();
-        assert_eq!(snapshot.plan.as_deref(), Some("go"));
+        assert_eq!(snapshot.plan, None);
         let windows = snapshot.rate_limits.unwrap().windows;
         assert_eq!(
             windows
@@ -236,11 +253,8 @@ mod tests {
             [
                 (
                     Some(300),
-                    Some(99),
-                    Some(WindowAmount {
-                        used: 1_199_999_999,
-                        limit: 1_200_000_000
-                    }),
+                    Some(42),
+                    None,
                     Some("2026-10-25T11:00:00Z".parse().unwrap()),
                     Some(now()),
                     WindowSource::Authoritative,
@@ -249,10 +263,7 @@ mod tests {
                 (
                     Some(10_080),
                     Some(0),
-                    Some(WindowAmount {
-                        used: 244_233,
-                        limit: 3_000_000_000
-                    }),
+                    None,
                     Some("2026-10-26T00:00:00Z".parse().unwrap()),
                     Some(now()),
                     WindowSource::Authoritative,
@@ -261,10 +272,7 @@ mod tests {
                 (
                     Some(43_200),
                     Some(100),
-                    Some(WindowAmount {
-                        used: 6_000_000_001,
-                        limit: 6_000_000_000
-                    }),
+                    None,
                     Some("2026-11-25T06:00:00Z".parse().unwrap()),
                     Some(now()),
                     WindowSource::Authoritative,
@@ -275,199 +283,391 @@ mod tests {
     }
 
     #[test]
-    fn unused_31_day_billing_month_has_already_started() {
-        let mut body = fixture();
-        body["access"]["meters"]["month"]["usedMicroCents"] = json!("0");
-        let snapshot = parse_response(&body.to_string(), now(), now()).unwrap();
-        let month = &snapshot.rate_limits.unwrap().windows[2];
-        assert!(!month.not_started(now()));
-    }
-
-    #[test]
-    fn absent_or_expired_five_hour_is_full_without_a_countdown() {
+    fn percentages_floor_and_only_refused_requests_are_spent() {
         let outcomes = [
-            None,
-            Some("2026-10-25T06:59:59Z"),
-            Some("2026-10-25T07:00:00Z"),
+            (0.0, "ok"),
+            (42.9, "ok"),
+            (99.99, "ok"),
+            (100.0, "ok"),
+            (150.0, "ok"),
+            (-5.0, "ok"),
+            (37.0, "rate-limited"),
         ]
-        .map(|reset| {
+        .map(|(percent, status)| {
             let mut body = fixture();
-            if let Some(reset) = reset {
-                body["access"]["meters"]["fiveHour"]["resetsAt"] = json!(reset);
-            } else {
-                body["access"]["meters"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("fiveHour");
-            }
-            parse_response(&body.to_string(), now(), now())
+            body["usage"]["rolling"]["percent"] = json!(percent);
+            body["usage"]["rolling"]["status"] = json!(status);
+            parse_response(&body.to_string(), now())
                 .map(|snapshot| {
                     let window = &snapshot.rate_limits.unwrap().windows[0];
-                    (
-                        window.duration_mins,
-                        window.used_percentage,
-                        window.amount,
-                        window.resets_at,
-                    )
+                    (window.used_percentage, window.is_spent())
                 })
-                .map_err(|error| error.fault())
-        });
-        let full = Some(WindowAmount {
-            used: 0,
-            limit: 1_200_000_000,
+                .map_err(|error| error.to_string())
         });
         assert_eq!(
             outcomes,
             [
-                Ok((Some(300), Some(0), None, None)),
-                Ok((Some(300), Some(0), full, None)),
-                Ok((Some(300), Some(0), full, None)),
+                Ok((Some(0), false)),
+                Ok((Some(42), false)),
+                Ok((Some(99), false)),
+                Ok((Some(99), false)),
+                Ok((Some(99), false)),
+                Ok((Some(0), false)),
+                Ok((Some(100), true)),
             ]
         );
     }
 
     #[test]
-    fn invalid_meters_fail_without_exposing_response_values() {
-        let mut bodies = vec!["private-body-not-json".to_owned()];
-        for (pointer, value) in [
-            ("/access/meters/week", Value::Null),
-            ("/access/meters/month", Value::Null),
-            ("/access/meters/week/usedMicroCents", json!("private-body")),
-            ("/access/meters/week/usedMicroCents", json!("-1")),
-            ("/access/meters/month/limitMicroCents", json!("0")),
-            ("/access/meters/fiveHour/limitMicroCents", json!("-1")),
-            ("/access/meters/month/resetsAt", json!("private-body")),
-            ("/product", json!("")),
-        ] {
-            let mut body = fixture();
-            *body.pointer_mut(pointer).unwrap() = value;
-            bodies.push(body.to_string());
-        }
-        let faults = bodies
-            .iter()
-            .map(|body| {
-                parse_response(body, now(), now())
-                    .map_err(|error| {
-                        let diagnostic = format!("{error} {error:?}");
-                        assert!(!diagnostic.contains("private-body"));
-                        assert!(!diagnostic.contains("private-user"));
-                        error.fault()
+    fn five_hour_idle_and_expiry_are_decided_at_the_read() {
+        let post_io = now() + Duration::from_secs(180);
+        let outcomes = [
+            ("2026-10-25T07:02:59Z", 50, "ok", None, 0),
+            ("2026-10-25T07:03:00Z", 50, "ok", None, 0),
+            ("2026-10-25T12:00:00Z", 0, "ok", None, 0),
+            (
+                "2026-10-25T11:57:00Z",
+                0,
+                "ok",
+                Some("2026-10-25T11:57:00Z"),
+                0,
+            ),
+            (
+                "2026-10-25T12:00:00Z",
+                50,
+                "ok",
+                Some("2026-10-25T12:00:00Z"),
+                50,
+            ),
+            (
+                "2026-10-25T12:00:00Z",
+                37,
+                "rate-limited",
+                Some("2026-10-25T12:00:00Z"),
+                100,
+            ),
+        ]
+        .map(
+            |(reset, percent, status, expected_reset, expected_percent)| {
+                let mut body = fixture();
+                body["usage"]["rolling"] = json!({
+                    "resetsAt": reset, "percent": percent, "status": status
+                });
+                let actual = parse_response(&body.to_string(), now())
+                    .map(|mut snapshot| {
+                        clear_inactive_five_hour(&mut snapshot, now(), post_io);
+                        let window = &snapshot.rate_limits.unwrap().windows[0];
+                        (
+                            window.used_percentage,
+                            window.resets_at,
+                            window.remaining_percentage(post_io),
+                        )
                     })
-                    .err()
-            })
-            .collect::<Vec<_>>();
+                    .map_err(|error| error.to_string());
+                (
+                    actual,
+                    Ok((
+                        Some(expected_percent),
+                        expected_reset.map(|reset| reset.parse().unwrap()),
+                        Some(100 - expected_percent),
+                    )),
+                )
+            },
+        );
         assert_eq!(
-            faults,
-            vec![Some(AccountUsageFault::Transient); bodies.len()]
+            outcomes.clone().map(|(actual, _)| actual),
+            outcomes.map(|(_, expected)| expected),
         );
-    }
-
-    fn serve(
-        status: u16,
-        body: String,
-        count: usize,
-    ) -> (
-        String,
-        Arc<AtomicUsize>,
-        std::thread::JoinHandle<Vec<String>>,
-    ) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!(
-            "http://{}/console/api/go/status",
-            listener.local_addr().unwrap()
-        );
-        let requests = Arc::new(AtomicUsize::new(0));
-        let counted = requests.clone();
-        let response = format!(
-            "HTTP/1.1 {status} response\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let handle = std::thread::spawn(move || {
-            (0..count)
-                .map(|_| {
-                    let (mut stream, _) = listener.accept().unwrap();
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .unwrap();
-                    let mut request = Vec::new();
-                    let mut buffer = [0_u8; 4096];
-                    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-                        let read = stream.read(&mut buffer).unwrap();
-                        assert_ne!(read, 0, "request headers must be complete");
-                        request.extend_from_slice(&buffer[..read]);
-                    }
-                    counted.fetch_add(1, Ordering::Relaxed);
-                    stream.write_all(response.as_bytes()).unwrap();
-                    String::from_utf8(request).unwrap().to_ascii_lowercase()
-                })
-                .collect()
-        });
-        (url, requests, handle)
     }
 
     #[test]
-    fn go_get_uses_bearer_and_optional_org_headers() {
-        let outcomes = [Some("test-org"), None, Some("")].map(|org| {
-            let (url, count, server) = serve(200, fixture().to_string(), 1);
-            let result = fetch_usage_with_url(&url, "test-token", org);
-            let requests = count.load(Ordering::Relaxed);
-            let request = if requests == 1 {
-                server.join().unwrap().pop().unwrap()
-            } else {
-                String::new()
-            };
+    fn unused_fixed_week_and_billing_month_have_started() {
+        let mut body = fixture();
+        body["usage"]["weekly"] = json!({
+            "status": "ok", "percent": 0, "resetsAt": "2026-11-01T07:00:00Z"
+        });
+        body["usage"]["monthly"] = json!({
+            "status": "ok", "percent": 0, "resetsAt": "2026-11-25T07:00:00Z"
+        });
+        let outcome = parse_response(&body.to_string(), now())
+            .map(|snapshot| {
+                snapshot.rate_limits.unwrap().windows[1..]
+                    .iter()
+                    .map(|window| {
+                        (
+                            window.used_percentage,
+                            window.resets_at.is_some(),
+                            window.not_started(now()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| error.to_string());
+        assert_eq!(outcome, Ok(vec![(Some(0), true, false); 2]));
+    }
+
+    #[test]
+    fn schema_errors_name_only_trusted_fields_and_problem_classes() {
+        let mut cases = vec![
+            ("private-response-value".to_owned(), "body: not JSON"),
             (
-                result.is_ok(),
-                requests,
-                request.starts_with("get /console/api/go/status http/1.1\r\n"),
-                request.contains("authorization: bearer test-token\r\n"),
-                request.contains("x-org-id: test-org\r\n"),
-                request.contains("x-org-id:"),
+                r#"["private-response-key","private-response-value"]"#.to_owned(),
+                "body: wrong type",
+            ),
+        ];
+        for (pointer, value, expected) in [
+            ("/usage", None, "usage: missing"),
+            ("/usage/weekly", Some(Value::Null), "usage.weekly: null"),
+            ("/usage/rolling", None, "usage.rolling: missing"),
+            (
+                "/usage/rolling/percent",
+                Some(json!("private-response-value")),
+                "usage.rolling.percent: wrong type",
+            ),
+            (
+                "/usage/monthly/status",
+                Some(json!("private-response-value")),
+                "usage.monthly.status: invalid value",
+            ),
+            (
+                "/usage/weekly/resetsAt",
+                Some(json!("private-response-value")),
+                "usage.weekly.resetsAt: invalid value",
+            ),
+            (
+                "/usage/rolling/resetsAt",
+                None,
+                "usage.rolling.resetsAt: missing",
+            ),
+        ] {
+            let mut body = fixture();
+            if let Some(value) = value {
+                *body.pointer_mut(pointer).unwrap() = value;
+            } else {
+                let (parent, key) = pointer.rsplit_once('/').unwrap();
+                body.pointer_mut(parent)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(key);
+            }
+            cases.push((body.to_string(), expected));
+        }
+        let outcomes = cases
+            .iter()
+            .map(|(body, _)| {
+                parse_response(body, now()).err().map(|error| {
+                    let diagnostic = format!("{error} {error:?}");
+                    (
+                        error.to_string(),
+                        error.fault(),
+                        diagnostic.contains("private-"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let expected = cases
+            .iter()
+            .map(|(_, expected)| {
+                Some((
+                    format!("OpenCode Go usage schema drift at {expected}"),
+                    AccountUsageFault::Transient,
+                    false,
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes, expected);
+    }
+
+    fn respond(stream: &mut impl Write, status: u16, body: &str) {
+        write!(
+            stream,
+            "HTTP/1.1 {status} response\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    }
+
+    fn fetch_from_server(
+        usage_status: u16,
+        usage_body: String,
+        tier_status: u16,
+        tier_body: &str,
+        org: Option<&str>,
+    ) -> (Result<AccountUsageSnapshot>, Vec<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/zen/go/v1/usage", listener.local_addr().unwrap());
+        let tier_body = tier_body.to_owned();
+        let (stop, stopped) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            loop {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if stopped.recv_timeout(Duration::from_millis(5)).is_ok() {
+                            return requests;
+                        }
+                        continue;
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).unwrap();
+                    assert_ne!(read, 0, "request headers must be complete");
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                let (status, body) = if request.starts_with("get /zen/go/v1/usage ") {
+                    (usage_status, &usage_body)
+                } else if request.starts_with("get /console/api/go/status ") {
+                    (tier_status, &tier_body)
+                } else {
+                    (404, &tier_body)
+                };
+                requests.push(request);
+                respond(&mut stream, status, body);
+            }
+        });
+        let result = fetch_usage_with_url(&url, "private-token", org);
+        stop.send(()).unwrap();
+        (result, server.join().unwrap())
+    }
+
+    #[test]
+    fn zen_then_console_use_bearer_and_distinct_optional_org_headers() {
+        let outcomes = [Some("private-org"), None, Some("")].map(|org| {
+            let (result, requests) = fetch_from_server(
+                200,
+                fixture().to_string(),
+                200,
+                r#"{"product":" go-plus ","private-tier-key":"private-tier-value"}"#,
+                org,
+            );
+            (
+                result.ok().and_then(|snapshot| snapshot.plan),
+                requests
+                    .iter()
+                    .map(|request| {
+                        (
+                            request.lines().next().unwrap().to_owned(),
+                            request.contains("authorization: bearer private-token\r\n"),
+                            request.contains("x-opencode-org-id:"),
+                            request.contains("x-org-id:"),
+                            request.contains("private-org\r\n"),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        });
+        let expected = [true, false, false].map(|has_org| {
+            (
+                Some("go-plus".to_owned()),
+                vec![
+                    (
+                        "get /zen/go/v1/usage http/1.1".to_owned(),
+                        true,
+                        has_org,
+                        false,
+                        has_org,
+                    ),
+                    (
+                        "get /console/api/go/status http/1.1".to_owned(),
+                        true,
+                        false,
+                        has_org,
+                        has_org,
+                    ),
+                ],
+            )
+        });
+        assert_eq!(outcomes, expected);
+    }
+
+    #[test]
+    fn failed_tier_reads_are_single_attempt_and_keep_usage() {
+        let outcomes = [
+            (500, "private-tier-value"),
+            (404, "private-tier-value"),
+            (200, "private-tier-value"),
+            (200, "{}"),
+            (200, r#"{"product":""}"#),
+            (200, r#"{"product":"  "}"#),
+            (200, r#"{"product":42}"#),
+        ]
+        .map(|(status, body)| {
+            let (result, requests) = fetch_from_server(
+                200,
+                fixture().to_string(),
+                status,
+                body,
+                Some("private-org"),
+            );
+            (
+                result
+                    .map(|snapshot| (snapshot.plan, snapshot.rate_limits.unwrap().windows.len()))
+                    .map_err(|error| error.to_string()),
+                requests
+                    .iter()
+                    .filter(|request| request.starts_with("get /zen/"))
+                    .count(),
+                requests
+                    .iter()
+                    .filter(|request| request.starts_with("get /console/"))
+                    .count(),
+            )
+        });
+        assert_eq!(outcomes, std::array::from_fn(|_| (Ok((None, 3)), 1, 1)));
+    }
+
+    #[test]
+    fn failed_usage_never_reads_tier_and_classifies_errors_privately() {
+        let outcomes = [
+            (401, "private-response-value"),
+            (403, "private-response-value"),
+            (404, "private-response-value"),
+            (500, "private-response-value"),
+            (200, "private-response-value"),
+        ]
+        .map(|(status, body)| {
+            let (result, requests) = fetch_from_server(
+                status,
+                body.to_owned(),
+                200,
+                r#"{"product":"go-plus"}"#,
+                Some("private-org"),
+            );
+            (
+                result.err().map(|error| {
+                    (
+                        error.fault(),
+                        format!("{error} {error:?}").contains("private-"),
+                    )
+                }),
+                requests
+                    .iter()
+                    .filter(|request| request.starts_with("get /zen/"))
+                    .count(),
+                requests
+                    .iter()
+                    .filter(|request| request.starts_with("get /console/"))
+                    .count(),
             )
         });
         assert_eq!(
             outcomes,
             [
-                (true, 1, true, true, true, true),
-                (true, 1, true, true, false, false),
-                (true, 1, true, true, false, false)
-            ]
-        );
-    }
-
-    #[test]
-    fn go_http_classifies_no_subscription_auth_and_retried_failures_privately() {
-        let outcomes = [
-            (200, "{}", 1),
-            (404, "private-body", 1),
-            (401, "private-body", 1),
-            (403, "private-body", 1),
-            (500, "private-body", 3),
-        ]
-        .map(|(status, body, expected_requests)| {
-            let (url, count, server) = serve(status, body.to_owned(), expected_requests);
-            let result = fetch_usage_with_url(&url, "private-token", Some("private-org"));
-            let fault = result.err().map(|error| {
-                let diagnostic = format!("{error} {error:?}");
-                for secret in ["private-body", "private-token", "private-org"] {
-                    assert!(!diagnostic.contains(secret));
-                }
-                error.fault()
-            });
-            let requests = count.load(Ordering::Relaxed);
-            if requests == expected_requests {
-                server.join().unwrap();
-            }
-            (fault, requests)
-        });
-        assert_eq!(
-            outcomes,
-            [
-                (Some(AccountUsageFault::NoCredentials), 1),
-                (Some(AccountUsageFault::NoCredentials), 1),
-                (Some(AccountUsageFault::NoCredentials), 1),
-                (Some(AccountUsageFault::NoCredentials), 1),
-                (Some(AccountUsageFault::Transient), 3),
+                (Some((AccountUsageFault::NoCredentials, false)), 1, 0),
+                (Some((AccountUsageFault::NoCredentials, false)), 1, 0),
+                (Some((AccountUsageFault::Transient, false)), 1, 0),
+                (Some((AccountUsageFault::Transient, false)), 3, 0),
+                (Some((AccountUsageFault::Transient, false)), 1, 0),
             ]
         );
     }
@@ -475,17 +675,21 @@ mod tests {
     #[test]
     fn go_usage_url_override_requires_the_official_origin_or_loopback() {
         let outcomes = [
-            "http://127.0.0.1:1234/status",
-            "https://opencode.ai/console/api/go/status",
-            "https://opencode.ai.evil.test/status",
-            "http://opencode.ai/console/api/go/status",
-            "https://opencode.ai:1234/status",
+            "http://127.0.0.1:1234/zen/go/v1/usage",
+            "https://opencode.ai/zen/go/v1/usage",
+            "https://opencode.ai.evil.test/usage",
+            "http://opencode.ai/zen/go/v1/usage",
+            "https://opencode.ai:1234/usage",
         ]
-        .map(|url| resolve_usage_url(Some(url)).is_ok());
+        .map(|url| {
+            resolve_usage_url(Some(url))
+                .map_err(|error| error.fault())
+                .is_ok()
+        });
         assert_eq!(
             (resolve_usage_url(None).ok().as_deref(), outcomes),
             (
-                Some("https://opencode.ai/console/api/go/status"),
+                Some("https://opencode.ai/zen/go/v1/usage"),
                 [true, true, false, false, false]
             )
         );

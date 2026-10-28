@@ -20,7 +20,7 @@ fn refresh_usage_argv(env: &Env, kind: &str, claim_id: &str) -> Vec<String> {
 }
 
 #[test]
-fn opencode_go_refresh_publishes_console_scoped_amounts_and_plan() {
+fn opencode_go_refresh_publishes_zen_windows_and_keeps_console_tier_on_failure() {
     let env = Env::new();
     let data = env.home_root.join("opencode-data");
     std::fs::create_dir_all(&data).unwrap();
@@ -38,102 +38,142 @@ fn opencode_go_refresh_publishes_console_scoped_amounts_and_plan() {
         "metadata":{"orgID":"private-go-org"}
     }"#;
     db.credential("console", "opencode", Some(true), (1, 2), credential);
-    let claim_id = env.seed_usage_claim("opencode");
     let scope = serde_json::json!({"kind":"sub_provider","provider":"opencode","variant":"oauth"});
-    let credits_path = env.runtime_paths().shared_credits_path();
-    let mut credits = read_json(credits_path.clone());
-    credits["logins"]["opencode@default"]["direct_query_claim"]["requested_scope"] = scope.clone();
-    std::fs::write(&credits_path, serde_json::to_vec(&credits).unwrap()).unwrap();
-    let body = r#"{
-        "product":"go",
-        "access":{"meters":{
-            "fiveHour":{
-                "usedMicroCents":"1", "limitMicroCents":"1000",
-                "resetsAt":"2100-01-01T00:00:00Z"
-            },
-            "week":{
-                "usedMicroCents":"2", "limitMicroCents":"2000",
-                "resetsAt":"2100-01-01T00:00:00Z"
-            },
-            "month":{
-                "usedMicroCents":"3", "limitMicroCents":"3000",
-                "resetsAt":"2100-01-01T00:00:00Z"
+    let usage_body = |rolling, weekly, monthly| {
+        let body = serde_json::json!({
+            "usage": {
+                "rolling": {
+                    "status":"ok", "percent":rolling, "resetsAt":"2100-01-01T00:00:00Z"
+                },
+                "weekly": {
+                    "status":"ok", "percent":weekly, "resetsAt":"2100-01-01T00:00:00Z"
+                },
+                "monthly": {
+                    "status":"rate-limited", "percent":monthly, "resetsAt":"2100-01-01T00:00:00Z"
+                }
             }
-        }}
-    }"#;
+        });
+        body.to_string()
+    };
     let (origin, server) = serve_http_routes(
-        vec![("GET /console/api/go/status", 200, body.to_owned())],
-        1,
+        vec![
+            ("GET /zen/go/v1/usage", 200, usage_body(42.9, 10, 37)),
+            ("GET /zen/go/v1/usage", 200, usage_body(50.9, 20, 0)),
+            (
+                "GET /console/api/go/status",
+                200,
+                r#"{"product":"go-plus","private-tier-key":"private-tier-value"}"#.to_owned(),
+            ),
+            (
+                "GET /console/api/go/status",
+                500,
+                "private-tier-value".to_owned(),
+            ),
+        ],
+        4,
     );
-    let output = env
-        .rimz()
-        .args(refresh_usage_argv(&env, "opencode", &claim_id))
-        .env("RIMZ_OPENCODE_DATA_DIR", &data)
-        .env(
-            "RIMZ_OPENCODE_GO_USAGE_URL",
-            format!("{origin}/console/api/go/status"),
-        )
-        .bounded_output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let credits = read_json(credits_path);
-    let entry = &credits["scoped"]["opencode@default/opencode/oauth"];
+    let credits_path = env.runtime_paths().shared_credits_path();
+    let first_claim = env.seed_usage_claim("opencode");
+    for (claim_id, rolling, weekly) in [
+        (first_claim, 42, 10),
+        (uuid::Uuid::now_v7().to_string(), 50, 20),
+    ] {
+        let mut credits = read_json(credits_path.clone());
+        credits["logins"]["opencode@default"]["direct_query_claim"] = serde_json::json!({
+            "nonce": claim_id, "claimed_at_ms": 1, "requested_scope": scope
+        });
+        std::fs::write(&credits_path, serde_json::to_vec(&credits).unwrap()).unwrap();
+        let output = env
+            .rimz()
+            .args(refresh_usage_argv(&env, "opencode", &claim_id))
+            .env("RIMZ_OPENCODE_DATA_DIR", &data)
+            .env(
+                "RIMZ_OPENCODE_GO_USAGE_URL",
+                format!("{origin}/zen/go/v1/usage"),
+            )
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let credits = read_json(credits_path.clone());
+        let entry = &credits["scoped"]["opencode@default/opencode/oauth"];
+        assert_eq!(
+            entry["ok"], true,
+            "Zen usage must publish a successful reading"
+        );
+        assert_eq!(entry["plan"], "go-plus");
+        assert_eq!(entry["scope"], scope);
+        let limits = read_json(RateLimitsCache::shared_path(&env.runtime_paths()));
+        let limit_entry = &limits["entries"]["opencode@default/opencode/oauth"];
+        assert_eq!(limit_entry["scope"], scope);
+        assert_eq!(limit_entry["account_key"], entry["account_key"]);
+        let windows = limit_entry["limits"]["windows"].as_array().unwrap();
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (
+                    window["duration_mins"].as_u64(),
+                    window["used_percentage"].as_u64(),
+                    window.get("amount"),
+                    window.get("fixed_period").and_then(Value::as_bool),
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (Some(300), Some(rolling), None, None),
+                (Some(10_080), Some(weekly), None, Some(true)),
+                (Some(43_200), Some(100), None, Some(true)),
+            ]
+        );
+        for secret in ["private-go-token", "private-go-org", "private-tier"] {
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+            assert!(!credits.to_string().contains(secret));
+            assert!(!limits.to_string().contains(secret));
+        }
+    }
+    let requests = server.join().unwrap();
     assert_eq!(
-        entry["ok"], true,
-        "Go status must publish a successful reading"
-    );
-    assert_eq!(entry["plan"], "go");
-    assert_eq!(entry["scope"], scope);
-    let limits = read_json(RateLimitsCache::shared_path(&env.runtime_paths()));
-    let limit_entry = &limits["entries"]["opencode@default/opencode/oauth"];
-    assert_eq!(limit_entry["scope"], scope);
-    assert_eq!(limit_entry["account_key"], entry["account_key"]);
-    let windows = limit_entry["limits"]["windows"].as_array().unwrap();
-    assert_eq!(
-        windows
+        requests
             .iter()
-            .map(|window| (
-                window["duration_mins"].as_u64(),
-                window["used_percentage"].as_u64(),
-                window["amount"].clone(),
-                window.get("fixed_period").cloned()
-            ))
+            .map(|request| {
+                let request = request.to_ascii_lowercase();
+                (
+                    request.lines().next().unwrap().to_owned(),
+                    request.contains("authorization: bearer private-go-token\r\n"),
+                    request.contains("x-opencode-org-id: private-go-org\r\n"),
+                    request.contains("x-org-id: private-go-org\r\n"),
+                )
+            })
             .collect::<Vec<_>>(),
         [
             (
-                Some(300),
-                Some(0),
-                serde_json::json!({"used":1,"limit":1000}),
-                None
+                "get /zen/go/v1/usage http/1.1".to_owned(),
+                true,
+                true,
+                false
             ),
             (
-                Some(10_080),
-                Some(0),
-                serde_json::json!({"used":2,"limit":2000}),
-                Some(serde_json::json!(true))
+                "get /console/api/go/status http/1.1".to_owned(),
+                true,
+                false,
+                true
             ),
             (
-                Some(43_200),
-                Some(0),
-                serde_json::json!({"used":3,"limit":3000}),
-                Some(serde_json::json!(true))
+                "get /zen/go/v1/usage http/1.1".to_owned(),
+                true,
+                true,
+                false
+            ),
+            (
+                "get /console/api/go/status http/1.1".to_owned(),
+                true,
+                false,
+                true
             ),
         ]
     );
-    let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 1);
-    let request = requests[0].to_ascii_lowercase();
-    assert!(request.contains("authorization: bearer private-go-token\r\n"));
-    assert!(request.contains("x-org-id: private-go-org\r\n"));
-    for secret in ["private-go-token", "private-go-org"] {
-        assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
-        assert!(!credits.to_string().contains(secret));
-        assert!(!limits.to_string().contains(secret));
-    }
 }
 
 #[test]
