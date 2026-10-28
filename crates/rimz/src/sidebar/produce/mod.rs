@@ -111,6 +111,8 @@ impl HostInputs {
         state: &StatePaths,
         runtime: &RuntimePaths,
     ) -> Result<WorkspaceSnapshot> {
+        #[cfg(any(test, feature = "testkit"))]
+        crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::HostFold);
         let base = rollup_snapshot(state, cursor)?;
         let projection = inputs.map_or_else(AgentProjection::default, |inputs| {
             let panes = base.card_admitted_live_panes(inputs.frame.to_pane_refs(), None);
@@ -604,6 +606,27 @@ mod tests {
     use crate::pane::RuntimeOwnerKind;
     use crate::sidebar::frame::assemble_frame;
     use jiff::Timestamp;
+
+    #[test]
+    fn host_fold_counts_calls_on_only_the_calling_thread() {
+        use crate::testkit::host_pass::{Counter, thread_counters};
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        state.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        let counts = thread_counters();
+        counts.reset();
+        let worker = std::thread::spawn(move || {
+            HostInputs::fold(None, &mut RollupCursor::new(), &state, &runtime).unwrap();
+            thread_counters()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(worker.get(Counter::HostFold), 1);
+        assert_eq!(counts.get(Counter::HostFold), 0);
+    }
 
     #[test]
     fn inspection_refolds_held_context_after_its_refresh() {

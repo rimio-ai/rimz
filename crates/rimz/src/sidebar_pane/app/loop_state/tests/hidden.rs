@@ -116,6 +116,44 @@ fn hidden_rig() -> Rig {
 }
 
 #[test]
+fn hidden_drain_counters_measure_retained_outcomes_and_preview_work() {
+    let mut rig = hidden_rig();
+    let counts = host_pass::thread_counters();
+    rig.state.pane.own.revision = rig.state.views.registry.lock().unwrap().revision;
+    counts.reset();
+    rig.state.on_snapshot();
+    assert_eq!(counts.get(Counter::DrainClone), 0);
+    assert_eq!(counts.get(Counter::DrainPreview), 0);
+    rig.lazy_fold(rig.state.views.mirror().clone(), SnapshotSource::Produced);
+    assert_eq!(counts.get(Counter::DrainClone), 1);
+    assert_eq!(counts.get(Counter::DrainPreview), 1);
+    rig.state.on_snapshot();
+    assert_eq!(counts.get(Counter::DrainClone), 2);
+    assert_eq!(counts.get(Counter::DrainPreview), 2);
+}
+
+#[test]
+fn timeout_source_tracks_the_winning_deadline_without_counting_a_wake() {
+    let mut rig = hidden_rig();
+    let clock = LoopClock::play(rig.state.views.mirror().now);
+    rig.state.pane.clock = clock.clone();
+    rig.state.pane.last_self_close_check = clock.now();
+    rig.state.pane.config.tick_seconds = 1;
+    rig.state.pane.caps_refresh_deadline = None;
+    rig.state.frame_timing();
+    assert_eq!(host_pass::timeout_source(), Counter::TimeoutIdle);
+    rig.state.pane.config.tick_seconds = 60;
+    rig.state.frame_timing();
+    assert_eq!(host_pass::timeout_source(), Counter::TimeoutWatchdog);
+    rig.state.pane.caps_refresh_deadline = Some(clock.now() + Duration::from_millis(300));
+    rig.state.frame_timing();
+    assert_eq!(host_pass::timeout_source(), Counter::TimeoutCaps);
+    rig.state.pane.caps_refresh_deadline = Some(clock.now() + Duration::from_secs(90));
+    rig.state.frame_timing();
+    assert_eq!(host_pass::timeout_source(), Counter::TimeoutWatchdog);
+}
+
+#[test]
 fn first_focus_reveal_reads_siblings_after_dwell() {
     let mut rig = hidden_rig();
     let clock = LoopClock::play(rig.state.views.mirror().now);
