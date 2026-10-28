@@ -63,7 +63,7 @@ pub(super) fn current_publication(
     runtime: &RuntimePaths,
     request: &crate::agents::spending::service::SpendingServiceRequest,
 ) -> Option<SpendingCaches> {
-    let provider = current_provider_spending_cache(runtime);
+    let provider = super::cached_provider_spending(&runtime.shared_provider_spending_path());
     if !provider.is_current_version() {
         return None;
     }
@@ -122,7 +122,7 @@ pub fn refresh_global_spending_direct(
         headline,
         allow_local_fallback: true,
     };
-    serve_one_shot(runtime, &context, progress).provider
+    std::sync::Arc::unwrap_or_clone(serve_one_shot(runtime, &context, progress).provider)
 }
 
 fn serve_one_shot(
@@ -232,7 +232,7 @@ fn compute_fleet_spending(
         )
     {
         return SpendingCaches {
-            provider,
+            provider: provider.into(),
             workspace,
         };
     }
@@ -246,7 +246,7 @@ fn compute_fleet_spending(
             walk_fleet_spending_files(walker, runtime, context, false, progress, &files, now_secs)
         } else {
             SpendingCaches {
-                provider: current_provider_spending_cache(runtime),
+                provider: current_provider_spending_cache(runtime).into(),
                 workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
             }
         }
@@ -262,7 +262,7 @@ fn fresh_published_spending(
     let now_ms = unix_now_ms();
     let scope = SpendScope::for_workspace(project_root, worktree_roots, worktree_home);
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
-    let provider = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    let provider = super::cached_provider_spending(&runtime.shared_provider_spending_path());
     if !provider.is_fresh(now_ms) {
         return None;
     }
@@ -371,7 +371,7 @@ fn walk_fleet_spending_files(
         let published = read_provider_spending_cache(&provider_path);
         if !walker.spending_discovery_is_authoritative() && !published.spending.total.is_zero() {
             return SpendingCaches {
-                provider: published,
+                provider: published.into(),
                 workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
             };
         }
@@ -411,7 +411,7 @@ fn walk_fleet_spending_files(
             }
         }
         return SpendingCaches {
-            provider,
+            provider: provider.into(),
             workspace,
         };
     }
@@ -475,7 +475,7 @@ fn walk_fleet_spending_files(
         }
     }
     SpendingCaches {
-        provider,
+        provider: provider.into(),
         workspace,
     }
 }
@@ -688,9 +688,7 @@ fn served_within_grace(
     runtime: &RuntimePaths,
     scope_hash: Option<&str>,
 ) -> Option<crate::agents::spending::SpendingCaches> {
-    let provider = crate::agents::spending::read_provider_spending_cache(
-        &runtime.shared_provider_spending_path(),
-    );
+    let provider = super::cached_provider_spending(&runtime.shared_provider_spending_path());
     if !provider.is_fresh_within(unix_now_ms(), SPENDING_STALE_GRACE) {
         return None;
     }

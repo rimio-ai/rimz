@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use jiff::{Timestamp, civil::Date, tz::TimeZone};
 use serde::de::DeserializeOwned;
@@ -25,6 +26,7 @@ use crate::agents::{
 };
 use crate::config::MachineConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
+use crate::disk::parse_cache::KeyedParseCache;
 use crate::ids::{AgentKind, AgentSessionId, LoginKey, PaneId, WorkspaceId};
 use crate::store::Store;
 use crate::store::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
@@ -388,6 +390,33 @@ impl DailyBudgetScope {
         if matches!(self, Self::Fleet) {
             ledger.parked =
                 crate::disk::atomic::read_json_cache(&runtime.lane_path("budget.fleet-park.json"));
+        }
+        ledger
+    }
+
+    fn cached_ledger(
+        &self,
+        runtime: &RuntimePaths,
+        state: Option<&crate::StatePaths>,
+    ) -> DailyBudgetLedger {
+        let path = match self {
+            Self::Fleet => state.map(|state| state.fleet_budget_record.clone()),
+            Self::Account(key) => Some(account_ledger_file(runtime, key).path),
+        };
+        let mut ledger = path
+            .and_then(|path| {
+                PARSED_DAILY_LEDGERS
+                    .with(|cache| cache.read_json(&path).ok().flatten().as_deref().cloned())
+            })
+            .unwrap_or_default();
+        if matches!(self, Self::Fleet) {
+            ledger.parked = PARSED_FLEET_PARK.with(|cache| {
+                cache
+                    .read_json(&runtime.lane_path("budget.fleet-park.json"))
+                    .ok()
+                    .flatten()
+                    .and_then(|value| (*value).clone())
+            });
         }
         ledger
     }
@@ -811,11 +840,10 @@ pub(crate) fn project_parks(
     let now = snapshot.now;
     let zone = config.time_zone();
     let fleet_scope = DailyBudgetScope::Fleet;
-    let fleet = fleet_scope.read_ledger(runtime, state);
-    let scope_state = read_scope_state(runtime);
-    let provider = crate::agents::spending::read_provider_spending_cache(
-        &runtime.shared_provider_spending_path(),
-    );
+    let fleet = fleet_scope.cached_ledger(runtime, state);
+    let scope_state = cached_scope_state(runtime);
+    let provider =
+        crate::agents::spending::cached_provider_spending(&runtime.shared_provider_spending_path());
     let catalog = account_catalog(config);
     let mut accounts = BTreeMap::new();
     for agent in std::sync::Arc::make_mut(&mut snapshot.agents) {
@@ -837,7 +865,7 @@ pub(crate) fn project_parks(
             let scope = DailyBudgetScope::account(&catalog, &agent.login_key());
             let account = accounts
                 .entry(scope.clone())
-                .or_insert_with(|| scope.read_ledger(runtime, state));
+                .or_insert_with(|| scope.cached_ledger(runtime, state));
             parks[3] = daily_scope_park(&scope, account, runtime, config, &provider, now);
         }
         let reset = parks
@@ -961,7 +989,7 @@ pub(crate) fn enforce(
         now,
         day_cutoff,
     );
-    let mut scope_state = read_scope_state(runtime);
+    let mut scope_state = (*cached_scope_state(runtime)).clone();
     let scope_before = scope_state.clone();
     if config.harness.turn_budget.is_none() {
         scope_state.turn.clear();
@@ -1034,7 +1062,7 @@ fn evaluate_scopes(
         current_workspace_day(runtime, day_cutoff).unwrap_or_default()
     };
     let fleet_scope = DailyBudgetScope::Fleet;
-    let mut fleet = fleet_scope.read_ledger(runtime, state);
+    let mut fleet = fleet_scope.cached_ledger(runtime, state);
     let fleet_parked_before = fleet.parked.clone();
     fleet.parked = fleet
         .parked
@@ -1047,9 +1075,8 @@ fn evaluate_scopes(
         now,
     );
 
-    let provider = crate::agents::spending::read_provider_spending_cache(
-        &runtime.shared_provider_spending_path(),
-    );
+    let provider =
+        crate::agents::spending::cached_provider_spending(&runtime.shared_provider_spending_path());
     let catalog = account_catalog(config);
     let account_scopes = snapshot
         .agents
@@ -1065,7 +1092,7 @@ fn evaluate_scopes(
         verdict: fleet_verdict,
     }];
     for scope in account_scopes {
-        let mut ledger = scope.read_ledger(runtime, state);
+        let mut ledger = scope.cached_ledger(runtime, state);
         let parked_before = ledger.parked.clone();
         let cap = scope.effective_cap(&ledger, config, runtime);
         let window = cap.map_or(BudgetWindow::Day, |cap| cap.window);
@@ -1093,7 +1120,7 @@ struct EnforceCtx<'a> {
     snapshot: &'a SidebarSnapshot,
     now: Timestamp,
     zone: &'a TimeZone,
-    human_deliveries: &'a [MessageRecord],
+    human_deliveries: &'a [Arc<MessageRecord>],
     scopes: &'a ScopeVerdicts,
     scope_state: &'a mut BudgetScopeState,
 }
@@ -1102,15 +1129,18 @@ fn enforce_agent(agent: &AgentState, ctx: &mut EnforceCtx<'_>) {
     if agent.agent_id.is_empty() || agent.agent_id.is_provisional() {
         return;
     }
-    let mut ledger = ledger_for_agent(ctx.runtime, agent);
-    let before = ledger.clone();
+    let mut ledger = ledger_for_projection(
+        agent,
+        cached_ledger(ctx.runtime, &agent.kind, &agent.agent_id),
+    );
+    let mut before = ledger.clone();
     let latest_delivery = ctx
         .human_deliveries
         .iter()
         .filter(|message| message.same_agent_card(agent))
         .filter_map(|message| message.delivered_at)
         .max();
-    let verdict = ledger.as_mut().map_or(BudgetVerdict::Disabled, |ledger| {
+    let mut verdict = ledger.as_mut().map_or(BudgetVerdict::Disabled, |ledger| {
         evaluate(agent, ledger, ctx.now, ctx.zone, latest_delivery)
     });
     let key = scope_agent_key(agent);
@@ -1132,7 +1162,16 @@ fn enforce_agent(agent: &AgentState, ctx: &mut EnforceCtx<'_>) {
         ctx.scope_state,
         ctx.now,
     );
-    let classification = classify_parks(&verdict, &turn_verdict, scope_verdict);
+    let mut classification = classify_parks(&verdict, &turn_verdict, scope_verdict);
+    if ledger != before || park_interrupt_due(agent, &ledger, classification, ctx) {
+        // A no-op can reuse the parse; a write or interrupt must use fresh bytes.
+        ledger = ledger_for_agent(ctx.runtime, agent);
+        before = ledger.clone();
+        verdict = ledger.as_mut().map_or(BudgetVerdict::Disabled, |ledger| {
+            evaluate(agent, ledger, ctx.now, ctx.zone, latest_delivery)
+        });
+        classification = classify_parks(&verdict, &turn_verdict, scope_verdict);
+    }
     apply_enforcement_effects(agent, &mut ledger, classification, ctx);
     if ledger != before
         && let Some(ledger) = ledger.as_ref()
@@ -1243,6 +1282,48 @@ fn interrupt_parked_agent(
     classification: ParkClassification,
     ctx: &mut EnforceCtx<'_>,
 ) {
+    if !park_interrupt_due(agent, ledger, classification, ctx) {
+        return;
+    }
+    let Some(pane_id) = ctx.snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
+        return;
+    };
+
+    // A supervised run records this agent's own cost. The broader
+    // fleet/account figure only decides why the pane is stopped.
+    let at_cost = total_cost_usd(agent);
+    if let Some(ledger) = ledger.as_ref()
+        && let Err(err) = write_ledger(ctx.runtime, &agent.kind, &agent.agent_id, ledger)
+    {
+        warn_write("agent budget ledger", err);
+    }
+    let key = scope_agent_key(agent);
+    if spawn_budget_park(ctx.runtime, agent, &pane_id, at_cost) {
+        if classification.agent_parked
+            && let Some(ledger) = ledger.as_mut()
+        {
+            ledger.last_interrupt_at = Some(ctx.now);
+        }
+        if classification.turn_parked
+            && let Some(entry) = ctx.scope_state.turn.get_mut(&key)
+        {
+            entry.last_interrupt_at = Some(ctx.now);
+        }
+        if classification.scope_parked {
+            ctx.scope_state.last_interrupt_at.insert(key, ctx.now);
+        }
+    }
+}
+
+fn park_interrupt_due(
+    agent: &AgentState,
+    ledger: &Option<BudgetLedger>,
+    classification: ParkClassification,
+    ctx: &EnforceCtx<'_>,
+) -> bool {
+    if !classification.agent_parked && !classification.turn_parked && !classification.scope_parked {
+        return false;
+    }
     let key = scope_agent_key(agent);
     let agent_interrupt = classification
         .agent_parked
@@ -1265,36 +1346,7 @@ fn interrupt_parked_agent(
         .into_iter()
         .flatten()
         .max();
-    if agent.status != AgentStatus::Running || !interrupt_due(last_interrupt, ctx.now) {
-        return;
-    }
-    let Some(pane_id) = ctx.snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
-        return;
-    };
-
-    // A supervised run records this agent's own cost. The broader
-    // fleet/account figure only decides why the pane is stopped.
-    let at_cost = total_cost_usd(agent);
-    if let Some(ledger) = ledger.as_ref()
-        && let Err(err) = write_ledger(ctx.runtime, &agent.kind, &agent.agent_id, ledger)
-    {
-        warn_write("agent budget ledger", err);
-    }
-    if spawn_budget_park(ctx.runtime, agent, &pane_id, at_cost) {
-        if classification.agent_parked
-            && let Some(ledger) = ledger.as_mut()
-        {
-            ledger.last_interrupt_at = Some(ctx.now);
-        }
-        if classification.turn_parked
-            && let Some(entry) = ctx.scope_state.turn.get_mut(&key)
-        {
-            entry.last_interrupt_at = Some(ctx.now);
-        }
-        if classification.scope_parked {
-            ctx.scope_state.last_interrupt_at.insert(key, ctx.now);
-        }
-    }
+    agent.status == AgentStatus::Running && interrupt_due(last_interrupt, ctx.now)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1469,6 +1521,35 @@ fn ledger_for_projection(agent: &AgentState, raw: Option<BudgetLedger>) -> Optio
 
 thread_local! {
     static PROJECTED_LEDGERS: RefCell<BTreeMap<PathBuf, Option<BudgetLedger>>> = RefCell::default();
+    static PARSED_LEDGERS: KeyedParseCache<BudgetLedger> = KeyedParseCache::default();
+    static PARSED_DAILY_LEDGERS: KeyedParseCache<DailyBudgetLedger> = KeyedParseCache::default();
+    static PARSED_FLEET_PARK: KeyedParseCache<Option<BudgetParkStamp>> = KeyedParseCache::default();
+    static PARSED_SCOPE_STATE: KeyedParseCache<BudgetScopeState> = KeyedParseCache::default();
+}
+
+fn cached_ledger(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+) -> Option<BudgetLedger> {
+    PARSED_LEDGERS.with(|cache| {
+        cache
+            .read_json(&budget_ledger_path(runtime, kind, agent_id))
+            .ok()
+            .flatten()
+            .as_deref()
+            .cloned()
+    })
+}
+
+fn cached_scope_state(runtime: &RuntimePaths) -> Arc<BudgetScopeState> {
+    PARSED_SCOPE_STATE.with(|cache| {
+        cache
+            .read_json(&scope_state_path(runtime))
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    })
 }
 
 fn projected_ledger(
@@ -1481,21 +1562,19 @@ fn projected_ledger(
         if deferred {
             return memo.get(&path).cloned().flatten();
         }
-        let raw = read_ledger(runtime, &agent.kind, &agent.agent_id);
+        let raw = cached_ledger(runtime, &agent.kind, &agent.agent_id);
         memo.insert(path, raw.clone());
         raw
     })
 }
 
-fn delivered_human_messages(store: Option<&Store>) -> Vec<MessageRecord> {
+fn delivered_human_messages(store: Option<&Store>) -> Vec<Arc<MessageRecord>> {
     let Some(store) = store else {
         return Vec::new();
     };
-    let mut messages = store.list_messages().unwrap_or_default();
-    messages.extend(store.list_message_history().unwrap_or_default());
-    messages
+    crate::store::message::cached_messages(store.paths(), true)
         .into_iter()
-        .filter(is_budget_waiving_delivery)
+        .filter(|message| is_budget_waiving_delivery(message))
         .collect()
 }
 
@@ -1611,7 +1690,7 @@ pub(crate) fn project_budget_views(
 ) {
     let now = snapshot.now;
     let fleet_scope = DailyBudgetScope::Fleet;
-    let fleet = fleet_scope.read_ledger(runtime, state);
+    let fleet = fleet_scope.cached_ledger(runtime, state);
     snapshot.fleet_budget = fleet_scope
         .effective_cap_usd(&fleet, config, runtime)
         .map(|cap_usd| {
@@ -1634,7 +1713,7 @@ pub(crate) fn project_budget_views(
             continue;
         }
         let scope = DailyBudgetScope::account(&catalog, &key);
-        let ledger = scope.read_ledger(runtime, state);
+        let ledger = scope.cached_ledger(runtime, state);
         let Some(cap) = scope.effective_cap(&ledger, config, runtime) else {
             continue;
         };

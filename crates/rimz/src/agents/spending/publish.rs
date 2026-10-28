@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -209,6 +210,14 @@ pub fn read_provider_spending_cache(path: &Path) -> ProviderSpendingCache {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ProviderSpendingCache>(&bytes).ok())
         .unwrap_or_default()
+}
+
+pub(crate) fn cached_provider_spending(path: &Path) -> Arc<ProviderSpendingCache> {
+    thread_local! {
+        static CACHE: crate::disk::parse_cache::KeyedParseCache<ProviderSpendingCache> =
+            crate::disk::parse_cache::KeyedParseCache::default();
+    }
+    CACHE.with(|cache| cache.read_json(path).ok().flatten().unwrap_or_default())
 }
 
 /// The published per-workspace cockpit spending cache. The filename is keyed by

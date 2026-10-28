@@ -78,8 +78,8 @@ pub(in crate::agents) use effort::{SlotEffortBreakdown, slot_effort_breakdown};
 pub use engine::current_provider_spending_cache;
 #[doc(hidden)]
 pub use engine::refresh_global_spending_direct;
-pub(crate) use publish::PROVIDER_SPENDING_VERSION;
 use publish::WORKSPACE_SPENDING_VERSION;
+pub(crate) use publish::{PROVIDER_SPENDING_VERSION, cached_provider_spending};
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
     read_workspace_spending_cache, write_provider_spending_cache, write_workspace_spending_cache,
@@ -119,7 +119,7 @@ impl WalkObserver for SilentWalk {}
 /// provider totals plus the room-local cockpit tally.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SpendingCaches {
-    pub provider: ProviderSpendingCache,
+    pub provider: std::sync::Arc<ProviderSpendingCache>,
     pub workspace: WorkspaceSpendingCache,
 }
 

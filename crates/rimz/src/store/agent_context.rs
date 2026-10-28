@@ -24,6 +24,8 @@
 //! durable truth: nothing here reaches the event log, and the
 //! `cargo xtask invariants` greps enforce that boundary.
 
+use std::sync::Arc;
+
 use jiff::Timestamp;
 
 use crate::agents::context::record::AgentContextRecord;
@@ -32,6 +34,7 @@ use crate::agents::{
     AgentSpec, AgentState, AgentStatus, LocalContextRefresh, LocallyPricedTurnCost,
 };
 use crate::disk::atomic;
+use crate::disk::parse_cache::KeyedParseCache;
 use crate::disk::paths::RuntimePaths;
 use crate::ids::MessageId;
 use crate::store::sidecar;
@@ -135,6 +138,25 @@ pub fn read_one(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> Option<Ag
     sidecar::read_one(&runtime.agent_context_dir, kind, agent_id)
 }
 
+/// Due-session reads must not evict the projection cache's deferred records.
+pub(crate) fn read_cached_one(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+) -> Option<Arc<AgentContextRecord>> {
+    thread_local! {
+        static CACHE: KeyedParseCache<AgentContextRecord> = KeyedParseCache::default();
+    }
+    let path = sidecar::path(
+        &runtime.agent_context_dir,
+        <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
+        kind,
+        agent_id,
+    );
+    let record = CACHE.with(|cache| cache.read_json(&path).ok().flatten())?;
+    (record.kind.as_str() == kind && record.agent_id.as_str() == agent_id).then_some(record)
+}
+
 /// Merge transcript-derived local context into a sidecar record. Local refresh
 /// owns tokens, cost, model identity/display, observed reasoning effort, and
 /// the transcript stat gate; a tail that misses effort preserves the prior value.
@@ -231,8 +253,7 @@ pub fn merge_locally_priced_cost(
 }
 
 thread_local! {
-    /// Per-thread parse cache. Every update lands via atomic rename of a
-    /// freshly-written temp file, so `(mtime, len)` validates content; the
+    /// Per-thread parse cache keyed by the full file stamp, including inode.
     /// Normal reads cost one stat per file; deferred caller checks retain
     /// the parse without metadata IO.
     static CONTEXT_PARSE_CACHE: sidecar::ParseCache<AgentContextRecord> =

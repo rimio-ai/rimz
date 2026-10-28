@@ -207,7 +207,7 @@ fn empty_fleet_publication_includes_effort_and_maintains_old_segments() {
         &[],
         now_secs,
     );
-    let roles = serde_json::to_value(result.provider.roles).unwrap();
+    let roles = serde_json::to_value(&result.provider.roles).unwrap();
     assert_eq!(
         roles["subagents"]["fast"]["effort"]["year"]["active_ms"],
         1234

@@ -9,12 +9,65 @@ pub mod opencode;
 pub mod sandbox;
 
 pub use crate::disk::atomic::testkit::fsync_count;
+pub use crate::disk::parse_cache::testkit::read_counts as parse_cache_read_counts;
 pub use crate::proc::testkit::spawn_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_read_under, bytes_written};
 pub use crate::store::sidecar::testkit::read_counts as sidecar_read_counts;
 pub use crate::store::snapshot::fold_testkit::{
     carryover_bytes_parsed, rollup_base_copies, rollup_rows_materialized,
 };
+
+/// Exercise stamped reads against real files without exporting the disk cache.
+pub fn read_cached_json(
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::sync::Arc<serde_json::Value>>> {
+    thread_local! {
+        static CACHE: crate::disk::parse_cache::KeyedParseCache<serde_json::Value> =
+            crate::disk::parse_cache::KeyedParseCache::default();
+    }
+    CACHE.with(|cache| cache.read_json(path))
+}
+
+/// Exercise the private park projection with explicit configuration.
+pub fn park_demotion(
+    store: &crate::Store,
+    config: &crate::config::MachineConfig,
+    agents: &[crate::agents::AgentState],
+) -> crate::agents::ParkDemotion {
+    crate::harness::auto_continue::park_demotion(
+        Some(store),
+        store.paths(),
+        store.runtime_paths(),
+        config,
+        agents,
+        &[],
+        jiff::Timestamp::now(),
+    )
+}
+
+/// Exercise live auto-continue with explicit configuration and snapshot time.
+pub fn resume_parked(
+    store: &crate::Store,
+    config: &crate::config::MachineConfig,
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
+) {
+    let logins =
+        crate::agents::RoomLoginSet::resolve(&store.paths().workspace_record, None, config)
+            .with_agents(&snapshot.agents);
+    let messages = crate::harness::auto_continue::read_resume_messages(
+        Some(store),
+        &config.resume,
+        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+    );
+    crate::harness::auto_continue::resume_parked(
+        |_| false,
+        snapshot,
+        store.runtime_paths(),
+        &logins,
+        &config.resume,
+        &messages,
+    );
+}
 
 /// Process-wide work measured at the snapshot and configuration boundaries.
 #[derive(Default)]

@@ -470,7 +470,9 @@ fn load_or_refresh_stats_via_service(paths: &RuntimePaths) -> Result<Stats> {
         rimz::agents::spending::service::SpendingServiceStartup::HostEligible,
     );
     match caches {
-        Ok(caches) => Ok(Stats::from_provider(caches.provider)),
+        Ok(caches) => Ok(Stats::from_provider(std::sync::Arc::unwrap_or_clone(
+            caches.provider,
+        ))),
         Err(error) => load_published_stats(paths).ok_or_else(|| error.into()),
     }
 }

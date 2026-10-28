@@ -15,6 +15,7 @@ mod codec;
 pub(crate) mod sender_notice;
 
 pub(super) use codec::MessageStoreErr;
+pub(crate) use codec::cached_messages;
 pub(in crate::store) use codec::{
     append_history_many, list_history, list_pending, read_queue, write_queue,
 };
