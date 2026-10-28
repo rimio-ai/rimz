@@ -103,7 +103,7 @@ pub(crate) use loop_::WaitMeta;
 pub(crate) use loop_::deserialize_judges;
 pub use loop_::{
     CheckOn, FileMark, Guard, Judge, LoopConfig, OverlapPolicy, TaskCheck, TaskEntry, TaskTarget,
-    Tasks, ThrottleConfig, ThrottleSwitch, WatchSpec,
+    Tasks, ThrottleConfig, ThrottleSwitch, WatchSpec, has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::MultiplexerConfig;
@@ -409,6 +409,7 @@ pub struct ConfigNotices {
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
     /// One warning per setting that asked for scoped isolation on a machine without it, now running on the host.
     pub host_isolation_fallback: Vec<String>,
+    pub skipped_loop_tasks: BTreeMap<String, String>,
     pub hibernate_unavailable: Vec<String>,
 }
 
@@ -471,6 +472,15 @@ impl ConfigNotices {
             .extend(keys.into_iter().map(|key| UnknownConfigKey {
                 path: path.to_path_buf(),
                 key,
+            }));
+    }
+
+    fn add_loop_warnings(&mut self, path: &Path, config: &LoopConfig) {
+        self.skipped_loop_tasks
+            .extend(config.skipped_tasks.0.iter().filter_map(|(name, entry)| {
+                entry
+                    .root_warning(name, path)
+                    .map(|warning| (name.clone(), warning))
             }));
     }
 }
@@ -609,6 +619,7 @@ impl MachineConfig {
         notices.add_unknown_keys(files.core_path(), core.unknown_keys);
         notices.add_unknown_keys(&theme_path, theme.unknown_keys);
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
+        notices.add_loop_warnings(&loop_path, &loop_.value);
         let mut config = Self::assemble(core.value, theme.value, loop_.value);
         validate_notifications_config(&config.notifications, files.core_path())?;
         validate_worktree_config(&config.agents.worktree, files.core_path())?;
@@ -648,6 +659,7 @@ impl MachineConfig {
         notices.add_unknown_keys(files.core_path(), core.unknown_keys);
         notices.add_unknown_keys(&theme_path, theme.unknown_keys);
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
+        notices.add_loop_warnings(&loop_path, &loop_.value);
         let mut config = Self::assemble(core.value, theme.value, loop_.value);
         if let Err(err) = validate_notifications_config(&config.notifications, files.core_path()) {
             tracing::warn!(
@@ -1385,7 +1397,7 @@ fn parse_loop_text(path: &Path, text: &str) -> Result<LoopConfig> {
 }
 
 fn parse_loop_text_collecting(path: &Path, text: &str) -> Result<Parsed<LoopConfig>> {
-    let parsed = parse_toml_collecting::<LoopConfig>(path, text)?;
+    let mut parsed = parse_toml_collecting::<LoopConfig>(path, text)?;
     parsed
         .value
         .validate_budgets()
@@ -1393,6 +1405,11 @@ fn parse_loop_text_collecting(path: &Path, text: &str) -> Result<Parsed<LoopConf
             path: path.to_path_buf(),
             source,
         })?;
+    let (tasks, skipped) = std::mem::take(&mut parsed.value.tasks.0)
+        .into_iter()
+        .partition(|(_, entry)| has_absolute_task_root(&entry.root));
+    parsed.value.tasks.0 = tasks;
+    parsed.value.skipped_tasks.0 = skipped;
     Ok(parsed)
 }
 

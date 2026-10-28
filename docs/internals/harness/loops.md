@@ -81,6 +81,8 @@ Three sources back the catalog.
 
 The instance store keeps runtime churn out of user config. An agent that arms `rimz wait --in 30m` writes an instance row, not `loop.toml`, and the row retires itself after it fires. `TaskCatalog::load(Some(root))` reads that workspace's instances and `load(None)` reads machine tasks only. Wait rows found in `loop.toml` stay `Config` rows, and machine-scope `rimz gc --all` reaps them.
 
+The machine loader requires an absolute `root` after expanding `~` and `~/` against `HOME` (`/` when unset), without reading the cwd or filesystem. Rows with a missing, empty, or relative root leave `LoopConfig.tasks` for its serde-skipped `skipped_tasks`; their budgets are still validated. Strict and lenient whole-config loads retain one warning per skipped row in `ConfigNotices.skipped_loop_tasks`, and room judgment records it under `loop.tasks.<name>` for the sidebar and doctor. The catalog keeps skipped machine rows outside its visible and runnable maps, retaining their overlay keys and a name-only remove/rename fallback. A same-named visible row still wins; a skipped name remains taken for rename.
+
 Instance mutation requires a readable room record. Without one, `crates/rimz/src/harness/schedule/instances.rs::mutate` treats removal, rename, and session retirement as empty no-ops before taking a lock; inserts and delivery inserts refuse.
 
 A project task cannot make machine-local claims, so loading rejects `root`, `dir`, `wait`, `deadline`, `watch`, `wait-meta`, `once`, `when`, `for`, `stay`, `each-worktree`, `takeover`, and `subscribe`, and the last four even when false or empty. Conditions and resident launches are machine-local, so none of their fields enters the project trust hash. Project rows require `every`, `cron`, or `signal`, because a one-shot would have to delete itself from a trust-hashed file.
@@ -95,7 +97,7 @@ The visible map is what `rimz loop list` shows. A project definition replaces a 
 
 The runnable map is what firing reads. A trusted project row replaces a same-named base row; an untrusted one never does, so the base row keeps running. The base is instance rows overlaid by machine rows only within the same resolved root. A machine row rooted elsewhere never displaces a room's same-named instance row.
 
-On durable machine replacement, `config_edit::set_entry` compares the existing and incoming `TaskEntry::resolved_root()` values in the file being edited and refuses a different root (including a rootless row), before writing or clearing any instance or overlay state.
+On durable machine replacement, `config_edit::set_entry` compares the existing and incoming `TaskEntry::resolved_root()` values in the file being edited and refuses a different root, before writing or clearing any instance or overlay state. A missing, empty, or relative existing root takes the remove-first refusal. The root comparison comes first, so re-adding from a directory that the relative root resolves to can still replace it with an absolute root.
 
 An untrusted project row with no same-named base row enters the runnable map, so the refusal happens where tasks execute. `fire::runnable_tasks_for`, which both the host and `fire_signal` call, drops every untrusted project row, and the trust gate in `rimz loop run` refuses one, except that a manual fire on a terminal offers an inline grant. During the untrusted window the user sees the project task, the machine task keeps running, and the two never both fire.
 
@@ -173,7 +175,7 @@ The arming stamp sets the edge each shape reads. A calendar task first seen afte
 `fire::fire_due_tasks` runs on the host's data tick:
 
 1. Load the runnable tasks for the room's project root, dropping untrusted project rows.
-2. Keep only tasks whose normalized `root` maps to this room's `WorkspaceId`, so each room fires only its own tasks. `rimz loop add` writes a canonical absolute root; a hand-edited `~` or relative root is expanded and canonicalized before the ownership check, display, and execution.
+2. Keep only tasks whose normalized `root` maps to this room's `WorkspaceId`, so each room fires only its own tasks. `rimz loop add` writes a canonical absolute root. The machine loader has already skipped roots that are not absolute after home expansion; accepted roots are expanded and canonicalized before the ownership check, display, and execution.
 3. Plan every task against `lanes/loop-fire.json`, the per-room map from task name to last-fire timestamp in the workspace runtime directory.
 4. Write the new state, then spawn a detached `rimz loop run <name>` with null stdio for each fire. A spawn that fails records a `start failed` row for that task and is left off the fired list; the stamp written in this step stays as it is.
 5. Spawn a detached `workflow advance` for each active workflow run of the root that is due, paced by `lanes/workflow-tick.json` ([workflow.md § The tick](./workflow.md#the-tick)).

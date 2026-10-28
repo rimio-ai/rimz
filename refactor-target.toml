@@ -775,7 +775,13 @@ upward-dependencies = [
 # AccountCap, its parser error/accessors, and budget validation reach config and launch (+6).
 # Profile::effective_effort preserves listing defaults without baking launch values (+1).
 # Per-agent lifetime resolution and its static provenance replace the kind-only lookup (+4).
-surface-budget = 224
+# has_absolute_task_root and TaskEntry::root_problem share machine-root admission and its diagnosis (+2).
+surface-budget = 226
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::has_absolute_task_root"
+reason = "Machine task loading, replacement, and doctor share absolute-root admission without cwd or filesystem reads."
 
 [[verdict]]
 kind = "item"
