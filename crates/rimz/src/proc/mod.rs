@@ -88,7 +88,8 @@ pub(crate) fn git_command(worktree: &Path) -> Command {
     git_command_uncounted(worktree)
 }
 
-fn git_command_uncounted(worktree: &Path) -> Command {
+/// Build git with its cached binary path; bounded callers count at the runner.
+pub(crate) fn git_command_uncounted(worktree: &Path) -> Command {
     let mut cmd = Command::new(git_binary());
     cmd.arg("-C").arg(worktree);
     cmd

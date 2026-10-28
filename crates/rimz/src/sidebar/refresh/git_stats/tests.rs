@@ -5,6 +5,8 @@ use crate::sidebar::timing::GIT_ACTIVITY_WINDOW;
 use jiff::Timestamp;
 use std::process::Command;
 
+mod index_refresh;
+
 #[test]
 fn condition_scopes_union_with_panes_without_duplicates() {
     let pane_dir = tempfile::tempdir().unwrap();
