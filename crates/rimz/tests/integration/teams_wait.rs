@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::agents::{AgentLifecycleObservation, AskKind, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::writer::AgentLifecycleIntent;
@@ -75,12 +75,27 @@ impl Fixture {
         )
         .unwrap();
         for role in ["coder", "reviewer"] {
-            self.seed(&format!("{role}-{lane}"), role, lane, &worktree);
+            self.seed(
+                &format!("{role}-{lane}"),
+                role,
+                lane,
+                &worktree,
+                Some("forge"),
+                None,
+            );
         }
         worktree
     }
 
-    fn seed(&self, name: &str, role: &str, channel: &str, worktree: &Path) {
+    fn seed(
+        &self,
+        name: &str,
+        role: &str,
+        channel: &str,
+        worktree: &Path,
+        team: Option<&str>,
+        pane: Option<&str>,
+    ) {
         let workspace = self.env.resolve_workspace(&self.env.project_root);
         self.env
             .store()
@@ -95,14 +110,14 @@ impl Fixture {
                     agent_name: name.to_owned(),
                     agent_name_explicit: true,
                     launch: rimz::agents::LaunchParams {
-                        team: Some("forge".to_owned()),
+                        team: team.map(str::to_owned),
                         role: Some(role.to_owned()),
                         channel: Some(channel.to_owned()),
                         ..Default::default()
                     },
                     state: AgentLaunchState::Bound,
                     run_id: None,
-                    pane_id: None,
+                    pane_id: pane.map(|pane| pane.parse().unwrap()),
                     runtime_owner: None,
                     worktree_path: Some(worktree.display().to_string()),
                     worktree_branch: Some(channel.to_owned()),
@@ -228,6 +243,91 @@ fn wait_times_out_on_a_pending_board_and_settles_at_once_on_done() {
     assert!(text(&several.stderr).contains("selects one cohort"));
     let unknown = fixture.run(&["smith#a"]);
     assert!(text(&unknown.stderr).contains("configured teams: forge"));
+}
+
+#[test]
+fn wait_attention_handles_round_trip_beside_teamless_role_rivals() {
+    use std::io::BufRead;
+
+    let fixture = Fixture::new();
+    let worktree = fixture.lane("a");
+    fixture.seed(
+        "coder-a",
+        "coder",
+        "a",
+        &worktree,
+        Some("forge"),
+        Some("zellij:terminal_1"),
+    );
+    fixture.seed(
+        "inline-coder",
+        "coder",
+        "a",
+        &worktree,
+        None,
+        Some("zellij:terminal_2"),
+    );
+    let board = worktree.join(".rimz/team/blackboard.md");
+    std::fs::write(&board, "Stage: Build (@coder)\n").unwrap();
+    let mut child = fixture
+        .wait(&["forge#a", "--timeout", "20s"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn teams wait");
+    let mut lines = std::io::BufReader::new(child.stderr.take().unwrap()).lines();
+    let first = lines.next().expect("initial progress").unwrap();
+    assert!(first.starts_with("waiting on forge#a:"), "{first}");
+
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    for signal in [
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Permission,
+            ask_id: None,
+            detail: None,
+            native_key: None,
+        },
+    ] {
+        let observation = AgentLifecycleObservation::new(Some("launch_coder-a".into()), signal);
+        fixture
+            .env
+            .store()
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    let diagnostic = lines
+        .map(|line| line.unwrap())
+        .find(|line| line.contains(" waiting on you"))
+        .expect("needs-you diagnostic");
+    std::fs::write(&board, DONE_BOARD).unwrap();
+    assert!(child.wait().unwrap().success(), "{diagnostic}");
+
+    let handle = diagnostic
+        .strip_prefix("forge#a: ")
+        .and_then(|line| line.strip_suffix(" waiting on you (rimz teams focus 'forge#a')"))
+        .unwrap_or_else(|| panic!("unexpected diagnostic: {diagnostic}"));
+    let snapshot = fixture.env.store().snapshot_cached().unwrap();
+    let resolved = rimz::address::resolve_one(
+        &snapshot,
+        handle,
+        None,
+        &rimz::address::AddressContext {
+            channel: Some("a".to_owned()),
+            origin: rimz::address::ChannelOrigin::Explicit,
+        },
+    );
+    assert_eq!(
+        resolved.map(|agent| agent.agent_id.as_str()),
+        Ok("launch_coder-a"),
+        "{diagnostic}"
+    );
 }
 
 #[test]

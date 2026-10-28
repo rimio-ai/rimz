@@ -2,7 +2,6 @@
 
 use super::{render, report_unknown_config_keys};
 use anyhow::Result;
-use rimz::agents::AgentState;
 use rimz::launcher::OpenedLayout as LaunchedLayout;
 use rimz::launcher::{self, ClosedCohort, CohortChoice, Interaction, Notice};
 use rimz::store::writer::AgentLaunchIdentity;
@@ -154,8 +153,7 @@ impl LayoutReceipt for LaunchedLayout {
         // The agents are already launched, so an unreadable snapshot only
         // costs the receipt its list handles.
         let snapshot = store.snapshot_cached().ok();
-        let peers = snapshot.as_ref().map(receipt_peers).unwrap_or_default();
-        let handles = receipt_handles(&self.identities, &peers);
+        let handles = receipt_handles(&self.identities, snapshot.as_ref());
         write_launch_receipt(
             w,
             &LaunchReceipt {
@@ -410,30 +408,25 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     )
 }
 
-/// The handle `rimz agents list` gives each launched agent among `agents`,
-/// which holds the launch's own rows beside the room's open ones; an identity
-/// with no row yet keeps its role, else its pet name.
-fn receipt_handles(identities: &[AgentLaunchIdentity], agents: &[&AgentState]) -> Vec<String> {
+/// The handle `rimz agents list` gives each launched agent among the resolver's
+/// addressable agents; an identity with no row yet keeps its role, else its pet name.
+fn receipt_handles(
+    identities: &[AgentLaunchIdentity],
+    snapshot: Option<&rimz::store::snapshot::SidebarSnapshot>,
+) -> Vec<String> {
+    let agents = snapshot
+        .map(rimz::address::addressable_agents)
+        .unwrap_or_default();
     identities
         .iter()
         .map(|identity| {
             agents
                 .iter()
                 .find(|agent| agent.agent_id == identity.agent_id && agent.kind == identity.kind)
-                .map(|agent| rimz::address::agent_handle(agent, agents, false))
+                .map(|agent| rimz::address::agent_handle(agent, &agents, false))
                 .and_then(|handle| handle.strip_prefix('@').map(str::to_owned))
                 .unwrap_or_else(|| launch_identity_handle(identity).to_owned())
         })
-        .collect()
-}
-
-/// The open root rows a launch's handles are counted among, read after the
-/// launch events committed; a stale row only costs a fresh agent its short
-/// handle, never an ambiguous one.
-fn receipt_peers(snapshot: &rimz::store::snapshot::SidebarSnapshot) -> Vec<&AgentState> {
-    rimz::address::addressable_agents(snapshot)
-        .into_iter()
-        .filter(|agent| agent.parent_agent_id.is_none() && agent.ended_at.is_none())
         .collect()
 }
 

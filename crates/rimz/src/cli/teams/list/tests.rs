@@ -550,6 +550,57 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
 }
 
 #[test]
+fn catalog_member_handles_round_trip_beside_teamless_role_rivals() {
+    let mut member = AgentState::stub("codex", "team-reviewer", AgentStatus::Running);
+    member.team = Some("forge".to_owned());
+    member.role = Some("reviewer".to_owned());
+    member.channel = Some("feat-x".to_owned());
+    member.kind_ordinal = Some(1);
+    let mut rival = member.clone();
+    rival.agent_id = "inline-reviewer".into();
+    rival.team = None;
+    rival.kind_ordinal = Some(2);
+    let snapshot = snapshot(vec![member.clone(), rival]);
+    let reports = build_catalog(
+        &TeamsConfig::default(),
+        &ProfilesConfig::default(),
+        &CommandsConfig::default(),
+        LiveCatalog {
+            demotion: &Default::default(),
+            snapshot: &snapshot,
+            tasks: &BTreeMap::new(),
+            flips: &[],
+            runs: &BTreeMap::new(),
+            audit_agents: &[],
+            lifetimes: &rimz::worktree::lane_lifetimes([]),
+            prices: &rimz::agents::PriceBook::default(),
+            worktree: None,
+            isolation: Isolation::Host,
+            shared_dir: Path::new("/state/room/shared"),
+        },
+        |_| None,
+    );
+
+    let instance = &reports[0].instances[0];
+    let handle = format!("{}#{}", instance.members[0].handle, instance.channel);
+    let resolved = rimz::address::resolve_one(
+        &snapshot,
+        &handle,
+        None,
+        &rimz::address::AddressContext {
+            channel: Some("feat-x".to_owned()),
+            origin: rimz::address::ChannelOrigin::Explicit,
+        },
+    );
+    assert_eq!(
+        resolved.map(|agent| &agent.agent_id),
+        Ok(&member.agent_id),
+        "{handle}"
+    );
+    assert_ne!(instance.members[0].handle, "@reviewer");
+}
+
+#[test]
 fn catalog_merges_definition_and_live_instance() {
     let mut definition = team();
     let mut reviewer = definition.roles[0].clone();

@@ -308,6 +308,7 @@ fn poll(
         if let Some(snapshot) = &snapshot
             && let Some(cohort) = &cohort
         {
+            let peers = rimz::address::addressable_agents(snapshot);
             progress.owner_live = progress.owner.as_deref().map(|owner| {
                 !rimz::address::role_holders(cohort.members.iter().copied(), owner).is_empty()
             });
@@ -341,7 +342,7 @@ fn poll(
                 ));
                 if let Some(attention) = attention {
                     progress.needs_you.push((
-                        rimz::address::agent_handle(agent, &cohort.members, false),
+                        rimz::address::agent_handle(agent, &peers, false),
                         attention.status,
                     ));
                 }
