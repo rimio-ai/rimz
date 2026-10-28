@@ -1298,22 +1298,32 @@ fn replacing_same_key_block_keeps_header_decor() {
 
 #[test]
 fn replacing_daemon_panes_keeps_the_array_before_the_sidebar() {
-    let (_dir, editor) = inline_editor(
-        "# about panes\n[[daemon.pane]]\ncommand = \"stats\"\n\n\
-         # about the second pane\n[[daemon.pane]]\ncommand = \"loop\"\n\n\
-         # about the sidebar\n[sidebar]\nspend_window = \"24h\"\n",
-    );
-    editor
-        .set("daemon.pane", "[{command = \"stats\"}]")
-        .unwrap();
+    // An empty array stays an inline value, so `[daemon]` takes entry 0's place.
+    for (value, replaced) in [
+        (
+            "[{command = \"stats\"}]",
+            "[[daemon.pane]]\ncommand = \"stats\"\n",
+        ),
+        ("[]", "[daemon]\npane = []\n"),
+    ] {
+        let (_dir, editor) = inline_editor(
+            "# about panes\n[[daemon.pane]]\ncommand = \"stats\"\n\n\
+             # about the second pane\n[[daemon.pane]]\ncommand = \"loop\"\n\n\
+             # about the sidebar\n[sidebar]\nspend_window = \"24h\"\n",
+        );
+        editor.set("daemon.pane", value).unwrap();
 
-    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
-    assert_eq!(
-        rendered,
-        "# about panes\n[[daemon.pane]]\ncommand = \"stats\"\n\n\
-         # about the second pane\n\n\
-         # about the sidebar\n[sidebar]\nspend_window = \"24h\"\n"
-    );
+        let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+        assert_eq!(
+            rendered,
+            format!(
+                "# about panes\n{replaced}\n\
+                 # about the second pane\n\n\
+                 # about the sidebar\n[sidebar]\nspend_window = \"24h\"\n"
+            ),
+            "{value}"
+        );
+    }
 }
 
 #[test]
