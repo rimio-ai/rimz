@@ -133,6 +133,7 @@ pub(super) fn stamp_pane_process_starts(
 /// root's child, while Qwen can report only its shared `node` runtime. The row
 /// binder consumes this signal to keep a wired session card stable until the
 /// in-pane agent process actually exits; unwired panes remain process rows.
+/// Sidebar chrome hosts the renderer, never an agent CLI, so it is not probed.
 pub(super) fn stamp_hosted_agent_processes(
     frame: &mut PaneFrame,
     root_process: &dyn Fn(u32) -> Option<HostedAgentProcess>,
@@ -142,6 +143,14 @@ pub(super) fn stamp_hosted_agent_processes(
         pane.current.hosted_agent_process_start = None;
         pane.current.hosted_agent_lineage.clear();
         pane.hosted_carry_since_ms = None;
+        if pane
+            .current
+            .command
+            .as_deref()
+            .is_some_and(crate::pane::command_is_sidebar_chrome)
+        {
+            continue;
+        }
         let Some(pid) = pane.current.pid else {
             continue;
         };
