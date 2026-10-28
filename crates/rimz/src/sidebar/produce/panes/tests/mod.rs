@@ -83,6 +83,7 @@ fn resume_and_process_start_stamping_dispatch_for_kiro_commands() {
         let unstamped = natively_unstamped(&frame);
         stamp_pane_resumed_session_ids(
             &mut frame,
+            None,
             &mut SettledResumes::new(),
             &|pid| {
                 if pid == 42 {
