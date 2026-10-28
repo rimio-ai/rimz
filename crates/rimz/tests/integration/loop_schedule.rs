@@ -7301,6 +7301,47 @@ fn loop_multi_name_remove_reports_each_outcome() {
 }
 
 #[test]
+fn loop_remove_first_task_keeps_template_comments() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        "# Supervised scheduled turns without a task-specific timeout use two hours.\n\
+         # default-timeout = \"2h\"\n\n\
+         [tasks.one]\ncheck = \"true\"\nevery = \"1h\"\n\n\
+         [tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n",
+    );
+
+    let output = loop_ok(&env, &["loop", "remove", "one"]);
+    assert_eq!(output, "removed loop task `one`\n");
+    assert_eq!(
+        std::fs::read_to_string(loop_config_path(&env)).unwrap(),
+        "# Supervised scheduled turns without a task-specific timeout use two hours.\n\
+         # default-timeout = \"2h\"\n\n\
+         [tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n"
+    );
+}
+
+#[test]
+fn loop_remove_last_task_keeps_preceding_task_comments() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        "[tasks.one]\ncheck = \"true\"\nevery = \"1h\"\n\
+         # every = \"30m\"   # faster cadence during release week\n\
+         # Weekly cleanup\n[tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n",
+    );
+
+    let output = loop_ok(&env, &["loop", "remove", "two"]);
+    assert_eq!(output, "removed loop task `two`\n");
+    assert_eq!(
+        std::fs::read_to_string(loop_config_path(&env)).unwrap(),
+        "[tasks.one]\ncheck = \"true\"\nevery = \"1h\"\n\
+         # every = \"30m\"   # faster cadence during release week\n\
+         # Weekly cleanup\n"
+    );
+}
+
+#[test]
 fn loop_enable_disable_pause_workflow() {
     let env = Env::new();
     env.record(&env.project_root);

@@ -4408,6 +4408,11 @@ reason = "Account reruns check the same editor body before changing the home, th
 
 [[verdict]]
 kind = "item"
+key = "config::edit::remove_keeping_comments"
+reason = "Loop task stores reuse config's header-comment preservation for task removals."
+
+[[verdict]]
+kind = "item"
 key = "config::glyphs::ThemeGlyphsConfig"
 reason = "Pass 12: unicode and nerd_font are wire vocabulary in an Option<String> field and template selectors; a typed set kind changes schema shape rather than narrowing."
 
