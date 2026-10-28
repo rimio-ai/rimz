@@ -21,7 +21,7 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 
 ## Lanes
 
-- [`produce/`](./produce/mod.rs) owns retained host inputs and private CLI reads. Only the host publishes pane frames, agent projection, and metrics history; its fast fold and refresher reuse those inputs in memory. Inspection still refreshes heavy-lane files.
+- [`produce/`](./produce/mod.rs) owns retained host inputs and private CLI reads. Only the host publishes pane frames, agent projection, and metrics history; its fetch worker reuses those inputs in memory and shares the resulting fold with the refresher. Inspection still refreshes heavy-lane files.
 - [`refresh/`](./refresh/mod.rs) owns the heavy lanes — git, provider accounts, credits, pull requests, rate limits, sessions, live spend, team pipelines. Each lane gates on its own TTL, except the pipeline lane, whose one board read per team group runs every pass and publishes only on change; all publish through the cache temp-then-rename helper.
 - [`consumer.rs`](./consumer.rs) reads publications passively and supplies the enrichment core shared with retained host folds. Neither fold calls mux, git, or providers.
 - The agent projection published for consumers ([`agent_projection.rs`](./agent_projection.rs)) is disposable and re-validated before use.

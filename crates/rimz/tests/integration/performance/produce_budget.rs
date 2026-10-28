@@ -23,7 +23,7 @@ const ROUNDS: u32 = 20;
 
 #[test]
 fn warm_fleet_refresh_forks_zero_subprocesses() {
-    use rimz::sidebar::produce::{HostInputs, refresh_producer_caches};
+    use rimz::sidebar::produce::refresh_producer_caches;
     use rimz::sidebar::refresh::ProducerRefreshState;
     use rimz::utils::time::unix_now_ms;
 
@@ -39,8 +39,8 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
         runtime.persistent_shared_root = home.join("cache/providers");
         let frame =
             serde_json::from_slice(&std::fs::read(runtime.pane_frame_path()).unwrap()).unwrap();
-        let inputs = HostInputs::from_frame(frame);
         let mut cursor = RollupCursor::new();
+        let workspace = super::workspace_for_refresh(&mut cursor, &state, &runtime, &frame);
         let mut refresh_state = ProducerRefreshState::default();
         let store = rimz::Store::open(state.clone(), runtime.clone()).unwrap();
         let snapshot = store.snapshot().unwrap();
@@ -58,10 +58,10 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
         let log = std::path::PathBuf::from(std::env::var_os("RIMZ_TEST_GIT_LOG").unwrap());
         std::fs::write(&log, "").unwrap();
         refresh_producer_caches(
-            &mut cursor,
+            workspace.clone(),
+            Some(&frame),
             &state,
             &runtime,
-            Some(&inputs),
             &mut refresh_state,
         )
         .unwrap();
@@ -77,14 +77,21 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
         );
         std::fs::write(&log, "").unwrap();
         let before = spawn_count();
+        let counts = rimz::testkit::host_pass::thread_counters();
+        let folds_before = counts.get(rimz::testkit::host_pass::Counter::HostFold);
         refresh_producer_caches(
-            &mut cursor,
+            workspace,
+            Some(&frame),
             &state,
             &runtime,
-            Some(&inputs),
             &mut refresh_state,
         )
         .unwrap();
+        assert_eq!(
+            counts.get(rimz::testkit::host_pass::Counter::HostFold) - folds_before,
+            0,
+            "the refresher must consume the worker's fold rather than folding again"
+        );
         let warm_git = std::fs::read_to_string(&log).unwrap();
         assert_eq!(
             spawn_count() - before,

@@ -52,7 +52,7 @@ Heavy-lane external reads also single-flight across processes through [`disk::si
 
 Smoothness and freshness run on separate clocks, so tuning one never taxes the other.
 
-The base frame grid is set by `[theme.display] refresh_ms` (100 ms by default), and a wheel glide briefly uses a finer grid. A frame redraws from the cached snapshot. The data clock is event-driven, and it folds new truth when a wakeup says there is some. Its backstop is the fetch worker's: an ordinary cycle when no request arrives within the shortest subscriber's data tick (`rimz sidebar serve --tick-seconds`, 1 s by default) after a cycle returns ([state.md → Requests](./sidebar/state.md#requests)). The fetch worker rests `FOLD_FLOOR` (250 ms) after each cycle returns before it starts the next, whatever the request, which bounds its duty cycle. The clamps, animation cadences, and hidden-tab paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
+The base frame grid is set by `[theme.display] refresh_ms` (100 ms by default), and a wheel glide briefly uses a finer grid. A frame redraws from the cached snapshot. The data clock is event-driven, and it folds new truth when a wakeup says there is some. Its backstop is the fetch worker's: an ordinary cycle when no request arrives within the shortest subscriber's data tick (`rimz sidebar serve --tick-seconds`, 1 s by default) after a cycle returns ([state.md → Requests](./sidebar/state.md#requests)). The fetch worker rests `FOLD_FLOOR` (250 ms) after each cycle returns before it starts the next, whatever the request, which bounds its duty cycle. The cache refresher consumes that worker's fold rather than folding again. It uses a sample strictly younger than its own data tick; otherwise it requests one ordinary cycle and waits at most one tick for a post-request sample. Failure or timeout skips heavy lanes for that pass, not due tasks, messages or daemon-view repair. The clamps, animation cadences, and hidden-tab paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
 
 Durable truth and the pane roster are split the same way. Every fold reads the store rollup event-fresh, so a status flip repaints within one wakeup. The pane roster sits behind a TTL cache, so discovery stays cheap. A writer that knows about a change posts a typed wakeup, and polling only backs up a missed one.
 
@@ -109,6 +109,8 @@ This section gives each lane's cost and the bound that holds it down. Reproducib
 
 ### The host cache refresher
 
+The heavy-lane table covers passes that acquire a worker fold. A failed acquisition postpones these lanes, while due tasks, messages and daemon-view repair keep their own cadence.
+
 | Operation | Cost | Bound |
 | --- | --- | --- |
 | Live-session context | Stat-gated local reads, no context-helper subprocess | Every refresher pass, except roots on the [hibernated cadence](./sidebar/state.md#cadences). Rich session metadata refreshes at hook boundaries or on explicit refresh, and account windows through the per-(login, scope) usage lane |
@@ -164,7 +166,7 @@ Within one hook frame, cached-tier store reads share one fold and snapshot assem
 
 Message dispatch reads the inherited `harness.smart_compact` threshold from the typed core file only when no explicit threshold is set. Session-login environment resolution reads account declarations through the same core-only reader, including parked-target hook preflight; attention reads share it too. The task catalog reads its machine tasks from the loop file alone. Each file has a single-slot per-process memo: repeated reads do no I/O within two seconds of the last stamp check, then revalidate the stamp and parse only if it changed. Like the full lenient load, these readers cache only a quiet, stable read and use built-in defaults for missing or broken files. Neither reads definitions or theme; account selection still uses the shared session-login resolver.
 
-Per workspace, RimZ pays once. The host pays the roster and metrics on its fetch worker and git and accounts on its cache refresher, then folds once for all its panes. Every workspace that shares a state root and provider-discovery environment asks the same warm spend walker, so a host restart adds no second parsed cursor. One elected hook drainer per room owns the ingress queue. When quiet it blocks in poll(2) on its listener and client sockets (`crates/rimz/src/harness/hook_drain.rs::run`), so an idle drainer and the leases it holds open add no periodic wakeups. It exits after `DRAINER_IDLE` (60 s) without frames or connections. Its election, sockets, and shutdown order are [ARCHITECTURE.md → Runtime shape](../../ARCHITECTURE.md#runtime-shape), and its apply children are [adapter.md → The feed](./agents/adapter.md#the-feed).
+Per workspace, RimZ pays once. The host pays the roster and metrics on its fetch worker and git and accounts on its cache refresher. The worker folds once for all its panes and shares that fold with the refresher. Every workspace that shares a state root and provider-discovery environment asks the same warm spend walker, so a host restart adds no second parsed cursor. One elected hook drainer per room owns the ingress queue. When quiet it blocks in poll(2) on its listener and client sockets (`crates/rimz/src/harness/hook_drain.rs::run`), so an idle drainer and the leases it holds open add no periodic wakeups. It exits after `DRAINER_IDLE` (60 s) without frames or connections. Its election, sockets, and shutdown order are [ARCHITECTURE.md → Runtime shape](../../ARCHITECTURE.md#runtime-shape), and its apply children are [adapter.md → The feed](./agents/adapter.md#the-feed).
 
 Per worktree, cost follows activity. The git input set scales with distinct group roots, not agents. A quiet root uses the idle TTL, or the 5-minute settled TTL when clean and landed. A qualifying all-hibernated root takes the 30-minute tier instead, unless focused, hot or condition-demanded ([qualification](./sidebar/state.md#cadences)). The first host pass after it leaves the hibernated set forces a refresh. A host pass always refreshes the due viewed, hot and just-thawed roots and gives the others what is left of its 8-root cap, so a cold start or a clump of expiring stamps spreads over several passes. Under sustained overload an idle or hibernated root can outlast its TTL. PR probes scale with origin repositories, and each enumerates open PRs once when due. A hundred agents sharing a few checkouts pay for a few hot roots.
 
@@ -206,7 +208,7 @@ Each renderer knows its own pane and the latest client map, so it can tell wheth
 
 The producer builds the snapshot in process on its fetch worker ([`produce_workspace_snapshot`](../../crates/rimz/src/sidebar/produce/mod.rs)), with no `rimz sidebar snapshot` fork per tick. The worker's cadence stamp allows one attempt per data tick, and only against a stale retained frame, so unrelated wakeups cannot multiply production.
 
-The fold spine splits into renderer-independent [`enrich_workspace`](../../crates/rimz/src/sidebar/enrich.rs) and renderer-local `project_local`. The worker folds the first half into host views, and each attachment projects at reduction. The retained fold seeds new attachments. Both lanes are [state.md → One fetch cycle](./sidebar/state.md#one-fetch-cycle).
+The fold spine splits into renderer-independent [`enrich_workspace`](../../crates/rimz/src/sidebar/enrich.rs) and renderer-local `project_local`. The worker folds the first half into host views, and each attachment projects at reduction. The retained fold seeds new attachments and supplies the cache refresher's workspace and matching frame. Both worker lanes are [state.md → One fetch cycle](./sidebar/state.md#one-fetch-cycle).
 
 ### Truth arrives by event, the frame by coalescing
 
@@ -326,7 +328,7 @@ Three layers hold the cost map in place: a live meter in every renderer, exact c
 
 ### The tick budget
 
-The fetch worker and the cache refresher each meter their ticks against budgets in [`sidebar/meter.rs`](../../crates/rimz/src/sidebar/meter.rs):
+The fetch worker and the cache refresher each meter their ticks against budgets in [`sidebar/meter.rs`](../../crates/rimz/src/sidebar/meter.rs). The refresher meters its heavy-lane refresh alone: the wait for the worker's fold is the worker's own metered cost, and a pass that acquires no fold records no tick. Due tasks, messages and daemon-view repair run unmetered after it:
 
 | Budget | Limit |
 | --- | --- |

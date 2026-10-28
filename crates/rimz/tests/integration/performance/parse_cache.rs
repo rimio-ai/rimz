@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use rimz::sidebar::consumer::{PublishedSnapshotReader, RollupCursor};
-use rimz::sidebar::produce::{HostInputs, refresh_producer_caches};
+use rimz::sidebar::produce::refresh_producer_caches;
 use rimz::sidebar::refresh::ProducerRefreshState;
 use rimz::testkit::{parse_cache_read_counts, read_cached_json};
 use sha2::{Digest, Sha256};
@@ -188,13 +188,26 @@ fn warm_fold_and_enforcement_over_200_agents_parse_nothing() {
     );
     assert_eq!(after.1 - before.1, 0, "warm fold reparsed unchanged files");
 
-    let inputs = HostInputs::from_frame(frame);
     let mut cursor = RollupCursor::new();
     let mut refresh = ProducerRefreshState::default();
-    refresh_producer_caches(&mut cursor, paths, runtime, Some(&inputs), &mut refresh).unwrap();
+    refresh_producer_caches(
+        super::workspace_for_refresh(&mut cursor, paths, runtime, &frame),
+        Some(&frame),
+        paths,
+        runtime,
+        &mut refresh,
+    )
+    .unwrap();
     let before = parse_cache_read_counts();
     let sidecars = rimz::testkit::sidecar_read_counts();
-    refresh_producer_caches(&mut cursor, paths, runtime, Some(&inputs), &mut refresh).unwrap();
+    refresh_producer_caches(
+        super::workspace_for_refresh(&mut cursor, paths, runtime, &frame),
+        Some(&frame),
+        paths,
+        runtime,
+        &mut refresh,
+    )
+    .unwrap();
     let after = parse_cache_read_counts();
     assert!(
         after.0 - before.0 >= 400,
@@ -340,11 +353,17 @@ fn refresher_keeps_held_fold_context_cached() {
             .and_then(|context| context.model_id.as_deref()),
         Some("retained-model")
     );
-    let inputs = HostInputs::from_frame(frame);
     let mut cursor = RollupCursor::new();
     let mut refresh = ProducerRefreshState::default();
     for _ in 0..2 {
-        refresh_producer_caches(&mut cursor, paths, runtime, Some(&inputs), &mut refresh).unwrap();
+        refresh_producer_caches(
+            super::workspace_for_refresh(&mut cursor, paths, runtime, &frame),
+            Some(&frame),
+            paths,
+            runtime,
+            &mut refresh,
+        )
+        .unwrap();
     }
     let after = reader.read(paths).unwrap();
     let row = after

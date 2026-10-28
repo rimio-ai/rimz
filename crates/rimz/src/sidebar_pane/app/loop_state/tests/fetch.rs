@@ -456,6 +456,7 @@ fn pre_tab_fold_seeds_without_selection() {
     let frame =
         crate::sidebar::frame::assemble_frame(vec![shell.clone()], now_ms - 1_000, "rimz-test");
     rig.state.seed(&WorkspaceFold {
+        sampled_at: Instant::now(),
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed),
         frame: Some(Arc::new(frame)),
     });
@@ -518,6 +519,7 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         "rimz-test",
     );
     let pre_tab = Arc::new(WorkspaceFold {
+        sampled_at: Instant::now(),
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed.clone()),
         frame: Some(Arc::new(frame)),
     });
@@ -797,6 +799,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         sampled_at_ms: seed.now.as_millisecond() as u64,
     });
     let fold = WorkspaceFold {
+        sampled_at: Instant::now(),
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed),
         frame: Some(Arc::new(frame)),
     };
@@ -929,6 +932,7 @@ fn seed_listing_the_own_pane_seats_its_focus_at_once() {
         "rimz-test",
     );
     rig.state.seed(&WorkspaceFold {
+        sampled_at: Instant::now(),
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed),
         frame: Some(Arc::new(frame)),
     });

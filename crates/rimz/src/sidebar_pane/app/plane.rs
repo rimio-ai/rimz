@@ -140,6 +140,7 @@ impl DataPlane {
         let (config, runtime, diag) = (config.clone(), runtime.clone(), diag.clone());
         let subscribers = plane.subscribers.clone();
         let host_data = plane.host_data.clone();
+        let requests = plane.request_tx.clone();
         let room_events = plane.room_events(&runtime);
         let hidden = (config.mux == MuxName::Tmux).then(hidden_views::channel);
         if let Some((sweep, _)) = &hidden {
@@ -176,6 +177,7 @@ impl DataPlane {
                 runtime.clone(),
                 diag.clone(),
                 host_data,
+                requests,
                 move || lock(&subscribers).values().next().map(data_tick),
             );
             // tmux fast path: record control-mode events once and fan out in memory. The plane
@@ -314,6 +316,7 @@ impl DataPlane {
                 let fold = match frame {
                     None => super::fixtures::fold(snapshot, Some(&subscriber.own_pane), Vec::new()),
                     Some(frame) => WorkspaceFold {
+                        sampled_at: std::time::Instant::now(),
                         workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
                         frame: Some(frame),
                     },
