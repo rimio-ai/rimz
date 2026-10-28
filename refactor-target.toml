@@ -726,6 +726,21 @@ kind = "item"
 key = "testkit::WORK_COUNTERS"
 reason = "The testkit-only work log reads one counter set across all process threads."
 
+[[verdict]]
+kind = "item"
+key = "store::snapshot::fold::testkit::count_rows_materialized"
+reason = "Store runtime projections and snapshot context joins share the fold-row copy counter."
+
+[[verdict]]
+kind = "item"
+key = "testkit::fleet::seed_live_launch_text"
+reason = "Apply and fleet benches share production-encoded launch text and observed prompts in their live rows."
+
+[[verdict]]
+kind = "item"
+key = "testkit::fleet::checkpoint_fleet_store"
+reason = "The apply bench prices complete persisted arrays after raw fixture seeding without exposing the private publish stamp."
+
 [[module]]
 path = "crates/rimz/src/config"
 upward-dependencies = [

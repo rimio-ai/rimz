@@ -204,6 +204,24 @@ fn scale_room_preserves_agent_pane_and_fence_dimensions() {
         assert_eq!(snapshot.worktree_groups.len(), panes);
         assert!(snapshot.fenced_sessions.len() >= ended_sessions);
         assert_eq!(
+            [
+                snapshot
+                    .agents
+                    .iter()
+                    .all(|agent| agent.prompt.is_some() && agent.first_prompt == agent.prompt),
+                snapshot
+                    .agents
+                    .iter()
+                    .filter_map(|agent| agent.pane.as_ref())
+                    .all(|pane| {
+                        pane.spawn_command.is_some()
+                            && pane.spawn_command == pane.foreground_cmdline
+                    }),
+            ],
+            [true, true],
+            "live scale roots carry observed prompts and production launch text"
+        );
+        assert_eq!(
             snapshot
                 .worktree_groups
                 .iter()

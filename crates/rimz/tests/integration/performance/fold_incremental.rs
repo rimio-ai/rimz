@@ -408,8 +408,8 @@ fn cold_carryover_trims_ended_text_and_shares_the_parse_with_audit_reads() {
 /// A `hooks apply` child reads the rollup several times per frame. Repeated in
 /// one thread at an unchanged log, `Store::snapshot` and
 /// `Store::runtime_projection` are served by the thread's held fold: no log or
-/// carryover bytes, no copy of the fold base, and no carried row flattened, so
-/// the repeat costs nothing that grows with the 3,300-row history.
+/// carryover bytes and no copy of the fold base or ended rows. Each runtime
+/// projection still copies the visible rows it retains.
 #[test]
 fn repeat_store_reads_at_an_unchanged_log_copy_no_history() {
     let h = Harness::new();
@@ -425,15 +425,9 @@ fn repeat_store_reads_at_an_unchanged_log_copy_no_history() {
         .runtime_projection(rimz::RuntimeScope::Runtime)
         .expect("cold projection");
 
-    let counters = || {
-        (
-            bytes_read(),
-            carryover_bytes_parsed(),
-            rollup_base_copies(),
-            rollup_rows_materialized(),
-        )
-    };
+    let counters = || (bytes_read(), carryover_bytes_parsed(), rollup_base_copies());
     let before = counters();
+    let rows_before = rollup_rows_materialized();
     let warm = h.store.snapshot().expect("warm snapshot");
     let projection = h
         .store
@@ -442,7 +436,12 @@ fn repeat_store_reads_at_an_unchanged_log_copy_no_history() {
     assert_eq!(
         counters(),
         before,
-        "(log bytes, carryover bytes, fold-base copies, flattened rows) moved on a repeat read"
+        "(log bytes, carryover bytes, fold-base copies) moved on a repeat read"
+    );
+    assert_eq!(
+        rollup_rows_materialized() - rows_before,
+        (warm.agents.len() + projection.agents.len()) as u64,
+        "each runtime projection copies only the rows it keeps"
     );
     assert_eq!(warm.agents, cold.agents);
     assert_eq!(projection, cold_projection);

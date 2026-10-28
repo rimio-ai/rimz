@@ -69,13 +69,14 @@ pub mod testkit {
     static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_BASE_COPIES: AtomicU64 = AtomicU64::new(0);
 
-    /// Rollup rows flattened since process start; borrowed readers add nothing.
+    /// Row copies from flattening, pending seeds, runtime projections and
+    /// shared context vectors since process start; borrowed readers add nothing.
     #[cfg(any(test, feature = "testkit"))]
     pub fn rollup_rows_materialized() -> u64 {
         ROLLUP_ROWS_MATERIALIZED.load(Ordering::Relaxed)
     }
 
-    pub(super) fn count_rows_materialized(n: u64) {
+    pub(in crate::store) fn count_rows_materialized(n: u64) {
         ROLLUP_ROWS_MATERIALIZED.fetch_add(n, Ordering::Relaxed);
     }
 
@@ -646,10 +647,11 @@ pub(in crate::store) fn catch_up_with_pending(
             resume_outcomes,
         });
     }
-    let seed = agents
+    let seed: BTreeMap<_, _> = agents
         .iter()
         .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent.clone()))
         .collect();
+    testkit::count_rows_materialized(seed.len() as u64);
     let (agents, identity) = reduce_agent_states_seeded_with_identity(
         seed,
         base.agent_identity.clone(),

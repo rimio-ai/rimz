@@ -32,6 +32,7 @@ pub(super) use fold::lifecycle_follow_seed;
 pub use fold::lifecycle_log_generation;
 #[cfg(feature = "testkit")]
 pub(crate) use fold::testkit as fold_testkit;
+pub(super) use fold::testkit::count_rows_materialized;
 pub use fold::{ResumeOutcome, RollupCursor};
 pub(super) use fold::{
     advance_log_generation, catch_up_rollup, catch_up_with_pending, prune_carryover,

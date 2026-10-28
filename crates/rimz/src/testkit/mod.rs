@@ -374,15 +374,21 @@ pub mod fleet {
         let store = crate::Store::open(paths.clone(), runtime.clone()).map_err(io::Error::other)?;
         seed_carryover(&store, room.ended_sessions, true, EndedText::Full)
             .map_err(io::Error::other)?;
-        let panes = synthetic_panes(room.panes);
-        let bound = room.agents.min(room.panes);
-        seed_fleet_store_with_panes(paths, &panes[..bound], bound).map_err(io::Error::other)?;
-        for slot in bound..room.agents {
+        let mut panes = synthetic_panes(room.panes);
+        for slot in 0..room.agents {
             event_log::append(
                 &paths.events_log,
                 &registered_lifecycle(&paths.workspace_id, slot),
             )
             .map_err(io::Error::other)?;
+        }
+        for slot in 0..room.agents {
+            seed_live_launch_text(
+                &store,
+                std::path::Path::new("/usr/bin/rimz"),
+                AgentSessionId::from(format!("agent-{slot}")),
+                panes.get_mut(slot),
+            )?;
         }
         for slot in 0..room.orphan_contexts {
             crate::store::agent_context::write(
@@ -405,6 +411,108 @@ pub mod fleet {
             crate::utils::time::unix_now_ms(),
             SESSION_NAME,
         ))
+    }
+
+    /// Observe a production-encoded team launch and a 2,400-byte prompt.
+    /// Cancel the setup turn so the fixture starts idle, retaining its text.
+    pub fn seed_live_launch_text(
+        store: &crate::Store,
+        rimz_bin: &std::path::Path,
+        agent_id: AgentSessionId,
+        mut pane: Option<&mut PaneRef>,
+    ) -> io::Result<()> {
+        use crate::config::PromptSource;
+        use crate::harness::launch::{ExecAction, ExecRequest, exec_argv};
+        use crate::harness::team_prompt::{Consensus, TeamPrompt};
+
+        let mut prompt =
+            "Inspect the repository, implement the assigned task, and verify it.\n".repeat(40);
+        prompt.truncate(2_400);
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        request.action = ExecAction::Launch {
+            prompt: Some(prompt.clone()),
+            extra_args: Vec::new(),
+        };
+        request.worktree_path = pane
+            .as_ref()
+            .and_then(|pane| pane.cwd.as_ref().map(std::path::PathBuf::from));
+        request.identity.name = Some(agent_id.to_string());
+        request.identity.launch_id = Some(format!("launch_{agent_id}"));
+        request.identity.params = LaunchParams {
+            team: Some("forge".into()),
+            role: Some("coder".into()),
+            channel: Some("feature".into()),
+            profile: Some("implementer".into()),
+            model: Some("claude-opus-4-8".into()),
+            effort: Some("high".into()),
+            ..LaunchParams::default()
+        };
+        request.system_prompt_file = Some(PromptSource::Text {
+            origin: "implementer.md".into(),
+            text: "Implement your team's task and prove it against the existing suite.".into(),
+        });
+        request.team_prompt = Some(TeamPrompt {
+            consensus: Consensus::BuiltIn,
+            files: vec![PromptSource::Text {
+                origin: "forge.md".into(),
+                text: "Coordinate with the team and record the evidence in the handoff.".into(),
+            }],
+        });
+        let command = exec_argv(rimz_bin, store.runtime_paths(), &request)
+            .map_err(io::Error::other)?
+            .join(" ");
+        if let Some(pane) = &mut pane {
+            pane.spawn_command = Some(command.clone());
+            pane.foreground_cmdline = Some(command);
+        }
+        for (event, signal, prompt) in [
+            (
+                "UserPromptSubmit",
+                LifecycleSignal::TurnStarted { turn_id: None },
+                crate::agents::SanitizedPrompt::new(Some(&prompt)),
+            ),
+            (
+                "TurnInterrupted",
+                LifecycleSignal::TurnInterrupted { turn_id: None },
+                None,
+            ),
+        ] {
+            let mut observation = AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
+            observation.prompt = prompt;
+            observation.pane_stamp = pane.as_deref().cloned();
+            event_log::append(
+                &store.paths().events_log,
+                &EventEnvelope::agent_lifecycle(
+                    store.paths().workspace_id.clone(),
+                    SESSION_NAME,
+                    "claude",
+                    event,
+                    &observation,
+                ),
+            )
+            .map_err(io::Error::other)?;
+        }
+        Ok(())
+    }
+
+    /// Publish complete snapshot caches after raw fixture appends, bypassing the cadence gate.
+    pub fn checkpoint_fleet_store(store: &crate::Store) -> io::Result<()> {
+        let stamp = store
+            .paths()
+            .checkpoint_publish_stamp()
+            .ok_or_else(|| io::Error::other("fixture has no runtime checkpoint"))?;
+        std::fs::remove_file(stamp)?;
+        store
+            .append_event(&EventEnvelope::new(
+                store.paths().workspace_id.clone(),
+                "fixture",
+                "rimz",
+                "bench",
+                "bench.fixture_ready",
+                serde_json::json!({}),
+            ))
+            .map_err(io::Error::other)
     }
 
     /// Append lifecycle frames bound to synthetic panes with real worktree paths.

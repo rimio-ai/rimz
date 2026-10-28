@@ -121,7 +121,7 @@ fn fixture() -> Env {
     env
 }
 
-fn cold_frame(payload: Value, assemblies: u64, config_loads: u64) {
+fn cold_frame(payload: Value, assemblies: u64, rows_materialized: u64, config_loads: u64) {
     let env = fixture();
     let log = env.home_root.join("work.jsonl");
     let rollup_bytes = std::fs::metadata(env.store().paths().rollup_cache().unwrap())
@@ -156,6 +156,7 @@ fn cold_frame(payload: Value, assemblies: u64, config_loads: u64) {
     }
     // handoff-perf-hook-flat.md: reuse cold-child fleet projections to lower this ratchet.
     assert_eq!(row["snapshot_assemblies"], assemblies, "{row}");
+    assert_eq!(row["rollup_rows_materialized"], rows_materialized, "{row}");
     // Prompt and Read applies read only the attention settings; Stop still loads the whole
     // machine config. handoff-perf-hook-flat.md owns lowering the Stop count.
     assert_eq!(row["machine_config_loads"], config_loads, "{row}");
@@ -177,6 +178,8 @@ fn cold_prompt_reports_process_work() {
     cold_frame(
         json!({"hook_event_name": "UserPromptSubmit", "prompt": "inspect the repository"}),
         6,
+        // Six three-row runtime projections and one fifteen-row Audit copy.
+        33,
         0,
     );
 }
@@ -187,6 +190,8 @@ fn cold_read_reports_process_work() {
         json!({"hook_event_name": "PostToolUse", "tool_name": "Read",
         "tool_input": {"file_path": "README.md"}, "tool_response": "contents"}),
         5,
+        // Five three-row runtime projections and one fifteen-row Audit copy.
+        30,
         0,
     );
 }
@@ -196,6 +201,8 @@ fn cold_stop_reports_process_work() {
     cold_frame(
         json!({"hook_event_name": "Stop", "last_assistant_message": "done"}),
         5,
+        // Five three-row runtime projections and one fifteen-row Audit copy.
+        30,
         1,
     );
 }
