@@ -1998,6 +1998,12 @@ fn failure_warning(team: &str, label: &str, reason: &str, consequence: &str) -> 
     }
 }
 
+fn missing_team_cause(team: &str, failure: Option<String>) -> String {
+    failure.unwrap_or_else(|| {
+        format!("the config read for recovery has no definition for team `{team}`")
+    })
+}
+
 /// Plan restorable named-team tabs from prior full agent sessions.
 #[expect(
     clippy::too_many_arguments,
@@ -2051,9 +2057,7 @@ fn plan_team_restore_tabs(
             crate::harness::spec::resolve_team(&team, teams, profiles, commands)
                 .map_err(|error| error.to_string())
         } else {
-            Err(definition_failure_for(&team).unwrap_or_else(|| {
-                format!("the config read for recovery has no definition for team `{team}`")
-            }))
+            Err(missing_team_cause(&team, definition_failure_for(&team)))
         };
         let mut layout = match layout {
             Ok(layout) => layout,
@@ -2426,28 +2430,12 @@ impl SplitMemberRestore<'_> {
 
     fn unbound_cause(&self, name: &str, role: &str) -> String {
         let Some(team) = self.restore.teams.0.get(name) else {
-            return self
-                .restore
-                .failed_definitions
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| {
-                    format!("the config read for recovery has no definition for team `{name}`")
-                });
-        };
-        let valid_roles = if team.roles.is_empty() {
-            "none".into()
-        } else {
-            team.roles
-                .iter()
-                .map(|binding| binding.role.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            return missing_team_cause(name, self.restore.failed_definitions.get(name).cloned());
         };
         crate::harness::spec::LayoutErr::UnknownRoleInTeam {
             team: name.to_owned(),
             role: role.to_owned(),
-            valid_roles,
+            valid_roles: crate::harness::spec::valid_team_roles(team),
             suggestion: "".into(),
         }
         .to_string()
