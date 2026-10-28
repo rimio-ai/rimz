@@ -31,6 +31,9 @@ fn wake_sidebars_drops_datagrams_when_receiver_queue_is_full() {
         serde_json::to_vec(&hb).expect("serialize full hb"),
     )
     .expect("write full hb");
+    crate::common::room::date_heartbeat_as_live(
+        &h.runtime_paths.heartbeat_dir.join("sidebar.full.json"),
+    );
 
     for _ in 0..2_000 {
         rimz::wakeup::wake_store_delta(&h.runtime_paths, None, None).expect("wake sidebars");
@@ -68,6 +71,9 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         serde_json::to_vec(&fresh_hb).expect("serialize fresh hb"),
     )
     .expect("write fresh hb");
+    crate::common::room::date_heartbeat_as_live(
+        &h.runtime_paths.heartbeat_dir.join("sidebar.fresh.json"),
+    );
 
     let mut sibling_hb = fresh_hb.clone();
     sibling_hb.instance_id = SidebarInstanceId::new();
@@ -76,6 +82,9 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         serde_json::to_vec(&sibling_hb).expect("serialize sibling hb"),
     )
     .expect("write sibling hb");
+    crate::common::room::date_heartbeat_as_live(
+        &h.runtime_paths.heartbeat_dir.join("sidebar.sibling.json"),
+    );
 
     let stale_sock_path = h.runtime_paths.sock_dir.join("event.stale.sock");
     let stale_recv = UnixDatagram::bind(&stale_sock_path).expect("bind stale");
@@ -85,7 +94,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
     stale_recv
         .set_read_timeout(Some(Duration::from_millis(50)))
         .expect("set read timeout stale");
-    let mut stale_hb = SidebarHeartbeat::new(
+    let stale_hb = SidebarHeartbeat::new(
         h.workspace_id.clone(),
         SidebarInstanceId::new(),
         MuxName::Tmux,
@@ -93,12 +102,15 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         stale_sock_path,
         None,
     );
-    stale_hb.last_seen = jiff::Timestamp::now() - Duration::from_secs(60);
     std::fs::write(
         h.runtime_paths.heartbeat_dir.join("sidebar.stale.json"),
         serde_json::to_vec(&stale_hb).expect("serialize stale hb"),
     )
     .expect("write stale hb");
+    std::fs::File::open(h.runtime_paths.heartbeat_dir.join("sidebar.stale.json"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
 
     let wrong_protocol_sock_path = h.runtime_paths.sock_dir.join("event.wrong-protocol.sock");
     let wrong_protocol_recv =
@@ -170,10 +182,8 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
 
 #[test]
 fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
-    // TOCTOU re-stat: the heartbeat JSON has a fresh `last_seen` so the
-    // content check passes, but the file's mtime is backdated past the TTL.
-    // The re-stat must skip the send — the content alone is not enough to
-    // trust the wakeup_socket path on disk.
+    // Readable current-protocol JSON is not enough to trust the socket path:
+    // the post-read metadata check must reject an expired mtime.
     use std::os::unix::net::UnixDatagram;
     use std::time::SystemTime;
 
@@ -199,8 +209,7 @@ fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
     let hb_path = h.runtime_paths.heartbeat_dir.join("sidebar.toctou.json");
     let file = std::fs::File::create(&hb_path).expect("create hb");
     serde_json::to_writer(&file, &hb).expect("write hb");
-    // Backdate mtime 60s into the past so the re-stat trips even though
-    // `last_seen` inside the JSON is current.
+    // Backdate mtime 60s into the past so the freshness check rejects it.
     let aged = SystemTime::now() - Duration::from_secs(60);
     file.set_modified(aged).expect("backdate mtime");
     drop(file);
@@ -218,6 +227,6 @@ fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
     let recv_result = recv.recv_from(&mut buf);
     assert!(
         recv_result.is_err(),
-        "aged-out mtime must block the wakeup even with fresh last_seen (got: {recv_result:?})",
+        "aged-out mtime must block the wakeup (got: {recv_result:?})",
     );
 }

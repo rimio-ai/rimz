@@ -10,7 +10,6 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use jiff::Timestamp;
 use rimz::disk::paths::RuntimePaths;
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::wakeup::events::RELOAD_CONTROL_WORD;
@@ -164,11 +163,11 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
         ),
     );
 
-    // A heartbeat whose `last_seen` is well past the TTL must be skipped even
+    // A heartbeat whose mtime is well past the TTL must be skipped even
     // though its socket is bound and listening.
     let stale_sock = runtime.sock_dir.join("event.stale.sock");
     let stale_recv = UnixDatagram::bind(&stale_sock).expect("bind stale sock");
-    let mut stale = SidebarHeartbeat::new(
+    let stale = SidebarHeartbeat::new(
         workspace_id.clone(),
         SidebarInstanceId::new(),
         MuxName::Tmux,
@@ -176,8 +175,11 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
         stale_sock,
         None,
     );
-    stale.last_seen = Timestamp::now() - Duration::from_secs(60);
     write_heartbeat(&runtime, "sidebar.stale.json", stale);
+    std::fs::File::open(runtime.heartbeat_dir.join("sidebar.stale.json"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
 
     let signaled = reload_all(&runtime).expect("reload_sidebars");
     assert_eq!(signaled, 2, "count fresh panes even when they share a host");
@@ -210,9 +212,8 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
 }
 
 fn write_heartbeat(runtime: &RuntimePaths, filename: &str, hb: SidebarHeartbeat) {
-    std::fs::write(
-        runtime.heartbeat_dir.join(filename),
-        serde_json::to_vec(&hb).expect("serialize heartbeat"),
-    )
-    .expect("write heartbeat");
+    let path = runtime.heartbeat_dir.join(filename);
+    std::fs::write(&path, serde_json::to_vec(&hb).expect("serialize heartbeat"))
+        .expect("write heartbeat");
+    crate::common::room::date_heartbeat_as_live(&path);
 }

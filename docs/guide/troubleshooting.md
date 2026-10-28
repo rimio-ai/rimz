@@ -94,7 +94,7 @@ STORAGE
 
 PROTOCOLS
   event:   rimz.event.v2
-  sidebar: rimz.plugin.v5
+  sidebar: rimz.plugin.v6
 
 TRUST
   trust: · no project config

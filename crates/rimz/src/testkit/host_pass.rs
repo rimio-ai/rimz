@@ -35,6 +35,8 @@ pub enum Counter {
     DrainClone,
     DrainPreview,
     HeartbeatWrite,
+    HeartbeatRenewal,
+    HeartbeatFailure,
     ParkRead,
     HostFold,
 }

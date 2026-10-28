@@ -41,6 +41,7 @@ use crate::mux::{
 };
 use crate::wakeup::heartbeat::{
     SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, SidebarSize, fresh_sidebar_heartbeats,
+    read_current_heartbeats,
 };
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
@@ -75,13 +76,21 @@ pub fn live_sidebars(runtime: &RuntimePaths) -> Vec<LiveSidebar> {
 /// the room matches the sidebar on screen. Every renderer converges on one
 /// room-wide width target, so the most recent beat speaks for the session.
 pub fn live_sidebar_size(runtime: &RuntimePaths, session: &str) -> Option<SidebarSize> {
-    fresh_sidebar_heartbeats(runtime)
+    read_current_heartbeats(&runtime.heartbeat_dir)
+        .ok()?
         .into_iter()
-        .filter(|heartbeat| {
+        .filter(|(_, heartbeat)| {
             heartbeat.workspace_id == runtime.workspace_id && heartbeat.session_name == session
         })
-        .filter_map(|heartbeat| Some((heartbeat.last_seen, heartbeat.size?)))
-        .max_by_key(|(last_seen, _)| *last_seen)
+        .filter_map(|(path, heartbeat)| {
+            let size = heartbeat.size?;
+            let modified = fs::metadata(path).ok()?.modified().ok()?;
+            modified
+                .elapsed()
+                .map_or(true, |age| age <= SIDEBAR_HEARTBEAT_TTL)
+                .then_some((modified, size))
+        })
+        .max_by_key(|(modified, _)| *modified)
         .map(|(_, size)| size)
 }
 

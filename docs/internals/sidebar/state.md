@@ -508,7 +508,7 @@ Unless marked, these live in the workspace runtime directory.
 
 | File | Purpose |
 | --- | --- |
-| `live/heartbeat/sidebar.<instance>.json` | Liveness for launch gating and wakeup fanout, named by the full instance id, plus the pane size that `rimz sidebar frame` draws at. |
+| `live/heartbeat/sidebar.<instance>.json` | v6 claim for launch gating and wakeup fanout, named by the full instance id, plus the pane size that `rimz sidebar frame` draws at. Freshness is its mtime, not a JSON timestamp; the freshest mtime supplies the session's size. |
 | `sock/host.<digest>.wake.sock` | The host's room datagram socket, named by a digest of mux and session to fit the AF_UNIX path limit. Every attachment's heartbeat names this same address. |
 | `lanes/focus-anchor.json` | The durable jump intent, optional card placement, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
 | `lanes/unread.json`, `live/read-marks/marks.json` | Open unread episodes and the room's locked, max-updated read marks. |
@@ -739,7 +739,7 @@ Each row is a staleness budget. The constants and the reasoning behind each live
 | Codex daemon reap | `CODEX_DAEMON_REAP_TTL` (30 s), stale after `CODEX_DAEMON_REAP_STALE` (90 s) | Codex daemon session reaping |
 | Remote link stats | Stale after `LINK_STATS_STALE` (10 s), expired after `LINK_STATS_EXPIRE` (120 s) | Footer link badge for `rimz remote connect` rooms |
 | Daemon-view repair | 30 s. A fresh, marker-satisfied frame with unchanged inputs and the same `rimzd` pane-id set as the last pass skips the authoritative check ([rimzd.md](../rimzd.md#who-repairs-and-when)). | Managed `rimzd` pane recovery, loop-watch shape repair, and configuration changes |
-| Renderer heartbeat | Written every `HEARTBEAT_WRITE_INTERVAL` (2 s), trusted for `SIDEBAR_HEARTBEAT_TTL` (5 s) | Launch freshness, wakeup fanout, and runtime cleanup |
+| Renderer heartbeat | Each attachment publishes its claim on create or change, size changes included, and renews unchanged by pathname mtime every `HEARTBEAT_WRITE_INTERVAL` (2 s). A deleted file is republished; other failures retry on every loop pass without advancing the success stamp, warning once per failure streak. Fresh through `SIDEBAR_HEARTBEAT_TTL` (5 s), equality and future mtimes included. | Launch freshness, wakeup fanout, and runtime cleanup |
 
 ### The paint clock
 

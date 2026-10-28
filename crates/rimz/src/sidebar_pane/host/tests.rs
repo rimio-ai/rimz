@@ -774,7 +774,13 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
     });
     visible.drain();
     hidden.drain();
-    let beat = room.heartbeat(&hidden_pane.instance_id).unwrap().last_seen;
+    let heartbeat_path = room
+        .runtime
+        .sidebar_heartbeat_path(&hidden_pane.instance_id);
+    let beat = std::fs::metadata(&heartbeat_path)
+        .unwrap()
+        .modified()
+        .unwrap();
 
     for (name, status) in [
         ("hidden-one", crate::agents::AgentStatus::Running),
@@ -804,7 +810,9 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
         );
     }
     eventually("the hidden heartbeat renews", || {
-        room.heartbeat(&hidden_pane.instance_id).unwrap().last_seen > beat
+        std::fs::metadata(&heartbeat_path)
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified > beat)
     });
     assert_eq!(hidden.drain(), b"", "heartbeat maintenance does not paint");
     if reveal_by_resize {

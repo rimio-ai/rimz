@@ -3,6 +3,62 @@
 
 use super::*;
 
+fn heartbeat_warnings(run: impl FnOnce()) -> usize {
+    let logs = tempfile::NamedTempFile::new().unwrap();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(std::sync::Arc::new(logs.reopen().unwrap()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, run);
+    std::fs::read_to_string(logs.path())
+        .unwrap()
+        .matches("heartbeat refresh failed")
+        .count()
+}
+
+#[test]
+fn failed_heartbeat_stays_due_and_warns_once_per_streak() {
+    let mut rig = Rig::new();
+    rig.state.pane.clock = LoopClock::wall();
+    rig.runtime.ensure_dirs().unwrap();
+    let path = rig
+        .runtime
+        .sidebar_heartbeat_path(&rig.state.pane.config.instance_id);
+    std::fs::create_dir(&path).unwrap();
+    let warnings = heartbeat_warnings(|| {
+        rig.state.run_maintenance(&mut rig.terminal);
+        rig.state.run_maintenance(&mut rig.terminal);
+    });
+    assert_eq!(warnings, 1, "a failure streak warns once");
+    assert_eq!(rig.state.pane.last_heartbeat, None);
+    std::fs::remove_dir(&path).unwrap();
+    rig.state.run_maintenance(&mut rig.terminal);
+    let success = rig
+        .state
+        .pane
+        .last_heartbeat
+        .expect("successful publication");
+    rig.state.pane.last_heartbeat =
+        Some(success - crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL);
+    let prior = rig.state.pane.last_heartbeat;
+    let saved = rig._dir.path().join("saved-heartbeats");
+    std::fs::rename(&rig.runtime.heartbeat_dir, &saved).unwrap();
+    std::fs::write(&rig.runtime.heartbeat_dir, b"not a directory").unwrap();
+    let warnings = heartbeat_warnings(|| {
+        rig.state.run_maintenance(&mut rig.terminal);
+        rig.state.run_maintenance(&mut rig.terminal);
+    });
+    assert_eq!(
+        warnings, 1,
+        "a success ends the streak, so the next failure warns"
+    );
+    assert_eq!(rig.state.pane.last_heartbeat, prior);
+    std::fs::remove_file(&rig.runtime.heartbeat_dir).unwrap();
+    std::fs::rename(saved, &rig.runtime.heartbeat_dir).unwrap();
+    rig.state.run_maintenance(&mut rig.terminal);
+    assert!(rig.state.pane.last_heartbeat > prior);
+}
+
 #[test]
 fn resize_does_not_arm_or_retime_a_layout_freeze() {
     let mut rig = Rig::new();

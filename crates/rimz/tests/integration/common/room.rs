@@ -56,7 +56,7 @@ pub fn seed_sidebar_heartbeat(
     path
 }
 
-/// A live renderer rewrites its heartbeat every beat; a one-shot seed has no
+/// A live attachment renews its heartbeat mtime every beat; a one-shot seed has no
 /// writer, so readers would rightly drop it, and the runtime-claim sweep reap
 /// it, once the test outlasts `SIDEBAR_HEARTBEAT_TTL`. Give custom heartbeat
 /// fixtures the same 24-hour lifetime as the shared seed.

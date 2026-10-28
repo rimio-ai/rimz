@@ -5,7 +5,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -17,13 +16,11 @@ use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 /// fanout treat the instance as dead and skip it.
 pub const SIDEBAR_HEARTBEAT_TTL: Duration = Duration::from_secs(5);
 
-// v5: the snapshot view-model carries explicit named-channel identity on agent
-// rows and panes. v4 carried `root_class`, and the worktree-group kind
-// vocabulary was `worktree`/`root`/`external` (the catch-all renamed from
-// `workspace`). Heartbeat readers accept only this protocol version.
-pub const SIDEBAR_PROTOCOL_VERSION: &str = "rimz.plugin.v5";
+// v6: unchanged claims renew by mtime; the record has no content-age field.
+// Heartbeat readers accept only this protocol version.
+pub const SIDEBAR_PROTOCOL_VERSION: &str = "rimz.plugin.v6";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidebarHeartbeat {
     pub protocol_version: String,
     pub workspace_id: WorkspaceId,
@@ -55,7 +52,6 @@ pub struct SidebarHeartbeat {
     /// unreadable terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<SidebarSize>,
-    pub last_seen: Timestamp,
 }
 
 /// A sidebar pane's size in terminal cells.
@@ -85,7 +81,6 @@ impl SidebarHeartbeat {
             build: None,
             version: None,
             size: None,
-            last_seen: Timestamp::now(),
         }
     }
 
@@ -104,12 +99,24 @@ impl SidebarHeartbeat {
         let bytes = std::fs::read(path)?;
         serde_json::from_slice(&bytes).map_err(std::io::Error::other)
     }
+
+    fn publish(&self, runtime: &RuntimePaths) -> Result<(), HeartbeatWriteErr> {
+        let path = runtime.sidebar_heartbeat_path(&self.instance_id);
+        let result = atomic::write_temp_then_rename_cache(&path, self)
+            .map_err(|source| HeartbeatWriteErr { path, source });
+        #[cfg(any(test, feature = "testkit"))]
+        crate::testkit::host_pass::count(if result.is_ok() {
+            crate::testkit::host_pass::Counter::HeartbeatWrite
+        } else {
+            crate::testkit::host_pass::Counter::HeartbeatFailure
+        });
+        result
+    }
 }
 
 /// Walk a heartbeat directory, decode every sidebar heartbeat file, and keep
 /// only current-protocol records. Freshness deliberately stays with callers:
-/// launch and reload check mtime TTL; wakeup fanout checks
-/// `last_seen` plus a TOCTOU re-stat; session records compare mtimes.
+/// all liveness readers check mtime TTL; session records compare mtimes.
 pub fn read_current_heartbeats(dir: &Path) -> io::Result<Vec<(PathBuf, SidebarHeartbeat)>> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -159,15 +166,69 @@ pub struct HeartbeatWriteErr {
     pub source: atomic::AtomicErr,
 }
 
+/// One attachment's last published claim; renewals retain no file descriptor.
+#[derive(Default)]
+pub(crate) struct HeartbeatLease {
+    published: Option<SidebarHeartbeat>,
+}
+
+impl HeartbeatLease {
+    pub(crate) fn renew(
+        &mut self,
+        runtime: &RuntimePaths,
+        heartbeat: &SidebarHeartbeat,
+    ) -> Result<(), HeartbeatWriteErr> {
+        if self.published.as_ref() != Some(heartbeat) {
+            heartbeat.publish(runtime)?;
+            self.published = Some(heartbeat.clone());
+            return Ok(());
+        }
+        use rustix::fs::{AtFlags, CWD, Timestamps, UTIME_NOW, UTIME_OMIT, utimensat};
+        use rustix::time::Timespec;
+
+        let path = runtime.sidebar_heartbeat_path(&heartbeat.instance_id);
+        let times = Timestamps {
+            last_access: Timespec {
+                tv_sec: 0,
+                tv_nsec: UTIME_OMIT,
+            },
+            last_modification: Timespec {
+                tv_sec: 0,
+                tv_nsec: UTIME_NOW,
+            },
+        };
+        match utimensat(CWD, &path, &times, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(()) => {
+                #[cfg(any(test, feature = "testkit"))]
+                crate::testkit::host_pass::count(
+                    crate::testkit::host_pass::Counter::HeartbeatRenewal,
+                );
+                Ok(())
+            }
+            Err(rustix::io::Errno::NOENT) => heartbeat.publish(runtime),
+            Err(source) => {
+                #[cfg(any(test, feature = "testkit"))]
+                crate::testkit::host_pass::count(
+                    crate::testkit::host_pass::Counter::HeartbeatFailure,
+                );
+                Err(HeartbeatWriteErr {
+                    source: atomic::AtomicErr::Io {
+                        path: path.clone(),
+                        source: source.into(),
+                    },
+                    path,
+                })
+            }
+        }
+    }
+}
+
 /// Write this sidebar instance's liveness heartbeat in-process.
 ///
-/// The heartbeat is a runtime liveness file, not store truth, so the renderer
-/// owns it directly rather than forking `rimz sidebar heartbeat` once per tick.
-/// The JSON shape and the atomic temp-then-rename are identical to the CLI path
-/// they replace, so the store wakeup fanout and the launch freshness gate that
-/// read it are unchanged. The heartbeat carries this process's build id when
-/// the running image is readable. The renderer ensures the runtime dirs at
-/// startup, so this only does the write.
+/// The heartbeat is disposable runtime liveness, not store truth: publication
+/// is cache-class temp-plus-rename without fsync. Attachments use a lease to
+/// renew unchanged claims by mtime instead. The record carries this process's
+/// build id when readable. The caller ensures the runtime dirs at startup.
 #[allow(clippy::too_many_arguments)]
 pub fn write_heartbeat(
     runtime: &RuntimePaths,
@@ -190,14 +251,7 @@ pub fn write_heartbeat(
     heartbeat.build = crate::build_id::current().map(str::to_owned);
     heartbeat.version = Some(crate::build_id::VERSION.to_owned());
     heartbeat.size = size;
-    let path = runtime.sidebar_heartbeat_path(instance_id);
-    // Cache-class: a heartbeat is disposable liveness, rewritten every beat
-    // and gc-swept when stale — surviving a power cut buys nothing.
-    atomic::write_temp_then_rename_cache(&path, &heartbeat)
-        .map_err(|source| HeartbeatWriteErr { path, source })?;
-    #[cfg(any(test, feature = "testkit"))]
-    crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::HeartbeatWrite);
-    Ok(())
+    heartbeat.publish(runtime)
 }
 
 /// Every fresh, current-protocol sidebar heartbeat in the workspace runtime dir.
@@ -220,6 +274,10 @@ pub(crate) fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbea
 }
 
 pub(crate) fn mtime_within_ttl(path: &Path) -> bool {
+    mtime_within_ttl_at(path, SystemTime::now)
+}
+
+fn mtime_within_ttl_at(path: &Path, now: impl FnOnce() -> SystemTime) -> bool {
     let modified = match fs::metadata(path).and_then(|meta| meta.modified()) {
         Ok(modified) => modified,
         Err(err) => {
@@ -227,7 +285,7 @@ pub(crate) fn mtime_within_ttl(path: &Path) -> bool {
             return false;
         }
     };
-    match SystemTime::now().duration_since(modified) {
+    match now().duration_since(modified) {
         Ok(age) => age <= SIDEBAR_HEARTBEAT_TTL,
         Err(_) => true,
     }
@@ -263,9 +321,11 @@ mod tests {
         };
         write().expect_err("a directory cannot be replaced by a heartbeat file");
         assert_eq!(counts.get(Counter::HeartbeatWrite), 0);
+        assert_eq!(counts.get(Counter::HeartbeatFailure), 1);
         fs::remove_dir(path).unwrap();
         write().unwrap();
         assert_eq!(counts.get(Counter::HeartbeatWrite), 1);
+        assert_eq!(counts.get(Counter::HeartbeatFailure), 1);
         assert_eq!(fresh_sidebar_heartbeats(&runtime).len(), 1);
         assert_eq!(counts.get(Counter::HeartbeatWrite), 1);
     }
@@ -279,7 +339,6 @@ mod tests {
             "mux": "tmux",
             "session_name": "rimz-test",
             "wakeup_socket": "/tmp/sidebar.sock",
-            "last_seen": Timestamp::now(),
         });
 
         let heartbeat: SidebarHeartbeat =
@@ -301,5 +360,158 @@ mod tests {
             !encoded.contains("\"size\""),
             "None size stays absent from heartbeat JSON",
         );
+    }
+
+    fn lease_fixture() -> (tempfile::TempDir, RuntimePaths, SidebarHeartbeat) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let heartbeat = SidebarHeartbeat::new(
+            workspace,
+            SidebarInstanceId::new(),
+            MuxName::Tmux,
+            "rimz-test",
+            runtime.sidebar_host_wake_socket_path(MuxName::Tmux, "rimz-test"),
+            Some(PaneId::from_parts(MuxName::Tmux, "%1")),
+        );
+        (dir, runtime, heartbeat)
+    }
+
+    #[test]
+    fn heartbeat_v6_has_no_content_clock() {
+        let (_dir, _runtime, heartbeat) = lease_fixture();
+        let record = serde_json::to_value(heartbeat).unwrap();
+        assert_eq!(record["protocol_version"], "rimz.plugin.v6");
+        assert_eq!(
+            record
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "protocol_version",
+                "workspace_id",
+                "instance_id",
+                "mux",
+                "session_name",
+                "wakeup_socket",
+                "pane_id",
+            ]),
+        );
+    }
+
+    #[test]
+    fn unchanged_lease_renewals_keep_bytes_and_inode_across_ttls() {
+        use crate::testkit::host_pass::{Counter, thread_counters};
+        use std::os::unix::fs::MetadataExt;
+
+        let (_dir, runtime, heartbeat) = lease_fixture();
+        let path = runtime.sidebar_heartbeat_path(&heartbeat.instance_id);
+        let mut lease = HeartbeatLease::default();
+        let counts = thread_counters();
+        counts.reset();
+        lease.renew(&runtime, &heartbeat).unwrap();
+        assert!(path.is_file(), "the initial claim must be published");
+        let original = fs::File::open(&path).unwrap();
+        let inode = original.metadata().unwrap().ino();
+        let bytes = fs::read(&path).unwrap();
+        for _ in 0..3 {
+            let expired = SystemTime::now() - SIDEBAR_HEARTBEAT_TTL * 2;
+            fs::File::open(&path)
+                .unwrap()
+                .set_modified(expired)
+                .unwrap();
+            assert!(!mtime_within_ttl(&path));
+            lease.renew(&runtime, &heartbeat).unwrap();
+            let metadata = fs::metadata(&path).unwrap();
+            assert!(metadata.modified().unwrap() > expired);
+            assert_eq!(metadata.ino(), inode);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(fresh_sidebar_heartbeats(&runtime).len(), 1);
+            assert_eq!(crate::wakeup::reload_all(&runtime).unwrap(), 1);
+        }
+        assert_eq!(counts.get(Counter::HeartbeatWrite), 1);
+        assert_eq!(counts.get(Counter::HeartbeatRenewal), 3);
+        assert_eq!(counts.get(Counter::HeartbeatFailure), 0);
+    }
+
+    #[test]
+    fn lease_claim_changes_publish_in_full_immediately() {
+        use std::os::unix::fs::MetadataExt;
+
+        let (_dir, runtime, heartbeat) = lease_fixture();
+        let mut prior = runtime.sidebar_heartbeat_path(&heartbeat.instance_id);
+        atomic::write_temp_then_rename_cache(&prior, &heartbeat).unwrap();
+        let mut lease = HeartbeatLease::default();
+        lease.renew(&runtime, &heartbeat).unwrap();
+        let mut pane = heartbeat.clone();
+        pane.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%2"));
+        let mut build = pane.clone();
+        build.build = Some("new-build".into());
+        let mut size = build.clone();
+        size.size = Some(SidebarSize { cols: 60, rows: 40 });
+        let mut instance = size.clone();
+        instance.instance_id = SidebarInstanceId::new();
+        for claim in [pane, build, size, instance] {
+            let original = fs::File::open(&prior).unwrap();
+            lease.renew(&runtime, &claim).unwrap();
+            let path = runtime.sidebar_heartbeat_path(&claim.instance_id);
+            assert!(path.is_file(), "a changed claim must be published");
+            let published = SidebarHeartbeat::read_from(&path).unwrap();
+            assert_eq!(
+                serde_json::to_value(published).unwrap(),
+                serde_json::to_value(&claim).unwrap()
+            );
+            assert_ne!(
+                fs::metadata(&path).unwrap().ino(),
+                original.metadata().unwrap().ino()
+            );
+            prior = path;
+        }
+    }
+
+    #[test]
+    fn deleted_lease_record_is_republished_and_other_errors_retry() {
+        use crate::testkit::host_pass::{Counter, thread_counters};
+
+        let (dir, runtime, heartbeat) = lease_fixture();
+        let path = runtime.sidebar_heartbeat_path(&heartbeat.instance_id);
+        atomic::write_temp_then_rename_cache(&path, &heartbeat).unwrap();
+        let mut lease = HeartbeatLease::default();
+        lease.renew(&runtime, &heartbeat).unwrap();
+        let counts = thread_counters();
+        counts.reset();
+        fs::remove_file(&path).unwrap();
+        lease.renew(&runtime, &heartbeat).unwrap();
+        assert!(path.is_file(), "a deleted record must be recreated");
+        assert_eq!(counts.get(Counter::HeartbeatWrite), 1);
+        assert_eq!(counts.get(Counter::HeartbeatRenewal), 0);
+
+        let saved = dir.path().join("saved-heartbeats");
+        fs::rename(&runtime.heartbeat_dir, &saved).unwrap();
+        fs::write(&runtime.heartbeat_dir, b"not a directory").unwrap();
+        assert!(lease.renew(&runtime, &heartbeat).is_err());
+        assert_eq!(counts.get(Counter::HeartbeatFailure), 1);
+        assert_eq!(counts.get(Counter::HeartbeatRenewal), 0);
+        fs::remove_file(&runtime.heartbeat_dir).unwrap();
+        fs::rename(saved, &runtime.heartbeat_dir).unwrap();
+        lease.renew(&runtime, &heartbeat).unwrap();
+        assert_eq!(counts.get(Counter::HeartbeatRenewal), 1);
+        assert_eq!(counts.get(Counter::HeartbeatFailure), 1);
+    }
+
+    #[test]
+    fn heartbeat_mtime_ttl_includes_equality_and_future_dates() {
+        let (_dir, runtime, heartbeat) = lease_fixture();
+        let path = runtime.sidebar_heartbeat_path(&heartbeat.instance_id);
+        atomic::write_temp_then_rename_cache(&path, &heartbeat).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(mtime_within_ttl_at(&path, || modified + SIDEBAR_HEARTBEAT_TTL));
+        assert!(!mtime_within_ttl_at(&path, || modified
+            + SIDEBAR_HEARTBEAT_TTL
+            + Duration::from_nanos(1)));
+        assert!(mtime_within_ttl_at(&path, || modified - Duration::from_secs(1)));
     }
 }

@@ -267,6 +267,8 @@ pub(super) struct PaneState {
     next_frame: Instant,
     last_self_close_check: Instant,
     last_heartbeat: Option<Instant>,
+    heartbeat: crate::wakeup::heartbeat::HeartbeatLease,
+    heartbeat_failing: bool,
     prev_width: Option<u16>,
     caps_refresh_deadline: Option<Instant>,
     width_control: WidthController,
@@ -616,6 +618,8 @@ impl LoopState {
                 next_frame: now,
                 last_self_close_check: now,
                 last_heartbeat: None,
+                heartbeat: crate::wakeup::heartbeat::HeartbeatLease::default(),
+                heartbeat_failing: false,
                 prev_width: initial_width,
                 caps_refresh_deadline: None,
                 width_control,
@@ -766,6 +770,33 @@ impl LoopState {
             return true;
         }
         self.observed_watched()
+    }
+
+    pub(super) fn refresh_heartbeat(&mut self, terminal: &Terminal<PaneBackend>) {
+        if !self.pane.clock.effects_enabled() || !heartbeat_write_due(self.pane.last_heartbeat) {
+            return;
+        }
+        let attempted_at = self.pane.clock.now();
+        let result = write_heartbeat(
+            &self.pane.config,
+            &self.pane.runtime,
+            &self.pane.host_wake_path,
+            terminal.backend().pane_size(),
+            &mut self.pane.heartbeat,
+        );
+        let failed = result.is_err();
+        match result {
+            Ok(()) => self.pane.last_heartbeat = Some(attempted_at),
+            // A failure leaves the write due, so it retries on every pass; one warning
+            // per failure streak keeps a persistent fault from flooding the host log.
+            Err(err) if !self.pane.heartbeat_failing => warn!(
+                session = %self.pane.config.room.session_name,
+                error = %err,
+                "heartbeat refresh failed",
+            ),
+            Err(err) => debug!(error = %err, "heartbeat refresh still failing"),
+        }
+        self.pane.heartbeat_failing = failed;
     }
 
     pub(super) fn on_snapshot(&mut self) {
@@ -1919,23 +1950,7 @@ impl LoopState {
             self.pane.fetch.request_if_idle(FetchRequest::default());
         }
 
-        // Heartbeat: fast in-process atomic write on the main thread so the
-        // exit path never races a background writer.
-        if self.pane.clock.effects_enabled() && heartbeat_write_due(self.pane.last_heartbeat) {
-            self.pane.last_heartbeat = Some(self.pane.clock.now());
-            if let Err(err) = write_heartbeat(
-                &self.pane.config,
-                &self.pane.runtime,
-                &self.pane.host_wake_path,
-                terminal.backend().pane_size(),
-            ) {
-                warn!(
-                    session = %self.pane.config.room.session_name,
-                    error = %err,
-                    "heartbeat write failed",
-                );
-            }
-        }
+        self.refresh_heartbeat(terminal);
 
         // Self-close watchdog: if no resize or presence event fired, ask the
         // normal snapshot path to refresh so the snapshot's own-view count can
@@ -2427,6 +2442,8 @@ impl PaneState {
             // Maintenance stamps, read against `current`.
             last_self_close_check: _,
             last_heartbeat: _,
+            heartbeat: _,
+            heartbeat_failing: _,
             // Baseline reporting, read from `ui` outside the fold.
             last_reported_baseline: _,
             painted_baseline: _,

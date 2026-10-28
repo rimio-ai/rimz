@@ -399,9 +399,10 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
     wait_for_mouse_capture(&server, &pane);
     assert_click_wheel_tracking_only(&server, &pane);
     let heartbeat = wait_for_sidebar_heartbeat(&env);
-    let startup_seen = rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
-        .expect("read initial sidebar heartbeat")
-        .last_seen;
+    let startup_seen = std::fs::metadata(&heartbeat)
+        .expect("stat initial sidebar heartbeat")
+        .modified()
+        .expect("heartbeat mtime");
     // Let the startup maintenance heartbeat land before taking the baseline.
     // The old worker then cannot publish another heartbeat during the reload,
     // so a newer timestamp confirms that the replacement worker is live.
@@ -431,8 +432,9 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
                 handoff_started.elapsed(),
             );
         }
-        if rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
-            .is_ok_and(|heartbeat| heartbeat.last_seen > initial_seen)
+        if std::fs::metadata(&heartbeat)
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified > initial_seen)
         {
             break;
         }
@@ -489,13 +491,13 @@ fn wait_for_sidebar_heartbeat(env: &Env) -> PathBuf {
     }
 }
 
-fn wait_for_heartbeat_after(path: &Path, prior: jiff::Timestamp) -> jiff::Timestamp {
+fn wait_for_heartbeat_after(path: &Path, prior: std::time::SystemTime) -> std::time::SystemTime {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(heartbeat) = rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(path)
-            && heartbeat.last_seen > prior
+        if let Ok(modified) = std::fs::metadata(path).and_then(|metadata| metadata.modified())
+            && modified > prior
         {
-            return heartbeat.last_seen;
+            return modified;
         }
         assert!(
             Instant::now() < deadline,
