@@ -2,10 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::agents::WorkflowAttemptRef;
+use crate::Store;
+use crate::agents::{AgentState, WorkflowAttemptRef};
 use crate::harness::schedule::takeover::OpenTurn;
+use crate::ids::{RunId, WorkflowRunId};
+use crate::store::StoreErr;
 use crate::store::run::RunStatus;
-use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited};
+use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited, TurnEnd};
 
 mod engine;
 mod script;
@@ -73,8 +76,13 @@ pub trait AttemptHost {
     fn occupancy(&self, scope: &Path, project_root: &Path) -> Result<Occupancy, WorkflowErr>;
     fn evict(&self, scope: &Path, project_root: &Path) -> Result<Vec<String>, WorkflowErr>;
     fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, LaunchFailure>, WorkflowErr>;
-    fn observe(&self, run: &AttemptRun) -> Result<Observed, WorkflowErr>;
+    fn observe(&self, run: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr>;
     fn stop(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
+}
+
+pub enum Observation {
+    Attempt,
+    LeaderTurn,
 }
 
 pub enum Occupancy {
@@ -98,6 +106,58 @@ pub struct Observed {
     pub limited: Option<Limited>,
     pub children: Children,
     pub cost_usd: Option<f64>,
+    pub turn: Option<LeaderTurn>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LeaderTurn {
+    pub end: TurnEnd,
+    pub at_rest: bool,
+}
+
+/// Read the leader's closed turn and current eligibility while holding the workspace lock.
+pub fn leader_turn(
+    store: &Store,
+    leader: &AgentState,
+    run: &WorkflowRunId,
+    session: &RunId,
+) -> Result<Option<LeaderTurn>, StoreErr> {
+    let Some((started_at, ended_at)) = leader.turn_started_at.zip(leader.turn_ended_at) else {
+        return Ok(None);
+    };
+    if ended_at < started_at {
+        return Ok(None);
+    }
+    let mut turn = LeaderTurn {
+        end: TurnEnd {
+            agent_id: leader.agent_id.clone(),
+            started_at,
+            ended_at,
+        },
+        at_rest: false,
+    };
+    if super::idle_stop::resting(leader).is_err() {
+        return Ok(Some(turn));
+    }
+    let messages = store.list_messages()?;
+    let runs = super::run::listing(store.paths())?;
+    let other_runs: Vec<_> = runs
+        .iter()
+        .filter(|run| &run.run_id != session)
+        .cloned()
+        .collect();
+    if super::idle_stop::debt(store, &messages, &other_runs, leader)?.is_some() {
+        return Ok(Some(turn));
+    }
+    let cursor = crate::store::ingress::read_cursor(store.paths())?;
+    let (pending, _) = crate::store::ingress::read_from_offset(store.paths(), cursor.applied)?;
+    turn.at_rest = !pending.iter().any(|(frame, _)| {
+        frame
+            .env
+            .get("RIMZ_WORKFLOW_RUN")
+            .is_some_and(|id| id == run.as_str())
+    });
+    Ok(Some(turn))
 }
 
 pub struct LaunchFailure {
