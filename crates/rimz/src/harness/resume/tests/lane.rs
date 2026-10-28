@@ -669,6 +669,405 @@ fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
     );
 }
 
+fn split_team_restore(root: &Path) -> LaneRestoreConfig {
+    let (mut teams, profiles, commands) = team_configs();
+    let team = teams.0.get_mut("forge").unwrap();
+    for (role, stage) in team.roles.iter_mut().zip(["Plan", "Code"]) {
+        role.owns = vec![stage.into()];
+        let prompt = root.join(format!("{}.md", role.role));
+        std::fs::write(&prompt, format!("{} instructions", role.role)).unwrap();
+        role.system_prompt_file = Some(crate::config::PromptSource::File(prompt));
+    }
+    team.roles[0].args = Some("--role-arg".into());
+    let prompt = root.join("team.md");
+    std::fs::write(&prompt, "Team instructions").unwrap();
+    team.append_system_prompt_files = vec![crate::config::PromptSource::File(prompt)];
+    LaneRestoreConfig {
+        teams,
+        profiles,
+        subagent_profiles: ProfilesConfig::default(),
+        commands,
+        failed_definitions: BTreeMap::new(),
+    }
+}
+
+fn split_member(id: &str, role: &str, secs_ago: i64) -> AgentState {
+    let (kind, profile) = if role == "coder" {
+        ("codex", "codex-code")
+    } else {
+        ("claude", "claude-plan")
+    };
+    AgentState {
+        profile: Some(profile.into()),
+        name: Some(id.into()),
+        name_explicit: true,
+        channel: Some("lane".into()),
+        ..team_agent(kind, id, role, "/lane", secs_ago)
+    }
+}
+
+fn split_lane<'a>(agents: &'a [AgentState], restore: LaneRestoreConfig) -> LaneCase<'a> {
+    LaneCase::new(LaneResumeSelector::Current, agents)
+        .current_root("/lane")
+        .liveness(|agent| {
+            if agent.agent_id.as_str() == "live" {
+                live(agent)
+            } else {
+                dead(agent)
+            }
+        })
+        .restore(|| Ok(restore))
+}
+
+#[test]
+fn lane_split_keeps_the_fresh_role_and_team_prompt_layers() {
+    let root = tempfile::tempdir().unwrap();
+    let restore = split_team_restore(root.path());
+    let fresh = crate::harness::spec::resolve_team(
+        "forge",
+        &restore.teams,
+        &restore.profiles,
+        &restore.commands,
+    )
+    .unwrap();
+    let planner = fresh.agent_cells().next().unwrap();
+    assert!(planner.team_prompt.is_some());
+    let agents = [
+        split_member("live", "coder", 1),
+        split_member("closed", "planner", 2),
+    ];
+    let LaneResumeAction::SplitClosed {
+        commands, warnings, ..
+    } = split_lane(&agents, restore).run().unwrap()
+    else {
+        panic!("expected partial split");
+    };
+    let request = decode_exec_request(&commands[0].argv);
+    assert_eq!(request.team_prompt, planner.team_prompt);
+    assert_eq!(request.system_prompt_file, planner.system_prompt_file);
+    let crate::harness::launch::ExecAction::Resume { extra_args, .. } = request.action else {
+        panic!("expected resume");
+    };
+    assert!(extra_args.iter().any(|arg| arg == "--role-arg"));
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn lane_split_resumes_when_the_role_supplies_the_solo_profiles_missing_base_prompt() {
+    let root = tempfile::tempdir().unwrap();
+    let mut restore = split_team_restore(root.path());
+    let prompt = root.path().join("solo.md");
+    std::fs::write(&prompt, "Solo instructions").unwrap();
+    let profile = restore.profiles.0.get_mut("claude-plan").unwrap();
+    profile.append_system_prompt_files = vec![crate::config::PromptSource::File(prompt)];
+    assert!(matches!(
+        posture_for("claude", Some("claude-plan"), None, &restore.profiles).degraded,
+        Some(PostureDegrade::PromptUnsupported { .. })
+    ));
+    let agents = [
+        split_member("live", "coder", 1),
+        split_member("closed", "planner", 2),
+    ];
+    let plan = split_lane(&agents, restore).run();
+    assert!(
+        matches!(plan, Ok(LaneResumeAction::SplitClosed { .. })),
+        "{plan:?}"
+    );
+    let LaneResumeAction::SplitClosed {
+        commands, warnings, ..
+    } = plan.unwrap()
+    else {
+        unreachable!();
+    };
+    let request = decode_exec_request(&commands[0].argv);
+    assert!(request.team_prompt.is_some());
+    assert!(request.system_prompt_file.is_some());
+    assert_eq!(request.append_system_prompt_files.len(), 1);
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn lane_split_warns_with_the_missing_teams_definition_cause() {
+    let root = tempfile::tempdir().unwrap();
+    let agents = [
+        split_member("live", "coder", 1),
+        split_member("closed", "planner", 2),
+    ];
+    let failure = "/definitions/teams/forge.md: invalid team";
+    let multiple =
+        format!("{failure}\n\n/definitions/teams/forge/TEAM.md: duplicate team definition");
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for cause in [None, Some(failure), Some(multiple.as_str())] {
+        let mut restore = split_team_restore(root.path());
+        restore.teams.0.clear();
+        if let Some(cause) = cause {
+            restore
+                .failed_definitions
+                .insert("forge".into(), cause.into());
+        }
+        let LaneResumeAction::SplitClosed {
+            commands, warnings, ..
+        } = split_lane(&agents, restore).run().unwrap()
+        else {
+            panic!("expected partial split");
+        };
+        assert_eq!(decode_exec_request(&commands[0].argv).team_prompt, None);
+        actual.push(warnings);
+        let cause =
+            cause.unwrap_or("the config read for recovery has no definition for team `forge`");
+        let consequence = "members @planner#lane resume as individual sessions \
+                           without the team's prompt layers";
+        expected.push(vec![if cause.contains('\n') {
+            format!("cannot restore team `forge` in #lane: {consequence}\n{cause}")
+        } else {
+            format!("cannot restore team `forge` in #lane: {cause}; {consequence}")
+        }]);
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn lane_split_warns_when_the_recorded_role_is_no_longer_bound() {
+    let root = tempfile::tempdir().unwrap();
+    let mut closed = split_member("closed", "planner", 2);
+    closed.role = Some("retired".into());
+    let agents = [split_member("live", "coder", 1), closed];
+    let LaneResumeAction::SplitClosed {
+        commands, warnings, ..
+    } = split_lane(&agents, split_team_restore(root.path()))
+        .run()
+        .unwrap()
+    else {
+        panic!("expected partial split");
+    };
+    assert_eq!(decode_exec_request(&commands[0].argv).team_prompt, None);
+    assert_eq!(
+        warnings,
+        [
+            "cannot restore team `forge` in #lane: team `forge` has no role `retired`; \
+         declared roles: planner, coder; members @retired#lane resume as individual sessions \
+         without the team's prompt layers"
+        ]
+    );
+}
+
+#[test]
+fn lane_split_rejected_team_prompt_keeps_the_solo_profile() {
+    let root = tempfile::tempdir().unwrap();
+    let mut restore = split_team_restore(root.path());
+    restore.teams.0.get_mut("forge").unwrap().roles[0].system_prompt_file = None;
+    let profile = restore.profiles.0.get_mut("claude-plan").unwrap();
+    profile.model = Some("sonnet".into());
+    let agents = [
+        split_member("live", "coder", 1),
+        split_member("closed", "planner", 2),
+    ];
+    let LaneResumeAction::SplitClosed {
+        commands, warnings, ..
+    } = split_lane(&agents, restore).run().unwrap()
+    else {
+        panic!("expected partial split");
+    };
+    let request = decode_exec_request(&commands[0].argv);
+    assert_eq!(request.team_prompt, None);
+    assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
+    assert_eq!(
+        warnings,
+        [format!(
+            "cannot restore team `forge` in #lane: team `forge` sets consensus-file or \
+         append-system-prompt-files but role `planner` (claude) has no base system prompt to \
+         compose them onto; add system-prompt-file to role planner or its profile, or write {} \
+         with a nonempty body as the claude kind base (run `rimz agents validate` if it did not \
+         load); members @planner#lane resume as individual sessions \
+         without the team's prompt layers",
+            crate::disk::paths::agents_home()
+                .join("agents/claude.md")
+                .display()
+        )]
+    );
+}
+
+#[test]
+fn lane_split_groups_missing_team_notices_and_excludes_skipped_members() {
+    let root = tempfile::tempdir().unwrap();
+    let mut restore = split_team_restore(root.path());
+    restore.teams.0.clear();
+    let agents = [
+        split_member("live", "coder", 1),
+        split_member("older", "planner", 4),
+        split_member("skipped", "planner", 2),
+        split_member("newer", "planner", 3),
+    ];
+    let LaneResumeAction::SplitClosed {
+        commands,
+        warnings,
+        skipped,
+        ..
+    } = split_lane(&agents, restore)
+        .session_backed(|agent| agent.agent_id.as_str() != "skipped")
+        .run()
+        .unwrap()
+    else {
+        panic!("expected partial split");
+    };
+    assert_eq!(commands.len(), 2);
+    for command in commands {
+        assert_eq!(decode_exec_request(&command.argv).team_prompt, None);
+    }
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].reason, ResumeSkipReason::NoConversation);
+    assert_eq!(
+        warnings,
+        [
+            "cannot restore team `forge` in #lane: the config read for recovery has no definition \
+         for team `forge`; members @newer#lane, @older#lane resume as individual sessions \
+         without the team's prompt layers"
+        ]
+    );
+}
+
+#[test]
+fn lane_split_missing_profile_keeps_only_the_existing_solo_warning() {
+    let root = tempfile::tempdir().unwrap();
+    let mut restore = split_team_restore(root.path());
+    restore.profiles.0.remove("claude-plan");
+    let reason = posture_for("claude", Some("claude-plan"), None, &restore.profiles)
+        .degraded
+        .unwrap();
+    let agents = [
+        split_member("live", "coder", 1),
+        split_member("closed", "planner", 2),
+    ];
+    let LaneResumeAction::SplitClosed {
+        commands, warnings, ..
+    } = split_lane(&agents, restore).run().unwrap()
+    else {
+        panic!("expected partial split");
+    };
+    let request = decode_exec_request(&commands[0].argv);
+    assert_eq!(request.team_prompt, None);
+    assert_eq!(request.system_prompt_file, None);
+    assert_eq!(warnings, [format!("{reason}; resuming bare")]);
+}
+
+#[test]
+fn lane_split_role_notice_does_not_name_a_restored_teammate() {
+    let root = tempfile::tempdir().unwrap();
+    let mut retired = split_member("retired", "coder", 2);
+    retired.role = Some("retired".into());
+    let agents = [
+        split_member("live", "coder", 1),
+        split_member("closed", "planner", 3),
+        retired,
+    ];
+    let LaneResumeAction::SplitClosed {
+        commands, warnings, ..
+    } = split_lane(&agents, split_team_restore(root.path()))
+        .run()
+        .unwrap()
+    else {
+        panic!("expected partial split");
+    };
+    let prompts = commands
+        .iter()
+        .map(|command| decode_exec_request(&command.argv).team_prompt.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        warnings,
+        [
+            "cannot restore team `forge` in #lane: team `forge` has no role `retired`; \
+         declared roles: planner, coder; members @retired#lane resume as individual sessions \
+         without the team's prompt layers"
+        ]
+    );
+    assert_eq!(prompts, [false, true]);
+}
+
+#[test]
+fn lane_split_notices_follow_solo_warnings_in_first_affected_member_order() {
+    let root = tempfile::tempdir().unwrap();
+    let restore = split_team_restore(root.path());
+    let mut newer = split_member("newer", "planner", 2);
+    newer.role = Some("retired".into());
+    let mut older = split_member("older", "planner", 3);
+    older.team = Some("unavailable".into());
+    older.profile = Some("missing".into());
+    let reason = posture_for("claude", Some("missing"), None, &restore.profiles)
+        .degraded
+        .unwrap();
+    let agents = [split_member("live", "coder", 1), older, newer];
+    let LaneResumeAction::SplitClosed {
+        commands, warnings, ..
+    } = split_lane(&agents, restore).run().unwrap()
+    else {
+        panic!("expected partial split");
+    };
+    for command in commands {
+        assert_eq!(decode_exec_request(&command.argv).team_prompt, None);
+    }
+    assert_eq!(
+        warnings,
+        [
+            format!("{reason}; resuming bare"),
+            "cannot restore team `forge` in #lane: team `forge` has no role `retired`; \
+         declared roles: planner, coder; members @retired#lane resume as individual sessions \
+         without the team's prompt layers"
+                .into(),
+            "cannot restore team `unavailable` in #lane: the config read for recovery has no \
+         definition for team `unavailable`; members @planner#lane resume as individual \
+         sessions without the team's prompt layers"
+                .into(),
+        ]
+    );
+}
+
+#[test]
+fn lane_split_notices_exclude_members_skipped_for_unsupported_prompts() {
+    let root = tempfile::tempdir().unwrap();
+    let mut restore = split_team_restore(root.path());
+    restore.teams.0.clear();
+    let mut unsupported = profile("claude");
+    unsupported.append_system_prompt_files = vec![crate::config::PromptSource::Text {
+        origin: "/solo.md".into(),
+        text: "Solo instructions without a base".into(),
+    }];
+    restore.profiles.0.insert("unsupported".into(), unsupported);
+    let mut skipped = split_member("skipped", "planner", 2);
+    skipped.profile = Some("unsupported".into());
+    let reason = posture_for("claude", Some("unsupported"), None, &restore.profiles)
+        .degraded
+        .unwrap();
+    let agents = [
+        split_member("live", "coder", 1),
+        skipped,
+        split_member("closed", "planner", 3),
+    ];
+    let LaneResumeAction::SplitClosed {
+        commands,
+        warnings,
+        skipped,
+        ..
+    } = split_lane(&agents, restore).run().unwrap()
+    else {
+        panic!("expected partial split");
+    };
+    assert_eq!(commands.len(), 1);
+    assert_eq!(decode_exec_request(&commands[0].argv).team_prompt, None);
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].reason, ResumeSkipReason::PromptUnsupported);
+    assert_eq!(
+        warnings,
+        [
+            format!("{reason}; not resuming"),
+            "cannot restore team `forge` in #lane: the config read for recovery has no definition \
+         for team `forge`; members @closed#lane resume as individual sessions \
+         without the team's prompt layers"
+                .into(),
+        ]
+    );
+}
+
 #[test]
 fn lane_rejects_provisional_or_unbacked_conversations() {
     let provisional = [agent("codex", "launch_pending", "/lane", 1)];
