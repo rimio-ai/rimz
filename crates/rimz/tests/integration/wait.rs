@@ -1650,6 +1650,8 @@ fn watched_failure_preserves_full_output_and_delivers_its_summary() {
         "{logs}"
     );
     assert!(logs.contains(&path.display().to_string()), "{logs}");
+    #[cfg(target_os = "linux")]
+    wait_for_loop_runs_to_exit(&env, &records[0].task);
     let output = env
         .rimz()
         .args(["loop", "show", &records[0].task])
@@ -1801,6 +1803,8 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     let logs = wait_ok(&env, &["loop", "logs", name]);
     assert!(logs.contains(&verdict.label()), "{logs}");
     assert!(logs.contains(&path.display().to_string()), "{logs}");
+    #[cfg(target_os = "linux")]
+    wait_for_loop_runs_to_exit(&env, &records[0].task);
     let output = env
         .rimz()
         .args(["loop", "show", &records[0].task])
@@ -2846,6 +2850,27 @@ fn wait_for_wait_messages(env: &Env, count: usize) -> Vec<MessageRecord> {
 fn wait_for_no_wait_instances(env: &Env) {
     wait_until(env, "wait instance was not retired", || {
         wait_instances(env).0.is_empty()
+    });
+}
+
+/// A delivering `rimz loop run` appends its terminal record before it releases
+/// its run lock, and `loop show` reads that held lock with no row as a run in
+/// flight, so a read after the record waits for the runner to exit.
+#[cfg(target_os = "linux")]
+fn wait_for_loop_runs_to_exit(env: &Env, task: &str) {
+    let spec = rimz::testkit::sandbox::SandboxSpec {
+        home_root: env.home_root.clone(),
+        runtime_root: env.runtime_root.clone(),
+    };
+    wait_until(env, &format!("`rimz loop run {task}` did not exit"), || {
+        !rimz::testkit::sandbox::sandbox_processes(&spec)
+            .into_iter()
+            .filter_map(rimz::proc::argv)
+            .any(|argv| {
+                ["loop", "run", task]
+                    .iter()
+                    .all(|word| argv.iter().any(|arg| arg == word))
+            })
     });
 }
 
