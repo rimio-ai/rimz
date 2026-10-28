@@ -726,11 +726,11 @@ fn carried_base(
         state.task = prior.task.clone();
         state.first_prompt = prior.first_prompt.clone();
         state.prompt = prior.prompt.clone();
+        state.prompt_wake_only = prior.prompt_wake_only;
         state.description = prior.description.clone();
         event::carry_lifetime_fields(&mut state, prior);
         state.origin = prior.origin;
         state.compacted_from = prior.compacted_from.clone();
-        state.recent_prompts = prior.recent_prompts.clone();
         state.model = prior.model.clone();
         state.effort = prior.effort.clone();
         state.budget = prior.budget.clone();
@@ -934,7 +934,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     if let Some(prompt) = input.observation.prompt.as_deref()
         && !state.ping_turn
     {
-        state.observe_prompt(prompt);
+        state.observe_prompt(prompt, crate::store::message::prompt_is_wake_only(prompt));
     }
     if let Some(description) = &input.observation.description {
         state.description = Some(description.clone());
@@ -1064,7 +1064,7 @@ fn assemble_launch_state(
         state.runtime_owner = Some(runtime_owner.clone());
     }
     if let Some(prompt) = payload.prompt.as_deref() {
-        state.observe_prompt(prompt);
+        state.observe_prompt(prompt, crate::store::message::prompt_is_wake_only(prompt));
     }
     let (status, phase) = match payload.state {
         AgentLaunchState::Failed => (AgentStatus::Failed, lifecycle::TurnPhase::Idle),

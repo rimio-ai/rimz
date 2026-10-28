@@ -369,25 +369,14 @@ fn cold_carryover_trims_ended_text_and_shares_the_parse_with_audit_reads() {
         let (_, agents, _) = RollupCursor::new().fold(&paths).expect("cold fold");
         assert_eq!(carryover_bytes_parsed() - before, carryover_len);
         for agent in agents.iter() {
-            if agent.ended_at.is_none() {
-                assert!(agent.first_prompt.is_some());
-                assert!(!agent.recent_prompts.is_empty());
-                if let Some(pane) = &agent.pane {
-                    assert!(pane.foreground_cmdline.is_some());
-                    assert!(pane.spawn_command.is_some());
-                }
-                continue;
+            for label in [&agent.first_prompt, &agent.prompt] {
+                let label = label.as_deref().expect("prompt label");
+                assert!(label.chars().count() <= 160, "bounded prompt label");
+                assert_eq!(label.lines().count(), 1);
             }
-            let first_prompt = agent.first_prompt.as_deref().expect("ended prompt prefix");
-            assert!(first_prompt.chars().count() <= 160, "bounded ended prefix");
-            assert_eq!(first_prompt.lines().count(), 1);
-            let prompt = agent.prompt.as_deref().expect("ended latest prompt label");
-            assert!(prompt.chars().count() <= 160);
-            assert_eq!(prompt.lines().count(), 1);
-            assert!(agent.recent_prompts.is_empty());
             if let Some(pane) = &agent.pane {
-                assert!(pane.foreground_cmdline.is_none());
-                assert!(pane.spawn_command.is_none());
+                assert_eq!(pane.foreground_cmdline.is_some(), agent.ended_at.is_none());
+                assert_eq!(pane.spawn_command.is_some(), agent.ended_at.is_none());
             }
         }
     })
@@ -557,6 +546,5 @@ fn post_rotation_end_keeps_new_prompt_labels() {
             assert_eq!(advanced.ended_at, carried.ended_at);
             assert_eq!(advanced.last_seen, carried.last_seen);
         }
-        assert!(advanced.recent_prompts.is_empty());
     }
 }

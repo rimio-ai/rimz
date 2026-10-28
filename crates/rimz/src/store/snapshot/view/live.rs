@@ -663,7 +663,7 @@ fn merge_bound_local_session(
                 state.phase = TurnPhase::Idle;
                 state.task = None;
                 state.prompt = None;
-                state.recent_prompts.clear();
+                state.prompt_wake_only = false;
                 state.usage.context_pct = None;
                 state.turn_started_at = None;
                 state.user_turn_started_at = None;
@@ -695,7 +695,7 @@ fn apply_local_lifecycle(
     state.phase = projection.phase;
     state.task = projection.native_prompt_detail.clone();
     if let Some(prompt) = projection.latest_prompt.as_deref() {
-        state.observe_prompt(prompt);
+        state.observe_prompt(prompt, crate::store::message::prompt_is_wake_only(prompt));
     }
     state.usage.context_pct = projection.context_pct;
     state.waiting_since = projection

@@ -17,9 +17,7 @@ use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus, Turn
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::EventKind;
 use crate::store::event_log;
-use crate::store::message::{
-    HarnessNotice, MessageRecord, MessageSender, MessageStatus, prompt_is_wake_only,
-};
+use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, MessageStatus};
 use crate::store::run::RunStatus;
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -606,7 +604,7 @@ impl TurnWaitView {
         CardView {
             status: self.status(agent),
             turn_started_at: agent.turn_started_at,
-            wake_turn: agent.prompt.as_deref().is_some_and(prompt_is_wake_only),
+            wake_turn: agent.prompt_wake_only,
         }
     }
 }
