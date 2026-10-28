@@ -405,9 +405,12 @@ fn rendering_clients_allowed(clients: &[RenderingClient], probe: &impl Probe) ->
     {
         return true;
     }
+    let registered = probe.pixel_ttyd_pids();
+    if registered.is_empty() {
+        return false;
+    }
     let processes = probe.processes();
-    let daemons = probe
-        .pixel_ttyd_pids()
+    let daemons = registered
         .into_iter()
         .filter(|pid| {
             processes.iter().any(|process| {
