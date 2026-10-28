@@ -1784,7 +1784,11 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
     convert_inline_tables(doc, parents)?;
     let mut item = value_to_item(value);
     let old = item_at(doc, path);
-    let old_position = old.and_then(Item::as_table).and_then(Table::position);
+    let old_position = old.and_then(|item| match item {
+        Item::Table(table) => table.position(),
+        Item::ArrayOfTables(blocks) => blocks.get(0).and_then(Table::position),
+        _ => None,
+    });
     let parent_starts_header = item.is_value()
         && !parents.is_empty()
         && item_at(doc, parents).is_none_or(|parent| {
