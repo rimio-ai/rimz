@@ -52,6 +52,8 @@ A change to a provider's launch argv or its `--settings` JSON also runs `cargo x
 
 A change to an adapter's permission arguments updates the `Permission modes` table in [agent-support.md](../../../../docs/reference/agent-support.md#permission-modes), which `conformance.rs` pins cell by cell against `LaunchSpec::permission_args`.
 
+A new `Ignored` edge in `lifecycle::step` is decided in its early-return chain and tested from a `compacting: true` prior. An ignore decided inside `map_status` still runs `step`'s tail, which closes the compaction bracket.
+
 A test for a new typed mapping must fail with that mapping removed: give the payload a fallback input that would classify differently. A shared test that needs an adapter lacking some capability uses an unregistered kind (`"unregistered"`), never a real built-in that may gain it.
 
 A spend parser that counts a new source needs the adapter's live cost push to count it too: the observed-cost merge (`crates/rimz/src/agents/context/record.rs::merge_observed_cost`) writes the incoming total outright, so a settled reconcile that raised the row is pulled back by the next envelope.
