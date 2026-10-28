@@ -939,7 +939,8 @@ fn pi_accounts_share_extensions_and_history_but_keep_logins_private() {
     assert!(selected.contains("pi@work"), "{selected}");
     succeeded(&accounts(&env, &["remove", "pi", "work"]));
     let config = std::fs::read_to_string(env.rimz_home().join("config.toml")).unwrap();
-    assert!(!config.contains("[accounts.pi.work]"), "{config}");
+    let parsed: toml::Table = toml::from_str(&config).unwrap();
+    assert!(parsed["accounts"].get("pi").is_none(), "{config}");
     assert!(home.join("extensions/rimz.ts").is_file());
 }
 

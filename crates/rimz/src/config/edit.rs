@@ -4,6 +4,7 @@
 //! comments in its entries' key prefixes, value suffixes, and `trailing()`.
 //! A write whose path crosses an inline table converts it to a standard
 //! table and carries that decor across.
+//! Removed headers leave their prefix comments above the next header or at EOF.
 
 use std::path::{Path, PathBuf};
 
@@ -269,7 +270,7 @@ impl ConfigEditor {
             return Ok(());
         };
         let mut doc = parse_document(file.path(), &text)?;
-        if clear_account_use(&mut doc, kind, None) {
+        if clear_account_use(&mut doc, kind, None)? {
             write(file.path(), doc.to_string().as_bytes())?;
         }
         Ok(())
@@ -288,14 +289,22 @@ impl ConfigEditor {
         };
         let mut doc = parse_document(file.path(), &text)?;
         let kinds = vec!["accounts".to_owned(), kind.to_string()];
-        let table = table_at_mut(&mut doc, &kinds)?;
-        if table.remove(name.as_str()).is_none() {
+        let key = [kinds.as_slice(), &[name.to_string()]].concat();
+        if !preserve_removed_table_comments(&mut doc, &key, false, |doc| {
+            Ok(table_at_mut(doc, &kinds)?
+                .remove(name.as_str())
+                .unwrap_or_default())
+        })? {
             return Ok(false);
         }
-        if table.is_empty() {
-            table_at_mut(&mut doc, &kinds[..1])?.remove(kind.as_str());
+        if table_at_mut(&mut doc, &kinds)?.is_empty() {
+            preserve_removed_table_comments(&mut doc, &kinds, false, |doc| {
+                Ok(table_at_mut(doc, &kinds[..1])?
+                    .remove(kind.as_str())
+                    .unwrap_or_default())
+            })?;
         }
-        clear_account_use(&mut doc, kind, Some(name));
+        clear_account_use(&mut doc, kind, Some(name))?;
         write(file.path(), doc.to_string().as_bytes())?;
         Ok(true)
     }
@@ -1034,6 +1043,122 @@ fn for_each_table_mut(table: &mut Table, visit: &mut impl FnMut(&mut Table)) {
     }
 }
 
+/// Keep removed header prefixes in render order, except one a replacement header carries.
+/// If the carried header preceded the kept text, the replacement's blocks are not receivers.
+fn preserve_removed_table_comments(
+    doc: &mut DocumentMut,
+    path: &[String],
+    keeps_first_header: bool,
+    drop_item: impl FnOnce(&mut DocumentMut) -> Result<Item>,
+) -> Result<bool> {
+    let first = item_at(doc, path).and_then(|item| {
+        item.as_table()
+            .or_else(|| item.as_array_of_tables().and_then(|blocks| blocks.get(0)))
+    });
+    let mut position = doc.as_table().position().unwrap_or(0);
+    let mut found = false;
+    for_each_table(doc.as_table(), &mut |table| {
+        if found {
+            return;
+        }
+        if !table.is_dotted() {
+            position = table.position().unwrap_or(position);
+        }
+        found = first.is_some_and(|first| std::ptr::eq(first, table));
+    });
+    let removed = drop_item(doc)?;
+    let mut prefixes = Vec::new();
+    let mut skip_header = keeps_first_header;
+    let mut skipped_position = None;
+    let mut collect = |table: &Table| {
+        if table.is_dotted() {
+            return;
+        }
+        position = table.position().unwrap_or(position);
+        if !renders_header(table) {
+            return;
+        }
+        if std::mem::take(&mut skip_header) {
+            skipped_position = Some(position);
+            return;
+        }
+        let prefix = table.decor().prefix();
+        if decor_comments(prefix).next().is_some() {
+            prefixes.push((position, decor_text(prefix).to_owned()));
+        }
+    };
+    for table in removed
+        .as_table()
+        .into_iter()
+        .chain(removed.as_array_of_tables().into_iter().flatten())
+    {
+        collect(table);
+        for_each_table(table, &mut collect);
+    }
+    prefixes.sort_by_key(|(position, _)| *position);
+    let Some((anchor, _)) = prefixes.first() else {
+        return Ok(!removed.is_none());
+    };
+    let mut replacement_tables = Vec::new();
+    if let Some(item) =
+        item_at(doc, path).filter(|_| skipped_position.is_some_and(|skipped| skipped <= *anchor))
+    {
+        for table in item
+            .as_table()
+            .into_iter()
+            .chain(item.as_array_of_tables().into_iter().flatten())
+        {
+            replacement_tables.push(std::ptr::from_ref(table));
+            for_each_table(table, &mut |child| {
+                replacement_tables.push(std::ptr::from_ref(child));
+            });
+        }
+    }
+    let mut next = None;
+    position = doc.as_table().position().unwrap_or(0);
+    for_each_table(doc.as_table(), &mut |table| {
+        if table.is_dotted() {
+            return;
+        }
+        position = table.position().unwrap_or(position);
+        if renders_header(table)
+            && position >= *anchor
+            && !replacement_tables.contains(&std::ptr::from_ref(table))
+            && next.is_none_or(|(next_position, _)| position < next_position)
+        {
+            next = Some((position, std::ptr::from_ref(table)));
+        }
+    });
+    let comments: String = prefixes.into_iter().map(|(_, prefix)| prefix).collect();
+    let join = |mut comments: String, prefix: Option<&RawString>| {
+        if prefix.is_some() {
+            while let Some(blank) = comments
+                .split_inclusive('\n')
+                .next_back()
+                .filter(|line| line.trim().is_empty())
+            {
+                comments.truncate(comments.len() - blank.len());
+            }
+        }
+        comments.push_str(decor_text(prefix));
+        comments
+    };
+    let Some((_, next)) = next else {
+        doc.set_trailing(join(comments, Some(doc.trailing())));
+        return Ok(!removed.is_none());
+    };
+    let mut comments = Some(comments);
+    for_each_table_mut(doc.as_table_mut(), &mut |table| {
+        if std::ptr::eq(table, next)
+            && let Some(comments) = comments.take()
+        {
+            let prefix = join(comments, table.decor().prefix());
+            table.decor_mut().set_prefix(prefix);
+        }
+    });
+    Ok(!removed.is_none())
+}
+
 fn item_at<'a>(doc: &'a DocumentMut, path: &[String]) -> Option<&'a Item> {
     let (leaf, parents) = path.split_last()?;
     let mut table: &dyn TableLike = doc.as_table();
@@ -1223,23 +1348,30 @@ fn clear_account_use(
     doc: &mut DocumentMut,
     kind: &crate::ids::AgentKind,
     matching: Option<&crate::ids::LoginName>,
-) -> bool {
+) -> Result<bool> {
     let Some(accounts) = doc.get_mut("accounts").and_then(Item::as_table_like_mut) else {
-        return false;
+        return Ok(false);
     };
     let Some(selection) = accounts.get_mut("use").and_then(Item::as_table_like_mut) else {
-        return false;
+        return Ok(false);
     };
     if matching.is_some_and(|name| {
         selection.get(kind.as_str()).and_then(Item::as_str) != Some(name.as_str())
     }) {
-        return false;
+        return Ok(false);
     }
     let removed = selection.remove(kind.as_str()).is_some();
     if selection.is_empty() {
-        accounts.remove("use");
+        let path = ["accounts".to_owned(), "use".to_owned()];
+        preserve_removed_table_comments(doc, &path, false, |doc| {
+            Ok(doc
+                .get_mut("accounts")
+                .and_then(Item::as_table_like_mut)
+                .and_then(|accounts| accounts.remove("use"))
+                .unwrap_or_default())
+        })?;
     }
-    removed
+    Ok(removed)
 }
 
 fn is_unknown_get_shape(path: &[String]) -> bool {
@@ -1653,16 +1785,17 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
     let creates_table =
         (parent_starts_header && old_position.is_none()) || (old.is_none() && !item.is_value());
     let changes_form = old.is_some_and(|old| old.is_value() != item.is_value());
-    // A replaced block keeps the comments above its header; under a header-less parent,
-    // the parent's first header takes them and the block's place. A new table or any other
-    // first header goes beside its section (see `place_new_table`); one appended at the end
-    // takes the template's trailing comments, so they stay with its last section, then a
-    // blank line.
-    let mut decor = match old {
-        Some(Item::Table(block)) => Some(block.decor().clone()),
-        Some(Item::ArrayOfTables(blocks)) => blocks.get(0).map(|block| block.decor().clone()),
-        _ => None,
-    };
+    // A same-key header takes the old header's decor; a header-less parent taking a block's
+    // place keeps only its prefix. Other removed headers leave their prefix comments above
+    // the next eligible header or at EOF. A new or first header goes beside its section
+    // (see `place_new_table`); at EOF it takes the trailing section comments and a blank line.
+    let mut decor =
+        match old.filter(|_| !item.is_value() || (parent_starts_header && !creates_table)) {
+            Some(Item::Table(block)) if renders_header(block) => Some(block.decor().clone()),
+            Some(Item::ArrayOfTables(blocks)) => blocks.get(0).map(|block| block.decor().clone()),
+            _ => None,
+        };
+    let keeps_first_header = decor.is_some();
     let mut position = old_position.unwrap_or_else(|| last_table_position(doc.as_table()) + 1);
     if creates_table {
         let place = place_new_table(doc, path);
@@ -1694,7 +1827,10 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
         }
         _ if parent_starts_header => {
             table.set_position(Some(position));
-            if let Some(decor) = decor {
+            if let Some(mut decor) = decor {
+                if !creates_table {
+                    decor.set_suffix("");
+                }
                 *table.decor_mut() = decor;
             }
         }
@@ -1705,7 +1841,6 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
     {
         *new.decor_mut() = old.decor().clone();
     }
-    table[leaf] = item;
     // A key keeps the spacing of the form it was parsed in (`b= 1` from `[a.b]`, `[a.b ]`
     // from `b = 1`), so one that changes form takes its new form's default. The comment
     // lines above a `b = 1` line stay, and render above the new header.
@@ -1721,6 +1856,10 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
             decor.set_prefix(comments);
         }
     }
+    preserve_removed_table_comments(doc, path, keeps_first_header, |doc| {
+        let table = placed_table_at_mut(doc, parents, position)?;
+        Ok(std::mem::replace(&mut table[leaf], item))
+    })?;
     Ok(())
 }
 

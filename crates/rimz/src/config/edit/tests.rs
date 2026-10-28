@@ -1124,6 +1124,233 @@ fn replacing_implicit_parents_child_keeps_harness_template_comments() {
 }
 
 #[test]
+fn replacing_child_under_rendered_parent_keeps_harness_template_comments() {
+    let (_dir, editor) = inline_editor(Kind::Core.template());
+    editor
+        .set("harness.prompt_cache_ttl.codex.api-key", "20m")
+        .unwrap();
+    editor
+        .set("harness.prompt_cache_ttl.fallback", "off")
+        .unwrap();
+    editor.set("harness.prompt_cache_ttl.codex", "12h").unwrap();
+
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert_eq!(
+        rendered,
+        format!(
+            "{}\n[harness.prompt_cache_ttl]\ncodex = \"12h\"\nfallback = \"off\"\n",
+            Kind::Core.template()
+        )
+    );
+    assert_harness_template_comments_stay_under_harness(&rendered);
+}
+
+#[test]
+fn replacing_implicit_parent_keeps_harness_template_comments() {
+    let (_dir, editor) = inline_editor(Kind::Core.template());
+    editor
+        .set("harness.prompt_cache_ttl.codex.api-key", "20m")
+        .unwrap();
+    editor
+        .set("harness.prompt_cache_ttl", "{ claude = \"5m\" }")
+        .unwrap();
+
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert_eq!(
+        rendered,
+        format!(
+            "{}\n[harness.prompt_cache_ttl]\nclaude = \"5m\"\n",
+            Kind::Core.template()
+        )
+    );
+    assert_harness_template_comments_stay_under_harness(&rendered);
+}
+
+#[test]
+fn replacing_nested_blocks_and_array_entries_keeps_header_comments() {
+    for (blocks, comments) in [
+        (
+            "# over b\n[a.b] # header line\n# body\ny = 1 # body suffix\n# over child\n[a.b.child]\nz = 1\n",
+            "# over b\n# over child\n",
+        ),
+        (
+            "# over entry 0\n[[a.b]] # header line\ny = 1\n# over entry 1\n[[a.b]]\ny = 2\n",
+            "# over entry 0\n# over entry 1\n",
+        ),
+    ] {
+        let mut doc: DocumentMut = format!("[a]\nx = 1\n{blocks}\n[next]\nx = 2\n")
+            .parse()
+            .unwrap();
+        set_document_value(&mut doc, &parse_key("a.b").unwrap(), Value::from(2)).unwrap();
+        assert_eq!(
+            doc.to_string(),
+            format!("[a]\nx = 1\nb = 2\n{comments}\n[next]\nx = 2\n")
+        );
+    }
+}
+
+#[test]
+fn replacing_final_blocks_keeps_header_comments_at_eof() {
+    for (blocks, comments) in [
+        (
+            "# over b\n[a.b]\ny = 1\n# over child\n[a.b.child]\nz = 1\n",
+            "# over b\n# over child\n",
+        ),
+        (
+            "# over entry 0\n[[a.b]]\ny = 1\n# over entry 1\n[[a.b]]\ny = 2\n",
+            "# over entry 0\n# over entry 1\n",
+        ),
+    ] {
+        let mut doc: DocumentMut = format!("[a]\nx = 1\n{blocks}\n\n# tail\n").parse().unwrap();
+        set_document_value(&mut doc, &parse_key("a.b").unwrap(), Value::from(2)).unwrap();
+        assert_eq!(
+            doc.to_string(),
+            format!("[a]\nx = 1\nb = 2\n{comments}\n\n# tail\n")
+        );
+    }
+}
+
+#[test]
+fn replacing_block_keeps_receiver_comments() {
+    let mut doc: DocumentMut = "[a]\nx = 1\n# over b\n\n\n[a.b]\ny = 1\n\n# next\n[next]\nx = 2\n"
+        .parse()
+        .unwrap();
+    set_document_value(&mut doc, &parse_key("a.b").unwrap(), Value::from(2)).unwrap();
+    assert_eq!(
+        doc.to_string(),
+        "[a]\nx = 1\nb = 2\n# over b\n\n# next\n[next]\nx = 2\n"
+    );
+}
+
+#[test]
+fn replacing_same_key_block_keeps_header_decor() {
+    let mut doc: DocumentMut = "[a]\nx = 1\n# over b\n[a.b] # line\ny = 1\n"
+        .parse()
+        .unwrap();
+    set_document_value(
+        &mut doc,
+        &parse_key("a.b").unwrap(),
+        parse_edit_value("{ y = 2 }"),
+    )
+    .unwrap();
+    assert_eq!(
+        doc.to_string(),
+        "[a]\nx = 1\n# over b\n[a.b] # line\ny = 2\n"
+    );
+}
+
+#[test]
+fn replacing_array_entries_keeps_later_comments_after_the_new_array() {
+    let two_entries = "# over entry 0\n[[a.b]]\ny = 1\n# over entry 1\n[[a.b]]\ny = 2\n";
+    let rendered = [
+        (two_entries, "[{ y = 3 }]", false),
+        (
+            "# e0\n[[a.b]]\ny = 1\n# e1\n[[a.b]]\ny = 2\n# e2\n[[a.b]]\ny = 3\n",
+            "[{ y = 4 }, { y = 5 }]",
+            false,
+        ),
+        (two_entries, "[{ y = 3 }]", true),
+    ]
+    .map(|(blocks, value, unpositioned_entry)| {
+        let mut doc: DocumentMut = format!("[a]\nx = 1\n{blocks}").parse().unwrap();
+        if unpositioned_entry {
+            doc["a"]["b"]
+                .as_array_of_tables_mut()
+                .unwrap()
+                .get_mut(1)
+                .unwrap()
+                .set_position(None);
+        }
+        set_document_value(
+            &mut doc,
+            &parse_key("a.b").unwrap(),
+            parse_edit_value(value),
+        )
+        .unwrap();
+        doc.to_string()
+    });
+    assert_eq!(
+        rendered,
+        [
+            "[a]\nx = 1\n# over entry 0\n[[a.b]]\ny = 3\n# over entry 1\n",
+            "[a]\nx = 1\n# e0\n[[a.b]]\ny = 4\n\n[[a.b]]\ny = 5\n# e1\n# e2\n",
+            "[a]\nx = 1\n# over entry 0\n[[a.b]]\ny = 3\n# over entry 1\n",
+        ]
+    );
+}
+
+#[test]
+fn replacing_array_with_block_keeps_later_comments_after_the_new_block() {
+    let rendered = ["", "\n# next\n[next]\nx = 2\n"].map(|tail| {
+        let mut doc: DocumentMut = format!(
+            "[a]\nx = 1\n# over entry 0\n[[a.b]]\ny = 1\n# over entry 1\n[[a.b]]\ny = 2\n{tail}"
+        )
+        .parse()
+        .unwrap();
+        if let Some(next) = doc.get_mut("next").and_then(Item::as_table_mut) {
+            next.set_position(None);
+        }
+        set_document_value(
+            &mut doc,
+            &parse_key("a.b").unwrap(),
+            parse_edit_value("{ y = 3 }"),
+        )
+        .unwrap();
+        doc.to_string()
+    });
+    assert_eq!(
+        rendered,
+        [
+            "[a]\nx = 1\n# over entry 0\n[a.b]\ny = 3\n# over entry 1\n",
+            "[a]\nx = 1\n# over entry 0\n[a.b]\ny = 3\n# over entry 1\n\n# next\n[next]\nx = 2\n",
+        ]
+    );
+}
+
+#[test]
+fn replacing_parent_after_its_child_keeps_harness_template_comments() {
+    let (_dir, editor) = inline_editor(Kind::Core.template());
+    editor
+        .set("harness.prompt_cache_ttl.codex.api-key", "20m")
+        .unwrap();
+    editor
+        .set("harness.prompt_cache_ttl.fallback", "off")
+        .unwrap();
+    editor
+        .set("harness.prompt_cache_ttl", "{ fallback = \"5m\" }")
+        .unwrap();
+
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert_eq!(
+        rendered,
+        format!(
+            "{}\n[harness.prompt_cache_ttl]\nfallback = \"5m\"\n",
+            Kind::Core.template()
+        )
+    );
+    assert_harness_template_comments_stay_under_harness(&rendered);
+}
+
+#[test]
+fn value_replacing_a_block_under_implicit_parent_keeps_prefix_spacing() {
+    let rendered = ["", "\n\n\n", "# over b\n\n"].map(|prefix| {
+        let mut doc: DocumentMut = format!("[x]\nk = 1\n{prefix}[a.b] # old header\ny = 1\n")
+            .parse()
+            .unwrap();
+        set_document_value(&mut doc, &parse_key("a.b").unwrap(), Value::from(2)).unwrap();
+        doc.to_string()
+    });
+    assert_eq!(
+        rendered,
+        [
+            "[x]\nk = 1\n[a]\nb = 2\n",
+            "[x]\nk = 1\n\n\n\n[a]\nb = 2\n",
+            "[x]\nk = 1\n# over b\n\n[a]\nb = 2\n",
+        ]
+    );
+}
+
+#[test]
 fn value_replacing_a_block_under_a_header_takes_default_key_spacing() {
     let (_dir, editor) = inline_editor(
         "[harness.prompt_cache_ttl]\nfallback = \"off\"\n\n[harness.prompt_cache_ttl.codex]\napi-key = \"20m\"\n",
@@ -2429,6 +2656,35 @@ fn inline_first_account_is_placed_beside_its_section() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn removing_named_account_restores_template_comments() {
+    let (dir, editor) = inline_editor(Kind::Core.template());
+    let claude = crate::ids::AgentKind::new_unchecked("claude");
+    let work = "work".parse().unwrap();
+    editor
+        .upsert_named_account(&claude, &work, Some(&dir.path().join("work")), None, None)
+        .unwrap();
+    assert!(editor.remove_named_account(&claude, &work).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(editor.files.core_path()).unwrap(),
+        Kind::Core.template()
+    );
+}
+
+#[test]
+fn clearing_account_selection_restores_template_comments() {
+    let (_dir, editor) = inline_editor(Kind::Core.template());
+    let codex = crate::ids::AgentKind::new_unchecked("codex");
+    editor.set("accounts.use.codex", "personal").unwrap();
+    editor
+        .use_account(&codex, &"default".parse().unwrap())
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(editor.files.core_path()).unwrap(),
+        Kind::Core.template()
+    );
 }
 
 #[test]
