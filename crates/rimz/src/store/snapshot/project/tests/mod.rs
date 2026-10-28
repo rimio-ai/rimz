@@ -730,7 +730,11 @@ fn backfill_duplicate_keys_read_the_last_row_then_the_assigned_one() {
     let first = agent("claude", "dup", AgentStatus::Idle, 1);
     let mut last = agent("claude", "dup", AgentStatus::Idle, 2);
     last.name = Some("otter".to_owned());
-    let mut rows = vec![first, last, agent("claude", "other", AgentStatus::Idle, 3)];
+    let mut rows = vec![
+        first.into(),
+        last.into(),
+        agent("claude", "other", AgentStatus::Idle, 3).into(),
+    ];
 
     let state = backfill_agent_identities(&mut rows, AgentIdentityState::default());
 
@@ -1579,7 +1583,7 @@ fn side_conversations_never_become_launched_children() {
     );
     assert_eq!(agents.len(), 1);
     assert_eq!(
-        agents.values().next().unwrap(),
+        agents.values().next().unwrap().as_ref(),
         &reduce_agent_states(&events[..2])[0]
     );
     assert!(identity.is_side_session(&AgentSessionId::from("side")));
@@ -1629,7 +1633,7 @@ fn side_registration_removes_preexisting_state_and_launch_index() {
     let mut reducer = ReducerState {
         map: BTreeMap::from([(
             key.clone(),
-            indexed_launch_agent("side", "tmux:%2", 84, Some("launch_side")),
+            indexed_launch_agent("side", "tmux:%2", 84, Some("launch_side")).into(),
         )]),
         identity: CardIdentityAllocator::default(),
         launch_identity: LaunchIdentityIndex::default(),
@@ -2261,7 +2265,7 @@ fn late_launch_event_does_not_recreate_provisional_when_name_is_owned() {
     .expect("registered card");
     let kind = AgentKind::new_unchecked("claude");
     let real_id = AgentSessionId::from("real-session");
-    let seed = BTreeMap::from([((kind.clone(), real_id.clone()), real)]);
+    let seed = BTreeMap::from([((kind.clone(), real_id.clone()), real.into())]);
     let identity = AgentIdentityState {
         names: BTreeMap::from([("lucid-atlas".to_owned(), (kind.clone(), real_id))]),
         next_ordinal: BTreeMap::from([(kind, 2)]),

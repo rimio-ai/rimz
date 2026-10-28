@@ -72,11 +72,15 @@ fn apply(env: &Env, index: usize, mut payload: Value, log: Option<&Path>) -> u32
 }
 
 fn fixture() -> Env {
+    fixture_with_history(12)
+}
+
+fn fixture_with_history(closed: usize) -> Env {
     let env = Env::new();
     env.record(&env.project_root);
     let store = env.store();
-    rimz::testkit::fleet::seed_history_carryover(&store, 12, 256).unwrap();
-    for index in 0..12 {
+    rimz::testkit::fleet::seed_history_carryover(&store, closed, 256).unwrap();
+    for index in 0..closed {
         let id = format!("history-{index}");
         let observation =
             AgentLifecycleObservation::new(Some(id.clone().into()), LifecycleSignal::Ended);
@@ -117,12 +121,33 @@ fn fixture() -> Env {
             .count(),
         3
     );
-    assert_eq!(snapshot.fenced_sessions.len(), 12);
+    assert_eq!(snapshot.fenced_sessions.len(), closed);
     env
 }
 
 fn cold_frame(payload: Value, assemblies: u64, rows_materialized: u64, config_loads: u64) {
-    let env = fixture();
+    let small = frame_work(
+        12,
+        payload.clone(),
+        assemblies,
+        rows_materialized,
+        config_loads,
+    );
+    let large = frame_work(120, payload, assemblies, rows_materialized, config_loads);
+    assert_eq!(
+        large, small,
+        "(fold row copies, materialized rows) must not grow with retained history"
+    );
+}
+
+fn frame_work(
+    closed: usize,
+    payload: Value,
+    assemblies: u64,
+    rows_materialized: u64,
+    config_loads: u64,
+) -> (u64, u64) {
+    let env = fixture_with_history(closed);
     let log = env.home_root.join("work.jsonl");
     let rollup_bytes = std::fs::metadata(env.store().paths().rollup_cache().unwrap())
         .unwrap()
@@ -148,7 +173,7 @@ fn cold_frame(payload: Value, assemblies: u64, rows_materialized: u64, config_lo
         "event_log_bytes_read",
         "carryover_bytes_parsed",
         "rollup_rows_materialized",
-        "rollup_base_copies",
+        "fold_row_copies",
         "snapshot_publishes",
         "latest_bytes_parsed",
     ] {
@@ -170,6 +195,10 @@ fn cold_frame(payload: Value, assemblies: u64, rows_materialized: u64, config_lo
         0,
         "{row}"
     );
+    (
+        row["fold_row_copies"].as_u64().unwrap(),
+        row["rollup_rows_materialized"].as_u64().unwrap(),
+    )
 }
 
 #[test]

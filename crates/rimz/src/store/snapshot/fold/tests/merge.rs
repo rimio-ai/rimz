@@ -1,4 +1,76 @@
 use super::*;
+use std::borrow::Borrow;
+
+#[test]
+fn root_lane_stamp_copies_only_changed_rows() {
+    let stable = agent("claude", "stable", AgentStatus::Idle, 1_000);
+    let mut root = agent("claude", "root", AgentStatus::Idle, 1_000);
+    root.worktree_path = Some("/tmp/root".to_owned());
+    let original = FoldCarryover {
+        agents: vec![stable.into(), root.into()],
+        ..Default::default()
+    };
+    let mut stamped = original.clone();
+    let before = testkit::fold_row_copies();
+    stamped.stamp_root_lane(Some(Path::new("/tmp/root")));
+    let original_stable: &AgentState = original.agents[0].borrow();
+    let stamped_stable: &AgentState = stamped.agents[0].borrow();
+    assert!(
+        std::ptr::eq(original_stable, stamped_stable),
+        "unchanged row must stay shared"
+    );
+    assert!(stamped.agents[1].root_lane);
+    assert!(!original.agents[1].root_lane);
+    assert_eq!(testkit::fold_row_copies() - before, 1);
+}
+
+#[test]
+fn rebirth_map_pass_shares_already_unstamped_rows() {
+    let original = rebirth_rows();
+    let mut unstamped = original.clone();
+    let before = testkit::fold_row_copies();
+    unstamp_for_rebirth(&mut unstamped.agents);
+    assert_rebirth_sharing(&original, &unstamped);
+    assert_eq!(testkit::fold_row_copies() - before, 1);
+}
+
+#[test]
+fn rebirth_carryover_shares_already_unstamped_rows() {
+    let original = rebirth_rows();
+    let before = testkit::fold_row_copies();
+    let unstamped = original.unstamped_for_rebirth();
+    assert_rebirth_sharing(&original, &unstamped);
+    assert_eq!(testkit::fold_row_copies() - before, 1);
+    assert!(Arc::ptr_eq(&unstamped, &original.unstamped_for_rebirth()));
+    assert_eq!(testkit::fold_row_copies() - before, 1);
+}
+
+fn rebirth_rows() -> FoldCarryover {
+    let mut stable = agent("claude", "stable", AgentStatus::Idle, 1_000);
+    stable.kind_ordinal = None;
+    stable.pane = None;
+    stable.on_screen_at = None;
+    let mut stamped = stable.clone();
+    stamped.agent_id = "stamped".into();
+    stamped.kind_ordinal = Some(1);
+    stamped.on_screen_at = Some(epoch());
+    FoldCarryover {
+        agents: vec![stable.into(), stamped.into()],
+        ..Default::default()
+    }
+}
+
+fn assert_rebirth_sharing(original: &FoldCarryover, unstamped: &FoldCarryover) {
+    let original_stable: &AgentState = original.agents[0].borrow();
+    let unstamped_stable: &AgentState = unstamped.agents[0].borrow();
+    assert!(
+        std::ptr::eq(original_stable, unstamped_stable),
+        "unchanged row must stay shared"
+    );
+    assert!(unstamped.agents[1].kind_ordinal.is_none());
+    assert!(unstamped.agents[1].on_screen_at.is_none());
+    assert_eq!(original.agents[1].kind_ordinal, Some(1));
+}
 
 #[test]
 fn launch_warnings_hydrate_a_rotated_row() {
@@ -29,6 +101,7 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
         carried.worktree_branch = Some("main".into());
         let mut live = agent("claude", "agent-1", AgentStatus::Running, live_seen);
         live.worktree_branch = Some("feature".into());
+        let live = Arc::new(live);
 
         let merged =
             AgentRollup::layered(fold_ready(vec![carried]), std::slice::from_ref(&live)).to_vec();
@@ -42,7 +115,7 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
     }
 
     let only_in_carryover = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
-    let only_live = agent("codex", "agent-2", AgentStatus::Running, 2_000);
+    let only_live = Arc::new(agent("codex", "agent-2", AgentStatus::Running, 2_000));
     let merged = AgentRollup::layered(
         fold_ready(vec![only_in_carryover]),
         std::slice::from_ref(&only_live),
@@ -51,7 +124,7 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
 
     let mut newer_carried = agent("claude", "agent-1", AgentStatus::Idle, 2_000);
     newer_carried.worktree_branch = Some("main".into());
-    let older_live = agent("claude", "agent-1", AgentStatus::Running, 1_000);
+    let older_live = Arc::new(agent("claude", "agent-1", AgentStatus::Running, 1_000));
     let merged = AgentRollup::layered(
         fold_ready(vec![newer_carried]),
         std::slice::from_ref(&older_live),
@@ -173,7 +246,7 @@ fn ended_carried_child_keeps_its_activity_label_and_truncated_prefix_filter() {
         agents: vec![child],
         ..EventCarryover::default()
     });
-    let mut child = trimmed.agents[0].clone();
+    let mut child = trimmed.agents[0].as_ref().clone();
     assert_eq!(child.activity_line(), Some("x".repeat(160)));
     child.context = Some(crate::agents::AgentContext {
         session_name: Some("x".repeat(120)),

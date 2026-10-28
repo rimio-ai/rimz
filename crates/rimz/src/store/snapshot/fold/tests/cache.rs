@@ -3,6 +3,48 @@ use std::time::{Duration, SystemTime};
 use super::*;
 
 #[test]
+fn rollup_rows_keep_the_plain_row_wire_bytes() {
+    use std::borrow::Borrow;
+
+    #[derive(Serialize)]
+    struct PlainRollup<'a> {
+        version: u32,
+        extent: event_log::LogExtent,
+        file_id: Option<LogFileId>,
+        raw_agents: Vec<&'a AgentState>,
+        resume_outcomes: &'a [ResumeOutcome],
+        agent_identity: &'a AgentIdentityState,
+        saw_session_rebirth: bool,
+    }
+
+    let cache = RollupCache {
+        version: ROLLUP_CACHE_VERSION,
+        extent: event_log::LogExtent {
+            generation: 7,
+            offset: 42,
+        },
+        file_id: None,
+        raw_agents: vec![agent("claude", "retained", AgentStatus::Idle, 1_000).into()],
+        resume_outcomes: Vec::new(),
+        agent_identity: AgentIdentityState::default(),
+        saw_session_rebirth: false,
+    };
+    let plain = PlainRollup {
+        version: 47,
+        extent: cache.extent,
+        file_id: cache.file_id,
+        raw_agents: cache.raw_agents.iter().map(Borrow::borrow).collect(),
+        resume_outcomes: &cache.resume_outcomes,
+        agent_identity: &cache.agent_identity,
+        saw_session_rebirth: false,
+    };
+    assert_eq!(
+        serde_json::to_vec(&cache).unwrap(),
+        serde_json::to_vec(&plain).unwrap()
+    );
+}
+
+#[test]
 fn pre_workflow_cache_refolds_attempt_identity() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -48,7 +90,7 @@ fn pre_workflow_cache_refolds_attempt_identity() {
                 generation: 0,
                 offset: std::fs::metadata(&paths.events_log).unwrap().len(),
             },
-            raw_agents: vec![agent("claude", "attempt", AgentStatus::Running, 0)],
+            raw_agents: vec![agent("claude", "attempt", AgentStatus::Running, 0).into()],
             resume_outcomes: Vec::new(),
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
@@ -87,7 +129,7 @@ fn pre_molt_rollup_cache_refolds_the_succession_link() {
                 generation: 0,
                 offset: std::fs::metadata(&paths.events_log).unwrap().len(),
             },
-            raw_agents: vec![agent("claude", "launch_new", AgentStatus::Running, 0)],
+            raw_agents: vec![agent("claude", "launch_new", AgentStatus::Running, 0).into()],
             resume_outcomes: Vec::new(),
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
@@ -205,7 +247,7 @@ fn materialized_rows_count_flattening_but_not_borrowed_iteration() {
             agents: vec![agent("claude", "carried", AgentStatus::Idle, 1_000)],
             ..EventCarryover::default()
         })),
-        &[agent("codex", "live", AgentStatus::Idle, 2_000)],
+        &[agent("codex", "live", AgentStatus::Idle, 2_000).into()],
     );
     let before = testkit::rollup_rows_materialized();
     assert_eq!(rollup.iter().count(), 2);
@@ -324,7 +366,7 @@ fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
                 generation: 0,
                 offset: 10,
             },
-            raw_agents: vec![agent("claude", "real", AgentStatus::Running, 1_000)],
+            raw_agents: vec![agent("claude", "real", AgentStatus::Running, 1_000).into()],
             resume_outcomes: Vec::new(),
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
@@ -371,7 +413,7 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
             generation: 0,
             offset,
         },
-        raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
+        raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0).into()],
         resume_outcomes: Vec::new(),
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
@@ -477,7 +519,7 @@ fn generation_mismatch_refolds_reads_and_rotation_staging() {
     let (mut cache, _, _) = catch_up_rollup(&paths).unwrap();
     let mut cursor = RollupCursor::new();
     cursor.fold(&paths).unwrap();
-    cache.raw_agents[0].agent_id = "ghost".into();
+    Arc::make_mut(&mut cache.raw_agents[0]).agent_id = "ghost".into();
     write_rollup_cache(&paths, &cache).unwrap();
     atomic::write_temp_then_rename(&paths.log_generation, &serde_json::json!({"generation": 7}))
         .unwrap();
@@ -566,7 +608,7 @@ fn rollup_parse_cache_hits_on_same_identity_and_misses_when_republish_changes_id
             generation: 0,
             offset: 10,
         },
-        raw_agents: vec![agent("claude", id, AgentStatus::Running, 1_000)],
+        raw_agents: vec![agent("claude", id, AgentStatus::Running, 1_000).into()],
         resume_outcomes: Vec::new(),
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
@@ -683,7 +725,7 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
                 generation: 0,
                 offset: 0,
             },
-            raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
+            raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0).into()],
             resume_outcomes: Vec::new(),
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,

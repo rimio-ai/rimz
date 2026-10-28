@@ -3,6 +3,7 @@
 
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -49,11 +50,11 @@ impl AgentIdentityState {
 }
 
 pub(crate) fn backfill_agent_identities(
-    agents: &mut [AgentState],
+    agents: &mut [Arc<AgentState>],
     state: AgentIdentityState,
 ) -> AgentIdentityState {
-    // Rows are indexed, never cloned: the last row for a key is its lookup
-    // target, and an assigned row becomes the target for its key's later rows.
+    // The last row for a key is its lookup target, and an assigned row becomes
+    // the target for its key's later rows.
     let mut index_by_key: BTreeMap<(AgentKind, AgentSessionId), usize> = agents
         .iter()
         .enumerate()
@@ -62,7 +63,7 @@ pub(crate) fn backfill_agent_identities(
     let mut allocator = CardIdentityAllocator::from_map_and_state(
         &index_by_key
             .iter()
-            .map(|(key, &index)| (key.clone(), &agents[index]))
+            .map(|(key, &index)| (key.clone(), agents[index].as_ref()))
             .collect(),
         state,
     );
@@ -78,11 +79,12 @@ pub(crate) fn backfill_agent_identities(
             continue;
         }
         let key = (kind, agent_id);
-        let prior = index_by_key.get(&key).map(|&prior| &agents[prior]);
+        let prior = index_by_key.get(&key).map(|&prior| agents[prior].as_ref());
         let identity = allocator.assign_existing(&key.0, &key.1, prior);
-        agents[index].name_explicit = identity.name_explicit;
-        agents[index].name = Some(identity.name);
-        agents[index].kind_ordinal = Some(identity.kind_ordinal);
+        let agent = super::agent_mut(&mut agents[index]);
+        agent.name_explicit = identity.name_explicit;
+        agent.name = Some(identity.name);
+        agent.kind_ordinal = Some(identity.kind_ordinal);
         index_by_key.insert(key, index);
     }
     allocator.state()
@@ -183,7 +185,7 @@ impl CardIdentityAllocator {
 
     pub(super) fn adoptable_owner_for_name(
         &self,
-        map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+        map: &BTreeMap<(AgentKind, AgentSessionId), Arc<AgentState>>,
         kind: &AgentKind,
         name: &str,
         new_key: &(AgentKind, AgentSessionId),
@@ -201,7 +203,7 @@ impl CardIdentityAllocator {
 
     pub(super) fn adoptable_owner_for_pane(
         &self,
-        map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+        map: &BTreeMap<(AgentKind, AgentSessionId), Arc<AgentState>>,
         kind: &AgentKind,
         pane_id: &PaneId,
         new_key: &(AgentKind, AgentSessionId),

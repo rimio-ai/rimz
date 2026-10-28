@@ -4,7 +4,7 @@
 //! push tens of events per second. The contract
 //! (docs/internals/performance.md): a warm fold reads only the bytes
 //! appended since its held base — one frame per event, never the log — so
-//! per-tab work per event stays O(frame) while the log grows without bound.
+//! per-tab log I/O per event stays O(frame) while the log grows without bound.
 //! Companion to `spending_incremental`, which proves the same shape for the
 //! transcript walk.
 
@@ -13,12 +13,36 @@ use rimz::store::snapshot::RollupCursor;
 use rimz::testkit::fleet::{
     SESSION_NAME, registered_lifecycle, seed_ended_carryover, seed_fleet_store, synthetic_panes,
 };
-use rimz::testkit::{carryover_bytes_parsed, rollup_base_copies, rollup_rows_materialized};
+use rimz::testkit::{carryover_bytes_parsed, fold_row_copies, rollup_rows_materialized};
 
 use crate::common::Harness;
 
 const HISTORY_EVENTS: usize = 3_000;
 const FLEET: usize = 30;
+
+#[test]
+fn warm_delta_copies_only_the_touched_row() {
+    let h = Harness::new();
+    seed_ended_carryover(&h.store, 3_300).expect("seed carryover");
+    let paths = h.store.paths();
+    seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    let mut cursor = RollupCursor::new();
+    let (_, cold, _) = cursor.fold(paths).expect("cold fold");
+    event_log::append(
+        &paths.events_log,
+        &registered_lifecycle(&paths.workspace_id, 0),
+    )
+    .expect("append one");
+    let before = rimz::testkit::fold_row_copies();
+    let (_, warm, _) = cursor.fold(paths).expect("warm fold");
+    let copies = rimz::testkit::fold_row_copies() - before;
+    assert!(copies <= 1, "one lifecycle key copied {copies} rows");
+    assert_eq!(warm.len(), cold.len());
+    assert_eq!(
+        warm.iter().find(|row| row.agent_id == "history-0"),
+        cold.iter().find(|row| row.agent_id == "history-0"),
+    );
+}
 
 #[test]
 fn delta_fold_is_o_new_bytes() {
@@ -398,7 +422,7 @@ fn cold_carryover_trims_ended_text_and_shares_the_parse_with_audit_reads() {
 /// A `hooks apply` child reads the rollup several times per frame. Repeated in
 /// one thread at an unchanged log, `Store::snapshot` and
 /// `Store::runtime_projection` are served by the thread's held fold: no log or
-/// carryover bytes and no copy of the fold base or ended rows. Each runtime
+/// carryover bytes and no deep row copies inside the fold. Each runtime
 /// projection still copies the visible rows it retains.
 #[test]
 fn repeat_store_reads_at_an_unchanged_log_copy_no_history() {
@@ -415,7 +439,7 @@ fn repeat_store_reads_at_an_unchanged_log_copy_no_history() {
         .runtime_projection(rimz::RuntimeScope::Runtime)
         .expect("cold projection");
 
-    let counters = || (bytes_read(), carryover_bytes_parsed(), rollup_base_copies());
+    let counters = || (bytes_read(), carryover_bytes_parsed(), fold_row_copies());
     let before = counters();
     let rows_before = rollup_rows_materialized();
     let warm = h.store.snapshot().expect("warm snapshot");
@@ -426,7 +450,7 @@ fn repeat_store_reads_at_an_unchanged_log_copy_no_history() {
     assert_eq!(
         counters(),
         before,
-        "(log bytes, carryover bytes, fold-base copies) moved on a repeat read"
+        "(log bytes, carryover bytes, fold row copies) moved on a repeat read"
     );
     assert_eq!(
         rollup_rows_materialized() - rows_before,

@@ -677,7 +677,7 @@ mod latency {
             "event_log_bytes_read",
             "carryover_bytes_parsed",
             "rollup_rows_materialized",
-            "rollup_base_copies",
+            "fold_row_copies",
             "snapshot_assemblies",
             "snapshot_publishes",
             "rollup_bytes_parsed",

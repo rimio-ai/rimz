@@ -236,8 +236,12 @@ proptest::proptest! {
         prop_assert_eq!(thread_cache.extent, cold_cache.extent);
         prop_assert_eq!(cursor_extent, cold_cache.extent);
         prop_assert_eq!(
-            sorted_value(incremental_cache.raw_agents),
-            sorted_value(cold_cache.raw_agents)
+            sorted_value(
+                incremental_cache.raw_agents.into_iter().map(Arc::unwrap_or_clone).collect()
+            ),
+            sorted_value(
+                cold_cache.raw_agents.into_iter().map(Arc::unwrap_or_clone).collect()
+            )
         );
         prop_assert_eq!(incremental_cache.extent, cold_cache.extent);
     }

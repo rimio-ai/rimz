@@ -420,7 +420,7 @@ fn fold_signals(
                     generation: 0,
                     offset: std::fs::metadata(&paths.events_log).unwrap().len(),
                 },
-                raw_agents: vec![agent("claude", "sess-a", status, 0)],
+                raw_agents: vec![agent("claude", "sess-a", status, 0).into()],
                 resume_outcomes: Vec::new(),
                 agent_identity: AgentIdentityState::default(),
                 saw_session_rebirth: false,
