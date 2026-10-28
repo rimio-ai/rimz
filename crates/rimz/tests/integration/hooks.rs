@@ -1360,6 +1360,13 @@ fn kimi_durable_children_surface_and_child_stops_leave_parent_running() {
 fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
     let env = Env::new();
     env.record(&env.project_root);
+    let pricing = env.runtime_paths().shared_pricing_cache_path();
+    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
+    std::fs::write(
+        pricing,
+        r#"{"schema":4,"models":{"gpt-5-mini":{"input":0.000001,"output":0.000005}}}"#,
+    )
+    .unwrap();
     env.install_agent_hooks("copilot");
     assert!(env.agent_hooks_installed("copilot"));
 

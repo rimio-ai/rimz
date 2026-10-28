@@ -104,6 +104,32 @@ fn only_a_test_sandbox_exports_a_missing_codex_and_its_runs_keep_it() {
 }
 
 #[test]
+fn only_a_test_sandbox_exports_offline_pricing_and_its_runs_keep_it() {
+    let workspace = TempDir::new().unwrap();
+    let sandbox = HostSandbox::for_tests(workspace.path()).unwrap();
+    let exported = sandbox.command_env();
+    assert_eq!(
+        exported
+            .iter()
+            .find_map(|(key, value)| (*key == "RIMZ_PRICING_OFFLINE").then_some(value)),
+        Some(&PathBuf::from("1"))
+    );
+    let ambient = [std::ffi::OsString::from("RIMZ_PRICING_OFFLINE")];
+    assert_eq!(
+        test_removed_env(ambient.into_iter(), &sandbox.env),
+        ["NO_COLOR"]
+    );
+
+    let manual = HostSandbox::for_manual_command().unwrap();
+    assert!(
+        manual
+            .command_env()
+            .iter()
+            .all(|(key, _)| *key != "RIMZ_PRICING_OFFLINE")
+    );
+}
+
+#[test]
 fn skip_records_group_distinct_tests_by_reason() {
     let records = "\
 journey::sandbox::b\tAF_UNIX bind is forbidden in this sandbox

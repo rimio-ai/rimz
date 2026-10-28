@@ -94,7 +94,9 @@ fn ambient_session_keys() -> impl Iterator<Item = String> {
 /// hands it to every pane it ever creates. Point `RIMZ_CODEX_BIN` at a missing
 /// path, so no fixture child starts the developer's installed codex; a test
 /// about codex behaviour sets it afterwards to the app-server stub or its own
-/// fake. Under coverage, point child profile
+/// fake. Set `RIMZ_PRICING_OFFLINE=1` so pricing never fetches live lists; a test
+/// needing prices seeds its own cache, and one testing a real fetch sets the
+/// switch to `0` afterwards. Under coverage, point child profile
 /// output at the null device: several fixtures intentionally SIGKILL long-lived
 /// child `rimz` processes, and a half-written `.profraw` poisons the merge even
 /// though the test process itself exited cleanly.
@@ -108,6 +110,7 @@ impl ScrubSessionEnvExt for Command {
             self.env_remove(key);
         }
         self.env("RIMZ_CODEX_BIN", MISSING_CODEX_BIN);
+        self.env("RIMZ_PRICING_OFFLINE", "1");
         suppress_child_coverage(self);
         self
     }
@@ -119,6 +122,7 @@ impl ScrubSessionEnvExt for portable_pty::CommandBuilder {
             self.env_remove(key);
         }
         self.env("RIMZ_CODEX_BIN", MISSING_CODEX_BIN);
+        self.env("RIMZ_PRICING_OFFLINE", "1");
         suppress_pty_child_coverage(self);
         self
     }
