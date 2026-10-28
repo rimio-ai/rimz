@@ -428,6 +428,107 @@ fn stable_read_stops_at_attempt_limit() {
 }
 
 #[test]
+fn narrow_file_memo_reuses_parses_and_revalidates_stamps() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static PARSES: AtomicUsize = AtomicUsize::new(0);
+    fn parse(path: &Path, text: &str) -> Result<Parsed<CoreConfig>> {
+        PARSES.fetch_add(1, Ordering::Relaxed);
+        parse_core_text_collecting(path, text)
+    }
+
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "[sidebar]\nfocus_key = 'Alt+x'\n");
+    set_modified_time(&path, SystemTime::now() - Duration::from_secs(1));
+    let memo = Mutex::new(None);
+    let read = |path: &Path| read_file_lenient(path, &memo, parse);
+    let expire = || {
+        memo.lock().unwrap().as_mut().unwrap().last_verified =
+            Instant::now() - CONFIG_STAMP_TTL - Duration::from_millis(1);
+    };
+
+    assert_eq!(read(&path).sidebar.focus_key, "Alt+x");
+    assert_eq!(read(&path).sidebar.focus_key, "Alt+x");
+    assert_eq!(PARSES.load(Ordering::Relaxed), 1);
+    expire();
+    assert_eq!(read(&path).sidebar.focus_key, "Alt+x");
+    assert_eq!(PARSES.load(Ordering::Relaxed), 1);
+
+    std::fs::write(&path, "[sidebar]\nfocus_key = 'Alt+yy'\n").unwrap();
+    set_modified_time(&path, SystemTime::now() - Duration::from_secs(1));
+    assert_eq!(read(&path).sidebar.focus_key, "Alt+x");
+    assert_eq!(PARSES.load(Ordering::Relaxed), 1);
+    expire();
+    assert_eq!(read(&path).sidebar.focus_key, "Alt+yy");
+    assert_eq!(PARSES.load(Ordering::Relaxed), 2);
+
+    let other_dir = tempdir().unwrap();
+    let other = write(&other_dir, "[sidebar]\nfocus_key = 'Alt+z'\n");
+    set_modified_time(&other, SystemTime::now() - Duration::from_secs(1));
+    assert_eq!(read(&other).sidebar.focus_key, "Alt+z");
+    assert_eq!(PARSES.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn narrow_file_memo_keeps_last_quiet_value_during_rewrite() {
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "[sidebar]\nfocus_key = 'Alt+x'\n");
+    set_modified_time(&path, SystemTime::now() - Duration::from_secs(1));
+    let memo = Mutex::new(None);
+    let read = || read_file_lenient(&path, &memo, parse_core_text_collecting);
+    let expire = || {
+        memo.lock().unwrap().as_mut().unwrap().last_verified =
+            Instant::now() - CONFIG_STAMP_TTL - Duration::from_millis(1);
+    };
+    assert_eq!(read().sidebar.focus_key, "Alt+x");
+    assert!(
+        memo.lock().unwrap().is_some(),
+        "a quiet read must populate the memo"
+    );
+
+    std::fs::write(&path, "[sidebar]\nfocus_key = 'Alt+yy'\n").unwrap();
+    set_modified_time(&path, SystemTime::now() + Duration::from_secs(1));
+    // An unquiet read without a prior cache entry must not replace the other path's value.
+    let other = dir.path().join("other.toml");
+    std::fs::write(&other, "[sidebar]\nfocus_key = 'Alt+z'\n").unwrap();
+    set_modified_time(&other, SystemTime::now() + Duration::from_secs(1));
+    assert_eq!(
+        read_file_lenient(&other, &memo, parse_core_text_collecting)
+            .sidebar
+            .focus_key,
+        "Alt+z"
+    );
+    expire();
+    assert_eq!(read().sidebar.focus_key, "Alt+x");
+
+    set_modified_time(&path, SystemTime::now() - Duration::from_secs(1));
+    expire();
+    assert_eq!(read().sidebar.focus_key, "Alt+yy");
+}
+
+#[test]
+fn narrow_core_readers_share_the_memo() {
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "[agents.attention]\nactive_grace_secs = 7\n");
+    set_modified_time(&path, SystemTime::now() - Duration::from_secs(1));
+    assert_eq!(
+        read_core_lenient(&path)
+            .agents
+            .attention
+            .active_grace_secs
+            .get(),
+        7
+    );
+    std::fs::write(&path, "[agents.attention]\nactive_grace_secs = 8\n").unwrap();
+    assert_eq!(
+        AttentionConfig::load_lenient_from(&path)
+            .active_grace_secs
+            .get(),
+        7
+    );
+}
+
+#[test]
 fn load_memo_reuses_unchanged_inputs_and_busts_on_file_change() {
     let dir = tempdir().expect("tempdir");
     let agents_home = tempdir().expect("agents home");

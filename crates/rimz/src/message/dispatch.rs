@@ -257,9 +257,7 @@ pub fn dispatch(
 ) -> Result<DispatchResult> {
     request.auto_compact = request
         .auto_compact
-        .or(crate::config::MachineConfig::load_lenient()
-            .harness
-            .smart_compact);
+        .or_else(crate::config::HarnessConfig::load_smart_compact_lenient);
     let resuming = request.resuming_recipient.is_some();
     let boundary = request.mode.kind() == DeliveryKind::Boundary || resuming;
     let pending = if boundary {

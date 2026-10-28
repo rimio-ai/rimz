@@ -489,6 +489,16 @@ impl Default for HarnessConfig {
 }
 
 impl HarnessConfig {
+    /// Read the smart-compaction default from the typed core file alone.
+    /// Missing or broken files use the full lenient load's defaults and stable-file guard.
+    pub(crate) fn load_smart_compact_lenient() -> Option<AutoCompact> {
+        Self::load_smart_compact_lenient_from(&super::MachineConfig::config_path())
+    }
+
+    fn load_smart_compact_lenient_from(path: &std::path::Path) -> Option<AutoCompact> {
+        super::read_core_lenient(path).harness.smart_compact
+    }
+
     /// Settings, provider defaults, then the fallback, without live cache-write evidence.
     pub fn configured_lifetime(
         &self,

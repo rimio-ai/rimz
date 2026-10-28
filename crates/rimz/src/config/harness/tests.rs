@@ -368,6 +368,33 @@ fn smart_compact_deserializes_percent() {
 }
 
 #[test]
+fn narrow_smart_compact_matches_full_lenient_config() {
+    for core in [
+        Some("[harness]\nsmart_compact = '70%'\n"),
+        Some("[harness]\ncache_keepalive = false\n"),
+        Some("[harness\n"),
+        None,
+        Some("[harness]\nsmart_compact = 'off'\n"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let core_path = dir.path().join("config.toml");
+        if let Some(core) = core {
+            std::fs::write(&core_path, core).unwrap();
+        }
+        let full = crate::config::MachineConfig::load_lenient_from(
+            &core_path,
+            &dir.path().join("agents"),
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            HarnessConfig::load_smart_compact_lenient_from(&core_path),
+            full.harness.smart_compact,
+            "core contents: {core:?}"
+        );
+    }
+}
+
+#[test]
 fn compaction_defaults_apply_when_unset() {
     for config in [HarnessConfig::default(), toml::from_str("").unwrap()] {
         assert_eq!(config.auto_compact, Some(272_000));

@@ -802,12 +802,22 @@ upward-dependencies = [
 # Profile::effective_effort preserves listing defaults without baking launch values (+1).
 # Per-agent lifetime resolution and its static provenance replace the kind-only lookup (+4).
 # has_absolute_task_root and TaskEntry::root_problem share machine-root admission and its diagnosis (+2).
-surface-budget = 226
+# HarnessConfig::load_smart_compact_lenient shares the core-only dispatch default (+1).
+# AccountsConfig::load_lenient keeps session-login environments on core declarations (+1).
+# LoopConfig::load_lenient keeps read-only task catalogs on the loop file alone (+1).
+# AccountsConfig::with_lenient replaces the earlier reader without cloning account declarations.
+# MachineConfig::load_time_zone_lenient shares the core-only lifecycle time zone (+1).
+surface-budget = 230
 
 [[verdict]]
 kind = "item"
 key = "config::loop_::has_absolute_task_root"
 reason = "Machine task loading, replacement, and doctor share absolute-root admission without cwd or filesystem reads."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::LoopConfig::load_lenient"
+reason = "Read-only task catalogs share memoized lenient loop-file settings without definitions or theme."
 
 [[verdict]]
 kind = "item"

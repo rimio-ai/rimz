@@ -12,7 +12,7 @@ use super::{
     config_edit, instances, strikes,
 };
 use crate::Store;
-use crate::config::{MachineConfig, TaskEntry, Tasks};
+use crate::config::{LoopConfig, MachineConfig, TaskEntry, Tasks};
 use crate::disk::paths::{RuntimePaths, StatePaths, rimz_home, workspaces_dir};
 use crate::trust::TrustState;
 use crate::workspace::WorkspaceResolver;
@@ -301,7 +301,7 @@ impl TaskCatalog {
             .and_then(|root| instance_root(root).ok())
             .map(|root| instances::load_from(&root))
             .unwrap_or_default();
-        let machine = MachineConfig::load_lenient().r#loop.clone();
+        let machine = LoopConfig::load_lenient();
         let project = project_root.and_then(|root| {
             crate::config::effective::project_tasks(root, &rimz_home())
                 .ok()
