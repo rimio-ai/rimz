@@ -91,25 +91,14 @@ fn ended_labels_survive_lifecycle_and_launch_revival_in_every_fold() {
             assert_eq!(cursor_extent, cold_cache.extent);
             assert_eq!(thread_cache.extent, cold_cache.extent);
             let row = &cold[0];
-            assert_eq!(
-                row.first_prompt.as_deref(),
-                Some(if index == 0 {
-                    first.as_str()
-                } else {
-                    first_label.as_str()
-                })
-            );
+            assert_eq!(row.first_prompt.as_deref(), Some(first_label.as_str()));
             let expected_prompt = match index {
-                0 => first.as_str(),
+                0 => first_label.as_str(),
                 1 | 2 => latest_label.as_str(),
-                3 => "new\n prompt",
                 _ => "new prompt",
             };
             assert_eq!(row.prompt.as_deref(), Some(expected_prompt));
             assert_eq!(row.ended_at.is_some(), matches!(index, 1 | 4));
-            if row.ended_at.is_some() {
-                assert!(row.recent_prompts.is_empty());
-            }
             write_rollup_cache(&paths, &warm_cache).unwrap();
         }
     }

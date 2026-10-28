@@ -694,9 +694,7 @@ impl WaitingResolution {
 /// to condense.
 pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
-/// How many user prompts a session rollup retains, newest last.
-const RECENT_PROMPTS_LIMIT: usize = 16;
-const RECENT_PROMPT_MAX_CHARS: usize = 512;
+const PROMPT_LABEL_MAX_CHARS: usize = 160;
 
 /// Borrowed identity for one logical agent card.
 ///
@@ -726,22 +724,6 @@ impl<'a> AgentCardRef<'a> {
     pub fn matches(self, other: Self) -> bool {
         self.kind == other.kind
             && (self.agent_id == other.agent_id || (self.name.is_some() && self.name == other.name))
-    }
-}
-
-/// Append one concrete prompt without duplicating a repeated observation.
-fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
-    let prompt = prompt
-        .char_indices()
-        .nth(RECENT_PROMPT_MAX_CHARS)
-        .map_or(prompt, |(end, _)| &prompt[..end]);
-    if prompt.is_empty() || recent_prompts.last().is_some_and(|prior| prior == prompt) {
-        return;
-    }
-    recent_prompts.push(prompt.to_owned());
-    let excess = recent_prompts.len().saturating_sub(RECENT_PROMPTS_LIMIT);
-    if excess > 0 {
-        recent_prompts.drain(0..excess);
     }
 }
 
@@ -889,15 +871,18 @@ pub struct AgentState {
     pub task: Option<String>,
     /// The session's first usable user prompt. Set once and carried for the
     /// whole session so an unnamed card has a stable label across later turns.
-    /// Ended rows keep a normalized one-line label of at most 160 characters.
+    /// Every row keeps a normalized one-line label of at most 160 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_prompt: Option<String>,
     /// The user's latest prompt, carried forward across events (unlike the
     /// activity-bound `task`). Labels an unnamed session on the sidebar until a
     /// real session name exists.
-    /// Ended rows keep a normalized one-line label of at most 160 characters.
+    /// Every row keeps a normalized one-line label of at most 160 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Full-text wake classification, retained independently of the prompt label.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prompt_wake_only: bool,
     /// Launch-seeded card label (`rimz agents --description`), carried forward.
     /// Ranks below the agent's own session naming and above the prompt on the
     /// card's description line; replaced once the agent emits its own.
@@ -921,12 +906,6 @@ pub struct AgentState {
     /// provider compact evidence so the predecessor can be superseded exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_from: Option<AgentSessionId>,
-    /// Recent user prompts for this session, newest last, capped by the rollup.
-    /// The sidebar row keeps only `prompt`; snapshot JSON exposes the history on
-    /// `agents[]` for diagnostics and future panes.
-    /// Empty on ended rows.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub recent_prompts: Vec<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Canonical launch-carried budget (`$5.00` or `$20.00/day`).
@@ -1148,25 +1127,29 @@ impl AgentState {
     }
 
     /// Record a prompt and own the set-once rule for the first usable prompt.
-    pub fn observe_prompt(&mut self, prompt: &str) {
-        self.prompt = Some(prompt.to_owned());
+    pub fn observe_prompt(&mut self, prompt: &str, prompt_wake_only: bool) {
+        let label = single_line_prefix(prompt, PROMPT_LABEL_MAX_CHARS);
         if self.first_prompt.is_none() && usable_description(prompt) {
-            self.first_prompt = Some(prompt.to_owned());
+            self.first_prompt = label.clone();
         }
-        append_recent_prompt(&mut self.recent_prompts, prompt);
+        self.prompt = label;
+        self.prompt_wake_only = prompt_wake_only;
     }
 
-    /// Retain bounded presentation labels once a session has ended.
+    /// Apply the observation-time label rule to legacy persisted rows.
+    pub(crate) fn normalize_prompt_labels(&mut self) {
+        for prompt in [&mut self.first_prompt, &mut self.prompt] {
+            *prompt = prompt
+                .as_deref()
+                .and_then(|text| single_line_prefix(text, PROMPT_LABEL_MAX_CHARS));
+        }
+    }
+
+    /// Drop pane-command text once a session has ended.
     pub(crate) fn trim_ended_text(&mut self) {
         if self.ended_at.is_none() {
             return;
         }
-        for prompt in [&mut self.first_prompt, &mut self.prompt] {
-            *prompt = prompt
-                .as_deref()
-                .and_then(|text| single_line_prefix(text, 160));
-        }
-        self.recent_prompts.clear();
         if let Some(pane) = &mut self.pane {
             pane.spawn_command = None;
             pane.foreground_cmdline = None;
@@ -1287,12 +1270,12 @@ impl AgentState {
             task: None,
             first_prompt: None,
             prompt: None,
+            prompt_wake_only: false,
             description: None,
             transcript_path: None,
             origin: None,
             account_key: None,
             compacted_from: None,
-            recent_prompts: Vec::new(),
             model: None,
             effort: None,
             budget: None,
@@ -2034,7 +2017,7 @@ pub fn single_line_description(value: &str) -> Option<String> {
 }
 
 /// [`single_line_description`] cut to at most `max_chars` characters without
-/// a trailing space, reading `value` only as far as the cut: an ended row's
+/// a trailing space, reading `value` only as far as the cut: a row's
 /// label costs the same for a kilobyte prompt as for a short one.
 fn single_line_prefix(value: &str, max_chars: usize) -> Option<String> {
     let mut out = String::new();

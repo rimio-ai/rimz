@@ -130,7 +130,7 @@ fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result<()> {
 /// identities backfilled and rows key-sorted with unique keys (the last row
 /// for a duplicated key wins, as the fold's keyed maps always did). Shared
 /// read-only by every fold on this thread until the file changes. The cached
-/// form applies [`AgentState::trim_ended_text`] to legacy ended rows too.
+/// form normalizes legacy prompt labels and trims ended rows' pane commands.
 /// Rotation staging writes these labels and backfilled identities into the
 /// durable carryover.
 #[derive(Clone, Debug, Default)]
@@ -146,6 +146,13 @@ struct FoldCarryover {
 impl FoldCarryover {
     fn from_raw(mut raw: EventCarryover) -> Self {
         for agent in &mut raw.agents {
+            let prompt = agent.prompt.clone();
+            agent.normalize_prompt_labels();
+            if agent.prompt != prompt {
+                agent.prompt_wake_only |= prompt
+                    .as_deref()
+                    .is_some_and(crate::store::message::prompt_is_wake_only);
+            }
             agent.trim_ended_text();
         }
         backfill_agent_identities(&mut raw.agents, raw.agent_identity.clone());
@@ -328,9 +335,9 @@ pub(crate) fn agent_rollup_with_carryover(
 }
 
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
-/// [`AgentState::trim_ended_text`]'s rules change — a
+/// [`AgentState::normalize_prompt_labels`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 46;
+const ROLLUP_CACHE_VERSION: u32 = 47;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.

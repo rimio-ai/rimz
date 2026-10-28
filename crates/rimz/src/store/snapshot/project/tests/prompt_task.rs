@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn prompt_wake_only_classifies_full_batches_before_labelling() {
+    let wait = format!("Type: WAIT\nFrom: @rimz\nContent:\n{}", "wake ".repeat(60));
+    let peer = "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nNext task.";
+    let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI finished.";
+    let prefix = wait.chars().take(160).collect::<String>();
+    assert!(crate::store::message::prompt_is_wake_only(&prefix));
+    for (prompt, expected) in [
+        (format!("{wait}\n\n{peer}"), false),
+        (format!("{wait}\n\n{signal}"), true),
+    ] {
+        let started = raw_lifecycle(
+            "claude",
+            serde_json::json!({
+                "agent_id": "s1",
+                "signal": { "signal": "turn_started" },
+                "prompt": prompt,
+            }),
+        );
+        let stop = raw_lifecycle(
+            "claude",
+            serde_json::json!({
+                "agent_id": "s1",
+                "signal": {
+                    "signal": "turn_ended",
+                    "errored": false,
+                    "parked_on_background": false,
+                },
+            }),
+        );
+        let agents = reduce_agent_states(&[started, stop]);
+        assert_eq!(agents[0].prompt_wake_only, expected);
+        let label = agents[0].prompt.as_deref().unwrap();
+        assert!(label.chars().count() <= 160);
+        assert!(!crate::store::message::prompt_is_wake_only(label));
+    }
+}
+
+#[test]
 fn prompt_persists_past_stop_while_task_clears() {
     let prompt = raw_lifecycle(
         "claude",
@@ -93,7 +131,7 @@ fn adapter_description_replaces_launch_label_and_carries_forward() {
 }
 
 #[test]
-fn lifecycle_carries_transcript_path_and_bounded_prompt_history() {
+fn lifecycle_carries_transcript_path_and_prompt_labels() {
     let start = raw_lifecycle(
         "claude",
         serde_json::json!({
@@ -121,19 +159,11 @@ fn lifecycle_carries_transcript_path_and_bounded_prompt_history() {
 
     assert_eq!(agent.transcript_path.as_deref(), Some("/tmp/s1.jsonl"));
     assert_eq!(agent.prompt.as_deref(), Some("prompt 17"));
-    assert_eq!(agent.recent_prompts.len(), 16);
-    assert_eq!(
-        agent.recent_prompts.first().map(String::as_str),
-        Some("prompt 2")
-    );
-    assert_eq!(
-        agent.recent_prompts.last().map(String::as_str),
-        Some("prompt 17")
-    );
+    assert_eq!(agent.first_prompt.as_deref(), Some("prompt 0"));
 }
 
 #[test]
-fn launch_prompts_append_to_recent_prompt_history() {
+fn launch_prompts_keep_first_and_latest_labels() {
     let launch_with_prompt = |prompt: &str, offset: i64| {
         let mut event = launch_event(
             "codex",
@@ -152,9 +182,6 @@ fn launch_prompts_append_to_recent_prompt_history() {
         launch_with_prompt("verify", 3),
     ]);
 
-    assert_eq!(
-        agents[0].recent_prompts,
-        vec!["plan".to_owned(), "build".to_owned(), "verify".to_owned()]
-    );
+    assert_eq!(agents[0].prompt.as_deref(), Some("verify"));
     assert_eq!(agents[0].first_prompt.as_deref(), Some("plan"));
 }

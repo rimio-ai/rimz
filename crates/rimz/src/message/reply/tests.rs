@@ -284,7 +284,37 @@ fn wake_turn_continues_an_anchored_reply_without_a_sleeping_poll() {
 }
 
 #[test]
-fn card_identifies_wake_turns_from_the_rollup_prompt() {
+fn card_uses_recorded_wake_classification() {
+    let agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
+    let mut wire = serde_json::to_value(agent).unwrap();
+    for (prompt, expected) in [
+        (
+            "Type: WAIT\nFrom: @rimz\nContent:\nMixed batch label",
+            false,
+        ),
+        (
+            "Type: WAIT From: @rimz Content: Wake-only batch label",
+            true,
+        ),
+    ] {
+        wire["prompt"] = prompt.into();
+        wire["prompt_wake_only"] = expected.into();
+        let agent = serde_json::from_value(wire.clone()).unwrap();
+        let view = TurnWaitView {
+            snapshot: SidebarSnapshot::build_with_agents(
+                WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+                vec![agent],
+                Timestamp::UNIX_EPOCH,
+            ),
+            messages: Vec::new(),
+            now: Timestamp::UNIX_EPOCH,
+        };
+        assert_eq!(view.card(&view.snapshot.agents[0]).wake_turn, expected);
+    }
+}
+
+#[test]
+fn card_identifies_wake_turns_from_the_rollup_classification() {
     let mut agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
     agent.status = AgentStatus::Running;
     agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
@@ -301,6 +331,7 @@ fn card_identifies_wake_turns_from_the_rollup_prompt() {
         (None, false),
     ] {
         agent.prompt = prompt.map(str::to_owned);
+        agent.prompt_wake_only = prompt.is_some_and(crate::store::message::prompt_is_wake_only);
         let view = TurnWaitView {
             snapshot: SidebarSnapshot::build_with_agents(
                 workspace.clone(),

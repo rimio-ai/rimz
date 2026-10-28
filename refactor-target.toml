@@ -301,7 +301,8 @@ upward-dependencies = ["address"]
 # CacheWriteRetention and SignIn share per-agent lifetime inputs (+2).
 # AgentState::trim_ended_text shares ended-row labels with reducer and carryover reads (+1).
 # RateLimitsCache::shared_path and shared_lock bind shared names to the cache format (+2).
-surface-budget = 1168
+# AgentState::normalize_prompt_labels shares legacy row normalization with store readers (+1).
+surface-budget = 1169
 
 [[verdict]]
 kind = "item"

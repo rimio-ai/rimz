@@ -209,7 +209,20 @@ fn prior_launch_ids_decode_legacy_rows_and_skip_empty_lists() {
 }
 
 #[test]
-fn ended_text_keeps_canonical_bounded_labels_and_leaves_live_rows_whole() {
+fn live_prompt_observations_store_bounded_labels() {
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    let prompt = format!("  ship\u{0007}\n\t{}", "🦀".repeat(3_000));
+    let expected = format!("ship {}", "🦀".repeat(155));
+    agent.observe_prompt(&prompt, false);
+    assert_eq!(agent.prompt.as_deref(), Some(expected.as_str()));
+    assert_eq!(agent.first_prompt.as_deref(), Some(expected.as_str()));
+    agent.observe_prompt(" \r\n\t\u{0007}", false);
+    assert!(agent.prompt.is_none());
+    assert_eq!(agent.first_prompt.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn row_text_keeps_bounded_labels_and_only_live_pane_argv() {
     for (text, expected) in [
         (
             "first\n  second\tline".to_owned(),
@@ -227,27 +240,30 @@ fn ended_text_keeps_canonical_bounded_labels_and_leaves_live_rows_whole() {
         let mut agent = test_agent(AgentStatus::Idle, 1_000);
         agent.first_prompt = Some(text.clone());
         agent.prompt = Some(text);
-        agent.recent_prompts = vec!["history".to_owned()];
         agent.task = Some("task stays".to_owned());
         let mut pane = crate::pane::PaneRef::from_id("tmux:%7".parse().unwrap());
         pane.spawn_command = Some("spawn argv".to_owned());
         pane.foreground_cmdline = Some("foreground argv".to_owned());
         agent.pane = Some(pane);
         let live = agent.clone();
-        agent.trim_ended_text();
-        assert_eq!(agent, live);
-
-        agent.ended_at = Some(agent.last_seen);
+        agent.normalize_prompt_labels();
         agent.trim_ended_text();
         assert_eq!(agent.first_prompt, expected);
         assert_eq!(agent.prompt, expected);
-        assert!(agent.recent_prompts.is_empty());
+        assert_eq!(agent.pane, live.pane);
+
+        agent.ended_at = Some(agent.last_seen);
+        agent.normalize_prompt_labels();
+        agent.trim_ended_text();
+        assert_eq!(agent.first_prompt, expected);
+        assert_eq!(agent.prompt, expected);
         let mut expected_pane = live.pane.unwrap();
         expected_pane.spawn_command = None;
         expected_pane.foreground_cmdline = None;
         assert_eq!(agent.pane, Some(expected_pane));
         assert_eq!(agent.task.as_deref(), Some("task stays"));
         let once = agent.clone();
+        agent.normalize_prompt_labels();
         agent.trim_ended_text();
         assert_eq!(agent, once, "ended labels are idempotent");
     }
@@ -259,6 +275,7 @@ fn ended_labels_preserve_short_session_name_prefix_decisions() {
         let mut agent = test_agent(AgentStatus::Idle, 1_000);
         agent.first_prompt = Some(text.to_owned());
         agent.ended_at = Some(agent.last_seen);
+        agent.normalize_prompt_labels();
         agent.trim_ended_text();
         assert_eq!(agent.first_prompt, single_line_description(text));
         for name in ["short", "short prompt", "ship now", "é", "different", ""] {
@@ -269,17 +286,6 @@ fn ended_labels_preserve_short_session_name_prefix_decisions() {
             );
         }
     }
-}
-
-#[test]
-fn recent_prompts_truncate_multibyte_text_before_deduplication() {
-    let mut agent = test_agent(AgentStatus::Running, 1_000);
-    let prompt = "🦀".repeat(10_000);
-    agent.observe_prompt(&prompt);
-    agent.observe_prompt(&prompt);
-    assert_eq!(agent.recent_prompts, vec!["🦀".repeat(512)]);
-    agent.observe_prompt(&format!("{prompt}different suffix"));
-    assert_eq!(agent.recent_prompts.len(), 1);
 }
 
 #[test]
@@ -330,7 +336,7 @@ fn hibernation_is_not_a_wire_status() {
 }
 
 #[test]
-fn observe_prompt_sets_first_prompt_once_skips_control_text_and_caps_recent() {
+fn observe_prompt_sets_first_label_once_and_skips_control_text() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     let initial = agent.clone();
     for prompt in [
@@ -338,36 +344,24 @@ fn observe_prompt_sets_first_prompt_once_skips_control_text_and_caps_recent() {
         "<system-reminder>control</system-reminder>",
         "<task-notification>control</task-notification>",
     ] {
-        agent.observe_prompt(prompt);
-        assert_eq!(agent.prompt.as_deref(), Some(prompt));
+        agent.observe_prompt(prompt, false);
+        assert_eq!(
+            agent.prompt.as_deref(),
+            (!prompt.is_empty()).then_some(prompt)
+        );
         assert_eq!(agent.first_prompt, None);
-        if !prompt.is_empty() {
-            assert_eq!(
-                agent.recent_prompts.last().map(String::as_str),
-                Some(prompt)
-            );
-        }
     }
-    assert_eq!(agent.recent_prompts.len(), 2);
-    agent.observe_prompt("first usable prompt");
-    agent.observe_prompt("first usable prompt");
-    assert_eq!(agent.recent_prompts.len(), 3);
-    agent.observe_prompt("");
-    assert_eq!(agent.prompt.as_deref(), Some(""));
+    agent.observe_prompt("first usable prompt", false);
+    agent.observe_prompt("", false);
+    assert!(agent.prompt.is_none());
     assert_eq!(agent.first_prompt.as_deref(), Some("first usable prompt"));
-    assert_eq!(agent.recent_prompts.len(), 3);
     for n in 0..20 {
-        agent.observe_prompt(&format!("prompt {n}"));
+        agent.observe_prompt(&format!("prompt {n}"), false);
     }
     assert_eq!(agent.prompt.as_deref(), Some("prompt 19"));
     assert_eq!(agent.first_prompt.as_deref(), Some("first usable prompt"));
-    assert_eq!(
-        agent.recent_prompts,
-        (4..20).map(|n| format!("prompt {n}")).collect::<Vec<_>>()
-    );
     agent.prompt = initial.prompt.clone();
     agent.first_prompt = initial.first_prompt.clone();
-    agent.recent_prompts = initial.recent_prompts.clone();
     assert_eq!(agent, initial);
 }
 
@@ -470,7 +464,7 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     assert!(running.name.is_none());
     assert!(running.pane.is_none());
     assert!(running.runtime_owner.is_none());
-    assert!(running.recent_prompts.is_empty());
+    assert!(!running.prompt_wake_only);
     assert!(running.usage.context_pct.is_none());
     assert!(running.usage.context_window.is_none());
     assert!(running.usage.total_tokens.is_none());

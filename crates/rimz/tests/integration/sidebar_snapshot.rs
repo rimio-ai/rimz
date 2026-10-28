@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::common::{Env, tmux_pane};
 
 #[test]
-fn ended_rows_keep_labels_without_prompt_history_or_pane_argv() {
+fn ended_rows_keep_labels_without_pane_argv() {
     let env = Env::new();
     env.record(&env.project_root);
     let store = env.store();
@@ -26,7 +26,6 @@ fn ended_rows_keep_labels_without_prompt_history_or_pane_argv() {
     child.ended_at = Some(now);
     child.first_prompt = Some(format!("first\n {}", "x".repeat(300)));
     child.prompt = Some("latest\n request".to_owned());
-    child.recent_prompts = vec!["full history".to_owned()];
     let mut child_pane = tmux_pane("%8", "claude", &env.project_root);
     child_pane.spawn_command = Some("claude --prompt full history".to_owned());
     child_pane.foreground_cmdline = Some("claude --prompt full history".to_owned());
@@ -59,7 +58,7 @@ fn ended_rows_keep_labels_without_prompt_history_or_pane_argv() {
         .expect("retained ended child");
     assert_eq!(child["prompt"], "latest request");
     assert_eq!(child["first_prompt"], format!("first {}", "x".repeat(154)));
-    assert!(child.get("recent_prompts").is_none());
+    assert!(child.get("prompt_wake_only").is_none());
     assert!(child["pane"].get("spawn_command").is_none());
     assert!(child["pane"].get("foreground_cmdline").is_none());
 }

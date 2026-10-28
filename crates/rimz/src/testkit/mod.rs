@@ -285,7 +285,7 @@ pub mod fleet {
     }
 
     /// The same history as [`seed_ended_carryover`] in the shape a rotation
-    /// writes today: ended rows keep only their prompt labels.
+    /// writes today: every row keeps prompt labels and ended rows drop pane argv.
     pub fn seed_trimmed_carryover(store: &crate::Store, rows: usize) -> crate::store::Result<()> {
         seed_carryover(store, rows, false, EndedText::Trimmed)
     }
@@ -315,7 +315,6 @@ pub mod fleet {
                 agent.task = Some("history task".to_owned());
                 agent.first_prompt = Some(String::new());
                 agent.prompt = Some(String::new());
-                agent.recent_prompts = vec![String::new(), String::new()];
                 if index % 100 < 39 {
                     let mut pane = synthetic_pane(index);
                     pane.foreground_cmdline = Some(String::new());
@@ -329,16 +328,16 @@ pub mod fleet {
                     _ => 35_900,
                 };
                 let base_bytes = serde_json::to_vec(&agent).expect("fixture row").len();
-                let fields = if agent.pane.is_some() { 6 } else { 4 };
+                let fields = if agent.pane.is_some() { 4 } else { 2 };
                 let prompt = "p".repeat(target_bytes.saturating_sub(base_bytes) / fields);
                 agent.first_prompt = Some(prompt.clone());
                 agent.prompt = Some(prompt.clone());
-                agent.recent_prompts = vec![prompt.clone(), prompt.clone()];
                 if let Some(pane) = &mut agent.pane {
                     pane.foreground_cmdline = Some(prompt.clone());
                     pane.spawn_command = Some(prompt);
                 }
                 if ended_text == EndedText::Trimmed {
+                    agent.normalize_prompt_labels();
                     agent.trim_ended_text();
                 }
                 agent

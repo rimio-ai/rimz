@@ -79,7 +79,6 @@ fn legacy_ended_carryover_folds_and_stages_only_labels() {
     carried.kind_ordinal = Some(1);
     carried.first_prompt = Some(format!("first\n {}", "x".repeat(300)));
     carried.prompt = Some("latest\n prompt".to_owned());
-    carried.recent_prompts = vec!["first prompt".to_owned(), "latest prompt".to_owned()];
     let mut stamp = pane("%7", "claude", "/repo");
     stamp.foreground_cmdline = Some("foreground prompt".to_owned());
     stamp.spawn_command = Some("birth prompt".to_owned());
@@ -96,7 +95,6 @@ fn legacy_ended_carryover_folds_and_stages_only_labels() {
     let mut expected = before.agents[0].clone();
     expected.first_prompt = Some(format!("first {}", "x".repeat(154)));
     expected.prompt = Some("latest prompt".to_owned());
-    expected.recent_prompts.clear();
     let stamp = expected.pane.as_mut().unwrap();
     stamp.foreground_cmdline = None;
     stamp.spawn_command = None;

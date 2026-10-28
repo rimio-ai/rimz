@@ -69,6 +69,55 @@ fn fold_ready(agents: Vec<AgentState>) -> Arc<FoldCarryover> {
 }
 
 #[test]
+fn live_legacy_carryover_prompts_are_normalized() {
+    let mut live = agent("claude", "live", AgentStatus::Running, 1_000);
+    live.first_prompt = Some(format!("first\n {}", "雪".repeat(300)));
+    live.prompt = Some("latest\u{0007}\t request".to_owned());
+    let carried = FoldCarryover::from_raw(EventCarryover {
+        agents: vec![live.clone()],
+        ..EventCarryover::default()
+    });
+    let row = carried.get(&live.kind, &live.agent_id).unwrap();
+    assert_eq!(
+        row.first_prompt,
+        Some(format!("first {}", "雪".repeat(154)))
+    );
+    assert_eq!(row.prompt.as_deref(), Some("latest request"));
+    assert!(!row.prompt_wake_only);
+}
+
+#[test]
+fn legacy_carryover_classifies_wakes_before_labeling() {
+    let wake = format!(
+        "Type: WAIT\nFrom: @rimz\nContent:\n{}",
+        "check back ".repeat(40)
+    );
+    let mixed = format!("{wake}\n\nType: AGENT_MESSAGE\nFrom: @otter\nContent:\nanswer me");
+    for (prompt, stamped, expected) in [
+        (wake.clone(), false, true),
+        ("a user request ".repeat(40), false, false),
+        (mixed, false, false),
+        (
+            "Type: WAIT From: @rimz Content: check back".to_owned(),
+            false,
+            false,
+        ),
+        ("a normalized wake label".to_owned(), true, true),
+    ] {
+        let mut live = agent("claude", "live", AgentStatus::Running, 1_000);
+        live.prompt = Some(prompt.clone());
+        live.prompt_wake_only = stamped;
+        let carried = FoldCarryover::from_raw(EventCarryover {
+            agents: vec![live.clone()],
+            ..EventCarryover::default()
+        });
+        let row = carried.get(&live.kind, &live.agent_id).unwrap();
+        assert_eq!(row.prompt_wake_only, expected, "{prompt}");
+        assert!(row.prompt.as_ref().unwrap().chars().count() <= 160);
+    }
+}
+
+#[test]
 fn ended_carryover_keeps_bounded_labels_without_splitting_characters() {
     for (prompt, expected) in [
         ("é🦊".repeat(200), "é🦊".repeat(80)),
@@ -87,7 +136,6 @@ fn ended_carryover_keeps_bounded_labels_without_splitting_characters() {
         ended.ended_at = Some(ended.last_seen);
         ended.first_prompt = Some(prompt);
         ended.prompt = Some("latest prompt".to_owned());
-        ended.recent_prompts = vec!["latest prompt".to_owned()];
         let mut stamp = pane("%7", "claude", "/repo");
         stamp.foreground_cmdline = Some("foreground prompt".to_owned());
         stamp.spawn_command = Some("birth prompt".to_owned());
@@ -102,14 +150,12 @@ fn ended_carryover_keeps_bounded_labels_without_splitting_characters() {
         let ended = trimmed.get(&continuing.kind, &"ended".into()).unwrap();
         assert_eq!(ended.first_prompt.as_deref(), Some(expected.as_str()));
         assert_eq!(ended.prompt.as_deref(), Some("latest prompt"));
-        assert!(ended.recent_prompts.is_empty());
         let stamp = ended.pane.as_ref().unwrap();
         assert!(stamp.foreground_cmdline.is_none());
         assert!(stamp.spawn_command.is_none());
         let live = trimmed.get(&continuing.kind, &continuing.agent_id).unwrap();
-        assert_eq!(live.first_prompt, continuing.first_prompt);
+        assert_eq!(live.first_prompt.as_deref(), Some(expected.as_str()));
         assert_eq!(live.prompt, continuing.prompt);
-        assert_eq!(live.recent_prompts, continuing.recent_prompts);
         assert_eq!(live.pane, continuing.pane);
     }
 }

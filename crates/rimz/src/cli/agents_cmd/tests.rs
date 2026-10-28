@@ -1979,7 +1979,6 @@ mod render {
         child.ended_at = Some(now);
         child.first_prompt = Some(format!("{}\nsecond line", "full prompt ".repeat(40)));
         child.prompt = Some("latest prompt".to_owned());
-        child.recent_prompts = vec!["latest prompt".to_owned()];
         rimz::disk::atomic::write_temp_then_rename(
             &store.paths().agents_carryover,
             &serde_json::json!({"agents": [parent, child]}),
@@ -2025,7 +2024,6 @@ mod render {
             Some(format!("{}full", "full prompt ".repeat(13))),
         );
         assert_eq!(loaded.prompt, child.prompt);
-        assert!(loaded.recent_prompts.is_empty());
         let audit = show::resolve_audit_agent(&store, &workspace, &runtime, "@child", &channel)
             .unwrap()
             .unwrap();
