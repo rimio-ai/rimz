@@ -58,7 +58,7 @@ pub(super) fn empty_observation() -> Observed {
     }
 }
 
-fn observed_outcome(
+pub(super) fn observed_outcome(
     observed: &Observed,
     lifecycle: crate::store::workflow::StepLifecycle,
     on_asked: bool,
@@ -84,10 +84,18 @@ fn observed_outcome(
     }
 }
 
+pub(super) fn fold_limited(observed: &mut Observed, outcome: AttemptOutcome) {
+    if outcome == AttemptOutcome::Limited
+        && (observed.limited.is_none() || observed.status == RunStatus::BudgetExceeded)
+    {
+        observed.limited = Some(Limited { reset_at: None });
+    }
+}
+
 /// Folds one observation's blocking ask into the attempt's hold and reports whether it changed.
 /// A new hold opens at the ask's own open time, clamped to the attempt; a kept hold keeps its
 /// start; the first observation without an ask closes it into `asked_ms`.
-fn hold(
+pub(super) fn hold(
     attempt: &mut workflow::LiveAttempt,
     ask: Option<&workflow::Asking>,
     now: Timestamp,
@@ -183,16 +191,16 @@ pub(super) fn prepare_end(
             })
     };
     let Some(ending) = ending else {
+        if until::begin(t, &observed) {
+            persist(t, guard)?;
+            return Ok(Decision::Again);
+        }
         if hold_changed {
             persist(t, guard)?;
         }
         return Ok(Decision::Stop);
     };
-    if ending.outcome == AttemptOutcome::Limited
-        && (observed.limited.is_none() || observed.status == RunStatus::BudgetExceeded)
-    {
-        observed.limited = Some(Limited { reset_at: None });
-    }
+    fold_limited(&mut observed, ending.outcome);
     let launching = missing_run && host_live;
     t.stage_agent_end(ending, &observed);
     if launching {
@@ -269,8 +277,10 @@ pub(super) fn launch(
                 .is_some_and(|attempt| attempt.ending.is_none())
             {
                 // A terminal wake may have preceded publication of the run identity.
-                if !matches!(prepare_end(&mut t, host, &guard)?, Decision::End(_)) {
-                    return Ok(false);
+                match prepare_end(&mut t, host, &guard)? {
+                    Decision::Again => return Ok(true),
+                    Decision::End(_) => {}
+                    _ => return Ok(false),
                 }
             }
             None

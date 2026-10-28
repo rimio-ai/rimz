@@ -41,11 +41,13 @@ pub(super) fn evaluate(
         );
     }
     let checked_at = source.checked_at(&record.scope.path);
+    let (entered_at, stale_reason) = record.held.as_ref().map_or(
+        (record.entered_at, "probed before this check was entered"),
+        |held| (held.entered_at, "probed before this session started"),
+    );
     let ci_unread = source
         .ci_commits(&record.scope.path)
-        .filter(|_| {
-            readings.contains_key("ci") && checked_at.is_some_and(|at| at >= record.entered_at)
-        })
+        .filter(|_| readings.contains_key("ci") && checked_at.is_some_and(|at| at >= entered_at))
         .and_then(|(pr_head, ci_sha)| {
             // Compare ci_sha with the cached PR head, and that head with fresh local HEAD.
             // Read HEAD after the cache. Settlement uses the PR head at checked_at, without
@@ -63,7 +65,7 @@ pub(super) fn evaluate(
         &expressions,
         readings,
         checked_at,
-        record.entered_at,
+        (entered_at, stale_reason),
         ci_unread,
         |key| schedule::unread_reason(source.probe_unread_reason(key, &record.scope.path), now),
     ))
@@ -74,7 +76,7 @@ fn answer(
     expressions: &[WhenExpr],
     mut readings: BTreeMap<String, Option<String>>,
     checked_at: Option<Timestamp>,
-    entered_at: Timestamp,
+    (entered_at, stale_reason): (Timestamp, &str),
     ci_unread: Option<String>,
     unread: impl Fn(&str) -> String,
 ) -> Value {
@@ -116,7 +118,7 @@ fn answer(
                             let reason = if !forge_keys.contains(key.as_str()) {
                                 "not read".into()
                             } else if checked_at.is_some_and(|at| at < entered_at) {
-                                "probed before this check was entered".into()
+                                stale_reason.into()
                             } else if key == "ci"
                                 && let Some(reason) = &ci_unread
                             {
@@ -234,7 +236,7 @@ mod tests {
                     ("ci".into(), readings[1].map(str::to_owned)),
                 ]),
                 Some(now),
-                now,
+                (now, "probed before this check was entered"),
                 None,
                 |_| "not read".into(),
             );
@@ -288,7 +290,7 @@ mod tests {
                         ("window.5h.left".into(), Some("80".into())),
                     ]),
                     checked,
-                    entered,
+                    (entered, "probed before this check was entered"),
                     None,
                     |_| "not checked yet".into(),
                 );
@@ -418,7 +420,7 @@ mod tests {
                     } else {
                         entered - jiff::SignedDuration::from_secs(1)
                     }),
-                    entered,
+                    (entered, "probed before this check was entered"),
                     ci_unread(pr_head, ci_sha, local, ancestor),
                     |_| "not checked yet".into(),
                 );
@@ -460,7 +462,7 @@ mod tests {
                 &[WhenExpr::parse(&[clause]).unwrap()],
                 BTreeMap::from([(key.into(), Some(value.into()))]),
                 Some(entered),
-                entered,
+                (entered, "probed before this check was entered"),
                 ci_unread("pr", Some("old"), Some("local"), Some(false)),
                 |_| "not checked yet".into(),
             );

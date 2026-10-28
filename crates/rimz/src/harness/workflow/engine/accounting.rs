@@ -2,29 +2,50 @@ use super::*;
 use crate::diag::DiagSink;
 use crate::diag::record::DiagEvent;
 use crate::harness::assist_log::{self, Assist, AssistRecord};
-use crate::store::workflow::EvaluationOrigin;
+use crate::store::workflow::{EvaluationOrigin, TurnEndAction};
 
 pub(super) fn transition(t: &Transition<'_>) {
+    let turn_end = t
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.event, JournalEvent::TurnEnd { .. }));
     let explicit_route = t
         .entries
         .iter()
         .any(|entry| matches!(entry.event, JournalEvent::Route { .. }));
     for entry in &t.entries {
+        if turn_end
+            && matches!(
+                entry.event,
+                JournalEvent::Evaluation { .. }
+                    | JournalEvent::Route { .. }
+                    | JournalEvent::Attempt { .. }
+            )
+        {
+            continue;
+        }
         let route = match &entry.event {
-            JournalEvent::Route { outcome, .. } if t.record.wait.is_none() => {
+            JournalEvent::Route { outcome, .. }
+                if t.record.held.is_none() && t.record.wait.is_none() =>
+            {
                 Some((outcome.clone(), None))
             }
             JournalEvent::Evaluation {
                 origin: EvaluationOrigin::Check,
                 outcome,
                 ..
-            } if !explicit_route && t.record.wait.is_none() => Some((outcome.clone(), None)),
+            } if !explicit_route && t.record.held.is_none() && t.record.wait.is_none() => {
+                Some((outcome.clone(), None))
+            }
             JournalEvent::Evaluation {
                 origin: EvaluationOrigin::Engine,
                 outcome,
                 object,
                 ..
             } if !explicit_route => {
+                if until::has_pending_verdict(&t.record) {
+                    continue;
+                }
                 if t.record.state == RunState::Active && outcome == "canceled" {
                     diagnostic(
                         &t.record,
@@ -52,6 +73,9 @@ pub(super) fn transition(t: &Transition<'_>) {
                     );
                     continue;
                 }
+                if t.record.held.is_some() {
+                    continue;
+                }
                 Some((outcome.clone(), None))
             }
             JournalEvent::Attempt { outcome, .. }
@@ -69,6 +93,28 @@ pub(super) fn transition(t: &Transition<'_>) {
                     .into(),
                     None,
                 ))
+            }
+            JournalEvent::TurnEnd {
+                action,
+                check,
+                outcome: Some(outcome),
+                target: Some(target),
+                ..
+            } if *action == TurnEndAction::Closed
+                || (*action == TurnEndAction::Kept && target != "@wait") =>
+            {
+                assist_log::append(&AssistRecord {
+                    at: entry.at,
+                    assist: Assist::WorkflowRoute {
+                        run: t.record.id.clone(),
+                        workflow: t.record.workflow.clone(),
+                        node: check.clone(),
+                        outcome: outcome.clone(),
+                        to: target.clone(),
+                        count: None,
+                    },
+                });
+                None
             }
             JournalEvent::Wait { outcome, count, .. } => Some((outcome.clone(), Some(*count))),
             JournalEvent::Park { reason, text } => {

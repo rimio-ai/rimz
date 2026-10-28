@@ -229,6 +229,7 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
         // into it, so an unfired deadline is a due edge of its own.
         let deadline = record.deadline.filter(|_| !record.deadline_fired);
         if record.recheck_at.is_some_and(|at| at > now)
+            && record.held.is_none()
             && !deadline.is_some_and(|at| at <= now)
             && !record.wait.as_ref().is_some_and(|wait| wait.is_hold())
         {
