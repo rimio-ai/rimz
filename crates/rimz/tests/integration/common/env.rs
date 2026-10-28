@@ -891,11 +891,17 @@ fn rimz_command_pins_persistent_roots_and_both_mux_namespaces() {
     assert!(!codex_bin.exists(), "the default codex binary is missing");
     let probe_timeout_ms = configured(super::ENV_PROBE_TIMEOUT_MS_ENV);
     assert_eq!(probe_timeout_ms.as_os_str(), "20000");
+    assert_eq!(configured("RIMZ_PRICING_OFFLINE").as_os_str(), "1");
 
     let mut pty = portable_pty::CommandBuilder::new("rimz");
     pty.env("CODEX_HOME", "/ambient/codex");
+    pty.env("RIMZ_PRICING_OFFLINE", "0");
     env.pin_pty_command(&mut pty);
     assert_eq!(pty.get_env("RIMZ_CODEX_BIN"), Some(codex_bin.as_os_str()));
+    assert_eq!(
+        pty.get_env("RIMZ_PRICING_OFFLINE"),
+        Some(std::ffi::OsStr::new("1"))
+    );
     assert_eq!(
         pty.get_env(super::ENV_PROBE_TIMEOUT_MS_ENV),
         Some(probe_timeout_ms.as_os_str())

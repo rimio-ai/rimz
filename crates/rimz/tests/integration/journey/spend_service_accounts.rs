@@ -39,9 +39,7 @@ fn accounts_of_one_pool_share_the_held_spend_service() {
         for key in ROOT_KEYS {
             command.env(key, &base);
         }
-        command
-            .env("RIMZ_PRICING_OFFLINE", "1")
-            .env_remove("RUST_LOG");
+        command.env_remove("RUST_LOG");
         if let Some(home) = account_home {
             command.env("CLAUDE_CONFIG_DIR", home);
         }

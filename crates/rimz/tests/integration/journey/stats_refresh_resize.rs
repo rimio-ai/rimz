@@ -175,7 +175,6 @@ impl StatsRefreshHarness {
         ] {
             cmd.env(key, xdg.path());
         }
-        cmd.env("RIMZ_PRICING_OFFLINE", "1");
         cmd.env_remove("CLAUDE_CONFIG_DIR");
         cmd.env_remove("CODEX_HOME");
         cmd.env_remove("PI_AGENT_DIR");

@@ -100,6 +100,7 @@ impl HostSandbox {
         sandbox.env.insert(SKIP_LOG_ENV, skip_log);
         let missing_codex = sandbox.root.join("missing-codex");
         sandbox.env.insert(CODEX_BIN_ENV, missing_codex);
+        sandbox.env.insert(PRICING_OFFLINE_ENV, PathBuf::from("1"));
         Ok(sandbox)
     }
 
@@ -214,6 +215,12 @@ const SKIP_LOG_ENV: &str = "RIMZ_TEST_SKIP_LOG";
 /// builds (`crates/rimz/tests/integration/common/command.rs`); this export
 /// covers the births that build no command.
 const CODEX_BIN_ENV: &str = "RIMZ_CODEX_BIN";
+
+/// The pricing switch a test sandbox turns on, so a test process and every
+/// spending walk it runs in-process fetch no live price list. The integration
+/// scrub sets the same default on each command it builds; a manual sandbox
+/// leaves it unset, so a live check keeps real pricing.
+const PRICING_OFFLINE_ENV: &str = "RIMZ_PRICING_OFFLINE";
 
 const SKIP_NAMES_SHOWN: usize = 5;
 
