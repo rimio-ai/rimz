@@ -27,6 +27,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+#[cfg(all(target_os = "linux", any(test, feature = "testkit")))]
+use crate::testkit::host_pass::{Counter, count};
+
 /// Native Linux boot identity, cached once per process, including failed reads.
 /// Other platforms have no cheap native identity and return `None`.
 pub fn boot_id() -> Option<String> {
@@ -364,6 +367,8 @@ pub(crate) fn process_group_has_env(pgid: u32, key: &str, value: &str) -> bool {
 /// program.
 #[cfg(target_os = "linux")]
 pub fn comm(pid: u32) -> Option<String> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcComm);
     parse_comm(&std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?)
 }
 
@@ -377,6 +382,8 @@ pub fn comm(_pid: u32) -> Option<String> {
 /// a private platform reader.
 #[cfg(target_os = "linux")]
 pub fn comm_and_ppid(pid: u32) -> Option<(String, u32)> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcStatus);
     parse_status_name_ppid(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
 }
 
@@ -385,6 +392,8 @@ pub fn comm_and_ppid(pid: u32) -> Option<(String, u32)> {
 /// process role. Unreadable and unsupported process tables abstain.
 #[cfg(target_os = "linux")]
 pub fn argv(pid: u32) -> Option<Vec<std::ffi::OsString>> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcCmdline);
     parse_argv(&std::fs::read(format!("/proc/{pid}/cmdline")).ok()?)
 }
 
@@ -499,6 +508,8 @@ fn parse_comm(raw: &str) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn read_proc(pid: u32) -> Option<ProcInfo> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcStatus);
     let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     let (ppid, real_uid) = parse_status_identity(&status)?;
     Some(ProcInfo {
@@ -557,6 +568,8 @@ fn parse_status_name_ppid(status: &str) -> Option<(String, u32)> {
 /// process — so callers fall back rather than guess.
 #[cfg(target_os = "linux")]
 pub(crate) fn cmdline(pid: u32) -> Option<String> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcCmdline);
     let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     Some(
         String::from_utf8_lossy(&raw)
@@ -577,6 +590,8 @@ pub(crate) fn cmdline(_pid: u32) -> Option<String> {
 /// user's private environment or config.
 #[cfg(target_os = "linux")]
 pub(crate) fn real_uid(pid: u32) -> Option<u32> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcStatus);
     parse_status_identity(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
         .map(|(_, uid)| uid)
 }
@@ -595,7 +610,11 @@ pub(crate) fn real_uid(_pid: u32) -> Option<u32> {
 /// `/proc` — another user's process — so callers fall back rather than guess.
 #[cfg(target_os = "linux")]
 pub(crate) fn process_start(pid: u32) -> Option<jiff::Timestamp> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcStat);
     let ticks = parse_starttime_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)?;
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcBootStat);
     let btime = parse_btime(&std::fs::read_to_string("/proc/stat").ok()?)?;
     let seconds = btime.checked_add((ticks / clk_tck()) as i64)?;
     jiff::Timestamp::from_second(seconds).ok()
@@ -611,6 +630,8 @@ pub(crate) fn process_start(_pid: u32) -> Option<jiff::Timestamp> {
 /// process start timestamp because tokens compare only on the same host.
 #[cfg(target_os = "linux")]
 pub fn process_start_token(pid: u32) -> Option<String> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcStat);
     parse_starttime_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
         .map(|ticks| ticks.to_string())
 }
@@ -661,6 +682,8 @@ fn unix_kill_probe(pid: u32) -> bool {
 /// that backs the pane. `None` on a non-Linux target or an unreadable link.
 #[cfg(target_os = "linux")]
 pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcCwd);
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
@@ -798,6 +821,8 @@ pub(crate) struct StatMetrics {
 /// unreadable/garbled stat line, so callers abstain rather than guess.
 #[cfg(target_os = "linux")]
 pub(crate) fn stat_metrics(pid: u32) -> Option<StatMetrics> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcStat);
     parse_stat_metrics(
         &std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?,
         page_size_kb(),
@@ -814,6 +839,8 @@ pub(crate) fn input_tty(provider_pid: u32) -> Option<std::fs::File> {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(any(test, feature = "testkit"))]
+        count(Counter::ProcStat);
         let stat = std::fs::read_to_string(format!("/proc/{provider_pid}/stat")).ok()?;
         let flags = nix::fcntl::OFlag::O_NOCTTY
             | nix::fcntl::OFlag::O_NONBLOCK
@@ -962,6 +989,8 @@ fn parse_btime(stat: &str) -> Option<i64> {
 /// and an unreadable task file skips that task's child edge for the sample.
 #[cfg(target_os = "linux")]
 pub fn children(pid: u32) -> Vec<u32> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcTaskDir);
     let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
         return Vec::new();
     };
@@ -976,6 +1005,8 @@ pub fn children(pid: u32) -> Vec<u32> {
         {
             continue;
         }
+        #[cfg(any(test, feature = "testkit"))]
+        count(Counter::ProcChildren);
         if let Ok(raw) = std::fs::read_to_string(entry.path().join("children")) {
             children.extend(parse_children(&raw));
         }
@@ -1004,6 +1035,8 @@ fn parse_children(raw: &str) -> Vec<u32> {
 /// missing field.
 #[cfg(target_os = "linux")]
 pub(crate) fn io_bytes(pid: u32) -> Option<u64> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcIo);
     let io = std::fs::read_to_string(format!("/proc/{pid}/io")).ok()?;
     parse_io_bytes(&io)
 }
@@ -1018,6 +1051,8 @@ pub(crate) fn io_bytes(_pid: u32) -> Option<u64> {
 /// non-Linux target, an unreadable file, or a missing field.
 #[cfg(target_os = "linux")]
 pub fn write_bytes(pid: u32) -> Option<u64> {
+    #[cfg(any(test, feature = "testkit"))]
+    count(Counter::ProcIo);
     let io = std::fs::read_to_string(format!("/proc/{pid}/io")).ok()?;
     parse_write_bytes(&io)
 }
@@ -1071,7 +1106,11 @@ fn parse_tree_memory(status: &str) -> Option<TreeMemory> {
 pub fn tree_memory_kb(root_pid: u32) -> Option<TreeMemory> {
     tree_memory_kb_with(
         root_pid,
-        &|pid| parse_tree_memory(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?),
+        &|pid| {
+            #[cfg(any(test, feature = "testkit"))]
+            count(Counter::ProcStatus);
+            parse_tree_memory(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
+        },
         &children,
     )
 }

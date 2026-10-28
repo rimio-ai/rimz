@@ -32,6 +32,8 @@ use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState, ViewState};
 use crate::sidebar_pane::view::BodyLens;
 use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
+#[cfg(any(test, feature = "testkit"))]
+use crate::testkit::host_pass::{self, Counter};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{MuxName, RuntimePaths};
 
@@ -732,11 +734,17 @@ impl LoopState {
                 self.pane.fetch.completed(),
             )
         };
+        #[cfg(any(test, feature = "testkit"))]
+        host_pass::add(Counter::DrainClone, pending.len() as u64);
         let deferred = allow_defer
             && pending.iter().all(FetchUpdate::is_success)
             && pending
                 .iter()
-                .find_map(|update| update.preview_for(&self.pane.config.own_pane))
+                .find_map(|update| {
+                    #[cfg(any(test, feature = "testkit"))]
+                    host_pass::count(Counter::DrainPreview);
+                    update.preview_for(&self.pane.config.own_pane)
+                })
                 .is_some_and(|(own_view, viewed)| self.skips_hidden(own_view.as_ref(), viewed));
         if deferred {
             if completed {
@@ -2193,6 +2201,8 @@ impl PaneState {
             .is_some();
         let active = !self.self_close.confirming_empty()
             && (watched && (animating || self.dirty || self.focus_marker_due(v, self.clock.now())));
+        #[cfg(any(test, feature = "testkit"))]
+        host_pass::set_timeout_source(Counter::TimeoutFrame);
         let mut timeout = if active {
             self.next_frame
                 .saturating_duration_since(self.clock.now())
@@ -2205,32 +2215,45 @@ impl PaneState {
                     .now()
                     .saturating_duration_since(self.last_self_close_check),
             );
+            #[cfg(any(test, feature = "testkit"))]
+            {
+                host_pass::set_timeout_source(Counter::TimeoutIdle);
+                host_pass::cap_timeout(
+                    tick_for(self.config.tick_seconds),
+                    watchdog_due,
+                    Counter::TimeoutWatchdog,
+                );
+            }
             let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
             if watched
                 && let Some(remaining) =
                     self.freeze_remaining(v, self.clock.timestamp().as_millisecond())
             {
+                #[cfg(any(test, feature = "testkit"))]
+                host_pass::cap_timeout(timeout, remaining, Counter::TimeoutFreeze);
                 timeout = timeout.min(remaining);
             }
             timeout.max(FRAME_MIN_TIMEOUT)
         };
         if watched && let Some(FocusMarker::Dwelling(until)) = v.context.focus_marker {
-            timeout = timeout.min(
-                until
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
+            let remaining = until
+                .saturating_duration_since(self.clock.now())
+                .max(FRAME_MIN_TIMEOUT);
+            #[cfg(any(test, feature = "testkit"))]
+            host_pass::cap_timeout(timeout, remaining, Counter::TimeoutFocusDwell);
+            timeout = timeout.min(remaining);
         }
         if let Some(until) = v
             .context
             .tab_read_dwell_until
             .filter(|_| v.context.current.own_view.is_some())
         {
-            timeout = timeout.min(
-                until
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
+            let remaining = until
+                .saturating_duration_since(self.clock.now())
+                .max(FRAME_MIN_TIMEOUT);
+            #[cfg(any(test, feature = "testkit"))]
+            host_pass::cap_timeout(timeout, remaining, Counter::TimeoutTabRead);
+            timeout = timeout.min(remaining);
         }
         if let Some(deadline) = self
             .width_control
@@ -2239,13 +2262,28 @@ impl PaneState {
             .chain(self.caps_refresh_deadline)
             .min()
         {
-            timeout = timeout.min(
-                deadline
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
+            let remaining = deadline
+                .saturating_duration_since(self.clock.now())
+                .max(FRAME_MIN_TIMEOUT);
+            #[cfg(any(test, feature = "testkit"))]
+            host_pass::cap_timeout(
+                timeout,
+                remaining,
+                if self.width_control.feedback_deadline() == Some(deadline) {
+                    Counter::TimeoutWidth
+                } else {
+                    Counter::TimeoutCaps
+                },
             );
+            timeout = timeout.min(remaining);
         }
         if let Some(remaining) = gate_remaining(&v.context.gate, self.clock.timestamp()) {
+            #[cfg(any(test, feature = "testkit"))]
+            host_pass::cap_timeout(
+                timeout,
+                remaining.max(FRAME_MIN_TIMEOUT),
+                Counter::TimeoutGate,
+            );
             timeout = timeout.min(remaining.max(FRAME_MIN_TIMEOUT));
         }
         (active, timeout)

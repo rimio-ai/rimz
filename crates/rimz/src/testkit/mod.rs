@@ -4,6 +4,7 @@
 //! out of the shipped binary while integration tests and benches can share the
 //! same event and pane shapes.
 
+pub mod host_pass;
 pub mod opencode;
 pub mod sandbox;
 

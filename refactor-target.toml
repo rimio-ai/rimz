@@ -752,6 +752,56 @@ kind = "item"
 key = "testkit::fleet::checkpoint_fleet_store"
 reason = "The apply bench prices complete persisted arrays after raw fixture seeding without exposing the private publish stamp."
 
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass"
+reason = "Tests and benches share testkit-only host I/O and attachment work measurements."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::Counter"
+reason = "Host instrumentation and its external performance consumers share named event kinds."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::Counters"
+reason = "Tests retain thread counter handles without retaining worker threads or a global registry."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::TOTAL"
+reason = "Performance consumers measure host work across fetch, refresh and attachment threads."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::thread_counters"
+reason = "Tests distinguish a refresher's fold calls and each attachment's wake sources."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::count"
+reason = "Proc, heartbeat, fold and attachment funnels record testkit events through one seam."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::add"
+reason = "The hidden drain records the number of actual retained-outcome clones."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::timeout_source"
+reason = "The inbox attributes a timed-out wait to the attachment's winning deadline."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::set_timeout_source"
+reason = "Frame timing records the initial timeout candidate without changing scheduling."
+
+[[verdict]]
+kind = "item"
+key = "testkit::host_pass::cap_timeout"
+reason = "Frame timing tracks a tighter deadline without changing its duration or clock reads."
+
 [[module]]
 path = "crates/rimz/src/config"
 upward-dependencies = [

@@ -235,6 +235,8 @@ impl Attachment {
         // trailing capability refreshes run once after their bursts settle;
         // resize actuators run off-thread.
         let mut inbox = WakeupInbox::new(inbox).with_input(input);
+        #[cfg(any(test, feature = "testkit"))]
+        inbox.track_close(close_requested.clone());
         let loop_result: Result<()> = (|| {
             while !state.pane.should_exit && !close_requested.load(Ordering::SeqCst) {
                 state.step(&mut inbox, &mut terminal)?;

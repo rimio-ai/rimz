@@ -1,5 +1,72 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn host_proc_counters_measure_open_attempts_including_composite_readers() {
+    use crate::testkit::host_pass::{Counter::*, thread_counters};
+    let counts = thread_counters();
+    let kinds = [
+        ProcStat,
+        ProcCmdline,
+        ProcComm,
+        ProcChildren,
+        ProcTaskDir,
+        ProcCwd,
+        ProcIo,
+        ProcStatus,
+        ProcBootStat,
+    ];
+    type ProcProbe = fn(u32) -> bool;
+    let probes: [(ProcProbe, [u64; 9]); 12] = [
+        (|pid| comm(pid).is_some(), [0, 0, 1, 0, 0, 0, 0, 0, 0]),
+        (|pid| cmdline(pid).is_some(), [0, 1, 0, 0, 0, 0, 0, 0, 0]),
+        (|pid| argv(pid).is_some(), [0, 1, 0, 0, 0, 0, 0, 0, 0]),
+        (|pid| cwd(pid).is_some(), [0, 0, 0, 0, 0, 1, 0, 0, 0]),
+        (|pid| io_bytes(pid).is_some(), [0, 0, 0, 0, 0, 0, 1, 0, 0]),
+        (
+            |pid| write_bytes(pid).is_some(),
+            [0, 0, 0, 0, 0, 0, 1, 0, 0],
+        ),
+        (
+            |pid| comm_and_ppid(pid).is_some(),
+            [0, 0, 0, 0, 0, 0, 0, 1, 0],
+        ),
+        (|pid| real_uid(pid).is_some(), [0, 0, 0, 0, 0, 0, 0, 1, 0]),
+        (
+            |pid| stat_metrics(pid).is_some(),
+            [1, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+        (
+            |pid| process_start_token(pid).is_some(),
+            [1, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+        (
+            |pid| process_start(pid).is_some(),
+            [1, 0, 0, 0, 0, 0, 0, 0, 1],
+        ),
+        (|pid| read_proc(pid).is_some(), [0, 1, 0, 0, 0, 0, 0, 1, 0]),
+    ];
+    for (probe, expected) in probes {
+        counts.reset();
+        assert!(probe(std::process::id()));
+        assert_eq!(kinds.map(|kind| counts.get(kind)), expected);
+    }
+    counts.reset();
+    children(std::process::id());
+    assert!(counts.get(ProcChildren) > 0);
+    assert_eq!(counts.get(ProcTaskDir), 1);
+    assert_eq!(counts.get(ProcStat), 0);
+    counts.reset();
+    process_start(u32::MAX);
+    assert_eq!(
+        kinds.map(|kind| counts.get(kind)),
+        [1, 0, 0, 0, 0, 0, 0, 0, 0]
+    );
+    counts.reset();
+    parse_children("1 2");
+    assert_eq!(kinds.map(|kind| counts.get(kind)), [0; 9]);
+}
+
 #[cfg(unix)]
 #[test]
 fn path_copies_collapse_same_files_exclude_the_hit_and_keep_path_order() {

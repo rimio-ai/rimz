@@ -194,7 +194,10 @@ pub fn write_heartbeat(
     // Cache-class: a heartbeat is disposable liveness, rewritten every beat
     // and gc-swept when stale — surviving a power cut buys nothing.
     atomic::write_temp_then_rename_cache(&path, &heartbeat)
-        .map_err(|source| HeartbeatWriteErr { path, source })
+        .map_err(|source| HeartbeatWriteErr { path, source })?;
+    #[cfg(any(test, feature = "testkit"))]
+    crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::HeartbeatWrite);
+    Ok(())
 }
 
 /// Every fresh, current-protocol sidebar heartbeat in the workspace runtime dir.
@@ -233,6 +236,39 @@ pub(crate) fn mtime_within_ttl(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heartbeat_counter_counts_full_publications_not_reads_or_failed_writes() {
+        use crate::testkit::host_pass::{Counter, thread_counters};
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        let instance = SidebarInstanceId::new();
+        let counts = thread_counters();
+        counts.reset();
+        runtime.ensure_dirs().unwrap();
+        let path = runtime.sidebar_heartbeat_path(&instance);
+        fs::create_dir(&path).unwrap();
+        let write = || {
+            write_heartbeat(
+                &runtime,
+                workspace.clone(),
+                &instance,
+                MuxName::Tmux,
+                "rimz-test",
+                &runtime.sidebar_host_wake_socket_path(MuxName::Tmux, "rimz-test"),
+                None,
+                None,
+            )
+        };
+        write().expect_err("a directory cannot be replaced by a heartbeat file");
+        assert_eq!(counts.get(Counter::HeartbeatWrite), 0);
+        fs::remove_dir(path).unwrap();
+        write().unwrap();
+        assert_eq!(counts.get(Counter::HeartbeatWrite), 1);
+        assert_eq!(fresh_sidebar_heartbeats(&runtime).len(), 1);
+        assert_eq!(counts.get(Counter::HeartbeatWrite), 1);
+    }
 
     #[test]
     fn sidebar_heartbeat_build_identity_is_backward_compatible() {
