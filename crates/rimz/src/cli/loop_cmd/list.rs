@@ -454,7 +454,12 @@ fn load(
     let config = MachineConfig::load_lenient();
     let now_zoned = now.to_zoned(config.time_zone());
     let mut rooms = Vec::new();
-    let mut warnings = Vec::new();
+    let mut warnings = config
+        .notices
+        .skipped_loop_tasks
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
     for root in roots {
         let here = caller_root.as_ref() == Some(&root);
         let catalog = match TaskCatalog::load_room(&root) {
