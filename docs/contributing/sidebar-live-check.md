@@ -593,6 +593,26 @@ This check proves caller resolution, not delivery of the wait's result to the ag
 
 The listing that follows `armed` can read `starting` before the detached watcher takes its lock. A watch without a live watcher reads `lost` only after the host's 30-second startup grace; `wait list` and `loop list` use the same grace.
 
+## Fake an agent process in a shell pane
+
+A pane-binding check (which resume id a plain shell pane publishes, whether the pane reads as hosting an agent) needs a process under the room's shell whose command line names a provider. Perl's `$0` assignment rewrites the process's own `/proc/<pid>/cmdline`, so a sleeping Perl process reads as a resumed Codex to both the hosted-agent probe and the resume walk, with no provider installed. The Codex parse takes the token right after `codex resume` as the session id ([`crates/rimz/src/agents/adapters/codex/process.rs::codex_resumed_session_id_from_cmdline`](../../crates/rimz/src/agents/adapters/codex/process.rs)); a UUID keeps it realistic. Another provider's fake carries the resume syntax its own adapter parses.
+
+In a tmux room, with `$ROOT` the card's sandbox root and `%1` the room's plain shell pane (the card names only the sidebar pane, `tmux:%0`; `tmux -S "$ROOT/runtime/rimz/tmux/server" list-panes -a` lists both), type the fake into that shell:
+
+```sh
+id=11111111-1111-4111-8111-111111111111
+tmux -S "$ROOT/runtime/rimz/tmux/server" send-keys -t %1 -l "perl -e '\$0 = \"codex resume $id\"; sleep 600'"
+tmux -S "$ROOT/runtime/rimz/tmux/server" send-keys -t %1 Enter
+```
+
+Confirm it is the shell's only child and reads as intended: `pgrep -P <shell pid>` prints one pid, and `tr '\0' ' ' < /proc/<that pid>/cmdline` prints `codex resume <id>`. The host publishes the pane frame to `lanes/snapshot.json` under the room's runtime directory; read the shell pane's published process from it after a few producer passes:
+
+```sh
+jq '.tabs[].panes[] | select(.pane_id == "tmux:%1") | .current | {pid, hosted_agent_lineage, resumed_session_id}' "$ROOT"/runtime/rimz/ws/*/lanes/snapshot.json
+```
+
+Kill the fake by its pid to leave the shell idle, or start another with a new id in the same shell to model an agent change.
+
 ## Cache clock band
 
 A card's cache-age pin and its `cache expires in Nm` line move with the agent's quiet time against the agent's resolved prompt-cache lifetime, an hour for Claude before its first observed write. Scenario cards may carry explicit fixture clocks; use a held room to check live lifetime resolution. In a held room, shorten the lifetime so the warning band arrives within minutes. The room picks the setting up without a restart; use a stub with no observed write, since a real agent's split write overrides it. With the `rz` prefix from [Run a command as an agent](#run-a-command-as-an-agent):
