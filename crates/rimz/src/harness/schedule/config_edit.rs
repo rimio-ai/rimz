@@ -77,9 +77,9 @@ pub(super) fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> 
         if let Some(existing) = config.tasks.0.get(name)
             && existing.resolved_root() != entry.resolved_root()
         {
-            if existing.root.as_os_str().is_empty() {
+            if let Some(problem) = existing.root_problem() {
                 bail!(
-                    "loop task `{name}` has no root in {}; choose another name, or run \
+                    "loop task `{name}` has {problem} in {}; choose another name, or run \
                      `rimz loop remove {name}` from a fresh directory outside any repository \
                      or RimZ project to remove it first",
                     path.display()

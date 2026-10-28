@@ -921,7 +921,7 @@ A workflow task refuses `stay`, `takeover`, `subscribe`, `check`, and `judge`, b
 Four things are worth knowing before you edit the file by hand:
 
 - `at` and `cron` resolve in the top-level [`timezone`](#sidebar-rendering), falling back to the system zone when it is unset.
-- A machine task carries a `root`. `rimz loop add` writes an absolute path, and a hand-written `~` or relative root is normalized before RimZ matches it to a room, fires it, or displays it.
+- A machine task carries a `root` that must be absolute after expanding `~` or `~/` against `HOME`. `rimz loop add` writes an absolute path. A missing, empty, or relative root skips the task at load with a warning until you set an absolute root or remove the task with `rimz loop remove <NAME>`; a relative root is never resolved against the reading process's directory.
 - A project task runs at the project root implicitly. It resolves `prompt-file` and `system-prompt-file` relative to `.rimz/`, rejects `root`, `dir`, `wait`, and `deadline`, and requires `every`, `cron`, or `signal`, because a one-shot is machine state and does not belong in a committed file.
 - A trusted project task outranks a machine task of the same name, but starts disabled until you enable it locally. An untrusted or stale project task stays visible and inert, so the machine task keeps running until you run `rimz trust grant`. `rimz loop add --project` writes `.rimz/config.toml` and enables the task for whoever added it; removing or renaming a project task means editing that file.
 

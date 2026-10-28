@@ -1181,6 +1181,94 @@ fn loop_tasks_parse_and_default_empty() {
 }
 
 #[test]
+fn loop_loads_skip_machine_tasks_without_absolute_roots() {
+    let dir = tempdir().unwrap();
+    let path = write_named(
+        &dir,
+        LOOP_FILE,
+        "[tasks.missing]\ncheck='true'\nevery='1h'\n\
+         [tasks.empty]\nroot=''\ncheck='true'\nevery='1h'\n\
+         [tasks.relative]\nroot='nowhere/x'\ncheck='true'\nevery='1h'\n\
+         [tasks.dot]\nroot='.'\ncheck='true'\nevery='1h'\n\
+         [tasks.home]\nroot='~/x'\ncheck='true'\nevery='1h'\n\
+         [tasks.absolute]\nroot='/repo'\ncheck='true'\nevery='1h'\n",
+    );
+    let configs = [
+        load_no_fragments(&path).unwrap(),
+        load_lenient_no_fragments(&path),
+    ];
+    let loaded = configs
+        .iter()
+        .map(|config| {
+            (
+                config
+                    .r#loop
+                    .tasks
+                    .0
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                config
+                    .r#loop
+                    .skipped_tasks
+                    .0
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                config
+                    .notices
+                    .skipped_loop_tasks
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        loaded,
+        vec![
+            (
+                vec!["absolute", "home"],
+                vec!["dot", "empty", "missing", "relative"],
+                vec!["dot", "empty", "missing", "relative"],
+            );
+            2
+        ],
+    );
+    for config in &configs {
+        assert!(
+            config.notices.unreadable_files.is_empty(),
+            "{:?}",
+            config.notices
+        );
+        for (name, problem) in [
+            ("missing", "no `root`"),
+            ("empty", "no `root`"),
+            ("relative", "relative `root` `nowhere/x`"),
+            ("dot", "relative `root` `.`"),
+        ] {
+            let warning = &config.notices.skipped_loop_tasks[name];
+            for text in [
+                &format!("loop task `{name}`"),
+                &dir.path().join(LOOP_FILE).display().to_string(),
+                problem,
+                "does not run",
+                "absolute path",
+                &format!("rimz loop remove {name}"),
+            ] {
+                assert!(warning.contains(text), "{warning}");
+            }
+        }
+        let serialized = toml::to_string(&config.r#loop).unwrap();
+        assert!(!serialized.contains("skipped_tasks"), "{serialized}");
+        assert!(!serialized.contains("nowhere/x"), "{serialized}");
+    }
+    let errors =
+        broken_machine_files_in(&MachineConfigFiles::from_paths(&path, no_fragments(&path)));
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
 fn loop_task_budgets_validate_during_config_load() {
     let err = expect_err(
         "loop.toml",

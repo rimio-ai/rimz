@@ -246,6 +246,7 @@ impl LoadedTask {
 pub struct TaskCatalog {
     visible: BTreeMap<String, LoadedTask>,
     runnable: BTreeMap<String, LoadedTask>,
+    skipped_machine: Tasks,
     overlay_keys: BTreeSet<String>,
     project_root: Option<PathBuf>,
 }
@@ -288,12 +289,10 @@ impl TaskCatalog {
             .transpose()?
             .flatten()
             .map(|project| (project.tasks, project.state));
-        Ok(Self::from_layers(
-            instances,
-            machine_tasks,
-            project,
-            project_root,
-        ))
+        Ok(
+            Self::from_layers(instances, machine_tasks, project, project_root)
+                .with_skipped_machine(machine.skipped_tasks),
+        )
     }
 
     /// Best-effort load for elder, doctor, and maintenance reads.
@@ -310,6 +309,7 @@ impl TaskCatalog {
                 .map(|project| (project.tasks, project.state))
         });
         Self::from_layers(instances, machine.tasks, project, project_root)
+            .with_skipped_machine(machine.skipped_tasks)
     }
 
     fn from_layers(
@@ -358,9 +358,21 @@ impl TaskCatalog {
         Self {
             visible,
             runnable,
+            skipped_machine: Tasks::default(),
             overlay_keys,
             project_root: project_root.map(Path::to_path_buf),
         }
+    }
+
+    fn with_skipped_machine(mut self, tasks: Tasks) -> Self {
+        self.overlay_keys.extend(
+            tasks
+                .0
+                .iter()
+                .map(|(name, entry)| TaskKey::for_task(name, TaskSource::Config, &entry.root)),
+        );
+        self.skipped_machine = tasks;
+        self
     }
 
     pub fn visible(&self) -> &BTreeMap<String, LoadedTask> {
@@ -425,17 +437,27 @@ impl TaskCatalog {
 
     pub fn remove(&self, name: &str) -> Result<TaskMutation> {
         let Some(task) = self.visible.get(name) else {
-            return Ok(TaskMutation::default());
+            let Some(entry) = self.skipped_machine.0.get(name) else {
+                return Ok(TaskMutation::default());
+            };
+            return Ok(TaskMutation {
+                changed: config_edit::remove(config_edit::TaskStore::Machine, name)?,
+                cleared_overlays: clear_overlays(&TaskKey::for_task(
+                    name,
+                    TaskSource::Config,
+                    &entry.root,
+                ))?,
+            });
         };
         let root = task.entry().resolved_root();
-        if root.is_absolute() && task.entry().workflow.is_some() {
+        if task.entry().workflow.is_some() {
             super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
         }
         let changed = remove_definition(name, task)?;
-        if changed && root.is_absolute() && task.entry().stay {
+        if changed && task.entry().stay {
             super::launch_ledger_store::remove(&StatePaths::for_project_root(&root)?, name)?;
         }
-        if changed && root.is_absolute() {
+        if changed {
             let paths = StatePaths::for_project_root(&root)?;
             match super::launch_ledger_store::remove_workflows(&paths, name) {
                 Err(super::launch_ledger_store::LedgerWriteErr::Read(error))
@@ -463,18 +485,28 @@ impl TaskCatalog {
     }
 
     pub fn rename(&self, name: &str, new_name: &str) -> Result<TaskMutation> {
-        if self.visible.contains_key(new_name) {
+        if self.visible.contains_key(new_name) || self.skipped_machine.0.contains_key(new_name) {
             bail!("loop task `{new_name}` already exists");
         }
         let Some(task) = self.visible.get(name) else {
-            return Ok(TaskMutation::default());
+            let Some(entry) = self.skipped_machine.0.get(name) else {
+                return Ok(TaskMutation::default());
+            };
+            let changed = config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?;
+            let old_key = TaskKey::for_task(name, TaskSource::Config, &entry.root);
+            let new_key = TaskKey::for_task(new_name, TaskSource::Config, &entry.root);
+            let cleared_arming = arming::rename(&old_key, &new_key)?;
+            let cleared_strikes = strikes::rename(&old_key, &new_key)?;
+            return Ok(TaskMutation {
+                changed,
+                cleared_overlays: cleared_arming || cleared_strikes,
+            });
         };
         let root = task.entry().resolved_root();
-        if root.is_absolute() && task.entry().workflow.is_some() {
+        if task.entry().workflow.is_some() {
             super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
         }
-        if root.is_absolute()
-            && task.entry().stay
+        if task.entry().stay
             && super::launch_ledger::load(&StatePaths::for_project_root(&root)?)?
                 .get(name)
                 .is_some_and(|launches| !launches.is_empty())
@@ -499,7 +531,7 @@ impl TaskCatalog {
             )?,
         };
         let old_key = task.key(name);
-        if changed && root.is_absolute() {
+        if changed {
             if task.entry().workflow.is_some() {
                 super::launch_ledger_store::rename_workflows(
                     &StatePaths::for_project_root(&root)?,
@@ -954,6 +986,38 @@ mod tests {
                 source,
                 &entry.resolved_root(),
             )));
+        }
+    }
+
+    #[test]
+    fn skipped_machine_rows_keep_overlay_keys_for_gc() {
+        let skipped = Tasks(BTreeMap::from([
+            ("bare".to_owned(), TaskEntry::default()),
+            (
+                "relative".to_owned(),
+                TaskEntry {
+                    root: PathBuf::from("nowhere/x"),
+                    ..TaskEntry::default()
+                },
+            ),
+        ]));
+        let catalog = TaskCatalog::from_layers(
+            Tasks::default(),
+            Tasks::default(),
+            None,
+            Some(Path::new("/repo")),
+        )
+        .with_skipped_machine(skipped);
+
+        for name in ["bare", "relative"] {
+            assert!(
+                catalog.overlay_keys.contains(&TaskKey::for_task(
+                    name,
+                    TaskSource::Config,
+                    Path::new("/repo"),
+                )),
+                "{name}: gc would prune the arming and strikes it keeps once its root is fixed"
+            );
         }
     }
 

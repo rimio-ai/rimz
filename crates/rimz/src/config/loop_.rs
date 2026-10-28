@@ -36,6 +36,8 @@ pub struct LoopConfig {
     #[serde(skip_serializing_if = "ThrottleConfig::is_empty")]
     pub throttle: ThrottleConfig,
     pub tasks: Tasks,
+    #[serde(skip)]
+    pub skipped_tasks: Tasks,
 }
 
 impl LoopConfig {
@@ -755,11 +757,31 @@ impl WatchSpec {
 }
 
 impl TaskEntry {
-    /// Root normalized for workspace identity. CLI-added tasks
-    /// already store this shape; hand-edited tasks may use `~` or a relative
-    /// path.
+    /// Root normalized for workspace identity. CLI-added tasks already store
+    /// this shape; hand-edited machine roots may use `~`, but the loader skips
+    /// empty and relative roots.
     pub fn resolved_root(&self) -> PathBuf {
         resolve_root_with(&self.root, home_dir())
+    }
+
+    /// Why a machine task's root cannot identify a workspace, if it cannot.
+    pub fn root_problem(&self) -> Option<String> {
+        if has_absolute_task_root(&self.root) {
+            return None;
+        }
+        Some(if self.root.as_os_str().is_empty() {
+            "no `root`".to_owned()
+        } else {
+            format!("relative `root` `{}`", self.root.display())
+        })
+    }
+
+    pub(super) fn root_warning(&self, name: &str, path: &Path) -> Option<String> {
+        let problem = self.root_problem()?;
+        Some(format!(
+            "loop task `{name}` in {} has {problem}; the task does not run; set `root` to an absolute path, or remove it with `rimz loop remove {name}`",
+            path.display(),
+        ))
     }
 
     pub fn run_dir(&self) -> PathBuf {
@@ -871,16 +893,25 @@ pub enum CheckOn {
     Any,
 }
 
+/// Whether a task root is absolute after home expansion, without filesystem access.
+pub fn has_absolute_task_root(root: &Path) -> bool {
+    expand_root_with(root, home_dir()).is_absolute()
+}
+
 fn resolve_root_with(root: &Path, home: PathBuf) -> PathBuf {
+    let expanded = expand_root_with(root, home);
+    expanded.canonicalize().unwrap_or(expanded)
+}
+
+fn expand_root_with(root: &Path, home: PathBuf) -> PathBuf {
     let raw = root.to_string_lossy();
-    let expanded = if raw == "~" {
+    if raw == "~" {
         home
     } else if let Some(rest) = raw.strip_prefix("~/") {
         home.join(rest)
     } else {
         root.to_path_buf()
-    };
-    expanded.canonicalize().unwrap_or(expanded)
+    }
 }
 
 fn home_dir() -> PathBuf {

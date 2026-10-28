@@ -301,7 +301,7 @@ fn adding_machine_refuses_rootless_row() {
     );
     assert!(!stdout.contains("added loop task"), "{stdout}");
     assert!(
-        error.contains("same") && error.contains("no root"),
+        error.contains("same") && error.contains("has no `root` in"),
         "{error}"
     );
     assert!(error.contains("loop remove same"), "{error}");

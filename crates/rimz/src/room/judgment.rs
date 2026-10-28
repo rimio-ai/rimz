@@ -84,6 +84,9 @@ pub(super) fn judge(
             message.trim_start_matches("warning: ").to_owned(),
         );
     }
+    for (name, message) in &machine.notices.skipped_loop_tasks {
+        warn(format!("loop.tasks.{name}"), message.clone());
+    }
     for message in &machine.notices.hibernate_unavailable {
         warn("agents.hibernate".into(), message.clone());
     }
@@ -384,6 +387,32 @@ fn hibernate_notice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn judgment_retains_skipped_loop_task_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+        let mut machine = MachineConfig::default();
+        let message = "loop task `one` has no `root`; the task does not run".to_owned();
+        machine
+            .notices
+            .skipped_loop_tasks
+            .insert("one".into(), message.clone());
+        let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
+        let warnings = judgment
+            .skipped
+            .iter()
+            .filter(|entry| entry.setting == "loop.tasks.one")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            warnings,
+            vec![&SkippedSetting {
+                setting: "loop.tasks.one".into(),
+                message
+            }]
+        );
+    }
 
     #[test]
     fn account_label_warnings_do_not_refuse_the_room_or_drop_accounts() {

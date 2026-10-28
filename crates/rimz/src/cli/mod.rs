@@ -1098,6 +1098,7 @@ pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -
         .host_isolation_fallback
         .iter()
         .chain(&config.notices.hibernate_unavailable)
+        .chain(config.notices.skipped_loop_tasks.values())
     {
         writeln!(stderr, "rimz: {warning}")?;
     }
