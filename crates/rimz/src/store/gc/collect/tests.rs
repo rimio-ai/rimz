@@ -4,6 +4,18 @@ use crate::ids::{MuxName, SidebarInstanceId};
 use crate::wakeup::heartbeat::SidebarHeartbeat;
 use tempfile::tempdir;
 
+#[test]
+fn heartbeat_expiry_keeps_ttl_equality_and_future_mtimes_live() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("sidebar.test.json");
+    fs::write(&path, b"{}").unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let ttl = crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL;
+    assert!(!heartbeat_expired(&path, ttl, || modified + ttl).unwrap());
+    assert!(heartbeat_expired(&path, ttl, || modified + ttl + Duration::from_nanos(1)).unwrap());
+    assert!(!heartbeat_expired(&path, ttl, || modified - Duration::from_secs(1)).unwrap());
+}
+
 fn age_socket(path: &Path) {
     let at = nix::sys::time::TimeSpec::from_duration(
         (SystemTime::now() - Duration::from_secs(7200))

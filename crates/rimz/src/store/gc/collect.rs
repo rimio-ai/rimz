@@ -119,7 +119,14 @@ fn collect_live(
             }
             None => continue,
         };
-        if is_older_than(&path, threshold)? {
+        let expired = if path.parent() == Some(heartbeat.as_path())
+            && SidebarHeartbeat::is_heartbeat_file(&path)
+        {
+            heartbeat_expired(&path, threshold, SystemTime::now)?
+        } else {
+            is_older_than(&path, threshold)?
+        };
+        if expired {
             sweep.remove_file_if_exists(
                 &path,
                 |report| {
@@ -314,7 +321,9 @@ fn fresh_sidebar_instance_ids(
             source,
         })?;
         let path = entry.path();
-        if !SidebarHeartbeat::is_heartbeat_file(&path) || is_older_than(&path, older_than)? {
+        if !SidebarHeartbeat::is_heartbeat_file(&path)
+            || heartbeat_expired(&path, older_than, SystemTime::now)?
+        {
             continue;
         }
         if let Some(instance_id) = sidebar_instance_id_from_json_name(&path) {
@@ -563,9 +572,13 @@ impl Sweep {
 /// A file that vanished between the listing and the stat (a concurrent sweep
 /// or an atomic publish renaming its temp) is not a candidate.
 pub(super) fn is_older_than(path: &Path, older_than: Duration) -> Result<bool> {
+    Ok(file_age(path, SystemTime::now)?.is_some_and(|age| age >= older_than))
+}
+
+fn file_age(path: &Path, now: impl FnOnce() -> SystemTime) -> Result<Option<Duration>> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(source) => {
             return Err(GcErr::Io {
                 path: path.to_path_buf(),
@@ -577,10 +590,11 @@ pub(super) fn is_older_than(path: &Path, older_than: Duration) -> Result<bool> {
         path: path.to_path_buf(),
         source,
     })?;
-    match SystemTime::now().duration_since(modified) {
-        Ok(age) => Ok(age >= older_than),
-        Err(_) => Ok(false),
-    }
+    Ok(now().duration_since(modified).ok())
+}
+
+fn heartbeat_expired(path: &Path, ttl: Duration, now: impl FnOnce() -> SystemTime) -> Result<bool> {
+    Ok(file_age(path, now)?.is_some_and(|age| age > ttl))
 }
 
 #[cfg(test)]

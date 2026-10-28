@@ -446,7 +446,7 @@ The `baseline` control updates the supervisor's remembered selection baseline wi
 
 The host is the only painter, so every way of failing to reach it shares one plain-text notice and an exponential retry from one second to 60 seconds ([host unavailable](./state.md#host-unavailable)).
 
-Each attachment writes its own heartbeat in the host, naming the host's room socket in `wakeup_socket`. The heartbeat record, its protocol version, and its TTL are wire, in [`wakeup/heartbeat.rs`](../../../crates/rimz/src/wakeup/heartbeat.rs). Heartbeat write failures log as best-effort liveness failures, and the normal reattach path repairs them.
+Each attachment owns its heartbeat lease in the host, naming the host's room socket in `wakeup_socket`. It publishes changed claims in full and renews unchanged claims by pathname mtime. The heartbeat record, its protocol version, and its TTL are wire, in [`wakeup/heartbeat.rs`](../../../crates/rimz/src/wakeup/heartbeat.rs). Refresh failures retry on every loop pass without advancing the success stamp, warning once per failure streak; detach removes the claim.
 
 ### Launch
 

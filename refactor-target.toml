@@ -3028,6 +3028,11 @@ surface-budget = 28
 path = "crates/rimz/src/wakeup"
 surface-budget = 27
 
+[[verdict]]
+kind = "item"
+key = "wakeup::heartbeat::HeartbeatLease"
+reason = "Each attachment retains its published claim to renew unchanged heartbeats without replacing them."
+
 [[module]]
 path = "crates/rimz/src/worktree"
 # The read-only lifetime resolver supplies attribution consumers across modules.

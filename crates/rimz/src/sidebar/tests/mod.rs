@@ -276,6 +276,22 @@ fn live_sidebar_size_reads_a_fresh_renderer_in_the_session() {
     let sized = write(&instance("03"), "rimz-test", Some(size));
     assert_eq!(live_sidebar_size(&h.runtime, "rimz-test"), Some(size));
 
+    let newer = write(
+        &instance("04"),
+        "rimz-test",
+        Some(SidebarSize { cols: 90, rows: 50 }),
+    );
+    std::fs::File::open(&sized)
+        .unwrap()
+        .set_modified(SystemTime::now() + Duration::from_secs(3600))
+        .unwrap();
+    assert_eq!(
+        live_sidebar_size(&h.runtime, "rimz-test"),
+        Some(size),
+        "mtime renewal, not creation time, selects the size"
+    );
+    std::fs::remove_file(newer).unwrap();
+
     make_stale(&sized);
     assert_eq!(
         live_sidebar_size(&h.runtime, "rimz-test"),
@@ -289,7 +305,12 @@ fn sweep_removes_stale_heartbeat_keeps_fresh() {
     let h = Harness::new();
     let live = instance("0a");
     let dead = instance("0b");
-    h.write_sidebar_for(&live);
+    let live_path = h.write_sidebar_for(&live);
+    let heartbeat = SidebarHeartbeat::read_from(&live_path).unwrap();
+    let mut lease = crate::wakeup::heartbeat::HeartbeatLease::default();
+    lease.renew(&h.runtime, &heartbeat).unwrap();
+    make_stale(&live_path);
+    lease.renew(&h.runtime, &heartbeat).unwrap();
     let dead_path = h.write_sidebar_for(&dead);
     make_stale(&dead_path);
 
@@ -298,6 +319,13 @@ fn sweep_removes_stale_heartbeat_keeps_fresh() {
     assert!(h.runtime.sidebar_heartbeat_path(&live).exists());
     assert!(!dead_path.exists());
     assert!(fresh_sidebar_present(&h.runtime));
+    make_stale(&live_path);
+    assert!(!fresh_sidebar_present(&h.runtime));
+    crate::harness::auto_gc::sweep_runtime_claims(&h.runtime);
+    assert!(
+        !live_path.exists(),
+        "a lease whose renewals stop is collected"
+    );
 }
 
 #[test]

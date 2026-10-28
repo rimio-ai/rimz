@@ -19,27 +19,28 @@ pub(super) fn heartbeat_write_due(last_heartbeat: Option<Instant>) -> bool {
     last_heartbeat.is_none_or(|last| last.elapsed() >= HEARTBEAT_WRITE_INTERVAL)
 }
 
-/// Refresh this instance's liveness heartbeat. Written in-process — no `rimz
-/// sidebar heartbeat` fork per tick — through the shared liveness helper, which
-/// keeps the JSON shape and atomic write identical to what the store wakeup
-/// fanout and launch freshness gate expect.
+/// Publish a changed claim or renew an unchanged one by pathname mtime.
 pub(super) fn write_heartbeat(
     config: &ServeConfig,
     runtime: &RuntimePaths,
     socket_path: &Path,
     size: Option<crate::wakeup::heartbeat::SidebarSize>,
+    lease: &mut crate::wakeup::heartbeat::HeartbeatLease,
 ) -> Result<()> {
-    crate::wakeup::heartbeat::write_heartbeat(
-        runtime,
+    let mut heartbeat = crate::wakeup::heartbeat::SidebarHeartbeat::new(
         config.room.workspace_id.clone(),
-        &config.instance_id,
+        config.instance_id.clone(),
         config.room.mux,
         &config.room.session_name,
-        socket_path,
+        socket_path.to_path_buf(),
         Some(config.own_pane.clone()),
-        size,
-    )
-    .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
+    );
+    heartbeat.build = crate::build_id::current().map(str::to_owned);
+    heartbeat.version = Some(crate::build_id::VERSION.to_owned());
+    heartbeat.size = size;
+    lease
+        .renew(runtime, &heartbeat)
+        .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
 }
 
 /// How often a stoppable forwarder looks for its stop request. Events still

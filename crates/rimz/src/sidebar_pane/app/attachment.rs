@@ -20,7 +20,6 @@ use super::inbox::WakeupInbox;
 use super::input::Wakeup;
 use super::loop_state::{BaselineReporter, LoopState};
 use super::plane::DataPlane;
-use super::socket::write_heartbeat;
 use super::{Result, RuntimeFileGuard, ServeConfig};
 
 /// Why an attachment's frame loop ended.
@@ -195,18 +194,7 @@ impl Attachment {
         }
         // Write the heartbeat immediately so the freshness gate never sees a gap.
         // Errors are non-fatal; the gate re-probes after the TTL.
-        if let Err(err) = write_heartbeat(
-            &config,
-            &runtime,
-            &host_wake_path,
-            terminal.backend().pane_size(),
-        ) {
-            warn!(
-                session = %config.room.session_name,
-                error = %err,
-                "initial heartbeat write failed",
-            );
-        }
+        state.refresh_heartbeat(&terminal);
 
         // Fire the first fetch on the background worker and start the main loop
         // immediately rather than blocking on a synchronous call: the first fetch

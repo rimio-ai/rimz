@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::process::Stdio;
+use std::time::SystemTime;
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -136,7 +137,7 @@ type Attachments = HashMap<PaneId, SidebarInstanceId>;
 struct Snapshot {
     census: Census,
     attachments: Attachments,
-    beats: HashMap<PaneId, jiff::Timestamp>,
+    beats: HashMap<PaneId, SystemTime>,
 }
 
 impl Snapshot {
@@ -466,7 +467,14 @@ impl Room {
                 .collect(),
             beats: heartbeats
                 .into_iter()
-                .filter_map(|beat| beat.pane_id.map(|pane| (pane, beat.last_seen)))
+                .filter_map(|beat| {
+                    let modified =
+                        std::fs::metadata(self.runtime.sidebar_heartbeat_path(&beat.instance_id))
+                            .ok()?
+                            .modified()
+                            .ok()?;
+                    beat.pane_id.map(|pane| (pane, modified))
+                })
                 .collect(),
         }
     }
@@ -539,7 +547,7 @@ impl Room {
         mut see: impl FnMut(&Snapshot),
     ) -> Snapshot {
         let panes = self.panes.clone();
-        let mut first: Option<(Proc, HashMap<PaneId, jiff::Timestamp>)> = None;
+        let mut first: Option<(Proc, HashMap<PaneId, SystemTime>)> = None;
         self.wait(
             "settled: one host, two attached supervisors",
             budget,

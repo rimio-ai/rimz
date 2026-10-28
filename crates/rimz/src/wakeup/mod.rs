@@ -7,26 +7,22 @@
 //! vocabulary.
 //!
 //! Each renderer publishes a heartbeat naming its host's room socket. Senders
-//! walk current-protocol heartbeats, enforce content and mtime freshness, and
-//! post nonblocking events once per distinct socket. Per-target failures are absorbed; only heartbeat
-//! directory reads and envelope serialization propagate. Wakeups cut latency
-//! but never carry truth.
+//! walk current-protocol heartbeats, enforce mtime freshness, and post
+//! nonblocking events once per distinct socket. Per-target failures are
+//! absorbed; only heartbeat directory reads and envelope serialization
+//! propagate. Wakeups cut latency but never carry truth.
 
 pub mod events;
 pub mod heartbeat;
 
 use std::collections::HashSet;
-use std::fs;
 use std::io;
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
-use std::time::Duration;
-
-use jiff::Timestamp;
 use tracing::debug;
 
 use self::events::{RELOAD_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope};
-use self::heartbeat::{SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, read_current_heartbeats};
+use self::heartbeat::{SidebarHeartbeat, mtime_within_ttl, read_current_heartbeats};
 use crate::disk::paths::RuntimePaths;
 
 #[derive(Debug, thiserror::Error)]
@@ -114,53 +110,11 @@ fn collect_fresh_sidebars(
             source,
         })?;
 
-    let now = Timestamp::now();
-    let mut fresh = Vec::new();
-    for (path, heartbeat) in heartbeats {
-        let age_seconds = now.duration_since(heartbeat.last_seen).as_secs();
-        if age_seconds.is_negative()
-            || Duration::from_secs(age_seconds as u64) > SIDEBAR_HEARTBEAT_TTL
-        {
-            debug!(?path, "wakeup: skipping stale sidebar heartbeat");
-            continue;
-        }
-        if heartbeat_still_fresh(&path) {
-            fresh.push(heartbeat);
-        }
-    }
-    Ok(fresh)
-}
-
-/// Re-stat immediately before send to close the heartbeat-read/renderer-exit
-/// window. This re-stat accepts a future mtime, while the content check in
-/// `collect_fresh_sidebars` before it rejects a future `last_seen`.
-fn heartbeat_still_fresh(path: &Path) -> bool {
-    let meta = match fs::metadata(path) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            debug!(?path, "wakeup: heartbeat unlinked between read and send");
-            return false;
-        }
-        Err(error) => {
-            debug!(?path, %error, "wakeup: re-stat failed");
-            return false;
-        }
-    };
-    let mtime = match meta.modified() {
-        Ok(mtime) => mtime,
-        Err(error) => {
-            debug!(?path, %error, "wakeup: filesystem reports no mtime");
-            return false;
-        }
-    };
-    match mtime.elapsed() {
-        Ok(age) if age <= SIDEBAR_HEARTBEAT_TTL => true,
-        Ok(_) => {
-            debug!(?path, "wakeup: heartbeat aged out between read and send");
-            false
-        }
-        Err(_) => true,
-    }
+    Ok(heartbeats
+        .into_iter()
+        .filter(|(path, _)| mtime_within_ttl(path))
+        .map(|(_, heartbeat)| heartbeat)
+        .collect())
 }
 
 fn send_datagrams_with<'a>(

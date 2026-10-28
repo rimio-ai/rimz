@@ -2978,7 +2978,7 @@ fn doctor_json_reports_protocol_version_mismatches() {
     );
     let protocols = &report["protocols"];
     assert_eq!(protocols["event"], "rimz.event.v2");
-    assert_eq!(protocols["sidebar"], "rimz.plugin.v5");
+    assert_eq!(protocols["sidebar"], "rimz.plugin.v6");
 
     let warnings = protocols["warnings"]
         .as_array()
@@ -2993,7 +2993,7 @@ fn doctor_json_reports_protocol_version_mismatches() {
     );
     assert!(
         warnings.contains(
-            "sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v5)"
+            "sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v6)"
         ),
         "{warnings}"
     );
