@@ -69,13 +69,13 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
             tmux_agent_exec_command(&env, &agent_bin, &ready, "budget-provider", &worktree);
         let request_index = command
             .iter()
-            .position(|arg| arg == "--request")
+            .position(|arg| arg == "--request-file")
             .expect("request flag")
             + 1;
         let mut request = rimz::harness::launch::decode_exec_envelope(
             "claude",
             Some(&worktree),
-            &command[request_index],
+            &std::fs::read_to_string(&command[request_index]).unwrap(),
         )
         .expect("budget request")
         .request()
@@ -161,7 +161,10 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
             request.identity.name = Some("budget-child".into());
             request.identity.params = ancestry;
         }
-        command[request_index] = serde_json::to_string(&request).expect("encode budget request");
+        let exec =
+            rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
+                .expect("encode budget request");
+        command[request_index] = exec.last().expect("request file").clone();
         command.splice(
             1..1,
             [

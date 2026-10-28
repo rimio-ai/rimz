@@ -608,7 +608,8 @@ fn resume_command_replays_launch_identity() {
         &crate::harness::plan::ResumeLaunchPosture::default(),
         true,
         None,
-    );
+    )
+    .unwrap();
     assert_eq!(&argv[..4], [RIMZ_BIN, "agents", "exec", "claude"]);
     let request = decode_exec_request(&argv);
     assert_eq!(

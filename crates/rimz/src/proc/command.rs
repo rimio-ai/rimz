@@ -860,7 +860,7 @@ mod tests {
         assert_eq!(rimz_exec_worktree_path(wrapped), Some("/repo/wt"));
         assert_eq!(
             effective_program_info(
-                "sudo /home/me/.cargo/bin/rimz agents exec codex --request opaque-state"
+                "sudo /home/me/.cargo/bin/rimz agents exec codex --request-file /runtime/exec.json"
             )
             .program,
             "codex"
@@ -871,7 +871,7 @@ mod tests {
         );
         assert_eq!(
             rimz_exec_worktree_path(
-                "/bin/rimz agents exec codex --worktree-path /repo/wt --request arbitrary-later-state"
+                "/bin/rimz agents exec codex --worktree-path /repo/wt --request-file /runtime/exec.json"
             ),
             Some("/repo/wt")
         );

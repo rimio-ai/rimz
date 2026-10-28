@@ -519,11 +519,11 @@ mod tests {
         r#"/home/me/.cargo/bin/rimz agents supervise-duty --request {"duty":"compact"}"#;
     const DRAINER: &str = "/home/me/.cargo/bin/rimz hooks drain --project-root /repo";
 
-    /// The exec wrapper's argv for a resume in `plan_exec_argv`'s shape, its
-    /// request trimmed to the resume action.
+    /// The exec wrapper's argv for a resume in `plan_exec_argv`'s shape.
     fn exec_wrapper(kind: &str, session: &str) -> String {
         format!(
-            r#"/home/me/.cargo/bin/rimz agents exec {kind} --request {{"request":{{"kind":"{kind}","action":{{"action":"resume","session_id":"{session}"}}}},"prompt_file":null}}"#
+            "/home/me/.cargo/bin/rimz agents exec {kind} --request-file \
+             /runtime/live/prompt/exec.{session}.json"
         )
     }
 

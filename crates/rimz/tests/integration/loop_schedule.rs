@@ -1034,8 +1034,12 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
     .unwrap();
     let layout: kdl::KdlDocument = layout.parse().unwrap();
     let argv = loop_agent_pane_args(&layout).expect("agent pane args");
-    let request = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
-    let request = rimz::harness::launch::decode_exec_request("codex", None, &request[1]).unwrap();
+    let request = argv
+        .windows(2)
+        .find(|pair| pair[0] == "--request-file")
+        .unwrap();
+    let payload = std::fs::read_to_string(&request[1]).unwrap();
+    let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
     let mut pane_env: BTreeMap<String, String> = argv
         .iter()
         .take_while(|arg| arg.contains('='))
@@ -1111,7 +1115,7 @@ fn loop_agent_pane_args(document: &kdl::KdlDocument) -> Option<Vec<String>> {
                 .iter()
                 .map(|entry| entry.value().as_string().unwrap().to_owned())
                 .collect::<Vec<_>>();
-            if args.iter().any(|arg| arg == "--request") {
+            if args.iter().any(|arg| arg == "--request-file") {
                 return Some(args);
             }
         }
@@ -9795,7 +9799,7 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
     let trace = std::fs::read_to_string(env.project_root.join("spawn.log")).unwrap();
     // The run's pane opens in a `new-tab --layout`, which spells its argv as JSON strings.
     let payload = trace
-        .split("\"--request\" ")
+        .split("\"--request-file\" ")
         .nth(1)
         .and_then(|rest| {
             serde_json::Deserializer::from_str(rest)
@@ -9804,6 +9808,7 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
                 .ok()
         })
         .unwrap_or_else(|| panic!("pane request in {trace}"));
+    let payload = std::fs::read_to_string(payload).unwrap();
     let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
     assert_eq!(
         request.loop_reminder.as_deref(),

@@ -6515,12 +6515,20 @@ fn launch_prompt_artifact_round_trips_and_missing_file_fails() {
     for prompt in [String::new(), "line with \"quotes\"\n雪\r\n".repeat(2048)] {
         let request = fresh_exec("codex", Some(&prompt));
         let argv = exec_argv(&env.rimz_bin(), &runtime, &request).expect("exec argv");
-        let payload = argv.last().expect("payload");
         assert!(
-            payload.len() < 4096,
-            "prompt must not travel through mux argv"
+            argv.iter().any(|arg| arg == "--request-file"),
+            "the exec request must travel by file"
         );
-        let wire: serde_json::Value = serde_json::from_str(payload).expect("wire JSON");
+        let request_path = std::path::Path::new(argv.last().expect("request path"));
+        assert_eq!(request_path.parent(), Some(runtime.prompt_dir().as_path()));
+        let request_name = request_path.file_name().unwrap().to_str().unwrap();
+        assert!(request_name.starts_with("exec.") && request_name.ends_with(".json"));
+        let payload = std::fs::read_to_string(request_path).expect("request contents");
+        assert!(
+            argv.join(" ").len() < 4096,
+            "request must not travel through mux argv"
+        );
+        let wire: serde_json::Value = serde_json::from_str(&payload).expect("wire JSON");
         assert!(wire["action"]["prompt"].is_null());
         let path = std::path::Path::new(wire["prompt_file"].as_str().expect("prompt path"));
         assert_eq!(path.parent(), Some(runtime.prompt_dir().as_path()));
@@ -6535,21 +6543,21 @@ fn launch_prompt_artifact_round_trips_and_missing_file_fails() {
             prompt
         );
         assert_eq!(
-            decode_exec_request("codex", None, payload).expect("decode"),
+            decode_exec_request("codex", None, &payload).expect("decode"),
             request
         );
 
         std::fs::remove_file(path).expect("remove artifact");
         assert!(matches!(
-            decode_exec_request("codex", None, payload),
+            decode_exec_request("codex", None, &payload),
             Err(ExecWireErr::PromptRead { .. })
         ));
         assert!(matches!(
-            decode_exec_request("claude", None, payload),
+            decode_exec_request("claude", None, &payload),
             Err(ExecWireErr::KindMismatch { .. })
         ));
         assert!(matches!(
-            decode_exec_request("codex", Some(&env.project_root), payload),
+            decode_exec_request("codex", Some(&env.project_root), &payload),
             Err(ExecWireErr::WorktreeMismatch)
         ));
 
@@ -6560,6 +6568,24 @@ fn launch_prompt_artifact_round_trips_and_missing_file_fails() {
             decode_exec_request("codex", None, &invalid.to_string()),
             Err(ExecWireErr::Parse(_))
         ));
+        std::fs::remove_file(request_path).expect("remove request");
+        let missing = env
+            .rimz()
+            .args(&argv[1..])
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        let missing = String::from_utf8(missing).unwrap();
+        assert!(
+            missing.contains("decoding hidden agent exec request"),
+            "{missing}"
+        );
+        assert!(
+            missing.contains(request_path.to_str().unwrap()),
+            "{missing}"
+        );
     }
     std::fs::remove_dir(runtime.prompt_dir()).expect("empty artifact directory");
     std::fs::write(runtime.prompt_dir(), "not a directory").expect("block artifact writes");
@@ -6693,8 +6719,8 @@ async fn exec_prompt_failures_fail_provisional_launch_and_release_run_waiter() {
         request.identity.launch_id = Some(launch_id.to_owned());
         let argv = exec_args(&env, &request);
         if missing_artifact {
-            let wire: serde_json::Value =
-                serde_json::from_str(argv.last().expect("payload")).expect("wire");
+            let payload = std::fs::read_to_string(argv.last().expect("request path")).unwrap();
+            let wire: serde_json::Value = serde_json::from_str(&payload).expect("wire");
             std::fs::remove_file(wire["prompt_file"].as_str().expect("artifact path"))
                 .expect("remove prompt artifact");
         }

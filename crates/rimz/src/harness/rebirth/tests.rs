@@ -66,9 +66,10 @@ fn rebirth_recovers_a_child_fork_with_its_subagent_posture_and_isolation() {
     let argv = &resumed.tabs[0].layout.columns[0].panes[0].argv;
     let payload = argv
         .windows(2)
-        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
+        .find_map(|pair| (pair[0] == "--request-file").then_some(pair[1].as_str()))
         .unwrap();
-    let request = crate::harness::launch::decode_exec_request(&argv[3], None, payload).unwrap();
+    let payload = std::fs::read_to_string(payload).unwrap();
+    let request = crate::harness::launch::decode_exec_request(&argv[3], None, &payload).unwrap();
     assert_eq!(request.isolation_default, Some(Isolation::Host));
     assert_eq!(request.identity.params.model.as_deref(), Some("opus"));
     assert_eq!(
@@ -2570,9 +2571,10 @@ fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() 
     let decode_request = |argv: &[String]| {
         let payload = argv
             .windows(2)
-            .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
-            .expect("exec request payload");
-        crate::harness::launch::decode_exec_request(&argv[3], None, payload)
+            .find_map(|pair| (pair[0] == "--request-file").then_some(pair[1].as_str()))
+            .expect("exec request path");
+        let payload = std::fs::read_to_string(payload).expect("exec request contents");
+        crate::harness::launch::decode_exec_request(&argv[3], None, &payload)
             .expect("decode exec request")
     };
     let planner = decode_request(argvs[0]);

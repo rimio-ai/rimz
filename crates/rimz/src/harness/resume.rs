@@ -317,6 +317,8 @@ pub enum ResumeSkipReason {
     FreshRelaunch(String),
     /// An explicit launch override cannot be applied to this session.
     OverrideRejected(String),
+    /// The exec request artifact could not be prepared.
+    ExecRequestUnavailable(String),
 }
 
 impl ResumeSkipReason {
@@ -335,6 +337,9 @@ impl ResumeSkipReason {
                 return format!("no saved team to restore; relaunch with {spec}").into();
             }
             Self::OverrideRejected(reason) => return reason.as_str().into(),
+            Self::ExecRequestUnavailable(reason) => {
+                return format!("exec request unavailable: {reason}").into();
+            }
         }
         .into()
     }
@@ -2558,6 +2563,7 @@ fn plan_resume_candidates_detailed(
         } else {
             (resolve_posture(request, profiles), None)
         };
+        let mut launch_warnings = Vec::new();
         if let Some(options) = single {
             let overrides = &options.overrides;
             if overrides.permission_mode.is_some()
@@ -2577,9 +2583,7 @@ fn plan_resume_candidates_detailed(
                     Some(posture.launch),
                     true,
                 ) {
-                    Ok(warnings) => plan
-                        .warnings
-                        .extend(warnings.into_iter().map(|warning| warning.to_string())),
+                    Ok(warnings) => launch_warnings = warnings,
                     Err(reason) => {
                         // The cell replays the record, so `Unresolved` here is
                         // finalize refusing an override, not the profile.
@@ -2613,6 +2617,34 @@ fn plan_resume_candidates_detailed(
             plan.skip(&candidate, label, ResumeSkipReason::PromptUnsupported);
             continue;
         }
+        let command = match crate::harness::plan::resume_command(
+            ctx.rimz_bin,
+            ctx.runtime,
+            &candidate.identity,
+            channel.as_deref(),
+            &posture.launch,
+            !ctx.in_place,
+            candidate
+                .identity
+                .checkout
+                .as_ref()
+                .map(|_| candidate.cwd.as_path()),
+        ) {
+            Ok(command) => command,
+            Err(error) => {
+                plan.skip(
+                    &candidate,
+                    label,
+                    ResumeSkipReason::ExecRequestUnavailable(error.to_string()),
+                );
+                continue;
+            }
+        };
+        plan.warnings.extend(
+            launch_warnings
+                .into_iter()
+                .map(|warning| warning.to_string()),
+        );
         plan.warnings.extend(
             posture
                 .degraded
@@ -2664,19 +2696,6 @@ fn plan_resume_candidates_detailed(
                     .push(format!("@{name} ran {stamp}; resuming under {isolation}"));
             }
         }
-        let command = crate::harness::plan::resume_command(
-            ctx.rimz_bin,
-            ctx.runtime,
-            &candidate.identity,
-            channel.as_deref(),
-            &posture.launch,
-            !ctx.in_place,
-            candidate
-                .identity
-                .checkout
-                .as_ref()
-                .map(|_| candidate.cwd.as_path()),
-        );
         let lane_path = candidate.lane_path();
         let tab_label = channel_label(channel.as_deref(), lane_path);
         let identity = resume_tab_identity(channel.as_deref(), lane_path);

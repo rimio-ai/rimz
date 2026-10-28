@@ -1826,7 +1826,7 @@ pub(super) fn resume_command(
     posture: &ResumeLaunchPosture,
     close_pane_on_exit: bool,
     cwd: Option<&Path>,
-) -> Vec<String> {
+) -> Result<Vec<String>, crate::harness::launch::ExecWireErr> {
     let channel = identity
         .channel
         .as_deref()
@@ -1854,7 +1854,7 @@ pub(super) fn resume_command(
         record: posture.record.clone(),
         ..Default::default()
     };
-    let result = crate::harness::launch::exec_argv(
+    crate::harness::launch::exec_argv(
         rimz_bin,
         runtime,
         &crate::harness::launch::ExecRequest {
@@ -1881,8 +1881,7 @@ pub(super) fn resume_command(
                 },
             )
         },
-    );
-    result.unwrap_or_else(|err| unreachable!("serializing canonical exec request: {err}"))
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -2008,7 +2007,7 @@ pub fn compile_layout_panes(
                                         &ResumeLaunchPosture::from(cell),
                                         !params.in_place,
                                         agent.checkout.as_ref().and(agent.worktree_path.as_deref()).map(Path::new),
-                                    )
+                                    )?
                                 },
                                 Some(CohortSeed::Fresh) | None => {
                                     let Some(launch) = launches.next() else {

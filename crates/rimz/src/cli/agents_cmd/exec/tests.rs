@@ -356,12 +356,10 @@ fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
     let Some(AgentsSubcmd::Exec(args)) = args.command else {
         panic!("expected exec subcommand");
     };
-    rimz::harness::launch::decode_exec_request(
-        &args.kind,
-        args.worktree_path.as_deref(),
-        &args.request,
-    )
-    .expect("decode exec request")
+    decode_exec_envelope(&args)
+        .expect("decode exec request")
+        .materialize()
+        .expect("materialize exec prompt")
 }
 
 pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
@@ -521,6 +519,48 @@ fn bare_exec_args() -> ExecRequest {
             ..ExecIdentity::default()
         },
     }
+}
+
+#[test]
+fn exec_accepts_one_legacy_or_file_request_and_decodes_the_same_envelope() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        rimz::RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let request = bare_exec_args();
+    let argv =
+        rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), &runtime, &request).unwrap();
+    let path = argv.last().unwrap();
+    let payload = std::fs::read_to_string(path).unwrap();
+    let base = ["rimz", "agents", "exec", "codex"];
+    let legacy =
+        crate::cli::Cli::try_parse_from(base.into_iter().chain(["--request", payload.as_str()]));
+    assert!(
+        legacy.is_ok(),
+        "a pre-upgrade wrapper must still parse: {legacy:?}"
+    );
+    let exec_args = |cli: crate::cli::Cli| {
+        let Some(crate::cli::Subcmd::Agents(args)) = cli.subcommand else {
+            panic!("expected agents subcommand");
+        };
+        let Some(AgentsSubcmd::Exec(args)) = args.command else {
+            panic!("expected exec subcommand");
+        };
+        args
+    };
+    let legacy = exec_args(legacy.unwrap());
+    let file = exec_args(crate::cli::Cli::try_parse_from(&argv).unwrap());
+    assert_eq!(decode_exec_envelope(&legacy).unwrap().request(), &request);
+    assert_eq!(decode_exec_envelope(&file).unwrap().request(), &request);
+    assert!(crate::cli::Cli::try_parse_from(base).is_err());
+    assert!(
+        crate::cli::Cli::try_parse_from(base.into_iter().chain([
+            "--request",
+            payload.as_str(),
+            "--request-file",
+            path.as_str(),
+        ]))
+        .is_err()
+    );
 }
 
 #[test]

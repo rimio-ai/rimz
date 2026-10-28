@@ -93,12 +93,10 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     .unwrap();
     let pane = panes.columns.remove(0).panes.remove(0);
     assert_eq!(pane.name.as_deref(), Some("codex"));
-    let request = rimz::harness::launch::decode_exec_request(
-        "codex",
-        Some(worktree),
-        pane.argv.last().expect("exec payload"),
-    )
-    .unwrap();
+    let payload = std::fs::read_to_string(pane.argv.last().expect("exec request file"))
+        .expect("exec request contents");
+    let request =
+        rimz::harness::launch::decode_exec_request("codex", Some(worktree), &payload).unwrap();
     // Together `close_pane_on_exit`, `exit_on_run_completion`, `subagent` and
     // `team_prompt` select the wrapper's parent-receipt hold before it closes the pane.
     assert_eq!(

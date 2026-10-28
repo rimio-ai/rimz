@@ -144,6 +144,84 @@ fn empty_dir_missing_cwd_is_still_resumable_on_rebirth() {
     );
 }
 
+#[test]
+fn request_write_failure_skips_resume_without_warnings_or_launch_facts() {
+    let h = Harness::new();
+    let mut observation = registered("saved", "otter", "terminal_2", "/repo", "main");
+    observation.launch.profile = Some("removed-profile".to_owned());
+    h.store
+        .append_event(&lifecycle(&h, "claude", "SessionStart", &observation))
+        .unwrap();
+    let projection = h
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    let prompt_dir = h.store.runtime_paths().prompt_dir();
+    std::fs::create_dir_all(prompt_dir.parent().unwrap()).unwrap();
+    std::fs::write(&prompt_dir, "not a directory").unwrap();
+    let result = std::panic::catch_unwind(|| {
+        rimz::harness::resume::plan_recorded_resume(
+            &projection.agents[0],
+            rimz::harness::resume::ResumeContext {
+                in_place: false,
+                project_root: None,
+                workspace_id: &h.workspace_id,
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: h.store.runtime_paths(),
+                profiles: &rimz::config::ProfilesConfig::default(),
+                subagent_profiles: &rimz::config::ProfilesConfig::default(),
+                max: 10,
+                logins: &rimz::agents::RoomAccounts::default(),
+                catalog: &rimz::agents::LoginCatalog::default(),
+            },
+            &rimz::harness::resume::SingleResumeOptions::default(),
+            |_| true,
+            |_| true,
+        )
+    });
+    assert!(result.is_ok(), "an artifact write failure must not panic");
+    let (plan, facts) = result.unwrap();
+    assert!(plan.tabs.is_empty());
+    assert!(plan.resumed.is_empty());
+    assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+    assert!(facts.is_none());
+    assert_eq!(plan.skipped.len(), 1);
+    let reason = plan.skipped[0].reason.label();
+    assert!(reason.contains("exec request unavailable"), "{reason}");
+    assert!(reason.contains(prompt_dir.to_str().unwrap()), "{reason}");
+}
+
+#[test]
+fn request_write_failure_does_not_stop_other_resume_candidates() {
+    let h = Harness::new();
+    for (id, pane) in [("blocked", "terminal_2"), ("ready", "terminal_3")] {
+        let observation = registered(id, id, pane, "/repo", "main");
+        h.store
+            .append_event(&lifecycle(&h, "claude", "SessionStart", &observation))
+            .unwrap();
+    }
+    let initial = plan_from_rollup(&h);
+    let argv = single_column(&initial.tabs[0])
+        .into_iter()
+        .find(|argv| decode_exec_request(argv).identity.name.as_deref() == Some("blocked"))
+        .unwrap();
+    let request_path = Path::new(argv.last().unwrap());
+    std::fs::remove_file(request_path).unwrap();
+    std::fs::create_dir(request_path).unwrap();
+    let result = std::panic::catch_unwind(|| plan_from_rollup(&h));
+    assert!(
+        result.is_ok(),
+        "one failed candidate must not abort the plan"
+    );
+    let plan = result.unwrap();
+    assert_eq!(plan.resumed.len(), 1);
+    assert!(plan.resumed.iter().any(|(_, id)| id.as_str() == "ready"));
+    assert_eq!(single_column(&plan.tabs[0]).len(), 1);
+    assert_eq!(plan.skipped.len(), 1);
+    let reason = plan.skipped[0].reason.label();
+    assert!(reason.contains(request_path.to_str().unwrap()), "{reason}");
+}
+
 fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
     rimz::harness::launch::exec_argv(
         Path::new("/bin/rimz"),
@@ -183,12 +261,17 @@ fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
 fn decode_exec_request(argv: &[String]) -> ExecRequest {
     let payload = argv
         .windows(2)
-        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
-        .expect("exec request payload");
+        .find_map(|pair| (pair[0] == "--request-file").then_some(pair[1].as_str()))
+        .expect("exec request path");
+    let payload = std::fs::read_to_string(payload).expect("exec request contents");
     let worktree = argv
         .windows(2)
         .find_map(|pair| (pair[0] == "--worktree-path").then(|| Path::new(&pair[1])));
-    rimz::harness::launch::decode_exec_request(&argv[3], worktree, payload)
+    let kind = &argv
+        .windows(3)
+        .find(|words| words[0] == "agents" && words[1] == "exec")
+        .expect("exec wrapper")[2];
+    rimz::harness::launch::decode_exec_request(kind, worktree, &payload)
         .expect("decode exec request")
 }
 
@@ -412,8 +495,9 @@ mod agent_ref {
             .unwrap();
             let layout = layout.parse().unwrap();
             let (_, argv) = resumed_pane(&layout).unwrap();
-            let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
-            rimz::harness::launch::decode_exec_request(&self.kind, None, &payload[1]).unwrap()
+            let request = super::decode_exec_request(&argv);
+            assert_eq!(request.kind.as_str(), self.kind);
+            request
         }
 
         fn attach_and_end(
@@ -960,7 +1044,7 @@ mod agent_ref {
                     .iter()
                     .map(|entry| entry.value().as_string().unwrap().to_owned())
                     .collect();
-                if argv.iter().any(|arg| arg == "--request") {
+                if argv.iter().any(|arg| arg == "--request-file") {
                     return Some((node, argv));
                 }
             }
@@ -1033,9 +1117,8 @@ mod agent_ref {
                 pane.get("cwd").unwrap().value().as_string(),
                 Some(fixture.cwd.to_str().unwrap())
             );
-            let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
-            let request =
-                rimz::harness::launch::decode_exec_request("claude", None, &payload[1]).unwrap();
+            let request = super::decode_exec_request(&argv);
+            assert_eq!(request.kind.as_str(), "claude");
             assert!(
                 matches!(&request.action, ExecAction::Resume { session_id, .. } if session_id == SESSION)
             );
@@ -1182,9 +1265,8 @@ mod agent_ref {
         .unwrap();
         let layout: kdl::KdlDocument = layout.parse().unwrap();
         let (_, argv) = resumed_pane(&layout).unwrap();
-        let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
-        let request =
-            rimz::harness::launch::decode_exec_request("claude", None, &payload[1]).unwrap();
+        let request = super::decode_exec_request(&argv);
+        assert_eq!(request.kind.as_str(), "claude");
         assert_eq!(
             serde_json::to_value(&request.action).unwrap()["action"],
             "pick"
@@ -1309,9 +1391,8 @@ mod agent_ref {
         .unwrap();
         let layout: kdl::KdlDocument = layout.parse().unwrap();
         let (_, argv) = resumed_pane(&layout).unwrap();
-        let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
-        let request =
-            rimz::harness::launch::decode_exec_request("claude", None, &payload[1]).unwrap();
+        let request = super::decode_exec_request(&argv);
+        assert_eq!(request.kind.as_str(), "claude");
         assert!(
             matches!(&request.action, ExecAction::Resume { session_id, .. } if session_id == SESSION)
         );
