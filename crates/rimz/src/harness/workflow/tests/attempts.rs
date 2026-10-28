@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 const STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=2\n";
 const KEYED_STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=5\nmax-visits-per-key=2\n";
 
+mod until;
+
 pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let dir = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
@@ -396,14 +398,19 @@ fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
 
 #[test]
 fn stay_lifecycle_is_persisted_and_legacy_attempts_remain_turns() {
-    for lifecycle in ["turn", "stay"] {
+    for lifecycle in ["turn", "stay", "until"] {
         let (_dir, state, record) = setup(&format!("{STEP}lifecycle='{lifecycle}'\n"));
         let host = FakeHost::new();
         let live = advance_ok(&state, &record.id, &host);
+        assert_eq!(
+            host.turn_observations.get(),
+            usize::from(lifecycle == "until"),
+            "only until observations request the leader turn"
+        );
         let mut value = serde_json::to_value(live.attempt.as_ref().unwrap()).unwrap();
         assert_eq!(
             value.get("lifecycle").cloned(),
-            (lifecycle == "stay").then(|| json!("stay"))
+            (lifecycle != "turn").then(|| json!(lifecycle))
         );
         value.as_object_mut().unwrap().remove("lifecycle");
         let legacy: records::LiveAttempt = serde_json::from_value(value).unwrap();

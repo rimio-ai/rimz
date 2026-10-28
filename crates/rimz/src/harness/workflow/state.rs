@@ -6,7 +6,8 @@ use super::spec::RESERVED_OUTCOMES;
 use crate::disk::paths::WorkflowPaths;
 use crate::store::workflow::{
     AttemptKind, AttemptOutcome, Children, EndCause, Ending, EvaluationOrigin, JournalEntry,
-    JournalEvent, Key, LiveAttempt, Park, ParkReason, PreviousAttempt, RunRecord, RunState, Wait,
+    JournalEvent, Key, LiveAttempt, Park, ParkReason, PreviousAttempt, RunRecord, RunState,
+    TurnEndAction, Verdict, Wait,
 };
 use crate::utils::time::{DurationUnit, TimeInputErr, parse_duration_units};
 
@@ -212,9 +213,11 @@ impl Transition<'_> {
 
     pub(super) fn close_wait(&mut self) {
         if let Some(wait) = self.record.wait.take() {
-            self.push(
-                None,
-                JournalEvent::Wait {
+            self.entries.push(JournalEntry {
+                seq: None,
+                at: self.now,
+                node: wait.node,
+                event: JournalEvent::Wait {
                     outcome: wait.outcome,
                     detail: wait.detail,
                     first: wait.first,
@@ -222,9 +225,109 @@ impl Transition<'_> {
                     count: wait.count,
                     recheck_at: wait.recheck_at,
                 },
-            );
+            });
         }
         self.record.recheck_at = None;
+    }
+
+    pub(super) fn restore_session(&mut self) {
+        // Only the held preflight and cancel restore a published held session.
+        let held = self.record.held.take().expect("held session to restore");
+        self.record.node = held.attempt.node.clone();
+        self.record.entered_at = held.entered_at;
+        self.record.attempt = Some(held.attempt);
+        self.record.check_retry = 0;
+        self.record.check_retry_context = None;
+        self.record.recheck_at = None;
+    }
+
+    pub(super) fn turn_end(
+        &mut self,
+        attempt: &LiveAttempt,
+        action: TurnEndAction,
+        verdict: Option<&Verdict>,
+        reason: Option<String>,
+    ) {
+        // A held session consumed a turn before it left the attempt slot.
+        let turn = attempt.judged.clone().expect("consumed leader turn end");
+        self.entries.push(JournalEntry {
+            seq: Some(attempt.seq),
+            at: self.now,
+            node: attempt.node.clone(),
+            event: JournalEvent::TurnEnd {
+                action,
+                turn,
+                check: verdict.map_or_else(
+                    || {
+                        self.spec.steps[&attempt.node]
+                            .then
+                            .clone()
+                            .expect("validated then check")
+                    },
+                    |verdict| verdict.node.clone(),
+                ),
+                outcome: verdict
+                    .and_then(|verdict| verdict.object["outcome"].as_str().map(str::to_owned)),
+                target: verdict.map(|verdict| verdict.target.clone()),
+                reason,
+            },
+        });
+    }
+
+    pub(super) fn merge_wait(&mut self, object: &Value, recheck: bool) -> Result<(), TimeInputErr> {
+        let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
+        let case = (outcome == "hold").then(|| case_index(object)).flatten();
+        let detail = if let Some(case) = case {
+            Some(
+                self.spec.checks[&self.record.node].cases[case as usize]
+                    .outcome
+                    .clone(),
+            )
+        } else if outcome == "unknown" {
+            object
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        let recheck_at = if recheck {
+            let requested = if let Some(case) = case {
+                self.hold_until(case)?
+            } else {
+                object
+                    .get("recheck_at")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse::<Timestamp>().ok())
+            };
+            self.bounded_recheck(requested)?
+        } else {
+            None
+        };
+        if self
+            .record
+            .wait
+            .as_ref()
+            .is_some_and(|w| (w.outcome.as_str(), w.case) != (outcome.as_str(), case))
+        {
+            self.close_wait();
+        }
+        let wait = self.record.wait.get_or_insert_with(|| Wait {
+            node: self.record.node.clone(),
+            outcome,
+            case,
+            detail: None,
+            first: self.now,
+            last: self.now,
+            count: 0,
+            recheck_at,
+        });
+        wait.last = self.now;
+        wait.count += 1;
+        wait.detail = detail;
+        wait.recheck_at = recheck_at;
+        self.record.recheck_at = recheck_at;
+        Ok(())
     }
 
     fn route(
@@ -236,55 +339,19 @@ impl Transition<'_> {
         if self.record.state.is_terminal() {
             return Ok(());
         }
-        if target == "@wait" {
-            let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
-            let case = (outcome == "hold").then(|| case_index(&object)).flatten();
-            let detail = if let Some(case) = case {
-                Some(
-                    self.spec.checks[&self.record.node].cases[case as usize]
-                        .outcome
-                        .clone(),
-                )
-            } else if outcome == "unknown" {
-                object
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            } else {
-                None
-            };
-            let requested = if let Some(case) = case {
-                self.hold_until(case)?
-            } else {
-                object
-                    .get("recheck_at")
-                    .and_then(Value::as_str)
-                    .and_then(|s| s.parse::<Timestamp>().ok())
-            };
-            let recheck_at = self.bounded_recheck(requested)?;
-            if self
-                .record
-                .wait
-                .as_ref()
-                .is_some_and(|w| (w.outcome.as_str(), w.case) != (outcome.as_str(), case))
-            {
-                self.close_wait();
-            }
-            let wait = self.record.wait.get_or_insert_with(|| Wait {
+        if let Some(held) = &mut self.record.held {
+            held.verdict = Some(Verdict {
                 node: self.record.node.clone(),
-                outcome,
-                case,
-                detail: None,
-                first: self.now,
-                last: self.now,
-                count: 0,
-                recheck_at,
+                entered_at: self.record.entered_at,
+                target: target.into(),
+                object,
+                reason,
             });
-            wait.last = self.now;
-            wait.count += 1;
-            wait.detail = detail;
-            wait.recheck_at = recheck_at;
-            self.record.recheck_at = recheck_at;
+            self.record.attempt = None;
+            return Ok(());
+        }
+        if target == "@wait" {
+            self.merge_wait(&object, true)?;
         } else {
             self.close_wait();
             match target {
@@ -498,7 +565,7 @@ impl Transition<'_> {
                 outcome: previous.outcome,
                 visit: previous.visit,
                 key: previous.key.clone(),
-                digests: attempt.digests,
+                digests: attempt.digests.clone(),
                 started_at: previous.started_at,
                 ended_at: self.now,
                 handle: previous.handle,
@@ -514,6 +581,12 @@ impl Transition<'_> {
                 reason,
             },
         );
+        if let Some(verdict) = ending.route {
+            self.turn_end(&attempt, TurnEndAction::Closed, Some(&verdict), None);
+            self.record.node = verdict.node;
+            self.record.entered_at = verdict.entered_at;
+            return self.route(&verdict.target, verdict.object, verdict.reason);
+        }
         if ending.cause == EndCause::Cancel {
             self.close_wait();
             self.record.state = RunState::Canceled;
@@ -669,7 +742,8 @@ impl Transition<'_> {
         {
             return Ok(false);
         }
-        if !self.record.deadline_fired
+        if self.record.held.is_none()
+            && !self.record.deadline_fired
             && let Some(deadline) = self.record.deadline
             && deadline <= self.now
         {

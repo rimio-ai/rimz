@@ -22,14 +22,34 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
     let paths = state.workflow(&record.id);
     std::fs::create_dir_all(&paths.home).unwrap();
     let cache = runtime.lane_path("workflow-tick.json");
-    for (now, recheck, expected) in [
-        (1000, None, 1000),
-        (1029, Some(1030), 1000),
-        (1030, Some(1030), 1030),
-        (1040, None, 1030),
-        (1090, None, 1090),
+    let mut actual = Vec::new();
+    let mut expected_stamps = Vec::new();
+    for (now, recheck, held, expected) in [
+        (1000, None, false, 1000),
+        (1029, Some(1030), false, 1000),
+        (1030, Some(1030), false, 1030),
+        (1040, None, false, 1030),
+        (1090, None, false, 1090),
+        (1150, Some(10000), false, 1090),
+        (1160, Some(10000), true, 1160),
+        (1190, Some(10000), true, 1160),
+        (1220, Some(10000), true, 1220),
     ] {
         record.recheck_at = recheck.map(|second| Timestamp::from_second(second).unwrap());
+        let mut value = serde_json::to_value(&record).unwrap();
+        value["held"] = if held {
+            serde_json::json!({
+                "attempt":{"kind":"agent", "lifecycle":"until", "seq":1, "node":"work",
+                    "started_at":record.created_at, "host":{"pid":1,"start":null},
+                    "run":{"run_id":crate::ids::RunId::new(),"handle":"@worker"},
+                    "judged":{"agent_id":"leader", "started_at":record.created_at,
+                        "ended_at":record.created_at}},
+                "entered_at":record.created_at
+            })
+        } else {
+            serde_json::Value::Null
+        };
+        record = serde_json::from_value(value).unwrap();
         std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
         tick_workflows(
             &runtime,
@@ -39,12 +59,11 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
         );
         let stamps: BTreeMap<crate::ids::WorkflowRunId, Timestamp> =
             crate::disk::atomic::read_json_cache(&cache);
-        assert_eq!(
-            stamps.get(&record.id),
-            Some(&Timestamp::from_second(expected).unwrap()),
-            "tick {now}"
-        );
+        actual.push((now, stamps.get(&record.id).copied()));
+        expected_stamps.push((now, Some(Timestamp::from_second(expected).unwrap())));
     }
+    assert_eq!(actual, expected_stamps);
+    record.held = None;
     record.state = crate::store::workflow::RunState::Parked;
     std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
     tick_workflows(

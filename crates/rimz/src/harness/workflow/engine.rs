@@ -20,6 +20,7 @@ use crate::store::workflow::{
 };
 
 mod accounting;
+mod until;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowErr {
@@ -402,7 +403,9 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             }
         }
         persist(&t, &guard)?;
-        if t.record.state != RunState::Active || (t.record.wait.is_some() && !recheck_woken) {
+        if t.record.state != RunState::Active
+            || (t.record.wait.is_some() && !recheck_woken && !until::has_pending_verdict(&t.record))
+        {
             return Ok(());
         }
     }
@@ -498,6 +501,11 @@ fn prepare(
     if t.record.state != RunState::Active {
         return Ok(Decision::Stop);
     }
+    if t.record.held.is_some()
+        && let Some(decision) = until::prepare(&mut t, host, &guard, seen)?
+    {
+        return Ok(decision);
+    }
     if t.record
         .attempt
         .as_ref()
@@ -508,7 +516,9 @@ fn prepare(
     if t.bound()? {
         persist(&t, &guard)?;
         return Ok(
-            if t.record.state != RunState::Active || t.record.wait.is_some() {
+            if t.record.state != RunState::Active
+                || (t.record.wait.is_some() && !until::has_pending_verdict(&t.record))
+            {
                 Decision::Stop
             } else {
                 Decision::Again
@@ -702,7 +712,7 @@ fn prepare(
 }
 
 fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec) -> Result<()> {
-    // Context is published only for the recorded attempt returned by prepare.
+    // Context belongs to the published attempt, including a restored until session.
     let attempt = record
         .attempt
         .as_ref()
@@ -714,6 +724,26 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
         let visits = &record.visits[&record.node];
         context["visits"] = json!(visits.total);
         context["visit"] = json!(visits.for_key(record.key.as_ref()));
+    }
+    if let Some(session) = record
+        .held
+        .as_ref()
+        .map(|held| &held.attempt)
+        .or(record.attempt.as_ref())
+        .filter(|attempt| {
+            attempt.lifecycle == workflow::StepLifecycle::Until && attempt.ending.is_none()
+        })
+    {
+        let visits = &record.visits[&session.node];
+        context["live_attempt"] = json!({
+            "step":session.node, "seq":session.seq,
+            "visit":visits.for_key(record.key.as_ref()), "visits":visits.total,
+            "key":record.key, "started_at":session.started_at,
+            "handle":session.run.as_ref().map(|run| &run.handle),
+            "run_id":session.run.as_ref().map(|run| &run.run_id),
+            "claim_path":paths.claim(session.seq), "head_start":session.head_start,
+            "turn_end":session.judged
+        });
     }
     crate::disk::atomic::write_temp_then_rename(&paths.context, &context)?;
     Ok(())
@@ -734,6 +764,9 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
         now: Timestamp::now(),
         entries: Vec::new(),
     };
+    if t.record.held.is_some() {
+        until::interrupt(&mut t, "cancel");
+    }
     t.close_wait();
     if let Some(attempt) = &t.record.attempt
         && attempt.kind == AttemptKind::Agent
@@ -752,6 +785,20 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
             Some(run) => host.observe(run, Observation::Attempt)?,
             None => agent::empty_observation(),
         };
+        if let Some(verdict) = attempt
+            .ending
+            .as_ref()
+            .and_then(|ending| ending.route.as_ref())
+        {
+            let attempt = attempt.clone();
+            let verdict = verdict.clone();
+            t.turn_end(
+                &attempt,
+                workflow::TurnEndAction::Interrupted,
+                Some(&verdict),
+                Some("cancel".into()),
+            );
+        }
         t.stage_agent_end(
             workflow::Ending {
                 outcome: AttemptOutcome::Canceled,

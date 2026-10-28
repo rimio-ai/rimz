@@ -76,6 +76,140 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
         assist_log::recent(&crate::disk::paths::logs_dir(), None).len(),
         1
     );
+    t.record.wait = None;
+    let workspace = crate::workspace::WorkspaceResolver::resolve(
+        &t.record.scope.path,
+        Some(t.record.project_root.clone()),
+    )
+    .unwrap();
+    let diagnostics_before = crate::diag::recent_records(workspace.workspace_id.clone())
+        .unwrap()
+        .1
+        .len();
+    assert_eq!(diagnostics_before, 1);
+    let mut actual = Vec::new();
+    for (action, target) in [
+        ("kept", "work"),
+        ("closed", "@done"),
+        ("kept", "@wait"),
+        ("discarded", "@done"),
+        ("interrupted", "@done"),
+    ] {
+        t.entries = vec![
+            serde_json::from_value(json!({
+                "event":"evaluation", "seq":2, "node":"pr", "at":t.now,
+                "outcome":"canceled", "origin":"engine", "object":null, "digests":{},
+                "started_at":t.now, "ended_at":t.now
+            }))
+            .unwrap(),
+            serde_json::from_value(json!({
+                "event":"route", "seq":2, "node":"pr", "at":t.now,
+                "outcome":"done", "input":null
+            }))
+            .unwrap(),
+            serde_json::from_value(json!({
+                "event":"attempt", "seq":1, "node":"work", "at":t.now,
+                "outcome":"ended", "visit":1, "key":null, "digests":{},
+                "started_at":t.now, "ended_at":t.now
+            }))
+            .unwrap(),
+            serde_json::from_value(json!({
+                "event":"turn_end", "seq":1, "node":"work", "at":t.now, "action":action,
+                "turn":{"agent_id":"leader", "started_at":t.now, "ended_at":t.now},
+                "check":"pr", "outcome":"done", "target":target
+            }))
+            .unwrap(),
+        ];
+        if action == "interrupted" {
+            t.entries.retain(|entry| {
+                !matches!(
+                    entry.event,
+                    JournalEvent::Route { .. } | JournalEvent::Attempt { .. }
+                )
+            });
+        }
+        accounting::transition(&t);
+        let routes: Vec<_> = assist_log::recent(&crate::disk::paths::logs_dir(), None)
+            .into_iter()
+            .map(|record| serde_json::to_value(record).unwrap())
+            .filter(|record| record["assist"] == "workflow_route")
+            .collect();
+        actual.push((
+            action,
+            target,
+            routes.len(),
+            routes
+                .iter()
+                .filter(|route| route["count"].is_null())
+                .all(|route| {
+                    route["node"] == "pr" && (route["to"] == "work" || route["to"] == "@done")
+                }),
+        ));
+    }
+    assert_eq!(
+        crate::diag::recent_records(workspace.workspace_id)
+            .unwrap()
+            .1
+            .len(),
+        diagnostics_before,
+        "an interrupted held check must not report a rerun"
+    );
+    assert_eq!(
+        actual,
+        vec![
+            ("kept", "work", 2, true),
+            ("closed", "@done", 3, true),
+            ("kept", "@wait", 3, true),
+            ("discarded", "@done", 3, true),
+            ("interrupted", "@done", 3, true)
+        ]
+    );
+    t.record.held = Some(
+        serde_json::from_value(json!({
+            "attempt":{
+                "kind":"agent", "lifecycle":"until", "seq":1, "node":"work",
+                "started_at":t.now, "host":{"pid":1, "start":null},
+                "run":{"run_id":crate::ids::RunId::new(), "handle":"@leader"},
+                "judged":{"agent_id":"leader", "started_at":t.now, "ended_at":t.now}
+            },
+            "entered_at":t.now
+        }))
+        .unwrap(),
+    );
+    let mut actual = Vec::new();
+    for (origin, route) in [("check", false), ("engine", false), ("engine", true)] {
+        t.entries = vec![
+            serde_json::from_value(json!({
+                "event":"evaluation", "seq":2, "node":"pr", "at":t.now,
+                "outcome":"invalid", "origin":origin, "object":null, "digests":{},
+                "started_at":t.now, "ended_at":t.now
+            }))
+            .unwrap(),
+        ];
+        if route {
+            t.push(
+                None,
+                JournalEvent::Route {
+                    outcome: "invalid".into(),
+                    input: serde_json::Value::Null,
+                },
+            );
+        }
+        accounting::transition(&t);
+        actual.push((
+            origin,
+            route,
+            assist_log::recent(&crate::disk::paths::logs_dir(), None).len(),
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            ("check", false, 3),
+            ("engine", false, 3),
+            ("engine", true, 3)
+        ]
+    );
 }
 
 fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, WorkflowSpec) {
