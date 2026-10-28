@@ -212,6 +212,13 @@ fn materialized_rows_count_flattening_but_not_borrowed_iteration() {
     assert_eq!(testkit::rollup_rows_materialized(), before);
     assert_eq!(rollup.to_vec().len(), 2);
     assert_eq!(testkit::rollup_rows_materialized() - before, 2);
+    let runtime = crate::store::runtime::RuntimeProjection::from_parts(
+        &rollup,
+        crate::store::runtime::RuntimeScope::Runtime,
+        Vec::new(),
+    );
+    assert_eq!(runtime.agents.len(), 2);
+    assert_eq!(testkit::rollup_rows_materialized() - before, 4);
 }
 
 #[test]

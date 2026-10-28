@@ -112,7 +112,7 @@ mod latency {
     use rimz::agents::{AgentContext, AgentLifecycleObservation, LifecycleSignal};
     use rimz::disk::lock::{SharedAppendLock, WorkspaceLock};
     use rimz::harness::hook_drain::{Connection, DrainReceipt, HookDrainErr};
-    use rimz::ids::{AgentKind, EventId};
+    use rimz::ids::{AgentKind, EventId, MuxName, PaneId};
     use rimz::store::event::{EventEnvelope, EventKind};
     use rimz::store::{agent_context, event_log, ingress};
     use serde_json::{Value, json};
@@ -147,6 +147,7 @@ mod latency {
                 std::env::var_os("RIMZ_HOOK_BUDGET_HOME").is_none(),
                 "generated fixture only"
             );
+            let load_before = load_1m();
             let roots = HookFixture::new();
             let binary = std::env::var_os("RIMZ_HOOK_BUDGET_BIN")
                 .map(PathBuf::from)
@@ -297,6 +298,23 @@ mod latency {
                 )
                 .unwrap();
             }
+            for index in 0..live_count {
+                let mut pane = rimz::pane::PaneRef::from_id(PaneId::from_parts(
+                    MuxName::Tmux,
+                    format!("%{}", index + 1),
+                ));
+                pane.cwd = Some(fixture.project.to_str().unwrap().into());
+                pane.pane_pid = Some(fixture.owners.0[index].id());
+                rimz::testkit::fleet::seed_live_launch_text(
+                    &fixture.store,
+                    &fixture.binary,
+                    format!("latency-{index}").into(),
+                    Some(&mut pane),
+                )
+                .unwrap();
+            }
+            // Price complete persisted arrays, not the last cadence-gated checkpoint.
+            rimz::testkit::fleet::checkpoint_fleet_store(&fixture.store).unwrap();
             let snapshot = fixture.store.snapshot_cached().unwrap();
             let live: Vec<_> = snapshot
                 .agents
@@ -308,7 +326,14 @@ mod latency {
             for index in 0..live_count {
                 let id = format!("latency-{index}");
                 assert!(live.iter().any(|agent| {
-                    agent.agent_id.as_str() == id && !agent.is_provider_subagent()
+                    agent.agent_id.as_str() == id
+                        && !agent.is_provider_subagent()
+                        && agent.prompt.is_some()
+                        && agent.first_prompt.is_some()
+                        && agent.pane.as_ref().is_some_and(|pane| {
+                            pane.spawn_command.is_some()
+                                && pane.spawn_command == pane.foreground_cmdline
+                        })
                 }));
             }
             let rollup = bytes(&fixture.store.paths().rollup_cache().unwrap());
@@ -335,11 +360,16 @@ mod latency {
                 assert_eq!(registrations.len(), live_count);
                 let cpu: Vec<_> = registrations.iter().map(cpu_us).collect();
                 json!({"kind": "fixture", "live": live_count, "closed": closed_count,
+                    "load_1m_before": load_before,
                     "build_id": rimz::build_id::of_file(&fixture.binary).unwrap(),
                     "version": String::from_utf8(version.stdout).unwrap().trim(),
                     "rollup_bytes": rollup,
+                    "rollup_live_row_bytes": live_row_bytes(
+                        &fixture.store.paths().rollup_cache().unwrap(), "raw_agents", live_count),
                     "carryover_bytes": bytes(&fixture.store.paths().agents_carryover),
                     "latest_bytes": bytes(&fixture.store.paths().latest_snapshot().unwrap()),
+                    "latest_live_row_bytes": live_row_bytes(
+                        &fixture.store.paths().latest_snapshot().unwrap(), "agents", live_count),
                     "event_log_bytes": bytes(&fixture.store.paths().events_log),
                     "session_start_wall_us": distribution(&registration_walls),
                     "session_start_cpu_us": distribution(&cpu)})
@@ -438,6 +468,30 @@ mod latency {
 
     fn bytes(path: &Path) -> u64 {
         std::fs::metadata(path).unwrap().len()
+    }
+
+    fn load_1m() -> f64 {
+        std::fs::read_to_string("/proc/loadavg")
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    fn live_row_bytes(path: &Path, field: &str, expected: usize) -> Value {
+        let value: Value = serde_json::from_reader(std::fs::File::open(path).unwrap()).unwrap();
+        let sizes: Vec<_> = value[field]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["ended_at"].is_null())
+            .map(|row| serde_json::to_vec(row).unwrap().len())
+            .collect();
+        assert_eq!(sizes.len(), expected, "live {field} rows in {path:?}");
+        json!({"mean": sizes.iter().sum::<usize>() as f64 / sizes.len() as f64,
+            "max": sizes.iter().max().unwrap()})
     }
 
     fn micros(duration: Duration) -> u64 {
@@ -723,6 +777,7 @@ mod latency {
         emit(
             APPLY_KEY,
             json!({"kind": "drain", "live": live, "closed": closed,
+            "load_1m_after": load_1m(),
             "working": 25, "frames": samples.len(), "seconds": seconds,
             "frames_per_second": samples.len() as f64 / seconds,
             "claim_to_applied_us": distribution(&claims)}),

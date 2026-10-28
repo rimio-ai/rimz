@@ -612,6 +612,9 @@ impl SidebarSnapshot {
             .into_iter()
             .map(|record| ((record.kind, record.agent_id), record.context))
             .collect();
+        if Arc::strong_count(&self.agents) > 1 {
+            super::count_rows_materialized(self.agents.len() as u64);
+        }
         for agent in Arc::make_mut(&mut self.agents) {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
                 agent.attach_context(Some(context));

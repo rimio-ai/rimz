@@ -118,7 +118,8 @@ impl RuntimeProjection {
                     projected
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
+        super::snapshot::count_rows_materialized(kept.len() as u64);
         Self {
             ended: ended_keys(agents.iter().map(|(agent, _)| *agent)),
             expelled,
