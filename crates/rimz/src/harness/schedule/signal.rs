@@ -622,14 +622,14 @@ fn elapsed_millis(started: std::time::Instant) -> u64 {
 /// carrying `ended_at` (`store::runtime`'s visibility rule), which is precisely
 /// the evidence the retirement predicate needs, so it would see an ended session
 /// as merely absent and leave its rows standing.
-fn audit_agents(project_root: &Path) -> Vec<crate::agents::AgentState> {
-    let read = || -> anyhow::Result<Vec<crate::agents::AgentState>> {
+fn audit_agents(project_root: &Path) -> crate::store::runtime::AuditRows {
+    let read = || -> anyhow::Result<crate::store::runtime::AuditRows> {
         let paths = crate::disk::paths::StatePaths::for_project_root(project_root)?;
-        Ok(crate::store::runtime::audit_projection(&paths)?.agents)
+        Ok(crate::store::runtime::audit_rows(&paths)?)
     };
     read().unwrap_or_else(|err| {
         tracing::warn!(error = %err, "loop: failed to read agent state before firing");
-        Vec::new()
+        crate::store::runtime::AuditRows::default()
     })
 }
 
@@ -670,9 +670,8 @@ fn fire_signal_with_wait(
     // A row pinned to a session that is durably ended must never be selected,
     // whoever ended it: the sibling-skip branch below returns before the fire
     // path's only liveness gate, so this is the decision point.
-    if let Err(err) = super::arm::retire_ended_sessions(project_root, || {
-        std::borrow::Cow::Owned(audit_agents(project_root))
-    }) {
+    if let Err(err) = super::arm::retire_ended_sessions(project_root, || audit_agents(project_root))
+    {
         tracing::warn!(error = %err, "loop: failed to retire ended sessions before firing");
     }
     let tasks = super::fire::workspace_runnable_tasks(runtime, Some(project_root));

@@ -462,7 +462,10 @@ pub fn rewake_resumed(
 }
 
 /// The live members of `member`'s team cohort on its channel.
-fn cohort_members<'a>(agents: &'a [AgentState], member: &AgentState) -> Vec<&'a AgentState> {
+fn cohort_members<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    member: &AgentState,
+) -> Vec<&'a AgentState> {
     let channel = member.channel().unwrap_or_else(|| "external".to_owned());
     crate::address::team_cohorts(agents)
         .into_iter()
@@ -507,8 +510,8 @@ fn react_lifecycle(
     if receipt.primary_event_id.is_none() && receipt.events.is_empty() {
         return;
     }
-    let audit = store
-        .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+    let rows = store
+        .audit_rows()
         .inspect_err(|err| {
             warn!(error = %err, "lifecycle: failed to read team member state");
         })
@@ -518,16 +521,26 @@ fn react_lifecycle(
     // append `Ended` without ever reaching a hook. It sits above the side
     // conversation's return because that conversation's own first hook appends
     // its registration, and that commit reaps like any other.
-    if let Some(audit) = &audit
-        && let Err(err) = arm::retire_ended_sessions(&workspace.project_root, || {
-            std::borrow::Cow::Borrowed(&audit.agents)
-        })
+    if let Some(rows) = &rows
+        && let Err(err) = arm::retire_ended_sessions(&workspace.project_root, || rows.clone())
     {
         warn!(error = %err, "lifecycle: failed to retire ended session deliveries");
     }
     if receipt.side_conversation.is_some() {
         return;
     }
+    let audit = if receipt.events.iter().any(|event| {
+        matches!(event.signal, LifecycleSignal::Registered) && event.parent_agent_id.is_none()
+    }) {
+        store
+            .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+            .inspect_err(|err| {
+                warn!(error = %err, "lifecycle: failed to read registration state");
+            })
+            .ok()
+    } else {
+        None
+    };
     let pending = if replay {
         None
     } else {
@@ -550,14 +563,17 @@ fn react_lifecycle(
         {
             warn!(error = %err, "lifecycle: failed to retire session deliveries");
         }
-        let member = audit
+        let member = rows
             .as_ref()
-            .and_then(|audit| find_agent(&audit.agents, &event.kind, &event.agent_id));
-        let registered_member = member.filter(|member| {
-            matches!(event.signal, LifecycleSignal::Registered)
-                && event.parent_agent_id.is_none()
-                && member.parent_agent_id.is_none()
-        });
+            .and_then(|rows| rows.find(&event.kind, &event.agent_id));
+        let registered_member = audit
+            .as_ref()
+            .and_then(|audit| find_agent(&audit.agents, &event.kind, &event.agent_id))
+            .filter(|member| {
+                matches!(event.signal, LifecycleSignal::Registered)
+                    && event.parent_agent_id.is_none()
+                    && member.parent_agent_id.is_none()
+            });
         let registered_team = registered_member.and_then(|member| {
             load_member_team(workspace, member.team.as_deref()?)
                 .inspect_err(|err| {
@@ -586,14 +602,14 @@ fn react_lifecycle(
         {
             warn!(error = %err, "lifecycle: failed to arm team signal bindings");
         }
-        let live_members = audit
+        let live_members = rows
             .as_ref()
             .zip(member)
-            .map(|(audit, member)| cohort_members(&audit.agents, member))
+            .map(|(rows, member)| cohort_members(rows.iter(), member))
             .unwrap_or_default();
         if !replay {
             let mut signals: Vec<_> = lifecycle_signal(event).into_iter().collect();
-            if let (Some(member), Some(pending)) = (member, &pending) {
+            if let (Some(rows), Some(member), Some(pending)) = (&rows, member, &pending) {
                 let sleeping = pending_waits_by_session(
                     &TaskCatalog::load_lenient(Some(&workspace.project_root)),
                     &workspace.project_root,
@@ -623,6 +639,7 @@ fn react_lifecycle(
                     &addressable,
                     pending,
                     &sleeping,
+                    rows,
                 ) {
                     match store.append_signal(&workspace.session_name, (&signal).into()) {
                         Ok(_) => signals.push(signal),
@@ -644,13 +661,14 @@ fn react_lifecycle(
                 }
             }
         }
-        if let (Some(member), Some(team)) = (registered_member, registered_team.as_ref())
+        if let (Some(audit), Some(member), Some(team)) =
+            (&audit, registered_member, registered_team.as_ref())
             && let (Some(name), Some(worktree)) =
                 (member.team.as_deref(), member.worktree_path.as_deref())
         {
-            let members = live_members
-                .iter()
-                .map(|member| (*member).clone())
+            let members = cohort_members(&audit.agents, member)
+                .into_iter()
+                .cloned()
                 .collect::<Vec<_>>();
             match with_rewake(
                 workspace,

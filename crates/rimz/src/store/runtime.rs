@@ -8,12 +8,60 @@ use crate::agents::{AgentState, state::standing_successor};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use std::collections::{BTreeSet, HashSet};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeScope {
     Runtime,
     Audit,
+}
+
+/// Shared durable rows, including ended sessions, without derived molt marks.
+/// Role decisions require the molt marks of [`RuntimeProjection`] in [`RuntimeScope::Audit`],
+/// not these raw rows.
+#[derive(Clone, Debug, Default)]
+pub struct AuditRows {
+    agents: super::snapshot::AgentRollup,
+    superseded: Arc<OnceLock<HashSet<AgentSessionId>>>,
+}
+
+impl AuditRows {
+    pub(super) fn new(agents: super::snapshot::AgentRollup) -> Self {
+        Self {
+            agents,
+            superseded: Arc::default(),
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &AgentState> + Clone {
+        self.agents.iter()
+    }
+
+    pub fn find(&self, kind: &str, agent_id: &AgentSessionId) -> Option<&AgentState> {
+        self.agents.find(kind, agent_id)
+    }
+
+    /// Copy one row with the same molt mark as the full Audit projection.
+    pub(crate) fn marked_copy(&self, agent: &AgentState) -> AgentState {
+        let superseded = self.superseded.get_or_init(|| {
+            superseded_molt_ids(self.iter())
+                .into_iter()
+                .cloned()
+                .collect()
+        });
+        let mut projected = agent.clone();
+        projected.molt_superseded =
+            superseded.contains(agent.launch_id.as_ref().unwrap_or(&agent.agent_id));
+        super::snapshot::count_rows_materialized(1);
+        projected
+    }
+}
+
+/// Read shared durable rows without a writer-capable [`crate::Store`].
+pub(crate) fn audit_rows(paths: &crate::StatePaths) -> crate::store::snapshot::Result<AuditRows> {
+    let (_, agents, _) = super::snapshot::catch_up_rollup(paths)?;
+    Ok(AuditRows::new(agents))
 }
 
 /// Tri-state process liveness for an agent session record.
@@ -36,10 +84,6 @@ pub struct RuntimeProjection {
 }
 
 /// Read the durable agent rollup without opening a writer-capable [`crate::Store`].
-///
-/// The one-shot signal emitter (`harness::schedule::signal::audit_agents`)
-/// retains ended rows through this read-only entry point when retiring
-/// subscriptions.
 pub(crate) fn audit_projection(
     paths: &crate::StatePaths,
 ) -> crate::store::snapshot::Result<RuntimeProjection> {
@@ -239,7 +283,14 @@ mod tests {
     use super::*;
     use crate::agents::AgentStatus;
     use crate::store::snapshot::AgentRollup;
+
     use jiff::Timestamp;
+
+    impl From<Vec<AgentState>> for AuditRows {
+        fn from(agents: Vec<AgentState>) -> Self {
+            Self::new(agents.into())
+        }
+    }
 
     fn agent(owner: Option<RuntimeOwner>) -> AgentState {
         AgentState {
@@ -285,6 +336,86 @@ mod tests {
         assert!(projection.agents[0].molt_superseded);
         assert!(projection.agents[1].molt_superseded);
         assert!(!projection.agents[2].molt_superseded);
+    }
+
+    #[test]
+    fn team_signal_handles_match_owned_audit_across_a_molt() {
+        use crate::agents::{AskKind, LifecycleEvent, LifecycleSignal};
+        use crate::harness::schedule::signal::team_lifecycle_signals;
+        use crate::ids::{EventId, WorkspaceId};
+
+        let mut rows = molt_chain();
+        for row in &mut rows {
+            row.team = Some("forge".to_owned());
+            row.channel = Some("auth".to_owned());
+            row.role = Some("coder".to_owned());
+        }
+        rows[2].status = AgentStatus::Waiting;
+        let signal = LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question,
+            ask_id: None,
+            detail: None,
+            native_key: None,
+        };
+        let mut prior = rows[2].lifecycle();
+        prior.status = AgentStatus::Running;
+        let transition = crate::agents::step(
+            Some(&prior),
+            None,
+            crate::agents::lifecycle::PriorTurnIds::default(),
+            &signal,
+        );
+        let event = LifecycleEvent::new(
+            EventId::new(),
+            Timestamp::UNIX_EPOCH,
+            WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            rows[2].kind.clone(),
+            rows[2].agent_id.clone(),
+            None,
+            None,
+            signal,
+            Some(AgentStatus::Running),
+            transition,
+        );
+        let rollup = AgentRollup::from(rows);
+        let audit = RuntimeProjection::from_parts(&rollup, RuntimeScope::Audit, Vec::new());
+        let rows = AuditRows::new(rollup);
+        let member = rows.find(&event.kind, &event.agent_id).unwrap();
+        let cohorts = crate::address::team_cohorts(rows.iter());
+        assert_eq!(cohorts.len(), 1);
+        assert_eq!(cohorts[0].members.len(), 2);
+        let actual = team_lifecycle_signals(
+            &event,
+            member,
+            &cohorts[0].members,
+            &[],
+            &[],
+            &BTreeSet::new(),
+            &rows,
+        );
+        let expected = crate::address::team_cohorts(&audit.agents);
+        let members = &expected[0].members;
+        let member = members
+            .iter()
+            .find(|row| row.agent_id == event.agent_id)
+            .unwrap();
+        assert_eq!(actual.len(), 1);
+        assert_eq!(actual[0].name.as_str(), "team.waiting");
+        assert_eq!(
+            actual[0].payload["member"],
+            crate::address::agent_handle(member, members, true)
+        );
+        let handles: Vec<_> = actual[0].payload["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|member| member["handle"].as_str().unwrap())
+            .collect();
+        let expected: Vec<_> = members
+            .iter()
+            .map(|member| crate::address::agent_handle(member, members, true))
+            .collect();
+        assert_eq!(handles, expected);
     }
 
     #[test]
