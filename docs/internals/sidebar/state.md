@@ -258,7 +258,7 @@ Before publication, the worker compares shared collections once against the prec
 
 ### Hidden attachments and reveal
 
-A settled hidden attachment leaves its cursor unread until reveal, with no time bound. A deferred drain builds no projection and advances neither cursor nor baseline. It consumes completion and refreshes the self-close watchdog only when completion is present. `FetchUpdate::preview_for` reads the selected unseen success, not the seed slot, which may hold an interim behind an unread final.
+A settled hidden attachment leaves its cursor unread until reveal, with no time bound. A deferred drain builds no projection and advances neither cursor nor baseline. It remembers the examined publication revision and caches the own-view preview by frame Arc and pane. Unchanged wakes clone no outcomes and rebuild no preview; a new revision on the same frame reuses that preview but reads the new fold's viewed panes. Reconciliation obligations are checked on every drain, even without a new revision. It consumes completion and refreshes the self-close watchdog only when completion is present. The preview reads the selected unseen success, not the seed slot, which may hold an interim behind an unread final.
 
 These conditions apply a hidden publication at once instead of deferring it:
 
