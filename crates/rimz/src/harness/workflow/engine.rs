@@ -109,7 +109,15 @@ pub fn create(
     }
     let now = Timestamp::now();
     let record = RunRecord {
-        version: 1,
+        version: if spec
+            .steps
+            .values()
+            .any(|step| step.lifecycle == Some(workflow::StepLifecycle::Until))
+        {
+            2
+        } else {
+            1
+        },
         id: WorkflowRunId::new(),
         workflow: name,
         task,
@@ -139,6 +147,7 @@ pub fn create(
         deadline_fired: false,
         next_seq: 1,
         attempt: None,
+        held: None,
         prev_attempt: None,
         terminal_at: None,
         check_retry: 0,
@@ -455,7 +464,16 @@ fn command_step(
     } else {
         EndCause::Lifecycle
     };
-    t.finish_script(Ending { outcome, cause }, code, head_end, reason)?;
+    t.finish_script(
+        Ending {
+            outcome,
+            cause,
+            route: None,
+        },
+        code,
+        head_end,
+        reason,
+    )?;
     persist(&t, &guard)?;
     Ok(t.record.state == RunState::Active)
 }
@@ -506,6 +524,7 @@ fn prepare(
             Ending {
                 outcome: AttemptOutcome::Canceled,
                 cause: EndCause::Lifecycle,
+                route: None,
             },
             None,
             None,
@@ -663,6 +682,7 @@ fn prepare(
         woken: false,
         asking: None,
         asked_ms: 0,
+        judged: None,
         child: None,
         run: None,
         head_start,
@@ -736,6 +756,7 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
             workflow::Ending {
                 outcome: AttemptOutcome::Canceled,
                 cause: workflow::EndCause::Cancel,
+                route: None,
             },
             &observed,
         );
@@ -754,6 +775,7 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
         Ending {
             outcome: AttemptOutcome::Canceled,
             cause: EndCause::Cancel,
+            route: None,
         },
         None,
         None,

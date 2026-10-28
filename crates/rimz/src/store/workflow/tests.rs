@@ -17,6 +17,89 @@ fn record() -> RunRecord {
 }
 
 #[test]
+fn until_session_round_trips_with_its_verdict_and_version_fence() {
+    let turn = json!({
+        "agent_id":"leader", "started_at":"2026-01-01T00:00:00Z",
+        "ended_at":"2026-01-01T00:00:01Z"
+    });
+    let verdict = json!({
+        "node":"pr", "entered_at":"2026-01-01T00:00:01Z", "target":"@done",
+        "object":{"outcome":"merged"}, "reason":"user"
+    });
+    let mut value = serde_json::to_value(record()).unwrap();
+    value["version"] = json!(2);
+    value["held"] = json!({
+        "attempt":value["attempt"], "entered_at":"2026-01-01T00:00:00Z",
+        "verdict":verdict
+    });
+    value["held"]["attempt"]["judged"] = turn.clone();
+    value["attempt"]["judged"] = turn;
+    value["attempt"]["ending"] = json!({
+        "outcome":"ended", "cause":"lifecycle", "route":verdict
+    });
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    let encoded = serde_json::to_value(&decoded).unwrap();
+    assert_eq!(
+        (&encoded["held"], &encoded["attempt"]),
+        (&value["held"], &value["attempt"])
+    );
+    let home = tempfile::tempdir().unwrap();
+    let state =
+        StatePaths::for_project_root_under(std::path::Path::new("/project"), home.path()).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    initialize(&state, &decoded, b"[workflow]", &guard).unwrap();
+    let loaded = load(&state.workflow(&decoded.id));
+    assert!(loaded.is_ok(), "version 2 must load: {loaded:?}");
+    assert_eq!(loaded.unwrap(), decoded);
+}
+
+#[test]
+fn until_turn_end_journal_preserves_each_decision() {
+    let results: Vec<_> = ["kept", "closed", "discarded", "interrupted"]
+        .into_iter()
+        .map(|action| {
+            let row = json!({
+                "event":"turn_end", "seq":1, "at":"2026-01-01T00:00:01Z", "node":"watch",
+                "action":action, "check":"pr", "outcome":"merged", "target":"@done",
+                "reason":"leader moved on", "turn":{
+                    "agent_id":"leader", "started_at":"2026-01-01T00:00:00Z",
+                    "ended_at":"2026-01-01T00:00:01Z"
+                }
+            });
+            let decoded = serde_json::from_value::<JournalEntry>(row.clone());
+            (
+                action,
+                decoded
+                    .ok()
+                    .map(|entry| serde_json::to_value(entry).unwrap())
+                    == Some(row),
+            )
+        })
+        .collect();
+    assert_eq!(
+        results,
+        vec![
+            ("kept", true),
+            ("closed", true),
+            ("discarded", true),
+            ("interrupted", true)
+        ]
+    );
+}
+
+#[test]
+fn legacy_records_omit_until_fields() {
+    let value = serde_json::to_value(record()).unwrap();
+    assert_eq!(value["version"], 1);
+    assert!(value.get("held").is_none());
+    assert!(value["attempt"].get("judged").is_none());
+    assert_eq!(
+        serde_json::from_value::<RunRecord>(value).unwrap(),
+        record()
+    );
+}
+
+#[test]
 fn provenance_and_window_evidence_survive_record_and_journal_round_trips() {
     let legacy = serde_json::to_value(record()).unwrap();
     let mut value = legacy.clone();
@@ -146,7 +229,7 @@ fn listing_skips_unreadable_records_but_named_loads_fail() {
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     initialize(&state, &record, b"[workflow]", &guard).unwrap();
     let mut future = record.clone();
-    future.version = 2;
+    future.version = 3;
     for contents in [
         None,
         Some(b"corrupt".to_vec()),

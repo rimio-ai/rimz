@@ -318,7 +318,7 @@ fn unreadable_homes(env: &Env, value: &Value) -> Vec<rimz::ids::WorkflowRunId> {
     let state =
         rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
     let mut future = value["record"].clone();
-    future["version"] = json!(2);
+    future["version"] = json!(3);
     let mut ids = Vec::new();
     for contents in [
         None,

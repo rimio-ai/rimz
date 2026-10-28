@@ -157,11 +157,13 @@ pub(super) fn prepare_end(
         Some(Ending {
             outcome: AttemptOutcome::Canceled,
             cause: EndCause::Deadline,
+            route: None,
         })
     } else if t.timeout_at()?.is_some_and(|at| at <= t.now) {
         Some(Ending {
             outcome: AttemptOutcome::Timeout,
             cause: EndCause::Timeout,
+            route: None,
         })
     } else {
         observed_outcome(&observed, lifecycle, on_asked)
@@ -169,6 +171,7 @@ pub(super) fn prepare_end(
             .map(|outcome| Ending {
                 outcome,
                 cause: EndCause::Lifecycle,
+                route: None,
             })
     };
     let Some(ending) = ending else {
@@ -278,6 +281,7 @@ pub(super) fn launch(
                     Ending {
                         outcome: failure.outcome,
                         cause: EndCause::Lifecycle,
+                        route: None,
                     },
                     &observed,
                 );

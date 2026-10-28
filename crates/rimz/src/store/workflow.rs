@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::ids::{AgentKind, RunId, WorkflowRunId};
+use crate::ids::{AgentKind, AgentSessionId, RunId, WorkflowRunId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -199,6 +199,8 @@ pub enum EndCause {
 pub struct Ending {
     pub outcome: AttemptOutcome,
     pub cause: EndCause,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Verdict>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -228,6 +230,41 @@ pub struct LiveAttempt {
     pub asking: Option<Asking>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub asked_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judged: Option<TurnEnd>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnEnd {
+    pub agent_id: AgentSessionId,
+    pub started_at: Timestamp,
+    pub ended_at: Timestamp,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Verdict {
+    pub node: String,
+    pub entered_at: Timestamp,
+    pub target: String,
+    pub object: Value,
+    pub reason: ParkReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeldSession {
+    pub attempt: LiveAttempt,
+    pub entered_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnEndAction {
+    Kept,
+    Closed,
+    Discarded,
+    Interrupted,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -242,6 +279,7 @@ pub enum StepLifecycle {
     #[default]
     Turn,
     Stay,
+    Until,
 }
 
 impl StepLifecycle {
@@ -374,6 +412,8 @@ pub struct RunRecord {
     pub deadline_fired: bool,
     pub next_seq: u64,
     pub attempt: Option<LiveAttempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<HeldSession>,
     pub prev_attempt: Option<PreviousAttempt>,
     pub terminal_at: Option<Timestamp>,
     #[serde(default)]
@@ -413,6 +453,17 @@ pub enum EvaluationOrigin {
 )]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum JournalEvent {
+    TurnEnd {
+        action: TurnEndAction,
+        turn: TurnEnd,
+        check: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     Evaluation {
         #[serde(default)]
         origin: EvaluationOrigin,
@@ -495,7 +546,7 @@ pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
             path: paths.record.clone(),
             source,
         })?;
-    if record.version != 1 {
+    if !matches!(record.version, 1 | 2) {
         return Err(WorkflowStoreErr::Version {
             path: paths.record.clone(),
             version: record.version,

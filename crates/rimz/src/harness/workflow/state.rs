@@ -677,6 +677,7 @@ impl Transition<'_> {
                 Ending {
                     outcome: AttemptOutcome::Canceled,
                     cause: EndCause::Deadline,
+                    route: None,
                 },
                 None,
                 None,
@@ -701,6 +702,7 @@ impl Transition<'_> {
             Ending {
                 outcome: AttemptOutcome::Timeout,
                 cause: EndCause::Timeout,
+                route: None,
             },
             None,
             None,
