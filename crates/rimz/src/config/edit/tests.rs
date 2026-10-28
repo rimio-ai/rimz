@@ -1297,6 +1297,55 @@ fn replacing_same_key_block_keeps_header_decor() {
 }
 
 #[test]
+fn replacing_daemon_panes_keeps_the_array_before_the_sidebar() {
+    let (_dir, editor) = inline_editor(
+        "# about panes\n[[daemon.pane]]\ncommand = \"stats\"\n\n\
+         # about the second pane\n[[daemon.pane]]\ncommand = \"loop\"\n\n\
+         # about the sidebar\n[sidebar]\nspend_window = \"24h\"\n",
+    );
+    editor
+        .set("daemon.pane", "[{command = \"stats\"}]")
+        .unwrap();
+
+    let rendered = std::fs::read_to_string(editor.files.core_path()).unwrap();
+    assert_eq!(
+        rendered,
+        "# about panes\n[[daemon.pane]]\ncommand = \"stats\"\n\n\
+         # about the second pane\n\n\
+         # about the sidebar\n[sidebar]\nspend_window = \"24h\"\n"
+    );
+}
+
+#[test]
+fn replacing_judge_array_with_block_keeps_it_before_the_next_task() {
+    let (dir, editor) = inline_editor("");
+    let loop_path = dir.path().join("loop.toml");
+    std::fs::write(
+        &loop_path,
+        "[tasks.x]\ncheck = \"true\"\n\n\
+         # first judge\n[[tasks.x.judge]]\nagent = \"claude\"\nprompt = \"a?\"\n\n\
+         # second judge\n[[tasks.x.judge]]\nagent = \"claude\"\nprompt = \"b?\"\n\n\
+         # next task\n[tasks.y]\ncheck = \"true\"\n",
+    )
+    .unwrap();
+    editor
+        .set(
+            "loop.tasks.x.judge",
+            "{ agent = \"claude\", prompt = \"c?\" }",
+        )
+        .unwrap();
+
+    let rendered = std::fs::read_to_string(&loop_path).unwrap();
+    assert_eq!(
+        rendered,
+        "[tasks.x]\ncheck = \"true\"\n\n\
+         # first judge\n[tasks.x.judge]\nagent = \"claude\"\nprompt = \"c?\"\n\n\
+         # second judge\n\n\
+         # next task\n[tasks.y]\ncheck = \"true\"\n"
+    );
+}
+
+#[test]
 fn replacing_array_entries_keeps_later_comments_after_the_new_array() {
     let two_entries = "# over entry 0\n[[a.b]]\ny = 1\n# over entry 1\n[[a.b]]\ny = 2\n";
     let rendered = [
@@ -1344,9 +1393,6 @@ fn replacing_array_with_block_keeps_later_comments_after_the_new_block() {
         )
         .parse()
         .unwrap();
-        if let Some(next) = doc.get_mut("next").and_then(Item::as_table_mut) {
-            next.set_position(None);
-        }
         set_document_value(
             &mut doc,
             &parse_key("a.b").unwrap(),
