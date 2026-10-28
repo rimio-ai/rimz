@@ -2708,7 +2708,8 @@ path = "crates/rimz/src/store"
 # MessageRecord::with_about_run links queued advisory notices to their child run (+1).
 # HookDrainerOutage and HookDrainerOutageAgent carry wrapper outage facts to the renderer (+2).
 # hibernate::read_cached shares per-fold record parses without changing locked reads (+1).
-surface-budget = 503
+# Workflow held sessions, turn identities, saved verdicts, and turn-end actions cross the engine/inspection seam (+4).
+surface-budget = 507
 
 [[verdict]]
 kind = "item"
@@ -9055,6 +9056,26 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 kind = "item"
 key = "store::workflow::LiveAttempt"
 reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::TurnEnd"
+reason = "The workflow host and engine share the durable identity of a consumed leader turn end."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Verdict"
+reason = "A held session saves its check's route across locked advances and the off-lock stop."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::HeldSession"
+reason = "The engine and inspection share the live session while an ordinary check owns the attempt slot."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::TurnEndAction"
+reason = "Durable turn-end decisions have one typed vocabulary for transitions and inspection."
 
 [[verdict]]
 kind = "item"

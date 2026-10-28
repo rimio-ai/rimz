@@ -968,6 +968,7 @@ fn live_stopper_is_left_alone_and_dead_stopper_is_retaken() {
     attempt.ending = Some(records::Ending {
         outcome: AttemptOutcome::Timeout,
         cause: records::EndCause::Timeout,
+        route: None,
     });
     update(&state, &live);
     assert_eq!(advance_ok(&state, &record.id, &host), live);
