@@ -173,9 +173,9 @@ pub(super) fn merge_account_rate_limits(
     identity: AccountUsageIdentity,
     windows: AgentRateLimits,
 ) {
-    let path = runtime.shared_rate_limits_path();
+    let path = RateLimitsCache::shared_path(runtime);
     let Some(_guard) = acquire_rate_limits_cache_lock(
-        &runtime.shared_rate_limits_lock(),
+        &RateLimitsCache::shared_lock(runtime),
         "cache.rate_limits_merge_lock",
     ) else {
         return;
@@ -227,9 +227,9 @@ pub(super) fn merge_account_rate_limits(
 /// changes. The detached writer waits for normal producer contention; a real
 /// lock acquisition failure or absent entry is a no-op.
 pub(super) fn drop_account_rate_limits(runtime: &RuntimePaths, key: &AccountUsageKey) {
-    let path = runtime.shared_rate_limits_path();
+    let path = RateLimitsCache::shared_path(runtime);
     let Some(_guard) = acquire_rate_limits_cache_lock(
-        &runtime.shared_rate_limits_lock(),
+        &RateLimitsCache::shared_lock(runtime),
         "cache.rate_limits_drop_lock",
     ) else {
         return;
@@ -302,7 +302,7 @@ pub(in crate::sidebar) fn apply_cached_rate_limits(
     if snapshot.providers.is_empty() {
         return;
     }
-    let cached = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let cached = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime));
     let _ = project_rate_limits(snapshot, &cached, logins, false, None);
 }
 
@@ -313,10 +313,10 @@ pub(super) fn refresh_rate_limits(
     runtime: &RuntimePaths,
     logins: &RoomLoginSet,
 ) {
-    let path = runtime.shared_rate_limits_path();
+    let path = RateLimitsCache::shared_path(runtime);
     let reset_kinds = {
         let Some(_guard) =
-            crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
+            crate::disk::lock::WorkspaceLock::try_acquire(&RateLimitsCache::shared_lock(runtime))
                 .ok()
                 .flatten()
         else {

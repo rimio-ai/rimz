@@ -7812,7 +7812,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
         ..RateLimitsCache::default()
     };
     rimz::disk::atomic::write_temp_then_rename_cache(
-        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache::shared_path(&runtime),
         &rate_cache(20, 100),
     )
     .expect("write exact quota cache");
@@ -7904,7 +7904,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     assert!(!reason.contains(&account_key), "{reason}");
 
     rimz::disk::atomic::write_temp_then_rename_cache(
-        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache::shared_path(&runtime),
         &rate_cache(80, 80),
     )
     .expect("write surplus cache");

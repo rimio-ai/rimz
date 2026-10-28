@@ -575,7 +575,7 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
             );
         }
         crate::disk::atomic::write_temp_then_rename_cache(
-            &runtime.shared_rate_limits_path(),
+            &crate::agents::account::RateLimitsCache::shared_path(&runtime),
             &crate::agents::account::RateLimitsCache {
                 entries: [(
                     crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)).into(),
@@ -655,7 +655,7 @@ fn launch_availability_follows_the_spend_ladder() {
                 resets: Option<ResetCredits>| {
         let key = crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind));
         crate::disk::atomic::write_temp_then_rename_cache(
-            &runtime.shared_rate_limits_path(),
+            &crate::agents::account::RateLimitsCache::shared_path(&runtime),
             &crate::agents::account::RateLimitsCache {
                 entries: [(
                     key.clone().into(),
@@ -757,7 +757,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
     let pinned = |_: &AgentKind| LaunchLogin::Pinned("work".parse().unwrap());
     let publish = |spent: &crate::ids::LoginKey, logged_out: &crate::ids::LoginKey| {
         crate::disk::atomic::write_temp_then_rename_cache(
-            &runtime.shared_rate_limits_path(),
+            &crate::agents::account::RateLimitsCache::shared_path(&runtime),
             &RateLimitsCache {
                 entries: [(
                     spent.clone().into(),

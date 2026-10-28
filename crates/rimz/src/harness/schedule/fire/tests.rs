@@ -774,7 +774,7 @@ fn window_condition_reads_the_provider_window_under_the_elder() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let publish = |used| {
         write_temp_then_rename_cache(
-            &runtime.shared_rate_limits_path(),
+            &RateLimitsCache::shared_path(&runtime),
             &RateLimitsCache {
                 entries: BTreeMap::from([(
                     "claude@default".parse().unwrap(),
@@ -868,7 +868,7 @@ fn window_conditions_read_each_tasks_own_account_in_one_pass() {
     ]);
     for (room_used, work_used, fired) in [(92, 10, "pinned"), (10, 92, "room")] {
         write_temp_then_rename_cache(
-            &runtime.shared_rate_limits_path(),
+            &RateLimitsCache::shared_path(&runtime),
             &RateLimitsCache {
                 entries: BTreeMap::from([
                     ("claude@default".parse().unwrap(), entry(room_used)),

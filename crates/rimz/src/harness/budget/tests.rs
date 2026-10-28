@@ -1781,7 +1781,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
     ));
     assert!(availability.unavailable("codex", "gpt-6-astra").is_none());
     crate::disk::atomic::write_temp_then_rename_cache(
-        &runtime.shared_rate_limits_path(),
+        &crate::agents::account::RateLimitsCache::shared_path(&runtime),
         &crate::agents::account::RateLimitsCache {
             entries: [(
                 LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),

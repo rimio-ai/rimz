@@ -1006,7 +1006,7 @@ mod tests {
             ..Default::default()
         };
         std::fs::write(
-            runtime.shared_rate_limits_path(),
+            rimz::agents::RateLimitsCache::shared_path(&runtime),
             serde_json::to_vec(&cache).unwrap(),
         )
         .unwrap();

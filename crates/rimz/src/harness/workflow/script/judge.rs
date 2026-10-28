@@ -1,5 +1,7 @@
 use super::*;
-use crate::agents::{HeadlessErrorKind, HeadlessRequest, WorkflowAttemptRef, WorkflowAttemptRole};
+use crate::agents::{
+    HeadlessErrorKind, HeadlessRequest, RateLimitsCache, WorkflowAttemptRef, WorkflowAttemptRole,
+};
 use crate::harness::headless::HeadlessProfile;
 use crate::harness::launch::{ExecAction, ExecIdentity, ExecRequest};
 
@@ -126,8 +128,9 @@ fn run(
             && error.kind == HeadlessErrorKind::ProviderLimit
         {
             result.failure = "limited";
-            let cache =
-                crate::agents::account::read_rate_limits_cache(&runtime.shared_rate_limits_path());
+            let cache = crate::agents::account::read_rate_limits_cache(
+                &RateLimitsCache::shared_path(&runtime),
+            );
             result.limited = Some(workflow::Limited {
                 reset_at: latest_limit_reset(
                     &cache,

@@ -1244,12 +1244,14 @@ impl RuntimePaths {
         self.shared_root.join("tmp-floor.lock")
     }
 
-    pub fn shared_rate_limits_path(&self) -> PathBuf {
-        self.persistent_shared_root.join("rate_limits.json")
+    pub(crate) fn shared_rate_limits_path(&self, version: u32) -> PathBuf {
+        self.persistent_shared_root
+            .join(format!("rate_limits.v{version}.json"))
     }
 
-    pub(crate) fn shared_rate_limits_lock(&self) -> PathBuf {
-        self.shared_root.join("rate_limits.lock")
+    pub(crate) fn shared_rate_limits_lock(&self, version: u32) -> PathBuf {
+        self.shared_root
+            .join(format!("rate_limits.v{version}.lock"))
     }
 
     pub fn shared_credits_path(&self) -> PathBuf {

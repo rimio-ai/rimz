@@ -6,8 +6,8 @@ use std::time::Instant;
 use crate::RuntimePaths;
 use crate::agents::account::{
     AccountProbe, AccountProfileAnswer, AccountProfileState, AccountsCache,
-    INFORMATIONAL_PROBE_TIMEOUT, ProviderRecord, RecordedLogin, read_accounts_cache,
-    read_rate_limits_cache,
+    INFORMATIONAL_PROBE_TIMEOUT, ProviderRecord, RateLimitsCache, RecordedLogin,
+    read_accounts_cache, read_rate_limits_cache,
 };
 use crate::agents::capabilities::AccountProfileProbe;
 use crate::agents::credits::OAUTH_HTTP_TIMEOUT_SECS;
@@ -473,7 +473,7 @@ fn probe_accounts(
     let session_start_ms = read_provider_spending_cache(&runtime.shared_provider_spending_path())
         .session_start_secs
         .map_or(0, |seconds| seconds.saturating_mul(1_000));
-    let rate_limits = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let rate_limits = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime));
     let policy = if crate::agents::credits::oauth_usage_offline() {
         ProfileReadPolicy::Disabled
     } else {

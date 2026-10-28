@@ -1305,8 +1305,11 @@ fn reset_child_report_reads_failed_with_its_open_run() {
         .into(),
         ..Default::default()
     };
-    rimz::disk::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &cache)
-        .unwrap();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &rimz::agents::RateLimitsCache::shared_path(&runtime),
+        &cache,
+    )
+    .unwrap();
     let capacities = [(
         login.clone(),
         rimz::agents::ProviderCapacity::read(&runtime, &login).unwrap(),

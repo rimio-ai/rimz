@@ -4,7 +4,7 @@
 //! Every adapter with a supported usage surface runs the same API-query channel
 //! through
 //! [`probe_account_usage_for`](rimz::agents::AgentDefinition::probe_account_usage_for),
-//! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
+//! single-flighted and folded into the shared `credits.json`/`rate_limits.v<N>.json`
 //! caches. An adapter may expose a pollable realtime account channel; the helper
 //! reads it first for the room-default login, then runs the direct channel on its
 //! own shared cadence. Other logins use the direct channel alone. When

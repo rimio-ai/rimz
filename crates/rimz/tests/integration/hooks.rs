@@ -4548,7 +4548,7 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let cache_path = env.runtime_paths().shared_rate_limits_path();
+    let cache_path = rimz::agents::RateLimitsCache::shared_path(&env.runtime_paths());
     let cache: Value = serde_json::from_slice(&std::fs::read(cache_path).expect("rate cache"))
         .expect("rate cache json");
     assert_eq!(

@@ -8193,7 +8193,7 @@ fn agent_launched_tier_routing_uses_exhausted_room_default() {
         .unwrap();
     let runtime = env.runtime_paths();
     rimz::disk::atomic::write_temp_then_rename_cache(
-        &runtime.shared_rate_limits_path(),
+        &rimz::agents::RateLimitsCache::shared_path(&runtime),
         &rimz::agents::account::RateLimitsCache {
             entries: [(
                 rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude"))

@@ -12527,7 +12527,7 @@ fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
         ..Default::default()
     };
     rimz::disk::atomic::write_temp_then_rename_cache(
-        &env.runtime_paths().shared_rate_limits_path(),
+        &rimz::agents::RateLimitsCache::shared_path(&env.runtime_paths()),
         &cache,
     )
     .expect("seed rate-limit cache");
