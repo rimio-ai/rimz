@@ -1224,6 +1224,81 @@ fn removing_loop_tasks_keeps_header_comments() {
 }
 
 #[test]
+fn replacing_loop_tasks_keeps_child_header_comments() {
+    let heading = "# Machine loops\n\n# One note\n[tasks.one] # header note\n";
+    let old = "check = \"true\"\nevery = \"1h\"\n\
+               # match note\n[tasks.one.match]\nexit = 0\n\
+               # judge note\n[[tasks.one.judge]]\nagent = \"claude\"\nprompt = \"ready?\"\n";
+    let comments = "# match note\n# judge note\n";
+    let next = "\n# Two note\n[tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n";
+    let mut rendered = Vec::new();
+    let mut expected = Vec::new();
+    for tail in [next, ""] {
+        for keep_match in [false, true] {
+            let mut doc: DocumentMut = format!("{heading}{old}{tail}").parse().unwrap();
+            let mut replacement = Table::new();
+            replacement.insert("check", toml_edit::value("false"));
+            replacement.insert("every", toml_edit::value("2h"));
+            let child = if keep_match {
+                let mut matches = Table::new();
+                matches.insert("exit", toml_edit::value(1));
+                replacement.insert("match", Item::Table(matches));
+                "\n[tasks.one.match]\nexit = 1\n"
+            } else {
+                ""
+            };
+            set_item_keeping_comments(
+                &mut doc,
+                &parse_key("tasks.one").unwrap(),
+                Item::Table(replacement),
+            )
+            .unwrap();
+            rendered.push(doc.to_string());
+            expected.push(format!(
+                "{heading}check = \"false\"\nevery = \"2h\"\n{child}{comments}{tail}"
+            ));
+        }
+    }
+    assert_eq!(rendered, expected);
+}
+
+#[test]
+fn replacing_inline_loop_task_keeps_its_comment_above_the_new_header() {
+    let mut doc: DocumentMut = "[tasks]\n# inline note\none = { check = \"true\" }\n\n\
+                                [next]\nx = 1\n"
+        .parse()
+        .unwrap();
+    let mut replacement = Table::new();
+    replacement.insert("check", toml_edit::value("false"));
+    set_item_keeping_comments(
+        &mut doc,
+        &parse_key("tasks.one").unwrap(),
+        Item::Table(replacement),
+    )
+    .unwrap();
+    let rendered = doc.to_string();
+    assert!(
+        rendered.contains("# inline note\n")
+            && rendered.contains("[tasks.one]\ncheck = \"false\"\n"),
+        "{rendered}"
+    );
+    let next = rendered.find("[next]").unwrap();
+    let note = rendered.find("# inline note\n").unwrap();
+    let header = rendered.find("[tasks.one]").unwrap();
+    assert!(next < note && note < header, "{rendered}");
+}
+
+#[test]
+fn setting_an_item_without_a_path_refuses_without_editing() {
+    let mut doc: DocumentMut = "# lead\nx = 1\n".parse().unwrap();
+    assert!(matches!(
+        set_item_keeping_comments(&mut doc, &[], toml_edit::value(2)),
+        Err(ConfigEditErr::InvalidKey(_))
+    ));
+    assert_eq!(doc.to_string(), "# lead\nx = 1\n");
+}
+
+#[test]
 fn replacing_nested_blocks_and_array_entries_keeps_header_comments() {
     for (blocks, comments) in [
         (

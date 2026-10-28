@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table};
 
-use crate::config::{MachineConfig, TaskEntry, remove_keeping_comments};
+use crate::config::{MachineConfig, TaskEntry, remove_keeping_comments, set_item_keeping_comments};
 use crate::disk::atomic::write_bytes_atomically;
 use crate::disk::paths::{agents_home, holds_rimz_home, rimz_home};
 use crate::trust::TrustState;
@@ -95,13 +95,16 @@ pub(super) fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> 
     let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
-    root_tasks_table(&mut doc)?.insert(
-        name,
-        Item::Table(task_entry_table(
-            entry,
-            matches!(store, TaskStore::Machine),
-        )?),
-    );
+    let item = Item::Table(task_entry_table(
+        entry,
+        matches!(store, TaskStore::Machine),
+    )?);
+    let tasks = root_tasks_table(&mut doc)?;
+    if tasks.contains_key(name) {
+        set_item_keeping_comments(&mut doc, &["tasks".to_owned(), name.to_owned()], item)?;
+    } else {
+        tasks.insert(name, item);
+    }
 
     let rendered = doc.to_string();
     store.validate(&rendered, name)?;
@@ -226,10 +229,13 @@ fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
     let tasks = doc
         .as_table_mut()
         .entry("tasks")
-        .or_insert_with(|| Item::Table(Table::new()))
+        .or_insert_with(|| {
+            let mut tasks = Table::new();
+            tasks.set_implicit(true);
+            Item::Table(tasks)
+        })
         .as_table_mut()
         .context("`tasks` is not a table")?;
-    tasks.set_implicit(true);
     Ok(tasks)
 }
 

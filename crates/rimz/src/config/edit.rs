@@ -1780,9 +1780,23 @@ fn normalize_set_key(path: &[String], value: &Value) -> Result<Vec<String>> {
 }
 
 fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> Result<()> {
-    let (leaf, parents) = path.split_last().expect("validated key has a leaf");
+    set_item_keeping_comments(doc, path, value_to_item(value))
+}
+
+/// Set an item for config edits and loop tasks, keeping same-key header decor and position.
+/// Other removed headers leave their prefix comments above the next header or at EOF.
+/// An empty path is refused without editing the document.
+pub(crate) fn set_item_keeping_comments(
+    doc: &mut DocumentMut,
+    path: &[String],
+    mut item: Item,
+) -> Result<()> {
+    let Some((leaf, parents)) = path.split_last() else {
+        return Err(ConfigEditErr::InvalidKey(
+            "config keys use non-empty dotted segments".to_owned(),
+        ));
+    };
     convert_inline_tables(doc, parents)?;
-    let mut item = value_to_item(value);
     let old = item_at(doc, path);
     let old_position = old.and_then(|item| match item {
         Item::Table(table) => table.position(),

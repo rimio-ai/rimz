@@ -7399,6 +7399,112 @@ fn loop_multi_name_remove_reports_each_outcome() {
 }
 
 #[test]
+fn loop_add_replacing_first_machine_task_keeps_header_comments() {
+    let env = Env::new();
+    let heading = "# Machine loops\n\n# One note\n[tasks.one] # header note\n";
+    let next = format!(
+        "\n# Two note\n[tasks.two]\nroot = {:?}\ncheck = \"true\"\nevery = \"7d\"\n",
+        env.project_root
+    );
+    write_loop_config(
+        &env,
+        &format!(
+            "{heading}root = {:?}\ncheck = \"true\"\nevery = \"1h\"\n{next}",
+            env.project_root
+        ),
+    );
+
+    loop_ok(
+        &env,
+        &["loop", "add", "one", "--check", "false", "--every", "2h"],
+    );
+    assert_eq!(
+        std::fs::read_to_string(loop_config_path(&env)).unwrap(),
+        format!(
+            "{heading}check = \"false\"\nroot = {:?}\nevery = \"2h\"\n{next}",
+            env.project_root
+        )
+    );
+}
+
+#[test]
+fn loop_add_replacing_first_project_task_keeps_header_comments() {
+    let env = Env::new();
+    let heading = "# Project loops\n\n# One note\n[tasks.one] # header note\n";
+    let next = "\n# Two note\n[tasks.two]\ncheck = \"true\"\nevery = \"7d\"\n";
+    write_project_config(
+        &env,
+        &format!("{heading}check = \"true\"\nevery = \"1h\"\n{next}"),
+    );
+
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "one",
+            "--project",
+            "--check",
+            "false",
+            "--every",
+            "2h",
+        ],
+    );
+    assert_eq!(
+        std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap(),
+        format!("{heading}check = \"false\"\nevery = \"2h\"\n{next}")
+    );
+}
+
+#[test]
+fn loop_add_new_task_keeps_explicit_tasks_header_comments() {
+    let env = Env::new();
+    let original = format!(
+        "# lead\n[tasks]\n\n# One note\n[tasks.one]\n\
+         root = {:?}\ncheck = \"true\"\nevery = \"1h\"\n",
+        env.project_root
+    );
+    write_loop_config(&env, &original);
+
+    loop_ok(
+        &env,
+        &["loop", "add", "two", "--check", "false", "--every", "2h"],
+    );
+    assert_eq!(
+        std::fs::read_to_string(loop_config_path(&env)).unwrap(),
+        format!(
+            "{original}\n[tasks.two]\ncheck = \"false\"\nroot = {:?}\nevery = \"2h\"\n",
+            env.project_root
+        )
+    );
+}
+
+#[test]
+fn loop_add_replacing_task_keeps_explicit_tasks_header_comments() {
+    let env = Env::new();
+    let heading = "# lead\n[tasks]\n\n# One note\n[tasks.one]\n";
+    write_loop_config(
+        &env,
+        &format!(
+            "{heading}root = {:?}\ncheck = \"true\"\nevery = \"1h\"\n",
+            env.project_root
+        ),
+    );
+
+    loop_ok(
+        &env,
+        &["loop", "add", "one", "--check", "false", "--every", "2h"],
+    );
+    assert_eq!(
+        std::fs::read_to_string(loop_config_path(&env)).unwrap(),
+        format!(
+            "{heading}check = \"false\"\nroot = {:?}\nevery = \"2h\"\n",
+            env.project_root
+        )
+    );
+}
+
+#[test]
 fn loop_remove_first_task_keeps_template_comments() {
     let env = Env::new();
     write_loop_config(
