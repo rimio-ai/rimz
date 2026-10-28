@@ -568,6 +568,7 @@ fn live_instances(
     catalog: LiveCatalog<'_>,
 ) -> BTreeMap<String, Vec<LiveInstance>> {
     let snapshot = catalog.snapshot;
+    let peers = rimz::address::addressable_agents(snapshot);
     let cohorts = rimz::address::team_cohorts(snapshot.agents.iter())
         .into_iter()
         .filter(|cohort| {
@@ -727,7 +728,7 @@ fn live_instances(
                             ..signal
                         })
                         .collect(),
-                    handle: rimz::address::agent_handle(agent, members, false),
+                    handle: rimz::address::agent_handle(agent, &peers, false),
                     kind: agent.kind.to_string(),
                     status,
                     phase,

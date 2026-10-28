@@ -1,5 +1,5 @@
 use super::*;
-use rimz::agents::PermissionMode;
+use rimz::agents::{AgentState, PermissionMode};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::run::ReportTo;
 fn test_agent(id: &str) -> AgentState {
@@ -221,7 +221,7 @@ fn team_launch_receipt_is_compact() {
             channel: Some("feat-x"),
             cwd: Path::new("/repo-worktrees/feat-x"),
             identities: &identities,
-            handles: &receipt_handles(&identities, &[]),
+            handles: &receipt_handles(&identities, None),
             leader_index: Some(0),
             terminal_width: 100,
             hints: true,
@@ -268,7 +268,7 @@ fn team_launch_receipt_is_compact() {
             channel: Some("feat-x"),
             cwd: Path::new("/repo-worktrees/feat-x"),
             identities: &identities,
-            handles: &receipt_handles(&identities, &[]),
+            handles: &receipt_handles(&identities, None),
             leader_index: None,
             terminal_width: 100,
             hints: true,
@@ -295,7 +295,7 @@ fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
             channel: None,
             cwd: Path::new("/repo"),
             identities: &identities,
-            handles: &receipt_handles(&identities, &[]),
+            handles: &receipt_handles(&identities, None),
             leader_index: Some(0),
             terminal_width: 100,
             hints: true,
@@ -334,7 +334,7 @@ fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
             channel: Some("parallel"),
             cwd: Path::new("/repo"),
             identities: &identities,
-            handles: &receipt_handles(&identities, &[]),
+            handles: &receipt_handles(&identities, None),
             leader_index,
             terminal_width: 100,
             hints: true,
@@ -388,7 +388,12 @@ fn launch_receipt_names_each_agent_by_its_list_handle() {
     identities[0].prompt = Some("Fix the login.".to_owned());
     let launched = lane_agent("round-binder");
 
-    let handles = receipt_handles(&identities, &[&launched]);
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(Path::new("/repo")),
+        vec![launched.clone()],
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let handles = receipt_handles(&identities, Some(&snapshot));
     assert_eq!(handles, ["coder"]);
     let output = receipt_for(&identities, &handles);
     assert!(
@@ -404,12 +409,68 @@ fn launch_receipt_names_each_agent_by_its_list_handle() {
     assert!(output.contains("Wait:  rimz agents wait @coder#auth\n"));
 
     let peer = lane_agent("able-fox");
-    let handles = receipt_handles(&identities, &[&peer, &launched]);
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        snapshot.workspace_id.clone(),
+        vec![peer, launched],
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let handles = receipt_handles(&identities, Some(&snapshot));
     assert_eq!(handles, ["round-binder"]);
     let output = receipt_for(&identities, &handles);
     assert!(output.contains("launched @round-binder in #auth (/repo)"));
     assert!(output.contains("  @round-binder   claude"), "{output}");
     assert!(output.contains("Wait:  rimz agents wait @round-binder#auth\n"));
+}
+
+#[test]
+fn launch_receipt_handles_round_trip_beside_running_launched_child() {
+    assert_receipt_handle_round_trip_beside_launched_child(None);
+}
+
+#[test]
+fn launch_receipt_handles_round_trip_beside_ended_launched_child() {
+    assert_receipt_handle_round_trip_beside_launched_child(Some(jiff::Timestamp::UNIX_EPOCH));
+}
+
+#[track_caller]
+fn assert_receipt_handle_round_trip_beside_launched_child(ended_at: Option<jiff::Timestamp>) {
+    let identity = launch_identity("codex", "round-binder");
+    let mut launched = test_agent(identity.agent_id.as_str());
+    launched.name = Some(identity.name.clone());
+    launched.profile = Some("gatekeeper".to_owned());
+    launched.channel = Some("auth".to_owned());
+    let parent = test_agent("parent");
+    let mut child = launched.clone();
+    child.agent_id = "child".into();
+    child.name = Some("quiet-otter".to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.launch_depth = Some(1);
+    child.launch_id = Some("launch-child".into());
+    child.ended_at = ended_at;
+    assert!(child.is_launched_child());
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(Path::new("/repo")),
+        vec![launched.clone(), parent, child],
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+
+    let handles = receipt_handles(&[identity], Some(&snapshot));
+    let handle = format!("@{}#auth", handles[0]);
+    let resolved = rimz::address::resolve_one(
+        &snapshot,
+        &handle,
+        None,
+        &rimz::address::AddressContext {
+            channel: Some("auth".to_owned()),
+            origin: rimz::address::ChannelOrigin::Explicit,
+        },
+    );
+    assert_eq!(
+        resolved.map(|agent| &agent.agent_id),
+        Ok(&launched.agent_id),
+        "{handle}"
+    );
+    assert_ne!(handles[0], "gatekeeper");
 }
 
 #[test]
@@ -441,7 +502,7 @@ fn team_launch_receipt_marks_the_implicit_leader() {
             channel: Some("feat-x"),
             cwd: Path::new("/repo-worktrees/feat-x"),
             identities: &identities,
-            handles: &receipt_handles(&identities, &[]),
+            handles: &receipt_handles(&identities, None),
             leader_index: Some(leader_index),
             terminal_width: 100,
             hints: true,
@@ -485,7 +546,7 @@ fn team_launch_receipt_uses_prompt_leader_and_clips_the_prompt() {
     identities[1].launch.role = Some("planner".to_owned());
     identities[1].prompt =
         Some("Read  \"the handoff\"\nthen design a fix for the team.".to_owned());
-    let handles = receipt_handles(&identities, &[]);
+    let handles = receipt_handles(&identities, None);
     let receipt = LaunchReceipt {
         team: Some(("forge", &team)),
         channel: Some("feat-x"),
