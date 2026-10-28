@@ -69,14 +69,14 @@ pub mod testkit {
     static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_BASE_COPIES: AtomicU64 = AtomicU64::new(0);
 
-    /// Row copies from flattening, pending seeds, runtime projections and
-    /// shared context vectors since process start; borrowed readers add nothing.
+    /// Row copies from flattening, pending seeds, runtime projections, shared
+    /// context vectors, own-row reads and dispatch views; borrowed readers add nothing.
     #[cfg(any(test, feature = "testkit"))]
     pub fn rollup_rows_materialized() -> u64 {
         ROLLUP_ROWS_MATERIALIZED.load(Ordering::Relaxed)
     }
 
-    pub(in crate::store) fn count_rows_materialized(n: u64) {
+    pub(crate) fn count_rows_materialized(n: u64) {
         ROLLUP_ROWS_MATERIALIZED.fetch_add(n, Ordering::Relaxed);
     }
 
@@ -674,6 +674,7 @@ pub(in crate::store) fn catch_up_with_pending(
 
 /// The rollup a store read sees inside a hook transaction: the shared fold
 /// base, plus the identity state its staged events folded to.
+#[derive(Debug)]
 pub(in crate::store) struct PendingRollup {
     base: Arc<RollupCache>,
     pending_identity: Option<AgentIdentityState>,

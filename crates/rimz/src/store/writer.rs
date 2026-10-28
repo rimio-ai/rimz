@@ -240,6 +240,7 @@ impl Store {
     pub fn for_hook_ingress(&self, ingress: EventId, at: jiff::Timestamp) -> Self {
         Self {
             ingress: Some((ingress, at)),
+            frame_read: Some(std::sync::Arc::default()),
             ..self.clone()
         }
     }
@@ -269,6 +270,10 @@ impl Store {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         event_log::append_batch(&self.paths().events_log, &events).map_err(StoreErr::from)?;
+        // Release the held fold base before the append's publish catches up.
+        if !events.is_empty() {
+            self.clear_frame_read();
+        }
         drop(transaction);
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY");
@@ -358,6 +363,9 @@ impl Store {
             return Ok(out);
         }
 
+        if !txn.events.is_empty() {
+            self.clear_frame_read();
+        }
         for event in &txn.events {
             self.wake_sidebars_for_event_best_effort(event);
         }

@@ -20,7 +20,7 @@ use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
     WhenCondition, env_ms, fresh_boundary_blocker, queue_head,
 };
-use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
+use crate::store::snapshot::{PaneAgent, SidebarSnapshot, count_rows_materialized};
 use crate::store::writer::{BoundaryClaim, ResumeAttempt};
 use crate::workspace::ResolvedWorkspace;
 
@@ -299,10 +299,15 @@ pub fn dispatch(
         snapshot = snapshot.with_agent_context(context);
     }
     // Ordinary delivery excludes ended rows; only the resume doorway names one explicitly.
-    std::sync::Arc::make_mut(&mut snapshot.agents).retain(|agent| agent.ended_at.is_none());
-    if let Some(child) = request.resuming_recipient.as_ref() {
-        std::sync::Arc::make_mut(&mut snapshot.agents).push(child.clone());
-    }
+    snapshot.agents = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_none())
+        .chain(request.resuming_recipient.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    count_rows_materialized(snapshot.agents.len() as u64);
 
     let durable_agents = durable_target_agents(store)?;
     let resolution = ResolutionView {
