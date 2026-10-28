@@ -10,9 +10,11 @@ fn shell_fixture(shell: &str, fields: &str) -> (Env, PathBuf) {
     )
 }
 
-pub(super) fn live_group(env: &Env, id: &str) -> (Value, u32, u32) {
+pub(super) fn live_group(env: &Env, id: &str, node: &str) -> (Value, u32, u32) {
     let value = until(env, id, |value| {
-        value["record"]["attempt"]["child"]["pid"].is_number()
+        let attempt = &value["record"]["attempt"];
+        attempt["node"] == node
+            && attempt["child"]["pid"].is_number()
             && fs::read_to_string(Path::new(value["dir"].as_str().unwrap()).join("descendant.pid"))
                 .ok()
                 .is_some_and(|pid| pid.trim().parse::<u32>().is_ok())
@@ -172,7 +174,7 @@ fn shell_timeout_kills_the_group_and_routes_or_parks() {
             ),
         );
         let id = start(&env);
-        let (value, child, descendant) = live_group(&env, &id);
+        let (value, child, descendant) = live_group(&env, &id, "pr");
         let state =
             rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
         let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
@@ -197,7 +199,7 @@ fn shell_timeout_kills_the_group_and_routes_or_parks() {
 fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
     let (env, _) = shell_fixture(LIVE, "");
     let id = start(&env);
-    let (_, child, descendant) = live_group(&env, &id);
+    let (_, child, descendant) = live_group(&env, &id, "pr");
     let deadline = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
     success(command(
         &env,
@@ -218,7 +220,7 @@ fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
 fn shell_cancel_interrupts_the_group_and_first_terminal_wins() {
     let (env, _) = shell_fixture(LIVE, "");
     let id = start(&env);
-    let (_, child, descendant) = live_group(&env, &id);
+    let (_, child, descendant) = live_group(&env, &id, "pr");
     success(command(&env, &["workflow", "cancel", &id]));
     assert_group_stopped(child, descendant);
     let value = show(&env, &id);
@@ -293,7 +295,7 @@ fn dead_host_check_group(action: &str, marker: GroupMarker) {
             )
         };
         let id = start(&env);
-        let (value, child, descendant) = live_group(&env, &id);
+        let (value, child, descendant) = live_group(&env, &id, "pr");
         until(&env, &id, |_| !rimz::proc::process_is_live(child, None));
         let host = value["record"]["attempt"]["host"]["pid"].as_u64().unwrap() as u32;
         let state =
@@ -358,7 +360,7 @@ fn stalled_host_shell_group_is_killed(leader_exits: bool) {
         };
         let (env, _) = shell_fixture(shell, "timeout='1h'\n");
         let id = start(&env);
-        let (value, child, descendant) = live_group(&env, &id);
+        let (value, child, descendant) = live_group(&env, &id, "pr");
         if leader_exits {
             until(&env, &id, |_| !rimz::proc::process_is_live(child, None));
             std::thread::sleep(Duration::from_millis(100));
