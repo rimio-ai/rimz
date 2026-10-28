@@ -1880,7 +1880,7 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
 /// Re-emit structured values as TOML table blocks so multi-field config stays
 /// readable: an inline table expands to `[header]` tables and an array of
 /// inline tables to array-of-tables blocks, recursing through nested inline
-/// tables. Scalars and scalar arrays keep their inline form.
+/// tables. Scalars, scalar arrays, and an empty array keep their inline form.
 fn value_to_item(value: Value) -> Item {
     match value {
         Value::InlineTable(inline) => Item::Table(expand_inline_table(inline)),
