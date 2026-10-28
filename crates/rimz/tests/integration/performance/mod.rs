@@ -9,6 +9,8 @@ mod consumer_enrichment;
 mod enrichment_cadence;
 mod fold_incremental;
 mod parse_cache;
+#[cfg(target_os = "linux")]
+mod proc_sampling;
 mod produce_budget;
 mod sidebar_diff_stats;
 mod spending_incremental;

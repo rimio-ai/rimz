@@ -1,5 +1,57 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn former_agent_gets_a_full_tree_at_the_next_due_sample() {
+    use crate::testkit::host_pass::{Counter::*, thread_counters};
+    let mut pidded = pane("terminal_1", Some("claude"), Some("/repo"));
+    pidded.pane_pid = Some(std::process::id());
+    let agents = HashSet::from([pidded.pane_id.clone()]);
+    let mut frame = frame_from_panes(vec![pidded]);
+    let mut cache = MetricsSampleCache::default();
+    let counts = thread_counters();
+    counts.reset();
+    crate::proc::with_read_memo(|| {
+        enrich_pane_metrics(
+            &mut frame,
+            SESSION,
+            &mut cache,
+            &HashSet::new(),
+            &HashSet::new(),
+            &agents,
+        )
+    });
+    assert_eq!(counts.get(ProcStat), 1);
+    assert_eq!(counts.get(ProcIo), 0);
+    let binding = pane_root_bindings(&cache);
+    assert_eq!(binding.values().next().unwrap().pid, std::process::id());
+    assert!(cache.entries.values().all(|entry| !entry.io_bytes_valid));
+    for entry in cache.entries.values_mut() {
+        entry.sampled_at_ms = 0;
+    }
+    counts.reset();
+    crate::proc::with_read_memo(|| {
+        enrich_pane_metrics(
+            &mut frame,
+            SESSION,
+            &mut cache,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    });
+    assert_eq!(counts.get(ProcStat), 1);
+    assert_eq!(counts.get(ProcIo), 1);
+    assert!(counts.get(ProcChildren) > 0);
+    assert_eq!(pane_root_bindings(&cache), binding);
+    assert!(cache.entries.values().all(|entry| entry.io_bytes_valid));
+    assert_eq!(
+        state(&frame, "terminal_1").metrics.cpu_pct,
+        None,
+        "root-only counters cannot seed tree rates"
+    );
+}
+
 // ── Metrics sampling cadence ───────────────────────────────────────────────────
 
 #[test]
@@ -95,13 +147,19 @@ fn hibernated_metrics_follow_the_shared_check_not_sample_age() {
             &HashSet::new()
         ));
         assert!(!enrich_pane_metrics(
-            &mut frame, SESSION, &mut cache, &held, &held
+            &mut frame,
+            SESSION,
+            &mut cache,
+            &held,
+            &held,
+            &HashSet::new()
         ));
         assert!(enrich_pane_metrics(
             &mut frame,
             SESSION,
             &mut cache,
             &held,
+            &HashSet::new(),
             &HashSet::new()
         ));
     }
@@ -135,6 +193,7 @@ fn unbound_idle_panes_back_off_on_the_idle_ttl() {
         &mut frame,
         "rimz-test-no-such-session-for-metrics",
         &mut cache,
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
     ));
@@ -186,6 +245,7 @@ fn metrics_within_ttl_carries_matching_display_values_and_binding() {
         &mut frame,
         "rimz-query-engine",
         &mut cache,
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
     ));
@@ -241,6 +301,7 @@ fn metrics_within_ttl_warms_changed_or_uncached_panes() {
         &mut cache,
         &HashSet::new(),
         &HashSet::new(),
+        &HashSet::new(),
     ));
 
     assert_eq!(
@@ -281,6 +342,7 @@ fn metrics_due_path_resamples_and_restamps() {
         &mut frame,
         "rimz-query-engine",
         &mut cache,
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
     ));

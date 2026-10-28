@@ -2306,7 +2306,13 @@ upward-dependencies = [
 # sole_agent_child and its proc re-export share candidate descent across both walks (+2).
 # path_copies shares distinct PATH installations with mux scans and shell diagnostics (+1).
 # git_command_uncounted lets host status set trace2 without double-counting bounded spawns (+1).
-surface-budget = 145
+# with_read_memo shares proc evidence within each candidate or metrics pass (+1).
+surface-budget = 146
+
+[[verdict]]
+kind = "item"
+key = "proc::with_read_memo"
+reason = "Pane repair and fresh-frame metrics scope all composite proc reads to one production."
 
 [[verdict]]
 kind = "item"

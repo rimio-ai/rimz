@@ -64,6 +64,8 @@ pub struct ProduceOptions {
     pub exclude: Option<PaneId>,
     pub min_pane_cache_ms: Option<u64>,
     pub hibernated_panes: HashSet<PaneId>,
+    /// Every agent-bound pane from the fast fold, including unrendered live panes.
+    pub agent_panes: HashSet<PaneId>,
     pub diag: crate::diag::DiagSink,
 }
 
@@ -199,6 +201,7 @@ pub(crate) fn produce_workspace_snapshot(
     inputs: &mut Option<HostInputs>,
 ) -> Result<ProducedWorkspaceSnapshot> {
     producer.hibernated_panes.clone_from(&opts.hibernated_panes);
+    producer.agent_panes.clone_from(&opts.agent_panes);
     let frame = producer.tick(
         runtime,
         opts.mux,
