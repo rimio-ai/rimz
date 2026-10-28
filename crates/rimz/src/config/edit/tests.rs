@@ -1224,6 +1224,62 @@ fn removing_loop_tasks_keeps_header_comments() {
 }
 
 #[test]
+fn new_loop_task_follows_template_with_its_child_tables() {
+    let template = MachineConfig::template_loop();
+    let mut doc: DocumentMut = template.parse().unwrap();
+    let mut task = Table::new();
+    task.insert("prompt", toml_edit::value("CI is green"));
+    let mut wait = Table::new();
+    wait.insert("kind", toml_edit::value("claude"));
+    wait.insert("session", toml_edit::value("sess-abc123"));
+    task.insert("wait", Item::Table(wait));
+    let mut matches = Table::new();
+    matches.insert("branch", toml_edit::value("main"));
+    task.insert("match", Item::Table(matches));
+
+    set_item_keeping_comments(&mut doc, &parse_key("tasks.x").unwrap(), Item::Table(task)).unwrap();
+    assert_eq!(
+        doc.to_string(),
+        format!(
+            "{template}\n[tasks.x]\nprompt = \"CI is green\"\n\n\
+             [tasks.x.wait]\nkind = \"claude\"\nsession = \"sess-abc123\"\n\n\
+             [tasks.x.match]\nbranch = \"main\"\n"
+        )
+    );
+}
+
+#[test]
+fn set_document_value_in_empty_document_starts_with_header() {
+    let mut doc = DocumentMut::new();
+    set_document_value(
+        &mut doc,
+        &parse_key("tasks.one.check").unwrap(),
+        Value::from("true"),
+    )
+    .unwrap();
+    assert_eq!(doc.to_string(), "[tasks.one]\ncheck = \"true\"\n");
+}
+
+#[test]
+fn set_document_value_groups_new_tasks_with_their_section() {
+    let seed = "[tasks.one]\ncheck = \"true\"\n# every = \"30m\"\n\n\
+                # Throttle settings\n[throttle]\npace = \"10s\"\n";
+    let mut doc: DocumentMut = seed.parse().unwrap();
+    set_document_value(
+        &mut doc,
+        &parse_key("tasks.two.check").unwrap(),
+        Value::from("false"),
+    )
+    .unwrap();
+    assert_eq!(
+        doc.to_string(),
+        "[tasks.one]\ncheck = \"true\"\n# every = \"30m\"\n\n\
+         [tasks.two]\ncheck = \"false\"\n\n\
+         # Throttle settings\n[throttle]\npace = \"10s\"\n"
+    );
+}
+
+#[test]
 fn replacing_loop_tasks_keeps_child_header_comments() {
     let heading = "# Machine loops\n\n# One note\n[tasks.one] # header note\n";
     let old = "check = \"true\"\nevery = \"1h\"\n\

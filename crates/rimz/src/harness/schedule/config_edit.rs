@@ -99,12 +99,8 @@ pub(super) fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> 
         entry,
         matches!(store, TaskStore::Machine),
     )?);
-    let tasks = root_tasks_table(&mut doc)?;
-    if tasks.contains_key(name) {
-        set_item_keeping_comments(&mut doc, &["tasks".to_owned(), name.to_owned()], item)?;
-    } else {
-        tasks.insert(name, item);
-    }
+    root_tasks_table(&mut doc)?;
+    set_item_keeping_comments(&mut doc, &["tasks".to_owned(), name.to_owned()], item)?;
 
     let rendered = doc.to_string();
     store.validate(&rendered, name)?;

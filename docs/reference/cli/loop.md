@@ -35,7 +35,7 @@ Every command takes the [global flags](../cli.md#global-flags). `loop show --jso
 
 ## Add a task
 
-`rimz loop add <NAME>` takes a name of letters, digits, `-`, and `_`, exactly one action, and exactly one trigger. Adding a name that already exists in the same store replaces that task, except that a machine task whose resolved project root differs is refused, including a hand-edited row with no root or a relative root that does not resolve to this project. Replacement keeps comment lines above the task's header in place; comments above its old child headers stay below the new task, above the next header or at the end of the file.
+`rimz loop add <NAME>` takes a name of letters, digits, `-`, and `_`, exactly one action, and exactly one trigger. A new task goes right after the store's last task. If the tasks end the file, or the store has none yet, it goes at the end of the file, below any comment lines there. Commented settings such as `# default-timeout` therefore keep their original section. Adding a name that already exists in the same store replaces that task, except that a machine task whose resolved project root differs is refused, including a hand-edited row with no root or a relative root that does not resolve to this project. Replacement keeps comment lines above the task's header in place; comments above its old child headers stay below the new task, above the next header or at the end of the file.
 
 ### Actions
 

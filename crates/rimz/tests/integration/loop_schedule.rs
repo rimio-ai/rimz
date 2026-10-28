@@ -7508,6 +7508,148 @@ fn loop_multi_name_remove_reports_each_outcome() {
 }
 
 #[test]
+fn loop_add_new_task_follows_template_and_remove_restores_it() {
+    let template = rimz::config::MachineConfig::template_loop();
+    let mut rendered = Vec::new();
+    let mut expected = Vec::new();
+    for initialize in [false, true] {
+        let env = Env::new();
+        if initialize {
+            loop_ok(&env, &["config", "init"]);
+        }
+        loop_ok(
+            &env,
+            &["loop", "add", "first", "--check", "true", "--every", "15m"],
+        );
+        rendered.push(std::fs::read_to_string(loop_config_path(&env)).unwrap());
+        expected.push(format!(
+            "{template}\n[tasks.first]\ncheck = \"true\"\nroot = {:?}\nevery = \"15m\"\n",
+            env.project_root
+        ));
+        loop_ok(&env, &["loop", "remove", "first"]);
+        rendered.push(std::fs::read_to_string(loop_config_path(&env)).unwrap());
+        expected.push(template.to_owned());
+    }
+    assert_eq!(rendered, expected);
+}
+
+#[test]
+fn loop_add_keeps_commented_default_timeout_at_root() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "first", "--check", "true", "--every", "15m"],
+    );
+    let path = loop_config_path(&env);
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        path,
+        text.replace("# default-timeout = \"2h\"", "default-timeout = \"2h\""),
+    )
+    .unwrap();
+    assert_eq!(
+        loop_ok(&env, &["config", "get", "loop.default-timeout"]),
+        "2h\n"
+    );
+}
+
+#[test]
+fn loop_add_new_project_task_follows_comments_without_a_leading_blank_line() {
+    let mut rendered = Vec::new();
+    let mut expected = Vec::new();
+    for seed in ["", "# Project loops\n# Keep settings above the tasks\n"] {
+        let env = Env::new();
+        if !seed.is_empty() {
+            write_project_config(&env, seed);
+        }
+        loop_ok(
+            &env,
+            &[
+                "loop",
+                "add",
+                "one",
+                "--project",
+                "--check",
+                "true",
+                "--every",
+                "15m",
+            ],
+        );
+        rendered.push(std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap());
+        let separator = if seed.is_empty() { "" } else { "\n" };
+        expected.push(format!(
+            "{seed}{separator}[tasks.one]\ncheck = \"true\"\nevery = \"15m\"\n"
+        ));
+    }
+    assert_eq!(rendered, expected);
+}
+
+#[test]
+fn loop_add_new_task_follows_root_settings_and_trailing_comments() {
+    let env = Env::new();
+    let seed = "default-timeout = \"2h\"\n\n# Scheduled loops\n# Keep the default above\n";
+    write_loop_config(&env, seed);
+    loop_ok(
+        &env,
+        &["loop", "add", "one", "--check", "true", "--every", "15m"],
+    );
+    let text = std::fs::read_to_string(loop_config_path(&env)).unwrap();
+    assert_eq!(
+        text,
+        format!(
+            "{seed}\n[tasks.one]\ncheck = \"true\"\nroot = {:?}\nevery = \"15m\"\n",
+            env.project_root
+        )
+    );
+    assert_eq!(
+        toml::from_str::<LoopConfig>(&text)
+            .unwrap()
+            .default_timeout
+            .as_deref(),
+        Some("2h")
+    );
+}
+
+#[test]
+fn loop_add_new_task_keeps_preceding_task_comments_and_following_sections() {
+    let comments = "# every = \"30m\"   # faster during release week\n";
+    let mut rendered = Vec::new();
+    let mut expected = Vec::new();
+    for project in [false, true] {
+        for following_section in [false, true] {
+            let env = Env::new();
+            let root = if project {
+                String::new()
+            } else {
+                format!("root = {:?}\n", env.project_root)
+            };
+            let first = format!("[tasks.one]\n{root}check = \"true\"\nevery = \"1h\"\n");
+            let next = match (following_section, project) {
+                (false, _) => "",
+                (true, false) => "\n# Throttle settings\n[throttle]\npace = \"10s\"\n",
+                (true, true) => "\n# Agent settings\n[agents]\n",
+            };
+            let seed = format!("{first}{comments}{next}");
+            let mut args = vec!["loop", "add", "two", "--check", "false", "--every", "2h"];
+            let path = if project {
+                write_project_config(&env, &seed);
+                args.push("--project");
+                env.project_root.join(".rimz/config.toml")
+            } else {
+                write_loop_config(&env, &seed);
+                loop_config_path(&env)
+            };
+            loop_ok(&env, &args);
+            rendered.push(std::fs::read_to_string(path).unwrap());
+            expected.push(format!(
+                "{first}{comments}\n[tasks.two]\ncheck = \"false\"\n{root}every = \"2h\"\n{next}"
+            ));
+        }
+    }
+    assert_eq!(rendered, expected);
+}
+
+#[test]
 fn loop_add_replacing_first_machine_task_keeps_header_comments() {
     let env = Env::new();
     let heading = "# Machine loops\n\n# One note\n[tasks.one] # header note\n";
