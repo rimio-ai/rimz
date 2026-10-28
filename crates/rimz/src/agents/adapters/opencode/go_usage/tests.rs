@@ -315,6 +315,8 @@ fn fetch_from_server(
                 }
                 Err(error) => panic!("accept: {error}"),
             };
+            // BSD `accept` copies the listener's `O_NONBLOCK`; Linux does not.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
