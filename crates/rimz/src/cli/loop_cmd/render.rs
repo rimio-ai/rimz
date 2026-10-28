@@ -1317,6 +1317,13 @@ fn resolve_show(args: &mut ShowArgs, caller: Option<&Path>) -> Result<ShowTarget
             return Ok(ShowTarget::Task(Box::new(task)));
         }
     }
+    if let Some(warning) = MachineConfig::load_lenient()
+        .notices
+        .skipped_loop_tasks
+        .get(&args.name)
+    {
+        bail!("{warning}");
+    }
     let mut rowless = catalogs
         .iter()
         .map(|(root, _)| RowlessShow {

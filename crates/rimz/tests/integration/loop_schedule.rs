@@ -331,6 +331,111 @@ fn adding_machine_refuses_rootless_row() {
 }
 
 #[test]
+fn loop_list_skips_machine_tasks_without_absolute_roots() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.skip-bare]\ncheck='true'\nevery='1h'\n\
+         [tasks.skip-relative]\nroot='nowhere/x'\ncheck='true'\nevery='1h'\n\
+         [tasks.skip-dot]\nroot='.'\ncheck='true'\nevery='1h'\n\
+         [tasks.rooted]\nroot={:?}\ncheck='true'\nevery='1h'\n",
+            env.project_root,
+        ),
+    );
+    for args in [
+        vec!["loop", "list", "--all"],
+        vec!["loop", "list", "--all", "--json"],
+        vec!["loop", "list"],
+        vec!["loop", "list", "--json"],
+    ] {
+        let output = env.rimz().args(&args).output().unwrap();
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stdout.contains("rooted"), "{stdout}");
+        for name in ["skip-bare", "skip-relative", "skip-dot"] {
+            assert!(!stdout.contains(name), "{stdout}");
+            let warnings = stderr
+                .lines()
+                .filter(|line| line.contains(&format!("loop task `{name}`")))
+                .collect::<Vec<_>>();
+            assert_eq!(warnings.len(), 1, "{stderr}");
+            let warning = warnings[0];
+            for text in [
+                "warning:",
+                "does not run",
+                "absolute path",
+                &format!("rimz loop remove {name}"),
+            ] {
+                assert!(warning.contains(text), "{warning}");
+            }
+        }
+        assert!(stderr.contains("no `root`"), "{stderr}");
+        assert!(stderr.contains("relative `root` `nowhere/x`"), "{stderr}");
+        assert!(stderr.contains("relative `root` `.`"), "{stderr}");
+        if args.contains(&"--json") {
+            let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            let rooms = value["rooms"].as_array().unwrap();
+            assert_eq!(rooms.len(), 1, "{value}");
+            assert_eq!(rooms[0]["root"], json!(env.project_root), "{value}");
+            assert_eq!(rooms[0]["tasks"].as_array().unwrap().len(), 1, "{value}");
+        }
+    }
+}
+
+#[test]
+fn loop_show_reports_machine_task_root_problem() {
+    let env = Env::new();
+    write_loop_config(&env, "[tasks.one]\ncheck='true'\nevery='1h'\n");
+    let output = env.rimz().args(["loop", "show", "one"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for text in [
+        "loop task `one`",
+        "no `root`",
+        "does not run",
+        "rimz loop remove one",
+    ] {
+        assert!(stderr.contains(text), "{stderr}");
+    }
+    assert!(!stderr.contains("no loop task named"), "{stderr}");
+}
+
+#[test]
+fn loop_tick_skips_machine_tasks_without_absolute_roots() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        "[tasks.one]\ncheck='true'\nevery='1h'\n[tasks.two]\nroot='nowhere/x'\ncheck='true'\nevery='1h'\n",
+    );
+    let output = env.rimz().args(["loop", "tick"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn adding_machine_refuses_relative_row() {
+    let env = Env::new();
+    let text = "[tasks.same]\nroot='nowhere/x'\ncheck='true'\nevery='1h'\n";
+    write_loop_config(&env, text);
+    let (stdout, error) = loop_fail(
+        &env,
+        &["loop", "add", "same", "--check", "false", "--every", "2h"],
+    );
+    assert!(!stdout.contains("added loop task"), "{stdout}");
+    let reason = format!(
+        "loop task `same` has relative `root` `nowhere/x` in {}; choose another name, or run `rimz loop remove same` from a fresh directory outside any repository or RimZ project to remove it first",
+        loop_config_path(&env).display(),
+    );
+    assert!(error.contains(&reason), "{error}");
+    assert!(!error.contains("belongs to another project"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(loop_config_path(&env)).unwrap(),
+        text
+    );
+}
+
+#[test]
 fn removing_rootless_machine_row_succeeds() {
     for resident in [false, true] {
         let env = Env::new();

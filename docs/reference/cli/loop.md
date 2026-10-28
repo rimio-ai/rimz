@@ -35,7 +35,7 @@ Every command takes the [global flags](../cli.md#global-flags). `loop show --jso
 
 ## Add a task
 
-`rimz loop add <NAME>` takes a name of letters, digits, `-`, and `_`, exactly one action, and exactly one trigger. Adding a name that already exists in the same store replaces that task, except that a machine task rooted in another project, or a hand-edited machine row with no root, is refused. Replacement keeps comment lines above the task's header in place; comments above its old child headers stay below the new task, above the next header or at the end of the file.
+`rimz loop add <NAME>` takes a name of letters, digits, `-`, and `_`, exactly one action, and exactly one trigger. Adding a name that already exists in the same store replaces that task, except that a machine task whose resolved project root differs is refused, including a hand-edited row with no root or a relative root that does not resolve to this project. Replacement keeps comment lines above the task's header in place; comments above its old child headers stay below the new task, above the next header or at the end of the file.
 
 ### Actions
 
@@ -274,7 +274,7 @@ Adding a state task requires an existing room: run `rimz start` in its root firs
 
 A machine task takes precedence over a same-named state task only within the same root. A machine task rooted elsewhere neither hides the room's state task nor is removed when you add that state task. `loop show`, `remove`, `rename`, `pause`, `run`, and `stop` in that room address its state task; the machine task remains reachable from its own room or outside any room.
 
-Adding a standing machine task also requires that an existing machine task of that name have the same resolved project root. A cross-project collision refuses without changing either task, names the stored root, and suggests another name or `rimz loop remove <NAME>` from the owning project. Re-adding from that project, or with `--root <owning-project>`, still replaces its task. A machine row with no root refuses too; run `rimz loop remove <NAME>` from a fresh directory outside any repository or RimZ project before reusing its name, so it cannot select a same-named room or project task instead.
+Adding a standing machine task also requires that an existing machine task of that name have the same resolved project root. A cross-project collision refuses without changing either task, names the stored root, and suggests another name or `rimz loop remove <NAME>` from the owning project. Re-adding from that project, or with `--root <owning-project>`, still replaces its task. A machine row with a missing, empty, or relative root is skipped at load with a warning and does not run; `~` and `~/` expand against `HOME` before the absolute-path check. Adding over it refuses when its resolved root differs too; run `rimz loop remove <NAME>` from a fresh directory outside any repository or RimZ project before reusing its name, so it cannot select a same-named room or project task instead. Rename and remove still reach a skipped row by name, and rename preserves its root as written.
 
 `loop list`, `enable --all`, and `disable --all` cover machine tasks plus the state and project tasks of the project resolved from the current directory or `--root`. Enable, disable, pause, and strike state belong to this machine: machine-wide for machine tasks, per project for state and project tasks.
 
@@ -539,6 +539,8 @@ Every attempted fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. A
 
 `loop list` shows the whole current room, including its worktrees. `--all` shows every known room, the caller's first, and unfolds older DONE entries and WAKE-UPS. Outside a project, in a directory with no recorded room, tasks, or one-off history, it shows every room, still folded unless `--all` is explicit. An explicit `--root` keeps that root selected. Known rooms come from machine tasks, stored instance tasks, and the caller's root. A project with only project-config tasks is not discovered unless it is the caller's. Other rooms' attention tasks appear on an `elsewhere:` line in the default view; healthy tasks elsewhere stay hidden.
 
+A machine task with a missing, empty, or relative root appears only as a `warning:` on stderr, naming the task, file, problem, and fix: set an absolute `root` or run `rimz loop remove <NAME>`. It creates no task row or room group. This warning also appears with `--all` and `--json`; the list still exits 0.
+
 Each heading names the home-relative root, whether its room is open, the task count before collapsing, the next clock fire when present, and nonzero spend today. Without a room, it explains which clocks and forge signals wait for `rimz start`, and whether the optional clock timer is active.
 
 Empty sections are omitted:
@@ -576,6 +578,8 @@ The band starts with `loop`, then nonzero `✗ N need you` (`✗ 1 needs you`), 
 ### `loop show`
 
 `loop show <word>` resolves an exact task name in the caller's room first, then the other rooms known to `loop list`. A name present in several other rooms prints one `rimz --root <root> loop show <name>` command per room and refuses to choose. Active runs without a definition and retired one-offs come next (text only; JSON still requires a task row), then worktree names among routine and one-off tasks, then subscription owners: a team name, `team#channel`, or loop-task name. Retired one-offs use the same rule as DONE: at least one fire, with the newest kind-stamped record being one-off. Other retained history does not shadow a worktree or owner. A unique worktree match starts with `worktree <worktree> → <task>`; several matches print the real task names, triggers, inspection commands, and wake-up count. An owner shows `SUBSCRIPTIONS` with every real name (text only; use `loop list --json` for structured subscription rows). A task found outside the caller's room names its room and the `--root` needed by other commands. Mutating commands and `loop logs` still require exact task names and keep their existing room selection.
+
+A machine task skipped for a missing, empty, or relative root refuses with exit 1 and its root warning, in text and JSON alike, unless a same-named loaded task resolves first. Set an absolute `root` or remove the skipped task with `rimz loop remove <NAME>`.
 
 A missing task refuses with exit 1 and empty stdout, in text and JSON alike. When retained fires exist in a known room, stderr points to their logs:
 
