@@ -4381,6 +4381,104 @@ fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
 }
 
 #[test]
+fn team_signal_payload_handles_round_trip_beside_teamless_role_rivals() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let Some(cwd) = team_signal_fixture(&env) else {
+        return;
+    };
+    register_running_agent(&env, "sess-team-observer", "main");
+    seed_team_signal_member(&env, &cwd, "sess-team-member", None);
+    team_signal_hook(&env, &cwd, "sess-team-member", "SessionStart");
+    team_signal_hook(&env, &cwd, "sess-team-member", "UserPromptSubmit");
+    seed_agent_launch(
+        &env,
+        &env.project_root,
+        "inline-coder",
+        rimz::agents::LaunchParams {
+            role: Some("coder".to_owned()),
+            channel: Some("feature-team".to_owned()),
+            ..Default::default()
+        },
+        Some(rimz::pane::RuntimeOwner::new(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            "inline-coder",
+            env.agent_owner_pid(),
+            None,
+        )),
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut rival = rimz::agents::AgentLifecycleObservation::new(
+        Some("sess-inline-coder".into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    rival.agent_name = Some("inline-coder".to_owned());
+    env.store()
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: AgentKind::new_unchecked("claude"),
+            event_name: "test",
+            observation: &rival,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "matching",
+            "--wait",
+            "@claude#project",
+            "--signal",
+            "team.idle",
+            "--match",
+            "instance=forge#feature-team",
+            "--once",
+        ],
+    );
+    team_signal_hook(&env, &cwd, "sess-team-member", "Stop");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].result, LoopRunResult::Delivered);
+    let signal = records[0].signal.as_ref().unwrap();
+    assert_eq!(signal.name.as_str(), "team.idle");
+    assert_eq!(signal.payload["members"].as_array().unwrap().len(), 1);
+    let snapshot = env.store().snapshot_cached().unwrap();
+    assert!(
+        rimz::address::addressable_agents(&snapshot)
+            .iter()
+            .any(|agent| agent.agent_id.as_str() == "sess-inline-coder"),
+        "{:?}",
+        snapshot.agents
+    );
+    for handle in [
+        &signal.payload["member"],
+        &signal.payload["members"][0]["handle"],
+    ] {
+        let handle = handle.as_str().unwrap();
+        let resolved = rimz::address::resolve_one(
+            &snapshot,
+            handle,
+            None,
+            &rimz::address::AddressContext {
+                channel: Some("feature-team".to_owned()),
+                origin: rimz::address::ChannelOrigin::Explicit,
+            },
+        );
+        assert_eq!(
+            resolved.map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
+            Ok(("claude", "sess-team-member")),
+            "{handle}"
+        );
+    }
+}
+
+#[test]
 fn team_signal_launch_refuses_root_before_side_effects() {
     let env = Env::new();
     env.record(&env.project_root);

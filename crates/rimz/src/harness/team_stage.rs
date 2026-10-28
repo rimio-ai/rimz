@@ -538,6 +538,7 @@ fn react_lifecycle(
             })
             .ok()
     };
+    let signal_snapshot = std::cell::OnceCell::new();
     for event in &receipt.events {
         if matches!(event.signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
             && let Err(err) = arm::retire_session(
@@ -600,9 +601,29 @@ fn react_lifecycle(
                 )
                 .into_keys()
                 .collect();
-                for signal in
-                    team_lifecycle_signals(event, member, &live_members, pending, &sleeping)
-                {
+                let addressable = signal_snapshot
+                    .get_or_init(|| {
+                        store
+                            .snapshot_cached()
+                            .inspect_err(|err| {
+                                warn!(
+                                    error = %err,
+                                    "lifecycle: failed to read team signal addresses"
+                                );
+                            })
+                            .ok()
+                    })
+                    .as_ref()
+                    .map(crate::address::addressable_agents)
+                    .unwrap_or_default();
+                for signal in team_lifecycle_signals(
+                    event,
+                    member,
+                    &live_members,
+                    &addressable,
+                    pending,
+                    &sleeping,
+                ) {
                     match store.append_signal(&workspace.session_name, (&signal).into()) {
                         Ok(_) => signals.push(signal),
                         Err(err) => {

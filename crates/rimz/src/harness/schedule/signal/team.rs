@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 
 use super::Signal;
-use crate::address::agent_handle;
+use crate::address::{AddressContext, ChannelOrigin, TargetErr, agent_handle, resolve_agents};
 use crate::agents::{
     AgentState, AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition,
 };
@@ -14,12 +14,14 @@ use crate::store::event::SignalSource;
 use crate::store::message::MessageRecord;
 
 /// Derive team signals from the transitioning audit row and its live cohort members.
+/// `addressable` is the cached snapshot's resolver candidate set, with rest certificates.
 /// `pending` is the complete pending queue, including delayed and resume-gated messages.
 /// `sleeping` contains sessions with a pending one-shot wait in this workspace.
 pub(crate) fn team_lifecycle_signals(
     event: &LifecycleEvent,
     member: &AgentState,
     live_cohort: &[&AgentState],
+    addressable: &[&AgentState],
     pending: &[MessageRecord],
     sleeping: &BTreeSet<(AgentKind, AgentSessionId)>,
 ) -> Vec<Signal> {
@@ -95,13 +97,19 @@ pub(crate) fn team_lifecycle_signals(
     if names.is_empty() {
         return Vec::new();
     }
+    let mut peers = addressable.to_vec();
+    peers.extend(members.iter().copied().filter(|agent| {
+        !addressable
+            .iter()
+            .any(|peer| peer.kind == agent.kind && peer.agent_id == agent.agent_id)
+    }));
     let channel = member.channel().unwrap_or_else(|| "external".to_owned());
     let payload = Map::from_iter([
         ("team".to_owned(), json!(team)),
         ("instance".to_owned(), json!(format!("{team}#{channel}"))),
         (
             "member".to_owned(),
-            json!(agent_handle(member, &members, true)),
+            json!(payload_handle(member, &peers, addressable)),
         ),
         (
             "members".to_owned(),
@@ -114,7 +122,8 @@ pub(crate) fn team_lifecycle_signals(
                         } else {
                             agent.status
                         };
-                        json!({"handle": agent_handle(agent, &members, true), "status": status})
+                        let handle = payload_handle(agent, &peers, addressable);
+                        json!({"handle": handle, "status": status})
                     })
                     .collect(),
             ),
@@ -132,13 +141,43 @@ pub(crate) fn team_lifecycle_signals(
         .collect()
 }
 
+fn payload_handle(
+    agent: &AgentState,
+    peers: &[&AgentState],
+    addressable: &[&AgentState],
+) -> String {
+    let agent = addressable
+        .iter()
+        .copied()
+        .find(|peer| peer.kind == agent.kind && peer.agent_id == agent.agent_id)
+        .unwrap_or(agent);
+    let handle = agent_handle(agent, peers, true);
+    let context = AddressContext {
+        channel: None,
+        origin: ChannelOrigin::Explicit,
+    };
+    let conflict = match resolve_agents(&handle, None, &context, addressable).as_deref() {
+        Ok([one]) => one.kind != agent.kind || one.agent_id != agent.agent_id,
+        Ok(_) | Err(TargetErr::Ambiguous { .. }) => true,
+        Err(_) => false,
+    };
+    if !conflict {
+        return handle;
+    }
+    match agent.lane_label() {
+        Some(channel) => format!("@{}#{channel}", agent.agent_id),
+        None => format!("@{}", agent.agent_id),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::address::team_cohorts;
+    use crate::address::{addressable_agents, resolve_one, team_cohorts};
     use crate::agents::{AskKind, TurnPhase};
     use crate::ids::{AgentSessionId, EventId, WorkspaceId};
     use crate::store::message::DeliveryGate;
+    use crate::store::snapshot::SidebarSnapshot;
 
     fn member(name: &str, channel: &str, status: AgentStatus) -> AgentState {
         let mut member = crate::sidebar::test_support::root_agent("codex", name, None);
@@ -198,7 +237,19 @@ mod tests {
             .iter()
             .find(|cohort| Some(cohort.team) == member.team.as_deref() && cohort.channel == channel)
             .map_or(&[][..], |cohort| cohort.members.as_slice());
-        team_lifecycle_signals(event, member, live, pending, sleeping)
+        let snapshot = SidebarSnapshot::build_with_agents(
+            event.workspace_id.clone(),
+            crate::store::runtime::RuntimeProjection::runtime_from_refs(rows, Vec::new()).agents,
+            event.at,
+        );
+        team_lifecycle_signals(
+            event,
+            member,
+            live,
+            &addressable_agents(&snapshot),
+            pending,
+            sleeping,
+        )
     }
 
     fn turn_end() -> LifecycleSignal {
@@ -280,6 +331,89 @@ mod tests {
                 {"handle": "@coder#auth", "status": "success"}
             ])
         );
+    }
+
+    #[test]
+    fn payload_handles_round_trip_beside_teamless_role_rivals() {
+        let mut reviewer = member("team-reviewer", "auth", AgentStatus::Success);
+        reviewer.role = Some("reviewer".to_owned());
+        reviewer.kind_ordinal = Some(1);
+        let coder = member("coder", "auth", AgentStatus::Idle);
+        let mut rival = reviewer.clone();
+        rival.agent_id = "inline-reviewer".into();
+        rival.name = Some("inline-reviewer".to_owned());
+        rival.team = None;
+        rival.kind_ordinal = Some(2);
+        let event = event(&reviewer, AgentStatus::Running, turn_end());
+        let rows = [reviewer, coder, rival];
+        let snapshot =
+            SidebarSnapshot::build_with_agents(event.workspace_id.clone(), rows.to_vec(), event.at);
+        let signals = derive(&event, &rows, &[]);
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].name.as_str(), "team.idle");
+        let payload = &signals[0].payload;
+        assert_eq!(payload["members"].as_array().unwrap().len(), 2);
+        for (handle, agent) in [
+            (&payload["member"], &rows[0]),
+            (&payload["members"][0]["handle"], &rows[1]),
+            (&payload["members"][1]["handle"], &rows[0]),
+        ] {
+            let handle = handle.as_str().unwrap();
+            let resolved = resolve_one(
+                &snapshot,
+                handle,
+                None,
+                &AddressContext {
+                    channel: Some("auth".to_owned()),
+                    origin: ChannelOrigin::Explicit,
+                },
+            );
+            assert_eq!(
+                resolved.map(|agent| (&agent.kind, &agent.agent_id)),
+                Ok((&agent.kind, &agent.agent_id)),
+                "{handle}"
+            );
+        }
+        assert_ne!(payload["member"], "@reviewer#auth");
+    }
+
+    #[test]
+    fn ended_member_uses_session_id_beside_later_tier_profile_rival() {
+        let mut reviewer = member("team-reviewer", "auth", AgentStatus::Running);
+        reviewer.role = Some("reviewer".to_owned());
+        reviewer.agent_id = "sess-team-reviewer".into();
+        let event = event(&reviewer, AgentStatus::Running, LifecycleSignal::Ended);
+        reviewer.ended_at = Some(event.at);
+        let mut rival = member("profile-reviewer", "auth", AgentStatus::Running);
+        rival.team = None;
+        rival.role = None;
+        rival.profile = Some("reviewer".to_owned());
+        let snapshot = SidebarSnapshot::build_with_agents(
+            event.workspace_id.clone(),
+            vec![rival.clone()],
+            event.at,
+        );
+        let context = AddressContext {
+            channel: Some("auth".to_owned()),
+            origin: ChannelOrigin::Explicit,
+        };
+        assert_eq!(
+            resolve_one(&snapshot, "@reviewer#auth", None, &context)
+                .map(|agent| (&agent.kind, &agent.agent_id)),
+            Ok((&rival.kind, &rival.agent_id))
+        );
+        let signals = derive(&event, &[reviewer, rival], &[]);
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].name.as_str(), "team.ended");
+        for handle in [
+            &signals[0].payload["member"],
+            &signals[0].payload["members"][0]["handle"],
+        ] {
+            assert_eq!(handle, "@sess-team-reviewer#auth");
+            let handle = handle.as_str().unwrap();
+            let resolved = resolve_one(&snapshot, handle, None, &context);
+            assert!(resolved.is_err(), "{handle}: {resolved:?}");
+        }
     }
 
     #[test]
