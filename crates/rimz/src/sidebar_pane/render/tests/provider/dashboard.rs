@@ -121,14 +121,14 @@ fn undecided_panel_keeps_its_header_and_stats_without_claiming_a_plan_or_budget(
 }
 
 #[test]
-fn go_shaped_panel_shows_a_month_ceiling_on_the_week() {
+fn qwen_shaped_panel_shows_a_month_ceiling_on_the_week() {
     let theme = Theme::fixed(false);
-    let mut panel = provider_panel("opencode", "OpenCode", 1, true, false, None);
-    let emblem = crate::agents::emblem_for("opencode");
+    let mut panel = provider_panel("qwen", "Qwen", 1, true, false, None);
+    let emblem = crate::agents::emblem_for("qwen");
     panel.art = emblem.lines;
     panel.art_tints = emblem.tints;
     panel.version = Some("1.0.0".to_owned());
-    panel.plan = Some("Go".to_owned());
+    panel.plan = Some("Alibaba Coding Plan".to_owned());
     panel.windows = [(300, 300, 1200), (10_080, 600, 3000), (43_200, 5000, 6000)]
         .into_iter()
         .map(|(mins, used, limit)| {
@@ -138,6 +138,9 @@ fn go_shaped_panel_shows_a_month_ceiling_on_the_week() {
                 used_percentage: Some(amount.used_percentage()),
                 amount: Some(amount),
                 resets_at: Some(fixed_now() + Duration::from_secs(3_600)),
+                observed_at: Some(fixed_now()),
+                source: crate::agents::context::WindowSource::Authoritative,
+                fixed_period: mins == 43_200,
                 ..Default::default()
             }
         })
@@ -147,7 +150,7 @@ fn go_shaped_panel_shows_a_month_ceiling_on_the_week() {
     assert!(rendered.contains("5h") && rendered.contains("7d"));
     assert_eq!(rendered.matches('╎').count(), 1);
     assert!(!rendered.contains("mo "));
-    assert_snapshot("provider_go_ceiling", rendered);
+    assert_snapshot("provider_qwen_ceiling", rendered);
 }
 
 #[test]
