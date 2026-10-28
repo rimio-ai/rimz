@@ -4,6 +4,7 @@ use std::path::Path;
 
 use super::spec::{self, CheckKind, RESERVED_OUTCOMES, StepKind, WorkflowSpec};
 use crate::config::definitions::LoadedDefinitions;
+use crate::store::workflow::StepLifecycle;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -311,7 +312,7 @@ pub(super) fn validate_spec(
                 (
                     "lifecycle",
                     step.lifecycle.is_some(),
-                    "a command step ends when its command exits; stay is for agent steps",
+                    "a command step ends when its command exits; lifecycle is for agent steps",
                 ),
                 (
                     "window",
@@ -376,7 +377,11 @@ pub(super) fn validate_spec(
                     .is_wired(),
             )
         });
-        if step.lifecycle.unwrap_or_default().is_turn() && do_background == Some(false) {
+        if matches!(
+            step.lifecycle.unwrap_or_default(),
+            StepLifecycle::Turn | StepLifecycle::Until
+        ) && do_background == Some(false)
+        {
             report.warnings.push(issue(&path, "step adapter has no background reporting; a turn end may finish the attempt while provider background work remains"));
         }
         if !step

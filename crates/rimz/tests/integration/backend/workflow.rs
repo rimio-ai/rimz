@@ -90,10 +90,20 @@ pub(super) fn check_layout(
             })
             .unwrap()
     };
-    for lifecycle in ["turn", "stay"] {
+    for lifecycle in ["turn", "stay", "until"] {
         let _ = fs::remove_file(&ready);
         let _ = fs::remove_file(&provider_ready);
-        fs::write(dir.join("workflow.toml"), format!("[workflow]\nscope='worktree'\nstart='before'\n[checks.before]\nshell='true'\non={{pass='work',fail='@failed'}}\n[steps.work]\nagent='claude,editor'\nlifecycle='{lifecycle}'\nprompt-file='prompt.md'\nthen='after'\n[checks.after]\nshell='true'\non={{pass='@done',fail='@failed'}}\n")).unwrap();
+        let bound = if lifecycle == "until" {
+            "max-visits=2\n"
+        } else {
+            ""
+        };
+        let after = if lifecycle == "until" {
+            "shell='test -f \"$RIMZ_WORKFLOW_DIR/close\"'\non={pass='@done',fail='work'}\n"
+        } else {
+            "shell='true'\non={pass='@done',fail='@failed'}\n"
+        };
+        fs::write(dir.join("workflow.toml"), format!("[workflow]\nscope='worktree'\nstart='before'\n[checks.before]\nshell='true'\non={{pass='work',fail='@failed'}}\n[steps.work]\nagent='claude,editor'\nlifecycle='{lifecycle}'\nprompt-file='prompt.md'\nthen='after'\n{bound}[checks.after]\n{after}")).unwrap();
         let output = command()
             .env("PATH", path_with_front(&bin))
             .env("SHELL", &shell)
@@ -227,6 +237,84 @@ pub(super) fn check_layout(
                     "provider-exit wake must finish the stay attempt without a tick: {record:#?}"
                 );
                 std::thread::sleep(Duration::from_millis(50));
+            }
+        } else if lifecycle == "until" {
+            for closing in [false, true] {
+                if closing {
+                    fs::write(state.workflow(&id).work.join("close"), "").unwrap();
+                }
+                for signal in [
+                    LifecycleSignal::Registered,
+                    LifecycleSignal::TurnStarted { turn_id: None },
+                    LifecycleSignal::TurnEnded {
+                        errored: false,
+                        parked_on_background: false,
+                        turn_id: None,
+                    },
+                ] {
+                    let observation =
+                        AgentLifecycleObservation::new(Some(leader.agent_id.clone()), signal);
+                    store
+                        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                            state.workspace_id.clone(),
+                            session,
+                            "claude",
+                            "test",
+                            &observation,
+                        ))
+                        .unwrap();
+                }
+                let output = command()
+                    .args(["workflow", "advance", id.as_str()])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let record = workflow::load(&state.workflow(&id)).unwrap();
+                let decisions: Vec<_> = workflow::journal(&state.workflow(&id))
+                    .unwrap()
+                    .into_iter()
+                    .filter_map(|row| match row.event {
+                        workflow::JournalEvent::TurnEnd { action, .. } => Some(action),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    decisions,
+                    if closing {
+                        vec![
+                            workflow::TurnEndAction::Kept,
+                            workflow::TurnEndAction::Closed,
+                        ]
+                    } else {
+                        vec![workflow::TurnEndAction::Kept]
+                    }
+                );
+                assert_eq!(record.visits["work"].total, 1);
+                if closing {
+                    assert_eq!(record.state, RunState::Done);
+                } else {
+                    assert_eq!(
+                        record
+                            .attempt
+                            .as_ref()
+                            .unwrap()
+                            .run
+                            .as_ref()
+                            .unwrap()
+                            .run_id,
+                        run.run_id
+                    );
+                    assert!(
+                        cells
+                            .iter()
+                            .all(|cell| panes().panes.iter().any(|pane| &pane.pane_id == cell)),
+                        "a keep must leave every cell open"
+                    );
+                }
             }
         } else {
             assert!(

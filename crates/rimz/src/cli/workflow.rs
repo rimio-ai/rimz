@@ -260,11 +260,18 @@ pub(super) fn waiting(record: &RunRecord) -> Option<String> {
     })
 }
 
+fn session_attempt(record: &records::RunRecord) -> Option<&records::LiveAttempt> {
+    record
+        .held
+        .as_ref()
+        .map(|held| &held.attempt)
+        .or(record.attempt.as_ref())
+        .filter(|attempt| attempt.kind == records::AttemptKind::Agent)
+}
+
 fn with_you(record: &records::RunRecord) -> bool {
     record.state == records::RunState::Active
-        && record
-            .attempt
-            .as_ref()
+        && session_attempt(record)
             .is_some_and(|attempt| !attempt.lifecycle.is_turn() && attempt.run.is_some())
 }
 
@@ -272,9 +279,7 @@ fn asking(record: &records::RunRecord) -> Option<&records::Asked> {
     if record.state != records::RunState::Active {
         return None;
     }
-    record
-        .attempt
-        .as_ref()?
+    session_attempt(record)?
         .asking
         .as_ref()
         .map(|asking| &asking.ask)
@@ -295,20 +300,31 @@ fn list(json: bool) -> Result<()> {
                 continue;
             }
             let asking = asking(&r);
-            let detail = waiting(&r)
-                .or_else(|| r.park.as_ref().map(records::Park::label))
-                .or_else(|| {
-                    asking.map(|ask| {
-                        format!(
-                            "asking you: {} ({}): {}",
-                            ask.handle,
-                            ask.kind,
-                            render::one_line(&ask.text)
-                        )
-                    })
+            let asking_line = asking.map(|ask| {
+                format!(
+                    "asking you: {} ({}): {}",
+                    ask.handle,
+                    ask.kind,
+                    render::one_line(&ask.text)
+                )
+            });
+            let detail = if with_you(&r) {
+                asking_line.unwrap_or_else(|| {
+                    let mut detail = "with you".to_owned();
+                    if r.held.is_some() {
+                        detail.push_str(&format!("; checking {}", r.node));
+                    }
+                    if let Some(waiting) = waiting(&r) {
+                        detail.push_str(&format!("; {waiting}"));
+                    }
+                    detail
                 })
-                .or_else(|| with_you(&r).then(|| "with you".into()))
-                .unwrap_or_default();
+            } else {
+                waiting(&r)
+                    .or_else(|| r.park.as_ref().map(records::Park::label))
+                    .or(asking_line)
+                    .unwrap_or_default()
+            };
             rows.push(serde_json::json!({"id":r.id,"workflow":r.workflow,"scope":r.scope.path,"state":r.state,"node":r.node,"since":r.entered_at,"detail":detail}));
             table.row([
                 render::cell(r.id.as_str()),
@@ -368,13 +384,16 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         "current node",
         render::cell(format!("{}, since {}", record.node, record.entered_at)),
     );
-    if let Some(attempt) = &record.attempt
+    if let Some(attempt) = session_attempt(&record)
         && let Some(run) = &attempt.run
     {
         header.push(
             "attempt",
             render::cell(format!("{} #{}", run.handle, attempt.seq)),
         );
+    }
+    if record.held.is_some() {
+        header.push("check", render::cell(&record.node));
     }
     let asked = asking.or_else(|| {
         record
@@ -461,6 +480,10 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
     for entry in journal {
         let value = serde_json::to_value(&entry)?;
         let event = value["event"].as_str().unwrap_or_default();
+        let action = value
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(String::new, |action| format!(" {action}"));
         let outcome = ["outcome", "state", "reason", "signal"]
             .iter()
             .find_map(|field| value.get(*field).and_then(|v| v.as_str()))
@@ -468,13 +491,17 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         let count = value
             .get("count")
             .map_or_else(String::new, |count| format!(" ×{count}"));
+        let target = value
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(String::new, |target| format!(" → {target}"));
         let payload = value
             .get("object")
             .or_else(|| value.get("input"))
             .map_or_else(String::new, |v| format!(" {v}"));
         writeln!(
             out,
-            "  {} #{} {} {event}{outcome}{count}{payload}",
+            "  {} #{} {} {event}{action}{outcome}{target}{count}{payload}",
             entry.at,
             entry.seq.map_or_else(|| "—".into(), |seq| seq.to_string()),
             entry.node
