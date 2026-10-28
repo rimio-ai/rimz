@@ -149,8 +149,11 @@ fn temp_runtime() -> (tempfile::TempDir, RuntimePaths) {
 }
 
 fn write_rate_limits_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
-    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), cache)
-        .expect("write rate-limits cache");
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &RateLimitsCache::shared_path(runtime),
+        cache,
+    )
+    .expect("write rate-limits cache");
 }
 
 fn write_recovered_window(runtime: &RuntimePaths) {
@@ -180,7 +183,8 @@ fn resume_gate_uses_the_agents_stamped_capacity() {
     let (_dir, runtime) = temp_runtime();
     write_recovered_window(&runtime);
     let mut cache: RateLimitsCache =
-        serde_json::from_slice(&std::fs::read(runtime.shared_rate_limits_path()).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(RateLimitsCache::shared_path(&runtime)).unwrap())
+            .unwrap();
     cache.entries.insert(
         "claude@work".parse().unwrap(),
         crate::agents::account::RateLimitCacheEntry {
@@ -207,7 +211,7 @@ fn resume_gate_recovers_failed_limit_parks() {
     ] {
         write_recovered_window(&runtime);
         let mut cache: RateLimitsCache =
-            serde_json::from_slice(&std::fs::read(runtime.shared_rate_limits_path()).unwrap())
+            serde_json::from_slice(&std::fs::read(RateLimitsCache::shared_path(&runtime)).unwrap())
                 .unwrap();
         for entry in cache.entries.values_mut() {
             entry.limits.windows = vec![window(100, 9_000)];
@@ -1479,7 +1483,7 @@ fn model_limit_waits_for_scoped_reset() {
         let (_dir, runtime) = temp_runtime();
         write_recovered_window(&runtime);
         let mut cache =
-            crate::agents::account::read_rate_limits_cache(&runtime.shared_rate_limits_path());
+            crate::agents::account::read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));
         let mut scoped = window(100, 7_500);
         scoped.scope = Some(crate::agents::RateLimitWindowScope {
             id: "model:fable".to_owned(),

@@ -150,8 +150,11 @@ fn cache_evidence_excludes_display_only_limits_stale_scoped_and_lapsed_entries()
             ..Default::default()
         },
     );
-    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &rates)
-        .unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &crate::agents::account::RateLimitsCache::shared_path(&runtime),
+        &rates,
+    )
+    .unwrap();
     let mut cache = crate::agents::credits::CreditsCache::default();
     let entry = crate::agents::credits::ProviderCreditsEntry {
         ok: true,

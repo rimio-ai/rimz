@@ -523,7 +523,7 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
     rimz::disk::atomic::write_temp_then_rename_cache(
-        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache::shared_path(&runtime),
         &RateLimitsCache {
             entries: [(
                 rimz::agents::account::AccountUsageKey::new(

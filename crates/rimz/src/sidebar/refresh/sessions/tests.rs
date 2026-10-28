@@ -282,7 +282,7 @@ fn write_spent_codex_window(runtime: &RuntimePaths) -> Timestamp {
         ..Default::default()
     };
     std::fs::write(
-        runtime.shared_rate_limits_path(),
+        crate::agents::account::RateLimitsCache::shared_path(runtime),
         serde_json::to_vec(&cache).unwrap(),
     )
     .unwrap();

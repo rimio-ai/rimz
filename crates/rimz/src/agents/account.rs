@@ -22,7 +22,7 @@
 //! enrichment, never correctness.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
@@ -289,7 +289,7 @@ pub struct ProviderCapacity {
 impl ProviderCapacity {
     /// Read one kind-wide capacity from the shared provider cache.
     pub fn read(runtime: &RuntimePaths, key: &LoginKey) -> Option<Self> {
-        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime));
         let entry = cache.entries.get(&key.clone().into())?;
         entry.scope.is_kind_wide().then(|| Self {
             windows: entry.limits.windows.clone(),
@@ -305,7 +305,7 @@ impl ProviderCapacity {
         key: &LoginKey,
         binding: &ProviderAccountBinding,
     ) -> Option<Self> {
-        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime));
         let entry = cache
             .entries
             .get(&AccountUsageKey::new(key.clone(), binding.scope.clone()))?;
@@ -326,7 +326,7 @@ impl ProviderCapacity {
         logins: &RoomLoginSet,
     ) -> BTreeMap<LoginKey, Self> {
         let in_use = logins.keys_in_use();
-        read_rate_limits_cache(&runtime.shared_rate_limits_path())
+        read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
             .entries
             .into_iter()
             .filter(|(key, entry)| {
@@ -709,6 +709,20 @@ pub struct RateLimitsCache {
     pub entries: BTreeMap<AccountUsageKey, RateLimitCacheEntry>,
 }
 
+impl RateLimitsCache {
+    /// Shared cache file for this build's rate-limit format.
+    ///
+    /// Keep incompatible builds on separate files so their whole-cache writes
+    /// cannot erase one another's entries.
+    pub fn shared_path(runtime: &RuntimePaths) -> PathBuf {
+        runtime.shared_rate_limits_path(RATE_LIMITS_CACHE_VERSION)
+    }
+
+    pub(crate) fn shared_lock(runtime: &RuntimePaths) -> PathBuf {
+        runtime.shared_rate_limits_lock(RATE_LIMITS_CACHE_VERSION)
+    }
+}
+
 impl Default for RateLimitsCache {
     fn default() -> Self {
         Self {
@@ -793,7 +807,7 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
 
 /// Latest cached window observation, falling back to the credits reading.
 pub fn cached_usage_read_at(runtime: &RuntimePaths, key: &LoginKey) -> Option<Timestamp> {
-    read_rate_limits_cache(&runtime.shared_rate_limits_path())
+    read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
         .entries
         .into_iter()
         .filter(|(usage_key, _)| usage_key.login == *key)

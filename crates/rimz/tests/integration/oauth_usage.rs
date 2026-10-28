@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rimz::agents::RateLimitsCache;
 use serde_json::Value;
 
 use crate::common::{CommandTimeoutExt, Env, path_with_front};
@@ -87,7 +88,7 @@ fn opencode_go_refresh_publishes_console_scoped_amounts_and_plan() {
     );
     assert_eq!(entry["plan"], "go");
     assert_eq!(entry["scope"], scope);
-    let limits = read_json(env.runtime_paths().shared_rate_limits_path());
+    let limits = read_json(RateLimitsCache::shared_path(&env.runtime_paths()));
     let limit_entry = &limits["entries"]["opencode@default/opencode/oauth"];
     assert_eq!(limit_entry["scope"], scope);
     assert_eq!(limit_entry["account_key"], entry["account_key"]);
@@ -256,7 +257,7 @@ fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
     let runtime = env.runtime_paths();
     let deadline = Instant::now() + Duration::from_secs(10);
     let switched_key = loop {
-        let limits = std::fs::read(runtime.shared_rate_limits_path())
+        let limits = std::fs::read(RateLimitsCache::shared_path(&runtime))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
         let entry = limits
@@ -292,7 +293,7 @@ fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
         &panes,
         None,
     );
-    let limits = read_json(runtime.shared_rate_limits_path());
+    let limits = read_json(RateLimitsCache::shared_path(&runtime));
     let entry = &limits["entries"]["claude@default"];
     assert_eq!(entry["account_key"], switched_key);
     assert!(
@@ -407,7 +408,7 @@ fn one_cold_snapshot_discovers_claude_and_publishes_first_usage_windows() {
         let credits = std::fs::read(runtime.shared_credits_path())
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        let limits = std::fs::read(runtime.shared_rate_limits_path())
+        let limits = std::fs::read(RateLimitsCache::shared_path(&runtime))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
         let settled = credits.as_ref().is_some_and(|credits| {
@@ -616,7 +617,7 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
         credits["logins"]["claude@default"]["account_key"],
         "claude-token"
     );
-    let limits = read_json(runtime.shared_rate_limits_path());
+    let limits = read_json(RateLimitsCache::shared_path(&runtime));
     assert_eq!(
         limits["entries"]["claude@default"]["limits"]["windows"][0]["used_percentage"],
         13
@@ -638,7 +639,7 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
         window["source"] = serde_json::json!("best_effort");
     }
     std::fs::write(
-        runtime.shared_rate_limits_path(),
+        RateLimitsCache::shared_path(&runtime),
         serde_json::to_vec(&session_limits).expect("serialize session limits"),
     )
     .expect("publish conflicting session limits");
@@ -731,7 +732,7 @@ fn claude_refresh_usage_refuses_an_untrusted_override_without_publishing_usage()
     assert_eq!(credits["logins"]["claude@default"]["auth_settled"], true);
     assert!(credits["logins"]["claude@default"]["direct_query_claim"].is_null());
     assert!(
-        std::fs::read(runtime.shared_rate_limits_path()).is_err(),
+        std::fs::read(RateLimitsCache::shared_path(&runtime)).is_err(),
         "an untrusted endpoint must not publish usage windows"
     );
 }
@@ -785,7 +786,7 @@ fn claude_refresh_usage_retries_transient_http_failures() {
             .all(|request| request.starts_with("GET /api/oauth/usage?cedar_ember=1 "))
     );
 
-    let limits = read_json(env.runtime_paths().shared_rate_limits_path());
+    let limits = read_json(RateLimitsCache::shared_path(&env.runtime_paths()));
     assert!(
         limits["entries"]["claude@default"]["limits"]["windows"]
             .as_array()
@@ -861,7 +862,7 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
         0.74
     );
     assert_eq!(credits["logins"]["codex@default"]["account_key"], "acc_123");
-    let limits = read_json(runtime.shared_rate_limits_path());
+    let limits = read_json(RateLimitsCache::shared_path(&runtime));
     assert_eq!(
         limits["entries"]["codex@default"]["limits"]["windows"][0]["used_percentage"],
         42

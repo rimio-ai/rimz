@@ -34,6 +34,20 @@ fn usage_keys_round_trip_legacy_and_scoped_text_and_reject_ambiguous_shapes() {
 }
 
 #[test]
+fn rate_limit_paths_follow_the_cache_format_version() {
+    let (_dir, runtime) = runtime();
+    let version = RateLimitsCache::default().version;
+    assert_eq!(
+        RateLimitsCache::shared_path(&runtime),
+        runtime.shared_rate_limits_path(version)
+    );
+    assert_eq!(
+        RateLimitsCache::shared_lock(&runtime),
+        runtime.shared_rate_limits_lock(version)
+    );
+}
+
+#[test]
 fn rate_limits_cache_skips_invalid_usage_keys_without_losing_valid_entries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rate_limits.json");
@@ -104,13 +118,16 @@ fn cached_usage_timestamp_reads_the_newest_scope_for_one_login() {
             }
         }
     });
-    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &limits)
-        .unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &RateLimitsCache::shared_path(&runtime),
+        &limits,
+    )
+    .unwrap();
     assert_eq!(
         cached_usage_read_at(&runtime, &key),
         Some("2026-10-26T00:00:00Z".parse().unwrap())
     );
-    std::fs::remove_file(runtime.shared_rate_limits_path()).unwrap();
+    std::fs::remove_file(RateLimitsCache::shared_path(&runtime)).unwrap();
     let entry = |observed_at_ms| serde_json::json!({"observed_at_ms": observed_at_ms, "ok": true});
     crate::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_credits_path(),
@@ -312,8 +329,11 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths) {
 }
 
 fn write_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
-    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), cache)
-        .unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &RateLimitsCache::shared_path(runtime),
+        cache,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -563,13 +583,13 @@ fn temporal_policy_fails_closed_for_incomplete_or_durationless_readings() {
 fn cache_read_cold_drops_corrupt_and_unknown_versions() {
     let (_dir, runtime) = runtime();
     assert!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path())
+        read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime))
             .entries
             .is_empty()
     );
-    std::fs::write(runtime.shared_rate_limits_path(), b"not-json").unwrap();
+    std::fs::write(RateLimitsCache::shared_path(&runtime), b"not-json").unwrap();
     assert!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path())
+        read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime))
             .entries
             .is_empty()
     );
@@ -580,7 +600,7 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
     };
     write_cache(&runtime, &cache);
     assert!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path())
+        read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime))
             .entries
             .is_empty()
     );
@@ -593,7 +613,7 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
         },
     );
     assert!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path())
+        read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime))
             .entries
             .is_empty(),
         "v5 caches are kind-keyed, so their schema must cold-drop"

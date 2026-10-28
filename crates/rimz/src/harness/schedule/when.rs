@@ -7,7 +7,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::account::read_rate_limits_cache;
+use crate::agents::account::{RateLimitsCache, read_rate_limits_cache};
 use crate::agents::{ProviderCapacity, RateLimitWindow, RoomLoginSet, WindowSpan};
 use crate::forge::pr_state::{PrQueueFact, PrStateCache, UNSUPPORTED_REPO_KEY};
 use crate::ids::{AgentKind, LoginKey, LoginName};
@@ -384,7 +384,7 @@ impl<'a> WindowReadings<'a> {
         let Some(runtime) = self.runtime else {
             return (RoomLoginSet::native(), BTreeMap::new());
         };
-        let capacities = read_rate_limits_cache(&runtime.shared_rate_limits_path())
+        let capacities = read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
             .entries
             .into_iter()
             .filter(|(key, entry)| key.scope.is_kind_wide() && entry.scope.is_kind_wide())

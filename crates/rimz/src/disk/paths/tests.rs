@@ -909,8 +909,38 @@ fn runtime_paths_share_user_scoped_cache_files() {
         second_paths.shared_accounts_path()
     );
     assert_eq!(
-        first_paths.shared_rate_limits_path(),
-        second_paths.shared_rate_limits_path()
+        first_paths.shared_rate_limits_path(7),
+        second_paths.shared_rate_limits_path(7)
+    );
+    assert_eq!(
+        first_paths.shared_rate_limits_lock(7),
+        second_paths.shared_rate_limits_lock(7)
+    );
+    assert_eq!(
+        first_paths.shared_rate_limits_path(7),
+        first_paths
+            .persistent_shared_root
+            .join("rate_limits.v7.json")
+    );
+    assert_eq!(
+        first_paths.shared_rate_limits_lock(7),
+        first_paths.shared_root.join("rate_limits.v7.lock")
+    );
+    assert_ne!(
+        first_paths.shared_rate_limits_path(7),
+        first_paths.shared_rate_limits_path(8)
+    );
+    assert_ne!(
+        first_paths.shared_rate_limits_lock(7),
+        first_paths.shared_rate_limits_lock(8)
+    );
+    assert_ne!(
+        first_paths.shared_rate_limits_path(7),
+        first_paths.persistent_shared_root.join("rate_limits.json")
+    );
+    assert_ne!(
+        first_paths.shared_rate_limits_lock(7),
+        first_paths.shared_root.join("rate_limits.lock")
     );
     assert_eq!(
         first_paths.shared_provider_spending_path(),

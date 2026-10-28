@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use crate::agents::account::{AccountsCache, ProviderRecord, read_rate_limits_cache};
+use crate::agents::account::{
+    AccountsCache, ProviderRecord, RateLimitsCache, read_rate_limits_cache,
+};
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow};
 use crate::ids::WorkspaceId;
 use crate::sidebar::refresh::credits::{CreditsCache, ProviderCreditsEntry};
@@ -204,7 +206,7 @@ fn published_usage_preserves_identity_and_only_writes_present_credits() {
         );
 
         let cache =
-            crate::agents::account::read_rate_limits_cache(&runtime.shared_rate_limits_path());
+            crate::agents::account::read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));
         let usage_key = AccountUsageKey::new(key.clone(), identity.scope.clone());
         let entry = cache.entries.get(&usage_key).unwrap();
         assert_eq!(entry.scope, identity.scope);
@@ -303,7 +305,8 @@ fn claimed_usage_reads_an_idle_account_by_the_direct_probe_alone() {
     assert_eq!(entry.direct_query_claim, None);
     assert_ne!(entry.oauth_read_at_ms, 0);
     assert_eq!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries[&spare.clone().into()]
+        read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime)).entries
+            [&spare.clone().into()]
             .limits
             .windows[0]
             .used_percentage,
@@ -393,7 +396,7 @@ fn claimed_usage_keeps_refreshing_a_live_agents_old_login() {
             }
         },
     ));
-    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));
     assert_eq!(
         cache.entries[&work.clone().into()].limits.windows[0].used_percentage,
         Some(12)
@@ -527,7 +530,7 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
         Some("pro")
     );
     assert_eq!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
+        read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime)).entries
             [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))
                 .into()]
             .limits
@@ -572,7 +575,7 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
         Some("pro")
     );
     assert_eq!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
+        read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime)).entries
             [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))
                 .into()]
             .limits
@@ -595,8 +598,8 @@ fn assert_published_under_owner(runtime: &RuntimePaths, key: &LoginKey, used: u8
     assert_eq!(credits.logins[key].account_key.as_deref(), Some("owner"));
     assert_eq!(credits.logins[key].credentials_stamp, Some(7));
     assert_eq!(credits.logins[key].plan.as_deref(), Some("pro"));
-    let windows =
-        &read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries[&key.clone().into()];
+    let windows = &read_rate_limits_cache(&RateLimitsCache::shared_path(runtime)).entries
+        [&key.clone().into()];
     assert_eq!(windows.account_key.as_deref(), Some("owner"));
     assert_eq!(windows.limits.windows[0].used_percentage, Some(used));
 }
@@ -774,7 +777,7 @@ fn authoritative_direct_completion_survives_live_session_exit() {
         },
     ));
 
-    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));
     assert_eq!(
         cache.entries[&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
             "claude"
@@ -871,7 +874,7 @@ fn claim(runtime: &RuntimePaths) -> Uuid {
 }
 
 fn windows(runtime: &RuntimePaths) -> Vec<RateLimitWindow> {
-    read_rate_limits_cache(&runtime.shared_rate_limits_path())
+    read_rate_limits_cache(&RateLimitsCache::shared_path(runtime))
         .entries
         .get(
             &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity"))
@@ -907,7 +910,7 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
         },
     ));
     assert_eq!(windows(&runtime)[0].used_percentage, Some(12));
-    let entry = &read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
+    let entry = &read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime)).entries
         [&"antigravity@default".parse().unwrap()];
     assert_eq!(entry.account_key.as_deref(), Some("owner-b"));
     assert!(

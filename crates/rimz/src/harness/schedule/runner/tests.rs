@@ -2312,7 +2312,7 @@ fn publish_windows_for(
     windows: Vec<RateLimitWindow>,
 ) {
     crate::disk::atomic::write_temp_then_rename_cache(
-        &runtime.shared_rate_limits_path(),
+        &crate::agents::account::RateLimitsCache::shared_path(runtime),
         &crate::agents::RateLimitsCache {
             entries: std::collections::BTreeMap::from([(
                 key.into(),
