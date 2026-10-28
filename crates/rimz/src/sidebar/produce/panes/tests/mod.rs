@@ -6,6 +6,7 @@ use crate::sidebar::timing::SNAPSHOT_CACHE_TTL;
 mod cache;
 mod fields;
 mod held;
+mod resume;
 
 #[test]
 fn listing_identity_survives_repaired_spawn_command() {
@@ -80,16 +81,20 @@ fn resume_and_process_start_stamping_dispatch_for_kiro_commands() {
         pane.pane_pid = Some(42);
         let mut frame = frame(vec![pane]);
         let unstamped = natively_unstamped(&frame);
-        stamp_pane_resumed_session_ids(&mut frame, &|pid| {
-            (pid == 42)
-                .then(|| {
-                    crate::ids::AgentSessionId::from("sess_11111111-1111-4111-8111-111111111111")
-                })
-                .map_or(
-                    crate::agents::ResumeProbe::Unsettled,
-                    crate::agents::ResumeProbe::Resumed,
-                )
-        });
+        stamp_pane_resumed_session_ids(
+            &mut frame,
+            &mut SettledResumes::new(),
+            &|pid| {
+                if pid == 42 {
+                    crate::agents::ResumeProbe::Resumed(
+                        "sess_11111111-1111-4111-8111-111111111111".into(),
+                    )
+                } else {
+                    crate::agents::ResumeProbe::Unsettled
+                }
+            },
+            &|_| None,
+        );
         stamp_pane_process_starts(
             &mut frame,
             &unstamped,
@@ -289,6 +294,7 @@ fn failed_presence_attempt_stamp_suppresses_retries_until_ttl() {
         hibernated_panes: HashSet::new(),
         agent_panes: HashSet::new(),
         native_tenants: HashMap::new(),
+        settled_resumes: SettledResumes::new(),
         held_checks: HashMap::new(),
     };
     let calls = std::cell::Cell::new(0);
