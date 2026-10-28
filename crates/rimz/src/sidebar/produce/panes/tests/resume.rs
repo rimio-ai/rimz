@@ -7,6 +7,7 @@ struct ResumeFixture {
     hosted: RefCell<Option<HostedAgentProcess>>,
     root_command: RefCell<String>,
     hosted_command: RefCell<String>,
+    hosted_absent: Cell<bool>,
     answer: RefCell<ResumeProbe>,
     calls: Cell<usize>,
     reads: RefCell<Vec<(&'static str, u32)>>,
@@ -26,6 +27,7 @@ impl ResumeFixture {
             hosted_command: RefCell::new(
                 "rimz agents exec claude --request-file /runtime/exec.json".into(),
             ),
+            hosted_absent: Cell::new(false),
             answer: RefCell::new(ResumeProbe::Settled),
             calls: Cell::new(0),
             reads: RefCell::new(Vec::new()),
@@ -44,6 +46,15 @@ impl ResumeFixture {
     }
 
     fn repair(&self, frame: &mut PaneFrame, memo: &mut SettledResumes) {
+        self.repair_with_prior(frame, None, memo);
+    }
+
+    fn repair_with_prior(
+        &self,
+        frame: &mut PaneFrame,
+        prior: Option<&PaneFrame>,
+        memo: &mut SettledResumes,
+    ) {
         self.reads.borrow_mut().clear();
         let commands = RefCell::new(HashMap::new());
         let cmdline = |pid| {
@@ -100,14 +111,14 @@ impl ResumeFixture {
             resumed_session: &resumed,
             root_start: &|_, pid| start(pid),
             cwd_starts: &|_, _| Vec::new(),
-            hosted_absent: &|_, _| false,
+            hosted_absent: &|_, _| self.hosted_absent.get(),
             process_start: &|_| None,
             elevated_agent: &|_| None,
             backfill_pids: &|_, _| {},
         };
         repair_pane_frame(
             frame,
-            None,
+            prior,
             "s",
             None,
             &HashSet::new(),
@@ -115,6 +126,150 @@ impl ResumeFixture {
             &HashSet::new(),
             memo,
             &readers,
+        );
+    }
+}
+
+#[test]
+fn resumed_session_follows_a_new_hosted_agent_under_the_same_shell() {
+    let fixture = ResumeFixture::new();
+    let mut memo = SettledResumes::new();
+    *fixture.answer.borrow_mut() = ResumeProbe::Resumed("session-x".into());
+    let mut prior = fixture.candidate();
+    fixture.repair(&mut prior, &mut memo);
+    assert_eq!(
+        first(&prior).current.resumed_session_id.as_deref(),
+        Some("session-x")
+    );
+    assert_eq!(fixture.calls.get(), 1);
+
+    {
+        let mut hosted = fixture.hosted.borrow_mut();
+        let hosted = hosted.as_mut().unwrap();
+        hosted.pid = 77;
+        hosted.lineage = vec![77];
+        hosted.started_at = jiff::Timestamp::from_second(20).unwrap();
+    }
+    *fixture.answer.borrow_mut() = ResumeProbe::Resumed("session-y".into());
+    let mut fresh = fixture.candidate();
+    fixture.repair_with_prior(&mut fresh, Some(&prior), &mut memo);
+    assert_eq!(
+        first(&fresh).current.resumed_session_id.as_deref(),
+        Some("session-y")
+    );
+    assert_eq!(
+        fixture.calls.get(),
+        2,
+        "a new hosted agent needs one new walk"
+    );
+}
+
+#[test]
+fn resumed_session_disappears_when_the_hosted_agent_is_proven_absent() {
+    let fixture = ResumeFixture::new();
+    let mut memo = SettledResumes::new();
+    *fixture.answer.borrow_mut() = ResumeProbe::Resumed("session-x".into());
+    let mut prior = fixture.candidate();
+    fixture.repair(&mut prior, &mut memo);
+    assert_eq!(
+        first(&prior).current.resumed_session_id.as_deref(),
+        Some("session-x")
+    );
+
+    fixture.hosted.borrow_mut().take();
+    fixture.hosted_absent.set(true);
+    let mut fresh = fixture.candidate();
+    fixture.repair_with_prior(&mut fresh, Some(&prior), &mut memo);
+    assert_eq!(first(&fresh).current.resumed_session_id, None);
+    assert_eq!(fixture.calls.get(), 1, "an idle shell needs no resume walk");
+}
+
+#[test]
+fn resumed_session_survives_an_indeterminate_miss_only_until_the_hosted_carry_expires() {
+    let fixture = ResumeFixture::new();
+    let mut memo = SettledResumes::new();
+    *fixture.answer.borrow_mut() = ResumeProbe::Resumed("session-x".into());
+    let mut prior = fixture.candidate();
+    fixture.repair(&mut prior, &mut memo);
+    assert_eq!(
+        first(&prior).current.resumed_session_id.as_deref(),
+        Some("session-x")
+    );
+
+    fixture.hosted.borrow_mut().take();
+    let mut carried = fixture.candidate();
+    fixture.repair_with_prior(&mut carried, Some(&prior), &mut memo);
+    assert_eq!(
+        first(&carried).current.resumed_session_id.as_deref(),
+        Some("session-x")
+    );
+    assert!(first(&carried).hosted_carry_since_ms.is_some());
+    assert_eq!(fixture.calls.get(), 1);
+
+    first_mut(&mut carried).hosted_carry_since_ms =
+        Some(unix_now_ms() - crate::sidebar::timing::PANE_CARRY_TTL.as_millis() as u64 - 1);
+    let mut expired = fixture.candidate();
+    fixture.repair_with_prior(&mut expired, Some(&carried), &mut memo);
+    assert_eq!(first(&expired).current.resumed_session_id, None);
+    assert_eq!(
+        fixture.calls.get(),
+        1,
+        "an expired idle shell needs no resume walk"
+    );
+}
+
+#[test]
+fn resumed_session_stays_without_new_walks_for_an_unchanged_or_parked_hosted_agent() {
+    for hosted_root in [false, true] {
+        let fixture = ResumeFixture::new();
+        if hosted_root {
+            let mut hosted = fixture.hosted.borrow_mut();
+            let hosted = hosted.as_mut().unwrap();
+            hosted.pid = 42;
+            hosted.lineage.clear();
+            *fixture.root_command.borrow_mut() = fixture.hosted_command.borrow().clone();
+        }
+        let mut memo = SettledResumes::new();
+        *fixture.answer.borrow_mut() = ResumeProbe::Resumed("session-x".into());
+        let mut prior = fixture.candidate();
+        fixture.repair(&mut prior, &mut memo);
+        assert_eq!(
+            first(&prior).current.resumed_session_id.as_deref(),
+            Some("session-x")
+        );
+        assert_eq!(fixture.calls.get(), 1);
+
+        let mut unchanged = fixture.candidate();
+        fixture.repair_with_prior(&mut unchanged, Some(&prior), &mut memo);
+        assert_eq!(
+            first(&unchanged).current.resumed_session_id.as_deref(),
+            Some("session-x")
+        );
+        assert_eq!(
+            fixture.calls.get(),
+            1,
+            "an unchanged agent keeps its resolved id"
+        );
+
+        fixture
+            .hosted_command
+            .borrow_mut()
+            .push_str(" --supervise /runtime/park.json");
+        if hosted_root {
+            *fixture.root_command.borrow_mut() = fixture.hosted_command.borrow().clone();
+        }
+        let mut parked = fixture.candidate();
+        first_mut(&mut parked).current.spawn_command =
+            first(&unchanged).current.spawn_command.clone();
+        fixture.repair_with_prior(&mut parked, Some(&unchanged), &mut memo);
+        assert_eq!(
+            first(&parked).current.resumed_session_id.as_deref(),
+            Some("session-x")
+        );
+        assert_eq!(
+            fixture.calls.get(),
+            1,
+            "a park changes argv, not the hosted identity"
         );
     }
 }

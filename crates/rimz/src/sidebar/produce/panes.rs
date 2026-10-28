@@ -16,7 +16,7 @@ use crate::sidebar::cache::{
     effective_pane_ttl, hibernated_check_due, presence_stamp_age_ms, read_snapshot_cache,
     snapshot_cache_is_fresh,
 };
-use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
+use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics, PaneProcess};
 use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL};
 use crate::store::snapshot::PresenceSample;
 use crate::utils::time::unix_now_ms;
@@ -363,14 +363,40 @@ fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
         .collect()
 }
 
+fn hosted_process_identity(process: &PaneProcess) -> Option<(u32, jiff::Timestamp)> {
+    let root_pid = process.pid?;
+    Some((
+        process
+            .hosted_agent_lineage
+            .last()
+            .copied()
+            .unwrap_or(root_pid),
+        process.hosted_agent_process_start?,
+    ))
+}
+
 fn stamp_pane_resumed_session_ids(
     frame: &mut PaneFrame,
+    prior: Option<&PaneFrame>,
     settled_resumes: &mut SettledResumes,
     root_resume: &dyn Fn(u32) -> crate::agents::ResumeProbe,
     proc_cmdline: &dyn Fn(u32) -> Option<String>,
 ) {
     use crate::agents::ResumeProbe;
+    let prior_by_pane: HashMap<_, _> = prior
+        .into_iter()
+        .flat_map(PaneFrame::pane_states)
+        .map(|pane| (&pane.pane_id, &pane.current))
+        .collect();
     for pane in frame.pane_states_mut() {
+        let hosted_identity = hosted_process_identity(&pane.current);
+        if pane.current.resumed_session_id.is_none()
+            && let Some(identity) = hosted_identity
+            && let Some(previous) = prior_by_pane.get(&pane.pane_id)
+            && hosted_process_identity(previous) == Some(identity)
+        {
+            pane.current.resumed_session_id = previous.resumed_session_id.clone();
+        }
         if pane.current.resumed_session_id.is_some() {
             continue;
         }
@@ -395,19 +421,9 @@ fn stamp_pane_resumed_session_ids(
             settled_resumes.remove(&pane.pane_id);
             continue;
         };
-        let hosted_identity = pane
-            .current
-            .hosted_agent_process_start
-            .and_then(|started_at| {
-                let pid = pane
-                    .current
-                    .hosted_agent_lineage
-                    .last()
-                    .copied()
-                    .unwrap_or(root_pid);
-                Some((pid, started_at, proc_cmdline(pid)?))
-            });
-        if hosted_identity
+        let settled_identity = hosted_identity
+            .and_then(|(pid, started_at)| Some((pid, started_at, proc_cmdline(pid)?)));
+        if settled_identity
             .as_ref()
             .is_some_and(|identity| settled_resumes.get(&pane.pane_id) == Some(identity))
         {
@@ -417,7 +433,7 @@ fn stamp_pane_resumed_session_ids(
         match root_resume(root_pid) {
             ResumeProbe::Resumed(resumed) => pane.current.resumed_session_id = Some(resumed),
             ResumeProbe::Settled => {
-                if let Some(identity) = hosted_identity {
+                if let Some(identity) = settled_identity {
                     settled_resumes.insert(pane.pane_id.clone(), identity);
                 }
             }
@@ -514,12 +530,6 @@ fn repair_processes(
         reconcile_active_commands(due, readers.cmdline, readers.comm, readers.children);
         stamp_hosted_agent_processes(due, readers.hosted_process);
         backfill_pane_cwds(due, readers.cwd);
-        stamp_pane_resumed_session_ids(
-            due,
-            settled_resumes,
-            readers.resumed_session,
-            readers.cmdline,
-        );
     });
     // Held starts still participate in duplicate detection and the cwd census.
     stamp_pane_process_starts(frame, unstamped, readers.root_start, readers.cwd_starts);
@@ -529,6 +539,13 @@ fn repair_processes(
         if (readers.process_start)(std::process::id()).is_some() {
             drop_reused_pid_bindings(due, readers.root_start, readers.process_start);
         }
+        stamp_pane_resumed_session_ids(
+            due,
+            prior,
+            settled_resumes,
+            readers.resumed_session,
+            readers.cmdline,
+        );
         annotate_elevated_agents(due, readers.elevated_agent);
         stamp_first_seen(due);
         hosted_carry_drops

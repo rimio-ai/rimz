@@ -294,12 +294,6 @@ impl PaneState {
         if self.current.started_at.is_none() {
             self.current.started_at = prior.current.started_at;
         }
-        if self.current.resumed_session_id.is_none() {
-            self.current.resumed_session_id = prior.current.resumed_session_id.clone();
-        }
-        if self.current.pid.is_some() && self.current.elevated_agent.is_none() {
-            self.current.elevated_agent = prior.current.elevated_agent.clone();
-        }
     }
 }
 
