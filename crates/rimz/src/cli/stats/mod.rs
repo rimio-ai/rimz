@@ -10,8 +10,8 @@
 //! then subsequent runs return from a cache aggregated for the same day in its
 //! published history zone.
 //!
-//! Windows: the heatmap always reads the full available history (the cache spans
-//! the trailing year). `--window` scopes model, provider, and profile breakdowns
+//! Windows cover 1, 7, 30, and 364 local calendar days, including today. The heatmap
+//! reads the full retained history. `--window` scopes model, provider, and profile breakdowns
 //! in every mode, defaulting to today. It sets the held dashboard's initial tab.
 //! `--refresh` recomputes on a background thread, retries an unavailable first
 //! frame after five seconds, then repaints in place every minute and re-centres
@@ -252,7 +252,7 @@ impl Window {
             Self::Today => 1,
             Self::Week => 7,
             Self::Month => 30,
-            Self::Year => 365,
+            Self::Year => 364,
         }
     }
 
@@ -323,7 +323,7 @@ use json::emit_json;
 #[cfg(test)]
 use {assists::*, fmt::*, hold::*, panel::*};
 /// The deduplicated account-global history `rimz stats` renders: per-day buckets,
-/// the model, provider, and profile breakdowns, and producer-priced trailing windows.
+/// the model, provider, and profile breakdowns, and producer-priced local-day windows.
 struct Stats {
     timezone: String,
     refreshed_at_ms: u64,

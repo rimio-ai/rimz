@@ -118,8 +118,8 @@ impl SpendWindow {
     }
 }
 
-/// The widest spend window. Entries at or beyond this age never contribute to
-/// totals, sessions, or the unknown-model pricing chase.
+/// Retention and parsing bound, independent of the 364-local-day year window.
+/// Entries at or beyond this age never contribute to totals, sessions, or pricing.
 pub(crate) const WIDEST_SPEND_WINDOW_SECS: u64 = 365 * 86_400;
 
 /// Margin for the mtime-based cold-parse skip, covering filesystem timestamp
@@ -128,8 +128,8 @@ pub(crate) const SKIP_PARSE_MARGIN_SECS: u64 = 2 * 86_400;
 
 /// Raw rows newer than this stay verbatim; older rows fold into
 /// day/model/thread rollups so the shared cache stays bounded by recent
-/// activity instead of lifetime history. Eight days keeps the 7d window
-/// second-exact with a day of margin.
+/// activity instead of lifetime history. Eight days keeps the seven-local-day
+/// window raw with a margin.
 pub(crate) const RAW_RETAIN_SECS: u64 = 8 * 86_400;
 
 /// The headline spend window shown in the cockpit and provider dashboard.
@@ -156,13 +156,49 @@ pub struct HeadlineSpec {
     pub timezone: Option<String>,
 }
 
+/// Inclusive local-midnight starts for the nested spend and effort windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowStarts {
+    pub day: u64,
+    pub week: u64,
+    pub month: u64,
+    pub year: u64,
+}
+
+impl WindowStarts {
+    /// Start today and its last 7, 30, and 364 local days in the history zone.
+    /// Unrepresentable calendar starts fall back to trailing elapsed-day cutoffs.
+    pub fn new(now_secs: u64, timezone: &str) -> Self {
+        let now = i64::try_from(now_secs)
+            .ok()
+            .and_then(|second| Timestamp::from_second(second).ok())
+            .map(|now| now.to_zoned(crate::config::resolve_time_zone(Some(timezone))));
+        let start = |days: u32| {
+            now.as_ref()
+                .and_then(|now| {
+                    now.checked_sub(jiff::Span::new().days(i64::from(days) - 1))
+                        .ok()
+                })
+                .and_then(|day| day.start_of_day().ok())
+                .and_then(|day| u64::try_from(day.timestamp().as_second()).ok())
+                .unwrap_or_else(|| trailing_window_cutoff(now_secs, u64::from(days) * 86_400))
+        };
+        Self {
+            day: start(1),
+            week: start(7),
+            month: start(30),
+            year: start(364),
+        }
+    }
+}
+
 pub(crate) const SESSION_GAP_SECS: u64 = 5 * 3_600;
 
 /// Stable sentinel for a session headline with no user-opened burst.
 pub(crate) const NO_BURST_CUTOFF: u64 = u64::MAX;
 
-/// Spend and token tally over the configured headline window, local calendar
-/// day, and trailing store windows: 7 days, 30 days, and 365 days. The store
+/// Spend and token tally over the configured headline window and the last
+/// 1, 7, 30, and 364 local calendar days, including today. The store
 /// windows nest, with `year` the widest, while the headline is independent.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -174,11 +210,11 @@ pub struct SpendTally {
     /// Local calendar day in the published history timezone.
     #[serde(default)]
     pub day: SpendWindow,
-    /// Trailing 7 days.
+    /// Today and the six preceding local calendar days in the history zone.
     pub week: SpendWindow,
-    /// Trailing 30 days.
+    /// Today and the 29 preceding local calendar days in the history zone.
     pub month: SpendWindow,
-    /// Trailing 365 days — the widest window, so it subsumes the other windows.
+    /// Today and the 363 preceding local days, matching 52 seven-day chart blocks.
     /// `#[serde(default)]` keeps an older `provider-spending.json` (which carried
     /// an `all_time` field and no `year`) readable: the stale field is ignored and
     /// `year` defaults to zero until the producer rewrites the cache next tick.
@@ -187,8 +223,8 @@ pub struct SpendTally {
 }
 
 impl SpendTally {
-    /// True when nothing has been recorded in the trailing year. `year` is the
-    /// widest window, so a zero year means every window is zero.
+    /// True when nothing has been recorded in the last 364 local calendar days.
+    /// `year` subsumes the other store windows, independently of the headline.
     pub fn is_zero(&self) -> bool {
         self.year.usd == 0.0
             && self.year.tokens == 0
@@ -284,14 +320,19 @@ pub(crate) fn aggregate_counted_rollups(
     let (zone, timezone) = history_zone(crate::config::resolve_time_zone(spec.timezone.as_deref()));
     let today = local_day_index(now_secs, Some(&timezone)).unwrap_or((now_secs / 86_400) as i64);
     chart.today = today;
-    let history_day_cutoff = local_day_start_secs(now_secs, Some(&timezone))
-        .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
+    chart.hour = i64::try_from(now_secs)
+        .ok()
+        .and_then(|second| Timestamp::from_second(second).ok())
+        .map_or((now_secs / 3_600 % 24) as i8, |now| {
+            zone.to_datetime(now).hour()
+        });
+    let window_starts = WindowStarts::new(now_secs, &timezone);
     let day_boundaries = if history_roles.is_some() {
         let first = counted.iter().map(|row| row.entry().ts_secs).min();
         let last = counted.iter().map(|row| row.entry().ts_secs).max();
         first
             .zip(last)
-            .map(|(first, last)| local_day_boundaries(first, last, zone))
+            .map(|(first, last)| local_day_boundaries(first, last, zone.clone()))
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -305,7 +346,7 @@ pub(crate) fn aggregate_counted_rollups(
             entry,
             now_secs,
             cutoffs.total,
-            history_day_cutoff,
+            window_starts,
         );
         accum(
             spending
@@ -315,14 +356,14 @@ pub(crate) fn aggregate_counted_rollups(
             entry,
             now_secs,
             cutoffs.total,
-            history_day_cutoff,
+            window_starts,
         );
         accum(
             spending.by_provider.entry(provider.to_owned()).or_default(),
             entry,
             now_secs,
             cutoffs.total,
-            history_day_cutoff,
+            window_starts,
         );
         if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
             login_day
@@ -362,7 +403,7 @@ pub(crate) fn aggregate_counted_rollups(
                 entry,
                 now_secs,
                 cutoffs.scoped(),
-                history_day_cutoff,
+                window_starts,
             );
             if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
                 workspace_day.add(entry.cost_usd, entry);
@@ -393,6 +434,19 @@ pub(crate) fn aggregate_counted_rollups(
             let model = entry.model.as_deref().unwrap_or_default();
             let age = today - day;
             if entry.cost_usd != 0.0 {
+                if (0..8).contains(&age)
+                    && !entry.rolled
+                    && let Ok(second) = i64::try_from(entry.ts_secs)
+                    && let Ok(timestamp) = Timestamp::from_second(second)
+                {
+                    let hour = day * 24 + i64::from(zone.to_datetime(timestamp).hour());
+                    *chart
+                        .hours
+                        .entry(hour)
+                        .or_default()
+                        .entry(model.to_owned())
+                        .or_default() += entry.cost_usd;
+                }
                 if (0..30).contains(&age) {
                     *chart
                         .days
@@ -412,7 +466,7 @@ pub(crate) fn aggregate_counted_rollups(
                 }
             }
             let (tally, producers) = models.entry(model).or_default();
-            accum(tally, entry, now_secs, u64::MAX, history_day_cutoff);
+            accum(tally, entry, now_secs, u64::MAX, window_starts);
             let producer = producers.entry(provider).or_default();
             if within_widest_window(entry.ts_secs, now_secs) {
                 producer.add(entry.cost_usd, entry);
@@ -433,7 +487,7 @@ pub(crate) fn aggregate_counted_rollups(
                     entry,
                     now_secs,
                     cutoffs.total,
-                    history_day_cutoff,
+                    window_starts,
                 );
                 let session = native
                     .map(|thread_id| SessionKey::Native {
@@ -455,7 +509,7 @@ pub(crate) fn aggregate_counted_rollups(
         cache,
         now_secs,
         cutoffs.total,
-        history_day_cutoff,
+        window_starts,
     );
     for ((placement, _), youngest) in role_sessions {
         bump_sessions(
@@ -463,7 +517,7 @@ pub(crate) fn aggregate_counted_rollups(
             youngest,
             now_secs,
             cutoffs.total,
-            history_day_cutoff,
+            window_starts,
         );
     }
     if let Some(scope) = workspace {
@@ -474,7 +528,7 @@ pub(crate) fn aggregate_counted_rollups(
             scope,
             now_secs,
             cutoffs.scoped(),
-            history_day_cutoff,
+            window_starts,
         );
     }
     workspace_day.sessions = workspace_day_sessions.len().try_into().unwrap_or(u32::MAX);
@@ -491,7 +545,7 @@ pub(crate) fn aggregate_counted_rollups(
             sessions.len().try_into().unwrap_or(u32::MAX);
     }
     if let Some(index) = history_roles {
-        super::session_effort::fold(index, &mut roles, now_secs, history_day_cutoff);
+        super::session_effort::fold(index, &mut roles, now_secs, window_starts);
     }
 
     SpendingWalkResult {
@@ -623,7 +677,7 @@ fn add_spending_sessions(
     cache: &SpendingDiskCache,
     now_secs: u64,
     headline_cutoff: u64,
-    day_cutoff: u64,
+    window_starts: WindowStarts,
 ) {
     let mut threads = FastHashMap::<SessionKey<'_>, (&'static str, u64)>::with_capacity_and_hasher(
         files.len(),
@@ -658,7 +712,7 @@ fn add_spending_sessions(
             *youngest,
             now_secs,
             headline_cutoff,
-            day_cutoff,
+            window_starts,
         );
         bump_sessions(
             spending
@@ -668,7 +722,7 @@ fn add_spending_sessions(
             *youngest,
             now_secs,
             headline_cutoff,
-            day_cutoff,
+            window_starts,
         );
     }
     for ((login, _), youngest) in login_threads {
@@ -677,7 +731,7 @@ fn add_spending_sessions(
             youngest,
             now_secs,
             headline_cutoff,
-            day_cutoff,
+            window_starts,
         );
     }
 }
@@ -689,7 +743,7 @@ fn add_scoped_sessions(
     scope: &SpendScope,
     now_secs: u64,
     headline_cutoff: u64,
-    day_cutoff: u64,
+    window_starts: WindowStarts,
 ) {
     let mut threads = FastHashMap::<SessionKey<'_>, u64>::default();
     for SpendingFile {
@@ -717,7 +771,7 @@ fn add_scoped_sessions(
         }
     }
     for youngest in threads.values() {
-        bump_sessions(tally, *youngest, now_secs, headline_cutoff, day_cutoff);
+        bump_sessions(tally, *youngest, now_secs, headline_cutoff, window_starts);
     }
 }
 
@@ -1235,24 +1289,24 @@ fn accum(
     entry: &CachedEntry,
     now_secs: u64,
     headline_cutoff: u64,
-    day_cutoff: u64,
+    window_starts: WindowStarts,
 ) {
     let usd = entry.cost_usd;
-    // Store-window bucketing: an entry counts toward each trailing window whose
-    // span it still falls within. The configured headline window is independent
-    // and may be calendar-day or session scoped.
+    // Store-window bucketing compares inclusive history-zone local-day starts.
+    // The configured headline window is independent and may be calendar-day or session scoped.
     if !within_widest_window(entry.ts_secs, now_secs) {
         return;
     }
-    let age = now_secs.saturating_sub(entry.ts_secs);
-    tally.year.add(usd, entry);
-    if age < 30 * 86_400 {
+    if entry.ts_secs >= window_starts.year {
+        tally.year.add(usd, entry);
+    }
+    if entry.ts_secs >= window_starts.month {
         tally.month.add(usd, entry);
     }
-    if age < 7 * 86_400 {
+    if entry.ts_secs >= window_starts.week {
         tally.week.add(usd, entry);
     }
-    if entry.ts_secs >= day_cutoff {
+    if entry.ts_secs >= window_starts.day {
         tally.day.add(usd, entry);
     }
     if entry.ts_secs >= headline_cutoff {
@@ -1267,20 +1321,21 @@ fn bump_sessions(
     youngest_ts: u64,
     now_secs: u64,
     headline_cutoff: u64,
-    day_cutoff: u64,
+    window_starts: WindowStarts,
 ) {
-    let age = now_secs.saturating_sub(youngest_ts);
-    if age >= WIDEST_SPEND_WINDOW_SECS {
+    if !within_widest_window(youngest_ts, now_secs) {
         return;
     }
-    tally.year.sessions += 1;
-    if age < 30 * 86_400 {
+    if youngest_ts >= window_starts.year {
+        tally.year.sessions += 1;
+    }
+    if youngest_ts >= window_starts.month {
         tally.month.sessions += 1;
     }
-    if age < 7 * 86_400 {
+    if youngest_ts >= window_starts.week {
         tally.week.sessions += 1;
     }
-    if youngest_ts >= day_cutoff {
+    if youngest_ts >= window_starts.day {
         tally.day.sessions += 1;
     }
     if youngest_ts >= headline_cutoff {

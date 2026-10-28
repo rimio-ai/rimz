@@ -184,7 +184,7 @@ The heading names the provider and CLI version: the active account's version, el
 | `EXTRA LEFT` | Only when some row reports paid usage: `off` when disabled, `∞` for unlimited credit, dollars left when known, else `$X used`, else `–`. An API account with a counting monthly cap shows its spend since the UTC month began as `$X used`; the sidebar's `api` bar shows the dollars left, and the detail view prints spend of cap. ` · paying` follows when paid credit is the next spend step. |
 | `RESET CREDITS` | Only when some row reports reset credits: count plus the nearest expiry (`2 · exp 9d14h`), `2 · due` after expiry, a bare count without an expiry, `-` at zero, or `–` when unknown. |
 | `AGENTS` | Live cross-room agent count, `-` for none, or `–` when rooms or a live room's agents could not be read. Remote-control daemons are not agents. |
-| `SPEND 7d` | Only when some account is standalone: its own trailing-week spend, `-` when unrecorded, or `shared` for default-pool members. |
+| `SPEND 7d` | Only when some account is standalone: its own 7-local-day spend, `-` when unrecorded, or `shared` for default-pool members. |
 | `READING` | Only when some row lacks an expected usage reading: `never read` or `no reading since <date>`. Claude, Codex and Kimi expect their declared windows unless unmetered. Other accounts must be known-metered and support direct usage reads; Pi and OpenCode also need a backing login with readable quotas. OpenCode OpenAI OAuth qualifies; Pi OpenAI OAuth does not. An observed window also establishes the expectation, except on unmetered accounts. |
 
 `PLAN` applies this precedence: `not installed`; a setup problem (`home missing`, `hooks missing`, `hooks untrusted`, `hooks disabled`, `unavailable`); `lapsed`; `no login check` for providers without a login check; `logged out`; `not probed` or `probe failed`; then the plan label. Setup problems use warning tones, lapses the failure tone, and login states their provider-status tones. A setup problem takes precedence over a lapse in both `PLAN` and its repair line.
@@ -243,11 +243,11 @@ Blocks use the table's state precedence in their titles, alongside the plan and 
 | `usage` | `no limit` for an unmetered account, or its missing-reading reason under the per-account [`READING` rule](#provider-tables). Accounts without readable quotas omit a missing-reading reason. |
 | `extra` | `off`, `unlimited`, or known dollars used, left, and limit; ` · paying` when paid credit is next. Without a reported limit, the ceiling is `[accounts.usage_limit_usd]`. |
 | `reset credits` | Positive banked count and up to three known expiries as `YYYY-MM-DD HH:MM:SS ±HH:MM` in machine timezone, then `in <interval>` or `due`. |
-| `spend` | History pool's trailing 7- and 30-day spend on default and standalone accounts; shared named members omit it. Default without published spend reads `–`. |
+| `spend` | History pool's spend over the last 7 and 30 local calendar days, including today on default and standalone accounts; shared named members omit it. Default without published spend reads `–`. |
 | `budget` | `$spent of $cap/day` or `$spent of $cap/month`, with `· parked` when the cap has parked agents. |
 | `agents` | Cross-room count, `0` for none, or `–` when inventory is unavailable. |
 
-Windows, extra usage, and reset credits belong to the credential account; spend and dollar caps belong to its history pool. On an API-billed account with a counting monthly cap, `extra` shows this UTC month's spend against that cap instead of the trailing-month display ceiling. To spend a banked reset, use [`redeem`](#redeem). Dollar amounts use the money tone; percentages and pace use the sidebar's budget and burn-rate tones.
+Windows, extra usage, and reset credits belong to the credential account; spend and dollar caps belong to its history pool. On an API-billed account with a counting monthly cap, `extra` shows this UTC month's spend against that cap instead of the 30-local-day display ceiling. To spend a banked reset, use [`redeem`](#redeem). Dollar amounts use the money tone; percentages and pace use the sidebar's budget and burn-rate tones.
 
 ## How fresh the figures are
 
@@ -310,7 +310,7 @@ Window fields are omitted when unknown:
 | `lifted` | `true` when the provider stopped enforcing this window; absent otherwise. |
 | `fixed_period` | `true` when the clock runs on a fixed schedule regardless of usage; absent otherwise. Its countdown runs even at zero usage. |
 
-`spending.today` is spend since local midnight in the configured `timezone`, or `null` when publication was for another local day. `headline` follows the sidebar setting; sibling `window` names `session`, `24h`, or `today`. `week`, `month`, and `year` cover trailing 7, 30, and 365 days. Each holds `usd`, `tokens`, `input`, `output`, `cache_write`, `cache_read`, and `sessions`, plus `tool_calls` and a `tools` name-to-count map when recorded.
+`spending.today` is spend since local midnight in the configured `timezone`, or `null` when publication was for another local day. `headline` follows the sidebar setting; sibling `window` names `session`, `24h`, or `today`. `week`, `month`, and `year` cover the last 7, 30, and 364 local calendar days, including today. Each holds `usd`, `tokens`, `input`, `output`, `cache_write`, `cache_read`, and `sessions`, plus `tool_calls` and a `tools` name-to-count map when recorded.
 
 Compared with the previous `accounts list --json`, rows now cover every kind, `windows` includes all scopes, and provider plan, identity, pool, freshness, spending, and day/month budget fields are added. `status` remains launch health and `login` remains auth state.
 

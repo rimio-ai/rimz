@@ -54,7 +54,7 @@ use aggregate::{
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
-    local_day_index, local_day_start_secs, utc_month_start_secs,
+    WindowStarts, local_day_index, local_day_start_secs, utc_month_start_secs,
 };
 pub(crate) use aggregate::{NO_BURST_CUTOFF, SESSION_GAP_SECS, live_session_keys, origin_path};
 #[cfg(test)]
@@ -141,16 +141,23 @@ pub struct SpendingWalkResult {
     pub stats: WalkStats,
 }
 
-/// Stored model dollars for the dashboard's daily and weekly spend charts.
+/// Stored model dollars for the dashboard's hourly, daily, and weekly spend charts.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartSpend {
     /// Walk's local epoch day in the published history zone, anchoring chart
     /// blocks and publication freshness.
     pub today: i64,
+    /// Walk's local wall-clock hour (0–23), at the same instant as `today`.
+    #[serde(default)]
+    pub hour: i8,
     /// Local epoch days for the last 30 days, including today.
     pub days: BTreeMap<i64, BTreeMap<String, f64>>,
     /// Last local epoch day of each of the 52 seven-day blocks ending today.
     pub weeks: BTreeMap<i64, BTreeMap<String, f64>>,
+    /// Local epoch day × 24 plus wall-clock hour, for today and seven preceding
+    /// local days. Only raw rows contribute; repeated DST hours share a key.
+    #[serde(default)]
+    pub hours: BTreeMap<i64, BTreeMap<String, f64>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -193,7 +200,7 @@ pub struct RoleTally {
     pub effort: EffortTally,
 }
 
-/// Recorded effort over the same local day and trailing windows as spend.
+/// Recorded effort over the same 1, 7, 30, and 364 local calendar days as spend.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct EffortTally {

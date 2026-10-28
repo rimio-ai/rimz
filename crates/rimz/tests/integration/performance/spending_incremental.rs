@@ -322,6 +322,10 @@ fn spending_memo_rebuilds_once_per_cache_generation() {
 
 #[test]
 fn spending_walk_warm_keeps_trailing_windows_fresh() {
+    let now_secs = "2026-06-02T23:59:59Z"
+        .parse::<jiff::Timestamp>()
+        .unwrap()
+        .as_second() as u64;
     let dir = tempfile::tempdir().expect("tempdir");
     let cache_path = dir.path().join("spending.json");
     let transcript = dir.path().join("edge.jsonl");
@@ -334,7 +338,10 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
         file_cache_entry(
             &transcript,
             vec![CachedEntry {
-                ts_secs: NOW_SECS - (7 * 86_400) + 1,
+                ts_secs: "2026-05-27T12:00:00Z"
+                    .parse::<jiff::Timestamp>()
+                    .unwrap()
+                    .as_second() as u64,
                 cost_usd,
                 input: 1200,
                 output: 80,
@@ -359,15 +366,36 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
     let prices = PriceBook::default();
     let mut walker = SpendingWalker::new();
 
-    let first = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
-    let second = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS + 2);
+    let spec = HeadlineSpec {
+        timezone: Some("UTC".into()),
+        ..Default::default()
+    };
+    let origin_overrides = HashMap::new();
+    let request = WalkRequest {
+        files: &files,
+        prices: &prices,
+        now_secs,
+        origin_overrides: &origin_overrides,
+        user_inputs: &[],
+        scope: None,
+        spec: &spec,
+    };
+    let first = walker.walk(&cache_path, &request, &mut SilentWalk);
+    let second = walker.walk(
+        &cache_path,
+        &WalkRequest {
+            now_secs: now_secs + 2,
+            ..request
+        },
+        &mut SilentWalk,
+    );
 
     assert_eq!(first.stats.dedup_passes, 1);
     assert_eq!(second.stats.dedup_passes, 0);
     assert!((first.spending.total.week.usd - cost_usd).abs() < 1e-9);
     assert!(
         second.spending.total.week.usd.abs() < 1e-9,
-        "warm memo must not freeze the rolling week window"
+        "warm memo must drop the oldest local day at midnight"
     );
     assert!(
         (second.spending.total.year.usd - cost_usd).abs() < 1e-9,

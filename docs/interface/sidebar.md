@@ -39,8 +39,8 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
    ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰╱▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱ ↻  5d22h     ← 7-day budget left, model sub-cap tick
 
   ── Total: ───────────────────────────────────────────     ← fleet store
-  W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88     ← trailing week, all providers
-  M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66     ← trailing month
+  W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88     ← last 7 local days, all providers
+  M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66     ← last 30 local days
 
  ⇄ remote 210ms                              ? for help     ← footer
 ```
@@ -164,7 +164,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `∞` | no limit |
 | `–` | the provider reports no figure for this slot |
 | `⇅ rc` | remote control is on for this provider: green when its server is up, red when a configured server is down |
-| `W:` `M:` | fleet totals for the trailing week and month |
+| `W:` `M:` | fleet totals for the last 7 and 30 local calendar days, including today |
 
 ### Cockpit and chrome glyphs
 
@@ -728,7 +728,7 @@ Claude · work v2.1.158                                                         
 | a dim empty track and no countdown | The reading is unknown: RimZ holds only a cached reading whose window has since reset, or the provider has not reported its windows yet. |
 | a full bar and `∞` | No limit applies: an API-key or Claude Console login without a counting monthly cap or display ceiling, extra usage with no limit or balance figure, a quota the provider reports as unlimited, or a limit the provider has lifted for now. |
 | an `ex` row | Paid extra usage on accounts with only time windows, shown while an included window is spent and extra usage is available: the longest spent window comes first, then `ex`. The figure is dollars left, never the budget size. With a limit the bar drains; without one a positive balance draws full. Reported unlimited extra usage draws full with `∞`, whether or not a display ceiling is set. There is no `ex` row when the provider reports nothing, extra usage is off, or no dollars are left. Without usable extra usage, a longer spent window replaces the second included row (`5h` and `mo` when the month is spent). Dollar figures on `ex` and `api` floor: cents below $10 (dropping `.00`), grouped whole dollars below $100,000, whole thousands below $1 million, then millions with one decimal. |
-| an `api` row | An API-key or Claude Console login. A counting `/month` account cap drains against your history pool's spend since 00:00 UTC on the 1st, with the dollars left on the right; raises enlarge the bar's cap. Without a monthly cap, a display ceiling drains against trailing-month spend; without either, the bar is full and reads `∞`. A daily cap does not replace that display ceiling. Stale month spend paints an unknown track until refreshed; a pool with no spend this month shows the full cap left. The row never shows the provider's credit balance. |
+| an `api` row | An API-key or Claude Console login. A counting `/month` account cap drains against your history pool's spend since 00:00 UTC on the 1st, with the dollars left on the right; raises enlarge the bar's cap. Without a monthly cap, a display ceiling drains against 30-local-day spend; without either, the bar is full and reads `∞`. A daily cap does not replace that display ceiling. Stale month spend paints an unknown track until refreshed; a pool with no spend this month shows the full cap left. The row never shows the provider's credit balance. |
 | `cr`, `bld`, `dep`, and other names | A quota the provider or a plugin names, such as Copilot's AI credits. Named quotas are independent: one spent quota does not mark another spent. A named quota with no reported length shows its reset in a quiet tone. |
 
 The color of the `↻` glyph beside the countdown shows your pace. It is neutral when the current burn rate lasts to the reset, slides through gold and amber to red as spending outruns the window, and cools toward green when spending runs well under pace, once 40% of the window has passed. The stops are `[theme.display.budget_bar.burn_rate]` ([theming: display](../guide/theme.md#display)).
@@ -764,7 +764,7 @@ As the pane narrows, a block drops the input and output token split, then the ve
 
 ### The fleet store
 
-The last two rows of the dashboard total every provider and every project on this machine's accounts, for the trailing week (`W:`) and the trailing month (`M:`).
+The last two rows of the dashboard total every provider and every project on this machine's accounts, for the last 7 (`W:`) and 30 (`M:`) local calendar days, including today.
 
 ```
   ── Total: ───────────────────────────────────────────

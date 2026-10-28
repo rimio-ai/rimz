@@ -478,7 +478,7 @@ impl<'de> Deserialize<'de> for ToolCounts {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
-    /// `timestamp` via `super::time::iso_to_unix_secs`. Drives the trailing-window bucketing
+    /// `timestamp` via `super::time::iso_to_unix_secs`. Drives local-day window bucketing
     /// in `super::aggregate::accum`.
     #[serde(rename = "t")]
     pub ts_secs: u64,

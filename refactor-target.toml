@@ -303,7 +303,8 @@ upward-dependencies = ["address"]
 # RateLimitsCache::shared_path and shared_lock bind shared names to the cache format (+2).
 # AgentState::normalize_prompt_labels shares legacy row normalization with store readers (+1).
 # cached_provider_spending shares stamped provider parses with host projections (+1).
-surface-budget = 1170
+# WindowStarts exposes shared history-zone window boundaries to the CLI (+1).
+surface-budget = 1171
 
 [[verdict]]
 kind = "item"
@@ -667,7 +668,8 @@ path = "crates/rimz/src/agents/spending"
 # ToolCounts exposes compact, canonical counts on public spending rows (+1).
 # utc_month_start_secs shares the walk and budget reader's UTC cutoff (+1).
 # cached_provider_spending shares stamped provider parses with host projections (+1).
-surface-budget = 111
+# WindowStarts and its constructor share local-day spend and assist cutoffs (+2).
+surface-budget = 113
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -1141,6 +1143,11 @@ reason = "Shared local-midnight convention is reachable for spending consumers i
 kind = "item"
 key = "agents::spending::aggregate::utc_month_start_secs"
 reason = "Account monthly caps and the spending walk must use the same UTC-calendar-month cutoff."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::aggregate::WindowStarts"
+reason = "Spend, effort, and CLI assist windows share one history-zone local-midnight rule."
 
 [[verdict]]
 kind = "item"

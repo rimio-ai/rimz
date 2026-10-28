@@ -41,7 +41,7 @@ Flags follow the accounts command. The alias retains cached login records within
 
 Keys inside `windows`, `extra_credits.known`, and `reset_credits` are left out when they have no value, so treat a missing key as unknown. Each window object carries the keys listed under [`rimz accounts` window fields](./accounts.md#json-output).
 
-`spending.today` is spend since local midnight in the configured `timezone`, or `null` when the cache was published for another local day. `headline` is the configured sidebar headline, with sibling `window` naming `session`, `24h`, or `today`. `week`, `month`, and `year` cover the trailing 7, 30, and 365 days. Each window holds `usd`, `tokens`, `input`, `output`, `cache_write`, `cache_read`, and `sessions`, plus `tool_calls` and a `tools` name-to-count map when any tool calls were recorded.
+`spending.today` is spend since local midnight in the configured `timezone`, or `null` when the cache was published for another local day. `headline` is the configured sidebar headline, with sibling `window` naming `session`, `24h`, or `today`. `week`, `month`, and `year` cover the last 7, 30, and 364 local calendar days, including today. Each window holds `usd`, `tokens`, `input`, `output`, `cache_write`, `cache_read`, and `sessions`, plus `tool_calls` and a `tools` name-to-count map when any tool calls were recorded.
 
 ## See also
 

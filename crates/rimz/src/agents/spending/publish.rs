@@ -44,7 +44,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult, local_day_index};
 // effort windows.
 // v22: bounded daily and weekly model-dollar chart cells.
 // v23: UTC-calendar-month spend per history pool for account monthly caps.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 23;
+// v24: local-day store windows and raw hourly model-dollar chart cells.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 24;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -57,7 +58,8 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 23;
 /// independently of the configured headline. v7: walked per-session baselines
 /// replace live-session exclusion for exact flush-lag overlays.
 /// v8: the scoped tally carries an independent calendar-day window.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 8;
+/// v9: store windows align with history-zone local days, with a 364-day year.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 9;
 
 /// The published provider-spending cache: the aggregated [`Spending`] plus the
 /// stamp the producer's `SPENDING_TTL` gate reads. A wrapper rather than a
@@ -102,10 +104,11 @@ pub struct ProviderSpendingCache {
     /// command can render its heatmap without walking transcripts.
     #[serde(default)]
     pub days: BTreeMap<i64, DaySpend>,
-    /// Stored model dollars for 30 local days and 52 seven-day blocks ending today.
+    /// Stored model dollars for 8 local days of raw hours, 30 daily cells, and
+    /// 52 seven-day blocks ending today.
     #[serde(default)]
     pub chart: super::ChartSpend,
-    /// Account-global model buckets by trailing window, published so
+    /// Account-global model buckets by local-day window, published so
     /// `rimz stats` can scope its model breakdown without walking transcripts.
     #[serde(default)]
     pub models: BTreeMap<String, super::ModelTally>,

@@ -50,7 +50,7 @@ fn utc_month_publication_counts_raw_and_compacted_pool_spend() {
         second("2026-10-01T00:00:00Z")
     );
     assert_eq!(publication["month_by_login"].as_object().unwrap().len(), 1);
-    assert_eq!(publication["version"], 23);
+    assert_eq!(publication["version"], 24);
 }
 
 #[test]
@@ -172,6 +172,233 @@ fn history_days_follow_published_zone_including_rolled_rows() {
         serde_json::to_value(publication).unwrap()["timezone"],
         "Asia/Shanghai"
     );
+}
+
+#[test]
+fn window_starts_follow_dst_and_fall_back_for_unrepresentable_instants() {
+    let second = |s: &str| s.parse::<Timestamp>().unwrap().as_second() as u64;
+    for (now, dates) in [
+        (
+            "2026-03-11T12:00:00-04:00",
+            [
+                "2026-03-11T00:00:00-04:00",
+                "2026-03-05T00:00:00-05:00",
+                "2026-02-10T00:00:00-05:00",
+                "2025-03-13T00:00:00-04:00",
+            ],
+        ),
+        (
+            "2026-11-04T12:00:00-05:00",
+            [
+                "2026-11-04T00:00:00-05:00",
+                "2026-10-29T00:00:00-04:00",
+                "2026-10-06T00:00:00-04:00",
+                "2025-11-06T00:00:00-05:00",
+            ],
+        ),
+    ] {
+        let starts = WindowStarts::new(second(now), "America/New_York");
+        assert_eq!(
+            [starts.day, starts.week, starts.month, starts.year],
+            dates.map(second)
+        );
+    }
+    let starts = WindowStarts::new(u64::MAX, "UTC");
+    assert_eq!(
+        [starts.day, starts.week, starts.month, starts.year],
+        [1, 7, 30, 364].map(|days| u64::MAX - days * 86_400 + 1)
+    );
+    let starts = WindowStarts::new(0, "America/New_York");
+    assert_eq!([starts.day, starts.week, starts.month, starts.year], [0; 4]);
+}
+
+#[test]
+fn local_day_windows_conserve_chart_dollars_and_session_edges_across_dst() {
+    let second = |s: &str| s.parse::<Timestamp>().unwrap().as_second() as u64;
+    let now_secs = second("2026-03-11T12:00:00-04:00");
+    let starts = [
+        second("2026-03-11T00:00:00-04:00"),
+        second("2026-03-05T00:00:00-05:00"),
+        second("2026-02-10T00:00:00-05:00"),
+        second("2025-03-13T00:00:00-04:00"),
+    ];
+    let spec = HeadlineSpec {
+        timezone: Some("America/New_York".into()),
+        ..Default::default()
+    };
+    let path = PathBuf::from("/x/windows.db");
+    let mut seconds: Vec<_> = starts
+        .into_iter()
+        .flat_map(|start| [start - 1, start, start + 1])
+        .collect();
+    seconds.extend([
+        second("2026-03-08T01:59:59-05:00"),
+        second("2026-03-08T03:00:00-04:00"),
+    ]);
+    let entries = seconds
+        .iter()
+        .enumerate()
+        .map(|(index, ts)| CachedEntry {
+            model: Some("model-a".into()),
+            ..cached_entry(*ts, 1.0, &format!("session-{index}"))
+        })
+        .chain([cached_entry(starts[3] - 100, 0.0, "session-0")])
+        .collect();
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file_with_origin(
+            &path,
+            Path::new("/project"),
+            entries,
+        )]),
+        ..Default::default()
+    };
+    let files = vec![spending_file(opencode_adapter(), path)];
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let scope = SpendScope::from_roots(Some(Path::new("/project")), &[]);
+    let result = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        Some(&scope),
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs,
+            spec: &spec,
+        },
+        Some(&Default::default()),
+    );
+    let today = result.chart.today;
+    for (index, (start, span)) in starts.into_iter().zip([1, 7, 30, 364]).enumerate() {
+        let expected = seconds.iter().filter(|ts| **ts >= start).count() as f64;
+        let cells = if span == 364 {
+            &result.chart.weeks
+        } else {
+            &result.chart.days
+        };
+        let dollars: f64 = cells
+            .range(today - span + 1..=today)
+            .flat_map(|(_, models)| models.values())
+            .sum();
+        assert_eq!(dollars, expected, "chart span {span}");
+        for tally in [
+            &result.spending.total,
+            &result.spending.by_provider["opencode"],
+            result.spending.by_login.values().next().unwrap(),
+            &result.workspace.tally,
+            &result.models["model-a"].tally,
+        ] {
+            let window = [&tally.day, &tally.week, &tally.month, &tally.year][index];
+            assert_eq!(window.usd, dollars, "window span {span}");
+        }
+        for tally in [
+            &result.spending.total,
+            &result.spending.by_provider["opencode"],
+            result.spending.by_login.values().next().unwrap(),
+            &result.workspace.tally,
+        ] {
+            let window = [&tally.day, &tally.week, &tally.month, &tally.year][index];
+            assert_eq!(window.sessions, expected as u32, "sessions span {span}");
+        }
+    }
+}
+
+#[test]
+fn hourly_chart_cells_use_wall_clock_hours_and_only_recent_raw_rows() {
+    let second = |s: &str| s.parse::<Timestamp>().unwrap().as_second() as u64;
+    let mut publication_hours = Vec::new();
+    for (now, timestamps, hours) in [
+        (
+            "2026-03-08T12:00:00-04:00",
+            ["2026-03-08T01:30:00-05:00", "2026-03-08T03:30:00-04:00"],
+            [1, 3],
+        ),
+        (
+            "2026-11-01T12:00:00-05:00",
+            ["2026-11-01T01:30:00-04:00", "2026-11-01T01:30:00-05:00"],
+            [1, 1],
+        ),
+    ] {
+        let spec = HeadlineSpec {
+            timezone: Some("America/New_York".into()),
+            ..Default::default()
+        };
+        let now_secs = second(now);
+        let today = local_day_index(now_secs, spec.timezone.as_deref()).unwrap();
+        let noon = Timestamp::from_second(now_secs as i64)
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::get("America/New_York").unwrap());
+        let older = |days| {
+            noon.checked_sub(jiff::Span::new().days(days))
+                .unwrap()
+                .timestamp()
+                .as_second() as u64
+        };
+        let path = PathBuf::from("/x/hours.db");
+        let mut entries: Vec<_> = timestamps
+            .into_iter()
+            .enumerate()
+            .map(|(index, ts)| CachedEntry {
+                model: Some("model-a".into()),
+                ..cached_entry(second(ts), 2.0, &format!("hour-{index}"))
+            })
+            .collect();
+        entries.extend([
+            cached_entry(older(7), 3.0, "oldest"),
+            cached_entry(older(8), 5.0, "too-old"),
+            CachedEntry {
+                rolled: true,
+                ..cached_entry(older(1), 7.0, "rolled")
+            },
+            cached_entry(now_secs, 0.0, "unpriced"),
+            cached_entry(older(-1), 11.0, "future"),
+        ]);
+        let cache = SpendingDiskCache {
+            files: HashMap::from([cached_file(&path, entries)]),
+            ..Default::default()
+        };
+        let files = vec![spending_file(opencode_adapter(), path)];
+        let counted = dedup_cached_entries(&files, &cache).into_counted();
+        let result = aggregate_counted_rollups(
+            &files,
+            &cache,
+            &counted,
+            None,
+            HeadlineContext {
+                user_inputs: &[],
+                now_secs,
+                spec: &spec,
+            },
+            Some(&Default::default()),
+        );
+        let mut expected = BTreeMap::new();
+        for hour in hours {
+            *expected.entry(today * 24 + hour).or_insert(0.0) += 2.0;
+        }
+        let mut expected: BTreeMap<_, _> = expected
+            .into_iter()
+            .map(|(hour, usd)| (hour, BTreeMap::from([("model-a".into(), usd)])))
+            .collect();
+        expected.insert(
+            (today - 7) * 24 + 12,
+            BTreeMap::from([(String::new(), 3.0)]),
+        );
+        assert_eq!(result.chart.hours, expected, "hour cells at {now}");
+        assert_eq!(
+            result
+                .chart
+                .hours
+                .range(today * 24..(today + 1) * 24)
+                .flat_map(|(_, cells)| cells.values())
+                .sum::<f64>(),
+            result.chart.days[&today].values().sum::<f64>()
+        );
+        let published = ProviderSpendingCache::from_walk(&result, now_secs * 1000);
+        let round_trip: ProviderSpendingCache =
+            serde_json::from_slice(&serde_json::to_vec(&published).unwrap()).unwrap();
+        assert_eq!(round_trip.chart.hours, result.chart.hours);
+        publication_hours.push((result.chart.hour, round_trip.chart.hour));
+    }
+    assert_eq!(publication_hours, [(12, 12); 2]);
 }
 
 #[test]
@@ -303,6 +530,7 @@ fn chart_cells_conserve_local_days_and_seven_day_blocks_with_bounded_history() {
         scoped.chart,
         ChartSpend {
             today,
+            hour: 1,
             ..Default::default()
         }
     );
@@ -423,15 +651,19 @@ fn effort_uses_spend_windows_and_shared_placement_without_requiring_spend() {
         ..Default::default()
     };
     let day = local_day_start_secs(NOW_SECS, spec.timezone.as_deref()).unwrap();
+    let week = day - 6 * 86_400;
+    let month = day - 29 * 86_400;
+    let year = day - 363 * 86_400;
     let seconds = [
         NOW_SECS + 1,
         day,
         day - 1,
-        NOW_SECS - 7 * 86_400 + 1,
-        NOW_SECS - 7 * 86_400,
-        NOW_SECS - 30 * 86_400 + 1,
-        NOW_SECS - 30 * 86_400,
-        NOW_SECS - 365 * 86_400 + 1,
+        week,
+        week - 1,
+        month,
+        month - 1,
+        year,
+        year - 1,
         NOW_SECS - 365 * 86_400,
     ];
     let mut records: Vec<_> = seconds
@@ -506,7 +738,8 @@ fn effort_uses_spend_windows_and_shared_placement_without_requiring_spend() {
     let result = aggregate_walk_publish(&files, &cache, &[], NOW_SECS, None, &spec, &history);
     let roles = serde_json::to_value(&result.roles).unwrap();
     assert_eq!(roles["effort_since_secs"], NOW_SECS - 365 * 86_400);
-    for window in ["day", "week", "month", "year"] {
+    for (window, expected) in [("day", 2), ("week", 4), ("month", 6), ("year", 8)] {
+        assert_eq!(roles["agents"]["solo.dotted"][window]["tokens"], expected);
         assert_eq!(
             roles["agents"]["solo.dotted"]["effort"][window]["active_ms"],
             roles["agents"]["solo.dotted"][window]["tokens"],

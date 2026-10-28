@@ -228,7 +228,7 @@ Provider diagnostics describe the top-level panel per login. Pi credential alter
 
 | `aggregate` | Names | Value |
 | --- | --- | --- |
-| `provider_spend` | The login's trailing-year spend | Integer cents |
+| `provider_spend` | The login's 364-local-day spend | Integer cents |
 | `provider_spend_period` | `period`: `headline`, `week`, or `month` | Integer cents |
 | `provider_mana` | One window's used % | The percent |
 | `provider_mana_field` | The same window, with `field`: `resets_at` or `lifted` | The stored reset timestamp, or `true`/`false` |
@@ -238,10 +238,10 @@ An unset field is an absent value and reads `<none>`. Two panel values are left 
 
 Two edge detectors run beside the windows, without a window of their own:
 
-- `aggregate_reset` fires when a spend tally drops from a non-zero figure straight to zero, and carries the prior figure and the pulled value. It covers only the trailing-year tallies (cockpit, workspace, and each provider's `provider_spend`), whose figure never legitimately drops to zero in place. A provider mana window rolling to zero is normal, and the shorter spend periods are not checked. A transient zero that returns inside the window also records `aggregate_oscillation`.
+- `aggregate_reset` fires when a spend tally drops from a non-zero figure straight to zero, and carries the prior figure and the pulled value. It covers only the 364-local-day tallies (cockpit, workspace, and each provider's `provider_spend`), where a drop straight to zero can indicate an incomplete read. A provider mana window rolling to zero is normal, and the shorter spend periods are not checked. A transient zero that returns inside the window also records `aggregate_oscillation`.
 - `aggregate_backstep` fires when a provider's `version` parses lower than the one the frame before it carried, and records the key, `from`, `to`, and the pulled figure. It catches a version alternating more slowly than the oscillation window, one record per downward step under the sink's identity limit. A version that does not parse as `major.minor[.patch]` is never judged.
 
-Nothing else is checked for a backward step, because every other panel figure can legitimately fall. Trailing spend windows, the year included, fall as entries age out: entries older than eight days are merged per transcript, day, model, and thread, and each merged entry leaves the year whole when it passes 365 days, so a spend drop short of zero can be ageing on an account with year-old history. A window's used % is lowered by an authoritative reading, its reset time jitters between readings, and credits and the day or month budget reset by design.
+Nothing else is checked for a backward step, because every other panel figure can legitimately fall. Local-day spend windows, the year included, fall at history-zone midnight as their oldest day ages out: entries older than eight days are merged per transcript, day, model, and thread, and each merged entry leaves the year whole when its local date precedes the last 364 local days, so a spend drop short of zero can be ageing on an account with year-old history. A window's used % is lowered by an authoritative reading, its reset time jitters between readings, and credits and the day or month budget reset by design.
 
 ### Per-frame checks
 

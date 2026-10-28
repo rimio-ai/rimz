@@ -624,6 +624,13 @@ fn dashboard_typical_counts_missing_days_and_titles_follow_the_active_tab() {
 #[test]
 fn dashboard_assist_suffixes_and_retention_header_use_the_window_start() {
     let now = Timestamp::from_second(TODAY * DAY_SECS + 15 * 3_600).unwrap();
+    for (window, days) in Window::TABS.into_iter().zip([0, 6, 29, 363]) {
+        assert_eq!(
+            window.assist_since(now, "UTC").unwrap().as_second(),
+            (TODAY - days) * DAY_SECS
+        );
+    }
+    assert_eq!(Window::Year.span_days(), 364);
     let records = [now - Duration::from_secs(8 * 86_400), now].map(|at| AssistRecord {
         at,
         assist: Assist::CacheKeepalive {
