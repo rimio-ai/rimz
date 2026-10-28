@@ -470,6 +470,10 @@ type RestoreFn<'a> = Box<dyn FnOnce() -> Result<LaneRestoreConfig, LaneResumeErr
 /// worktree is on disk, every session is redeemable, every member is closed,
 /// nothing is discoverable natively, and the restore config is empty. Each
 /// test names only what it varies.
+///
+/// Planned panes compile their exec argv, which writes inline prompt sources
+/// under the runtime dir: give role and team prompts as `PromptSource::File`
+/// in a tempdir.
 struct LaneCase<'a> {
     selector: LaneResumeSelector,
     fresh: bool,
