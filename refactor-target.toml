@@ -84,6 +84,7 @@ path = "crates/rimz/src/address.rs"
 # Reader-relative paste addresses share the resolver's verified selector chain (+1).
 # launch_rows narrows Prompt sender context reads to launch members (+1).
 surface-budget = 47
+allowed-dependencies = ["agents", "ids", "store"]
 
 [[verdict]]
 kind = "item"
