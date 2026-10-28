@@ -302,7 +302,9 @@ fn wait_attention_handles_round_trip_beside_teamless_role_rivals() {
             })
             .unwrap();
     }
+    // `by_ref` keeps the pipe open until the child exits: a dropped reader fails its next write.
     let diagnostic = lines
+        .by_ref()
         .map(|line| line.unwrap())
         .find(|line| line.contains(" waiting on you"))
         .expect("needs-you diagnostic");
