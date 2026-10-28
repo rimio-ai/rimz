@@ -1350,7 +1350,24 @@ path = "crates/rimz/src/harness"
 # WorkflowLaunchRecord, WorkflowLedger, load_workflows, Launch, and launched share typed launch memory with loop inspection (+5).
 # LoadedTask::key_for_root reuses the loop list's resolved root across key and row reads (+1).
 # hibernation_entry shares the open-agent join with the transcript watcher (+1).
-surface-budget = 1018
+# LeaderTurn and leader_turn share locked workflow eligibility with the CLI attempt host (+2).
+# Observation limits leader-turn reads to workflow decisions that consume them (+1).
+surface-budget = 1021
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Observation"
+reason = "The engine explicitly requests locked leader-turn eligibility only for until decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::LeaderTurn"
+reason = "The CLI host supplies a fresh leader turn identity and rest decision to the workflow engine."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::leader_turn"
+reason = "Workflow eligibility reuses harness debt and rest predicates without exposing them to the CLI."
 
 [[verdict]]
 kind = "item"

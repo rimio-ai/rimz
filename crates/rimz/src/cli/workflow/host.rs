@@ -234,7 +234,11 @@ impl workflow::AttemptHost for Host<'_> {
         Ok(Err(workflow::LaunchFailure { outcome, reason }))
     }
 
-    fn observe(&self, attempt: &AttemptRun) -> Result<workflow::Observed, WorkflowErr> {
+    fn observe(
+        &self,
+        attempt: &AttemptRun,
+        observation: workflow::Observation,
+    ) -> Result<workflow::Observed, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
@@ -245,6 +249,7 @@ impl workflow::AttemptHost for Host<'_> {
                 limited: None,
                 children: Children::default(),
                 cost_usd: run.cost_usd,
+                turn: None,
             };
             let Some(root) = agent(&snapshot, &run) else {
                 return Ok(observed);
@@ -295,6 +300,12 @@ impl workflow::AttemptHost for Host<'_> {
                             }),
                     });
                 }
+            }
+            if matches!(observation, workflow::Observation::LeaderTurn)
+                && let Some(workflow) = &run.workflow
+            {
+                observed.turn =
+                    workflow::leader_turn(&ctx.store, root, &workflow.run, &run.run_id)?;
             }
             Ok(observed)
         })()

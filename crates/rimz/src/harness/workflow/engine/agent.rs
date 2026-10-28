@@ -1,4 +1,4 @@
-use super::super::{AttemptHost, LaunchFailure, Observed, StepLaunch};
+use super::super::{AttemptHost, LaunchFailure, Observation, Observed, StepLaunch};
 use super::*;
 use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
 use crate::store::run::RunStatus;
@@ -54,6 +54,7 @@ pub(super) fn empty_observation() -> Observed {
         limited: None,
         children: Children::default(),
         cost_usd: None,
+        turn: None,
     }
 }
 
@@ -131,7 +132,7 @@ pub(super) fn prepare_end(
             .is_none_or(|previous| previous.seq != attempt.seq)
         {
             let observed = match &attempt.run {
-                Some(run) => host.observe(run)?,
+                Some(run) => host.observe(run, Observation::Attempt)?,
                 None => empty_observation(),
             };
             t.stage_agent_end(ending.clone(), &observed);
@@ -141,7 +142,14 @@ pub(super) fn prepare_end(
         return Ok(Decision::End(Box::new(t.record.clone())));
     }
     let mut observed = match &attempt.run {
-        Some(run) => host.observe(run)?,
+        Some(run) => host.observe(
+            run,
+            if attempt.lifecycle == workflow::StepLifecycle::Until {
+                Observation::LeaderTurn
+            } else {
+                Observation::Attempt
+            },
+        )?,
         None => empty_observation(),
     };
     t.now = Timestamp::now();
@@ -330,7 +338,10 @@ pub(super) fn finish(
         }
     }
     let (children, cost) = match &run {
-        Some(run) => (host.stop(run)?, host.observe(run)?.cost_usd),
+        Some(run) => (
+            host.stop(run)?,
+            host.observe(run, Observation::Attempt)?.cost_usd,
+        ),
         None => (Children::default(), None),
     };
     let head_end = super::super::head(&record.scope.path);
@@ -394,7 +405,11 @@ mod tests {
         let mut expected = Vec::new();
         for (status, terminal) in statuses {
             for (ask, limit, held, routed) in signals {
-                for lifecycle in [StepLifecycle::Turn, StepLifecycle::Stay] {
+                for lifecycle in [
+                    StepLifecycle::Turn,
+                    StepLifecycle::Stay,
+                    StepLifecycle::Until,
+                ] {
                     for on_asked in [false, true] {
                         let observed = Observed {
                             status,
@@ -409,6 +424,7 @@ mod tests {
                             limited: limit.then_some(Limited { reset_at: None }),
                             children: Children::default(),
                             cost_usd: None,
+                            turn: None,
                         };
                         let case = (status, ask, limit, lifecycle, on_asked);
                         actual.push((case, observed_outcome(&observed, lifecycle, on_asked)));

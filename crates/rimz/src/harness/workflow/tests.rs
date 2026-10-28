@@ -17,8 +17,10 @@ pub(super) struct FakeHost {
     evictions: Cell<usize>,
     occupancies: Cell<usize>,
     observations: Cell<usize>,
+    turn_observations: Cell<usize>,
     on_stop: RefCell<Option<Box<dyn Fn()>>>,
     on_launch: RefCell<Option<Box<dyn Fn()>>>,
+    on_observe: RefCell<Option<Box<dyn Fn()>>>,
     pub(super) on_occupancy: RefCell<Option<Box<dyn Fn()>>>,
 }
 
@@ -33,6 +35,7 @@ impl FakeHost {
                 limited: None,
                 children: Children::default(),
                 cost_usd: Some(0.25),
+                turn: None,
             })),
             failure: RefCell::new(None),
             evict_error: Cell::new(false),
@@ -41,8 +44,10 @@ impl FakeHost {
             evictions: Cell::new(0),
             occupancies: Cell::new(0),
             observations: Cell::new(0),
+            turn_observations: Cell::new(0),
             on_stop: RefCell::new(None),
             on_launch: RefCell::new(None),
+            on_observe: RefCell::new(None),
             on_occupancy: RefCell::new(None),
         }
     }
@@ -94,9 +99,17 @@ impl AttemptHost for FakeHost {
         })
     }
 
-    fn observe(&self, _: &AttemptRun) -> Result<Observed, WorkflowErr> {
+    fn observe(&self, _: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr> {
         self.observations.set(self.observations.get() + 1);
-        Ok(self.observed.borrow().clone())
+        if let Some(check) = &*self.on_observe.borrow() {
+            check();
+        }
+        let mut observed = self.observed.borrow().clone();
+        match observation {
+            Observation::Attempt => observed.turn = None,
+            Observation::LeaderTurn => self.turn_observations.set(self.turn_observations.get() + 1),
+        }
+        Ok(observed)
     }
 
     fn stop(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {
@@ -111,6 +124,7 @@ impl AttemptHost for FakeHost {
 mod attempts;
 mod commands;
 mod conditions;
+mod turns;
 
 #[test]
 fn advance_arguments_address_a_run_or_a_room_signal_without_shell_parsing() {

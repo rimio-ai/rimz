@@ -4,7 +4,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde_json::json;
 
-use super::{AttemptHost, Occupancy, ScopeRoots};
+use super::{AttemptHost, Observation, Occupancy, ScopeRoots};
 use super::{WorkflowSpec, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
@@ -749,7 +749,7 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
             return Ok(true);
         }
         let observed = match &attempt.run {
-            Some(run) => host.observe(run)?,
+            Some(run) => host.observe(run, Observation::Attempt)?,
             None => agent::empty_observation(),
         };
         t.stage_agent_end(
