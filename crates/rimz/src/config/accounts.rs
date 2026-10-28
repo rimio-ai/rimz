@@ -228,6 +228,15 @@ impl std::str::FromStr for AccountHistory {
 }
 
 impl AccountsConfig {
+    /// Borrow core account declarations, with the full lenient load's defaults and file guard.
+    pub(crate) fn with_lenient<T>(read: impl FnOnce(&Self) -> T) -> T {
+        Self::with_lenient_from(&super::MachineConfig::config_path(), read)
+    }
+
+    fn with_lenient_from<T>(path: &std::path::Path, read: impl FnOnce(&Self) -> T) -> T {
+        read(&super::read_core_lenient(path).accounts)
+    }
+
     /// The valid display label of a declared named account, never an identity.
     pub fn label(&self, key: &LoginKey) -> Option<&str> {
         if key.name.is_default() {
@@ -462,6 +471,30 @@ impl Visitor<'_> for UsageLimitVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrow_accounts_match_full_lenient_config() {
+        for core in [
+            Some("[accounts.codex.work]\nhome = '/srv/work'\n"),
+            Some("[harness]\nsmart_compact = 'off'\n"),
+            Some("[accounts\n"),
+            None,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let core_path = dir.path().join("config.toml");
+            if let Some(core) = core {
+                std::fs::write(&core_path, core).unwrap();
+            }
+            let full = crate::config::MachineConfig::load_lenient_from(
+                &core_path,
+                &dir.path().join("agents"),
+                &BTreeMap::new(),
+            );
+            AccountsConfig::with_lenient_from(&core_path, |accounts| {
+                assert_eq!(accounts, &full.accounts, "core contents: {core:?}");
+            });
+        }
+    }
 
     #[test]
     fn account_month_caps_and_standalone_overrides_round_trip() {

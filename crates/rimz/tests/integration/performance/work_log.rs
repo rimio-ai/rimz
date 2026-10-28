@@ -157,7 +157,7 @@ fn cold_frame(payload: Value, assemblies: u64, rows_materialized: u64, config_lo
     // Cached reads assemble once before the lifecycle append and once after its commit.
     assert_eq!(row["snapshot_assemblies"], assemblies, "{row}");
     assert_eq!(row["rollup_rows_materialized"], rows_materialized, "{row}");
-    // Prompt and Read use narrow settings; Stop's dispatch still loads the whole config.
+    // Settings reads use the memoized core-only and loop-file readers.
     assert_eq!(row["machine_config_loads"], config_loads, "{row}");
     // One cold rollup parse per apply process; later reads share the held fold.
     assert_eq!(
@@ -203,8 +203,55 @@ fn cold_stop_reports_process_work() {
         // Two three-row runtime projections and two own-row reads; Audit borrows.
         // This cold Stop has no queued dispatch or context-row join.
         8,
-        1,
+        // Core defaults/accounts/attention and the lifecycle task catalog read only their files.
+        0,
     );
+}
+
+#[test]
+fn cold_team_stop_with_pending_message_avoids_machine_config_loads() {
+    use rimz::store::message::{DeliveryGate, MessageRecord};
+
+    let env = fixture();
+    let store = env.store();
+    let mut observation =
+        AgentLifecycleObservation::new(Some("work-0".into()), LifecycleSignal::Registered);
+    observation.launch.team = Some("forge".to_owned());
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "work-0",
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let message = MessageRecord::new_for_card(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        "work-0".into(),
+        None,
+        "continue the task".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    store
+        .queue_message(&message, &workspace.session_name)
+        .unwrap();
+    assert!(store.audit_rows().unwrap().iter().any(|agent| {
+        agent.agent_id.as_str() == "work-0" && agent.team.as_deref() == Some("forge")
+    }));
+    let log = env.home_root.join("team-work.jsonl");
+    let pid = apply(
+        &env,
+        0,
+        json!({"hook_event_name": "Stop", "last_assistant_message": "done"}),
+        Some(&log),
+    );
+    let rows = records(&log);
+    let row = rows.iter().find(|row| row["pid"] == pid).unwrap();
+    assert_eq!(row["machine_config_loads"], 0, "{row}");
 }
 
 #[test]

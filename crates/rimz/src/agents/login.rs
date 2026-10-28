@@ -848,8 +848,9 @@ pub fn session_login_env(
     login: Option<&LoginName>,
 ) -> Result<BTreeMap<String, String>, RoomLoginErr> {
     let ambient = ambient_env();
-    let accounts = &crate::config::MachineConfig::load_lenient().accounts;
-    Ok(session_login(kind, login, accounts)?.env(&ambient))
+    crate::config::AccountsConfig::with_lenient(|accounts| {
+        Ok(session_login(kind, login, accounts)?.env(&ambient))
+    })
 }
 
 /// The machine's read-side catalog for a caller with no config in scope.

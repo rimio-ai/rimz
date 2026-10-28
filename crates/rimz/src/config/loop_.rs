@@ -41,6 +41,21 @@ pub struct LoopConfig {
 }
 
 impl LoopConfig {
+    /// Read only loop.toml, with the full lenient load's defaults, TTL and quiet-stamp guard.
+    pub(crate) fn load_lenient() -> Self {
+        Self::load_lenient_from(&super::MachineConfig::loop_path())
+    }
+
+    fn load_lenient_from(path: &Path) -> Self {
+        super::read_file_lenient(
+            path,
+            super::LOOP_MEMO.get_or_init(|| std::sync::Mutex::new(None)),
+            super::parse_loop_text_collecting,
+        )
+        .as_ref()
+        .clone()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.default_timeout.is_none() && self.throttle.is_empty() && self.tasks.0.is_empty()
     }

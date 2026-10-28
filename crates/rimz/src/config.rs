@@ -1,8 +1,8 @@
 //! Per-machine settings, loaded from `~/.rimz/config.toml`, `theme.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
 //!
 //! Full machine-config loads populate profiles and teams from Markdown definitions under the agents
-//! home; config.toml owns machine launch preferences. Core-only attention and Sentry reads skip
-//! definitions, theme.toml, and loop.toml.
+//! home; config.toml owns machine launch preferences. Core-only attention, account, dispatch-default
+//! and Sentry reads skip definitions, theme.toml, and loop.toml.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in
@@ -267,11 +267,20 @@ const STABLE_READ_ATTEMPTS: u8 = 3;
 const STABLE_READ_QUIET: Duration = Duration::from_millis(50);
 
 static LOAD_MEMO: OnceLock<Mutex<Option<LoadMemo>>> = OnceLock::new();
+// Each narrow memo retains only the most recently requested path.
+static CORE_MEMO: OnceLock<Mutex<Option<FileMemo<CoreConfig>>>> = OnceLock::new();
+static LOOP_MEMO: OnceLock<Mutex<Option<FileMemo<LoopConfig>>>> = OnceLock::new();
 
 #[derive(Debug)]
 struct LoadMemo {
     stamp: ConfigStamp,
     config: Arc<MachineConfig>,
+    last_verified: Instant,
+}
+
+struct FileMemo<T> {
+    stamp: StampedPath,
+    value: Arc<T>,
     last_verified: Instant,
 }
 
@@ -874,6 +883,11 @@ impl MachineConfig {
         resolve_time_zone(self.timezone.as_deref())
     }
 
+    /// Read the time zone through the memoized core-only lenient reader.
+    pub(crate) fn load_time_zone_lenient() -> jiff::tz::TimeZone {
+        resolve_time_zone(read_core_lenient(&Self::config_path()).timezone.as_deref())
+    }
+
     /// Failures for one unloaded definition name, including each source path.
     pub fn definition_failure_for(&self, name: &str) -> Option<String> {
         let paths = self.notices.failed_definitions.get(name)?;
@@ -1311,6 +1325,69 @@ fn recover_parsed<T: Default>(
     notices: &mut ConfigNotices,
 ) -> Parsed<T> {
     recover(load_optional(path, parse), notices).unwrap_or_default()
+}
+
+fn read_file_lenient<T: Default>(
+    path: &Path,
+    memo: &Mutex<Option<FileMemo<T>>>,
+    parse: fn(&Path, &str) -> Result<Parsed<T>>,
+) -> Arc<T> {
+    let now = Instant::now();
+    if let Ok(memo) = memo.lock()
+        && let Some(cached) = memo.as_ref()
+        && cached.stamp.path == path
+        && now.duration_since(cached.last_verified) <= CONFIG_STAMP_TTL
+    {
+        return cached.value.clone();
+    }
+
+    let stamp = StampedPath::of(path);
+    if let Ok(mut memo) = memo.lock()
+        && let Some(cached) = memo.as_mut()
+        && cached.stamp == stamp
+    {
+        cached.last_verified = now;
+        return cached.value.clone();
+    }
+
+    let read = || Arc::new(recover_parsed(path, parse, &mut ConfigNotices::default()).value);
+    if let Some((stamp, value)) = read_stable(
+        stamp,
+        || StampedPath::of(path),
+        |stamp, quiet| {
+            let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+                return true;
+            };
+            stamped_path_modified_within(stamp, now, quiet)
+        },
+        read,
+    ) {
+        if let Ok(mut memo) = memo.lock() {
+            *memo = Some(FileMemo {
+                stamp,
+                value: value.clone(),
+                last_verified: now,
+            });
+        }
+        return value;
+    }
+
+    if let Ok(memo) = memo.lock()
+        && let Some(cached) = memo.as_ref()
+        && cached.stamp.path == path
+    {
+        return cached.value.clone();
+    }
+    read()
+}
+
+/// The core file alone, shared under the full lenient load's TTL and quiet-stamp guard.
+fn read_core_lenient(path: &Path) -> Arc<CoreConfig> {
+    read_file_lenient(
+        path,
+        CORE_MEMO.get_or_init(|| Mutex::new(None)),
+        parse_core_text_collecting,
+    )
 }
 
 fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {

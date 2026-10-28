@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn narrow_loop_matches_full_lenient_config() {
+    for contents in [
+        Some(
+            "default-timeout = '5m'\n[throttle]\npace = '1s'\n[tasks.nightly]\ncheck = 'cargo test'\nevery = '1h'\n",
+        ),
+        Some("[tasks.nightly\n"),
+        Some("[tasks.nightly]\ncheck = 'cargo test'\nbudget = 'bad'\n"),
+        None,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let core_path = dir.path().join("config.toml");
+        let loop_path = dir.path().join("loop.toml");
+        if let Some(contents) = contents {
+            std::fs::write(&loop_path, contents).unwrap();
+        }
+        let full = crate::config::MachineConfig::load_lenient_from(
+            &core_path,
+            &dir.path().join("agents"),
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            LoopConfig::load_lenient_from(&loop_path),
+            full.r#loop,
+            "loop contents: {contents:?}"
+        );
+    }
+}
+
+#[test]
 fn shell_watch_previews_preserve_trailing_redirects() {
     let short = "cargo test > /tmp/gate.log 2>&1";
     assert_eq!(WatchSpec::Command(short.into()).subject(), short);
