@@ -2646,7 +2646,7 @@ fn wrap_choices<'a>(label: &str, names: impl IntoIterator<Item = &'a str>) -> St
     wrapped
 }
 
-fn valid_team_roles(team: &Team) -> String {
+pub(super) fn valid_team_roles(team: &Team) -> String {
     let values = team
         .roles
         .iter()
