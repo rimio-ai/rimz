@@ -8,6 +8,7 @@ struct ResumeFixture {
     root_command: RefCell<String>,
     hosted_command: RefCell<String>,
     hosted_absent: Cell<bool>,
+    live_start: Cell<Option<jiff::Timestamp>>,
     answer: RefCell<ResumeProbe>,
     calls: Cell<usize>,
     reads: RefCell<Vec<(&'static str, u32)>>,
@@ -28,6 +29,7 @@ impl ResumeFixture {
                 "rimz agents exec claude --request-file /runtime/exec.json".into(),
             ),
             hosted_absent: Cell::new(false),
+            live_start: Cell::new(None),
             answer: RefCell::new(ResumeProbe::Settled),
             calls: Cell::new(0),
             reads: RefCell::new(Vec::new()),
@@ -109,10 +111,10 @@ impl ResumeFixture {
             hosted_process: &hosted,
             cwd: &|_| None,
             resumed_session: &resumed,
-            root_start: &|_, pid| start(pid),
+            root_start: &|_, pid| self.live_start.get().or_else(|| start(pid)),
             cwd_starts: &|_, _| Vec::new(),
             hosted_absent: &|_, _| self.hosted_absent.get(),
-            process_start: &|_| None,
+            process_start: &|_| self.live_start.get(),
             elevated_agent: &|_| None,
             backfill_pids: &|_, _| {},
         };
@@ -215,6 +217,33 @@ fn resumed_session_survives_an_indeterminate_miss_only_until_the_hosted_carry_ex
         fixture.calls.get(),
         1,
         "an expired idle shell needs no resume walk"
+    );
+}
+
+#[test]
+fn resumed_session_is_withheld_when_the_pid_reuse_check_drops_the_binding() {
+    let fixture = ResumeFixture::new();
+    let mut memo = SettledResumes::new();
+    *fixture.answer.borrow_mut() = ResumeProbe::Resumed("session-x".into());
+    let mut prior = fixture.candidate();
+    fixture.repair(&mut prior, &mut memo);
+    assert_eq!(
+        first(&prior).current.resumed_session_id.as_deref(),
+        Some("session-x")
+    );
+
+    // The hosted scan still matches the prior identity; the live start does not.
+    fixture
+        .live_start
+        .set(Some(jiff::Timestamp::from_second(20).unwrap()));
+    let mut reused = fixture.candidate();
+    fixture.repair_with_prior(&mut reused, Some(&prior), &mut memo);
+    assert_eq!(first(&reused).current.pid, None);
+    assert_eq!(first(&reused).current.resumed_session_id, None);
+    assert_eq!(
+        fixture.calls.get(),
+        1,
+        "a dropped binding has no root to walk"
     );
 }
 
