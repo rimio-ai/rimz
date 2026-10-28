@@ -128,6 +128,43 @@ fn open_forge(env: &Env, scope: &Path, pr_head: &str, ci_sha: &str) {
 }
 
 #[test]
+fn condition_mergeability_waits_for_a_current_head_answer() {
+    let spec = format!(
+        "{HEADER}[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ conflict='@done', pending='@wait' }}\n[[checks.pr.cases]]\nwhen=['pr.mergeable=conflicting']\noutcome='conflict'\n"
+    );
+    let (env, _) = fixture(&spec, "");
+    let id = start(&env);
+    let first = until(&env, &id, |value| {
+        value["record"]["wait"]["outcome"] == "unknown" && value["record"]["attempt"].is_null()
+    });
+    let scope = Path::new(first["record"]["scope"]["path"].as_str().unwrap());
+    let conflict = |settled_head| {
+        open_forge(&env, scope, "head-b", "head-b");
+        let path = env.runtime_paths().lane_path("pr-state.json");
+        let mut cache: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        cache["states"][scope.to_string_lossy().as_ref()]["open"]["mergeability"] =
+            json!({"state": "conflicting", "head": settled_head});
+        fs::write(path, serde_json::to_vec(&cache).unwrap()).unwrap();
+    };
+    conflict("head-a");
+    success(command(&env, &["workflow", "advance", &id]));
+    let stale = show(&env, &id);
+    conflict("head-b");
+    success(command(&env, &["workflow", "advance", &id]));
+    let current = show(&env, &id);
+    assert_eq!(
+        (&stale["record"]["input"], &current["record"]["input"]),
+        (
+            &json!({"outcome": "unknown", "readings": {"pr.mergeable": null},
+                "reason": "pr.mergeable (not reported for this checkout's open PR)"}),
+            &json!({"outcome": "conflict", "case": 0,
+                "readings": {"pr.mergeable": "conflicting"}}),
+        )
+    );
+    settled(&env, &id, "done");
+}
+
+#[test]
 fn condition_ci_waits_for_local_commits_and_the_pr_head_verdict() {
     use crate::common::git::{commit_file, git, git_stdout, init_repo};
 

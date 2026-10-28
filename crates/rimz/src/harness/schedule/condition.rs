@@ -52,5 +52,13 @@ pub fn unread_reason(reason: Option<UnreadReason>, now: Timestamp) -> String {
             || "no CI for this checkout".into(),
             |branch| format!("no CI for branch {branch}"),
         ),
+        Some(UnreadReason::NoOpenPr { branch }) => branch.map_or_else(
+            || "no open PR for this checkout".into(),
+            |branch| format!("no open PR for branch {branch}"),
+        ),
+        Some(UnreadReason::PrFactsUnavailable { branch }) => branch.map_or_else(
+            || "not reported for this checkout's open PR".into(),
+            |branch| format!("not reported for branch {branch}'s open PR"),
+        ),
     }
 }

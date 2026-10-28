@@ -191,9 +191,11 @@ Cases are ordered. Each `when` array is ANDed, and its strings take the loop gra
 
 A sweep that repairs a queue removal must also re-arm the PR (enable auto-merge or add it to the queue); a push alone does not clear `pr.queue=dequeued`.
 
+A landing check can route conflicts and review state with `pr.mergeable` and `pr.review` instead of a script; the [condition keys](../reference/cli/loop.md#conditions) list their readings.
+
 Unread is not false: an unread case before the first true case answers `unknown`, even for `!pr=open`. The default `unknown → @wait` waits for evidence; for `until`, it keeps the session until another eligible leader turn end. Override `on.unknown` to route elsewhere. Do not write `pr=unknown` in a case: unread terms answer the `unknown` outcome instead. An ordinary check needs a successful forge probe at or after entry to that check (including after resume). An `until` session's check instead accepts a successful probe at or after the session's start, including a probe from an earlier turn. Until a probe meets that floor, `show` names the unread keys. Stage and usage-window readings have no freshness floor. Keep the room open for fresh forge data: an idle repository's next probe can take up to five minutes. Two consecutive ordinary forge checks each need a post-entry probe, so put related decisions in cases of one check. Closing the room leaves its last facts that pass the relevant floor in force. An `until` check samples the latest probe at each eligible leader turn end; changes after the last end are sampled at the next one.
 
-On an open GitHub PR, when the commits are known, bare `ci` also requires CI for the PR's head and the checkout's current HEAD to be on that PR. A local commit not yet on the PR, or a verdict for another PR head, makes `ci` unread. The check waits by default, and `show` says which commits differ. Someone else's push can count even when the checkout has not fetched it. Missing commit data skips only the comparison it prevents. Without a known PR head, the time floor alone applies, as it does for `pr`, `pr.queue`, branch selectors such as `ci[main]`, merged or closed PRs, Gitea, and PR-less checkouts. Forge propagation lag can still affect those readings. Loop conditions are unchanged.
+On an open GitHub PR, when the commits are known, bare `ci` also requires CI for the PR's head and the checkout's current HEAD to be on that PR. A local commit not yet on the PR, or a verdict for another PR head, makes `ci` unread. The check waits by default, and `show` says which commits differ. Someone else's push can count even when the checkout has not fetched it. Missing commit data skips only the comparison it prevents. Without a known PR head, the time floor alone applies, as it does for `pr`, `pr.queue`, `pr.mergeable`, `pr.review`, branch selectors such as `ci[main]`, merged or closed PRs, Gitea, and PR-less checkouts. Forge propagation lag can still affect those readings. Loop conditions have no commit fence.
 
 A case's optional `for` is a nonzero duration in `s`, `m`, `h`, or `d`. A held case must route its outcome away from `@wait`. While that case keeps winning, the run shows `holding red 1m/2m`; the next evaluation at or after two minutes follows `on.red`. A different answer closes the hold, and a later true starts a new one. Subscribed signals and the minute tick re-sample an ordinary waiting check; a kept `until` wait samples only at the next eligible leader turn end. Changes entirely between samples go unseen. `key` fixes the case's string or integer key; without it the answer inherits the run's key.
 
@@ -206,7 +208,7 @@ A condition derives these subscriptions from all its cases, including negated te
 | Term | Signal subscription |
 | --- | --- |
 | `ci` | `ci.*` for the run's checkout |
-| `pr`, `pr.queue` | `pr.*` for the run's checkout |
+| `pr`, `pr.queue`, `pr.mergeable`, `pr.review` | `pr.*` for the run's checkout |
 | `team.stage` | `team.stage` for the run's board |
 | Branch-selector terms such as `ci[main]`, and `window.*` | None; recheck time and the minute tick only |
 

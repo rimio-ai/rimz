@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::account::{RateLimitsCache, read_rate_limits_cache};
 use crate::agents::{ProviderCapacity, RateLimitWindow, RoomLoginSet, WindowSpan};
-use crate::forge::pr_state::{PrQueueFact, PrStateCache, UNSUPPORTED_REPO_KEY};
+use crate::forge::pr_state::{
+    PrQueueFact, PrReview, PrStateCache, SettledMergeability, UNSUPPORTED_REPO_KEY,
+};
 use crate::ids::{AgentKind, LoginKey, LoginName};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
@@ -185,6 +187,8 @@ pub enum UnreadReason {
     LookupFailing { last_tried: u64 },
     NoPr { branch: Option<String> },
     NoCi { branch: Option<String> },
+    NoOpenPr { branch: Option<String> },
+    PrFactsUnavailable { branch: Option<String> },
 }
 
 /// The condition keys read from the room's forge cache. This is the one place
@@ -194,25 +198,48 @@ enum ForgeKey<'a> {
     Ci(Option<&'a str>),
     Pr(Option<&'a str>),
     PrQueue(Option<&'a str>),
+    PrMergeable(Option<&'a str>),
+    PrReview(Option<&'a str>),
 }
 
 impl<'a> ForgeKey<'a> {
+    fn all(branch: Option<&'a str>) -> [Self; 5] {
+        [
+            Self::Ci(branch),
+            Self::Pr(branch),
+            Self::PrQueue(branch),
+            Self::PrMergeable(branch),
+            Self::PrReview(branch),
+        ]
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Ci(_) => "ci",
+            Self::Pr(_) => "pr",
+            Self::PrQueue(_) => "pr.queue",
+            Self::PrMergeable(_) => "pr.mergeable",
+            Self::PrReview(_) => "pr.review",
+        }
+    }
+
     fn parse(key: &'a str) -> Option<Self> {
         let (key, branch) = match key.split_once('[') {
             Some((key, branch)) => (key, Some(branch.strip_suffix(']')?)),
             None => (key, None),
         };
-        match key {
-            "ci" => Some(Self::Ci(branch)),
-            "pr" => Some(Self::Pr(branch)),
-            "pr.queue" => Some(Self::PrQueue(branch)),
-            _ => None,
-        }
+        Self::all(branch)
+            .into_iter()
+            .find(|candidate| candidate.name() == key)
     }
 
     fn branch(self) -> Option<&'a str> {
         match self {
-            Self::Ci(branch) | Self::Pr(branch) | Self::PrQueue(branch) => branch,
+            Self::Ci(branch)
+            | Self::Pr(branch)
+            | Self::PrQueue(branch)
+            | Self::PrMergeable(branch)
+            | Self::PrReview(branch) => branch,
         }
     }
 
@@ -221,6 +248,15 @@ impl<'a> ForgeKey<'a> {
             Self::Ci(_) => &["passed", "failed", "pending", "unknown"],
             Self::Pr(_) => &["open", "merged", "closed", "unknown"],
             Self::PrQueue(_) => &["queued", "dequeued", "none", "unknown"],
+            Self::PrMergeable(_) => &["mergeable", "conflicting", "unknown"],
+            Self::PrReview(_) => &[
+                "draft",
+                "changes_requested",
+                "required",
+                "approved",
+                "none",
+                "unknown",
+            ],
         }
     }
 
@@ -236,6 +272,9 @@ impl<'a> ForgeKey<'a> {
                 cache.branch_ci.get(scope.as_ref()).copied(),
             )
         };
+        let open = link
+            .filter(|link| link.state == WorktreePrState::Open)
+            .and_then(|link| link.open.as_ref());
         match self {
             Self::Ci(_) => link
                 .filter(|link| {
@@ -257,6 +296,28 @@ impl<'a> ForgeKey<'a> {
                 Some(PrQueueFact::Queued { .. }) => "queued",
                 Some(PrQueueFact::Dequeued { .. }) => "dequeued",
                 None => "none",
+            }),
+            Self::PrMergeable(_) => {
+                let facts = open?;
+                if facts.head.is_empty() {
+                    return None;
+                }
+                match facts.mergeability.as_ref()? {
+                    SettledMergeability::Mergeable(head) if head == &facts.head => {
+                        Some("mergeable")
+                    }
+                    SettledMergeability::Conflicting(head) if head == &facts.head => {
+                        Some("conflicting")
+                    }
+                    _ => None,
+                }
+            }
+            Self::PrReview(_) => open?.review.map(|review| match review {
+                PrReview::Draft => "draft",
+                PrReview::ChangesRequested => "changes_requested",
+                PrReview::Required => "required",
+                PrReview::Approved => "approved",
+                PrReview::None => "none",
             }),
         }
     }
@@ -299,10 +360,18 @@ impl CiSource {
             None => self.0.states.get(path.as_ref()),
         };
         let branch = key.branch().map(str::to_owned);
-        Some(if link.is_none() && !matches!(key, ForgeKey::Ci(None)) {
-            UnreadReason::NoPr { branch }
-        } else {
-            UnreadReason::NoCi { branch }
+        if link.is_none() && !matches!(key, ForgeKey::Ci(None)) {
+            return Some(UnreadReason::NoPr { branch });
+        }
+        Some(match key {
+            ForgeKey::Ci(_) | ForgeKey::Pr(_) => UnreadReason::NoCi { branch },
+            ForgeKey::PrQueue(_) | ForgeKey::PrMergeable(_) | ForgeKey::PrReview(_) => {
+                if link.is_some_and(|link| link.state != WorktreePrState::Open) {
+                    UnreadReason::NoOpenPr { branch }
+                } else {
+                    UnreadReason::PrFactsUnavailable { branch }
+                }
+            }
         })
     }
 
@@ -545,12 +614,16 @@ impl WhenTerm {
                 self.key.parse().expect("team.stage is a valid signal name"),
             ));
         }
-        match ForgeKey::parse(&self.key)? {
-            ForgeKey::Ci(None) => Some(SignalSelector::Family("ci".into())),
-            ForgeKey::Pr(None) | ForgeKey::PrQueue(None) => {
-                Some(SignalSelector::Family("pr".into()))
-            }
-            _ => None,
+        let key = ForgeKey::parse(&self.key)?;
+        if key.branch().is_some() {
+            return None;
+        }
+        match key {
+            ForgeKey::Ci(_) => Some(SignalSelector::Family("ci".into())),
+            ForgeKey::Pr(_)
+            | ForgeKey::PrQueue(_)
+            | ForgeKey::PrMergeable(_)
+            | ForgeKey::PrReview(_) => Some(SignalSelector::Family("pr".into())),
         }
     }
 
@@ -937,21 +1010,20 @@ impl Parser<'_> {
 
     fn key(&mut self) -> Result<String, WhenError> {
         let mut key = self.word()?;
+        let forge_keys = ForgeKey::all(None).map(ForgeKey::name);
         if key != "team.stage" && window_span(&key).is_none() && ForgeKey::parse(&key).is_none() {
-            let keys = [
-                "team.stage",
-                "ci",
-                "pr",
-                "pr.queue",
-                "window.5h.left",
-                "window.7d.left",
-            ];
-            let suggestion = crate::utils::suggest::nearest_name(&key, keys)
+            let keys = ["team.stage"]
+                .into_iter()
+                .chain(forge_keys)
+                .chain(["window.5h.left", "window.7d.left"])
+                .collect::<Vec<_>>();
+            let suggestion = crate::utils::suggest::nearest_name(&key, keys.iter().copied())
                 .map(|name| format!("did you mean {name}? "))
                 .unwrap_or_default();
             return Err(self.error(format!(
-                "{suggestion}unknown key; keys: {}; ci, pr, pr.queue also accept [branch]",
-                keys.join(", ")
+                "{suggestion}unknown key; keys: {}; {} also accept [branch]",
+                keys.join(", "),
+                forge_keys.join(", ")
             )));
         }
         if !self.take("[") {
@@ -964,7 +1036,8 @@ impl Parser<'_> {
                 "team.stage=unknown".to_owned()
             };
             return Err(self.error(format!(
-                "{key} cannot take a branch selector; only ci, pr, pr.queue take one; use {fix}"
+                "{key} cannot take a branch selector; only {} take one; use {fix}",
+                forge_keys.join(", ")
             )));
         }
         let fix = format!("{key}[branch]=unknown");
