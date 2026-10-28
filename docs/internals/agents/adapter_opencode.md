@@ -137,7 +137,7 @@ Plan approval is derived from the agent the plugin remembers. A root execution t
 | Plan | none: no agent is selected |
 | Yolo | `--auto` |
 
-Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `rimz doctor` refuse a binary whose readable version is below 2.0.0, with the fix "run `opencode upgrade --major`" (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). A version RimZ cannot read does not refuse. Model selection is verified on 2.1.4, without raising the floor for model-less launches. Fork and effort presets are unsupported; unsupported fast and auto-compact settings warn and launch without the setting.
+Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `rimz doctor` refuse a binary whose readable version is below 2.0.0, with the fix "run `opencode upgrade --major`" (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). A version RimZ cannot read does not refuse. Model selection is verified on 2.1.4, without raising the floor for model-less launches. Fork is unsupported; unsupported effort, fast, and auto-compact settings warn and launch without the setting.
 
 Other launch text limits:
 
@@ -303,7 +303,7 @@ The spend cache stamps one origin per database file, either an origin override f
 
 - Native answering, background parking, background shells, and remote control are unsupported.
 - Idle attention is partial: OpenCode has no idle notification, so RimZ reconstructs it from turn boundaries, native asks, and the stall window.
-- Plan mode at launch, effort presets, fork, and headless runs are unsupported. System-prompt replacement has the [agent-selection, managed-settings, and artifact-retention limits](#replacement-limits) above.
+- Plan mode at launch, fork, and headless runs are unsupported. Effort presets are skipped with a launch warning. System-prompt replacement has the [agent-selection, managed-settings, and artifact-retention limits](#replacement-limits) above.
 - RimZ does not read `OPENCODE_DB`, and it skips channel databases whose names contain a `.`, which OpenCode allows ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-storage-and-credentials)).
 - Workspace-scoped spend reads one origin for the whole shared database.
 - The reference does not record whether OpenCode runs the `context` hook for title or generate requests, so whether those requests carry the launch reminder is unverified.

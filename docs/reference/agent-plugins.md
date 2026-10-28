@@ -206,7 +206,7 @@ Without `[launch]`, RimZ has no command to start the agent. With it, `rimz agent
 | `resume` | Full argv to resume a session. Must contain `{session_id}`, which RimZ replaces with the session id. |
 | `compact-command` | Text RimZ sends into the pane to compact the agent (`rimz agents compact` and smart compaction). Must not be empty. RimZ sends it bare: `rimz agents compact` refuses an instruction for a plugin, and refuses the plugin entirely unless `emits` includes `turn_start`. |
 
-A launch that sets `model`, `effort`, or `system-prompt-file` fails before any pane opens when the matching flag is not declared. A launch that sets `auto-compact` or `fast` warns and runs without that setting for a plugin, since the manifest has no switch for it ([auto-compaction window](./agent-support.md#auto-compaction-window)). Invalid auto-compact counts still refuse.
+A launch that sets `model` or `system-prompt-file` fails before any pane opens when the matching flag is not declared. A missing `effort-flag` instead warns and launches without the requested effort. A launch that sets `auto-compact` or `fast` warns and runs without that setting for a plugin, since the manifest has no switch for it ([auto-compaction window](./agent-support.md#auto-compaction-window)). Invalid auto-compact counts still refuse.
 
 `[launch.permission-args]` holds the arguments each permission mode (`ask`, `auto`, `yolo`, `plan`) appends. Each defaults to no arguments, so the agent keeps its own default. Modes are described in [permission modes](./agent-support.md#permission-modes).
 

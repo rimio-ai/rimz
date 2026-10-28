@@ -147,6 +147,7 @@ impl std::fmt::Display for PermissionMode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkippedPresetField {
     AutoCompact(String),
+    Effort(String),
     /// The provider's fast alternative, when it has one.
     Fast {
         alternative: Option<&'static str>,
@@ -307,7 +308,7 @@ impl LaunchSpec {
         }
     }
 
-    /// Omit unsupported flag mappings, leaving model and effort rendering strict.
+    /// Omit unsupported tuning settings, leaving model rendering strict.
     pub(crate) fn normalize_preset(
         self,
         mut preset: LaunchPreset,
@@ -317,6 +318,11 @@ impl LaunchSpec {
             && let Some(value) = preset.auto_compact.take()
         {
             skipped.push(SkippedPresetField::AutoCompact(value));
+        }
+        if !self.supports_preset(PresetField::Effort)
+            && let Some(value) = preset.effort.take()
+        {
+            skipped.push(SkippedPresetField::Effort(value));
         }
         if preset.fast == Some(true)
             && let Err(fix) = self.fast_args()

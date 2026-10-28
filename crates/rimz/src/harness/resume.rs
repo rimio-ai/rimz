@@ -358,11 +358,12 @@ pub struct ResumeSkip {
 /// `@planner` comes back as a planner. A launch with a durable record replays
 /// the record's model and effort, and fast mode where supported. A record
 /// without effort takes the profile's declared effort and saves it on relaunch.
-/// Without a record, one-off `--model` / `--effort` flags typed at the original
-/// launch stay out. A resume may pass its own `--model`, `--effort`,
-/// `--fast` / `--no-fast`, and `--ask` / `--yolo`; the exec wrapper records the
-/// model, effort, and fast mode it launched with, so a later resume replays
-/// them, and `--isolation` is recorded the same way.
+/// A kind without an effort flag drops either effort on replay, without a
+/// warning, and saves none. Without a record, one-off `--model` / `--effort`
+/// flags typed at the original launch stay out. A resume may pass its own
+/// `--model`, `--effort`, `--fast` / `--no-fast`, and `--ask` / `--yolo`; the
+/// exec wrapper records the model, effort, and fast mode it launched with, so a
+/// later resume replays them, and `--isolation` is recorded the same way.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePosture {
     pub launch: ResumeLaunchPosture,
@@ -612,19 +613,7 @@ fn resolve_posture_with_role(
         }
     }
     if let Some(adapter) = find_definition(cell.kind.as_str()) {
-        let (preset, _) = adapter
-            .spec()
-            .launch
-            .normalize_preset(crate::agents::LaunchPreset {
-                auto_compact: cell.auto_compact.take(),
-                fast: Some(cell.launch.fast),
-                ..Default::default()
-            });
-        cell.auto_compact = preset.auto_compact;
-        cell.launch.fast = preset.fast.unwrap_or_default();
-        if let Some(record) = &mut cell.launch.record {
-            record.fast = cell.launch.fast;
-        }
+        crate::harness::plan::normalize_cell_preset(&mut cell, adapter);
     }
     if let Some(((name, team), role)) = team.zip(role) {
         cell.team_prompt = crate::harness::spec::role_team_prompt(

@@ -164,6 +164,56 @@ fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
 }
 
 #[test]
+fn unsupported_effort_override_warns_and_leaves_no_launch_stamp() {
+    let preset = crate::agents::LaunchPreset {
+        effort: Some("high".into()),
+        ..Default::default()
+    };
+    for kind in [
+        "amp", "kimi", "cursor", "droid", "qwen", "minimax", "opencode",
+    ] {
+        let mut layout = LayoutSpec::single(preset_cell(kind, &[], None, None));
+        let warnings = finalize(&mut layout, &preset, &[]).expect("unsupported effort launches");
+        assert_eq!(
+            warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [format!(
+                "warning: `{kind}-coder` effort high is unsupported on {kind}; launching without it"
+            )]
+        );
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.launch.effort, None);
+        assert_eq!(cell.launch.record.as_deref().unwrap().effort, None);
+        assert!(
+            cell.args
+                .iter()
+                .all(|arg| !arg.contains("effort") && arg != "high")
+        );
+    }
+}
+
+#[test]
+fn unsupported_profile_effort_warns_and_leaves_no_launch_stamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "worker".into(),
+        configured_profile("cursor", None, None, Some("high"), None, None),
+    );
+    let launch = effective_launch(&machine, dir.path());
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("worker"), None)
+        .expect("unsupported profile effort resolves");
+    let warnings = finalize(&mut resolved.layout, &Default::default(), &[]).unwrap();
+    assert_eq!(
+        warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["warning: `worker` effort high is unsupported on cursor; launching without it"]
+    );
+    let cell = resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(cell.launch.effort, None);
+    assert_eq!(cell.launch.record.as_deref().unwrap().effort, None);
+    assert!(cell.args.is_empty(), "{:?}", cell.args);
+}
+
+#[test]
 fn role_tools_render_once_for_every_profile_cell_path() {
     let tools = crate::agents::ToolSet::parse(
         &[
@@ -514,12 +564,32 @@ fn launch_preset_validation_matches_provider_support() {
     assert!(validate_launch_preset("claude", &on).is_ok());
     assert!(validate_launch_preset("cursor", &off).is_ok());
     assert!(validate_launch_preset("cursor", &on).is_ok());
+    let warnings = validate_launch_preset("cursor", &effort)
+        .expect("unsupported effort is skipped with a warning");
     assert_eq!(
-        validate_launch_preset("cursor", &effort),
-        Err(LaunchFinalizeError::UnsupportedPresetField {
-            agent: "cursor",
-            field: "effort",
-        })
+        warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["warning: `cursor` effort high is unsupported on cursor; launching without it"]
+    );
+    assert!(matches!(
+        &warnings[..],
+        [LaunchFinalizeWarning::SkippedField { .. }]
+    ));
+    assert_eq!(validate_launch_preset("claude", &effort), Ok(vec![]));
+    assert_eq!(
+        validate_launch_preset(
+            "hermes",
+            &crate::agents::LaunchPreset {
+                effort: Some("bogus".into()),
+                ..Default::default()
+            }
+        ),
+        Err(LaunchFinalizeError::PresetValue(
+            crate::agents::PresetErr::UnsupportedValue {
+                agent: "hermes",
+                field: "effort",
+                value: "bogus".into(),
+            }
+        ))
     );
 }
 
@@ -2424,17 +2494,25 @@ fn provider_override_replaces_provider_fields_and_carries_portable_fields() {
         ["--effort", "high", "--permission-mode", "auto",]
     );
 
-    let err = resolve_launch(
+    let mut resolved = resolve_launch(
         &launch,
         &machine.agents.commands,
         Some("coder"),
         Some("kimi"),
     )
-    .expect_err("kimi cannot express effort");
-    assert!(
-        err.to_string()
-            .contains("does not support profile field `effort`")
+    .expect("kimi skips effort at finalize");
+    let warnings = finalize(&mut resolved.layout, &Default::default(), &[]).unwrap();
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|warning| matches!(warning, LaunchFinalizeWarning::SkippedField { .. }))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["warning: `coder` effort high is unsupported on kimi; launching without it"]
     );
+    let cell = resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(cell.launch.effort, None);
+    assert_eq!(cell.launch.record.as_deref().unwrap().effort, None);
 }
 
 #[test]

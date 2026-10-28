@@ -1419,44 +1419,38 @@ fn flip_compact_accepts_yaml_off_and_rejects_other_shapes() {
 
 #[test]
 fn unsupported_preset_fields_fail_at_the_definition() {
-    for (kind, field, value) in [
-        ("amp", "effort", "high"),
-        ("droid", "model", "custom"),
-        ("opencode", "effort", "high"),
-    ] {
-        let root = fixture();
-        definition(
-            root.path(),
-            "agents/parent.md",
-            &format!("agent: {kind}\n{field}: {value}"),
-            "",
-        );
-        definition(root.path(), "agents/child.md", "agent: parent", "");
-        let loaded = load(
-            root.path(),
-            SkillCheck::Skip,
-            &CommandsConfig::default(),
-            &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
-        );
-        let expected =
-            crate::agents::PresetErr::UnsupportedField { agent: kind, field }.to_string();
-        assert!(
-            loaded
-                .errors
-                .iter()
-                .any(|error| error.path == root.path().join("agents/parent.md")
-                    && error.message == expected)
-        );
-        assert!(!loaded.agent_profiles.0.contains_key("parent"));
-        assert!(!loaded.agent_profiles.0.contains_key("child"));
-        error(root.path(), "follows `parent`, which failed to load");
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "agent: droid\nmodel: custom",
+        "",
+    );
+    definition(root.path(), "agents/child.md", "agent: parent", "");
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    let expected = crate::agents::PresetErr::UnsupportedField {
+        agent: "droid",
+        field: "model",
     }
+    .to_string();
+    assert!(loaded.errors.iter().any(
+        |error| error.path == root.path().join("agents/parent.md") && error.message == expected
+    ));
+    assert!(!loaded.agent_profiles.0.contains_key("parent"));
+    assert!(!loaded.agent_profiles.0.contains_key("child"));
+    error(root.path(), "follows `parent`, which failed to load");
 }
 
 #[test]
-fn unsupported_fast_and_auto_compact_load_for_launch_time_normalization() {
+fn unsupported_tuning_fields_load_for_launch_time_normalization() {
     let root = fixture();
+    definition(root.path(), "agents/opencode.md", "", "OpenCode base.");
     definition(
         root.path(),
         "agents/quick.md",
@@ -1482,6 +1476,20 @@ fn unsupported_fast_and_auto_compact_load_for_launch_time_normalization() {
         "agent: swift\nfast: false",
         "",
     );
+    for kind in ["amp", "opencode"] {
+        definition(
+            root.path(),
+            &format!("agents/{kind}-parent.md"),
+            &format!("agent: {kind}\neffort: high"),
+            "",
+        );
+        definition(
+            root.path(),
+            &format!("agents/{kind}-child.md"),
+            &format!("agent: {kind}-parent"),
+            "",
+        );
+    }
     let loaded = load(
         root.path(),
         SkillCheck::Skip,
@@ -1490,6 +1498,16 @@ fn unsupported_fast_and_auto_compact_load_for_launch_time_normalization() {
         Some(272_000),
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    for kind in ["amp", "opencode"] {
+        for relation in ["parent", "child"] {
+            assert_eq!(
+                loaded.agent_profiles.0[&format!("{kind}-{relation}")]
+                    .effort
+                    .as_deref(),
+                Some("high")
+            );
+        }
+    }
     assert_eq!(loaded.agent_profiles.0["quick"].fast, Some(true));
     assert_eq!(
         loaded.agent_profiles.0["compact"].auto_compact.as_deref(),

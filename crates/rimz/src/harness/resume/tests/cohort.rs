@@ -3465,12 +3465,12 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
 }
 
 #[test]
-fn unrenderable_record_effort_refuses_its_cohort_restore() {
-    let profiles = profiles("worker", profile("kimi"));
-    let mut seat = agent("kimi", "a1", "/repo", 1);
+fn invalid_record_effort_refuses_its_cohort_restore() {
+    let profiles = profiles("worker", profile("hermes"));
+    let mut seat = agent("hermes", "a1", "/repo", 1);
     seat.profile = Some("worker".into());
     seat.record = Some(Box::new(crate::agents::LaunchRecord {
-        effort: Some("high".into()),
+        effort: Some("bogus".into()),
         ..Default::default()
     }));
     let reason = resolve_posture(

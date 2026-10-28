@@ -1702,6 +1702,14 @@ fn kind_defaults_follow_the_final_kind_and_model() {
             Some("low"),
         ),
         (
+            "written",
+            Some("qwen"),
+            "qwen",
+            None,
+            Some(Plan),
+            Some("high"),
+        ),
+        (
             "markdown",
             Some("fable-base"),
             "claude",
@@ -1740,22 +1748,6 @@ fn kind_defaults_follow_the_final_kind_and_model() {
             )),
         ));
     }
-    let refusal = resolve_spec_with_agent_override(
-        Some("written"),
-        &profiles,
-        &profiles,
-        &no_commands(),
-        &TeamsConfig::default(),
-        Some("qwen"),
-    )
-    .map(|_| ("qwen".into(), None, None, None))
-    .map_err(|error| error.to_string());
-    actual.push(("written", Some("qwen"), refusal));
-    let reason = concat!(
-        "invalid profile `written`: agent `qwen` does not support profile field `effort`; ",
-        "remove it or put provider-specific flags in `args`",
-    );
-    expected.push(("written", Some("qwen"), Err(reason.into())));
     assert_eq!(actual, expected);
 }
 

@@ -425,22 +425,18 @@ impl Resolver<'_> {
                 Ok::<_, DefinitionErr>(parsed)
             })
             .transpose()?;
-        if let Some(definition) = agents::find_definition(kind) {
-            for (field, name, value) in [
-                (PresetField::Model, "model", &fm.model),
-                (PresetField::Effort, "effort", &fm.effort),
-            ] {
-                if value.is_some() && !definition.spec().launch.supports_preset(field) {
-                    return Err(DefinitionErr::new(
-                        path,
-                        agents::PresetErr::UnsupportedField {
-                            agent: definition.spec().kind,
-                            field: name,
-                        }
-                        .to_string(),
-                    ));
+        if let Some(definition) = agents::find_definition(kind)
+            && fm.model.is_some()
+            && !definition.spec().launch.supports_preset(PresetField::Model)
+        {
+            return Err(DefinitionErr::new(
+                path,
+                agents::PresetErr::UnsupportedField {
+                    agent: definition.spec().kind,
+                    field: "model",
                 }
-            }
+                .to_string(),
+            ));
         }
         if let Some(model) = fm.model.as_deref()
             && let Some(implied) = agents::definition_model_kind(model)

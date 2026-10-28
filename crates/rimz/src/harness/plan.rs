@@ -1170,6 +1170,10 @@ impl fmt::Display for LaunchFinalizeWarning {
                         formatter,
                         "warning: `{profile}` auto-compact {value} is unsupported on {agent}; launching without it"
                     ),
+                    SkippedPresetField::Effort(value) => write!(
+                        formatter,
+                        "warning: `{profile}` effort {value} is unsupported on {agent}; launching without it"
+                    ),
                     SkippedPresetField::Fast { alternative } => {
                         write!(
                             formatter,
@@ -1437,18 +1441,7 @@ pub(super) fn finalize_agent_cell(
         .clone()
         .unwrap_or_else(|| cell.kind.to_string());
     if let Some(adapter) = adapter {
-        let (preset, skipped) =
-            adapter
-                .spec()
-                .launch
-                .normalize_preset(crate::agents::LaunchPreset {
-                    auto_compact: cell.auto_compact.clone(),
-                    fast: Some(cell.launch.fast),
-                    ..Default::default()
-                });
-        cell.auto_compact = preset.auto_compact;
-        cell.launch.fast = preset.fast == Some(true);
-        for field in skipped {
+        for field in normalize_cell_preset(cell, adapter) {
             warnings.push(LaunchFinalizeWarning::SkippedField {
                 profile: profile.clone(),
                 agent: adapter.spec().kind,
@@ -1485,6 +1478,29 @@ pub(super) fn finalize_agent_cell(
         fast: cell.launch.fast,
     }));
     Ok(())
+}
+
+pub(super) fn normalize_cell_preset(
+    cell: &mut AgentCell,
+    adapter: &crate::agents::AgentDefinition,
+) -> Vec<crate::agents::definition::SkippedPresetField> {
+    let (preset, skipped) = adapter
+        .spec()
+        .launch
+        .normalize_preset(crate::agents::LaunchPreset {
+            auto_compact: cell.auto_compact.take(),
+            effort: cell.launch.effort.take(),
+            fast: Some(cell.launch.fast),
+            ..Default::default()
+        });
+    cell.auto_compact = preset.auto_compact;
+    cell.launch.effort = preset.effort;
+    cell.launch.fast = preset.fast == Some(true);
+    if let Some(record) = &mut cell.launch.record {
+        record.effort.clone_from(&cell.launch.effort);
+        record.fast = cell.launch.fast;
+    }
+    skipped
 }
 
 pub(super) fn apply_preset_args(
