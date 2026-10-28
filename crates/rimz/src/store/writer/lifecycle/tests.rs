@@ -794,6 +794,46 @@ fn a_fork_on_a_resumed_cards_instance_ends_only_that_card() {
 }
 
 #[test]
+fn a_closed_turns_unnamed_tool_proof_is_ignored_without_an_append() {
+    let (_dir, store) = test_store();
+    let append = |signal| {
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("codex"),
+                event_name: "fixture",
+                observation: &observation(signal),
+                spawned_subagents: &[],
+            })
+            .unwrap()
+    };
+    append(LifecycleSignal::TurnStarted { turn_id: None });
+    append(LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: Some("closed".into()),
+    });
+    let before = store.read_events().unwrap().len();
+    let receipt = append(LifecycleSignal::ToolUsed {
+        mutates: false,
+        edits: false,
+        name: None,
+        native_key: None,
+        turn_id: Some("closed".into()),
+    });
+    assert!(matches!(
+        receipt.transition.unwrap().kind,
+        TransitionKind::Ignored { .. }
+    ));
+    assert_eq!(receipt.primary_event_id, None);
+    assert_eq!(store.read_events().unwrap().len(), before);
+    assert_eq!(
+        store.snapshot().unwrap().agents[0].status,
+        AgentStatus::Success
+    );
+}
+
+#[test]
 fn late_turn_reports_leave_the_started_turn_on_ingest_and_replay() {
     let (_dir, store) = test_store();
     let append = |event_name, signal| {

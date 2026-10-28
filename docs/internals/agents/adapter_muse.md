@@ -36,7 +36,7 @@ Only `Interrupt` installs async, because Muse 1.4.9 skips a synchronous `Interru
 | `Interrupt` | `TurnInterrupted` | 1.4.9 capture of Escape |
 | `SessionEnd` | `Ended` | 1.4.9 capture of `/quit`, `/clear`, and `/new` |
 
-Every signal carries Muse's native `turn_id`, and `ToolUsed` also carries the native tool id. The turn id is what makes `Interrupt` safe: the interrupted turn is recorded, so a late tool report for that turn cannot reopen Running. Muse emits no `Stop` for an interrupted turn.
+Every signal carries Muse's native `turn_id`, and `ToolUsed` also carries the native tool id. `Interrupt` and `Stop` both record the closed turn id, so a late tool report for that turn cannot reopen Running. Muse emits no `Stop` for an interrupted turn.
 
 A tool id that starts with `user_shell_` marks a `!` shell action the user typed. It has no model turn around it, so the decoder returns the classification without a lifecycle signal and a resting card stays unchanged. For model tools, `shell` counts as mutating and no tool counts as editing (`ToolClassification` in the spec).
 

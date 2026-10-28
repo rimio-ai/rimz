@@ -1025,10 +1025,16 @@ pub struct AgentState {
     /// it is a late report from that earlier turn and is dropped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_turn_id: Option<String>,
-    /// Provider turn id most recently canceled for this session. A matching
-    /// trailing tool completion is ignored instead of reopening the turn.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interrupted_turn_id: Option<String>,
+    /// Provider id of the most recently ended or interrupted turn. An id-less
+    /// close clears it; a parked end preserves it. Matching tools are trailing
+    /// output. Registration, a real turn start, or any opened turn clears it;
+    /// keepalive pings preserve it.
+    #[serde(
+        default,
+        alias = "interrupted_turn_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub closed_turn_id: Option<String>,
     /// When this agent last began compacting its context window — the timestamp
     /// of its most-recent compaction-start signal (`PreCompact` or Pi
     /// `session_before_compact`). Set by the rollup, cleared by the session's
@@ -1313,7 +1319,7 @@ impl AgentState {
             queued_asks: Vec::new(),
             started_turn_id: None,
             superseded_turn_id: None,
-            interrupted_turn_id: None,
+            closed_turn_id: None,
             compacting_since: None,
             compaction_count: 0,
             tool_calls: BTreeMap::new(),
@@ -1485,7 +1491,7 @@ impl AgentState {
         PriorTurnIds {
             started: self.started_turn_id.as_deref(),
             superseded: self.superseded_turn_id.as_deref(),
-            interrupted: self.interrupted_turn_id.as_deref(),
+            closed: self.closed_turn_id.as_deref(),
         }
     }
 

@@ -236,7 +236,7 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
         turn_id: turn_id.map(ToOwned::to_owned),
     };
     let trailing_ids = PriorTurnIds {
-        interrupted: Some("turn-1"),
+        closed: Some("turn-1"),
         ..PriorTurnIds::default()
     };
     let trailing = step(Some(&idle), None, trailing_ids, &tool(Some("turn-1")));
@@ -244,7 +244,7 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
     assert_eq!(
         trailing.kind,
         TransitionKind::Ignored {
-            reason: "tool completed after its turn was interrupted",
+            reason: "tool reported after its turn closed",
         }
     );
     assert!(!trailing.opened_turn);
@@ -257,13 +257,208 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
 }
 
 #[test]
+fn closed_turns_ignore_only_their_own_trailing_tools() {
+    let running = state(AgentStatus::Running, TurnPhase::Acting, false);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for errored in [false, true] {
+        for parked in [false, true] {
+            for close_id in [Some("closed"), None] {
+                let close = LifecycleSignal::TurnEnded {
+                    errored,
+                    parked_on_background: parked,
+                    turn_id: close_id.map(str::to_owned),
+                };
+                let ended = step(Some(&running), None, PriorTurnIds::default(), &close);
+                let (_, _, closed) = turn_ids_after(PriorTurnIds::default(), &close, false);
+                let closed_id = if parked { None } else { close_id };
+                actual.push((closed.clone(), ended.next.status, false, false));
+                expected.push((
+                    closed_id.map(str::to_owned),
+                    ended.next.status,
+                    false,
+                    false,
+                ));
+                for tool_id in [Some("closed"), Some("new"), None] {
+                    let tool = LifecycleSignal::ToolUsed {
+                        mutates: true,
+                        edits: true,
+                        name: Some("Bash".into()),
+                        native_key: None,
+                        turn_id: tool_id.map(str::to_owned),
+                    };
+                    let progress = step(
+                        Some(&ended.next),
+                        None,
+                        PriorTurnIds {
+                            closed: closed.as_deref(),
+                            ..PriorTurnIds::default()
+                        },
+                        &tool,
+                    );
+                    let ignored = closed_id.is_some() && tool_id == closed_id;
+                    let status = if ignored || errored {
+                        ended.next.status
+                    } else {
+                        AgentStatus::Running
+                    };
+                    actual.push((
+                        closed.clone(),
+                        progress.next.status,
+                        matches!(progress.kind, TransitionKind::Ignored { .. }),
+                        progress.opened_turn,
+                    ));
+                    expected.push((
+                        closed_id.map(str::to_owned),
+                        status,
+                        ignored,
+                        !ignored && !errored && !parked,
+                    ));
+                }
+            }
+        }
+    }
+    let mut phases = Vec::new();
+    let mut held = Vec::new();
+    for prior in [
+        state(AgentStatus::Idle, TurnPhase::Idle, false),
+        state(AgentStatus::Success, TurnPhase::Idle, false),
+        state(AgentStatus::Failed, TurnPhase::Idle, false),
+        state(AgentStatus::Waiting, TurnPhase::Idle, false),
+        state(AgentStatus::Running, TurnPhase::Reasoning, false),
+        state(AgentStatus::Running, TurnPhase::Acting, false),
+        state(AgentStatus::Running, TurnPhase::Parked, false),
+    ] {
+        for edits in [false, true] {
+            let trailing = step(
+                Some(&prior),
+                None,
+                PriorTurnIds {
+                    closed: Some("closed"),
+                    ..PriorTurnIds::default()
+                },
+                &LifecycleSignal::ToolUsed {
+                    mutates: true,
+                    edits,
+                    name: Some("Bash".into()),
+                    native_key: None,
+                    turn_id: Some("closed".into()),
+                },
+            );
+            phases.push((trailing.next, trailing.opened_turn));
+            held.push((prior, false));
+        }
+    }
+    assert_eq!((actual, phases), (expected, held));
+}
+
+#[test]
+fn trailing_tools_hold_an_open_compaction_bracket() {
+    let prior = state(AgentStatus::Success, TurnPhase::Idle, true);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (id, ignored) in [
+        (Some("closed"), true),
+        (Some("fresh"), false),
+        (None, false),
+    ] {
+        let transition = step(
+            Some(&prior),
+            None,
+            PriorTurnIds {
+                closed: Some("closed"),
+                ..PriorTurnIds::default()
+            },
+            &LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: false,
+                name: Some("Bash".into()),
+                native_key: None,
+                turn_id: id.map(str::to_owned),
+            },
+        );
+        actual.push((
+            transition.next,
+            transition.compaction_closed,
+            transition.waiting_cleared,
+            transition.opened_turn,
+            matches!(transition.kind, TransitionKind::Ignored { .. }),
+        ));
+        expected.push((
+            if ignored {
+                prior
+            } else {
+                state(AgentStatus::Running, TurnPhase::Acting, false)
+            },
+            !ignored,
+            false,
+            !ignored,
+            ignored,
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn closed_turn_identity_records_closes_and_clears_at_new_boundaries() {
+    let prior = PriorTurnIds {
+        closed: Some("old"),
+        ..PriorTurnIds::default()
+    };
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (signal, opened, closed) in [
+        (LifecycleSignal::Registered, false, None),
+        (LifecycleSignal::TurnStarted { turn_id: None }, false, None),
+        (
+            LifecycleSignal::TurnStarted {
+                turn_id: Some("new".into()),
+            },
+            true,
+            None,
+        ),
+        (LifecycleSignal::SubagentStarted, true, None),
+        (
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            false,
+            None,
+        ),
+        (
+            LifecycleSignal::TurnInterrupted {
+                turn_id: Some("ended".into()),
+            },
+            false,
+            Some("ended"),
+        ),
+        (
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: Some("ended".into()),
+            },
+            false,
+            Some("ended"),
+        ),
+        (turn_end(false, false), false, None),
+        (turn_end(false, true), false, Some("old")),
+        (turn_end(true, true), false, Some("old")),
+        (tool(true), true, None),
+        (tool(true), false, Some("old")),
+    ] {
+        actual.push(turn_ids_after(prior, &signal, opened).2);
+        expected.push(closed.map(str::to_owned));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn turn_reports_correlate_with_the_started_turn_id() {
     let running = state(AgentStatus::Running, TurnPhase::Reasoning, false);
     let success = state(AgentStatus::Success, TurnPhase::Idle, false);
     let started = PriorTurnIds {
         started: Some("prompt-2"),
         superseded: Some("prompt-1"),
-        interrupted: None,
+        closed: None,
     };
     let ended = |errored, turn_id: Option<&str>| LifecycleSignal::TurnEnded {
         errored,
@@ -1039,7 +1234,7 @@ fn only_a_start_with_a_new_id_supersedes_the_started_turn() {
         let prior = PriorTurnIds {
             started: ids.0.as_deref(),
             superseded: ids.1.as_deref(),
-            interrupted: None,
+            closed: None,
         };
         let (started, superseded, _) = turn_ids_after(prior, signal, false);
         (started, superseded)

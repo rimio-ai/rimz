@@ -414,7 +414,7 @@ fn turn_end_reports_settle_the_turn_through_the_state_machine() {
         let ids = PriorTurnIds {
             started: Some("p2"),
             superseded: Some("p1"),
-            interrupted: None,
+            closed: None,
         };
         assert_eq!(
             step(Some(&running), None, ids, &late).next,

@@ -88,7 +88,7 @@ A permission wait clears at the next tool or settle signal. Native questions and
 
 Beyond the table, every mapped event carries the payload's `model` onto the card, and mux-session death comes from the shared exec wrapper. `registers_lazily` is true, so a MiniMax session can be present without a stamped pane, and the sidebar binds it to its pane by cwd.
 
-Stop does not close every turn. A failed or cancelled turn sends no Stop, so the card stays working until the next prompt or SessionEnd, and a supervised run waits out its deadline. A hook continuation can also resume work after Stop. RimZ reconciles none of this: it reads no private turn tables and maps no background parking or idle notification.
+Stop does not close every turn. A failed or cancelled turn sends no Stop, so the card stays working until the next prompt or SessionEnd, and a supervised run waits out its deadline. A hook continuation can also resume work after Stop under the same turn id. Its tools are treated as trailing output from the closed turn, so the row keeps its verdict until another lifecycle boundary; a later Stop for that turn still applies. RimZ reads no private turn tables and maps no background parking or idle notification.
 
 ## Launch and resume
 
