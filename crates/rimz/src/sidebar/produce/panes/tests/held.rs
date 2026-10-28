@@ -47,6 +47,7 @@ fn assert_held_start_census(starts: &[i64], carried_due: Option<i64>, expected: 
         &skipped,
         &skipped,
         &HashSet::new(),
+        &mut SettledResumes::new(),
         &readers,
     );
     assert_eq!(first(&fresh).current, first(&prior).current);
@@ -266,6 +267,7 @@ fn production_repair_reads_only_due_pane_trees_at_each_fleet_size() {
                 &held,
                 &skipped,
                 &HashSet::new(),
+                &mut SettledResumes::new(),
                 &readers,
             );
             let reads = reads.borrow();

@@ -36,11 +36,15 @@ use validate::{
 
 use super::metrics::{MetricsSampleCache, read_metrics_sample_cache, write_metrics_sample_cache};
 
+type SettledResumes = HashMap<PaneId, (u32, jiff::Timestamp, String)>;
+
 pub(crate) struct PaneProducer {
     pub(super) prior: Option<Arc<PaneFrame>>,
     pub(super) hibernated_panes: HashSet<PaneId>,
     pub(super) agent_panes: HashSet<PaneId>,
     native_tenants: HashMap<PaneId, (u32, Option<String>)>,
+    // Pruned to live pane ids on each repaired candidate.
+    settled_resumes: SettledResumes,
     held_checks: HashMap<PaneId, Instant>,
     metrics: MetricsSampleCache,
     presence_probed_at_ms: Option<u64>,
@@ -66,6 +70,7 @@ impl PaneProducer {
             hibernated_panes: HashSet::new(),
             agent_panes: HashSet::new(),
             native_tenants: HashMap::new(),
+            settled_resumes: SettledResumes::new(),
             held_checks: HashMap::new(),
         }
     }
@@ -193,6 +198,7 @@ impl PaneProducer {
             frame
         } else {
             let mut native_tenants = self.native_tenants.clone();
+            let mut settled_resumes = self.settled_resumes.clone();
             let mut held_checks = self.held_checks.clone();
             let mut ctx = FrameContext {
                 runtime,
@@ -205,6 +211,7 @@ impl PaneProducer {
                 hibernated_panes: &self.hibernated_panes,
                 agent_panes: &self.agent_panes,
                 native_tenants: &mut native_tenants,
+                settled_resumes: &mut settled_resumes,
                 held_checks: &mut held_checks,
                 checked_panes: HashSet::new(),
             };
@@ -215,6 +222,7 @@ impl PaneProducer {
             match accepted? {
                 Accepted::Fresh(mut frame) => {
                     self.native_tenants = native_tenants;
+                    self.settled_resumes = settled_resumes;
                     self.held_checks = held_checks;
                     publish_frame(
                         &runtime.pane_frame_path(),
@@ -260,6 +268,7 @@ pub(crate) fn read_pane_frame(
         hibernated_panes: &HashSet::new(),
         agent_panes: &HashSet::new(),
         native_tenants: &mut HashMap::new(),
+        settled_resumes: &mut SettledResumes::new(),
         held_checks: &mut HashMap::new(),
         checked_panes: HashSet::new(),
     })
@@ -280,6 +289,7 @@ struct FrameContext<'a> {
     hibernated_panes: &'a HashSet<PaneId>,
     agent_panes: &'a HashSet<PaneId>,
     native_tenants: &'a mut HashMap<PaneId, (u32, Option<String>)>,
+    settled_resumes: &'a mut SettledResumes,
     held_checks: &'a mut HashMap<PaneId, Instant>,
     checked_panes: HashSet<PaneId>,
 }
@@ -355,8 +365,11 @@ fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
 
 fn stamp_pane_resumed_session_ids(
     frame: &mut PaneFrame,
+    settled_resumes: &mut SettledResumes,
     root_resume: &dyn Fn(u32) -> crate::agents::ResumeProbe,
+    proc_cmdline: &dyn Fn(u32) -> Option<String>,
 ) {
+    use crate::agents::ResumeProbe;
     for pane in frame.pane_states_mut() {
         if pane.current.resumed_session_id.is_some() {
             continue;
@@ -375,12 +388,40 @@ fn stamp_pane_resumed_session_ids(
             .and_then(crate::agents::find_definition)
             .is_some();
         if !supports_resume_discovery {
+            settled_resumes.remove(&pane.pane_id);
             continue;
         }
-        if let Some(crate::agents::ResumeProbe::Resumed(resumed)) =
-            pane.current.pid.map(root_resume)
+        let Some(root_pid) = pane.current.pid else {
+            settled_resumes.remove(&pane.pane_id);
+            continue;
+        };
+        let hosted_identity = pane
+            .current
+            .hosted_agent_process_start
+            .and_then(|started_at| {
+                let pid = pane
+                    .current
+                    .hosted_agent_lineage
+                    .last()
+                    .copied()
+                    .unwrap_or(root_pid);
+                Some((pid, started_at, proc_cmdline(pid)?))
+            });
+        if hosted_identity
+            .as_ref()
+            .is_some_and(|identity| settled_resumes.get(&pane.pane_id) == Some(identity))
         {
-            pane.current.resumed_session_id = Some(resumed);
+            continue;
+        }
+        settled_resumes.remove(&pane.pane_id);
+        match root_resume(root_pid) {
+            ResumeProbe::Resumed(resumed) => pane.current.resumed_session_id = Some(resumed),
+            ResumeProbe::Settled => {
+                if let Some(identity) = hosted_identity {
+                    settled_resumes.insert(pane.pane_id.clone(), identity);
+                }
+            }
+            ResumeProbe::Unsettled => {}
         }
     }
 }
@@ -430,6 +471,7 @@ fn repair_pane_frame(
     hibernated_panes: &HashSet<PaneId>,
     skipped: &HashSet<PaneId>,
     agent_panes: &HashSet<PaneId>,
+    settled_resumes: &mut SettledResumes,
     readers: &RepairReaders<'_>,
 ) -> (Vec<HostedCarryDrop>, bool) {
     crate::proc::with_read_memo(|| {
@@ -449,7 +491,7 @@ fn repair_pane_frame(
             (readers.backfill_pids)(frame, session);
             false
         };
-        let drops = repair_processes(frame, prior, &unstamped, skipped, readers);
+        let drops = repair_processes(frame, prior, &unstamped, skipped, settled_resumes, readers);
         (drops, sampled)
     })
 }
@@ -459,15 +501,25 @@ fn repair_processes(
     prior: Option<&PaneFrame>,
     unstamped: &HashSet<PaneId>,
     skipped: &HashSet<PaneId>,
+    settled_resumes: &mut SettledResumes,
     readers: &RepairReaders<'_>,
 ) -> Vec<HostedCarryDrop> {
+    if !settled_resumes.is_empty() {
+        let live_panes: HashSet<_> = frame.pane_states().map(|pane| &pane.pane_id).collect();
+        settled_resumes.retain(|pane, _| live_panes.contains(pane));
+    }
     with_due_panes(frame, prior, skipped, |due| {
         backfill_pane_commands(due, readers.cmdline, readers.comm);
         backfill_wrapper_spawn_commands(due, readers.cmdline);
         reconcile_active_commands(due, readers.cmdline, readers.comm, readers.children);
         stamp_hosted_agent_processes(due, readers.hosted_process);
         backfill_pane_cwds(due, readers.cwd);
-        stamp_pane_resumed_session_ids(due, readers.resumed_session);
+        stamp_pane_resumed_session_ids(
+            due,
+            settled_resumes,
+            readers.resumed_session,
+            readers.cmdline,
+        );
     });
     // Held starts still participate in duplicate detection and the cwd census.
     stamp_pane_process_starts(frame, unstamped, readers.root_start, readers.cwd_starts);
@@ -680,6 +732,7 @@ pub fn repaired_pane_frame_for_binding(
         &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
+        &mut SettledResumes::new(),
         &RepairReaders::system(),
     );
     emit_hosted_carry_dropped(&diag, hosted_carry_drops);
@@ -1021,6 +1074,7 @@ impl FrameContext<'_> {
             &hibernated,
             &skipped,
             self.agent_panes,
+            self.settled_resumes,
             &RepairReaders::system(),
         );
         self.sampled |= sampled;

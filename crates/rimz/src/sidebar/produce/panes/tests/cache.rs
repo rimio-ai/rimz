@@ -20,6 +20,7 @@ fn candidate_repair_shares_root_reads_across_all_process_probes() {
         &HashSet::new(),
         &HashSet::new(),
         &agents,
+        &mut SettledResumes::new(),
         &RepairReaders::system(),
     );
     assert!(first(&candidate).current.command.is_some());
@@ -52,6 +53,7 @@ fn candidate_repair_shares_root_reads_across_all_process_probes() {
                 &HashSet::new(),
                 &HashSet::new(),
                 &agents,
+                &mut SettledResumes::new(),
                 &RepairReaders::system(),
             );
             Ok((confirmed, true))
@@ -137,6 +139,7 @@ fn requested_pidless_pane_keeps_its_cached_binding_across_topology_frames() {
         hibernated_panes: &requested,
         agent_panes: &HashSet::new(),
         native_tenants: &mut HashMap::new(),
+        settled_resumes: &mut SettledResumes::new(),
         held_checks: &mut HashMap::new(),
         checked_panes: HashSet::new(),
     };
