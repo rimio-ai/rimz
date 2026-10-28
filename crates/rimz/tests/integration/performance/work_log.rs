@@ -177,8 +177,8 @@ fn cold_prompt_reports_process_work() {
     cold_frame(
         json!({"hook_event_name": "UserPromptSubmit", "prompt": "inspect the repository"}),
         2,
-        // Two three-row runtime projections, one fifteen-row Audit, three own-row reads.
-        24,
+        // Two three-row runtime projections and three own-row reads; Audit borrows.
+        9,
         0,
     );
 }
@@ -189,8 +189,8 @@ fn cold_read_reports_process_work() {
         json!({"hook_event_name": "PostToolUse", "tool_name": "Read",
         "tool_input": {"file_path": "README.md"}, "tool_response": "contents"}),
         2,
-        // Two three-row runtime projections, one fifteen-row Audit, two own-row reads.
-        23,
+        // Two three-row runtime projections and two own-row reads; Audit borrows.
+        8,
         0,
     );
 }
@@ -200,9 +200,9 @@ fn cold_stop_reports_process_work() {
     cold_frame(
         json!({"hook_event_name": "Stop", "last_assistant_message": "done"}),
         2,
-        // Two three-row runtime projections, one fifteen-row Audit, two own-row reads.
+        // Two three-row runtime projections and two own-row reads; Audit borrows.
         // This cold Stop has no queued dispatch or context-row join.
-        23,
+        8,
         1,
     );
 }

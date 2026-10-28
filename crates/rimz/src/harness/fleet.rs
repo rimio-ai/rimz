@@ -15,7 +15,10 @@ pub(super) fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Optio
 
 /// Whether `launcher` launched anyone at all, answered from the agent rows
 /// alone so a caller can skip reading the runs directory.
-pub(super) fn has_members(agents: &[AgentState], launcher: &AgentState) -> bool {
+pub(super) fn has_members<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    launcher: &AgentState,
+) -> bool {
     !crate::address::launched_fleet(agents, launcher).is_empty()
 }
 
@@ -318,8 +321,8 @@ fn open_team_runs<'a, 'agents>(
 }
 
 /// Open team runs whose Done the launcher is still owed; a detached team owes none.
-pub(super) fn owed_team_runs<'a>(
-    agents: &[AgentState],
+pub(super) fn owed_team_runs<'a, 'agents>(
+    agents: impl IntoIterator<Item = &'agents AgentState> + Clone,
     runs: &'a [RunRecord],
     launcher: &AgentState,
 ) -> Vec<&'a RunRecord> {

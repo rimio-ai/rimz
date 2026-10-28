@@ -347,9 +347,9 @@ fn retire_session_in(
 ///
 /// `agents` is read only once this workspace is known to hold a pinned row or
 /// an idle-stop request, so a caller with neither pays two file reads.
-pub fn retire_ended_sessions<'a>(
+pub fn retire_ended_sessions(
     project_root: &Path,
-    agents: impl FnOnce() -> std::borrow::Cow<'a, [AgentState]>,
+    agents: impl FnOnce() -> crate::store::runtime::AuditRows,
 ) -> Result<usize, RetireFailure> {
     let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
         .map_err(RetireFailure::before_removal)?;
@@ -358,11 +358,11 @@ pub fn retire_ended_sessions<'a>(
     retire_ended_sessions_in(&paths, &runtime, project_root, agents)
 }
 
-fn retire_ended_sessions_in<'a>(
+fn retire_ended_sessions_in(
     paths: &crate::disk::paths::StatePaths,
     runtime: &crate::disk::paths::RuntimePaths,
     project_root: &Path,
-    agents: impl FnOnce() -> std::borrow::Cow<'a, [AgentState]>,
+    agents: impl FnOnce() -> crate::store::runtime::AuditRows,
 ) -> Result<usize, RetireFailure> {
     let mut pinned = super::instances::pinned_sessions(&paths.root);
     pinned.extend(
@@ -380,7 +380,7 @@ fn retire_ended_sessions_in<'a>(
     }
     let mut dropped = 0;
     let mut failures = Vec::new();
-    for (kind, session) in ended_pinned_sessions(&agents(), &pinned) {
+    for (kind, session) in ended_pinned_sessions(agents().iter(), &pinned) {
         match retire_session_in(
             paths,
             runtime,
@@ -409,12 +409,12 @@ fn retire_ended_sessions_in<'a>(
 /// The retirement predicate: which of the `pinned` sessions `agents` proves
 /// durably ended. Collecting the ended identities first keeps the scan over an
 /// audit list, which holds every session the room ever saw, allocation-free.
-fn ended_pinned_sessions<'a>(
-    agents: &[AgentState],
+fn ended_pinned_sessions<'a, 'agents>(
+    agents: impl IntoIterator<Item = &'agents AgentState>,
     pinned: &'a std::collections::BTreeSet<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
 ) -> Vec<&'a (crate::ids::AgentKind, crate::ids::AgentSessionId)> {
     let ended = agents
-        .iter()
+        .into_iter()
         .filter(|agent| agent.ended_at.is_some() && !agent.is_provider_subagent())
         .map(|agent| (&agent.kind, &agent.agent_id))
         .collect::<std::collections::BTreeSet<_>>();
@@ -823,10 +823,8 @@ mod tests {
         let mut ended = crate::testkit::agent_state("claude", "stopping", now);
         ended.ended_at = Some(now);
 
-        let failure = retire_ended_sessions_in(&paths, &runtime, dir.path(), || {
-            std::borrow::Cow::Owned(vec![ended])
-        })
-        .expect_err("the withdrawal fails");
+        let failure = retire_ended_sessions_in(&paths, &runtime, dir.path(), || vec![ended].into())
+            .expect_err("the withdrawal fails");
 
         assert_eq!(failure.dropped(), 1, "{failure}");
         assert!(super::super::instances::pinned_sessions(&paths.root).is_empty());
@@ -842,10 +840,8 @@ mod tests {
         let mut ended = crate::testkit::agent_state("claude", "stopping", now);
         ended.ended_at = Some(now);
         let agents = vec![ended, crate::testkit::agent_state("claude", "resting", now)];
-        retire_ended_sessions_in(&paths, &runtime, dir.path(), || {
-            std::borrow::Cow::Borrowed(&agents)
-        })
-        .expect("reconcile");
+        retire_ended_sessions_in(&paths, &runtime, dir.path(), || agents.into())
+            .expect("reconcile");
         assert_eq!(idle_stop_sessions(&paths), ["resting"]);
     }
 

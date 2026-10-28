@@ -1,10 +1,10 @@
 //! Harness wakes still owed to a supervised agent session.
 
+use crate::Store;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::reply::TurnWaitView;
 use crate::store::StoreErr;
 use crate::store::snapshot::find_agent;
-use crate::{RuntimeScope, Store};
 
 use super::fleet::FleetRuns;
 
@@ -35,23 +35,22 @@ pub fn owed_wake(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> Result<Option<OwedWake>, StoreErr> {
-    let projection = store.runtime_projection(RuntimeScope::Audit)?;
-    if let Some(launcher) = find_agent(&projection.agents, kind, agent_id) {
-        let has_members = super::fleet::has_members(&projection.agents, launcher);
-        let launched_team = projection
-            .agents
+    let rows = store.audit_rows()?;
+    if let Some(launcher) = rows.find(kind, agent_id) {
+        let has_members = super::fleet::has_members(rows.iter(), launcher);
+        let launched_team = rows
             .iter()
             .any(|agent| agent.is_team_seat() && agent.launcher_is(launcher));
         if has_members || launched_team {
             let runs = super::run::listing(store.paths())?;
             if has_members {
-                let fleet = FleetRuns::of(&projection.agents, &runs, launcher);
+                let fleet = FleetRuns::of(rows.iter(), &runs, launcher);
                 if fleet.any_running() || !fleet.unreported().is_empty() {
                     return Ok(Some(OwedWake::Subagents));
                 }
             }
             if launched_team
-                && super::fleet::owed_team_runs(&projection.agents, &runs, launcher)
+                && super::fleet::owed_team_runs(rows.iter(), &runs, launcher)
                     .iter()
                     .any(|run| {
                         let stage = super::scratch::board_stage(&run.worktree_path);

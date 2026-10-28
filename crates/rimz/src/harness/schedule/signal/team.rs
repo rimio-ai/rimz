@@ -24,6 +24,7 @@ pub(crate) fn team_lifecycle_signals(
     addressable: &[&AgentState],
     pending: &[MessageRecord],
     sleeping: &BTreeSet<(AgentKind, AgentSessionId)>,
+    audit: &crate::store::runtime::AuditRows,
 ) -> Vec<Signal> {
     let Some(team) = member.team.as_deref().filter(|team| !team.is_empty()) else {
         return Vec::new();
@@ -97,6 +98,12 @@ pub(crate) fn team_lifecycle_signals(
     if names.is_empty() {
         return Vec::new();
     }
+    let marked = members
+        .iter()
+        .map(|agent| audit.marked_copy(agent))
+        .collect::<Vec<_>>();
+    let member = &marked[members.len() - 1];
+    let members = marked.iter().collect::<Vec<_>>();
     let mut peers = addressable.to_vec();
     peers.extend(members.iter().copied().filter(|agent| {
         !addressable
@@ -242,6 +249,7 @@ mod tests {
             crate::store::runtime::RuntimeProjection::runtime_from_refs(rows, Vec::new()).agents,
             event.at,
         );
+        let audit = rows.to_vec().into();
         team_lifecycle_signals(
             event,
             member,
@@ -249,6 +257,7 @@ mod tests {
             &addressable_agents(&snapshot),
             pending,
             sleeping,
+            &audit,
         )
     }
 

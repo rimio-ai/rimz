@@ -734,6 +734,16 @@ reason = "Store projections, context joins and dispatch share the fold-row copy 
 
 [[verdict]]
 kind = "item"
+key = "store::runtime::AuditRows"
+reason = "Hook reactions borrow durable rows; role decisions use Audit-marked cohort copies or the full projection."
+
+[[verdict]]
+kind = "item"
+key = "store::runtime::audit_rows"
+reason = "Signal retirement reads shared durable rows through StatePaths without opening a writer-capable Store."
+
+[[verdict]]
+kind = "item"
 key = "testkit::fleet::seed_live_launch_text"
 reason = "Apply and fleet benches share production-encoded launch text and observed prompts in their live rows."
 
@@ -2750,7 +2760,8 @@ path = "crates/rimz/src/store"
 # hibernate::read_cached shares per-fold record parses without changing locked reads (+1).
 # Workflow held sessions, turn identities, saved verdicts, and turn-end actions cross the engine/inspection seam (+4).
 # count_rows_materialized includes dispatch's retained roster and resume-child copies (+1).
-surface-budget = 508
+# AuditRows, its read/lookup surface and marked cohort copies share durable rows (+5).
+surface-budget = 513
 
 [[verdict]]
 kind = "item"
@@ -3256,7 +3267,8 @@ allowed-dependencies = [
 # The durable `workflow` record and journal module (+1).
 # Store::snapshot_with_context selects enrichment without narrowing membership (+1).
 # Store::agent_with_context copies one selected row for hook decisions (+1).
-surface-budget = 40
+# Store::audit_rows exposes the frame's shared durable fold (+1).
+surface-budget = 41
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"

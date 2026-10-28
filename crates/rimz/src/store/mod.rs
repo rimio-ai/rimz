@@ -224,6 +224,14 @@ impl Store {
         ))
     }
 
+    /// Borrow every durable row, without liveness filtering or derived molt marks.
+    /// Role decisions need marked copies or [`Self::runtime_projection`] in [`RuntimeScope::Audit`].
+    pub fn audit_rows(&self) -> Result<runtime::AuditRows> {
+        Ok(runtime::AuditRows::new(
+            self.pending_rollup()?.agents.clone(),
+        ))
+    }
+
     /// Build a fresh snapshot in memory (no disk write). Lock-free and
     /// O(delta): the rollup resumes from the thread's held fold or the
     /// persisted fold base.
@@ -677,6 +685,50 @@ mod tests {
             store.snapshot_with_context(own).unwrap().agents[0]
                 .context
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn borrowed_audit_rows_retain_history_without_materializing() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let store = Store::open(
+            StatePaths::under(id.clone(), dir.path()).unwrap(),
+            RuntimePaths::under(id.clone(), dir.path()).unwrap(),
+        )
+        .unwrap();
+        for index in 0..2 {
+            event_log::append(&store.paths().events_log, &lifecycle(&id, index)).unwrap();
+        }
+        event_log::append(
+            &store.paths().events_log,
+            &EventEnvelope::agent_lifecycle(
+                id,
+                "session",
+                "claude",
+                "SessionEnd",
+                &AgentLifecycleObservation::new(Some("agent-1".into()), LifecycleSignal::Ended),
+            ),
+        )
+        .unwrap();
+        assert_eq!(store.snapshot_cached().unwrap().agents.len(), 1);
+        let before = snapshot::fold_testkit::rollup_rows_materialized();
+        let rows = store.audit_rows().unwrap();
+        assert_eq!(rows.iter().count(), 2, "borrowed audit retains ended rows");
+        assert!(
+            rows.find("claude", &"agent-1".into())
+                .unwrap()
+                .ended_at
+                .is_some()
+        );
+        let read_only = runtime::audit_rows(store.paths()).unwrap();
+        assert_eq!(
+            read_only.iter().collect::<Vec<_>>(),
+            rows.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            snapshot::fold_testkit::rollup_rows_materialized() - before,
+            0
         );
     }
 
