@@ -128,6 +128,54 @@ struct FoldPreparation {
     anchor: Option<crate::mux::focus_anchor::FocusAnchor>,
 }
 
+#[derive(Default)]
+struct HiddenDrain {
+    examined_revision: Option<u64>,
+    frame: Option<Arc<crate::sidebar::frame::PaneFrame>>,
+    pane: Option<PaneId>,
+    own_view: Option<SidebarOwnView>,
+    viewed_panes: Vec<PaneId>,
+}
+
+impl HiddenDrain {
+    fn preview(&mut self, update: &FetchUpdate, pane: &PaneId) -> bool {
+        let viewed = match update {
+            FetchUpdate::Shared { update, .. } => return self.preview(update, pane),
+            FetchUpdate::Fold { fold, .. } => {
+                if self.pane.as_ref() != Some(pane)
+                    || self.frame.as_ref().is_none_or(|prior| {
+                        fold.frame
+                            .as_ref()
+                            .is_none_or(|frame| !Arc::ptr_eq(prior, frame))
+                    })
+                {
+                    #[cfg(any(test, feature = "testkit"))]
+                    host_pass::count(Counter::DrainPreview);
+                    self.own_view = fold
+                        .frame
+                        .as_deref()
+                        .and_then(|frame| SidebarOwnView::from_frame(pane, frame));
+                    self.frame.clone_from(&fold.frame);
+                }
+                &fold.workspace.snapshot().viewed_panes
+            }
+            _ => {
+                let Some((own_view, viewed)) = update.preview_for(pane) else {
+                    return false;
+                };
+                #[cfg(any(test, feature = "testkit"))]
+                host_pass::count(Counter::DrainPreview);
+                self.own_view = own_view;
+                self.frame = None;
+                viewed
+            }
+        };
+        self.pane = Some(pane.clone());
+        viewed.clone_into(&mut self.viewed_panes);
+        true
+    }
+}
+
 impl FoldPreparation {
     fn load(
         runtime: &RuntimePaths,
@@ -193,6 +241,7 @@ pub(super) struct PaneState {
     host_wake_path: PathBuf,
     diag: crate::diag::DiagSink,
     own: super::views::Cursor,
+    hidden: HiddenDrain,
     pending_focus_push: Option<FocusPush>,
     painted_focus_anchor_ms: u64,
     painted_at: Instant,
@@ -328,6 +377,7 @@ impl LoopState {
         revision: u64,
     ) {
         self.pane.baseline_seed = self.views.share(views);
+        self.pane.hidden = HiddenDrain::default();
         self.pane.own = super::views::Cursor {
             revision,
             accepted: None,
@@ -538,6 +588,7 @@ impl LoopState {
                 host_wake_path,
                 diag,
                 own: super::views::Cursor::default(),
+                hidden: HiddenDrain::default(),
                 fold_effects: FoldEffects::default(),
                 baseline_seed: None,
                 pending_focus_push: None,
@@ -722,35 +773,48 @@ impl LoopState {
     }
 
     fn drain_snapshot(&mut self, allow_defer: bool) {
-        let (pending, revision, completed) = {
+        let (revision, completed) = {
             let views = self
                 .views
                 .registry
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            (
-                views.latest.since(self.pane.own.revision),
-                views.revision,
-                self.pane.fetch.completed(),
-            )
+            let hidden = &mut self.pane.hidden;
+            if allow_defer
+                && (hidden.examined_revision != Some(views.revision)
+                    || hidden.pane.as_ref() != Some(&self.pane.config.own_pane))
+            {
+                let mut unseen = views.latest.unseen(self.pane.own.revision);
+                hidden.examined_revision = unseen
+                    .next()
+                    .filter(|update| update.is_success() && unseen.all(FetchUpdate::is_success))
+                    .filter(|update| hidden.preview(update, &self.pane.config.own_pane))
+                    .map(|_| views.revision);
+            }
+            (views.revision, self.pane.fetch.completed())
         };
-        #[cfg(any(test, feature = "testkit"))]
-        host_pass::add(Counter::DrainClone, pending.len() as u64);
         let deferred = allow_defer
-            && pending.iter().all(FetchUpdate::is_success)
-            && pending
-                .iter()
-                .find_map(|update| {
-                    #[cfg(any(test, feature = "testkit"))]
-                    host_pass::count(Counter::DrainPreview);
-                    update.preview_for(&self.pane.config.own_pane)
-                })
-                .is_some_and(|(own_view, viewed)| self.skips_hidden(own_view.as_ref(), viewed));
+            && self.pane.hidden.examined_revision == Some(revision)
+            && self.skips_hidden(
+                self.pane.hidden.own_view.as_ref(),
+                &self.pane.hidden.viewed_panes,
+            );
         if deferred {
             if completed {
                 self.pane.last_self_close_check = self.pane.clock.now();
             }
         } else {
+            let (pending, revision) = {
+                let views = self
+                    .views
+                    .registry
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                (views.latest.since(self.pane.own.revision), views.revision)
+            };
+            #[cfg(any(test, feature = "testkit"))]
+            host_pass::add(Counter::DrainClone, pending.len() as u64);
+            self.pane.hidden.examined_revision = None;
             for update in pending {
                 self.apply_latest_snapshot(update);
             }
@@ -2331,6 +2395,7 @@ impl PaneState {
             diag: _,
             fetch: _,
             own: _,
+            hidden: _,
             observe_tx: _,
             wake: _,
             room_caps: _,

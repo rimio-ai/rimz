@@ -126,11 +126,51 @@ fn hidden_drain_counters_measure_retained_outcomes_and_preview_work() {
     assert_eq!(counts.get(Counter::DrainClone), 0);
     assert_eq!(counts.get(Counter::DrainPreview), 0);
     rig.lazy_fold(rig.state.views.mirror().clone(), SnapshotSource::Produced);
-    assert_eq!(counts.get(Counter::DrainClone), 1);
+    assert_eq!(counts.get(Counter::DrainClone), 0);
     assert_eq!(counts.get(Counter::DrainPreview), 1);
     rig.state.on_snapshot();
-    assert_eq!(counts.get(Counter::DrainClone), 2);
-    assert_eq!(counts.get(Counter::DrainPreview), 2);
+    assert_eq!(counts.get(Counter::DrainClone), 0);
+    assert_eq!(counts.get(Counter::DrainPreview), 1);
+    rig.state.drain_snapshot(false);
+    assert_eq!(counts.get(Counter::DrainClone), 1);
+    assert_eq!(counts.get(Counter::DrainPreview), 1);
+}
+
+#[test]
+fn hidden_retained_revision_clones_and_previews_nothing() {
+    let mut rig = hidden_rig();
+    defer_name(&mut rig, "pending");
+    let counts = host_pass::thread_counters();
+    counts.reset();
+    for _ in 0..3 {
+        rig.state.on_snapshot();
+    }
+    assert_eq!(counts.get(Counter::DrainClone), 0);
+    assert_eq!(counts.get(Counter::DrainPreview), 0);
+    assert_ne!(rig.view().ctx().current.display_name, "pending");
+}
+
+#[test]
+fn hidden_new_revision_reuses_only_the_same_frame_preview() {
+    let mut rig = hidden_rig();
+    let update = rig.lazy_update(rig.state.views.mirror().clone(), SnapshotSource::Produced);
+    rig.deliver(update.clone());
+    let counts = host_pass::thread_counters();
+    counts.reset();
+    rig.deliver(update);
+    assert_eq!(counts.get(Counter::DrainPreview), 0);
+    rig.lazy_fold(rig.state.views.mirror().clone(), SnapshotSource::Produced);
+    assert_eq!(counts.get(Counter::DrainPreview), 1);
+    assert_eq!(rig.state.pane.projections, 1);
+}
+
+#[test]
+fn hidden_memo_rechecks_obligations_without_a_new_revision() {
+    let mut rig = hidden_rig();
+    defer_name(&mut rig, "pending");
+    rig.view().ctx().health.failure_streak = 1;
+    rig.state.on_snapshot();
+    assert_eq!(rig.view().ctx().current.display_name, "pending");
 }
 
 #[test]

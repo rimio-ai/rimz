@@ -73,13 +73,17 @@ impl Latest {
 
     /// Outcomes published after `seen`, in replay order.
     pub(super) fn since(&self, seen: u64) -> Vec<FetchUpdate> {
-        let unseen = |slot: &Option<(u64, FetchUpdate)>| {
+        self.unseen(seen).cloned().collect()
+    }
+
+    pub(super) fn unseen(&self, seen: u64) -> impl Iterator<Item = &FetchUpdate> {
+        fn unseen(slot: &Option<(u64, FetchUpdate)>, seen: u64) -> Option<&FetchUpdate> {
             slot.as_ref()
                 .filter(|(revision, _)| *revision > seen)
-                .map(|(_, update)| update.clone())
-        };
-        let success = unseen(&self.completed).or_else(|| unseen(&self.interim));
-        success.into_iter().chain(unseen(&self.failed)).collect()
+                .map(|(_, update)| update)
+        }
+        let success = unseen(&self.completed, seen).or_else(|| unseen(&self.interim, seen));
+        success.into_iter().chain(unseen(&self.failed, seen))
     }
 }
 
