@@ -956,6 +956,252 @@ fn peer_hook_enrolls_launcher_delivery_and_fails_it_on_session_end() {
     );
 }
 
+fn sender_context_room(two_members: bool) -> (tempfile::TempDir, Store) {
+    let (dir, store) = store();
+    append_launched_agent(
+        &store,
+        "codex",
+        "sender-old",
+        Some("sender-launch"),
+        "sender-old",
+        Default::default(),
+    );
+    if two_members {
+        append_launched_agent(
+            &store,
+            "codex",
+            "sender-new",
+            Some("sender-launch"),
+            "sender-new",
+            Default::default(),
+        );
+    }
+    append_launched_agent(
+        &store,
+        "claude",
+        "sess-1",
+        Some("receiver-launch"),
+        "receiver",
+        Default::default(),
+    );
+    for index in 0..4 {
+        let id = format!("unrelated-{index}");
+        append_launched_agent(&store, "claude", &id, Some(&id), &id, Default::default());
+    }
+    let audit = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
+    for (index, row) in audit.agents.iter().enumerate() {
+        let mut observation = AgentLifecycleObservation::new(
+            Some(row.agent_id.clone()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+            rimz::ids::MuxName::Tmux,
+            format!("%{}", 4_000 + index),
+        ));
+        store
+            .append_event(&rimz::store::event::EventEnvelope::agent_lifecycle(
+                store.paths().workspace_id.clone(),
+                "session",
+                row.kind.as_str(),
+                "UserPromptSubmit",
+                &observation,
+            ))
+            .unwrap();
+        rimz::store::agent_context::write(
+            store.runtime_paths(),
+            row.kind.as_str(),
+            row.agent_id.as_str(),
+            &rimz::agents::AgentContext::new(row.kind.as_str(), jiff::Timestamp::now()),
+            None,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        store.snapshot().unwrap().agents.len(),
+        if two_members { 7 } else { 6 }
+    );
+    (dir, store)
+}
+
+fn certify_sender_rest(store: &Store) -> rimz::ids::AgentSessionId {
+    let kind = rimz::ids::AgentKind::new_unchecked("codex");
+    let raw = store.snapshot().unwrap();
+    let winner =
+        rimz::address::launch_row(raw.agents.iter(), &kind, &"sender-launch".into()).unwrap();
+    let at = jiff::Timestamp::now() + std::time::Duration::from_secs(1);
+    let context = rimz::agents::AgentContext {
+        settle: Some(rimz::agents::TurnSettle::new(
+            at,
+            rimz::agents::TurnSettleOutcome::Complete,
+        )),
+        ..rimz::agents::AgentContext::new("codex", at)
+    };
+    rimz::store::agent_context::write(
+        store.runtime_paths(),
+        "codex",
+        winner.agent_id.as_str(),
+        &context,
+        None,
+    )
+    .unwrap();
+    let full = store.snapshot_cached().unwrap();
+    let resolved =
+        rimz::address::launch_row(full.agents.iter(), &kind, &"sender-launch".into()).unwrap();
+    assert_ne!(
+        resolved.agent_id, winner.agent_id,
+        "the rest certificate must decide the occupant"
+    );
+    resolved.agent_id.clone()
+}
+
+fn record_agent_prompt_context(two_members: bool) {
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender};
+
+    let (_dir, store) = sender_context_room(two_members);
+    let expected_sender = if two_members {
+        certify_sender_rest(&store)
+    } else {
+        "sender-old".into()
+    };
+    let store = store.for_hook_ingress(rimz::ids::EventId::new(), jiff::Timestamp::now());
+    let snapshot = store.snapshot_with_context(|_, _| false).unwrap();
+    let receiver = snapshot
+        .agents
+        .iter()
+        .find(|row| row.agent_id == "sess-1")
+        .unwrap();
+    let message = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        receiver,
+        "review this".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Agent {
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        agent_id: Some("sender-old".into()),
+        name: Some("sender".to_owned()),
+        profile: None,
+        role: None,
+        channel: None,
+    });
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
+        "Type: AGENT_MESSAGE\nFrom: @sender\nContent:\nreview this",
+    ));
+    let rows_before = rimz::testkit::rollup_rows_materialized();
+    let reads_before = rimz::testkit::sidecar_read_counts();
+    record_conversation(
+        &workspace(),
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        conversation_input(None, &[], &[message]),
+    )
+    .unwrap();
+    let reads = rimz::testkit::sidecar_read_counts();
+    let rows = rimz::testkit::rollup_rows_materialized() - rows_before;
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].from.as_deref(), Some("@sender"));
+    assert_eq!(entries[0].origin(), rimz::transcript::EntryOrigin::Agent);
+    let effort = effort_records(&store);
+    assert_eq!(effort[0]["sender_session"], expected_sender.as_str());
+    let members = if two_members { 2 } else { 1 };
+    assert_eq!(
+        reads.0 - reads_before.0,
+        members,
+        "only sender launch sidecars are selected"
+    );
+    assert_eq!(reads.1, reads_before.1, "no sidecar directory scan");
+    assert!(
+        rows <= members as u64,
+        "{members} launch members copied {rows} rows"
+    );
+}
+
+#[test]
+fn agent_prompt_context_is_limited_to_sender_launch() {
+    record_agent_prompt_context(false);
+}
+
+#[test]
+fn agent_prompt_context_keeps_rest_certified_launch_occupant() {
+    record_agent_prompt_context(true);
+}
+
+#[test]
+fn launcher_prompt_context_is_limited_to_parent_launch() {
+    let (_dir, store) = sender_context_room(true);
+    let expected_sender = certify_sender_rest(&store);
+    append_launched_agent(
+        &store,
+        "claude",
+        "sess-1",
+        Some("receiver-launch"),
+        "receiver",
+        rimz::agents::LaunchParams {
+            launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+                kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                agent_id: "sender-launch".into(),
+            })),
+            launch_depth: Some(1),
+            ..Default::default()
+        },
+    );
+    let full = store.snapshot_cached().unwrap();
+    let parent = rimz::address::launch_row(
+        full.agents.iter(),
+        &rimz::ids::AgentKind::new_unchecked("codex"),
+        &"sender-launch".into(),
+    )
+    .unwrap();
+    assert_eq!(parent.agent_id, expected_sender);
+    let expected_from = format!("@{}", parent.name.as_deref().unwrap());
+    let store = store.for_hook_ingress(rimz::ids::EventId::new(), jiff::Timestamp::now());
+    store.snapshot_with_context(|_, _| false).unwrap();
+    let mut run = rimz::store::run::RunRecord::new(
+        workspace().workspace_id,
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "launch work".to_owned(),
+        workspace().worktree_root,
+    );
+    run.subagent = true;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(&run.prompt));
+    let rows_before = rimz::testkit::rollup_rows_materialized();
+    let reads_before = rimz::testkit::sidecar_read_counts();
+    record_conversation(
+        &workspace(),
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        TestConversationInput {
+            run_id: Some(&run.run_id),
+            ..conversation_input(None, &[], &[])
+        },
+    )
+    .unwrap();
+    let reads = rimz::testkit::sidecar_read_counts();
+    let rows = rimz::testkit::rollup_rows_materialized() - rows_before;
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].from.as_deref(), Some(expected_from.as_str()));
+    assert_eq!(entries[0].origin(), rimz::transcript::EntryOrigin::Agent);
+    assert_eq!(
+        effort_records(&store)[0]["sender_session"],
+        expected_sender.as_str()
+    );
+    assert_eq!(
+        reads.0 - reads_before.0,
+        2,
+        "only launcher sidecars are selected"
+    );
+    assert_eq!(reads.1, reads_before.1, "no sidecar directory scan");
+    assert!(rows <= 2, "two launcher members copied {rows} rows");
+}
+
 #[test]
 fn run_briefs_keep_loop_human_and_unresolved_parent_origins() {
     for (subagent, loop_task, expected_from) in [

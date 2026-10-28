@@ -69,8 +69,9 @@ pub mod testkit {
     static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
     static FOLD_ROW_COPIES: AtomicU64 = AtomicU64::new(0);
 
-    /// Row copies from flattening, runtime projections, shared
-    /// context vectors, own-row reads and dispatch views; borrowed readers add nothing.
+    /// Row copies from flattening, runtime projections, shared context
+    /// vectors, own-row reads, live launch members read with context and
+    /// dispatch views; borrowed readers add nothing.
     #[cfg(any(test, feature = "testkit"))]
     pub fn rollup_rows_materialized() -> u64 {
         ROLLUP_ROWS_MATERIALIZED.load(Ordering::Relaxed)

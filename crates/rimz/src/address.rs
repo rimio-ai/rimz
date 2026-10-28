@@ -1154,6 +1154,23 @@ fn launch_members<'a>(
         .collect()
 }
 
+/// Members of the requested launches, each once even for overlapping aliases.
+/// [`launch_row`] over these rows selects as it does over the whole snapshot;
+/// it reads context only on live members, which the caller attaches.
+pub fn launch_rows<'a, 'key>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    keys: impl IntoIterator<Item = (&'key AgentKind, &'key AgentSessionId)>,
+) -> Vec<&'a AgentState> {
+    let mut rows = BTreeMap::new();
+    for (kind, id) in keys {
+        for member in launch_members(agents.clone(), kind, id) {
+            rows.entry((&member.kind, &member.agent_id))
+                .or_insert(member);
+        }
+    }
+    rows.into_values().collect()
+}
+
 /// Current row of a launch, including a legacy session-id alias.
 ///
 /// Accepts a reusable borrowed row view, including a layered rollup.

@@ -227,21 +227,37 @@ pub(super) fn record_conversation(
         return Ok(());
     };
     let kind = agent.spec().kind_id();
-    let resolves_address = sections.iter().any(|section| {
-        matches!(
-            section.record.map(|record| &record.sender),
-            Some(rimz::store::message::MessageSender::Agent {
-                agent_id: Some(_),
-                ..
-            })
-        ) || (run_id.is_some()
-            && section.origin == rimz::transcript::SectionOrigin::Human
-            && section.record.is_none())
-    });
-    let snapshot = store.snapshot_with_context(|_, _| resolves_address).ok();
+    let snapshot = store.snapshot_with_context(|_, _| false).ok();
     let state = snapshot
         .as_ref()
         .and_then(|snapshot| find_agent(&snapshot.agents, &kind, &agent_id));
+    let senders = sections
+        .iter()
+        .filter_map(|section| match &section.record?.sender {
+            rimz::store::message::MessageSender::Agent {
+                kind,
+                agent_id: Some(id),
+                ..
+            } => Some((kind, id)),
+            _ => None,
+        });
+    let launcher = if run_id.is_some()
+        && sections.iter().any(|section| {
+            section.origin == rimz::transcript::SectionOrigin::Human && section.record.is_none()
+        }) {
+        state.and_then(rimz::agents::AgentState::launcher)
+    } else {
+        None
+    };
+    let sender_rows = snapshot
+        .as_ref()
+        .map(|snapshot| {
+            store.rows_with_live_context(rimz::address::launch_rows(
+                snapshot.agents.iter(),
+                senders.chain(launcher),
+            ))
+        })
+        .unwrap_or_default();
     let channel = rimz::transcript::entry_channel(
         observation.launch.channel.as_deref(),
         observation
@@ -377,9 +393,11 @@ pub(super) fn record_conversation(
                         kind,
                         agent_id: Some(id),
                         ..
-                    }) => snapshot.as_ref().and_then(|snapshot| {
-                        rimz::address::launch_row(snapshot.agents.iter(), kind, id)
-                    }),
+                    }) => rimz::address::launch_row(
+                        sender_rows.iter().map(|row| row.as_ref()),
+                        kind,
+                        id,
+                    ),
                     _ => None,
                 };
                 if section.origin == SectionOrigin::Human
@@ -397,7 +415,7 @@ pub(super) fn record_conversation(
                             sender = state.and_then(|state| {
                                 let (kind, id) = state.launcher()?;
                                 rimz::address::launch_row(
-                                    snapshot.as_ref()?.agents.iter(),
+                                    sender_rows.iter().map(|row| row.as_ref()),
                                     kind,
                                     id,
                                 )
@@ -407,6 +425,7 @@ pub(super) fn record_conversation(
                                     snapshot.as_ref()?,
                                     state,
                                     channel.as_deref(),
+                                    sender,
                                 )
                             });
                             parent.map_or(SectionOrigin::Harness, SectionOrigin::Agent)
@@ -508,9 +527,10 @@ fn launched_parent_handle(
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     child: &rimz::agents::AgentState,
     child_channel: Option<&str>,
+    parent: Option<&rimz::agents::AgentState>,
 ) -> Option<String> {
-    let (kind, id) = child.launcher()?;
-    let sender = match rimz::address::launch_row(snapshot.agents.iter(), kind, id) {
+    let (kind, _) = child.launcher()?;
+    let sender = match parent {
         Some(parent) => rimz::store::message::MessageSender::Agent {
             agent_id: None,
             kind: parent.kind.clone(),

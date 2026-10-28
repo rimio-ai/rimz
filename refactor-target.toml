@@ -82,7 +82,13 @@ path = "crates/rimz/src/address.rs"
 # `launch_word_matches` lets the bare `rimz agents <word>` refusal reuse the
 # role and name tiers instead of matching them a second time (+1).
 # Reader-relative paste addresses share the resolver's verified selector chain (+1).
-surface-budget = 46
+# launch_rows narrows Prompt sender context reads to launch members (+1).
+surface-budget = 47
+
+[[verdict]]
+kind = "item"
+key = "address::launch_rows"
+reason = "Hook attribution resolves launch aliases over their members alone, so context is read and rows copied for those members only."
 
 [[module]]
 path = "crates/rimz/src/pixel_wire.rs"
