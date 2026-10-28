@@ -84,3 +84,30 @@ fn visitor_resumes_and_stops_before_torn_tail_but_rejects_middle_corruption() {
             .is_corruption()
     );
 }
+
+#[test]
+fn terminated_corruption_is_hard_when_the_next_read_finds_an_append() {
+    let bad = b"999 {\"oops\":true}\n";
+    let good = encode_batch(&[test_event("event.next")]).unwrap();
+    let reader = io::BufReader::new(ChunkedReader {
+        current: &[],
+        chunks: vec![bad.as_slice(), good.as_slice()].into_iter(),
+    });
+    let mut events: Vec<EventEnvelope> = Vec::new();
+    let mut scanned = 0;
+
+    let result = scan_records(
+        Path::new("events.log.jsonl"),
+        0,
+        reader,
+        &mut scanned,
+        |event, _| events.push(event),
+    );
+
+    assert!(
+        matches!(result, Err(EventLogErr::FrameLength { offset: 0, .. })),
+        "terminated corruption stays a hard error when bytes follow: {result:?}"
+    );
+    assert!(events.is_empty());
+    assert_eq!(scanned, bad.len() as u64);
+}
