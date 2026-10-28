@@ -5,6 +5,10 @@
 //! A write whose path crosses an inline table converts it to a standard
 //! table and carries that decor across.
 //! Removed headers leave their prefix comments above the next header or at EOF.
+//!
+//! toml_edit renders non-root tables by position. A table without one inherits
+//! the position of the previously visited table. Document trailing text always
+//! renders last, so a comment-only file keeps all its text there.
 
 use std::path::{Path, PathBuf};
 
@@ -932,18 +936,17 @@ struct NewTablePlace {
     decor: Option<Decor>,
 }
 
-/// Place a newly rendered `[accounts.*]` header right after the last `accounts`
-/// table, so `[accounts.use]` lands beside the templated `[accounts]` block rather
-/// than at the end of the file. Later tables shift down one. The comments a section
-/// carries after its last table are stored as the next header's prefix; the part up to
-/// its last blank line stays with the section, above the new header, and the
-/// next header keeps only the comments directly above it. Other sections, an
-/// `accounts` section the document lacks, or one that ends the file, append.
+/// Place a newly rendered `[accounts.*]` or `[tasks.*]` header right after its
+/// section's last table, rather than at the end of the file. Later tables shift down
+/// one. The comments a section carries after its last table are stored as the next
+/// header's prefix; the part up to its last blank line stays with the section, above
+/// the new header, and the next header keeps only the comments directly above it.
+/// Other sections, a section the document lacks, or one that ends the file, append.
 fn place_new_table(doc: &mut DocumentMut, path: &[String]) -> NewTablePlace {
     let end = last_table_position(doc.as_table()) + 1;
     let section_last = path
         .first()
-        .filter(|section| *section == "accounts")
+        .filter(|section| matches!(section.as_str(), "accounts" | "tasks"))
         .and_then(|section| doc.as_table().get(section))
         .and_then(Item::as_table)
         .and_then(|section| {
@@ -1785,6 +1788,8 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
 
 /// Set an item for config edits and loop tasks, keeping same-key header decor and position.
 /// Other removed headers leave their prefix comments above the next header or at EOF.
+/// New tables go beside their section (see `place_new_table`) or at EOF, below
+/// the trailing comments.
 /// An empty path is refused without editing the document.
 pub(crate) fn set_item_keeping_comments(
     doc: &mut DocumentMut,
@@ -1816,7 +1821,8 @@ pub(crate) fn set_item_keeping_comments(
     // A same-key header takes the old header's decor; a header-less parent taking a block's
     // place keeps only its prefix. Other removed headers leave their prefix comments above
     // the next eligible header or at EOF. A new or first header goes beside its section
-    // (see `place_new_table`); at EOF it takes the trailing section comments and a blank line.
+    // (see `place_new_table`); at EOF it carries the trailing section comments above it.
+    // Without trailing text, default decor omits a blank line before the file's first header.
     let mut decor =
         match old.filter(|_| !item.is_value() || (parent_starts_header && !creates_table)) {
             Some(Item::Table(block)) if renders_header(block) => Some(block.decor().clone()),
@@ -1830,7 +1836,10 @@ pub(crate) fn set_item_keeping_comments(
         position = place.position;
         decor = Some(place.decor.unwrap_or_else(|| {
             let mut appended = Decor::default();
-            appended.set_prefix(format!("{}\n", doc.trailing().as_str().unwrap_or_default()));
+            let trailing = doc.trailing().as_str().unwrap_or_default();
+            if !trailing.is_empty() {
+                appended.set_prefix(format!("{trailing}\n"));
+            }
             doc.set_trailing("");
             appended
         }));

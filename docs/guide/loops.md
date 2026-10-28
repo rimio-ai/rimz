@@ -347,7 +347,7 @@ Repeated failures disable the task. Three consecutive failed fires auto-disable 
 
 `rimz loop add` writes a task definition and starts no process.
 
-A standing task appends a `[tasks.<name>]` entry to `~/.rimz/loop.toml`: per-machine automation, like your crontab, never inherited by a cloned repository. The file is plain TOML you can edit by hand, and the `deps` task above lands as:
+A standing task writes a `[tasks.<name>]` entry to `~/.rimz/loop.toml`: per-machine automation, like your crontab, never inherited by a cloned repository. The file is plain TOML you can edit by hand, and the `deps` task above lands as:
 
 ```toml
 [tasks.deps]
