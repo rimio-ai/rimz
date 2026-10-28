@@ -595,7 +595,7 @@ mod tests {
             .find(|agent| agent.kind == kind && agent.agent_id == id)
             .unwrap();
         assert_eq!(target.started_turn_id.as_deref(), Some("new"));
-        assert_eq!(target.interrupted_turn_id, None);
+        assert_eq!(target.closed_turn_id, None);
         assert_eq!(
             confirm_interrupt(follower, &kind, &id, Duration::ZERO),
             super::super::InterruptConfirmation::Confirmed

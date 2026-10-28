@@ -1817,7 +1817,7 @@ fn map_codex_lifecycle_signal(
         CodexHook::Stop(_) => LifecycleSignal::TurnEnded {
             errored: errored(),
             parked_on_background: false,
-            turn_id: None,
+            turn_id: optional_payload_string(payload, &["turn_id"]),
         },
         CodexHook::PermissionRequest(_) => awaiting(AskKind::Permission),
         CodexHook::PostToolUse(tool) => LifecycleSignal::ToolUsed {

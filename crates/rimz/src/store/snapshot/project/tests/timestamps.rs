@@ -1,6 +1,66 @@
 use super::*;
 
 #[test]
+fn closed_turn_id_reads_the_legacy_key_and_writes_the_new_key() {
+    let row = crate::testkit::agent_state("codex", "session", epoch());
+    let mut legacy = serde_json::to_value(row).unwrap();
+    legacy["interrupted_turn_id"] = json!("closed");
+    let restored: AgentState = serde_json::from_value(legacy).unwrap();
+    let serialized = serde_json::to_value(restored).unwrap();
+    assert_eq!(serialized["closed_turn_id"], json!("closed"));
+    assert!(serialized.get("interrupted_turn_id").is_none());
+}
+
+#[test]
+fn a_closed_turns_trailing_tool_leaves_a_ping_turn_open() {
+    let events = [
+        raw_lifecycle_at(
+            "codex",
+            1,
+            json!({
+                "agent_id": "session", "signal": {"signal": "turn_started"}
+            }),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            2,
+            json!({
+                "agent_id": "session", "signal": {
+                    "signal": "turn_ended", "errored": false,
+                    "parked_on_background": false, "turn_id": "closed"
+                }
+            }),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            3,
+            json!({
+                "agent_id": "session",
+                "prompt": "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm.",
+                "signal": {"signal": "turn_started"}
+            }),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            4,
+            json!({
+                "agent_id": "session", "signal": {
+                    "signal": "tool_used", "mutates": true, "name": "Bash", "turn_id": "closed"
+                }
+            }),
+        ),
+    ];
+    let rows = reduce_agent_states(&events);
+    let row = &rows[0];
+    assert!(row.ping_turn);
+    assert_eq!(
+        (row.status, row.phase),
+        (AgentStatus::Success, TurnPhase::Idle)
+    );
+    assert_eq!(row.turn_started_at, Some(events[0].timestamp));
+}
+
+#[test]
 fn client_snapshots_fold_status_without_resetting_turn_evidence() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
@@ -16,7 +76,7 @@ fn client_snapshots_fold_status_without_resetting_turn_evidence() {
             "keepalive_since",
             "started_turn_id",
             "superseded_turn_id",
-            "interrupted_turn_id",
+            "closed_turn_id",
             "compacting_since",
             "compaction_count",
             "compaction_retired",
@@ -55,7 +115,7 @@ fn client_snapshots_fold_status_without_resetting_turn_evidence() {
                 row.keepalive_since = Some(ago(40));
                 row.started_turn_id = Some("current".into());
                 row.superseded_turn_id = Some("previous".into());
-                row.interrupted_turn_id = Some("interrupted".into());
+                row.closed_turn_id = Some("interrupted".into());
                 row.compacting_since = Some(ago(2));
                 row.compaction_count = 3;
                 row.compaction_retired = true;
@@ -427,7 +487,7 @@ fn turn_ids_carry_supersede_and_clear_through_the_fold() {
             (
                 state.started_turn_id.as_deref(),
                 state.superseded_turn_id.as_deref(),
-                state.interrupted_turn_id.as_deref()
+                state.closed_turn_id.as_deref()
             ),
             expected,
             "event {}",
@@ -982,7 +1042,7 @@ fn a_ping_only_turn_moves_only_the_cache_clock() {
             state.user_turn_started_at,
             state.started_turn_id.clone(),
             state.superseded_turn_id.clone(),
-            state.interrupted_turn_id.clone(),
+            state.closed_turn_id.clone(),
         )
     };
     for (opener, rest) in [

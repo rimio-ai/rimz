@@ -243,14 +243,155 @@ mod tests {
         owned: &[&str],
         liveness: impl Fn(&AgentState) -> AgentLiveness,
     ) -> Result<Vec<String>, Vec<(String, OpenTurn)>> {
+        decide_at(agents, checkouts, owned, now(), liveness)
+    }
+
+    fn decide_at(
+        agents: &[AgentState],
+        checkouts: &[&str],
+        owned: &[&str],
+        now: Timestamp,
+        liveness: impl Fn(&AgentState) -> AgentLiveness,
+    ) -> Result<Vec<String>, Vec<(String, OpenTurn)>> {
         let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        match plan(agents, &paths(checkouts), &paths(owned), now(), liveness) {
+        match plan(agents, &paths(checkouts), &paths(owned), now, liveness) {
             Takeover::Stop(occupants) => Ok(ids(&occupants)),
             Takeover::Blocked(blockers) => Err(blockers
                 .into_iter()
                 .map(|(agent, turn)| (agent.agent_id.as_str().to_owned(), turn))
                 .collect()),
         }
+    }
+
+    #[test]
+    fn a_closed_codex_turns_trailing_tool_does_not_block_takeover() {
+        assert_closed_codex_turn_takeover(false);
+    }
+
+    #[test]
+    fn a_closed_codex_turns_trailing_tool_does_not_end_compaction() {
+        assert_closed_codex_turn_takeover(true);
+    }
+
+    #[track_caller]
+    fn assert_closed_codex_turn_takeover(compacting: bool) {
+        use crate::disk::paths::{RuntimePaths, StatePaths};
+        use crate::ids::{EventId, WorkspaceId};
+        use crate::store::{Store, writer::AgentLifecycleIntent};
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let store = Store::open(
+            StatePaths::under(workspace.clone(), dir.path()).unwrap(),
+            RuntimePaths::under(workspace, dir.path()).unwrap(),
+        )
+        .unwrap();
+        let turn = "01a17ed0-62df-77b2-8382-0db6b99a20b4";
+        let at = Timestamp::now();
+        let append = |index, event, payload| {
+            let decoded = crate::agents::definition_by_kind("codex")
+                .unwrap()
+                .decode_hook(event, &payload)
+                .unwrap();
+            store
+                .for_hook_ingress(EventId::new(), at + jiff::SignedDuration::from_secs(index))
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "takeover-test",
+                    agent_kind: AgentKind::new_unchecked("codex"),
+                    event_name: event,
+                    observation: decoded.lifecycle().unwrap(),
+                    spawned_subagents: &[],
+                })
+                .unwrap()
+        };
+        let tool = |id| {
+            serde_json::json!({
+                "session_id": "child", "turn_id": id, "tool_name": "Bash"
+            })
+        };
+        append(
+            0,
+            "UserPromptSubmit",
+            serde_json::json!({"session_id":"child","prompt":"work"}),
+        );
+        append(1, "PostToolUse", tool(turn));
+        append(2, "PostToolUse", tool(turn));
+        append(
+            3,
+            "Stop",
+            serde_json::json!({"session_id":"child","turn_id":turn}),
+        );
+        let late_index = if compacting {
+            append(4, "PreCompact", serde_json::json!({"session_id":"child"}));
+            5
+        } else {
+            4
+        };
+        let late = append(late_index, "PostToolUse", tool(turn));
+        let parent = agent("parent", AgentStatus::Idle, "/elsewhere");
+        let decide_row = |mut row: AgentState| {
+            let placement = child_of(&parent, "child", row.status, "/repo/wt");
+            row.parent_agent_id = placement.parent_agent_id;
+            row.launch_depth = placement.launch_depth;
+            row.worktree_path = placement.worktree_path;
+            row.pane = placement.pane;
+            decide_at(
+                &[row],
+                &["/repo/wt"],
+                &[],
+                at + jiff::SignedDuration::from_secs(late_index + 2),
+                |_| AgentLiveness::Live { pid: 42 },
+            )
+        };
+        let expected = if compacting {
+            Err(vec![("child".into(), OpenTurn::Compacting)])
+        } else {
+            Ok(vec!["child".into()])
+        };
+        let row = store.snapshot().unwrap().agents[0].clone();
+        assert_eq!(decide_row(row.clone()), expected);
+        let transition = late.transition.unwrap();
+        assert!(matches!(
+            transition.kind,
+            crate::agents::lifecycle::TransitionKind::Ignored { .. }
+        ));
+        assert!(!transition.compaction_closed);
+        assert_eq!(row.compacting_since.is_some(), compacting);
+        assert_eq!(row.compaction_count, 0);
+        assert!(!row.compaction_retired);
+        assert_eq!(
+            (row.status, row.phase),
+            (AgentStatus::Success, TurnPhase::Idle)
+        );
+        assert_eq!(
+            (row.turn_started_at, row.user_turn_started_at),
+            (Some(at), Some(at))
+        );
+        assert_eq!(
+            row.last_activity,
+            at + jiff::SignedDuration::from_secs(late_index)
+        );
+        assert_eq!(row.tool_calls.get("Bash"), Some(&3));
+        let cache = store.paths().rollup_cache().unwrap();
+        if cache.exists() {
+            std::fs::remove_file(cache).unwrap();
+        }
+        let (_, replayed, _) = crate::store::snapshot::RollupCursor::new()
+            .fold(store.paths())
+            .unwrap();
+        let replayed = replayed.iter().next().unwrap();
+        assert_eq!(decide_row(replayed.clone()), expected);
+        assert_eq!(replayed.compacting_since.is_some(), compacting);
+        assert_eq!(replayed.compaction_count, 0);
+        let fresh = append(late_index + 1, "PostToolUse", tool("fresh-turn"));
+        assert!(fresh.transition.unwrap().opened_turn);
+        let row = store.snapshot().unwrap().agents[0].clone();
+        assert!(row.compacting_since.is_none());
+        assert_eq!(row.compaction_count, u32::from(compacting));
+        assert_eq!(
+            decide_row(row),
+            Err(vec![("child".into(), OpenTurn::Working)])
+        );
     }
 
     #[test]

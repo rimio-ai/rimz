@@ -329,7 +329,7 @@ pub(crate) fn agent_rollup_with_carryover(
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
 /// [`AgentState::trim_ended_text`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 45;
+const ROLLUP_CACHE_VERSION: u32 = 46;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.

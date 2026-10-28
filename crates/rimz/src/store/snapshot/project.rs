@@ -1146,9 +1146,7 @@ fn fold_lifecycle(
             state
                 .superseded_turn_id
                 .clone_from(&prior.superseded_turn_id);
-            state
-                .interrupted_turn_id
-                .clone_from(&prior.interrupted_turn_id);
+            state.closed_turn_id.clone_from(&prior.closed_turn_id);
             state.compacting_since = prior.compacting_since;
             state.compaction_retired = prior.compaction_retired;
             state.ping_turn = prior.ping_turn;
@@ -1312,7 +1310,7 @@ fn fold_lifecycle(
     (
         state.started_turn_id,
         state.superseded_turn_id,
-        state.interrupted_turn_id,
+        state.closed_turn_id,
     ) = lifecycle::turn_ids_after(turn_ids, &signal, opened_turn);
     // A successful end with no open bracket is a compaction whose open was
     // lost, unless the usage was already retired and only compaction ends have
@@ -1365,9 +1363,7 @@ fn carry_across_ping(
     state
         .superseded_turn_id
         .clone_from(&prior.superseded_turn_id);
-    state
-        .interrupted_turn_id
-        .clone_from(&prior.interrupted_turn_id);
+    state.closed_turn_id.clone_from(&prior.closed_turn_id);
     state.compaction_retired = prior.compaction_retired;
 }
 

@@ -287,7 +287,7 @@ fn snapshots_update_live_and_replayed_state_without_emitting_edges_or_changing_t
                         (
                             state.started_turn_id.clone(),
                             state.superseded_turn_id.clone(),
-                            state.interrupted_turn_id.clone(),
+                            state.closed_turn_id.clone(),
                         )
                     })
                     .unwrap_or_default();
@@ -335,7 +335,7 @@ fn snapshots_update_live_and_replayed_state_without_emitting_edges_or_changing_t
                     (
                         state.started_turn_id,
                         state.superseded_turn_id,
-                        state.interrupted_turn_id,
+                        state.closed_turn_id,
                     ),
                     state.open_ask_key,
                     edge.prior_status,
@@ -501,6 +501,50 @@ fn late_report_for_a_superseded_turn_is_ignored_from_the_seed_and_the_log() {
         );
         assert_eq!(late.status, crate::agents::AgentStatus::Running);
     }
+}
+
+#[test]
+fn trailing_tool_for_a_closed_turn_is_ignored_from_the_seed_and_the_log() {
+    let (_dir, store, paths) = fixture();
+    append(&store, LifecycleSignal::TurnStarted { turn_id: None });
+    append(
+        &store,
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: Some("closed".into()),
+        },
+    );
+    let mut seeded = EventFollower::open(paths.clone(), false).unwrap();
+    append(
+        &store,
+        LifecycleSignal::ToolUsed {
+            mutates: true,
+            edits: false,
+            name: Some("Bash".into()),
+            native_key: None,
+            turn_id: Some("closed".into()),
+        },
+    );
+    let mut replayed = EventFollower::open(paths, true).unwrap();
+    let actual = [&mut seeded, &mut replayed].map(|follower| {
+        let events = follower.poll().unwrap().events;
+        let FollowEvent::Lifecycle(tool) = events.last().unwrap() else {
+            panic!("lifecycle")
+        };
+        (
+            tool.status,
+            matches!(
+                tool.transition,
+                crate::agents::LifecycleTransition::Ignored { .. }
+            ),
+            tool.phase,
+        )
+    });
+    assert_eq!(
+        actual,
+        [(AgentStatus::Success, true, crate::agents::TurnPhase::Idle); 2]
+    );
 }
 
 #[test]

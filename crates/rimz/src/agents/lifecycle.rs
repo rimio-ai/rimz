@@ -104,8 +104,8 @@ pub enum LifecycleSignal {
     Registered,
     /// A user turn began (`UserPromptSubmit`). On a parked running row this
     /// resumes the same logical turn instead of opening a fresh boundary. When
-    /// the provider supplies its turn id, a later turn report carrying a
-    /// different id belongs to an earlier turn and is dropped.
+    /// the provider supplies its turn id, a later report carrying the id this
+    /// start superseded belongs to an earlier turn and is dropped.
     TurnStarted {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
@@ -113,8 +113,9 @@ pub enum LifecycleSignal {
     /// A turn ended. `errored` always wins (the failure is the attention
     /// signal); a clean end with `parked_on_background` is the main thread
     /// parking on still-in-flight work, not a true turn end, so it stays
-    /// running rather than painting a false success. A `turn_id` that differs
-    /// from the open turn's marks a late report from an earlier turn.
+    /// running rather than painting a false success. A `turn_id` matching
+    /// the superseded turn marks a late report from an earlier turn. A
+    /// non-parked end records its id so matching tools cannot reopen the turn.
     TurnEnded {
         errored: bool,
         parked_on_background: bool,
@@ -123,10 +124,10 @@ pub enum LifecycleSignal {
     },
     /// A turn was canceled by the user or provider. This closes the turn
     /// without reporting either success or failure and leaves the session idle.
-    /// When the provider supplies its turn id, a later tool completion with the
-    /// same id is trailing output from the canceled turn rather than new work.
-    /// Like a turn end, a report for another turn is dropped, and so is a
-    /// cancel for a turn that already reported its verdict.
+    /// Its provider turn id is remembered as closed, so a later tool carrying
+    /// the same id is trailing output from the canceled turn rather than work.
+    /// Like a turn end, a report for the superseded turn is dropped, and so is
+    /// a cancel for a turn that already reported its verdict.
     TurnInterrupted {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
@@ -147,9 +148,9 @@ pub enum LifecycleSignal {
     /// mutation or state change. `edits` marks the file-editing subset (Claude
     /// `Edit`/`Write`/…, Codex `apply_patch`): the first edit of a turn moves
     /// it from reasoning to acting. Defaulted so a `tool_used` event written
-    /// before the bit existed still replays. A completion carrying the id of
-    /// the most recently interrupted turn is ignored as trailing output from
-    /// that canceled turn.
+    /// before the bit existed still replays. A tool carrying the id of the
+    /// most recently closed turn (ended or interrupted) is ignored as trailing
+    /// output rather than reopening that turn.
     ToolUsed {
         mutates: bool,
         #[serde(default)]
@@ -397,21 +398,23 @@ pub enum PingEdge {
 }
 
 /// Provider turn ids the prior record remembers, which [`step`] correlates
-/// id-bearing signals against. Both are absent for providers without turn ids.
+/// id-bearing signals against. All are absent for providers without turn ids.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PriorTurnIds<'a> {
     /// The most recent turn start's id; an id-less start clears it.
     pub started: Option<&'a str>,
     /// The id `started` held before a start with another id replaced it.
     pub superseded: Option<&'a str>,
-    /// The most recently interrupted turn's id.
-    pub interrupted: Option<&'a str>,
+    /// The most recent non-parked end's or interruption's id.
+    pub closed: Option<&'a str>,
 }
 
-/// The `(started, superseded, interrupted)` turn ids a record carries once
+/// The `(started, superseded, closed)` turn ids a record carries once
 /// `signal` folds onto one whose prior ids are `prior`. Only a turn start
 /// moves the first two, and a repeated start for the open turn keeps both.
-/// An interruption records its id; registration or an opened turn clears it.
+/// An interruption or non-parked end records its id, even for an ignored report;
+/// an id-less close clears it. A parked end carries it. Registration, a turn
+/// start, or any opened turn clears it.
 pub(crate) fn turn_ids_after(
     prior: PriorTurnIds<'_>,
     signal: &LifecycleSignal,
@@ -424,13 +427,18 @@ pub(crate) fn turn_ids_after(
         }
         _ => (owned(prior.started), owned(prior.superseded)),
     };
-    let interrupted = match signal {
-        LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
-        LifecycleSignal::Registered => None,
+    let closed = match signal {
+        LifecycleSignal::TurnInterrupted { turn_id }
+        | LifecycleSignal::TurnEnded {
+            parked_on_background: false,
+            turn_id,
+            ..
+        } => turn_id.clone(),
+        LifecycleSignal::Registered | LifecycleSignal::TurnStarted { .. } => None,
         _ if opened_turn => None,
-        _ => owned(prior.interrupted),
+        _ => owned(prior.closed),
     };
-    (started, superseded, interrupted)
+    (started, superseded, closed)
 }
 
 /// Fold one [`LifecycleSignal`] onto the prior [`LifecycleState`]. Pure and
@@ -451,6 +459,13 @@ pub(crate) fn step(
         Some("session lost (legacy replay marker)")
     } else if let LifecycleSignal::AskResolved { native_key } = signal {
         stale_ask_close(prior_status, open_ask_key, native_key.as_deref())
+    } else if let LifecycleSignal::ToolUsed {
+        turn_id: Some(turn_id),
+        ..
+    } = signal
+        && turn_ids.closed == Some(turn_id.as_str())
+    {
+        Some("tool reported after its turn closed")
     } else {
         stale_turn_report(signal, prior_status, turn_ids)
     };
@@ -478,13 +493,7 @@ pub(crate) fn step(
     // Compaction is the one signal that preserves the prior status; it is a
     // transient head, not a transition. Every other signal clears the head.
     let compacting = matches!(signal, LifecycleSignal::Compacting);
-    let status = map_status(
-        signal,
-        prior_status,
-        open_ask_key,
-        turn_ids.interrupted,
-        &mut kind,
-    );
+    let status = map_status(signal, prior_status, open_ask_key, &mut kind);
     let phase = map_phase(signal, prior_phase, status);
     let compaction_closed = was_compacting && !compacting;
     let waiting_cleared =
@@ -590,7 +599,6 @@ fn map_status(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
     open_ask_key: Option<&str>,
-    interrupted_turn_id: Option<&str>,
     kind: &mut TransitionKind,
 ) -> AgentStatus {
     match signal {
@@ -633,19 +641,8 @@ fn map_status(
             }
         }
         LifecycleSignal::TurnInterrupted { .. } => AgentStatus::Idle,
-        LifecycleSignal::ToolUsed {
-            native_key,
-            turn_id,
-            ..
-        } => {
-            if let Some(turn_id) = turn_id
-                && interrupted_turn_id == Some(turn_id.as_str())
-            {
-                *kind = TransitionKind::Ignored {
-                    reason: "tool completed after its turn was interrupted",
-                };
-                prior_status.unwrap_or(AgentStatus::Idle)
-            } else if prior_status == Some(AgentStatus::Waiting)
+        LifecycleSignal::ToolUsed { native_key, .. } => {
+            if prior_status == Some(AgentStatus::Waiting)
                 && open_ask_key.is_some()
                 && native_key.as_deref().is_some()
                 && open_ask_key != native_key.as_deref()

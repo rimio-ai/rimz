@@ -106,7 +106,7 @@ struct FollowState {
     open_ask_key: Option<String>,
     started_turn_id: Option<String>,
     superseded_turn_id: Option<String>,
-    interrupted_turn_id: Option<String>,
+    closed_turn_id: Option<String>,
 }
 
 /// Events and non-fatal archive-gap warnings observed in one poll.
@@ -167,7 +167,7 @@ impl EventFollower {
                     open_ask_key: open_ask_key(agent),
                     started_turn_id: agent.started_turn_id.clone(),
                     superseded_turn_id: agent.superseded_turn_id.clone(),
-                    interrupted_turn_id: agent.interrupted_turn_id.clone(),
+                    closed_turn_id: agent.closed_turn_id.clone(),
                 };
                 (key, state)
             })
@@ -292,7 +292,7 @@ impl EventFollower {
                     open_ask_key: None,
                     started_turn_id: None,
                     superseded_turn_id: None,
-                    interrupted_turn_id: None,
+                    closed_turn_id: None,
                 });
                 state.lifecycle = next;
                 state.open_ask_key = None;
@@ -302,7 +302,7 @@ impl EventFollower {
             let turn_ids = PriorTurnIds {
                 started: prior.and_then(|state| state.started_turn_id.as_deref()),
                 superseded: prior.and_then(|state| state.superseded_turn_id.as_deref()),
-                interrupted: prior.and_then(|state| state.interrupted_turn_id.as_deref()),
+                closed: prior.and_then(|state| state.closed_turn_id.as_deref()),
             };
             let mut transition = step(
                 prior.map(|state| &state.lifecycle),
@@ -340,7 +340,7 @@ impl EventFollower {
                 _ if transition.next.status != crate::agents::AgentStatus::Waiting => None,
                 _ => prior.and_then(|state| state.open_ask_key.clone()),
             };
-            let (started_turn_id, superseded_turn_id, interrupted_turn_id) =
+            let (started_turn_id, superseded_turn_id, closed_turn_id) =
                 turn_ids_after(turn_ids, &observation.signal, transition.opened_turn);
             self.states.insert(
                 key.clone(),
@@ -349,7 +349,7 @@ impl EventFollower {
                     open_ask_key,
                     started_turn_id,
                     superseded_turn_id,
-                    interrupted_turn_id,
+                    closed_turn_id,
                 },
             );
             self.ended.retain(|ended| ended != &key);

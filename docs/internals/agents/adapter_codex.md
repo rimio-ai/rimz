@@ -34,7 +34,7 @@ Every hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex`, and 
 | `UserPromptSubmit` | none | `TurnStarted`; a root prompt's reply can carry the [Environment block](../harness/fleet.md#environment-at-prompt-submit) as `hookSpecificOutput.additionalContext` beside `hookEventName` |
 | `SubagentStart` | `.*` | `SubagentStarted` |
 | `SubagentStop` | `.*` | `SubagentStopped { errored }` |
-| `Stop` | none | `AwaitingInput { PlanApproval }` when the rollout rests on a plan, otherwise `TurnEnded { errored, parked_on_background: false }` |
+| `Stop` | none | `AwaitingInput { PlanApproval }` when the rollout rests on a plan, otherwise `TurnEnded { errored, parked_on_background: false, turn_id }` |
 | `Interrupt` | none | `TurnInterrupted { turn_id }` |
 | `PermissionRequest` | `.*` | `AwaitingInput { Permission }` |
 | `PreToolUse`, tool `request_user_input` | `.*` | `AwaitingInput { Question }` |
@@ -48,21 +48,21 @@ A root `Registered` or `TurnStarted`, and the compaction close from `SessionStar
 
 Codex's `SessionEnd` hook stays unwired, because upstream also fires it when the app-server unloads an idle thread, which does not prove the pane died. The [reaper](./instances.md#session-death) stamps the end once pane liveness proves the process gone.
 
-Codex has no `Notification` hook and no background-task parking, so `parked_on_background` is always false. Background shells are unsupported too: the descriptor's `background_shells` coverage records that commands run through the code_mode `exec` and `wait` tools, which fire no `PreToolUse` or `PostToolUse`, and that `Stop` carries no task list.
+Codex has no `Notification` hook and no background-task parking, so `parked_on_background` is always false. Background-shell tracking is unsupported too: `Stop` carries no task list.
 
 ### Tool events
 
 `PostToolUse` carries the tool name, so the store appends every one and replay counts it into `tool_calls`. The unnamed `PreToolUse` signal is proof of work: it keeps the heartbeat current and is appended only under the rule in [model.md](./model.md#the-state-machine), so one call counts once. `apply_patch` sets `edits`.
 
-The hooks are a progress signal, not an enforcement boundary. Upstream routes shell calls (reported as `Bash`), `apply_patch`, and MCP calls through `PreToolUse` and `PostToolUse`, while web search and some other tool paths bypass both. The [spend parser](#cost) reads tool calls from the rollout, so historical counts stay complete.
+The hooks are a progress signal, not an enforcement boundary. Upstream routes shell calls (reported as `Bash`), `apply_patch`, and MCP calls through `PreToolUse` and `PostToolUse`, while web search and some other tool paths bypass both. Those calls also fire both hooks when nested in a code-mode cell, carry their originating turn's id, and can complete after `Stop`. The [spend parser](#cost) reads tool calls from the rollout, so historical counts stay complete.
 
 ### Turn endings
 
 On `Stop` and `SubagentStop`, `decode_hook` scans the rollout tail once with [`scan_transcript_tail`](../../../crates/rimz/src/agents/adapters/codex/transcript.rs). An explicit rollout error record, or an error flag in the stop payload, marks the signal errored, so a provider-killed turn never ends as success. The same scan decides whether `Stop` rests on a plan ([plan-approval marker](#plan-approval-marker)).
 
-`Interrupt` fires only for a root turn and forwards Codex's `turn_id`, as `PreToolUse` and `PostToolUse` do. The rollup records the interrupted turn id and ignores a trailing tool completion from that turn, so a late `PostToolUse` cannot reopen the rested root. A Codex version without the hook ignores the installed key, and the rollout's [interruption marker](#turn-interruption-marker) settles its turns.
+`Stop` forwards Codex's `turn_id`, as `Interrupt`, `PreToolUse`, and `PostToolUse` do. The rollup records the closed turn id on a turn end or interruption and ignores a trailing tool from that turn, so a late `PostToolUse` cannot reopen the rested root. A tool with a different or absent id still reconciles an idle or successful row to running; `UserPromptSubmit` remains id-less. `Interrupt` fires only for a root turn. A Codex version without that hook ignores the installed key, and the rollout's [interruption marker](#turn-interruption-marker) settles its turns.
 
-Codex is the one adapter that declares `confirm_interrupt`, so `rimz message --interrupt` follows the event log for this `TurnInterrupted` after pressing Escape ([the interrupt key](../harness/messaging.md#the-interrupt-key) owns the sequence). It reads events, so a later `TurnStarted` that clears the snapshot's interrupted id cannot hide the stop. No event within the window means not confirmed: the turn may still be running, or the optional `Interrupt` hook may be untrusted. A confirmed stop is not a fresh turn. Codex replays pending steers but not text already committed to the running turn, an expanded question editor takes pasted text as an answer, and an Escape that the editor owns (Vim insert mode, history search) reaches the editor first.
+Codex is the one adapter that declares `confirm_interrupt`, so `rimz message --interrupt` follows the event log for this `TurnInterrupted` after pressing Escape ([the interrupt key](../harness/messaging.md#the-interrupt-key) owns the sequence). It reads events, so a later `TurnStarted` that clears the snapshot's closed id cannot hide the stop. No event within the window means not confirmed: the turn may still be running, or the optional `Interrupt` hook may be untrusted. A confirmed stop is not a fresh turn. Codex replays pending steers but not text already committed to the running turn, an expanded question editor takes pasted text as an answer, and an Escape that the editor owns (Vim insert mode, history search) reaches the editor first.
 
 ### Asks and answers
 

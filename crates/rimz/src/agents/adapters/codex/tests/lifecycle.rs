@@ -140,6 +140,20 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
         ),
         (
             "Stop",
+            json!({"session_id":"s","turn_id":"turn-1"}),
+            Some(TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: Some("turn-1".to_owned()),
+            }),
+        ),
+        (
+            "UserPromptSubmit",
+            json!({"session_id":"s","turn_id":"turn-1","prompt":"next"}),
+            Some(TurnStarted { turn_id: None }),
+        ),
+        (
+            "Stop",
             json!({"session_id":"s","status":"failed"}),
             Some(TurnEnded {
                 errored: true,
@@ -155,10 +169,14 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             }),
         ),
     ];
-    for (event, payload, expected) in cases {
-        let signal = hook_observation(&CodexAdapter, event, payload).map(|obs| obs.signal);
-        assert_eq!(&signal, expected, "{event} {payload}");
-    }
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(event, payload, _)| {
+            hook_observation(&CodexAdapter, event, payload).map(|obs| obs.signal)
+        })
+        .collect();
+    let expected: Vec<_> = cases.iter().map(|(_, _, signal)| signal.clone()).collect();
+    assert_eq!(actual, expected);
 
     // A SessionStart carries the session as the agent identity and no task.
     let session = hook_lifecycle(
@@ -239,7 +257,7 @@ fn messageless_stop_keeps_raw_turn_error_empty() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
-            turn_id: None,
+            turn_id: Some("turn-messageless".to_owned()),
         }
     );
 }
