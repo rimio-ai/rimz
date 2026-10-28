@@ -208,6 +208,7 @@ fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
             None,
         ),
         ("stay", format!("{VALID}lifecycle='stay'\n"), None),
+        ("until", format!("{VALID}lifecycle='until'\n"), None),
         (
             "no agent",
             VALID.replace("agent = \"claude\"", "agent = 'term'"),
@@ -231,6 +232,16 @@ fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
         (
             "stay asked",
             format!("{VALID}lifecycle='stay'\non.asked='@user'\n"),
+            Some("steps.build.on.asked"),
+        ),
+        (
+            "until timeout",
+            format!("{VALID}lifecycle='until'\ntimeout='1h'\n"),
+            Some("steps.build.timeout"),
+        ),
+        (
+            "until asked",
+            format!("{VALID}lifecycle='until'\non.asked='@user'\n"),
             Some("steps.build.on.asked"),
         ),
         (
@@ -274,6 +285,37 @@ fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
         })
         .collect();
     assert!(results.iter().all(|(_, valid, _)| *valid), "{results:#?}");
+}
+
+#[test]
+fn until_warns_about_unreported_background_work_but_not_auto_continue() {
+    let (home, dir) = fixture();
+    fs::write(
+        dir.join("workflow.toml"),
+        format!(
+            "{}lifecycle='until'\n",
+            VALID.replace("agent = \"claude\"", "agent = 'codex'")
+        ),
+    )
+    .unwrap();
+    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|issue| issue.message.contains("background reporting")),
+        "{:?}",
+        report.warnings
+    );
+    assert!(
+        !report
+            .warnings
+            .iter()
+            .any(|issue| issue.message.contains("auto-continue")),
+        "{:?}",
+        report.warnings
+    );
 }
 
 #[test]
@@ -605,7 +647,7 @@ fn validation_rejects_each_invalid_spec() {
             "command lifecycle",
             format!("{command}lifecycle='turn'\n"),
             "steps.build.lifecycle",
-            "stay",
+            "lifecycle is for agent steps",
         ),
         (
             "command window",

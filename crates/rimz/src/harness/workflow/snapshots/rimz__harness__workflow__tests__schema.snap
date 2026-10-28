@@ -286,7 +286,8 @@ expression: value
     "StepLifecycle": {
       "enum": [
         "turn",
-        "stay"
+        "stay",
+        "until"
       ],
       "type": "string"
     },

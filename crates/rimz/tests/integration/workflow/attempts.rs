@@ -13,6 +13,8 @@ struct Room {
     bin: PathBuf,
 }
 
+mod until;
+
 fn dummy_agent_process() -> std::process::Child {
     let mut owner = std::process::Command::new("sleep");
     owner.scrub_session_env().arg("30");
@@ -1426,10 +1428,22 @@ impl Room {
         self.hook_with_owner(id, run, self.env.agent_owner_pid(), payload);
     }
 
-    fn hook_with_owner(&self, id: &str, run: &RunRecord, owner_pid: u32, mut payload: Value) {
+    fn hook_with_owner(&self, id: &str, run: &RunRecord, owner_pid: u32, payload: Value) {
+        self.hook_with_environment(id, run, owner_pid, payload, &[]);
+    }
+
+    fn hook_with_environment(
+        &self,
+        id: &str,
+        run: &RunRecord,
+        owner_pid: u32,
+        mut payload: Value,
+        variables: &[(&str, &std::path::Path)],
+    ) {
         payload["session_id"] = json!("workflow-session");
         payload["cwd"] = json!(self.env.project_root);
         let mut cmd = self.hook_command(run.kind.as_str());
+        cmd.envs(variables.iter().copied());
         cmd.env("RIMZ_AGENT_PID", owner_pid.to_string())
             .env("RIMZ_RUN_ID", run.run_id.as_str())
             .env("RIMZ_AGENT_NAME", run.agent_name.as_deref().unwrap())
