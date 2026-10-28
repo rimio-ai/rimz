@@ -409,6 +409,7 @@ fn collect_loop() -> model::LoopTasks {
     let mut rooms = std::collections::BTreeMap::new();
     let mut markers = std::collections::BTreeMap::new();
     let mut unscheduled = Vec::new();
+    let config = rimz::config::MachineConfig::load_lenient();
     let machine = TaskCatalog::load_lenient(None);
     let instances = workspace_instance_roots()
         .into_iter()
@@ -491,6 +492,25 @@ fn collect_loop() -> model::LoopTasks {
                     .collect(),
             }
         })
+        .chain(
+            config
+                .r#loop
+                .skipped_tasks
+                .0
+                .iter()
+                .filter_map(|(name, entry)| {
+                    let problem = entry.root_problem()?;
+                    Some(model::LoopTaskRow {
+                        name: name.clone(),
+                        spec: "<invalid>".to_owned(),
+                        when: format!("invalid: {problem}"),
+                        root: entry.root.display().to_string(),
+                        valid: false,
+                        room_open: false,
+                        holds_worktrees: Vec::new(),
+                    })
+                }),
+        )
         .collect();
     model::LoopTasks {
         tasks: rows,

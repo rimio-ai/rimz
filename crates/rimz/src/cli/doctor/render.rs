@@ -2416,11 +2416,20 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
         }
         visible += 1;
         let badge = if !row.valid {
+            let fix = if rimz::config::has_absolute_task_root(std::path::Path::new(&row.root)) {
+                "repair the task's trigger or action in loop.toml, then inspect `rimz loop list`"
+                    .to_owned()
+            } else {
+                format!(
+                    "set `root` to an absolute path in loop.toml, or remove the task with `rimz loop remove {}`",
+                    row.name
+                )
+            };
             counted(
                 tally,
                 Severity::Problem,
                 format!("{}: {}", row.name, row.when),
-                "repair the task's trigger or action in loop.toml, then inspect `rimz loop list`",
+                fix,
             )
         } else if unscheduled {
             tally.record_subject(

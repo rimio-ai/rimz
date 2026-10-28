@@ -1259,6 +1259,43 @@ fn doctor_audit_does_not_turn_ended_failures_into_findings() {
 }
 
 #[test]
+fn doctor_reports_machine_task_root_problem() {
+    let env = Env::new();
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        "[tasks.one]\ncheck='true'\nevery='1h'\n",
+    )
+    .unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let tasks = report["loop_tasks"]["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 1, "{report}");
+    let row = &tasks[0];
+    assert_eq!(row["name"], "one", "{report}");
+    assert_eq!(row["valid"], false, "{report}");
+    assert_eq!(row["root"], "", "{report}");
+    assert_eq!(row["room_open"], false, "{report}");
+    assert_eq!(row["holds_worktrees"], json!([]), "{report}");
+    let when = row["when"].as_str().unwrap();
+    assert!(
+        when.starts_with("invalid:") && when.contains("no `root`"),
+        "{report}"
+    );
+    assert_eq!(report["loop_tasks"]["unscheduled"], json!([]), "{report}");
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("✗ LOOP TASKS: one:"), "{text}");
+    assert!(
+        text.contains("absolute path") && text.contains("rimz loop remove one"),
+        "{text}"
+    );
+    assert!(!text.contains("one has no scheduler"), "{text}");
+    assert!(
+        !text.contains("repair the task's trigger or action"),
+        "{text}"
+    );
+}
+
+#[test]
 fn doctor_counts_an_invalid_loop_action() {
     let env = Env::new();
     std::fs::write(
