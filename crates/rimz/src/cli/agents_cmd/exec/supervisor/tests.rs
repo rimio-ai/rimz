@@ -44,8 +44,8 @@ fn thin_argv_retains_globals_and_original_exec_envelope() {
         "claude",
         "--worktree-path",
         "/a checkout",
-        "--request",
-        "{\"v\":1}",
+        "--request-file",
+        "/a runtime/exec.digest.json",
     ]
     .into_iter()
     .map(Into::into)
@@ -469,7 +469,13 @@ fn folding_card_evidence_asks_have_a_quarter_second_floor() {
 #[test]
 fn park_errors_before_supervision_fail_the_run_and_end_the_provider() {
     use super::super::tests::test_workspace;
-    for invalid_workspace in [false, true] {
+    // The handoff fails its provider-child check before supervision. The error
+    // branch then fails reading the absent request or, with the request
+    // present, settling against a root that holds no room.
+    for (invalid_workspace, failed_step) in [
+        (false, "reading exec request"),
+        (true, "opening supervised run store"),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let workspace = test_workspace(dir.path());
         let paths = rimz::StatePaths::for_project_root(dir.path()).unwrap();
@@ -492,15 +498,24 @@ fn park_errors_before_supervision_fail_the_run_and_end_the_provider() {
             },
         );
         request.run_id = Some(record.run_id.clone());
+        let request_file = if invalid_workspace {
+            let argv = rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), &runtime, &request)
+                .unwrap();
+            std::path::PathBuf::from(argv.last().unwrap())
+        } else {
+            dir.path().join("missing-request.json")
+        };
         let mut command = Command::new("/bin/sleep");
-        command.arg("60");
+        command.arg("347");
         let mut child = command.spawn().unwrap();
+        let mut stranger = Command::new("/bin/true").spawn().unwrap();
+        stranger.wait().unwrap();
         let state = ParkState {
             v: PARK_VERSION,
             request,
             identity: None,
             provider: SavedCommand::capture(&command),
-            provider_pid: child.id(),
+            provider_pid: stranger.id(),
             spawned_at: jiff::Timestamp::now(),
             relaunch_cap: 0,
             relaunch_wait_ms: 0,
@@ -522,7 +537,8 @@ fn park_errors_before_supervision_fail_the_run_and_end_the_provider() {
         let args = ExecArgs {
             kind: "codex".into(),
             worktree_path: None,
-            request: "invalid envelope".into(),
+            request_file: Some(request_file),
+            request: None,
             supervise: Some(path),
         };
         let globals = GlobalFlags {
@@ -536,17 +552,31 @@ fn park_errors_before_supervision_fail_the_run_and_end_the_provider() {
                 dir.path().into()
             }),
         };
-        assert!(run_exec(args, &globals).is_err());
+        let started = Instant::now();
+        let error = run_exec(args, &globals).unwrap_err();
+        let elapsed = started.elapsed();
         let stopped = rimz::proc::comm_and_ppid(child.id()).is_none();
         let failed = rimz::harness::run::load(&paths, &record.run_id).unwrap();
         let _ = child.kill();
         let _ = child.wait();
+        assert!(format!("{error:#}").contains(failed_step), "{error:#}");
         assert_eq!(
             failed.status,
             rimz::store::run::RunStatus::Failed,
             "early park error must fail a retained run (workspace error={invalid_workspace})"
         );
-        assert!(stopped, "early park error must end the retained provider");
+        assert!(
+            failed
+                .failure_tail
+                .as_deref()
+                .is_some_and(|tail| tail.contains("does not name this wrapper's provider child")),
+            "{:?}",
+            failed.failure_tail
+        );
+        assert!(
+            stopped && elapsed < Duration::from_secs(30),
+            "early park error must end the retained provider, not outwait it ({elapsed:?})"
+        );
     }
 }
 

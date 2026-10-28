@@ -348,9 +348,8 @@ const DRAINER: &str = "/home/me/.cargo/bin/rimz hooks drain --project-root /repo
 
 fn exec_wrapper(kind: &str) -> String {
     format!(
-        "/home/me/.cargo/bin/rimz agents exec {kind} --request \
-         {{\"request\":{{\"kind\":\"{kind}\",\"action\":{{\"action\":\"resume\",\
-         \"session_id\":\"session\"}}}},\"prompt_file\":null}}"
+        "/home/me/.cargo/bin/rimz agents exec {kind} --request-file \
+         /runtime/live/prompt/exec.digest.json"
     )
 }
 

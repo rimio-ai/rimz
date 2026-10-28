@@ -418,7 +418,7 @@ fn turn_layout_pins_every_agent_and_wraps_commands() {
         assert!(trace.contains(expected), "missing {expected}: {trace}");
     }
     let payloads: Vec<_> = trace
-        .split("\"--request\" ")
+        .split("\"--request-file\" ")
         .skip(1)
         .map(|rest| {
             serde_json::Deserializer::from_str(rest)
@@ -430,6 +430,7 @@ fn turn_layout_pins_every_agent_and_wraps_commands() {
         .collect();
     assert_eq!(payloads.len(), 2);
     for (kind, payload) in ["codex", "claude"].into_iter().zip(payloads) {
+        let payload = fs::read_to_string(payload).unwrap();
         let request = rimz::harness::launch::decode_exec_request(kind, None, &payload).unwrap();
         assert_eq!(request.identity.params.workflow, runs[0].workflow);
     }
@@ -1577,7 +1578,7 @@ fn supervised_identity_prompt_and_lifecycle_completion() {
     assert_eq!(run.prompt, "Build it\n\nUse the smaller fix\n\nReview this");
     let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
     let payload = trace
-        .split("\"--request\" ")
+        .split("\"--request-file\" ")
         .nth(1)
         .and_then(|rest| {
             serde_json::Deserializer::from_str(rest)
@@ -1586,6 +1587,7 @@ fn supervised_identity_prompt_and_lifecycle_completion() {
                 .ok()
         })
         .unwrap();
+    let payload = fs::read_to_string(payload).unwrap();
     let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
     assert_eq!(request.identity.params.workflow, run.workflow);
     room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));

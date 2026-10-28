@@ -666,6 +666,31 @@ fn provider_compiler_rejects_remote_codex_on_every_action() {
 }
 
 #[test]
+fn exec_argv_size_is_independent_of_request_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = runtime(dir.path());
+    let mut input = team_request("claude");
+    input.worktree_path = Some(PathBuf::from("/repo/worktree"));
+    input.system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: PathBuf::from("system.md"),
+        text: "s".repeat(10_000),
+    });
+    input.action = ExecAction::Launch {
+        prompt: None,
+        extra_args: (0..100)
+            .map(|index| format!("--setting-{index}={}", "value".repeat(100)))
+            .collect(),
+    };
+    let argv = exec_argv(Path::new("/bin/rimz"), &runtime, &input).unwrap();
+    assert!(
+        argv.iter().all(|arg| !arg.starts_with('{')),
+        "the request must not travel through mux argv"
+    );
+    assert!(argv.join(" ").len() < 512 + "/bin/rimz".len() + "/repo/worktree".len());
+    assert!(argv.iter().any(|arg| arg == "--request-file"));
+}
+
+#[test]
 fn text_prompt_sources_spill_before_encoding_the_exec_wire() {
     use crate::config::PromptSource;
     use crate::harness::team_prompt::{Consensus, TeamPrompt};
@@ -699,16 +724,11 @@ fn text_prompt_sources_spill_before_encoding_the_exec_wire() {
         input
     );
     let plan = plan_exec_argv(Path::new("/bin/rimz"), &runtime, &input).unwrap();
-    let payload = plan
-        .argv
-        .windows(2)
-        .find(|pair| pair[0] == "--request")
-        .unwrap()[1]
-        .as_str();
+    let payload = &plan.artifacts.last().unwrap().contents;
     assert!(!payload.contains("private"));
-    assert_eq!(plan.artifacts.len(), 4);
+    assert_eq!(plan.artifacts.len(), 5);
     assert_eq!(plan.artifacts[0].contents, "private task text");
-    for (artifact, text) in plan.artifacts[1..].iter().zip(texts) {
+    for (artifact, text) in plan.artifacts[1..4].iter().zip(texts) {
         assert_eq!(artifact.contents, text);
         assert_eq!(artifact.path, prompt_artifact_path(&runtime, "frag", text));
         assert!(!artifact.path.exists());
@@ -786,19 +806,31 @@ fn round_trip(input: &ExecRequest) -> (Vec<String>, ExecRequest) {
     let plan = plan_exec_argv(Path::new("/bin/rimz"), &runtime, input).expect("plan exec request");
     for artifact in &plan.artifacts {
         assert!(!artifact.path.exists());
-        let ExecAction::Launch { prompt, .. } = &input.action else {
-            panic!("only launch requests carry prompt artifacts");
-        };
-        assert_eq!(Some(&artifact.contents), prompt.as_ref());
+    }
+    if let ExecAction::Launch {
+        prompt: Some(prompt),
+        ..
+    } = &input.action
+    {
+        assert_eq!(&plan.artifacts[0].contents, prompt);
     }
     let argv = exec_argv(Path::new("/bin/rimz"), &runtime, input).expect("encode exec request");
     assert_eq!(plan.argv, argv);
     let payload = argv
         .windows(2)
-        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
-        .expect("request payload");
-    let decoded = decode_exec_request(input.kind.as_str(), input.worktree_path.as_deref(), payload)
-        .expect("decode exec request");
+        .find_map(|pair| (pair[0] == "--request-file").then_some(pair[1].as_str()))
+        .expect("request path");
+    let payload = std::fs::read_to_string(payload).expect("request contents");
+    if !matches!(input.action, ExecAction::Launch { .. }) {
+        let wire: ExecWire = serde_json::from_str(&payload).expect("wire");
+        assert!(wire.prompt_file.is_none());
+    }
+    let decoded = decode_exec_request(
+        input.kind.as_str(),
+        input.worktree_path.as_deref(),
+        &payload,
+    )
+    .expect("decode exec request");
     (argv, decoded)
 }
 
@@ -2638,7 +2670,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
             "/repo/worktree"
         ]
     );
-    assert_eq!(argv[6], "--request");
+    assert_eq!(argv[6], "--request-file");
     assert_eq!(decoded.identity.params.kind_ordinal, None);
     let mut expected = invocation;
     expected.identity.params.kind_ordinal = None;
@@ -2700,9 +2732,6 @@ fn exec_wire_round_trips_resume_and_fork() {
         };
         let (argv, decoded) = round_trip(&invocation);
         assert_eq!(argv[..4], ["/bin/rimz", "agents", "exec", "claude"]);
-        let wire: serde_json::Value =
-            serde_json::from_str(argv.last().expect("payload")).expect("wire");
-        assert!(wire.get("prompt_file").is_none());
         assert_eq!(decoded, invocation);
     }
 }
@@ -2975,6 +3004,8 @@ fn provider_binding(key: &str) -> crate::agents::ProviderAccountBinding {
 
 #[test]
 fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = runtime(dir.path());
     let mut missing_run = request(
         "codex",
         ExecAction::Launch {
@@ -2984,13 +3015,9 @@ fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
     );
     missing_run.exit_on_run_completion = true;
     assert_eq!(
-        exec_argv(
-            Path::new("/bin/rimz"),
-            &runtime(Path::new("/tmp/unused")),
-            &missing_run
-        )
-        .expect_err("run id required")
-        .to_string(),
+        exec_argv(Path::new("/bin/rimz"), &runtime, &missing_run)
+            .expect_err("run id required")
+            .to_string(),
         "--exit-on-run-completion requires --run-id"
     );
 
@@ -3001,19 +3028,17 @@ fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
             extra_args: Vec::new(),
         },
     );
-    let argv = exec_argv(
-        Path::new("/bin/rimz"),
-        &runtime(Path::new("/tmp/unused")),
-        &input,
-    )
-    .expect("argv");
-    let payload = argv.last().expect("payload");
+    let argv = exec_argv(Path::new("/bin/rimz"), &runtime, &input).expect("argv");
+    let path = Path::new(argv.last().expect("request path"));
+    let decode = |kind: &str, worktree: Option<&Path>| {
+        decode_exec_request(kind, worktree, &std::fs::read_to_string(path).unwrap())
+    };
     assert!(matches!(
-        decode_exec_request("claude", None, payload),
+        decode("claude", None),
         Err(ExecWireErr::KindMismatch { .. })
     ));
     assert!(matches!(
-        decode_exec_request("codex", Some(Path::new("/other")), payload),
+        decode("codex", Some(Path::new("/other"))),
         Err(ExecWireErr::WorktreeMismatch)
     ));
 
@@ -3022,19 +3047,20 @@ fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
         .as_object_mut()
         .expect("request serializes as an object")
         .remove("subagent");
-    let decoded =
-        decode_exec_request("codex", None, &value.to_string()).expect("legacy request payload");
+    std::fs::write(path, value.to_string()).unwrap();
+    let decoded = decode("codex", None).expect("legacy request payload");
     assert!(!decoded.subagent);
 
     value["action"]["prompt"] = serde_json::json!("legacy inline\nprompt");
-    let decoded = decode_exec_request("codex", None, &value.to_string()).expect("inline prompt");
+    std::fs::write(path, value.to_string()).unwrap();
+    let decoded = decode("codex", None).expect("inline prompt");
     assert!(
         matches!(decoded.action, ExecAction::Launch { prompt: Some(ref prompt), .. } if prompt == "legacy inline\nprompt")
     );
 
     value["provider_account"] = serde_json::json!({ "state": "finalized" });
-    let err = decode_exec_request("codex", None, &value.to_string())
-        .expect_err("finalized binding required");
+    std::fs::write(path, value.to_string()).unwrap();
+    let err = decode("codex", None).expect_err("finalized binding required");
     assert!(
         err.to_string()
             .contains("finalized provider-account launch is missing its expected binding"),
@@ -3119,21 +3145,25 @@ fn provider_account_stage_validates_and_reenters_once() {
         panic!("pending binding must re-enter");
     };
     assert!(!argv.iter().any(|arg| arg == "session-step"));
-    let artifact = prompt_artifacts
-        .into_iter()
-        .next()
-        .expect("reentry prompt artifact");
-    assert!(!artifact.path.exists());
-    write_prompt_artifact(&artifact).expect("apply reentry prompt artifact");
+    assert_eq!(
+        prompt_artifacts.last().unwrap().path.to_str(),
+        argv.last().map(String::as_str)
+    );
+    for artifact in &prompt_artifacts {
+        assert!(!artifact.path.exists());
+        write_prompt_artifact(artifact).expect("apply reentry artifact");
+    }
     let payload = argv
         .windows(2)
-        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
-        .expect("reentry payload");
-    let finalized = decode_exec_request("qwen", None, payload).expect("finalized request");
+        .find_map(|pair| (pair[0] == "--request-file").then_some(pair[1].as_str()))
+        .expect("reentry path");
+    let payload = std::fs::read_to_string(payload).unwrap();
+    let finalized = decode_exec_request("qwen", None, &payload).expect("finalized request");
     assert_eq!(finalized.action, pending.action);
     let initial = exec_argv(Path::new("/bin/rimz"), &runtime, &pending).expect("initial argv");
-    let initial: ExecWire = serde_json::from_str(initial.last().expect("payload")).expect("wire");
-    let reentry: ExecWire = serde_json::from_str(payload).expect("wire");
+    let initial = std::fs::read_to_string(initial.last().expect("request path")).unwrap();
+    let initial: ExecWire = serde_json::from_str(&initial).expect("wire");
+    let reentry: ExecWire = serde_json::from_str(&payload).expect("wire");
     assert_eq!(initial.prompt_file, reentry.prompt_file);
     assert!(matches!(
         finalized.provider_account,

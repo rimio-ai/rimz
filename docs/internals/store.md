@@ -215,6 +215,7 @@ live/{agent_context,subagent_context}/        enrichment
 live/agent-activity/                          activity hints
 live/active-time/                             active-time accumulators
 live/prompt/{task,sys}.<digest>.md            launch artifacts
+live/prompt/exec.<digest>.json                exec request envelopes
 live/agent-telemetry/copilot-otel.jsonl       metadata-only Copilot export
 live/idle-compact/<digest>.json               idle-compaction fire records
 live/idle-stop/<digest>.json                  idle-stop helper pacing records

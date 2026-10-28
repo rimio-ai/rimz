@@ -1946,7 +1946,7 @@ fn assert_subagent_checkout_case(
         assert_eq!(cwd.map(|args| args[1]), checkout.to_str(), "{pane}");
         let payload = args
             .windows(2)
-            .find(|args| args[0] == "--request")
+            .find(|args| args[0] == "--request-file")
             .expect("exec request")[1];
         assert!(
             payload.len() < 4096,
@@ -1956,7 +1956,8 @@ fn assert_subagent_checkout_case(
             .windows(2)
             .find(|args| args[0] == "--worktree-path")
             .map(|args| std::path::Path::new(args[1]));
-        let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, payload)
+        let payload = std::fs::read_to_string(payload).expect("exec request contents");
+        let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, &payload)
             .expect("child prompt artifact");
         assert!(
             matches!(decoded.action, rimz::harness::launch::ExecAction::Launch { prompt: Some(ref actual), .. } if actual == &prompt)
@@ -2060,13 +2061,14 @@ fn assert_subagent_checkout_case(
         let args = reopened.split('\t').collect::<Vec<_>>();
         let payload = args
             .windows(2)
-            .find(|args| args[0] == "--request")
+            .find(|args| args[0] == "--request-file")
             .expect("restarted exec request")[1];
         let visible_worktree = args
             .windows(2)
             .find(|args| args[0] == "--worktree-path")
             .map(|args| std::path::Path::new(args[1]));
-        let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, payload)
+        let payload = std::fs::read_to_string(payload).expect("exec request contents");
+        let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, &payload)
             .expect("restarted child request");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(

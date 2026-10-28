@@ -835,8 +835,23 @@ struct ExecArgs {
     kind: String,
     #[arg(long)]
     worktree_path: Option<PathBuf>,
-    #[arg(long, hide = true, value_name = "JSON")]
-    request: String,
+    #[arg(
+        long,
+        hide = true,
+        value_name = "PATH",
+        required_unless_present = "request",
+        conflicts_with = "request"
+    )]
+    request_file: Option<PathBuf>,
+    // A wrapper started by a pre-request-file binary must still park under the new one.
+    // Remove this legacy flag in the following release.
+    #[arg(
+        long,
+        hide = true,
+        value_name = "JSON",
+        required_unless_present = "request_file"
+    )]
+    request: Option<String>,
     #[arg(long, hide = true)]
     supervise: Option<PathBuf>,
 }

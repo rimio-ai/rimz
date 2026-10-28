@@ -30,19 +30,21 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     result
 }
 
+fn decode_exec_envelope(args: &ExecArgs) -> Result<rimz::harness::launch::ExecEnvelope> {
+    let payload = if let Some(path) = &args.request_file {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("reading exec request {}", path.display()))
+            .context("decoding hidden agent exec request")?
+    } else {
+        args.request
+            .clone()
+            .context("missing hidden agent exec request")?
+    };
+    rimz::harness::launch::decode_exec_envelope(&args.kind, args.worktree_path.as_deref(), &payload)
+        .context("decoding hidden agent exec request")
+}
+
 fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
-    let envelope = rimz::harness::launch::decode_exec_envelope(
-        &args.kind,
-        args.worktree_path.as_deref(),
-        &args.request,
-    )
-    .context("decoding hidden agent exec request")?;
-    let cwd = envelope
-        .request()
-        .worktree_path
-        .as_deref()
-        .map(absolute_lexical_path)
-        .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))?;
     #[cfg(unix)]
     if let Some(path) = args.supervise.as_deref() {
         let (exit, workspace) = match supervisor::run(path) {
@@ -53,9 +55,16 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 install_interrupt_signal_handler()?;
                 rimz::child_process::CleanupSignalMask::unblock()?;
                 let status = supervisor::terminate_retained();
+                let request = decode_exec_envelope(&args)?.request().clone();
+                let cwd = request
+                    .worktree_path
+                    .as_deref()
+                    .map(absolute_lexical_path)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().context("reading the agent pane cwd")
+                    })?;
                 let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
                     .context("resolving the agent launch workspace")?;
-                let request = envelope.request().clone();
                 let isolation = request
                     .isolation_default
                     .unwrap_or(crate::cli::machine_config().agents.isolation);
@@ -100,6 +109,13 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if args.supervise.is_some() {
         bail!("park image handoff is unavailable on this platform");
     }
+    let envelope = decode_exec_envelope(&args)?;
+    let cwd = envelope
+        .request()
+        .worktree_path
+        .as_deref()
+        .map(absolute_lexical_path)
+        .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
     let mut invocation = ExecInvocationContext::new(&workspace, cwd);

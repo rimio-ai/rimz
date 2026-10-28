@@ -439,8 +439,14 @@ mod tests {
     #[test]
     fn agent_wrapper_root_is_the_hosted_cli_whatever_its_children() {
         let start = timestamp("2026-07-01T10:00:00Z");
-        let launch = r#"/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt --request {"request":{"kind":"codex","action":{"action":"launch"}},"prompt_file":null}"#;
-        let parked = r#"/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt --request {"request":{"kind":"codex","action":{"action":"launch"}},"prompt_file":null} --supervise /tmp/rimz/unit/supervise.json"#;
+        let launch = concat!(
+            "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt ",
+            "--request-file /runtime/exec.json"
+        );
+        let parked = concat!(
+            "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt ",
+            "--request-file /runtime/exec.json --supervise /tmp/rimz/unit/supervise.json"
+        );
         let duty = "/home/me/.cargo/bin/rimz agents supervise-duty --request /tmp/req";
         let cases = [
             chain([(10, launch), (20, "codex"), (30, duty)]).branch(10, [20, 30]),

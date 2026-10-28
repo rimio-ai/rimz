@@ -16,10 +16,12 @@ static NO_SUBAGENT_PROFILES: std::sync::LazyLock<ProfilesConfig> =
     std::sync::LazyLock::new(ProfilesConfig::default);
 static WORKSPACE: std::sync::LazyLock<WorkspaceId> =
     std::sync::LazyLock::new(|| WorkspaceId::from_project_root(Path::new("/repo")));
+static RUNTIME_ROOT: std::sync::LazyLock<tempfile::TempDir> =
+    std::sync::LazyLock::new(|| tempfile::tempdir().expect("runtime root"));
 static RUNTIME: std::sync::LazyLock<RuntimePaths> = std::sync::LazyLock::new(|| {
     RuntimePaths::under(
         crate::WorkspaceId::from_project_root(Path::new("/repo")),
-        Path::new("/runtime"),
+        RUNTIME_ROOT.path(),
     )
     .expect("runtime fixture")
 });
@@ -121,12 +123,13 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
 fn decode_exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
     let payload = argv
         .windows(2)
-        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
-        .expect("exec request payload");
+        .find_map(|pair| (pair[0] == "--request-file").then_some(pair[1].as_str()))
+        .expect("exec request path");
+    let payload = std::fs::read_to_string(payload).expect("exec request contents");
     let worktree = argv
         .windows(2)
         .find_map(|pair| (pair[0] == "--worktree-path").then(|| Path::new(&pair[1])));
-    crate::harness::launch::decode_exec_request(&argv[3], worktree, payload)
+    crate::harness::launch::decode_exec_request(&argv[3], worktree, &payload)
         .expect("decode exec request")
 }
 

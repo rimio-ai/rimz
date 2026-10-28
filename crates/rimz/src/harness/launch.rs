@@ -1665,7 +1665,7 @@ pub fn preflight_agent_kind(project_root: &Path, kind: &str, cwd: &Path) -> Agen
     .map(drop)
 }
 
-/// Encode the launch prompt by artifact path, keeping its body out of mux argv.
+/// Encode the request and launch prompt by artifact path, keeping mux argv bounded.
 pub fn exec_argv(
     rimz_bin: &Path,
     runtime: &RuntimePaths,
@@ -1750,7 +1750,15 @@ fn plan_exec_argv(
         prompt_file,
     })
     .map_err(ExecWireErr::Serialize)?;
-    argv.extend(["--request".to_owned(), payload]);
+    let path = prompt_artifact_path(runtime, "exec", &payload).with_extension("json");
+    argv.extend([
+        "--request-file".to_owned(),
+        path.to_string_lossy().into_owned(),
+    ]);
+    artifacts.push(PromptArtifact {
+        path,
+        contents: payload,
+    });
     Ok(ExecArgvPlan { argv, artifacts })
 }
 

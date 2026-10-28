@@ -636,8 +636,8 @@ pub struct ResumeTab {
     /// pin), the same way `TabOptions.env` applies to a live tab.
     pub env: BTreeMap<String, String>,
     /// At least one pane. Resume panes run the supervised exec
-    /// wrapper, e.g. `["<rimz>", "agents", "exec", "claude", "--request",
-    /// "<json>"]`, so a resumed agent gets the same launch-env injection as a
+    /// wrapper, e.g. `["<rimz>", "agents", "exec", "claude", "--request-file",
+    /// "<path>"]`, so a resumed agent gets the same launch-env injection as a
     /// fresh launch.
     pub layout: LayoutPanes,
 }

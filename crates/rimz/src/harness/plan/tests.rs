@@ -1273,12 +1273,13 @@ fn assert_request_field(argv: &[String], field: RequestField, value: &str) {
 fn exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
     let payload = argv
         .windows(2)
-        .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
-        .expect("exec request payload");
+        .find_map(|pair| (pair[0] == "--request-file").then_some(pair[1].as_str()))
+        .expect("exec request path");
+    let payload = std::fs::read_to_string(payload).expect("exec request contents");
     let worktree = argv
         .windows(2)
         .find_map(|pair| (pair[0] == "--worktree-path").then(|| Path::new(pair[1].as_str())));
-    crate::harness::launch::decode_exec_request(&argv[3], worktree, payload)
+    crate::harness::launch::decode_exec_request(&argv[3], worktree, &payload)
         .expect("decode exec request")
 }
 
@@ -3649,12 +3650,10 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
 
 #[test]
 fn resume_command_can_return_to_the_existing_shell() {
+    let dir = tempfile::tempdir().unwrap();
     let root = Path::new("/code/project");
-    let runtime = RuntimePaths::under(
-        crate::WorkspaceId::from_project_root(root),
-        Path::new("/runtime"),
-    )
-    .unwrap();
+    let runtime =
+        RuntimePaths::under(crate::WorkspaceId::from_project_root(root), dir.path()).unwrap();
     let agent = crate::testkit::agent_state("codex", "saved", Timestamp::UNIX_EPOCH);
     let argv = resume_command(
         Path::new("/bin/rimz"),
@@ -3664,18 +3663,17 @@ fn resume_command_can_return_to_the_existing_shell() {
         &ResumeLaunchPosture::default(),
         false,
         None,
-    );
+    )
+    .unwrap();
     assert!(!exec_request(&argv).close_pane_on_exit);
 }
 
 #[test]
 fn in_place_resume_layout_returns_to_the_existing_shell() {
+    let dir = tempfile::tempdir().unwrap();
     let root = Path::new("/code/project");
-    let runtime = RuntimePaths::under(
-        crate::WorkspaceId::from_project_root(root),
-        Path::new("/runtime"),
-    )
-    .unwrap();
+    let runtime =
+        RuntimePaths::under(crate::WorkspaceId::from_project_root(root), dir.path()).unwrap();
     let agent = crate::testkit::agent_state("codex", "saved", Timestamp::UNIX_EPOCH);
     let layout = LayoutSpec::single(Cell::agent(agent.kind.clone()));
     let seeds = [CohortSeed::Resume(Box::new(agent))];
