@@ -17,6 +17,7 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 - **Pending focus intent outranks both** until the mux confirms the jump or the anchor in [`mux::focus_anchor`](../mux/focus_anchor.rs) expires, so a click never appears to bounce back. This subsystem only reads and folds the anchor; the renderer requests, applies, and clears intents through that module's API.
 - **One host owns the room's data plane.** It folds once for subscribed panes and owns publication, notifications, timers, and watchers. Heartbeat records, TTL, and freshness scans in [`wakeup::heartbeat`](../wakeup/heartbeat.rs) remain launch and wakeup hints, not ownership votes.
 - Sidebar cadence constants live in [`timing.rs`](./timing.rs) alone, so poll mode, push mode, and the heavy lanes stay legible against each other. A bound that defines another module's behaviour lives with that module: mux command deadlines in [`mux/`](../mux/AGENTS.md), the paint grid in `config`, GC marker lifetimes in `store::gc`.
+- **A per-key slow cadence rides its lane's gate.** A key held to a longer interval, such as a hibernated agent's checks through `hibernated_check_due` in [`cache.rs`](./cache.rs), is checked when its lane's gate opens for its own reasons. Its deadline never opens a shared gate, or N keys on staggered stamps open it every pass. A held item skips only its own probes: it stays in every cross-item count of its pass, such as the pane repair's start census or a fleet budget, with its retained values.
 
 ## Lanes
 
