@@ -247,7 +247,7 @@ impl<'a> ForgeKey<'a> {
         match self {
             Self::Ci(_) => &["passed", "failed", "pending", "unknown"],
             Self::Pr(_) => &["open", "merged", "closed", "unknown"],
-            Self::PrQueue(_) => &["queued", "dequeued", "none", "unknown"],
+            Self::PrQueue(_) => &["queued", "dequeued", "armed", "none", "unknown"],
             Self::PrMergeable(_) => &["mergeable", "conflicting", "unknown"],
             Self::PrReview(_) => &[
                 "draft",
@@ -295,6 +295,7 @@ impl<'a> ForgeKey<'a> {
             Self::PrQueue(_) => link.map(|link| match link.queue() {
                 Some(PrQueueFact::Queued { .. }) => "queued",
                 Some(PrQueueFact::Dequeued { .. }) => "dequeued",
+                None if open.is_some_and(|facts| facts.auto_merge) => "armed",
                 None => "none",
             }),
             Self::PrMergeable(_) => {

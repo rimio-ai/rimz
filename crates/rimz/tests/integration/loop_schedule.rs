@@ -1242,22 +1242,21 @@ fn queue_condition_selects_a_dequeued_open_pr_from_the_room_cache() {
         &env.resolve_workspace(&env.project_root).session_name,
         "queue",
     );
-    let write_queue = |queue: serde_json::Value| {
+    let write_open = |facts: serde_json::Value| {
         std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
         std::fs::write(
             runtime.lane_path("pr-state.json"),
             json!({"states": {env.project_root.to_string_lossy().to_string(): {
-                "state": "open", "number": 91,
-                "open": {"head": "head-a", "base": "main", "queue": queue},
+                "state": "open", "number": 91, "open": facts,
             }}})
             .to_string(),
         )
         .unwrap();
     };
-    write_queue(json!({
+    write_open(json!({"head": "head-a", "base": "main", "queue": {
         "state": "dequeued", "at": "2026-10-03T12:46:03Z",
         "reason": "failed_checks", "commit": "queue-a",
-    }));
+    }}));
     loop_ok(
         &env,
         &[
@@ -1280,13 +1279,26 @@ fn queue_condition_selects_a_dequeued_open_pr_from_the_room_cache() {
     }
     assert!(show.contains("dequeued"), "{show}");
 
-    write_queue(json!({"state": "queued", "at": "2026-10-03T13:00:00Z"}));
-    let show = loop_ok(&env, &["loop", "show", "requeue"]);
-    let line = show
-        .lines()
-        .find(|line| line.trim_start().starts_with("pr.queue=dequeued"))
-        .unwrap_or_else(|| panic!("{show}"));
-    assert!(line.ends_with("queued") && !line.contains('✓'), "{show}");
+    // A re-armed PR waiting to enter the queue reads armed, not none.
+    for (facts, reading) in [
+        (
+            json!({"head": "head-a", "base": "main", "auto_merge": true,
+                "queue": {"state": "queued", "at": "2026-10-03T13:00:00Z"}}),
+            "queued",
+        ),
+        (
+            json!({"head": "head-a", "base": "main", "auto_merge": true}),
+            "armed",
+        ),
+    ] {
+        write_open(facts);
+        let show = loop_ok(&env, &["loop", "show", "requeue"]);
+        let line = show
+            .lines()
+            .find(|line| line.trim_start().starts_with("pr.queue=dequeued"))
+            .unwrap_or_else(|| panic!("{show}"));
+        assert!(line.ends_with(reading) && !line.contains('✓'), "{show}");
+    }
 }
 
 #[test]

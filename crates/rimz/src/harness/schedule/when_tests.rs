@@ -624,10 +624,31 @@ fn pr_queue_reads_the_open_link_fact_and_leaves_pr_open() {
             "none",
         ),
         (json!({"state": "open"}), "open", "none"),
+        // An auto-merge request reads armed only below a queue fact.
+        (
+            json!({"state": "open", "open": {"head": "a", "auto_merge": true}}),
+            "open",
+            "armed",
+        ),
+        (
+            json!({"state": "open", "open": {"head": "a", "auto_merge": true, "queue": queued}}),
+            "open",
+            "queued",
+        ),
+        (
+            json!({"state": "open", "open": {"head": "a", "auto_merge": true, "queue": dequeued}}),
+            "open",
+            "dequeued",
+        ),
         // A fact left on a link that is no longer open is not a reading.
         (
             json!({"state": "merged", "open": {"head": "a", "queue": queued}}),
             "merged",
+            "none",
+        ),
+        (
+            json!({"state": "closed", "open": {"head": "a", "auto_merge": true}}),
+            "closed",
             "none",
         ),
         (json!({"state": "closed"}), "closed", "none"),
@@ -648,6 +669,17 @@ fn pr_queue_reads_the_open_link_fact_and_leaves_pr_open() {
             assert_eq!((verdict.ok, &verdict.readings["pr.queue"]), (false, &None));
         }
     }
+    let armed = CiSource(
+        serde_json::from_value(json!({
+            "branch_ci": {}, "path_repos": {"/checkout": "repo"},
+            "branches": {"repo": {
+                "topic": {"pr": {"state": "open", "open": {"head": "a", "auto_merge": true}}}
+            }}
+        }))
+        .unwrap(),
+    );
+    let expr = WhenExpr::parse(&["pr.queue[topic]=armed".to_owned()]).unwrap();
+    assert!(evaluate(&expr, scope, Some(&armed), None, None, &no_windows()).ok);
     let reads_forge = |when: &str| WhenExpr::parse(&[when.to_owned()]).unwrap().reads_forge();
     assert!(reads_forge("pr.queue=queued,dequeued") && reads_forge("ci=passed || team.stage=Done"));
     assert!(!reads_forge("team.stage=Done && window.5h.left>=40"));
@@ -655,7 +687,7 @@ fn pr_queue_reads_the_open_link_fact_and_leaves_pr_open() {
     assert!(
         error
             .to_string()
-            .contains("unknown pr.queue value; values: queued, dequeued, none")
+            .contains("unknown pr.queue value; values: queued, dequeued, armed, none")
     );
 }
 
