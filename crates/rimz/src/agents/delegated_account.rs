@@ -2,7 +2,7 @@
 //!
 //! Both adapters load provider credentials into the same map shape and delegate
 //! Anthropic/OpenAI quota reads to RimZ's provider-owned normalizers. OpenCode
-//! also delegates Console Go status reads.
+//! also delegates Go usage and best-effort Console tier reads.
 
 use std::collections::BTreeMap;
 use std::path::Path;

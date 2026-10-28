@@ -29,6 +29,14 @@ Source paths in the OpenCode 2 sections are under `packages/` at `v2.0.27` unles
 | Database | [`core/src/database/schema.gen.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/core/src/database/schema.gen.ts) |
 | CLI command and flag catalog | [`cli/src/commands/commands.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/cli/src/commands/commands.ts) |
 
+## Go usage (development contract)
+
+OpenCode's own Go reader is pinned to development branch `dev`, commit [`86ce19d96eccbfb95af3ff3189c7071575f94339`](https://github.com/anomalyco/opencode/commit/86ce19d96eccbfb95af3ff3189c7071575f94339), whose core package version is 2.2.0. No tagged release is known to carry this contract. [`core/src/usage-limits.ts`](https://github.com/anomalyco/opencode/blob/86ce19d96eccbfb95af3ff3189c7071575f94339/packages/core/src/usage-limits.ts), `readGo`, sends `GET <Console origin>/zen/go/v1/usage` with `Authorization: Bearer <access>` for OAuth and `x-opencode-org-id: <metadata.orgID>`. Upstream skips Go without a string organization id. A 403 means the member has no Go subscription in that workspace; other non-2xx responses fail the read.
+
+`GoUsage` requires `usage.rolling`, `usage.weekly`, and `usage.monthly`. Each `GoMeter` requires `status: "ok" | "rate-limited"`, a finite numeric `percent` (unbounded on the wire), and `resetsAt` decoded by `DateFromString`. Extra keys are ignored. The projection preserves the percentage and reset and maps `rate-limited` to `limited`, meaning Go refuses requests until reset ([`schema/src/usage-limits.ts`](https://github.com/anomalyco/opencode/blob/86ce19d96eccbfb95af3ff3189c7071575f94339/packages/schema/src/usage-limits.ts)). The response carries neither a plan nor amounts.
+
+`GET https://opencode.ai/console/api/go/status` has no current public server source. Its top-level `product` identifies the tier: `go` was observed live on 2026-10-25; `go-plus` was identified in the same day's endpoint research but not observed live. No other field from that endpoint is part of the tier contract. Console requests use the same bearer with `metadata.orgID` as `x-org-id`, not the Zen header ([`core/src/console-access.ts`](https://github.com/anomalyco/opencode/blob/86ce19d96eccbfb95af3ff3189c7071575f94339/packages/core/src/console-access.ts), `headers`).
+
 ## OpenCode 2 plugins and runtime
 
 The CLI normally connects to a persistent background server, starting it when needed. `--server <url>` selects an existing server. `--standalone` starts a private child server and cannot be combined with `--server`. Server plugins execute in the server process, not in the TUI process. See [`cli/src/services/server-connection.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/cli/src/services/server-connection.ts), `resolve`, and [`standalone.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/cli/src/services/standalone.ts), `command`.
