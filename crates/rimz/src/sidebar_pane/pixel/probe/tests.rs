@@ -710,6 +710,7 @@ fn ttyd_descendant_client_requires_live_pixel_daemon() {
         )
         .kitty_clients
     );
+    assert_eq!(capable.process_reads.get(), 1);
 
     for rejected in [
         FakeProbe {
@@ -760,6 +761,11 @@ fn ttyd_descendant_client_requires_live_pixel_daemon() {
                 &rejected,
             )
             .kitty_clients
+        );
+        assert_eq!(
+            rejected.process_reads.get(),
+            usize::from(!rejected.ttyd_pids.is_empty()),
+            "processes are listed only when a pixel daemon is registered"
         );
     }
 }
