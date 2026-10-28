@@ -238,7 +238,7 @@ pub(super) fn fold(
     index: &session_roles::RoleIndex,
     tallies: &mut RoleTallies,
     now_secs: u64,
-    day_cutoff: u64,
+    window_starts: super::WindowStarts,
 ) {
     for record in index.effort.iter().flat_map(|segment| segment.iter()) {
         let Ok(second) = u64::try_from(record.at.as_second()) else {
@@ -252,7 +252,6 @@ pub(super) fn fold(
         if !aggregate::within_widest_window(second, now_secs) {
             continue;
         }
-        let age = now_secs.saturating_sub(second);
         for (kind, session, credit) in record.credits() {
             let Some(role) = index
                 .roles
@@ -262,14 +261,16 @@ pub(super) fn fold(
                 continue;
             };
             let effort = &mut tallies.entry(role.placement(kind.as_str())).effort;
-            effort.year.merge(credit);
-            if age < 30 * 86_400 {
+            if second >= window_starts.year {
+                effort.year.merge(credit);
+            }
+            if second >= window_starts.month {
                 effort.month.merge(credit);
             }
-            if age < 7 * 86_400 {
+            if second >= window_starts.week {
                 effort.week.merge(credit);
             }
-            if second >= day_cutoff {
+            if second >= window_starts.day {
                 effort.day.merge(credit);
             }
         }

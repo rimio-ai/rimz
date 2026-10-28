@@ -34,7 +34,7 @@ When the service call fails, the held dashboard falls back to any current-versio
 
 ## Windows
 
-`Window` has four variants, in tab order: Today (the local calendar day in the publication's timezone), Week, Month, and Year (the trailing 7, 30, and 365 days). `--window` selects the window for every breakdown, the insights, and the held dashboard's first tab, and defaults to Today. Today selects `SpendTally.day`, which is independent of the sidebar's configured headline window. The heatmap and the four-window totals ignore the selection.
+`Window` has four variants, in tab order: Today (the local calendar day in the publication's timezone), Week, Month, and Year (the last 7, 30, and 364 local calendar days, including today). `--window` selects the window for every breakdown, the insights, and the held dashboard's first tab, and defaults to Today. Today selects `SpendTally.day`, which is independent of the sidebar's configured headline window. The heatmap and the four-window totals ignore the selection.
 
 Two token measures appear on the panel, and the difference is a trap:
 
@@ -107,7 +107,7 @@ Held share bars use `panel::resolve_panel_glyphs` to resolve the filled and trac
 
 ### Recorded-since notes
 
-A profile section can cover a window that starts before RimZ recorded roles or effort, and a muted coverage line says so. Each clause shows independently when the selected window starts before its first-retained time: `roles recorded since DATE, earlier spend counts as No role` for `recorded_since_secs`, and `agent-time and messages recorded since DATE` for `effort_since_secs`. After a roles clause and a middle dot, the effort clause shortens to `agent-time and messages since DATE`. The window start is `Window::assist_since` at publication time: local midnight for Today, and publication time minus 7, 30, or 365 days for the others.
+A profile section can cover a window that starts before RimZ recorded roles or effort, and a muted coverage line says so. Each clause shows independently when the selected window starts before its first-retained time: `roles recorded since DATE, earlier spend counts as No role` for `recorded_since_secs`, and `agent-time and messages recorded since DATE` for `effort_since_secs`. After a roles clause and a middle dot, the effort clause shortens to `agent-time and messages since DATE`. The window start is `Window::assist_since` at publication time: local midnight for Today, and the start of local day today minus 6, 29, or 363 for the others.
 
 The one-shot coverage line prints above the first visible profile section, and a report without a visible profile section omits it. An explicit view keeps the window rule even with no rows and prints a `No <noun> spend recorded (<window>).` line. The held dashboard puts the applicable roles date in Where it went and emits no effort-recording note. Effort-only history still renders profile sections when there are no spend-day buckets.
 
@@ -124,7 +124,7 @@ Activity comes from `panel::Activity::of`, and the heatmap key carries the compa
 
 The current streak counts back from today, or from yesterday when today has no activity yet, so a quiet morning does not break a streak.
 
-Both text surfaces use `panel::per_active_day`: dollars and days with tokens cover the same last 7, 30, or 365 local calendar days, today included. The one-shot average prints a U+2013 placeholder for Today. Chart titles compare Today with yesterday and show the shared average for Week, Month, and Year. One-shot Spend figures right-align to fixed column edges, so Week and Month trends run into the next column's padding without moving any figure. `panel::trend_label` caps changes above 999% as `↑999%+` so they fit those slots. Today and Year have no spend trend.
+Both text surfaces use `panel::per_active_day`: dollars and days with tokens cover the same last 7, 30, or 364 local calendar days, today included. The one-shot average prints a U+2013 placeholder for Today. Chart titles compare Today with yesterday and show the shared average for Week, Month, and Year. One-shot Spend figures right-align to fixed column edges, so Week and Month trends run into the next column's padding without moving any figure. `panel::trend_label` caps changes above 999% as `↑999%+` so they fit those slots. Today and Year have no spend trend.
 
 ## Fitting the terminal
 

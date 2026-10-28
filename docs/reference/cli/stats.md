@@ -6,7 +6,7 @@
 rimz stats                              # print the panel once
 rimz stats --dollars                    # shade the heatmap by dollars instead of tokens
 rimz stats --refresh                    # hold the panel open and repaint every minute
-rimz stats --json | jq '.windows.week'  # the trailing week's tokens and dollars
+rimz stats --json | jq '.windows.week'  # tokens and dollars over the last 7 local days
 rimz stats --assists                    # latest 50 effective assists, newest first
 rimz stats --assists -n 0 --all          # all retained attempts, including held ones
 rimz stats --agents                     # every agent profile, unfolded
@@ -33,7 +33,7 @@ A conflicting pair exits `2`. Of the [global flags](../cli.md#global-flags), `--
 
 History days use the configured `timezone`, or the system's named timezone. An unnamed system zone falls back to UTC; set `timezone` to an IANA name to select another zone.
 
-The one-shot panel opens with dollars and tokens for Today, Week, Month, and Year. Today starts at local midnight; the other windows trail 7, 30, and 365 days. Week and Month dollars include a trend against the preceding equal window when it had spend, capped above 999% as `↑999%+`; dollar figures keep their alignment whether a trend is present or not. The `per active day` row instead uses the last 7, 30, or 365 local calendar days, including today: dollars over those dates divided by their days with tokens. Today shows `–`.
+The one-shot panel opens with dollars and tokens for Today, Week, Month, and Year. Today starts at local midnight; the other windows cover the last 7, 30, and 364 local calendar days, including today. Week and Month dollars include a trend against the preceding equal window when it had spend, capped above 999% as `↑999%+`; dollar figures keep their alignment whether a trend is present or not. The `per active day` row uses the last 7, 30, or 364 local calendar days, including today: dollars over those dates divided by their days with tokens. Today shows `–`.
 
 Models, Providers, Agents, Teams, then Subagents follow, each labelled with the selected window, `(today)` by default. Every share is the row's dollars divided by fleet dollars in that window. Each section ranks by dollars, shows the top three rows with spend or recorded effort, and folds the rest into a counted tail such as `N other teams`. Empty sections are omitted. Token units are uppercase, and session and run counts use grouped thousands. Models use provider identity colours; profile and team names stay muted. Providers shows `SESSIONS TOKENS HIT TOK/S`; compact Agents adds `AGENT-TIME` after `SESSIONS`, Teams adds `AGENT-TIME MESSAGES`, and Subagents adds `AGENT-TIME` after `RUNS`. Explicit views keep the input/output/cache columns and append effort after the session or run count.
 
@@ -48,7 +48,7 @@ For example, a compact Teams row:
   recon                      $576   55.6%        91         45m    2 (1 you)     1.1B  97%    91
 ```
 
-One muted coverage line sits above the first visible profile or team section. When the window begins before role recording, it says `roles recorded since DATE, earlier spend counts as No role`. When only effort history starts later, it says `agent-time and messages recorded since DATE`. When both apply, they join as `roles recorded since DATE, earlier spend counts as No role · agent-time and messages since DATE`. Each date independently includes the partial oldest day of a trailing window, and the line disappears when all three sections hide. Explicit `--agents`, `--teams`, and `--subagents` text views list every qualifying row, or say no spend was recorded in the named window; they keep the applicable coverage line even when empty.
+One muted coverage line sits above the first visible profile or team section. When the window begins before role recording, it says `roles recorded since DATE, earlier spend counts as No role`. When only effort history starts later, it says `agent-time and messages recorded since DATE`. When both apply, they join as `roles recorded since DATE, earlier spend counts as No role · agent-time and messages since DATE`. Each date is compared with the window's local-midnight start, and the line disappears when all three sections hide. Explicit `--agents`, `--teams`, and `--subagents` text views list every qualifying row, or say no spend was recorded in the named window; they keep the applicable coverage line even when empty.
 
 After the role sections, the full report adds `No role recorded`: fleet dollars minus Agents, Teams and Subagents, clamped at zero, with its share of fleet spend. It is hidden below one cent and omitted from explicit role views.
 

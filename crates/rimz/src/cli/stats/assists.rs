@@ -1019,18 +1019,15 @@ impl AssistEvent {
 
 impl Window {
     pub(super) fn assist_since(self, now: Timestamp, timezone: &str) -> Option<Timestamp> {
-        let days = match self {
-            Self::Today => {
-                let now_secs = u64::try_from(now.as_second()).ok()?;
-                let cutoff =
-                    rimz::agents::spending::local_day_start_secs(now_secs, Some(timezone))?;
-                return Timestamp::from_second(i64::try_from(cutoff).ok()?).ok();
-            }
-            Self::Week => 7,
-            Self::Month => 30,
-            Self::Year => 365,
+        let now_secs = u64::try_from(now.as_second()).ok()?;
+        let starts = rimz::agents::spending::WindowStarts::new(now_secs, timezone);
+        let cutoff = match self {
+            Self::Today => rimz::agents::spending::local_day_start_secs(now_secs, Some(timezone))?,
+            Self::Week => starts.week,
+            Self::Month => starts.month,
+            Self::Year => starts.year,
         };
-        Some(now - Duration::from_secs(days * DAY_SECS as u64))
+        Timestamp::from_second(i64::try_from(cutoff).ok()?).ok()
     }
 
     fn assist_label(self) -> &'static str {

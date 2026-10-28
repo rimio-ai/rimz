@@ -22,6 +22,38 @@ fn publication_expires_at_utc_month_turn_before_history_midnight() {
 }
 
 #[test]
+fn publication_accepts_v23_without_hours_but_requires_new_window_versions() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("provider-spending.json");
+    let result = SpendingWalkResult {
+        session_start_secs: Some(NOW_SECS - 100),
+        spending: sample_spending(),
+        chart: ChartSpend {
+            today: 20_000,
+            hour: 7,
+            days: BTreeMap::from([(20_000, BTreeMap::from([("model".into(), 2.5)]))]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let published = ProviderSpendingCache::from_walk(&result, NOW_SECS * 1000);
+    let mut value = serde_json::to_value(&published).unwrap();
+    value["version"] = 23.into();
+    value["chart"].as_object_mut().unwrap().remove("hours");
+    value["chart"].as_object_mut().unwrap().remove("hour");
+    crate::disk::atomic::write_temp_then_rename_cache(&path, &value).unwrap();
+    let older = read_provider_spending_cache(&path);
+    assert_eq!(older.spending, result.spending);
+    assert_eq!(older.session_start_secs, result.session_start_secs);
+    assert_eq!(older.chart.days, result.chart.days);
+    assert!(older.chart.hours.is_empty());
+    assert_eq!(older.chart.hour, 0);
+    assert!(!older.is_current_version());
+    assert_eq!(PROVIDER_SPENDING_VERSION, 24);
+    assert_eq!(WORKSPACE_SPENDING_VERSION, 9);
+}
+
+#[test]
 fn publication_carries_session_start_and_accepts_an_older_writer() {
     let result = SpendingWalkResult {
         session_start_secs: Some(NOW_SECS - 100),
@@ -77,7 +109,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
-    assert_eq!(PROVIDER_SPENDING_VERSION, 23);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 24);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();

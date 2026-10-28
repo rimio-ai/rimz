@@ -34,9 +34,9 @@ The spending walk reads the whole transcript and store history of every provider
 | --- | --- | --- |
 | headline | the configured `[sidebar] spend_window`, serialized as `today` | the provider panel |
 | `day` | the local calendar day in the publication's timezone | model and session-role tallies for the held stats dashboard |
-| 7d, 30d, 365d | trailing | the fleet store rows, stats, and role tallies |
+| `week`, `month`, `year` | last 7, 30, and 364 local calendar days, including today | the fleet store rows, stats, and role tallies |
 
-`day` is independent of the headline, whatever `spend_window` selects.
+`day` is independent of the headline, whatever `spend_window` selects. `crates/rimz/src/agents/spending/aggregate.rs::WindowStarts::new` computes all four starts once per fold in the history zone. Week begins at local midnight six days ago, month 29 days ago, and year 363 days ago. A timestamp at the start belongs to that window; a session uses its youngest entry. Windows nest and expire a whole oldest day at history-zone midnight, including across 23-hour and 25-hour days. The 365 × 24-hour bound remains for retention, parsing, and pricing, not year membership.
 
 Each parsed file yields, per entry: a cost, a four-way token split (`input`, `output`, `cache_write`, `cache_read`), a per-name tool-call map where the provider exposes one, a timestamp, and a provider-native thread id when one store holds many sessions. The file also yields one origin path when the provider exposes one. A window folds `cache_write` into its `↘` input, so the `◇` total is folded input plus output, and `cache_read` rides apart. A window's `sessions` count is the distinct threads that ran in it.
 
@@ -79,19 +79,19 @@ The seat fold in [`effort.rs`](../../../crates/rimz/src/agents/spending/effort.r
 
 ### What reads the totals
 
-The walk publishes the machine-shared `provider-spending.json`, and every reader takes its figures from there or from the workspace cache derived beside it. Its optional `session_start_secs` records the machine-wide cockpit session start in Unix seconds in every headline mode (`session`, `24h`, and `today`), independently of headline and workspace cutoffs. It is absent when no prompt has opened a current session or an older writer published the cache, and the aggregate version stays 22.
+The walk publishes the machine-shared `provider-spending.json`, and every reader takes its figures from there or from the workspace cache derived beside it. Its optional `session_start_secs` records the machine-wide cockpit session start in Unix seconds in every headline mode (`session`, `24h`, and `today`), independently of headline and workspace cutoffs. It is absent when no prompt has opened a current session or an older writer published the cache, and the aggregate version is 24.
 
 | Reader | Reads |
 | --- | --- |
 | provider panel headline | the kind's `SpendTally` headline: session count, token breakdown, and dollars ([providers.md](./providers.md#producer-aggregation)) |
 | `rimz accounts --json` | a CLI-local projection. `headline` and `window` name the configured headline. `today` reads the pool's `day_by_login` only when `day_cutoff_secs` matches the current local midnight in the configured timezone, else null. `pool` identifies repeated tallies, and consumers deduplicate by it. The cache and the service wire keep `today` as the headline's name. |
-| fleet store `W:` and `M:` rows | the fleet-wide trailing-week and trailing-month totals, `$0.00` before any history exists ([interface](../../interface/sidebar.md#the-fleet-store)) |
+| fleet store `W:` and `M:` rows | the fleet-wide 7-local-day and 30-local-day totals, `$0.00` before any history exists ([interface](../../interface/sidebar.md#the-fleet-store)) |
 | cockpit `◎`, `¤`, and breakdown | a workspace-scoped tally limited to the room's project root and grouped worktrees, omitting unknown-origin files |
 | account daily caps | a local-calendar-day `SpendWindow` per kind (`day_by_provider`) and per history pool (`day_by_login`), computed for eligible kinds independently of the headline ([budget.md](../harness/budget.md)) |
 | account monthly caps | a UTC-calendar-month `SpendWindow` per history pool (`month_by_login`), with `month_cutoff_secs` at 00:00 UTC on the 1st; raw entries and compacted UTC-day buckets use the same cutoff |
-| `rimz stats` | local-calendar-day and per-model buckets; `chart.days` holds model dollars for the last 30 local days, and `chart.weeks` for 52 seven-day blocks ending at `chart.today`, keyed by each block's last day ([stats.md](../stats.md)) |
+| `rimz stats` | local-calendar-day and per-model buckets; `chart.days` holds model dollars for the last 30 local days, and `chart.weeks` for 52 seven-day blocks ending at `chart.today`, keyed by each block's last day; `chart.hours` holds raw model dollars for today and the seven preceding local days, keyed by local epoch day × 24 plus wall-clock hour ([stats.md](../stats.md)) |
 
-The publication names its resolved `timezone`. Its day keys (local civil dates as epoch-day numbers) and the reader's today index both use that zone. `chart.today` records each walk's local epoch day in that history zone, anchoring weekly blocks and publication freshness independently of the configured/system-zone account-day cutoff. `crates/rimz/src/agents/spending/publish.rs::ProviderSpendingCache::is_from_today` compares it with today's index in the published zone. A raw row uses its local date. A row compacted beyond eight days carries only its UTC rollup's maximum timestamp, so its heatmap cell uses that timestamp's local date: an approximation that leaves window totals unchanged. The walk computes local-midnight boundaries once per history pass, not per row. The cursor cache holds timestamps, so a change to local-day bucketing bumps only the aggregate version and re-parses no transcript.
+The publication names its resolved `timezone`. Its day keys (local civil dates as epoch-day numbers) and the reader's today index both use that zone. `chart.today` records each walk's local epoch day in that history zone, anchoring weekly blocks and publication freshness independently of the configured/system-zone account-day cutoff. `chart.hour` records the local wall-clock hour (0–23) at that same walk-start instant, so the forecast reads the hour that cut the day tally rather than the later publication stamp. `crates/rimz/src/agents/spending/publish.rs::ProviderSpendingCache::is_from_today` compares the day with today's index in the published zone. A raw row uses its local date. A row compacted beyond eight days carries only its UTC rollup's maximum timestamp, so its heatmap cell uses that timestamp's local date: an approximation shared by history cells and local-day window membership. The walk computes local-midnight boundaries once per history pass, not per row. Repeated fall-back hours share one hourly key and skipped spring-forward hours have none. Compacted rollups and zero-dollar rows create no hourly cells. Raw retention stays eight elapsed days, so the first hour of the oldest hourly day can be missing in a fall-back week. The cursor cache holds timestamps, so a change to local-day bucketing bumps only the aggregate version and re-parses no transcript.
 
 An unnamed system timezone cannot be carried in the publication. History then uses and publishes UTC, with a tracing warning to set `timezone` in config. Account-day budget windows keep the configured zone, else the system zone, in that case too.
 
@@ -138,13 +138,13 @@ The cursor carries provider resume state where a parser needs it:
 | Copilot | per-model shutdown baselines and the session-start directory |
 | Pi | the session header directory |
 
-Rows dedup against retry writes within each parsed chunk. Finalized rows stay exact for 8 days (`RAW_RETAIN_SECS`), which covers the trailing week and cross-file retry and sidechain dedup. Older rows compact into per-day, per-model, per-thread rollups out to 365 days.
+Rows dedup against retry writes within each parsed chunk. Finalized rows stay exact for 8 days (`RAW_RETAIN_SECS`), which covers the seven-local-day window and cross-file retry and sidechain dedup. Older rows compact into per-day, per-model, per-thread rollups out to 365 days.
 
 ### Persisting and checkpoints
 
 Dirty cursor state persists on the first walk, after `SPENDING_PERSIST_MIN_INTERVAL` (5 minutes), or after cold-sized parse work. The final cursor and aggregate are the authority, and write failures log warnings with their paths.
 
-During a publishing walk, `WALK_CHECKPOINT_INTERVAL` (1 second) checkpoints cursor progress when the persist gate is open. It publishes a current-stamped partial aggregate only when the cache changed since the previous checkpoint and the partial lowers no published figure. The figures checked are the trailing-year dollars of the fleet total, each provider, each login, and the walk's own workspace scope in its current-version sidecar. So the dashboard total climbs during a cold start, a restart resumes from the checkpoint, and a fresh walker whose cursor trails the publication never dips it. A withheld partial leaves `provider-spending.json` and the workspace sidecar untouched, stamp included. Only the finished walk lowers a published figure.
+During a publishing walk, `WALK_CHECKPOINT_INTERVAL` (1 second) checkpoints cursor progress when the persist gate is open. It publishes a current-stamped partial aggregate only when the cache changed since the previous checkpoint and the partial lowers no published figure. The figures checked are the 364-local-day dollars of the fleet total, each provider, each login, and the walk's own workspace scope in its current-version sidecar. So the dashboard total climbs during a cold start, a restart resumes from the checkpoint, and a fresh walker whose cursor trails the publication never dips it. A withheld partial leaves `provider-spending.json` and the workspace sidecar untouched, stamp included. Only the finished walk lowers a published figure.
 
 The long-lived walker memo keeps only `(file index, entry index)` locations of dedup winners, keyed by cache generation and signature. Aggregation borrows paths and thread ids from the cache, and allocates session strings only for the published live-baseline and session-key outputs. An append, truncate, compaction, or file-set change rebuilds the locations once.
 
@@ -160,7 +160,7 @@ Three version constants gate schema changes:
 | `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
 | `WORKSPACE_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the workspace tally or its walked baselines change | the workspace sidecar recomputes once from the entry cache |
 
-`PROVIDER_SPENDING_VERSION` is 22, covering the bounded daily and weekly model-dollar chart cells.
+`PROVIDER_SPENDING_VERSION` is 24, covering local-day windows, the walk hour, and bounded hourly, daily, and weekly model-dollar chart cells. `WORKSPACE_SPENDING_VERSION` is 9 for local-day windows. A v23 provider file without `chart.hours` or `chart.hour` keeps its other values readable but is stale and must be recomputed. Both fields have serde defaults; a missing hour reads as zero.
 
 Writers refuse a schema downgrade after a cheap leading-version probe. A long-lived build of a lower version therefore cannot blank a newer build's aggregate or force cursor cold walks: a bump costs one recompute, and the higher version holds.
 
@@ -393,9 +393,9 @@ The spending walker, the checkpoint publisher, and the empty-fleet publisher sha
 - An indexed session with no spend gets a role entry only when it has a retained effort record inside the windows (`crates/rimz/src/agents/spending/session_effort.rs::fold`). Provenance alone creates none.
 - A `from_agent` record adds `from_teammates` to the receiver. When the sender resolved and is indexed, it also adds `to_teammates` to the sender, whatever the receiver's provenance.
 
-Windows use the spend fold's local-day cutoff and trailing 7, 30, and 365-day membership, with no headline window. Active credit lands at the release timestamp, even across midnight, and messages at their transcript timestamp. Each retained daily segment has a process-wide stat-keyed parse memo. An unchanged segment reuses its parsed records, and a deleted, expired, or different-root segment leaves the memo.
+Windows use the spend fold's local-midnight starts and 7, 30, and 364-local-day membership, with no headline window. Active credit lands at the release timestamp, even across midnight, and messages at their transcript timestamp. Each retained daily segment has a process-wide stat-keyed parse memo. An unchanged segment reuses its parsed records, and a deleted, expired, or different-root segment leaves the memo.
 
-Only the elected spending engine maintains the ledger, never the hook. A segment whose entire UTC day is older than `RAW_RETAIN_SECS` (8 days) is durably replaced with `totals` records grouped by provider, native session, and the UTC day of each event's `at`. Sender-side message credit is materialized into the sender's totals. The latest event timestamp in each group becomes its `at`, which preserves window totals to UTC-day granularity. The seven-day window stays second-exact, because its segments are not compacted. Compacted segments are left untouched. A segment whose entire UTC day is older than 366 days is deleted with a directory sync. A maintenance error warns and does not block spend publication.
+Only the elected spending engine maintains the ledger, never the hook. A segment whose entire UTC day is older than `RAW_RETAIN_SECS` (8 days) is durably replaced with `totals` records grouped by provider, native session, and the UTC day of each event's `at`. Sender-side message credit is materialized into the sender's totals. The latest event timestamp in each group becomes its `at`, which preserves window totals to UTC-day granularity. The seven-local-day window keeps raw timestamps, because its segments are not compacted. Compacted segments are left untouched. A segment whose entire UTC day is older than 366 days is deleted with a directory sync. A maintenance error warns and does not block spend publication.
 
 ## See also
 

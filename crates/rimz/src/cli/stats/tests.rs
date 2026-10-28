@@ -1176,7 +1176,7 @@ fn one_shot_serves_the_published_history_day_across_zones() {
 }
 
 #[test]
-fn roles_note_includes_the_partial_oldest_day_of_a_trailing_window() {
+fn roles_note_includes_the_whole_oldest_local_day_of_a_window() {
     let published = "2026-10-17T15:00:00Z".parse::<Timestamp>().unwrap();
     let since = "2026-10-11T12:00:00Z".parse::<Timestamp>().unwrap();
     let mut cache = ProviderSpendingCache {
@@ -1202,10 +1202,14 @@ fn roles_note_includes_the_partial_oldest_day_of_a_trailing_window() {
         String::from_utf8(out)
             .unwrap()
             .contains("recorded since Oct 11"),
-        "the week also includes Oct 10 afternoon, before roles were recorded"
+        "the week includes Oct 11 morning, before roles were recorded"
     );
-    stats.recorded_since_secs =
-        Some((published - Duration::from_secs(7 * 86_400)).as_second() as u64);
+    stats.recorded_since_secs = Some(
+        "2026-10-11T00:00:00Z"
+            .parse::<Timestamp>()
+            .unwrap()
+            .as_second() as u64,
+    );
     let mut out = Vec::new();
     panel::render_spend(
         &mut out,
