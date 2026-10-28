@@ -76,3 +76,70 @@ fn read_from_offset_stops_before_inflight_or_torn_tail() {
         );
     }
 }
+
+#[test]
+fn growing_tail_stops_at_the_committed_prefix_without_reading_again() {
+    let first = encode_batch(&[test_event("event.first")]).unwrap();
+    let second = encode_batch(&[test_event("event.second")]).unwrap();
+    let split = second.len() / 2;
+    let mut initial = first.clone();
+    initial.extend_from_slice(&second[..split]);
+    let mut reader = io::BufReader::new(ChunkedReader {
+        current: &[],
+        chunks: vec![initial.as_slice(), &[], &second[split..]].into_iter(),
+    });
+    let mut events = Vec::new();
+    let mut scanned = 0;
+
+    let result = scan_records(
+        Path::new("events.log.jsonl"),
+        0,
+        &mut reader,
+        &mut scanned,
+        |event, _| events.push(event),
+    );
+
+    assert!(
+        matches!(result, Ok(end) if end == first.len() as u64),
+        "return the committed prefix even if the tail grows: {result:?}"
+    );
+    assert_eq!(methods(&events), ["event.first"]);
+    assert_eq!(scanned, initial.len() as u64);
+    assert_eq!(
+        reader.get_ref().chunks.len(),
+        1,
+        "no read past observed EOF"
+    );
+}
+
+#[test]
+fn through_offset_stops_before_every_partial_second_frame() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("events.log.jsonl");
+    append(&path, &test_event("event.first")).unwrap();
+    let first_end = fs::metadata(&path).unwrap().len();
+    append(&path, &test_event("event.second")).unwrap();
+    let full_len = fs::metadata(&path).unwrap().len();
+
+    for through in first_end..=full_len {
+        let before = testkit::bytes_read_under(dir.path());
+        let mut events = Vec::new();
+        let end = visit_records_through_offset(&path, 0, through, |event, _| {
+            events.push(event);
+        })
+        .unwrap();
+        let (expected_end, expected_methods) = if through == full_len {
+            (full_len, ["event.first", "event.second"].as_slice())
+        } else {
+            (first_end, ["event.first"].as_slice())
+        };
+
+        assert_eq!(end, expected_end, "through = {through}");
+        assert_eq!(methods(&events), expected_methods, "through = {through}");
+        assert_eq!(
+            testkit::bytes_read_under(dir.path()) - before,
+            through,
+            "partial rows count toward bytes read: through = {through}"
+        );
+    }
+}

@@ -317,9 +317,9 @@ Rebirth and rotation keep handles stable. Every fold on a thread shares one unst
 
 Only the trailing frame can be in flight when a process dies. The workspace lock serializes appenders, and each append hands the kernel one encoded buffer through `write_all` (`crates/rimz/src/disk/atomic.rs::append_record_bytes`), so a crash or a short write can leave at most a partial last frame.
 
-A reader that hits an undecodable frame at the end of the log stops in front of it and reports an extent that does not claim those bytes. An unterminated tail is an in-flight append that the next wakeup will cover, logged at debug. A terminated but torn tail is left by a power cut, logged at warn, and skipped.
+A reader that hits an unterminated row has met end of input, so it stops in front of that row even if the rest of the append lands during the read. It reports an extent that does not claim those bytes and logs the stop at debug, and the next wakeup covers that in-flight append. Only a terminated undecodable frame is judged by what follows it: a torn tail with no bytes behind it is logged at warn and skipped.
 
-A bad frame behind a good one is real corruption, and the read fails loudly instead of silently dropping everything after it. [`repair`](../../crates/rimz/src/store/event_log/recovery.rs) is the deliberate recovery: it truncates from the first invalid frame to end of file and reports the frames kept and bytes cut. The publish tail calls it when its fold hits corruption, and `rimz gc` calls it on demand.
+A terminated bad frame followed by more bytes is real corruption, and the read fails loudly instead of silently dropping everything after it. [`repair`](../../crates/rimz/src/store/event_log/recovery.rs) is the deliberate recovery: it truncates from the first invalid frame to end of file and reports the frames kept and bytes cut. The publish tail calls it when its fold hits corruption, and `rimz gc` calls it on demand.
 
 Lock-free `O_APPEND` would remove the lock cost but let writeback reorder and tear a frame in the middle of the file, where repair can only cut from that frame onward and lose every good record behind it. [performance.md → Deferred and rejected](./performance.md#deferred-and-rejected) records why that trade stays rejected.
 
