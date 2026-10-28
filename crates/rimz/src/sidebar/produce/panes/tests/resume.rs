@@ -288,6 +288,7 @@ fn resumed_session_stays_without_new_walks_for_an_unchanged_or_parked_hosted_age
             *fixture.root_command.borrow_mut() = fixture.hosted_command.borrow().clone();
         }
         let mut parked = fixture.candidate();
+        // A park re-execs in place, so the pane keeps the argv it was born with.
         first_mut(&mut parked).current.spawn_command =
             first(&unchanged).current.spawn_command.clone();
         fixture.repair_with_prior(&mut parked, Some(&unchanged), &mut memo);
