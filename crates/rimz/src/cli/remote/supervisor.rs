@@ -261,6 +261,7 @@ pub(super) fn supervise_remote(
     let mut reconnect = ReconnectState::default();
     let target = plan.target().clone();
     let host = target.host_display();
+    let mut port_sync = ForwardPublisher::new(setup_hint, host, auto_forward);
     let mut first_attempt = true;
     let guard = super::tty::TtyGuard::acquire();
     let Some(mut supervisor) =
@@ -268,11 +269,8 @@ pub(super) fn supervise_remote(
     else {
         return Ok(());
     };
-    let port_sync = Arc::new(Mutex::new(ForwardPublisher::new(
-        setup_hint,
-        host,
-        auto_forward,
-    )));
+    port_sync.retry_publish();
+    let port_sync = Arc::new(Mutex::new(port_sync));
     let zombie_interval = supervisor
         .dial_plan
         .as_ref()

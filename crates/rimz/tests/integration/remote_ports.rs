@@ -247,8 +247,13 @@ fn unavailable_machine_record_does_not_stop_connect_or_forwarding() {
 fn supervisor_publishes_while_alive_and_removes_its_record_on_return() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
+    let ready = env.project_root.join("control-master-ready");
+    let ready_plan = env.project_root.join("ssh-master-ready.plan");
+    std::fs::write(&ready_plan, "0\n").unwrap();
     let port = available_forward_probe_port();
     let mut child = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
+        .env("RIMZ_TEST_SSH_MASTER_READY_PLAN", &ready_plan)
         .env("RIMZ_REMOTE_PROBE_MS", "10")
         .env("RIMZ_TEST_PROBE_PORT", port.to_string())
         .env("RIMZ_TEST_PROBE_PORTS_SCOPE", "room")
@@ -259,6 +264,32 @@ fn supervisor_publishes_while_alive_and_removes_its_record_on_return() {
         .unwrap();
     let pid = child.id();
     let path = records_dir(&env).join(format!("{pid}.json"));
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    while master_invocation_count(&log) == 0 {
+        if child.try_wait().unwrap().is_some() || Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "first master never started: {:?}",
+                std::fs::read_to_string(&log)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let out = env
+        .rimz()
+        .args(["remote", "ports", "--json"])
+        .bounded_output()
+        .unwrap();
+    let waiting: Value = serde_json::from_str(&stdout_line(&out)).unwrap();
+    let locked = path.with_extension("lock").exists();
+    assert_eq!(
+        main_invocation_count(&log),
+        0,
+        "the first master must still be pending: {:?}",
+        shim_invocations(&log)
+    );
+    std::fs::write(&ready, "ready").unwrap();
     let deadline = Instant::now() + COMMAND_TIMEOUT;
     let published = loop {
         let value = std::fs::read(&path)
@@ -277,6 +308,20 @@ fn supervisor_publishes_while_alive_and_removes_its_record_on_return() {
     }
     let _ = child.wait();
     let published = published.expect("a live supervisor publishes its successful forward");
+    assert_eq!(waiting["connections"][0]["pid"], pid, "{waiting}");
+    assert_eq!(
+        waiting["connections"][0]["forwards"],
+        json!([]),
+        "{waiting}"
+    );
+    assert!(
+        locked,
+        "the pending connection holds its record lock: {waiting}"
+    );
+    assert_eq!(
+        published["started_at_ms"],
+        waiting["connections"][0]["started_at_ms"]
+    );
     assert_eq!(published["pid"], pid);
     assert_eq!(published["forwards"][0]["remote"], port);
     assert!(!path.exists() && !path.with_extension("lock").exists());

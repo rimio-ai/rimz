@@ -90,7 +90,7 @@ With or without `--no-reconnect`, the host's refusals come through as their own 
 
 ## Inspect forwarded ports
 
-`rimz remote ports [--json]` shows the current connection when run in a participant room with a fresh link sidecar. Otherwise it lists live supervised connections on this machine, oldest first. The connection header names the host; machine groups also name the original target and supervisor pid. `--web` and `--no-reconnect` connections are not listed.
+`rimz remote ports [--json]` shows the current connection when run in a participant room with a fresh link sidecar. Otherwise it lists live supervised connections on this machine, oldest first, including those waiting for their first SSH connection. The connection header names the host; machine groups also name the original target and supervisor pid. `--web` and `--no-reconnect` connections are not listed.
 
 Rows have `REMOTE`, `LOCAL`, `STATE`, `SINCE`, and `REASON` columns. `SINCE` is the age of the current state, not the connection. A busy port does not need a remembered notification: the remapped local port stays here for the whole connection.
 
@@ -118,7 +118,7 @@ REMOTE  LOCAL  STATE          SINCE  REASON
 9001    -      not forwarded  6m     no free local port
 ```
 
-`--json` prints `{"scope":"connection"|"machine","connections":[...]}`. Each record has `target`, `host`, `pid`, `started_at_ms`, `at_ms`, `auto_forward`, and `forwards`. Entries have `remote`, optional `local`, `state` (`forwarded`, `reopening`, `limit`, `refused`, `no_local_port`, or `unknown` for an unrecognized peer state), `age_secs`, and `error` only on refusal. A legacy sidecar gives an empty `connections` array. The command exits `0` when its inputs can be read, including empty and not-forwarded results.
+`--json` prints `{"scope":"connection"|"machine","connections":[...]}`. Each record has `target`, `host`, `pid`, `started_at_ms`, `at_ms`, `auto_forward`, and `forwards`. `started_at_ms` is the supervisor's start, including the initial wait, and does not reset when SSH connects. Entries have `remote`, optional `local`, `state` (`forwarded`, `reopening`, `limit`, `refused`, `no_local_port`, or `unknown` for an unrecognized peer state), `age_secs`, and `error` only on refusal. A legacy sidecar gives an empty `connections` array. The command exits `0` when its inputs can be read, including empty and not-forwarded results.
 
 ## Saved aliases
 
