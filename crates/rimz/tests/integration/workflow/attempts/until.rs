@@ -34,6 +34,32 @@ fn paths(room: &Room, id: &str) -> rimz::disk::paths::WorkflowPaths {
         .workflow(&id.parse().unwrap())
 }
 
+fn wait_for_advances_to_exit(env: &Env, id: &str) {
+    let spec = rimz::testkit::sandbox::SandboxSpec {
+        home_root: env.home_root.clone(),
+        runtime_root: env.runtime_root.clone(),
+    };
+    let command = ["workflow", "advance", id].map(std::ffi::OsString::from);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let running = rimz::testkit::sandbox::sandbox_processes(&spec)
+            .into_iter()
+            .filter_map(rimz::proc::argv)
+            .any(|argv| {
+                argv.windows(command.len())
+                    .any(|args| args == command.as_slice())
+            });
+        if !running {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "workflow advance {id} did not exit"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn gate(listener: &UnixListener) -> UnixStream {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -112,6 +138,7 @@ fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
     let (id, run) = room.launch();
     fs::write(paths(&room, &id).work.join("close"), "").unwrap();
     opened_turn(&room, &id, &run);
+    wait_for_advances_to_exit(&room.env, &id);
     let socket = room.env.runtime_root.join("until-result.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -146,6 +173,7 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     let room = room();
     let (id, run) = room.launch();
     opened_turn(&room, &id, &run);
+    wait_for_advances_to_exit(&room.env, &id);
     let socket = room.env.runtime_root.join("until-context.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
