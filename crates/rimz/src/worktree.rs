@@ -1839,7 +1839,8 @@ struct MarkerParses {
 static MARKER_PARSES: LazyLock<Mutex<MarkerParses>> = LazyLock::new(Mutex::default);
 
 /// Read a RimZ marker by following the checkout's `.git` metadata on every call. This
-/// keeps sidebar projection code off the git subprocess path.
+/// keeps sidebar projection code off the git subprocess path. It may serve a stat-validated
+/// memoized parse (`MARKER_PARSES`); a read-modify-write caller uses `read_marker_for_worktree`.
 pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<WorktreeMarker>> {
     let Some(marker) = marker_path_from_checkout_metadata(path)? else {
         return Ok(None);
