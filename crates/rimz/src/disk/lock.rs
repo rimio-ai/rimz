@@ -5,7 +5,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -119,6 +119,26 @@ impl Drop for SharedAppendLock {
 }
 
 impl WorkspaceLock {
+    /// Attempt acquisition, creating the lock with an exact mode despite umask.
+    /// The caller prepares the parent directory.
+    pub fn try_acquire_mode(path: &Path, mode: u32) -> Result<Option<Self>> {
+        let mut file = open_lock_inode(path, Some(mode)).map_err(|source| LockErr::Open {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        match lock_current_mode(&mut file, path, File::try_lock, Some(mode)) {
+            Ok(()) => Ok(Some(Self {
+                file,
+                path: path.to_path_buf(),
+            })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(source)) => Err(LockErr::Acquire {
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
+    }
+
     /// Block until the lock is held, creating the lock file and its parent
     /// directories. A caller that may run before room birth checks that the
     /// room root exists first, or this call creates it.
@@ -209,6 +229,15 @@ fn lock_current(
     path: &Path,
     acquire: impl Fn(&File) -> std::result::Result<(), std::fs::TryLockError>,
 ) -> std::result::Result<(), std::fs::TryLockError> {
+    lock_current_mode(file, path, acquire, None)
+}
+
+fn lock_current_mode(
+    file: &mut File,
+    path: &Path,
+    acquire: impl Fn(&File) -> std::result::Result<(), std::fs::TryLockError>,
+    mode: Option<u32>,
+) -> std::result::Result<(), std::fs::TryLockError> {
     loop {
         acquire(file)?;
         let current = (|| {
@@ -224,14 +253,25 @@ fn lock_current(
         }
         file.unlock().map_err(std::fs::TryLockError::Error)?;
         current.map_err(std::fs::TryLockError::Error)?;
-        *file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(path)
-            .map_err(std::fs::TryLockError::Error)?;
+        *file = open_lock_inode(path, mode).map_err(std::fs::TryLockError::Error)?;
     }
+}
+
+fn open_lock_inode(path: &Path, mode: Option<u32>) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).truncate(false);
+    if let Some(mode) = mode {
+        match options.create_new(true).mode(mode).open(path) {
+            Ok(file) => {
+                file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+                return Ok(file);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        return options.create_new(false).open(path);
+    }
+    options.create(true).open(path)
 }
 
 fn open_lock_file(path: &Path) -> Result<File> {

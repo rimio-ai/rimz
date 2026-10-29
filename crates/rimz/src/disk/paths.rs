@@ -758,6 +758,59 @@ pub(crate) fn builds_dir_under(home: &Path) -> PathBuf {
     home.join("builds")
 }
 
+/// Account-shared durable spending ledgers, independent of any home's cursors.
+#[derive(Clone, Debug)]
+pub struct SpendingHistoryPaths {
+    pub(crate) history_root: PathBuf,
+}
+
+impl SpendingHistoryPaths {
+    pub fn under(accounts: &Path) -> Self {
+        Self {
+            history_root: accounts.join(".history"),
+        }
+    }
+
+    pub fn roles_dir(&self) -> PathBuf {
+        self.history_root.join("session-roles")
+    }
+
+    pub fn effort_dir(&self) -> PathBuf {
+        self.history_root.join("session-effort")
+    }
+
+    pub fn spend_dir(&self) -> PathBuf {
+        self.history_root.join("spend")
+    }
+
+    pub fn roles(&self, year: i16) -> PathBuf {
+        self.roles_dir().join(format!("{year:04}.jsonl"))
+    }
+
+    pub fn effort(&self, date: jiff::civil::Date) -> PathBuf {
+        self.effort_dir().join(format!("{date}.jsonl"))
+    }
+
+    pub fn spend(&self, year: i16) -> PathBuf {
+        self.spend_dir().join(format!("{year:04}.jsonl"))
+    }
+
+    pub fn format(&self) -> PathBuf {
+        self.history_root.join("format")
+    }
+
+    pub fn maintain_lock(&self) -> PathBuf {
+        self.history_root.join("maintain.lock")
+    }
+
+    pub fn tagged_segment(path: &Path, tag: &str) -> PathBuf {
+        path.with_file_name(format!(
+            "{}.{tag}.jsonl",
+            path.file_stem().unwrap_or_default().to_string_lossy()
+        ))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimePaths {
     pub workspace_id: WorkspaceId,
@@ -774,6 +827,7 @@ pub struct RuntimePaths {
     /// supplied runtime root for test isolation and byte-identical
     /// cross-workspace cache paths.
     pub persistent_shared_root: PathBuf,
+    pub spending_history: SpendingHistoryPaths,
     pub sock_dir: PathBuf,
     pub live_dir: PathBuf,
     pub lanes_dir: PathBuf,
@@ -866,6 +920,7 @@ impl RuntimePaths {
         let dir_name = WorkspaceDirName::fallback(&sentinel);
         let mut paths = Self::under_named(sentinel, dir_name, &runtime_home());
         paths.persistent_shared_root = providers_cache_dir();
+        paths.spending_history = SpendingHistoryPaths::under(&accounts_dir());
         paths
     }
 
@@ -895,6 +950,7 @@ impl RuntimePaths {
         let root = rimz_root.join("ws").join(dir_name.as_str());
         let shared_root = rimz_root.join("shared");
         let persistent_shared_root = shared_root.clone();
+        let spending_history = SpendingHistoryPaths::under(&runtime_root.join("accounts"));
         let sock_dir = root.join(Class::Sock.dir_name());
         let live_dir = root.join(Class::Live.dir_name());
         let lanes_dir = root.join(Class::Lanes.dir_name());
@@ -915,6 +971,7 @@ impl RuntimePaths {
             root,
             shared_root,
             persistent_shared_root,
+            spending_history,
             sock_dir,
             live_dir,
             lanes_dir,
@@ -938,6 +995,7 @@ impl RuntimePaths {
         let mut paths = Self::under_named(workspace_id, dir_name, runtime_root);
         SockBudget::for_sock_dir(&paths.sock_dir).validate()?;
         paths.persistent_shared_root = providers_cache_dir();
+        paths.spending_history = SpendingHistoryPaths::under(&accounts_dir());
         Ok(paths)
     }
 
@@ -950,6 +1008,7 @@ impl RuntimePaths {
         paths.bind_state_locks(&state);
         paths.shared_root = self.shared_root.clone();
         paths.persistent_shared_root = self.persistent_shared_root.clone();
+        paths.spending_history = self.spending_history.clone();
         Ok(paths)
     }
 

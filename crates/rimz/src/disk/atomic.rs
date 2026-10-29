@@ -58,6 +58,88 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
+/// Durably replace a file with an exact mode, independent of the caller's umask.
+pub fn write_bytes_atomically_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    replace_whole_file(path, Fsync::Durable, Some(mode), |writer, tmp| {
+        writer.write_all(bytes).map_err(AtomicErr::io(tmp))
+    })
+}
+
+/// Durably publish complete bytes without replacing an existing destination.
+/// The caller prepares the parent directory.
+pub fn write_bytes_if_absent_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    let tmp = temp_sibling(path);
+    let _guard = TempFileGuard::new(tmp.clone());
+    write_temp_file(&tmp, Fsync::Durable, Some(mode), |writer| {
+        writer.write_all(bytes).map_err(AtomicErr::io(&tmp))
+    })?;
+    match std::fs::hard_link(&tmp, path) {
+        Ok(()) => sync_parent_dir(path),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => sync_parent_dir(path),
+        Err(source) => Err(AtomicErr::io(path)(source)),
+    }
+}
+
+/// Create a directory with an exact mode and durable parent entries.
+/// Missing ancestors follow the process umask.
+pub fn create_dir_all_mode(path: &Path, mode: u32) -> Result<()> {
+    if path.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        let missing = parent
+            .ancestors()
+            .take_while(|ancestor| !ancestor.is_dir())
+            .collect::<Vec<_>>();
+        std::fs::create_dir_all(parent).map_err(AtomicErr::io(parent))?;
+        for ancestor in missing.into_iter().rev() {
+            sync_parent_dir(ancestor)?;
+        }
+    }
+    match std::fs::create_dir(path) {
+        Ok(()) => {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .map_err(AtomicErr::io(path))?;
+            sync_parent_dir(path)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        Err(source) => Err(AtomicErr::io(path)(source)),
+    }
+}
+
+/// Append a record, setting the exact mode only when creating its file.
+/// The caller prepares the parent directory.
+pub fn append_record_bytes_mode(path: &Path, line: &[u8], mode: u32) -> Result<()> {
+    let (mut file, created) = match OpenOptions::new()
+        .create_new(true)
+        .append(true)
+        .mode(mode)
+        .open(path)
+    {
+        Ok(file) => {
+            file.set_permissions(std::fs::Permissions::from_mode(mode))
+                .map_err(AtomicErr::io(path))?;
+            (file, true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (
+            OpenOptions::new()
+                .append(true)
+                .open(path)
+                .map_err(AtomicErr::io(path))?,
+            false,
+        ),
+        Err(source) => return Err(AtomicErr::io(path)(source)),
+    };
+    file.write_all(line).map_err(AtomicErr::io(path))?;
+    if created {
+        sync_parent_dir(path)?;
+    }
+    Ok(())
+}
+
 /// Write pre-serialized cache bytes through temp+rename without fsync. This is
 /// the raw-byte twin of [`write_temp_then_rename_cache`] for callers that must
 /// reuse one serialization for content comparison and publication.
@@ -728,6 +810,87 @@ mod tests {
         append_record_bytes(&path, b"first\n").unwrap();
         append_record_bytes(&path, b"second\n").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"first\nsecond\n");
+    }
+
+    #[test]
+    fn explicit_modes_survive_restrictive_umask() {
+        if std::env::var_os("RIMZ_TEST_EXPLICIT_MODES").is_none() {
+            let output = std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    "umask 077; exec \"$1\" --exact \"$2\" --nocapture",
+                    "sh",
+                ])
+                .arg(std::env::current_exe().unwrap())
+                .arg("disk::atomic::tests::explicit_modes_survive_restrictive_umask")
+                .env("RIMZ_TEST_EXPLICIT_MODES", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("history/effort");
+        create_dir_all_mode(&nested, 0o2775).unwrap();
+        assert_eq!(
+            std::fs::metadata(&nested).unwrap().permissions().mode() & 0o7777,
+            0o2775,
+            "the requested directory must remain group-writable"
+        );
+        assert_eq!(
+            std::fs::metadata(nested.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o700,
+            "ancestors must follow the umask without setgid"
+        );
+        let segment = nested.join("day.jsonl");
+        append_record_bytes_mode(&segment, b"first\n", 0o664).unwrap();
+        append_record_bytes_mode(&segment, b"second\n", 0o664).unwrap();
+        assert_eq!(std::fs::read(&segment).unwrap(), b"first\nsecond\n");
+        assert_eq!(
+            std::fs::metadata(&segment).unwrap().permissions().mode() & 0o777,
+            0o664
+        );
+        write_bytes_atomically_mode(&segment, b"totals\n", 0o664).unwrap();
+        assert_eq!(
+            std::fs::metadata(&segment).unwrap().permissions().mode() & 0o777,
+            0o664
+        );
+        let lock = nested.join("maintain.lock");
+        let held = crate::disk::lock::WorkspaceLock::try_acquire_mode(&lock, 0o664)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&lock).unwrap().permissions().mode() & 0o777,
+            0o664
+        );
+        assert!(
+            crate::disk::lock::WorkspaceLock::try_acquire_mode(&lock, 0o664)
+                .unwrap()
+                .is_none()
+        );
+        drop(held);
+    }
+
+    #[test]
+    fn publish_if_absent_keeps_the_first_complete_copy() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("migrated.jsonl");
+        write_bytes_if_absent_mode(&path, b"original\n", 0o664).unwrap();
+        write_bytes_if_absent_mode(&path, b"replacement\n", 0o664).unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"original\n",
+            "migration must never overwrite a concurrently published or compacted copy"
+        );
     }
 
     #[test]

@@ -1195,7 +1195,8 @@ allowed-dependencies = [
 # packs_dir shares the explicit-home pack root (+1).
 # skills_library_under shares explicit home and pack skill roots with the chain (+1).
 # Remove the unused ambient skills_library accessor (-1).
-surface-budget = 298
+# SpendingHistoryPaths and exact-mode publication/locking share account-history disk mechanics (+16).
+surface-budget = 314
 
 [[verdict]]
 kind = "item"
@@ -3702,7 +3703,33 @@ allowed-dependencies = []
 # Checked executable copying shares the durable publication funnel.
 # symlink_dir_atomically keeps archive link publication in the durable write funnel (+1).
 # write_checkpoint publishes runtime checkpoints without making directories (+1).
-surface-budget = 22
+# Exact-mode creation, append, replacement and non-replacing copy support shared history (+4).
+surface-budget = 26
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::SpendingHistoryPaths"
+reason = "Spending walkers receive an explicit isolated account-history root from their caller."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::create_dir_all_mode"
+reason = "Shared history directories must be group-writable regardless of the caller's umask."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::append_record_bytes_mode"
+reason = "Shared ledger appends create exact-mode files without changing another user's files."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::write_bytes_atomically_mode"
+reason = "Shared ledger rewrites preserve group write access through durable publication."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::write_bytes_if_absent_mode"
+reason = "Migration publishes a complete durable copy without replacing an existing segment."
 
 [[verdict]]
 kind = "item"
