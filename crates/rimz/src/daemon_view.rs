@@ -304,7 +304,12 @@ pub struct DaemonViewSpecParams<'a> {
 pub fn daemon_view_spec(params: DaemonViewSpecParams<'_>) -> DaemonView {
     DaemonView {
         name: VIEW_NAME.to_owned(),
-        content: content_panes(params.daemon, params.rimz_bin, params.worktree_root),
+        content: content_panes(
+            params.daemon,
+            params.rimz_bin,
+            params.worktree_root,
+            params.workspace_id,
+        ),
         hosts: daemon_hosts(&params),
         loop_panel: loop_panel(params.rimz_bin, params.worktree_root),
     }
@@ -328,8 +333,17 @@ fn daemon_hosts(params: &DaemonViewSpecParams<'_>) -> Vec<HostPane> {
         });
     }
     if let Some(argv) = params.claude_host_argv {
+        let mut wrapped = vec![
+            params.rimz_bin.to_string_lossy().into_owned(),
+            "daemon".to_owned(),
+            "host".to_owned(),
+            "--workspace-id".to_owned(),
+            params.workspace_id.as_str().to_owned(),
+            "--".to_owned(),
+        ];
+        wrapped.extend_from_slice(argv);
         hosts.push(HostPane {
-            argv: argv.to_vec(),
+            argv: wrapped,
             cwd: params.project_root.to_path_buf(),
         });
     }
@@ -348,13 +362,23 @@ fn loop_panel(rimz_bin: &Path, worktree_root: &Path) -> HostPane {
     }
 }
 
-fn content_panes(daemon: &DaemonConfig, rimz_bin: &Path, worktree_root: &Path) -> Vec<HostPane> {
+fn content_panes(
+    daemon: &DaemonConfig,
+    rimz_bin: &Path,
+    worktree_root: &Path,
+    workspace_id: &WorkspaceId,
+) -> Vec<HostPane> {
     (0..crate::daemon_content::resolve_content(daemon, rimz_bin, worktree_root).len())
-        .map(|slot| content_supervisor_pane(slot, rimz_bin, worktree_root))
+        .map(|slot| content_supervisor_pane(slot, rimz_bin, worktree_root, workspace_id))
         .collect()
 }
 
-fn content_supervisor_pane(slot: usize, rimz_bin: &Path, worktree_root: &Path) -> HostPane {
+fn content_supervisor_pane(
+    slot: usize,
+    rimz_bin: &Path,
+    worktree_root: &Path,
+    workspace_id: &WorkspaceId,
+) -> HostPane {
     HostPane {
         argv: vec![
             rimz_bin.to_string_lossy().into_owned(),
@@ -364,13 +388,12 @@ fn content_supervisor_pane(slot: usize, rimz_bin: &Path, worktree_root: &Path) -
             slot.to_string(),
             "--worktree-root".to_owned(),
             worktree_root.to_string_lossy().into_owned(),
+            "--workspace-id".to_owned(),
+            workspace_id.as_str().to_owned(),
         ],
         cwd: worktree_root.to_path_buf(),
     }
 }
-
-/// Substring marking the always-present loop panel command.
-const LOOP_PANEL_MARKER: &str = "loop watch";
 
 /// Return the oldest loop panel in the managed view.
 pub fn find_loop_panel(panes: &[PaneRef]) -> Option<&PaneRef> {
@@ -902,24 +925,27 @@ fn command_marker(command: &str) -> Option<ManagedPaneMarker> {
     content_slot_from_command(command)
         .map(ManagedPaneMarker::ContentSlot)
         .or_else(|| {
-            if command.contains(APP_SERVER_MARKER) {
-                Some(ManagedPaneMarker::CodexAppServer)
-            } else if command_is_claude_host(command) {
-                Some(ManagedPaneMarker::ClaudeRemoteControl)
-            } else if command.contains(LOOP_PANEL_MARKER) {
-                Some(ManagedPaneMarker::LoopPanel)
-            } else {
-                None
-            }
+            [
+                ManagedPaneMarker::CodexAppServer,
+                ManagedPaneMarker::ClaudeRemoteControl,
+                ManagedPaneMarker::LoopPanel,
+            ]
+            .into_iter()
+            .find(|marker| command_matches_marker(command, marker))
         })
 }
 
 fn command_matches_marker(command: &str, marker: &ManagedPaneMarker) -> bool {
     match marker {
         ManagedPaneMarker::ContentSlot(slot) => content_slot_from_command(command) == Some(*slot),
-        ManagedPaneMarker::CodexAppServer => command.contains(APP_SERVER_MARKER),
+        ManagedPaneMarker::CodexAppServer => command
+            .split_whitespace()
+            .any(|word| word == APP_SERVER_MARKER),
         ManagedPaneMarker::ClaudeRemoteControl => command_is_claude_host(command),
-        ManagedPaneMarker::LoopPanel => command.contains(LOOP_PANEL_MARKER),
+        ManagedPaneMarker::LoopPanel => command
+            .split_whitespace()
+            .zip(command.split_whitespace().skip(1))
+            .any(|(command, subcommand)| command == "loop" && subcommand == "watch"),
     }
 }
 

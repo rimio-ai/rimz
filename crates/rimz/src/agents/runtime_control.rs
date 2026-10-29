@@ -168,7 +168,7 @@ pub(crate) fn installed_broker_bin() -> Option<PathBuf> {
     super::adapters::codex::broker::installed_bin()
 }
 
-/// Host one session's provider broker on `socket_path` until the pane closes.
+/// Host one session's provider broker until the pane closes or `should_stop` fires.
 /// Codex is the only provider with a warm app-server to hold; the entry stays
 /// neutral so `cli/` never reaches past the private-adapter boundary.
 pub fn serve_broker(
@@ -178,6 +178,7 @@ pub fn serve_broker(
     + Send
     + Sync
     + 'static,
+    should_stop: impl FnMut() -> bool,
 ) -> std::io::Result<()> {
     super::adapters::codex::broker::serve(
         super::adapters::codex::broker::BrokerInfo {
@@ -185,5 +186,6 @@ pub fn serve_broker(
             socket_path,
         },
         resolve_login,
+        should_stop,
     )
 }

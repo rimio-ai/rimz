@@ -422,6 +422,77 @@ fn connect_with_deadline(socket: &Path, timeout: Duration) -> Option<UnixStream>
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn broker_follows_room_build_and_reaps_the_old_app_server() {
+    use crate::common::builds::{RoomBuilds, executable};
+
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let builds = RoomBuilds::new(&env);
+    let mut broker = env
+        .rimz_at(&builds.first)
+        .args([
+            "codex",
+            "app-server",
+            "serve",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+        ])
+        .env("RIMZ_CODEX_BIN", codex_appserver_stub())
+        .env("RIMZ_TEST_SIDEBAR_RECORD_POLL_MS", "50")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let socket = env.runtime_paths().codex_app_server_socket_path();
+        let mut stream = connect_with_deadline(&socket, Duration::from_secs(10)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let init = rpc(&mut stream, &mut reader, 1, "initialize");
+        let old_child = init["rimzFixture"]["pid"].as_u64().unwrap();
+
+        builds.record(&env, &builds.first);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(executable(broker.id()), builds.first);
+        assert_eq!(
+            rpc(&mut stream, &mut reader, 2, "initialize")["rimzFixture"]["pid"],
+            old_child
+        );
+        builds.record(&env, &builds.second);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while executable(broker.id()) != builds.second && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(
+            executable(broker.id()),
+            builds.second,
+            "broker did not exec the room build"
+        );
+        assert!(
+            !Path::new(&format!("/proc/{old_child}")).exists(),
+            "old app-server was not reaped"
+        );
+        let mut stream = connect_with_deadline(&socket, Duration::from_secs(10)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let next = rpc(&mut stream, &mut reader, 3, "initialize");
+        assert_ne!(next["rimzFixture"]["pid"], old_child);
+        let limits = rpc(&mut stream, &mut reader, 4, "account/rateLimits/read");
+        assert_eq!(limits["rateLimits"]["primary"]["usedPercent"], 42);
+    }));
+    let _ = broker.kill();
+    let _ = broker.wait();
+    outcome.unwrap();
+}
+
+#[test]
 fn broker_serves_a_warm_app_server_over_its_socket() {
     let env = Env::new();
     if env.skip_if_sandboxed() {

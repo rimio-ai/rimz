@@ -430,40 +430,6 @@ fn host_spawn_prefers_the_durable_target_even_for_matching_bytes() {
 }
 
 #[test]
-fn record_change_requires_a_new_mtime_and_preserves_verification() {
-    let prior = SystemTime::UNIX_EPOCH;
-    let next = prior + Duration::from_secs(1);
-    let target = crate::reload::StagedBuild {
-        path: PathBuf::from("/state/builds/next/rimz"),
-        build: "next".to_owned(),
-    };
-    assert_eq!(
-        record_change(
-            Some(prior),
-            Some(prior),
-            crate::reload::WorkspaceReexecTarget::Verified(target.clone()),
-        ),
-        None,
-    );
-    assert_eq!(
-        record_change(
-            Some(prior),
-            Some(next),
-            crate::reload::WorkspaceReexecTarget::Verified(target.clone()),
-        ),
-        Some(RecordChange::Verified(target)),
-    );
-    assert_eq!(
-        record_change(
-            Some(prior),
-            Some(next),
-            crate::reload::WorkspaceReexecTarget::Invalid,
-        ),
-        Some(RecordChange::Unavailable),
-    );
-}
-
-#[test]
 fn pending_exec_waits_for_the_painting_build_stability_window() {
     let target = crate::reload::StagedBuild {
         path: PathBuf::from("/state/builds/new/rimz"),

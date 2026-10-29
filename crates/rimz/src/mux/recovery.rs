@@ -245,8 +245,8 @@ pub(crate) fn temp_unit_holders(units: &[std::path::PathBuf]) -> Vec<ProcInfo> {
 
 /// SIGUSR1 every `rimz stats --refresh` dashboard this user owns in this state
 /// domain so each re-execs in place onto the freshly-installed binary. Stats
-/// are mux-agnostic, so a reload refreshes the daemon-view pane and any
-/// standalone dashboard in the same world alike. Returns the pids signalled;
+/// are mux-agnostic. A following content supervisor restarts its own stats child
+/// after the room record moves, so that child is excluded. Returns the pids signalled;
 /// empty where the process backend cannot enumerate processes and the dashboard
 /// reloads via its own `r` key.
 #[cfg(unix)]
@@ -266,7 +266,7 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
         .iter()
         .filter(|proc| proc.real_uid == my_uid)
         .filter(|proc| !protected.contains(&proc.pid))
-        .filter(|proc| is_stats_refresh(&proc.cmdline))
+        .filter(|proc| stats_reload_candidate(proc, &procs))
         .filter(|proc| own_domain.same_world_as_process(proc.pid))
         .map(|proc| proc.pid)
         .collect();
@@ -302,6 +302,27 @@ fn is_stats_refresh(cmdline: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(any(unix, test))]
+fn stats_reload_candidate(proc: &ProcInfo, procs: &[ProcInfo]) -> bool {
+    is_stats_refresh(&proc.cmdline)
+        && !procs
+            .iter()
+            .find(|parent| parent.pid == proc.ppid)
+            .is_some_and(|parent| following_content_supervisor(&parent.cmdline))
+}
+
+#[cfg(any(unix, test))]
+fn following_content_supervisor(cmdline: &str) -> bool {
+    let mut words = cmdline.split_whitespace().peekable();
+    let mut content = false;
+    let mut workspace = false;
+    while let Some(word) = words.next() {
+        content |= word == "daemon" && words.peek() == Some(&"content");
+        workspace |= word == "--workspace-id" || word.starts_with("--workspace-id=");
+    }
+    content && workspace
 }
 
 /// Whether `cmdline` is one of `(workspace, session)`'s sidebar *serve* processes
@@ -740,6 +761,40 @@ mod tests {
         assert!(!is_stats_refresh(
             "rimz sidebar serve --workspace ws --session rimz-x"
         ));
+    }
+
+    #[test]
+    fn stats_reload_skips_only_children_of_following_content_supervisors() {
+        let procs = vec![
+            proc(
+                10,
+                1,
+                1000,
+                "rimz daemon content --slot 0 --workspace-id ws_0123456789abcdef01234567 --worktree-root /p",
+            ),
+            proc(11, 10, 1000, "rimz stats --refresh --hold"),
+            proc(
+                20,
+                1,
+                1000,
+                "rimz daemon content --slot 0 --worktree-root /p",
+            ),
+            proc(21, 20, 1000, "rimz stats --refresh --hold"),
+            proc(30, 1, 1000, "rimz stats --refresh"),
+            proc(
+                40,
+                1,
+                1000,
+                "/state/builds/current/rimz daemon content --slot 0 --worktree-root /home/u/src/rimz --workspace-id ws_0123456789abcdef01234567",
+            ),
+            proc(41, 40, 1000, "rimz stats --refresh --hold"),
+        ];
+        let selected: Vec<_> = procs
+            .iter()
+            .filter(|proc| stats_reload_candidate(proc, &procs))
+            .map(|proc| proc.pid)
+            .collect();
+        assert_eq!(selected, vec![21, 30]);
     }
 
     #[test]

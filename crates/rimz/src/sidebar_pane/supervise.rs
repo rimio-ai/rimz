@@ -16,12 +16,13 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::diag::record::{DiagEvent, SidebarHostUnavailableCause};
 use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
+use crate::reload::{RecordChange, RecordWatch, record_poll_interval};
 use crate::sidebar_pane::app::EventForwarder;
 use crate::sidebar_pane::attach::Control;
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
@@ -50,8 +51,6 @@ const TEST_PANE_PROBE_ABSENT_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_ABSE
 #[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_STRIKE_LOG_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_STRIKE_LOG";
 #[cfg(feature = "testkit")]
-const TEST_RECORD_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_RECORD_POLL_MS";
-#[cfg(feature = "testkit")]
 const TEST_STABLE_RUN_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_STABLE_RUN_MS";
 #[cfg(feature = "testkit")]
 const TEST_SELF_CLOSE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE";
@@ -65,7 +64,6 @@ const SELF_CLOSE_RECONFIRM_DELAY: Duration = Duration::from_millis(500);
 const RESPAWN_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPAWN_STABLE_RUN: Duration = Duration::from_secs(60);
-const RECORD_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SUPERVISOR_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Pane identity and cadence from argv and the mux environment, without machine settings.
@@ -535,75 +533,6 @@ impl PendingExec {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum RecordChange {
-    Verified(crate::reload::StagedBuild),
-    Unavailable,
-}
-
-#[derive(Debug)]
-pub(super) struct RecordWatch {
-    workspace_id: crate::ids::WorkspaceId,
-    record_path: PathBuf,
-    last_seen_mtime: Option<SystemTime>,
-    next_poll: Instant,
-}
-
-impl RecordWatch {
-    pub(super) fn new(workspace_id: &crate::ids::WorkspaceId) -> Self {
-        let record_path = crate::StatePaths::for_workspace(workspace_id.clone())
-            .map(|paths| paths.workspace_record)
-            .unwrap_or_default();
-        let last_seen_mtime = record_mtime(&record_path);
-        Self {
-            workspace_id: workspace_id.clone(),
-            record_path,
-            last_seen_mtime,
-            next_poll: Instant::now() + record_poll_interval(),
-        }
-    }
-
-    pub(super) fn poll_if_due(&mut self, now: Instant) -> Option<RecordChange> {
-        if now < self.next_poll {
-            return None;
-        }
-        self.next_poll = now + record_poll_interval();
-        self.poll_now()
-    }
-
-    fn poll_now(&mut self) -> Option<RecordChange> {
-        let mtime = record_mtime(&self.record_path);
-        if mtime == self.last_seen_mtime {
-            return None;
-        }
-        let target = crate::reload::recorded_reexec_target(&self.workspace_id);
-        let change = record_change(self.last_seen_mtime, mtime, target);
-        self.last_seen_mtime = mtime;
-        change
-    }
-}
-
-fn record_change(
-    prior_mtime: Option<SystemTime>,
-    mtime: Option<SystemTime>,
-    target: crate::reload::WorkspaceReexecTarget,
-) -> Option<RecordChange> {
-    if mtime == prior_mtime {
-        return None;
-    }
-    Some(match target {
-        crate::reload::WorkspaceReexecTarget::Verified(target) => RecordChange::Verified(target),
-        crate::reload::WorkspaceReexecTarget::Absent
-        | crate::reload::WorkspaceReexecTarget::Invalid => RecordChange::Unavailable,
-    })
-}
-
-fn record_mtime(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PaneProbe {
     Present(u64),
@@ -1054,16 +983,6 @@ fn reap_poll_interval() -> Duration {
 #[cfg(feature = "testkit")]
 fn respawn_delay(delay: Duration) -> Duration {
     duration_override(TEST_RESPAWN_BACKOFF_MS_ENV, delay)
-}
-
-#[cfg(feature = "testkit")]
-fn record_poll_interval() -> Duration {
-    duration_override(TEST_RECORD_POLL_MS_ENV, RECORD_POLL_INTERVAL)
-}
-
-#[cfg(not(feature = "testkit"))]
-fn record_poll_interval() -> Duration {
-    RECORD_POLL_INTERVAL
 }
 
 #[cfg(feature = "testkit")]

@@ -306,16 +306,19 @@ fn wait_pid(pid: u32) -> io::Result<std::process::ExitStatus> {
     }
 }
 
-/// Forward process signals to an event-driven supervisor.
+/// Deliver each process signal to an event-driven supervisor's callback.
 #[cfg(unix)]
-pub fn register_signal_wake(signals: Vec<i32>, wake: Sender<()>) -> io::Result<()> {
+pub fn register_signal_wake(
+    signals: Vec<i32>,
+    mut on_signal: impl FnMut(i32) + Send + 'static,
+) -> io::Result<()> {
     let _worker_mask = CleanupSignalMask::block()?;
     let mut signals = signal_hook::iterator::Signals::new(signals)?;
     std::thread::Builder::new()
         .name("rimz-signal-wake".to_owned())
         .spawn(move || {
-            for _ in signals.forever() {
-                let _ = wake.send(());
+            for signal in signals.forever() {
+                on_signal(signal);
             }
         })?;
     Ok(())
@@ -323,7 +326,10 @@ pub fn register_signal_wake(signals: Vec<i32>, wake: Sender<()>) -> io::Result<(
 
 /// Signal wakeups are unavailable off Unix; polling remains bounded there.
 #[cfg(not(unix))]
-pub fn register_signal_wake(_signals: Vec<i32>, _wake: Sender<()>) -> io::Result<()> {
+pub fn register_signal_wake(
+    _signals: Vec<i32>,
+    _on_signal: impl FnMut(i32) + Send + 'static,
+) -> io::Result<()> {
     Ok(())
 }
 

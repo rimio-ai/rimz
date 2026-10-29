@@ -44,7 +44,11 @@ pub(super) fn run_refresh(dollars: bool, hold: bool, active: Window) -> Result<(
             CycleExit::Refresh => {}
             CycleExit::Reload => {
                 if let Some(target) = rimz::reload::current_reexec_target() {
-                    return Err(reexec(&target));
+                    let error = rimz::reload::exec_current_args(&target);
+                    return Err(anyhow!(
+                        "failed to reload stats: re-exec {} failed: {error}",
+                        target.display()
+                    ));
                 }
             }
             CycleExit::Quit => return Ok(()),
@@ -345,17 +349,6 @@ pub(super) fn key_outcome(key: KeyEvent, hold: bool) -> KeyOutcome {
         }
         _ => KeyOutcome::Ignore,
     }
-}
-
-pub(super) fn reexec(target: &Path) -> anyhow::Error {
-    use std::os::unix::process::CommandExt;
-
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let err = std::process::Command::new(target).args(&args).exec();
-    anyhow!(
-        "failed to reload stats: re-exec {} failed: {err}",
-        target.display()
-    )
 }
 
 pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<Stats> {

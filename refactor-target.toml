@@ -979,7 +979,13 @@ reason = "One table-or-array decoder shared by task files and the lenient trust 
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
-surface-budget = 3
+# run_host exposes the CLI's foreground daemon wrapper (+1).
+surface-budget = 4
+
+[[verdict]]
+kind = "item"
+key = "daemon_content::run_host"
+reason = "The hidden daemon host CLI supervises the provider argv through the shared child lifecycle owner."
 
 [[module]]
 path = "crates/rimz/src/daemon_view.rs"
@@ -2436,7 +2442,33 @@ reason = "The drainer publishes boot-safe claims, applications, skips and drops 
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
-surface-budget = 10
+# RecordWatch/RecordChange and their cadence move from the sidebar; RoomBuildFollower and exec_current_args serve every rimzd process (+12).
+surface-budget = 22
+
+[[verdict]]
+kind = "item"
+key = "reload::RecordWatch"
+reason = "The sidebar host, sidebar supervisor and room-build followers share one record watcher."
+
+[[verdict]]
+kind = "item"
+key = "reload::RecordChange"
+reason = "Shared record observations preserve verified-build and unavailable-target semantics."
+
+[[verdict]]
+kind = "item"
+key = "reload::record_poll_interval"
+reason = "The sidebar's backoff and the moved watcher retain the same polling cadence and test override."
+
+[[verdict]]
+kind = "item"
+key = "reload::RoomBuildFollower"
+reason = "Content and host supervisors plus the loop and broker CLI follow verified room-build changes."
+
+[[verdict]]
+kind = "item"
+key = "reload::exec_current_args"
+reason = "The stats dashboard and room-build followers share same-pid exec with original OS-string argv."
 
 [[module]]
 path = "crates/rimz/src/remote"

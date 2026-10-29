@@ -19,9 +19,18 @@ pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
             "`rimz loop watch` shows an open room's loops; start one with `rimz start`, or use `rimz loop list`"
         );
     }
-    let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
+    let mut follower = rimz::reload::RoomBuildFollower::new(&workspace.workspace_id);
+    let mut input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
     let mut held_stats = run_log::HeldStats::new(&rimz::disk::paths::logs_dir());
     loop {
+        if follower.poll_if_due(Instant::now()).is_some() {
+            drop(input);
+            if let Some(target) = follower.recheck() {
+                let error = rimz::reload::exec_current_args(&target);
+                tracing::warn!(%error, "loop panel exec failed; keeping current build");
+            }
+            input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
+        }
         repaint_watch(&workspace, args.hold, &mut held_stats)?;
         match event::poll(Duration::from_secs(1)) {
             Ok(true) => match event::read() {

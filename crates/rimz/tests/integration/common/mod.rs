@@ -12,6 +12,8 @@
 //! shared across tiers; `codex` holds the hook and project trust setup a real
 //! Codex launch needs.
 
+#[cfg(target_os = "linux")]
+pub(crate) mod builds;
 mod codex;
 mod command;
 mod env;

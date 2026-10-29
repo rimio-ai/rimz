@@ -301,7 +301,11 @@ fn registered_signal_wakes_blocked_receiver() {
     use signal_hook::consts::signal::SIGUSR1;
 
     let (wake_tx, wake_rx) = mpsc::channel();
-    register_signal_wake(vec![SIGUSR1], wake_tx.clone()).expect("register signal wake");
+    let signal_wake = wake_tx.clone();
+    register_signal_wake(vec![SIGUSR1], move |_| {
+        let _ = signal_wake.send(());
+    })
+    .expect("register signal wake");
     wake_after(wake_tx, WAIT_TIMEOUT);
 
     let started = Instant::now();
