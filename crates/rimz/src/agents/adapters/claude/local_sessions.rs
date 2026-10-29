@@ -184,8 +184,8 @@ impl ClaudeDiscoverySnapshot {
             observations.extend(workspace_observations);
         }
 
-        self.candidates
-            .retain(|entry| self.catalog.entries().contains(entry));
+        let live: HashSet<&CatalogEntry> = self.catalog.entries().iter().collect();
+        self.candidates.retain(|entry| live.contains(entry));
         observations
     }
 
