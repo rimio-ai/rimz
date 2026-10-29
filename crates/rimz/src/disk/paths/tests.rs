@@ -1021,6 +1021,10 @@ fn shared_directory_preparation_leaves_workspace_tree_absent() {
 
 #[test]
 fn production_runtime_paths_persist_shared_data_and_keep_locks_runtime() {
+    assert_eq!(
+        RuntimePaths::shared().spending_history.history_root,
+        accounts_dir().join(".history")
+    );
     let temp = short_tempdir();
     let state_root = temp.path().join("home");
     let runtime_root = temp.path().join("runtime");
@@ -1029,6 +1033,16 @@ fn production_runtime_paths_persist_shared_data_and_keep_locks_runtime() {
 
     let mut paths = RuntimePaths::under(workspace_id, &runtime_root).unwrap();
     paths.persistent_shared_root = persistent_shared_root.clone();
+    paths.spending_history = SpendingHistoryPaths::under(&state_root.join("accounts"));
+
+    assert_eq!(
+        paths.spending_history.history_root,
+        state_root.join("accounts/.history")
+    );
+    assert_eq!(
+        paths.spending_history.spend(2026),
+        state_root.join("accounts/.history/spend/2026.jsonl")
+    );
 
     assert_eq!(paths.shared_root, runtime_root.join("rimz").join("shared"));
     assert_eq!(paths.persistent_shared_root, persistent_shared_root);
