@@ -720,6 +720,7 @@ fn report_fixture() -> DoctorReport {
             tasks: Vec::new(),
             timer: LoopTimer::NotInstalled,
             unscheduled: Vec::new(),
+            throttle_errors: Vec::new(),
         },
         remote_control: RemoteControl::Off,
         disk_usage: None,
@@ -1158,6 +1159,7 @@ fn loop_worktree_holders_render_without_audit_and_do_not_raise_tally() {
         }],
         timer: LoopTimer::NotInstalled,
         unscheduled: Vec::new(),
+        throttle_errors: Vec::new(),
     };
     let mut tally = Tally::default();
     let out = strip(|w| {
@@ -1170,6 +1172,27 @@ fn loop_worktree_holders_render_without_audit_and_do_not_raise_tally() {
     );
     assert!(tally.warns.is_empty());
     assert!(tally.alarms.is_empty());
+}
+
+#[test]
+fn capacity_check_errors_render_without_tasks_and_name_the_fix() {
+    let tasks = LoopTasks {
+        tasks: Vec::new(),
+        timer: LoopTimer::NotInstalled,
+        unscheduled: Vec::new(),
+        throttle_errors: vec!["claude/work: exit 2: broken credentials".into()],
+    };
+    let mut tally = Tally::default();
+    let out = strip(|w| {
+        render_loop(w, &tasks, &mut tally)?;
+        render_tally(w, &tally)
+    });
+    assert!(
+        out.contains("claude/work: exit 2: broken credentials"),
+        "{out}"
+    );
+    assert!(out.contains("[throttle] check"), "{out}");
+    assert_eq!(tally.warns.len(), 1);
 }
 
 #[test]
@@ -1197,6 +1220,7 @@ fn loop_section_lists_tasks_and_flags_invalid_ones() {
         ],
         timer: LoopTimer::NotInstalled,
         unscheduled: Vec::new(),
+        throttle_errors: Vec::new(),
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -2064,6 +2088,7 @@ fn loop_section_reads_empty_when_unconfigured() {
                 tasks: Vec::new(),
                 timer: LoopTimer::NotInstalled,
                 unscheduled: Vec::new(),
+                throttle_errors: Vec::new(),
             },
             &mut tally,
         )
@@ -2120,6 +2145,7 @@ fn loop_section_reports_scheduler_coverage() {
             }],
             timer,
             unscheduled,
+            throttle_errors: Vec::new(),
         };
         let mut tally = Tally::default();
         let out = strip(|w| {

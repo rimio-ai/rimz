@@ -3811,7 +3811,18 @@ allowed-dependencies = [
 # cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
 # CheckSignalGuard and TaskFire::record_signal_guard hold SIGTERM through terminal recording (+2).
 # CheckOutcome::{code,interrupted} expose hosted-shell exit and interruption without copying output (+2).
-surface-budget = 63
+# CheckOutcome::{stderr_line,timed_out} let capacity checks diagnose failures without copying output (+2).
+surface-budget = 65
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::throttle::check_errors"
+reason = "Doctor reads the latest per-kind/account capacity-check errors without executing checks."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::loop_throttle_check_cache"
+reason = "The home-wide capacity-check verdict cache is addressed only through the disk path module."
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

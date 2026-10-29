@@ -2382,6 +2382,19 @@ fn push_probe_rows(table: &mut Table, tally: &mut Tally, plugin: &PluginRow) {
 fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) -> io::Result<()> {
     use super::model::LoopTimer;
     section(w, tally, "LOOP TASKS")?;
+    let mut checks = KeyVals::new().indent(2);
+    for error in &loop_tasks.throttle_errors {
+        checks.push(
+            "capacity check",
+            unavailable(
+                tally,
+                Severity::Warning,
+                error,
+                "repair `[throttle] check` in loop.toml, then retry the start",
+            ),
+        );
+    }
+    checks.render(w)?;
     if loop_tasks.tasks.is_empty() {
         return writeln!(w, "  {}", paint(palette::faint(), "none configured"));
     }

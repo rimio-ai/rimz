@@ -24,6 +24,10 @@ pub(in crate::harness::schedule) struct FakeHost {
     agent_reads: AtomicUsize,
     on_sleep: Mutex<Option<SleepHook>>,
     on_lock: Mutex<Option<SleepHook>>,
+    on_check: Mutex<Option<SleepHook>>,
+    check_answer: Mutex<Result<(Option<i32>, bool), String>>,
+    checks: Mutex<Vec<StartGroup>>,
+    check_timeouts: Mutex<Vec<Duration>>,
     /// Raised as Ctrl-C would be; only a hold that listens hears it.
     pub(in crate::harness::schedule) interrupt: Arc<AtomicBool>,
     listening: AtomicUsize,
@@ -50,6 +54,10 @@ impl FakeHost {
             agent_reads: AtomicUsize::new(0),
             on_sleep: Mutex::new(None),
             on_lock: Mutex::new(None),
+            on_check: Mutex::new(None),
+            check_answer: Mutex::new(Ok((Some(0), false))),
+            checks: Mutex::new(Vec::new()),
+            check_timeouts: Mutex::new(Vec::new()),
             interrupt: Arc::new(AtomicBool::new(false)),
             listening: AtomicUsize::new(0),
         })
@@ -89,6 +97,10 @@ impl FakeHost {
         ticket_paths(&self.queue_dir()).unwrap().len()
     }
 
+    pub(in crate::harness::schedule) fn checked_groups(&self) -> Vec<StartGroup> {
+        self.checks.lock().unwrap().clone()
+    }
+
     /// Every path free disk was read at, in order.
     pub(in crate::harness::schedule) fn disk_reads(&self) -> Vec<PathBuf> {
         self.disk_reads.lock().unwrap().clone()
@@ -112,6 +124,36 @@ impl FakeHost {
 }
 
 impl Host for FakeHost {
+    fn check_cache(&self) -> PathBuf {
+        self.dir.path().join("checks.json")
+    }
+
+    fn check(
+        &self,
+        _config: &ThrottleConfig,
+        _run: &Run,
+        group: &StartGroup,
+        timeout: Duration,
+    ) -> Result<super::super::runner::CheckOutcome, String> {
+        self.checks.lock().unwrap().push(group.clone());
+        self.check_timeouts.lock().unwrap().push(timeout);
+        if let Some(mut hook) = self.on_check.lock().unwrap().take() {
+            hook(self);
+        }
+        self.check_answer
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|(code, timed_out)| {
+                super::super::runner::CheckOutcome::new(
+                    code == Some(0),
+                    timed_out,
+                    String::new(),
+                    code,
+                )
+            })
+    }
+
     fn now_ms(&self) -> u64 {
         self.clock.load(Ordering::SeqCst)
     }
@@ -205,6 +247,12 @@ fn run(task: &str) -> Run {
         checkout: PathBuf::from("/repo"),
         disk: PathBuf::from("/repo"),
         workspace: workspace(),
+        groups: vec![StartGroup {
+            kind: AgentKind::new_unchecked("claude"),
+            account: None,
+            agents: 1,
+        }],
+        gives_up_ms: None,
     }
 }
 
@@ -232,12 +280,16 @@ fn admitted(admission: Admission) -> (Turn, Option<Duration>) {
 }
 
 fn admit_quiet(fake: &Arc<FakeHost>, config: &ThrottleConfig, run: &Run) -> Admission {
-    admit(&fake.host(), config, run, None, &mut |_| {}).expect("admit")
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms() + duration_ms(config.max_wait())),
+        ..run.clone()
+    };
+    admit(&fake.host(), config, &run, None, &mut |_| {}).expect("admit")
 }
 
 /// One pass for a ticket that is not this thread's, as its owner would run it.
 fn step(fake: &FakeHost, config: &ThrottleConfig, run: &Run, ticket: &Path) -> Option<String> {
-    pass(fake, config, run, ticket, fake.now_ms(), &mut None)
+    pass(fake, config, run, Some(ticket), fake.now_ms(), &mut None)
         .expect("pass")
         .map(|hold| hold.text)
 }
@@ -280,6 +332,555 @@ fn nothing_configured_writes_no_ticket() {
 }
 
 #[test]
+fn capacity_nonblocking_holds_leave_no_ticket_and_do_not_check_behind_limits() {
+    let results: Vec<_> = ["queue", "limit", "full", "error"]
+        .into_iter()
+        .map(|case| {
+            let fake = FakeHost::new();
+            let mut configured = config("pace = '0s'\ncheck = 'capacity'\n");
+            let _holder = if case == "queue" {
+                Some(admitted(admit_quiet(&fake, &config(""), &run("first"))).0)
+            } else {
+                None
+            };
+            match case {
+                "limit" => {
+                    configured.min_memory = Some("1GB".into());
+                    *fake.memory.lock().unwrap() = Ok(0);
+                }
+                "full" => *fake.check_answer.lock().unwrap() = Ok((Some(75), false)),
+                "error" => *fake.check_answer.lock().unwrap() = Ok((Some(2), false)),
+                _ => {}
+            }
+            let before = fake.tickets();
+            let attempt = try_admit_in(&fake.host(), &configured, &run("next")).unwrap();
+            let kind = match attempt {
+                Attempt::Held(hold) => Some(hold.kind),
+                _ => None,
+            };
+            (
+                kind,
+                fake.tickets() == before,
+                fake.checks.lock().unwrap().len(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            (Some(HoldKind::Queue), true, 0),
+            (Some(HoldKind::Memory), true, 0),
+            (Some(HoldKind::Capacity), true, 1),
+            (Some(HoldKind::CheckFailed), true, 1),
+        ]
+    );
+}
+
+#[test]
+fn capacity_system_check_receives_the_room_pin_checkout_and_group_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = run("nightly");
+    run.root = dir.path().to_owned();
+    run.checkout = run.root.clone();
+    run.groups[0].account = Some("work".parse().unwrap());
+    run.groups[0].agents = 2;
+    let configured = ThrottleConfig {
+        check: Some(
+            concat!(
+                "test \"$PWD\" = \"$RIMZ_PROJECT_ROOT\" && ",
+                "test -n \"$RIMZ_WORKSPACE_ID\" && ",
+                "test \"$RIMZ_START_KIND\" = claude && ",
+                "test \"$RIMZ_START_ACCOUNT\" = work && ",
+                "test \"$RIMZ_START_AGENTS\" = 2 && ",
+                "test \"$RIMZ_START_TASK\" = nightly"
+            )
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let checked = SystemHost.check(
+        &configured,
+        &run,
+        &run.groups[0],
+        configured.check_timeout(),
+    );
+    assert!(
+        checked.is_ok_and(|checked| checked.passed()),
+        "the check must receive every launch field"
+    );
+}
+
+#[test]
+fn capacity_check_holds_an_admitted_turn_without_holding_the_queue_lock() {
+    let fake = FakeHost::new();
+    let weak = Arc::downgrade(&fake);
+    *fake.on_check.lock().unwrap() = Some(Box::new(move |fake| {
+        let lock = WorkspaceLock::try_acquire(&fake.queue_lock()).unwrap();
+        assert!(
+            lock.is_some(),
+            "the script must not run under the queue lock"
+        );
+        drop(lock);
+        let paths = ticket_paths(&fake.queue_dir()).unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            read_ticket(&paths[0]).unwrap().unwrap().state,
+            TicketState::Admitted
+        );
+        let second =
+            try_admit_in(&weak.upgrade().unwrap().host(), &config(""), &run("second")).unwrap();
+        assert!(
+            matches!(&second, Attempt::Held(hold) if hold.text == "1 start ahead"),
+            "{second:?}"
+        );
+        assert_eq!(fake.tickets(), 1);
+    }));
+    let attempt = try_admit_in(&fake.host(), &config("check = 'capacity'"), &run("first")).unwrap();
+    assert!(matches!(attempt, Attempt::Turn(_)), "{attempt:?}");
+    assert_eq!(fake.checks.lock().unwrap().len(), 1);
+    drop(attempt);
+    assert_eq!(fake.tickets(), 0);
+}
+
+#[test]
+fn capacity_answers_and_cache_distinguish_full_errors_and_success() {
+    let answers = [
+        Ok((Some(0), false)),
+        Ok((Some(75), false)),
+        Ok((Some(2), false)),
+        Ok((None, true)),
+        Ok((None, false)),
+        Err("cannot spawn".to_owned()),
+    ];
+    let results: Vec<_> = answers
+        .into_iter()
+        .map(|answer| {
+            let fake = FakeHost::new();
+            *fake.check_answer.lock().unwrap() = answer;
+            let configured = config("pace = '0s'\ncheck = 'capacity'");
+            let mut kinds = Vec::new();
+            for _ in 0..2 {
+                let attempt = try_admit_in(&fake.host(), &configured, &run("first")).unwrap();
+                kinds.push(match attempt {
+                    Attempt::Turn(_) => None,
+                    Attempt::Held(hold) => Some(hold.kind),
+                    Attempt::Open => Some(HoldKind::Queue),
+                });
+            }
+            let checks = fake.checks.lock().unwrap().len();
+            fake.clock.fetch_add(60_000, Ordering::SeqCst);
+            drop(try_admit_in(&fake.host(), &configured, &run("first")).unwrap());
+            let after_expiry = fake.checks.lock().unwrap().len();
+            (kinds, checks, after_expiry)
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            (vec![None, None], 2, 3),
+            (vec![Some(HoldKind::Capacity); 2], 1, 2),
+            (vec![Some(HoldKind::CheckFailed); 2], 1, 2),
+            (vec![Some(HoldKind::CheckFailed); 2], 1, 2),
+            (vec![Some(HoldKind::CheckFailed); 2], 1, 2),
+            (vec![Some(HoldKind::CheckFailed); 2], 1, 2),
+        ]
+    );
+}
+
+#[test]
+fn capacity_look_never_writes_a_ticket_and_reuses_only_holds() {
+    let fake = FakeHost::new();
+    let configured = config("check = 'capacity'");
+    *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
+    let full = look_in(fake.as_ref(), &configured, &run("first")).unwrap();
+    assert!(
+        matches!(
+            full,
+            Some(Hold {
+                kind: HoldKind::Capacity,
+                ..
+            })
+        ),
+        "{full:?}"
+    );
+    assert_eq!(fake.tickets(), 0);
+    *fake.check_answer.lock().unwrap() = Ok((Some(0), false));
+    assert!(
+        look_in(fake.as_ref(), &configured, &run("first"))
+            .unwrap()
+            .is_some()
+    );
+    fake.clock.fetch_add(60_000, Ordering::SeqCst);
+    assert!(
+        look_in(fake.as_ref(), &configured, &run("first"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        try_admit_in(&fake.host(), &configured, &run("first")).unwrap(),
+        Attempt::Turn(_)
+    ));
+    assert_eq!(
+        fake.checks.lock().unwrap().len(),
+        3,
+        "capacity is checked again at admission"
+    );
+    assert_eq!(fake.tickets(), 0);
+}
+
+#[test]
+fn capacity_holds_are_cached_per_kind_and_account_and_diagnose_the_latest_error() {
+    let fake = FakeHost::new();
+    let configured = config("check = 'capacity'");
+    *fake.check_answer.lock().unwrap() = Ok((Some(2), false));
+    drop(try_admit_in(&fake.host(), &configured, &run("first")).unwrap());
+    let errors = check_errors_in(fake.as_ref(), &configured);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("claude") && errors[0].contains("exit 2"),
+        "{errors:?}"
+    );
+    let mut other = run("other");
+    other.groups[0].account = Some("work".parse().unwrap());
+    *fake.check_answer.lock().unwrap() = Ok((Some(0), false));
+    assert!(matches!(
+        try_admit_in(&fake.host(), &configured, &other).unwrap(),
+        Attempt::Turn(_)
+    ));
+    assert_eq!(
+        check_errors_in(fake.as_ref(), &configured).len(),
+        1,
+        "another account cannot clear an error"
+    );
+    fake.clock.fetch_add(60_000, Ordering::SeqCst);
+    drop(try_admit_in(&fake.host(), &configured, &run("first")).unwrap());
+    assert!(check_errors_in(fake.as_ref(), &configured).is_empty());
+}
+
+#[test]
+fn capacity_waiters_step_aside_only_for_disjoint_kinds_and_never_a_held_turn() {
+    let results: Vec<_> = [HoldKind::Capacity, HoldKind::CheckFailed]
+        .into_iter()
+        .map(|kind| {
+            let fake = FakeHost::new();
+            let first = run("first");
+            let path = enqueue_as(&fake, 1, &first);
+            let mut ticket = read_ticket(&path).unwrap().unwrap();
+            ticket.state = TicketState::Waiting {
+                reason: Some(Hold {
+                    kind,
+                    text: "no capacity".into(),
+                    kinds: vec![AgentKind::new_unchecked("claude")],
+                }),
+            };
+            write_ticket(&path, &ticket).unwrap();
+            let mut other = run("other");
+            other.groups[0].kind = AgentKind::new_unchecked("codex");
+            let codex = try_admit_in(&fake.host(), &config(""), &other).unwrap();
+            let claude = try_admit_in(&fake.host(), &config(""), &run("next")).unwrap();
+            let held_turn = try_admit_in(&fake.host(), &config(""), &other).unwrap();
+            (
+                matches!(codex, Attempt::Turn(_)),
+                matches!(claude, Attempt::Held(_)),
+                matches!(held_turn, Attempt::Held(_)),
+            )
+        })
+        .collect();
+    assert_eq!(results, [(true, true, true); 2]);
+}
+
+#[test]
+fn capacity_queued_same_kind_waiters_do_not_block_other_kinds() {
+    let fake = FakeHost::new();
+    let configured = config("check = 'capacity'");
+    *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
+    let weak = Arc::downgrade(&fake);
+    fake.on_sleep(move |fake| {
+        let host = weak.upgrade().unwrap().host();
+        let second = run("second");
+        let second_path = enqueue_as(fake, 2, &second);
+        let hold = pass(
+            fake,
+            &configured,
+            &second,
+            Some(&second_path),
+            fake.now_ms(),
+            &mut None,
+        )
+        .unwrap();
+        assert!(hold.is_some(), "the second Claude start must wait");
+        let mut codex = run("codex");
+        codex.groups[0].kind = AgentKind::new_unchecked("codex");
+        let other = try_admit_in(&host, &config(""), &codex).unwrap();
+        let third = try_admit_in(&host, &config(""), &run("third")).unwrap();
+        assert!(matches!(other, Attempt::Turn(_)), "{other:?}");
+        assert!(matches!(third, Attempt::Held(_)), "{third:?}");
+        fake.interrupt.store(true, Ordering::SeqCst);
+        remove_ticket(&second_path);
+    });
+    let result = admit(
+        &fake.host(),
+        &config("check = 'capacity'"),
+        &run("first"),
+        None,
+    )
+    .unwrap();
+    assert!(matches!(result, Admission::Interrupted), "{result:?}");
+    assert_eq!(fake.tickets(), 0);
+}
+
+#[test]
+fn capacity_check_stops_at_the_give_up_instant_without_caching_an_error() {
+    let fake = FakeHost::new();
+    let cut_at_the_bound = |fake: &FakeHost| {
+        *fake.on_check.lock().unwrap() = Some(Box::new(|fake| {
+            let timeout = *fake.check_timeouts.lock().unwrap().last().unwrap();
+            fake.clock.fetch_add(duration_ms(timeout), Ordering::SeqCst);
+            *fake.check_answer.lock().unwrap() = Ok((None, true));
+        }));
+    };
+    cut_at_the_bound(&fake);
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms() + 3_000),
+        ..run("first")
+    };
+    let result = admit(&fake.host(), &config("check = 'capacity'"), &run, None).unwrap();
+    assert!(matches!(result, Admission::Skipped { .. }), "{result:?}");
+    assert_eq!(fake.elapsed_ms(), 3_000);
+    assert!(read_verdicts(fake.as_ref()).is_empty());
+    assert_eq!(fake.tickets(), 0);
+    cut_at_the_bound(&fake);
+    let once = Run {
+        gives_up_ms: Some(fake.now_ms() + 3_000),
+        ..run.clone()
+    };
+    let attempt = try_admit_in(&fake.host(), &config("check = 'capacity'"), &once).unwrap();
+    assert!(matches!(attempt, Attempt::Held(_)), "{attempt:?}");
+    assert!(read_verdicts(fake.as_ref()).is_empty());
+    assert_eq!(fake.tickets(), 0);
+}
+
+#[test]
+fn capacity_expired_admission_without_a_check_has_a_neutral_reason() {
+    let fake = FakeHost::new();
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms()),
+        ..run("first")
+    };
+    let result = admit(&fake.host(), &config(""), &run, None).unwrap();
+    let Admission::Skipped { reason } = result else {
+        panic!("expected a skip, got {result:?}");
+    };
+    assert_eq!(
+        reason,
+        "gave up waiting for capacity after 0s; wait deadline reached"
+    );
+}
+
+#[test]
+fn capacity_removed_check_stops_reporting_cached_errors() {
+    let fake = FakeHost::new();
+    *fake.check_answer.lock().unwrap() = Ok((Some(2), false));
+    drop(try_admit_in(&fake.host(), &config("check = 'capacity'"), &run("first")).unwrap());
+    assert!(check_errors_in(fake.as_ref(), &config("")).is_empty());
+}
+
+#[test]
+fn capacity_check_bounds_pipe_holders_after_the_leader_exits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = run("first");
+    run.root = dir.path().to_owned();
+    run.checkout = run.root.clone();
+    let configured = config("check = 'sleep 3 & exit 75'\ncheck-timeout = '1s'");
+    let started = std::time::Instant::now();
+    let checked = SystemHost
+        .check(
+            &configured,
+            &run,
+            &run.groups[0],
+            configured.check_timeout(),
+        )
+        .unwrap();
+    assert_eq!(checked.code(), Some(75));
+    assert!(!checked.timed_out());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "pipe holders exceeded the timeout"
+    );
+}
+
+#[test]
+fn capacity_check_extends_the_ceiling_but_provider_reports_still_release_it() {
+    let results: Vec<_> = [false, true]
+        .into_iter()
+        .map(|report| {
+            let fake = FakeHost::new();
+            let configured = config("pace = '1s'\ncheck = 'capacity'");
+            let (first, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
+            fake.set_agents(&workspace(), vec![launched("launch_a")]);
+            first.report_launch(&workspace(), &AgentSessionId::from("launch_a"));
+            fake.clock.fetch_add(1_000, Ordering::SeqCst);
+            let held = try_admit_in(&fake.host(), &configured, &run("next")).unwrap();
+            if report {
+                let mut adopted = launched("provider-session");
+                adopted.launch_id = Some(AgentSessionId::from("launch_a"));
+                fake.set_agents(&workspace(), vec![adopted]);
+            } else {
+                fake.clock.fetch_add(119_000, Ordering::SeqCst);
+            }
+            let released = try_admit_in(&fake.host(), &configured, &run("next")).unwrap();
+            (
+                matches!(held, Attempt::Held(_)),
+                matches!(released, Attempt::Turn(_)),
+            )
+        })
+        .collect();
+    assert_eq!(results, [(true, true); 2]);
+}
+
+#[test]
+fn capacity_blocking_admission_uses_the_callers_instant_or_waits_forever() {
+    let results: Vec<_> = [Some(3_000), None]
+        .into_iter()
+        .map(|bound| {
+            let fake = FakeHost::new();
+            fake.set_pressure(90.0, 90.0);
+            fake.on_sleep(|fake| {
+                if fake.elapsed_ms() >= 5_000 {
+                    fake.set_pressure(0.0, 0.0);
+                }
+            });
+            let run = Run {
+                gives_up_ms: bound.map(|ms| fake.now_ms() + ms),
+                ..run("first")
+            };
+            let admission = admit(
+                &fake.host(),
+                &config("cpu-pressure = 25\nmax-wait = '1s'"),
+                &run,
+                None,
+                &mut |_| {},
+            )
+            .unwrap();
+            (
+                matches!(admission, Admission::Skipped { .. }),
+                fake.elapsed_ms(),
+            )
+        })
+        .collect();
+    assert_eq!(results, [(true, 3_000), (false, 5_000)]);
+}
+
+#[test]
+fn capacity_blocking_checks_retry_without_holding_the_turn_between_verdicts() {
+    let fake = FakeHost::new();
+    *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
+    fake.on_sleep(|fake| {
+        let paths = ticket_paths(&fake.queue_dir()).unwrap();
+        let ticket = read_ticket(&paths[0]).unwrap().unwrap();
+        assert!(matches!(
+            ticket.state,
+            TicketState::Waiting {
+                reason: Some(Hold {
+                    kind: HoldKind::Capacity,
+                    ..
+                })
+            }
+        ));
+        if fake.elapsed_ms() >= 60_000 {
+            *fake.check_answer.lock().unwrap() = Ok((Some(0), false));
+        }
+    });
+    let admission = admit(
+        &fake.host(),
+        &config("check = 'capacity'"),
+        &run("first"),
+        None,
+        &mut |_| {},
+    )
+    .unwrap();
+    let (_turn, waited) = admitted(admission);
+    assert_eq!(waited, Some(Duration::from_secs(60)));
+    assert_eq!(fake.checked_groups().len(), 2);
+}
+
+#[test]
+fn capacity_a_slow_check_cannot_admit_after_the_callers_give_up_instant() {
+    let results: Vec<_> = [(0, 3_000), (75, 3_000), (0, 4_000), (75, 4_000)]
+        .into_iter()
+        .map(|(code, elapsed)| {
+            let fake = FakeHost::new();
+            *fake.check_answer.lock().unwrap() = Ok((Some(code), false));
+            *fake.on_check.lock().unwrap() = Some(Box::new(move |fake| {
+                fake.clock.fetch_add(elapsed, Ordering::SeqCst);
+            }));
+            let run = Run {
+                gives_up_ms: Some(fake.now_ms() + 3_000),
+                ..run("first")
+            };
+            let admission = admit(
+                &fake.host(),
+                &config("check = 'capacity'"),
+                &run,
+                None,
+                &mut |_| {},
+            )
+            .unwrap();
+            let Admission::Skipped { reason } = &admission else {
+                panic!("expected a skip, got {admission:?}");
+            };
+            assert!(
+                reason.contains(&format!("{}s", elapsed / 1_000)),
+                "{reason}"
+            );
+            (
+                matches!(admission, Admission::Skipped { .. }),
+                fake.tickets(),
+            )
+        })
+        .collect();
+    assert_eq!(results, [(true, 0); 4]);
+}
+
+#[test]
+fn capacity_only_denied_kinds_hold_and_slow_checks_do_not_extend_cache_freshness() {
+    let fake = FakeHost::new();
+    let mut run = run("first");
+    run.groups.push(StartGroup {
+        kind: AgentKind::new_unchecked("codex"),
+        account: None,
+        agents: 1,
+    });
+    *fake.on_check.lock().unwrap() = Some(Box::new(|fake| {
+        fake.clock.fetch_add(60_000, Ordering::SeqCst);
+        *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
+    }));
+    let configured = config("check = 'capacity'");
+    let attempt = try_admit_in(&fake.host(), &configured, &run).unwrap();
+    let Attempt::Held(hold) = attempt else {
+        panic!("all denied groups must hold: {attempt:?}");
+    };
+    assert_eq!(
+        hold.kinds,
+        [
+            AgentKind::new_unchecked("claude"),
+            AgentKind::new_unchecked("codex")
+        ]
+    );
+    *fake.check_answer.lock().unwrap() = Ok((Some(0), false));
+    let attempt = try_admit_in(&fake.host(), &configured, &run).unwrap();
+    let Attempt::Held(hold) = attempt else {
+        panic!("the second group's cached hold must remain: {attempt:?}");
+    };
+    assert_eq!(hold.kinds, [AgentKind::new_unchecked("codex")]);
+    assert_eq!(
+        fake.checked_groups().len(),
+        3,
+        "the first group's request was already 60s old"
+    );
+}
+
+#[test]
 fn a_pressure_limit_holds_until_both_averages_are_under_it() {
     let fake = FakeHost::new();
     fake.set_pressure(10.0, 41.0);
@@ -310,14 +911,21 @@ fn a_pressure_limit_holds_until_both_averages_are_under_it() {
 }
 
 #[test]
-fn a_run_held_past_max_wait_is_skipped_with_its_last_reason() {
+fn a_run_held_past_its_give_up_instant_is_skipped_with_its_last_reason() {
     let fake = FakeHost::new();
     fake.set_pressure(90.0, 90.0);
-    let skipped = admit_quiet(
-        &fake,
-        &config("cpu-pressure = 25\nmax-wait = \"3s\"\n"),
-        &run("nightly"),
-    );
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms() + 3_000),
+        ..run("nightly")
+    };
+    let skipped = admit(
+        &fake.host(),
+        &config("cpu-pressure = 25"),
+        &run,
+        None,
+        &mut |_| {},
+    )
+    .unwrap();
     let Admission::Skipped { reason } = skipped else {
         panic!("expected a skip, got {skipped:?}");
     };
@@ -403,7 +1011,11 @@ fn with_pacing_off_the_next_start_is_admitted_at_the_report_and_counts_its_row()
     });
     fake.become_owner(2);
     let mut heard = Vec::new();
-    let skipped = admit(&fake.host(), &capped, &run("second"), None, &mut |reason| {
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms() + 20_000),
+        ..run("second")
+    };
+    let skipped = admit(&fake.host(), &capped, &run, None, &mut |reason| {
         heard.push((fake.elapsed_ms(), reason.to_owned()));
     })
     .expect("admit");
@@ -706,12 +1318,12 @@ fn memory_and_disk_floors_hold_below_the_floor_and_show_beside_the_reading() {
 }
 
 #[test]
-fn a_held_run_is_skipped_at_max_wait_even_when_its_hold_clears_then() {
+fn a_held_run_is_skipped_at_its_give_up_instant_even_when_its_hold_clears_then() {
     // The holder's turn passes on exactly at the deadline, or a slow poll
     // first wakes past it: both are a skip, never a late start.
-    for (clears_at, delay_ms) in [(3_000, 0), (1_000, 5_000)] {
+    for (clears_at, delay_ms, waited) in [(3_000, 0, "3s"), (1_000, 5_000, "6s")] {
         let fake = FakeHost::new();
-        let paced = config("max-wait = \"3s\"\n");
+        let paced = config("");
         let mut holder = Some(admitted(admit_quiet(&fake, &paced, &run("first"))).0);
         fake.on_sleep(move |fake| {
             if fake.elapsed_ms() == clears_at {
@@ -720,11 +1332,15 @@ fn a_held_run_is_skipped_at_max_wait_even_when_its_hold_clears_then() {
             }
         });
         fake.become_owner(2);
-        let skipped = admit_quiet(&fake, &paced, &run("second"));
+        let run = Run {
+            gives_up_ms: Some(fake.now_ms() + 3_000),
+            ..run("second")
+        };
+        let skipped = admit(&fake.host(), &paced, &run, None, &mut |_| {}).unwrap();
         let Admission::Skipped { reason } = skipped else {
             panic!("cleared at {clears_at}ms: expected a skip, got {skipped:?}");
         };
-        assert_eq!(reason, "1 start ahead; held 3s");
+        assert_eq!(reason, format!("1 start ahead; held {waited}"));
         assert_eq!(fake.elapsed_ms(), clears_at + delay_ms);
         assert_eq!(fake.tickets(), 0);
     }

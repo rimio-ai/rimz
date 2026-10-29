@@ -303,6 +303,7 @@ pub(super) fn run(
             interrupted,
             terminated: false,
             output,
+            stderr_line: String::new(),
         },
         record,
     )))

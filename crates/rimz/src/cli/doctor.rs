@@ -519,6 +519,7 @@ fn collect_loop() -> model::LoopTasks {
         )
         .collect();
     model::LoopTasks {
+        throttle_errors: rimz::harness::schedule::throttle::check_errors(),
         tasks: rows,
         timer,
         unscheduled,

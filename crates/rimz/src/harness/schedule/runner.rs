@@ -448,6 +448,7 @@ pub struct TaskFire<'a> {
     check_interrupts: Option<throttle::Interrupts>,
     throttle_turn: Option<throttle::Turn>,
     throttle_wait: Option<Duration>,
+    resident_groups: Vec<throttle::StartGroup>,
     hold_notice: Option<HoldNotice<'a>>,
     fired_guard: Vec<FiredCheck>,
     pending: Option<PendingEffect>,
@@ -503,6 +504,7 @@ impl<'a> TaskFire<'a> {
             needs_room: false,
             run_lock_path,
             throttle_host: Arc::new(throttle::SystemHost),
+            resident_groups: Vec::new(),
             check_interrupts: None,
             throttle_turn: None,
             throttle_wait: None,
@@ -719,7 +721,26 @@ impl<'a> TaskFire<'a> {
             return Ok(None);
         }
         let root = self.entry.resolved_root();
+        let groups = match self
+            .context
+            .as_ref()
+            .and_then(|context| context.scope.as_ref())
+        {
+            Some(scope) => vec![throttle::StartGroup {
+                kind: scope.kind.clone(),
+                account: scope.login.as_ref().map(|login| login.name().clone()),
+                agents: 1,
+            }],
+            None => self.resident_groups.clone(),
+        };
         let run = throttle::Run {
+            groups,
+            gives_up_ms: Some(
+                self.throttle_host.now_ms().saturating_add(
+                    u64::try_from(self.config.r#loop.throttle.max_wait().as_millis())
+                        .unwrap_or(u64::MAX),
+                ),
+            ),
             task: self.name.clone(),
             workspace: StatePaths::for_project_root(&root)?.workspace_id,
             root,
@@ -1141,6 +1162,7 @@ impl<'a> TaskFire<'a> {
             self.entry.agent.as_deref(),
             None,
         )?;
+        let mut groups: Vec<throttle::StartGroup> = Vec::new();
         for cell in layout.layout.agent_cells() {
             let resolved = ResolvedSingleAgentLaunch {
                 kind: cell.kind.as_str().to_owned(),
@@ -1148,6 +1170,18 @@ impl<'a> TaskFire<'a> {
                 model: cell.launch.model.clone(),
             };
             let login = task_login(&LaunchLogin::RoomDefault, &cell.kind, &runtime)?;
+            let account = login.as_ref().map(|login| login.name().clone());
+            match groups
+                .iter_mut()
+                .find(|group| group.kind == cell.kind && group.account == account)
+            {
+                Some(group) => group.agents += 1,
+                None => groups.push(throttle::StartGroup {
+                    kind: cell.kind.clone(),
+                    account,
+                    agents: 1,
+                }),
+            }
             let mut scope = FireScope::new(
                 cell.kind.clone(),
                 runtime.clone(),
@@ -1160,6 +1194,7 @@ impl<'a> TaskFire<'a> {
                 return Ok(Some(self.record_gate(result, reason)));
             }
         }
+        self.resident_groups = groups;
         Ok(None)
     }
 
@@ -3214,9 +3249,18 @@ pub struct CheckOutcome {
     terminated: bool,
     output: String,
     code: Option<i32>,
+    stderr_line: String,
 }
 
 impl CheckOutcome {
+    pub(super) fn stderr_line(&self) -> &str {
+        &self.stderr_line
+    }
+
+    pub(super) fn timed_out(&self) -> bool {
+        self.timed_out
+    }
+
     pub(super) fn new(passed: bool, timed_out: bool, output: String, code: Option<i32>) -> Self {
         Self {
             passed,
@@ -3225,6 +3269,7 @@ impl CheckOutcome {
             terminated: false,
             output,
             code,
+            stderr_line: String::new(),
         }
     }
 
@@ -3328,6 +3373,7 @@ pub fn run_check(
 
 pub(crate) enum WatchDeadline<'a> {
     KillAfter(Duration),
+    CapacityCheck(Duration),
     /// Run to exit, with an optional one-time check-in.
     Watch(Option<Duration>),
     Hosted {
@@ -3476,7 +3522,7 @@ pub(crate) fn run_command(
             .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))
     };
     let (mut command, mut interrupts, kill_after, check_in_after) = match &deadline {
-        WatchDeadline::KillAfter(timeout) => (
+        WatchDeadline::KillAfter(timeout) | WatchDeadline::CapacityCheck(timeout) => (
             check_command(cmd),
             Some(CheckSignals::new(
                 &[signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM],
@@ -3630,18 +3676,30 @@ pub(crate) fn run_command(
         }
         std::thread::sleep(CHECK_POLL_INTERVAL);
     };
-    let drain_deadline = (timed_out || interrupted).then(|| Instant::now() + CHECK_DRAIN_GRACE);
-    for drain in [stdout, stderr] {
+    let capacity_drain = matches!(deadline, WatchDeadline::CapacityCheck(_));
+    let drain_deadline = if capacity_drain {
+        kill_at
+    } else {
+        (timed_out || interrupted).then(|| Instant::now() + CHECK_DRAIN_GRACE)
+    };
+    let mut stderr_line = String::new();
+    for (is_stderr, drain) in [(false, stdout), (true, stderr)] {
         while !drain.is_finished() && drain_deadline.is_some_and(|at| Instant::now() < at) {
             std::thread::sleep(CHECK_POLL_INTERVAL);
         }
         if drain_deadline.is_some() && !drain.is_finished() {
+            if capacity_drain {
+                let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+            }
             tracing::debug!("stopped check output truncated while a survivor holds its pipe");
             continue;
         }
-        drain
+        let first_line = drain
             .join()
             .map_err(|_| anyhow::anyhow!("loop check output reader panicked"))??;
+        if is_stderr {
+            stderr_line = first_line;
+        }
     }
     if let Some(error) = publication_error {
         return Err(error).context("publishing hosted check child");
@@ -3653,6 +3711,7 @@ pub(crate) fn run_command(
         terminated,
         output: captured_output()?,
         code: status.code(),
+        stderr_line,
     })
 }
 
@@ -3760,8 +3819,10 @@ fn drain_pipe(
     pipe: Option<impl Read + Send + 'static>,
     capture: Arc<Mutex<CheckCapture>>,
     mut forward: Option<PipeForward>,
-) -> std::thread::JoinHandle<std::io::Result<()>> {
+) -> std::thread::JoinHandle<std::io::Result<String>> {
     std::thread::spawn(move || {
+        let mut first_line = Vec::new();
+        let mut complete = false;
         if let Some(mut pipe) = pipe {
             let mut chunk = [0; 8 * 1024];
             loop {
@@ -3770,6 +3831,13 @@ fn drain_pipe(
                     break;
                 }
                 let bytes = &chunk[..read];
+                if !complete {
+                    let end = bytes.iter().position(|byte| *byte == b'\n');
+                    let line = &bytes[..end.unwrap_or(bytes.len())];
+                    let remaining = 1024_usize.saturating_sub(first_line.len());
+                    first_line.extend_from_slice(&line[..line.len().min(remaining)]);
+                    complete = end.is_some() || first_line.len() == 1024;
+                }
                 capture
                     .lock()
                     .map_err(|_| std::io::Error::other("loop check output lock poisoned"))?
@@ -3782,7 +3850,13 @@ fn drain_pipe(
         if let Some(forward) = forward {
             forward.finish();
         }
-        Ok(())
+        if first_line.len() == 1024
+            && let Err(error) = std::str::from_utf8(&first_line)
+            && error.error_len().is_none()
+        {
+            first_line.truncate(error.valid_up_to());
+        }
+        Ok(String::from_utf8_lossy(&first_line).trim_end().to_owned())
     })
 }
 
