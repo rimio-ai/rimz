@@ -37,7 +37,7 @@ fn utc_month_publication_counts_raw_and_compacted_pool_spend() {
                 ..Default::default()
             },
         },
-        None,
+        Default::default(),
     );
     let publication =
         serde_json::to_value(ProviderSpendingCache::from_walk(&result, now * 1000)).unwrap();
@@ -94,7 +94,7 @@ fn session_start_is_machine_wide_and_independent_of_headline_mode() {
                     now_secs: NOW_SECS,
                     spec: &spec,
                 },
-                None,
+                Default::default(),
             );
             actual.push(result.session_start_secs);
             let scoped = compute_scoped_spending(&files, &cache, inputs, &scope, NOW_SECS, &spec);
@@ -145,7 +145,10 @@ fn history_days_follow_published_zone_including_rolled_rows() {
                 ..Default::default()
             },
         },
-        Some(&Default::default()),
+        HistoryContext {
+            roles: Some(&Default::default()),
+            ..Default::default()
+        },
     );
     let day = |s| (second(s) / 86_400) as i64;
     assert_eq!(result.days[&day("2026-01-12T00:00:00Z")].usd, 1.0);
@@ -271,7 +274,10 @@ fn local_day_windows_conserve_chart_dollars_and_session_edges_across_dst() {
             now_secs,
             spec: &spec,
         },
-        Some(&Default::default()),
+        HistoryContext {
+            roles: Some(&Default::default()),
+            ..Default::default()
+        },
     );
     let scoped = compute_scoped_spending(&files, &cache, &[], &scope, now_secs, &spec);
     assert_eq!(format!("{:?}", result.workspace), format!("{scoped:?}"));
@@ -377,7 +383,10 @@ fn hourly_chart_cells_use_wall_clock_hours_and_only_recent_raw_rows() {
                 now_secs,
                 spec: &spec,
             },
-            Some(&Default::default()),
+            HistoryContext {
+                roles: Some(&Default::default()),
+                ..Default::default()
+            },
         );
         let mut expected = BTreeMap::new();
         for hour in hours {
@@ -460,7 +469,10 @@ fn chart_cells_conserve_local_days_and_seven_day_blocks_with_bounded_history() {
             now_secs,
             spec: &spec,
         },
-        Some(&Default::default()),
+        HistoryContext {
+            roles: Some(&Default::default()),
+            ..Default::default()
+        },
     );
     assert!(
         !result.chart.days.is_empty(),
@@ -535,7 +547,7 @@ fn chart_cells_conserve_local_days_and_seven_day_blocks_with_bounded_history() {
             now_secs,
             spec: &spec,
         },
-        None,
+        Default::default(),
     );
     assert_eq!(
         scoped.chart,
@@ -592,7 +604,10 @@ fn model_identity_uses_year_spend_then_tokens_then_kind() {
                 now_secs: NOW_SECS,
                 spec: &HeadlineSpec::default(),
             },
-            Some(&Default::default()),
+            HistoryContext {
+                roles: Some(&Default::default()),
+                ..Default::default()
+            },
         );
         let models = serde_json::to_value(&result.models).unwrap();
         assert_eq!(models["shared-model"]["kind"], expected);
@@ -747,7 +762,18 @@ fn effort_uses_spend_windows_and_shared_placement_without_requiring_spend() {
         files: HashMap::from([cached_file(&transcript, entries)]),
         ..Default::default()
     };
-    let result = aggregate_walk_publish(&files, &cache, &[], NOW_SECS, None, &spec, &history);
+    let result = aggregate_walk_publish(
+        &files,
+        &cache,
+        &[],
+        NOW_SECS,
+        None,
+        &spec,
+        HistoryContext {
+            roles: Some(&history),
+            ..Default::default()
+        },
+    );
     let roles = serde_json::to_value(&result.roles).unwrap();
     assert_eq!(roles["effort_since_secs"], NOW_SECS - 365 * 86_400);
     for (window, expected) in [("day", 2), ("week", 4), ("month", 6), ("year", 8)] {
@@ -929,7 +955,10 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
                 timezone: Some("UTC".into()),
             },
         },
-        Some(&roles),
+        HistoryContext {
+            roles: Some(&roles),
+            ..Default::default()
+        },
     );
     let published_roles = serde_json::to_value(&result.roles).unwrap();
     assert_eq!(published_roles["recorded_since_secs"], first);
@@ -1010,7 +1039,10 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
                 timezone: Some("UTC".into()),
             },
         },
-        Some(&Default::default()),
+        HistoryContext {
+            roles: Some(&Default::default()),
+            ..Default::default()
+        },
     );
     let empty = serde_json::to_value(&empty.roles).unwrap();
     assert!(empty["agents"].as_object().unwrap().is_empty());
@@ -1098,7 +1130,10 @@ fn codex_revision_spend_joins_the_threads_role_and_counts_one_session() {
                     timezone: Some("UTC".into()),
                 },
             },
-            Some(&roles),
+            HistoryContext {
+                roles: Some(&roles),
+                spend: None,
+            },
         );
         let published = serde_json::to_value(&result.roles).unwrap();
         let tally = published.pointer(pointer).unwrap();
@@ -1245,7 +1280,7 @@ fn claude_sessions_in_one_project_populate_every_session_tally() {
                 now_secs: NOW_SECS,
                 spec: &spec,
             },
-            None,
+            Default::default(),
         );
         let login = &files[0].login;
         for tally in [
@@ -1567,7 +1602,7 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
             now_secs: now.as_second() as u64,
             spec: &spec,
         },
-        None,
+        Default::default(),
     );
 
     let scoped = compute_scoped_spending(

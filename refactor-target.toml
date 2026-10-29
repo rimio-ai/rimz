@@ -320,7 +320,8 @@ upward-dependencies = ["address"]
 # ProviderHomeLogin and provider_home_logins, with facade exports, share native/account homes (+4).
 # Shared packs::PackItem and ItemFate replace PackSkill and PackSkillFate (-2).
 # SkillInventory carries pack items and problems without SkillChain::pack_skills (-1).
-surface-budget = 1193
+# SpendingWalker::discover_login_spending_files gives benches isolated account-aware discovery (+1).
+surface-budget = 1194
 
 [[verdict]]
 kind = "item"
@@ -745,7 +746,8 @@ path = "crates/rimz/src/agents/spending"
 # utc_month_start_secs shares the walk and budget reader's UTC cutoff (+1).
 # cached_provider_spending shares stamped provider parses with host projections (+1).
 # WindowStarts and its constructor share local-day spend and assist cutoffs (+2).
-surface-budget = 113
+# SpendingWalker::discover_login_spending_files gives benches isolated account-aware discovery (+1).
+surface-budget = 114
 
 [[module]]
 path = "crates/rimz/src/bin"

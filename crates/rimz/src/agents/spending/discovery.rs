@@ -107,6 +107,16 @@ impl SpendingSource {
             Self::Group(group) => group.complete_files(),
         }
     }
+
+    pub(super) fn contains(&self, path: &Path) -> bool {
+        match self {
+            Self::Exact(source) => source == path,
+            Self::Group(group) => group.trees.iter().any(|tree| {
+                path.strip_prefix(&tree.root)
+                    .is_ok_and(|relative| tree.matches(relative))
+            }),
+        }
+    }
 }
 
 /// Ordered roots participating in one selection/precedence rule.
@@ -299,10 +309,20 @@ fn relative_components_match(pattern: &[RelativePatternComponent], path: &[&str]
 #[derive(Default)]
 pub(crate) struct SpendingDiscoveryIndex {
     adapters: HashMap<LoginKey, AdapterState>,
+    pub(super) history_accounts: Vec<HistoryAccount>,
     last_complete: Option<Instant>,
     last_authoritative: bool,
     force_complete: bool,
     stats: DiscoveryStats,
+}
+
+#[derive(Clone)]
+pub(super) struct HistoryAccount {
+    pub(super) login: LoginKey,
+    pub(super) adapter: &'static AgentDefinition,
+    pub(super) home: PathBuf,
+    pub(super) canonical_home: PathBuf,
+    pub(super) sources: Vec<SpendingSource>,
 }
 
 struct AdapterState {
@@ -376,9 +396,21 @@ impl SpendingDiscoveryIndex {
         // ambient home names a declared account's home cannot take its spend.
         let mut bases = bases.collect::<Vec<_>>();
         bases.sort_by_key(|(login, ..)| login.is_default());
+        self.history_accounts.clear();
         for (login, adapter, env) in bases {
             let login_key = login.key();
             let declarations = adapter.spending_sources(&env);
+            if let Some(home) = adapter.config_home(&env)
+                && let Ok(canonical_home) = std::fs::canonicalize(&home)
+            {
+                self.history_accounts.push(HistoryAccount {
+                    login: login_key.clone(),
+                    adapter,
+                    home,
+                    canonical_home,
+                    sources: declarations.clone(),
+                });
+            }
             let key = source_set_key(&declarations);
             let changed = self
                 .adapters

@@ -55,7 +55,8 @@ pub(super) fn try_maintain(
 impl Maintenance {
     pub(super) fn maintain(&self, now_secs: u64) -> Result<(), AtomicErr> {
         super::session_roles::prune_segments(self, now_secs)?;
-        super::session_effort::maintain(self, now_secs)
+        super::session_effort::maintain(self, now_secs)?;
+        super::closed_days::expire(self, now_secs)
     }
 }
 
@@ -422,7 +423,10 @@ mod tests {
                 now,
                 None,
                 &Default::default(),
-                &index,
+                super::super::HistoryContext {
+                    roles: Some(&index),
+                    ..Default::default()
+                },
             )
             .roles
             .subagents

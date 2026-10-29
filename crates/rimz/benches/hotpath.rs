@@ -2132,6 +2132,71 @@ fn spending_fixture_scaled(
     }
 }
 
+fn spending_recorded_year_fixture() -> SpendingFixture {
+    let tempdir = TempDir::new().expect("tempdir");
+    let home = tempdir.path().join("claude/bench");
+    std::fs::create_dir_all(home.join("projects")).expect("provider home");
+    let history = rimz::disk::paths::SpendingHistoryPaths::under(tempdir.path());
+    std::fs::create_dir_all(history.spend_dir()).expect("spend directory");
+    let mut years = BTreeMap::<i16, Vec<u8>>::new();
+    for offset in 15..380 {
+        let ts = (SPENDING_NOW_SECS / 86_400 - offset) * 86_400 + 43_200;
+        let date = jiff::Timestamp::from_second(ts as i64)
+            .expect("timestamp")
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .date();
+        let rows = (0..250)
+            .map(|index| {
+                serde_json::json!({
+                    "session": {"native": format!("recorded-{offset}-{index}")},
+                    "model": "claude-opus-4-8", "ts": ts, "usd": 0.001,
+                    "input": 1200, "output": 80, "cache_read": 800
+                })
+            })
+            .collect::<Vec<_>>();
+        let bytes = years.entry(date.year()).or_default();
+        serde_json::to_writer(
+            &mut *bytes,
+            &serde_json::json!({
+                "kind": "claude", "account": "claude/bench", "day": date, "rows": rows
+            }),
+        )
+        .expect("spend line");
+        bytes.push(b'\n');
+    }
+    for (year, bytes) in years {
+        std::fs::write(history.spend(year), bytes).expect("spend segment");
+    }
+    let adapter = rimz::agents::definition_by_kind("claude").expect("Claude definition");
+    let env = BTreeMap::from([(
+        "CLAUDE_CONFIG_DIR".into(),
+        home.to_string_lossy().into_owned(),
+    )]);
+    let mut walker = rimz::agents::spending::SpendingWalker::new();
+    let files = walker.discover_login_spending_files(adapter, &env, SPENDING_NOW_SECS);
+    let cache_path = tempdir.path().join("spending.json");
+    let prices = rimz::agents::PriceBook::default();
+    let req = rimz::agents::spending::WalkRequest {
+        history: &history,
+        files: &files,
+        prices: &prices,
+        now_secs: SPENDING_NOW_SECS,
+        origin_overrides: &HashMap::new(),
+        user_inputs: &[],
+        scope: None,
+        spec: &rimz::agents::spending::HeadlineSpec::default(),
+    };
+    let _ = walker.walk(&cache_path, &req, &mut rimz::agents::spending::SilentWalk);
+    SpendingFixture {
+        _tempdir: tempdir,
+        cache_path,
+        files,
+        prices,
+        walker,
+        sources: Vec::new(),
+    }
+}
+
 fn spending_discovery_fixture(warm: bool) -> SpendingFixture {
     let mut fixture = spending_fixture_scaled(6_000, 17, true, true);
     if warm {
@@ -2260,6 +2325,29 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
                 user_inputs: &user_inputs,
                 scope: None,
                 spec: &spec,
+            };
+            divan::black_box(fixture.walker.walk(
+                &fixture.cache_path,
+                &req,
+                &mut rimz::agents::spending::SilentWalk,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
+fn spending_walk_warm_recorded_year(bencher: Bencher) {
+    bencher
+        .with_inputs(spending_recorded_year_fixture)
+        .bench_local_values(|mut fixture| {
+            let req = rimz::agents::spending::WalkRequest {
+                history: &rimz::disk::paths::SpendingHistoryPaths::under(fixture._tempdir.path()),
+                files: &fixture.files,
+                prices: &fixture.prices,
+                now_secs: SPENDING_NOW_SECS,
+                origin_overrides: &HashMap::new(),
+                user_inputs: &[],
+                scope: None,
+                spec: &rimz::agents::spending::HeadlineSpec::default(),
             };
             divan::black_box(fixture.walker.walk(
                 &fixture.cache_path,

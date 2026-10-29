@@ -71,9 +71,11 @@ With no daily history or role usage, the full report replaces the tables and hea
 
 A one-shot run can print figures from earlier today. A walk that begins before midnight still covers the earlier day even if it finishes after midnight, so a one-shot run refreshes it again. Run `rimz stats --refresh`, or open a room, for updates within the day.
 
+Recorded UTC days, closed fourteen days after their end, replace live account-days in these figures. They survive transcript deletion and cache rebuilds under `accounts/.history/`, shared with other homes using the same accounts folder and kept by uninstall and reset ([history rules](../../internals/agents/spending.md#closed-day-spend-lines)).
+
 If a refresh cannot read session files and only an older publication remains, a one-shot run exits with an error rather than showing yesterday's breakdowns as today. The older publication stays intact, and a held dashboard can continue showing it.
 
-Every run except `--assists` creates RimZ's shared state directories when they are missing. Beyond that, only the transcript walk writes files or uses the network. The walk writes the spending cache, its walk cursor, and the price-table cache beside it, unless another process is already writing them. It fetches the price tables from LiteLLM and models.dev when the cached table is more than a week old, or sooner when your history holds models it has no price for. Set `RIMZ_PRICING_OFFLINE=1` to skip every fetch (`0`, `false`, and an empty value leave fetching on); prices then come from the cached table and the table built into the binary. The walk and pricing are described in [spending internals](../../internals/agents/spending.md).
+Every run except `--assists` creates RimZ's shared state directories when they are missing. Beyond that, only the transcript walk writes files or uses the network. The walk writes the spending cache, its walk cursor, and the price-table cache beside it, unless another process is already writing them. It also migrates and maintains shared history and records newly closed days. It fetches the price tables from LiteLLM and models.dev when the cached table is more than a week old, or sooner when your history holds models it has no price for. Set `RIMZ_PRICING_OFFLINE=1` to skip every fetch (`0`, `false`, and an empty value leave fetching on); prices then come from the cached table and the table built into the binary. The walk and pricing are described in [spending internals](../../internals/agents/spending.md).
 
 ## The held dashboard
 

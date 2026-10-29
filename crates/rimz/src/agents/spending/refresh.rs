@@ -25,6 +25,7 @@ use super::{SpendProgress, WalkStats};
 const MAX_SPENDING_PARSE_WORKERS: usize = 8;
 
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
+type BeforeCompact<'a> = dyn FnMut(&SpendingDiskCache, &[&SpendingFile], &[&SpendingFile]) + 'a;
 
 pub(crate) fn refresh_spending_cache(
     files: &[SpendingFile],
@@ -40,15 +41,20 @@ pub(crate) fn refresh_spending_cache(
     let total_files = files.len();
     let mut finished_files = 0;
     let mut jobs = Vec::new();
-    for SpendingFile {
-        adapter,
-        path: file,
-        ..
-    } in files
-    {
+    let mut parsed_files = Vec::new();
+    let mut unread_files = Vec::new();
+    for spending_file in files {
+        let SpendingFile {
+            adapter,
+            path: file,
+            ..
+        } = spending_file;
         let key = file.to_string_lossy().into_owned();
         let entry = cache.files.get(&key);
         let Some(stat) = adapter.transcript_stat(file) else {
+            if entry.is_none() {
+                unread_files.push(spending_file);
+            }
             finished_files += 1;
             (callbacks.tick)(
                 cache,
@@ -109,6 +115,7 @@ pub(crate) fn refresh_spending_cache(
                 .as_ref()
                 .map_or(stat.len, |cursor| stat.len.saturating_sub(cursor.offset)),
         );
+        parsed_files.push(spending_file);
         jobs.push(SpendingParseJob {
             adapter,
             file,
@@ -130,6 +137,7 @@ pub(crate) fn refresh_spending_cache(
         callbacks.tick,
     );
 
+    (callbacks.before_compact)(cache, &parsed_files, &unread_files);
     if compact_spending_cache(cache, files, now_secs) {
         cache.mark_changed();
     }
@@ -171,6 +179,7 @@ pub(crate) fn refresh_decision(
 pub(crate) struct RefreshCallbacks<'a> {
     pub(crate) on_jobs_scheduled: &'a mut dyn FnMut(&WalkStats),
     pub(crate) tick: &'a mut dyn FnMut(&SpendingDiskCache, SpendProgress),
+    pub(super) before_compact: &'a mut BeforeCompact<'a>,
 }
 
 struct SpendingParseJob<'a> {

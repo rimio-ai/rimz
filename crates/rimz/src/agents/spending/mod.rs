@@ -16,6 +16,7 @@
 
 mod aggregate;
 mod cache;
+mod closed_days;
 mod discovery;
 mod effort;
 mod engine;
@@ -50,9 +51,9 @@ const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
 pub(crate) use aggregate::CountedPayload;
 pub(in crate::agents) use aggregate::should_replace_usage_duplicate;
 use aggregate::{
-    CountedLocation, HeadlineContext, aggregate_counted_rollups, aggregate_scoped_locations,
-    contested_session_locations, dedup_cached_entries, dedup_cached_entry_locations,
-    indexed_counted_entries, spending_files_signature,
+    CountedLocation, HeadlineContext, HistoryContext, aggregate_counted_rollups,
+    aggregate_scoped_locations, contested_session_locations, dedup_cached_entries,
+    dedup_cached_entry_locations, indexed_counted_entries, spending_files_signature,
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
@@ -316,6 +317,7 @@ pub struct SpendingWalker {
     last_persisted_now_secs: Option<u64>,
     memo: Option<SpendingMemo>,
     discovery: discovery::SpendingDiscoveryIndex,
+    closed_days: closed_days::ClosedDays,
 }
 
 #[derive(Clone, Debug)]
@@ -353,6 +355,7 @@ impl SpendingWalker {
             last_persisted_now_secs: None,
             memo: None,
             discovery: discovery::SpendingDiscoveryIndex::default(),
+            closed_days: closed_days::ClosedDays::default(),
         }
     }
 
@@ -404,6 +407,27 @@ impl SpendingWalker {
             .collect()
     }
 
+    /// Exercise account-aware discovery without reading the machine's login config.
+    #[cfg(feature = "testkit")]
+    #[doc(hidden)]
+    pub fn discover_login_spending_files(
+        &mut self,
+        adapter: &'static AgentDefinition,
+        env: &BTreeMap<String, String>,
+        now_secs: u64,
+    ) -> Vec<SpendingFile> {
+        self.discovery.discover(
+            std::iter::once((
+                crate::agents::ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked(
+                    adapter.spec().kind,
+                )),
+                adapter,
+                env.clone(),
+            )),
+            now_secs,
+        )
+    }
+
     fn recorded_unknown_models(
         &mut self,
         cache_path: &Path,
@@ -452,6 +476,27 @@ impl SpendingWalker {
         let mut checkpoint_written = false;
         let mut checkpoint_generation = None;
         {
+            let authoritative = self.spending_discovery_is_authoritative();
+            let accounts = &self.discovery.history_accounts;
+            let closed_days = &mut self.closed_days;
+            let mut before_compact =
+                |cache: &SpendingDiskCache, parsed: &[&SpendingFile], unread: &[&SpendingFile]| {
+                    closed_days.invalidate_for_parsed(cache, parsed, req.now_secs);
+                    if persist
+                        && let Some(hold) = history::maintain(req.history, req.now_secs)
+                        && authoritative
+                        && let Err(error) = closed_days.record(
+                            &hold,
+                            cache,
+                            req.files,
+                            unread,
+                            accounts,
+                            req.now_secs,
+                        )
+                    {
+                        tracing::warn!(%error, "failed to record closed-day spending history");
+                    }
+                };
             let mut last_checkpoint_generation = prior_generation;
             let mut last_checkpoint = Instant::now()
                 .checked_sub(WALK_CHECKPOINT_INTERVAL)
@@ -489,6 +534,7 @@ impl SpendingWalker {
                 &mut RefreshCallbacks {
                     on_jobs_scheduled: &mut on_jobs_scheduled,
                     tick: &mut tick,
+                    before_compact: &mut before_compact,
                 },
             );
         }
@@ -517,13 +563,13 @@ impl SpendingWalker {
             self.memo = None;
         }
 
-        let _maintenance = persist
-            .then(|| history::maintain(req.history, req.now_secs))
-            .flatten();
         self.ensure_memo(req.files, &mut stats);
         let memo = self.memo.as_ref().expect("memo seeded above");
         let counted = indexed_counted_entries(req.files, &self.cache, &memo.counted);
         let roles = session_roles::load_history(req.history, req.now_secs);
+        let recorded = self
+            .closed_days
+            .load(req.history, &self.discovery.history_accounts);
         let mut result = aggregate_counted_rollups(
             req.files,
             &self.cache,
@@ -535,7 +581,10 @@ impl SpendingWalker {
                 now_secs: req.now_secs,
                 spec: req.spec,
             },
-            Some(&roles),
+            HistoryContext {
+                roles: Some(&roles),
+                spend: Some(recorded),
+            },
         );
         result.stats = stats;
         result
@@ -547,6 +596,7 @@ impl SpendingWalker {
             return;
         }
         self.cache = SpendingDiskCache::default();
+        self.closed_days.invalidate_recording();
         self.memo = None;
         self.cache = read_spending_cache(cache_path);
         self.cache_stamp = stamp;
@@ -766,7 +816,7 @@ fn aggregate_walk_publish(
     now_secs: u64,
     scope: Option<&SpendScope>,
     spec: &HeadlineSpec,
-    roles: &session_roles::RoleIndex,
+    history: HistoryContext<'_>,
 ) -> SpendingWalkResult {
     let counted = dedup_cached_entries(files, cache).into_counted();
     aggregate_counted_rollups(
@@ -780,7 +830,7 @@ fn aggregate_walk_publish(
             now_secs,
             spec,
         },
-        Some(roles),
+        history,
     )
 }
 
@@ -800,6 +850,7 @@ pub(crate) struct CachedScopedSpending {
 
 /// Compute the cockpit's workspace-scoped tally plus the headline epoch cutoff
 /// that resets presentation ratchets at window boundaries.
+#[cfg(test)]
 fn compute_scoped_spending(
     files: &[SpendingFile],
     cache: &SpendingDiskCache,

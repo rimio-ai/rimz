@@ -10,8 +10,7 @@ use std::time::Duration;
 use crate::RuntimePaths;
 use crate::agents::spending::{
     HeadlineSpec, ProviderSpendingCache, SESSION_GAP_SECS, SpendProgress, SpendScope,
-    SpendingCaches, WorkspaceSpendingCache, compute_scoped_spending, read_provider_spending_cache,
-    user_input,
+    SpendingCaches, WorkspaceSpendingCache, read_provider_spending_cache, user_input,
 };
 
 use crate::utils::time::unix_now_ms;
@@ -363,13 +362,13 @@ fn walk_fleet_spending_files(
         total_files: files.len(),
     });
     if files.is_empty() {
-        let _maintenance = publish
-            .then(|| super::history::maintain(&runtime.spending_history, now_secs))
-            .flatten();
         // A non-authoritative empty scan retains prior publications; an
-        // authoritative empty index is a real deletion and publishes zero.
+        // authoritative empty index publishes recorded days without live rows.
         let published = read_provider_spending_cache(&provider_path);
         if !walker.spending_discovery_is_authoritative() && !published.spending.total.is_zero() {
+            let _maintenance = publish
+                .then(|| super::history::maintain(&runtime.spending_history, now_secs))
+                .flatten();
             return SpendingCaches {
                 provider: published.into(),
                 workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
@@ -377,30 +376,33 @@ fn walk_fleet_spending_files(
         }
         let refreshed_at_ms = unix_now_ms();
         let user_inputs = user_input::load();
-        let roles = super::session_roles::load_history(&runtime.spending_history, now_secs);
-        let result = crate::agents::spending::aggregate_walk_publish(
+        let req = WalkRequest {
+            history: &runtime.spending_history,
             files,
-            &Default::default(),
-            &user_inputs,
+            prices: &Default::default(),
             now_secs,
-            None,
-            context.headline,
-            &roles,
-        );
-        let scoped = compute_scoped_spending(
-            files,
-            &Default::default(),
-            &user_inputs,
-            &scope,
-            now_secs,
-            context.headline,
-        );
+            origin_overrides: &context.origin_overrides,
+            user_inputs: &user_inputs,
+            scope: Some(&scope),
+            spec: context.headline,
+        };
+        let cache_path = runtime.shared_spending_cursor_path();
+        let result = if publish {
+            walker.walk(&cache_path, &req, &mut SilentWalk)
+        } else {
+            walker.walk_local(&cache_path, &req, &mut SilentWalk)
+        };
+        let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
+        let scoped = if scope.is_empty() {
+            Default::default()
+        } else {
+            result.workspace
+        };
         let workspace = WorkspaceSpendingCache::from_scoped(
             scope_hash.as_deref().unwrap_or_default(),
             refreshed_at_ms,
             scoped,
         );
-        let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
         if publish {
             // Stamp the empty result too: an agentless machine must not re-run
             // the (empty) discovery readdirs every tick.
@@ -451,6 +453,8 @@ fn walk_fleet_spending_files(
             scope_hash: scope_hash.clone(),
             spec: context.headline,
             progress,
+            accounts: walker.discovery.history_accounts.clone(),
+            closed_days: Default::default(),
         };
         walker.walk(&cache_path, &req, &mut observer)
     } else {
@@ -490,6 +494,8 @@ struct PublishingWalkObserver<'a> {
     scope_hash: Option<String>,
     spec: &'a crate::agents::spending::HeadlineSpec,
     progress: &'a mut dyn FnMut(SpendProgress),
+    accounts: Vec<super::discovery::HistoryAccount>,
+    closed_days: super::closed_days::ClosedDays,
 }
 
 impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
@@ -500,6 +506,9 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
     fn on_interval(&mut self, cache: &crate::agents::spending::SpendingDiskCache) {
         let roles =
             super::session_roles::load_history(&self.runtime.spending_history, self.now_secs);
+        let recorded = self
+            .closed_days
+            .load(&self.runtime.spending_history, &self.accounts);
         let result = crate::agents::spending::aggregate_walk_publish(
             self.files,
             cache,
@@ -507,7 +516,10 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             self.now_secs,
             self.scope,
             self.spec,
-            &roles,
+            super::HistoryContext {
+                roles: Some(&roles),
+                spend: Some(recorded),
+            },
         );
         let published = read_provider_spending_cache(&self.provider_path);
         if published.is_current_version()

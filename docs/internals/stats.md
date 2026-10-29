@@ -1,6 +1,6 @@
 # The stats panel
 
-`rimz stats` renders account-global token and dollar history as a spend-first report or a held dashboard: a model spend chart, a token heatmap, totals for four windows, spend by model, provider, and profile, a compact activity summary, and the assists RimZ performed for the user. It runs in or out of a room and in or out of a project, and it touches no agent and no session. Stats itself writes only the shared state directories (`RuntimePaths::ensure_shared_dirs`), and it never opens a workspace tree. A walk that stats triggers writes what any spending walk writes: the spending publication, the shared price table (`pricing-cache.json`) when its price load refreshes, and the [shared history store](./agents/spending.md#shared-history-store) migration and maintenance.
+`rimz stats` renders account-global token and dollar history as a spend-first report or a held dashboard: a model spend chart, a token heatmap, totals for four windows, spend by model, provider, and profile, a compact activity summary, and the assists RimZ performed for the user. It runs in or out of a room and in or out of a project, and it touches no agent and no session. Stats itself writes only the shared state directories (`RuntimePaths::ensure_shared_dirs`), and it never opens a workspace tree. A walk that stats triggers writes what any spending walk writes: the spending publication, the shared price table (`pricing-cache.json`) when its price load refreshes, and the [shared history store](./agents/spending.md#shared-history-store) migration, closed-day recording, and maintenance.
 
 The command has three surfaces, and most rules on this page differ between them:
 
@@ -158,7 +158,7 @@ Beyond the last step, the body is clipped to terminal height while the final hin
 
 One reusable worker thread (`hold::RefreshWorker`) loads through the elected service each cycle and sends back one `Result<Stats>`, with a panic caught and turned into an error. The foreground polls for events every 100 ms (`REFRESH_POLL_TICK`) and starts the next cycle once the refresh has landed and the 60-second deadline (`REFRESH_INTERVAL`) has passed. Until the first successful frame, a landed result moves the deadline to 5 seconds out (`EMPTY_REFRESH_RETRY`).
 
-A failed refresh never exits. The first failure in a streak logs a warning and later ones log at debug until a refresh succeeds. `main.rs::log_filter_for` turns stderr logging off for `stats --refresh` so a warning cannot smear the raw-mode frame, while the Sentry layer, when reporting is on, still captures it. A `RUST_LOG` in the environment overrides that default.
+A failed refresh never exits. The first failure in a streak logs a warning and later ones log at debug until a refresh succeeds. `crates/rimz/src/main.rs::log_filter_for` turns stderr logging off for `stats --refresh` so a warning cannot smear the raw-mode frame, while the Sentry layer, when reporting is on, still captures it. A `RUST_LOG` in the environment overrides that default.
 
 Each repaint picks one of three frames:
 
@@ -184,7 +184,7 @@ The final hint is `←/→ range · t/w/m/y jump · r reload · q quit`. `--hold
 
 ## Machine-readable surfaces
 
-`--json` emits one document for the selected window (`json.rs::stats_json`):
+`--json` emits one document for the selected window (`crates/rimz/src/cli/stats/json.rs::stats_json`):
 
 | Field | Holds |
 | --- | --- |
