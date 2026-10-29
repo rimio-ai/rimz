@@ -636,10 +636,12 @@ impl CodexDiscoverySnapshot {
             if let Some(observation) = header.and_then(|header| {
                 observation_from_header(candidate.path, header, stamp, &workspace_lookup)
             }) {
+                if !session_ids_seen.insert(observation.session_id.to_string()) {
+                    continue;
+                }
                 if let Some(session_id) = filename_session {
                     session_ids_seen.insert(session_id);
                 }
-                session_ids_seen.insert(observation.session_id.to_string());
                 observations.push(observation);
             }
         }
