@@ -500,23 +500,26 @@ fn host_tree_process(env: &Env, binary: &Path, ignore_hangup: bool) -> ChildGuar
         ignore_hangup,
     ))
     .unwrap();
+    let mut command = env.rimz_at(binary);
+    command
+        .args([
+            "daemon",
+            "host",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--",
+        ])
+        .args(argv)
+        .env("RIMZ_TEST_SIDEBAR_RECORD_POLL_MS", "50")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // Only a child that ignores SIGHUP waits out the grace, so only it gets a short one: a short
+    // grace can kill a hangup child inside its trap on a loaded host.
+    if ignore_hangup {
+        command.env("RIMZ_TEST_DAEMON_HOST_STOP_MS", "100");
+    }
     ChildGuard {
-        child: env
-            .rimz_at(binary)
-            .args([
-                "daemon",
-                "host",
-                "--workspace-id",
-                env.workspace_id.as_str(),
-                "--",
-            ])
-            .args(argv)
-            .env("RIMZ_TEST_SIDEBAR_RECORD_POLL_MS", "50")
-            .env("RIMZ_TEST_DAEMON_HOST_STOP_MS", "100")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
+        child: command.spawn().unwrap(),
     }
 }
 
@@ -557,7 +560,6 @@ wait "$sleeper"
             .arg(env.home_root.join("host.pids"))
             .arg(env.home_root.join("host.signals"))
             .env("RIMZ_TEST_SIDEBAR_RECORD_POLL_MS", "50")
-            .env("RIMZ_TEST_DAEMON_HOST_STOP_MS", "100")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
