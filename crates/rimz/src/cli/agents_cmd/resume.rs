@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
-use rimz::agents::LocalSessionObservation;
+use rimz::agents::{LocalSessionDiscovery, LocalSessionObservation};
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::resume::{
     LaneRestoreConfig, LaneResumeAction, LaneResumeError, LaneResumeRequest, LaneResumeSelector,
@@ -788,7 +788,10 @@ fn discover_lane_sessions(
 ) -> Vec<LocalSessionObservation> {
     let ambient = rimz::agents::ambient_env();
     rimz::agents::all_definitions()
-        .filter(|adapter| adapter.spec().capabilities.local_session_discovery)
+        .filter(|adapter| {
+            adapter.spec().capabilities.local_session_discovery
+                != LocalSessionDiscovery::Unsupported
+        })
         .flat_map(|adapter| {
             let kind = rimz::ids::AgentKind::new_unchecked(adapter.spec().kind);
             match logins.login(&kind, accounts) {

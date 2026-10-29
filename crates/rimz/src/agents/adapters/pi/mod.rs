@@ -52,8 +52,8 @@ use super::context::{
 };
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification, UserCoverage,
+    HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -105,7 +105,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: false,
-        local_session_discovery: false,
+        local_session_discovery: LocalSessionDiscovery::Unsupported,
         daemon_hooked_sessions: false,
         direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,

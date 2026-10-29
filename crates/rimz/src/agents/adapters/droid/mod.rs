@@ -27,8 +27,8 @@ use self::payloads::{
 use super::AgentHookClass;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal};
@@ -72,7 +72,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: false,
-        local_session_discovery: false,
+        local_session_discovery: LocalSessionDiscovery::Unsupported,
         daemon_hooked_sessions: false,
         direct_account_usage: false,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,

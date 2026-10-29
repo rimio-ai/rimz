@@ -15,8 +15,8 @@ use super::registry::BUILTINS;
 use super::{
     AdapterConformance, AgentDefinition, AgentHookClass, AskReply, CapabilityLevel,
     ClassificationSample, ClassifiedHook, ConcernCoverage, DerivedAskFixture, HookCoverage,
-    IntegrationConcern, LaunchPreset, PermissionMode, PresetArgMatcher, PresetField, PriceBook,
-    SpendFixture, SpendFixtureBody, UserCapability,
+    IntegrationConcern, LaunchPreset, LocalSessionDiscovery, PermissionMode, PresetArgMatcher,
+    PresetField, PriceBook, SpendFixture, SpendFixtureBody, UserCapability,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
@@ -1014,7 +1014,7 @@ fn capability_honesty() {
         }
 
         assert_eq!(
-            capabilities.local_session_discovery,
+            capabilities.local_session_discovery != LocalSessionDiscovery::Unsupported,
             conformance.local_session.is_some(),
             "{kind} local-session discovery requires fixture-backed behavior"
         );
@@ -1233,7 +1233,8 @@ fn wiring_inputs_cover_every_provider_file_used_for_admission() {
             ),
             "codex" => assert_eq!(paths.len(), 1, "Codex model config input"),
             "copilot" => assert_eq!(paths.len(), 2, "Copilot hook and settings inputs"),
-            _ if !adapter.spec().capabilities.local_session_discovery
+            _ if adapter.spec().capabilities.local_session_discovery
+                == LocalSessionDiscovery::Unsupported
                 && adapter.spec().has_wired_hook_install() =>
             {
                 assert!(!paths.is_empty(), "{kind} hook admission input")

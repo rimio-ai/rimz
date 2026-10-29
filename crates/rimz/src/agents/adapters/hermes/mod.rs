@@ -8,8 +8,8 @@ use super::*;
 use crate::agents::capabilities::*;
 use crate::agents::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification, UserCoverage,
+    HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use crate::agents::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use crate::ids::AgentSessionId;
@@ -45,7 +45,7 @@ static HERMES_SPEC: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: false,
-        local_session_discovery: false,
+        local_session_discovery: LocalSessionDiscovery::Unsupported,
         daemon_hooked_sessions: false,
         direct_account_usage: false,
         same_pane_session: SamePaneSessionPolicy::KeepPrimary,

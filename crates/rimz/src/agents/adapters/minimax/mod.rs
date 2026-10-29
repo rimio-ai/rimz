@@ -51,7 +51,7 @@ static MINIMAX_SPEC: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: true,
-        local_session_discovery: false,
+        local_session_discovery: LocalSessionDiscovery::Unsupported,
         daemon_hooked_sessions: false,
         direct_account_usage: false,
         same_pane_session: crate::agents::SamePaneSessionPolicy::KeepPrimary,

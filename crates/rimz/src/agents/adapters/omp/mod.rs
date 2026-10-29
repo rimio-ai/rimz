@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use super::definition::{
     CapabilityLevel as Level, ConcernCoverage as Concern, HookCoverage as Hook,
+    LocalSessionDiscovery,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -335,7 +336,7 @@ static OMP_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: false,
-        local_session_discovery: false,
+        local_session_discovery: LocalSessionDiscovery::Unsupported,
         daemon_hooked_sessions: false,
         direct_account_usage: false,
         same_pane_session: SamePaneSessionPolicy::FollowLatest,

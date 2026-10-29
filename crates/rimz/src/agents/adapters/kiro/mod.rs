@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification, UserCoverage,
+    HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -66,7 +66,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: true,
-        local_session_discovery: true,
+        local_session_discovery: LocalSessionDiscovery::FullScan,
         daemon_hooked_sessions: false,
         direct_account_usage: false,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,

@@ -28,8 +28,8 @@ use serde_json::Value;
 use super::AgentHookClass;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, SamePaneSessionPolicy,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
+    SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -180,7 +180,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: true,
-        local_session_discovery: true,
+        local_session_discovery: LocalSessionDiscovery::FullScan,
         daemon_hooked_sessions: false,
         direct_account_usage: true,
         same_pane_session: SamePaneSessionPolicy::FollowLatest,

@@ -105,7 +105,7 @@ ACP UUID directories, the v2 engine's `sessions/cli/` store, mismatched metadata
 
 ### Discovery
 
-`session::discover` resolves the home from the login env and looks only in the bucket of each requested workspace. Workspaces are made absolute and lexically normalized, then sorted and deduplicated (`local_session_cache::normalized_workspace_inputs`). The `sessions/` root and the bucket must both be real directories, and the bucket's canonical parent must be the canonical root. Observations come back ordered by `createdAt`, then by session id.
+Kiro declares `local_session_discovery = FullScan`. `session::discover` resolves the home from the login env and looks only in the bucket of each requested workspace. Workspaces are made absolute and lexically normalized, then sorted and deduplicated (`local_session_cache::normalized_workspace_inputs`). The `sessions/` root and the bucket must both be real directories, and the bucket's canonical parent must be the canonical root. Observations come back ordered by `createdAt`, then by session id.
 
 Each bucket admits at most 128 valid sessions (`MAX_SESSIONS_PER_WORKSPACE`), counted in `read_dir` order. When a bucket holds more, which 128 are admitted is unspecified. A session that passes validation but has an unparseable `createdAt` still takes a slot and yields no observation.
 

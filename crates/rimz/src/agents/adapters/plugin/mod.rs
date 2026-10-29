@@ -28,9 +28,9 @@ use super::LaunchPreset;
 use super::account::AccountProbe;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    FastSwitch, HookCoverage, LaunchPermissionArgs, LaunchSpec, LifecycleAnnotations, PlanLabel,
-    PresetMatchers, PromptStyle, RemoteControlCapability, StaticPresetMatcher, ThreadKey,
-    ToolClassification, UserCoverage,
+    FastSwitch, HookCoverage, LaunchPermissionArgs, LaunchSpec, LifecycleAnnotations,
+    LocalSessionDiscovery, PlanLabel, PresetMatchers, PromptStyle, RemoteControlCapability,
+    StaticPresetMatcher, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
@@ -437,7 +437,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
             native_ask_ui: manifest.capabilities.native_ask_ui,
             transcript_tail_context: false,
             registers_lazily: manifest.capabilities.registers_lazily,
-            local_session_discovery: false,
+            local_session_discovery: LocalSessionDiscovery::Unsupported,
             daemon_hooked_sessions: false,
             direct_account_usage: manifest.probes.account.is_some(),
             same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,

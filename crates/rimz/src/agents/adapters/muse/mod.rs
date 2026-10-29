@@ -13,8 +13,8 @@ use serde_json::Value;
 use crate::agents::capabilities::*;
 use crate::agents::definition::{
     Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations, HookCoverage,
-    LifecycleAnnotations, PlanLabel, RemoteControlCapability, SamePaneSessionPolicy, ThreadKey,
-    ToolClassification, UserCoverage,
+    LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
+    SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use crate::agents::hook_types::{HookEventSpec, decode_catalog_hook};
 use crate::agents::{
@@ -47,7 +47,7 @@ static MUSE_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: true,
-        local_session_discovery: false,
+        local_session_discovery: LocalSessionDiscovery::Unsupported,
         daemon_hooked_sessions: false,
         direct_account_usage: false,
         same_pane_session: SamePaneSessionPolicy::KeepPrimary,

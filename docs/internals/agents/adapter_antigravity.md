@@ -96,7 +96,7 @@ One live `agy` follows its latest conversation, so the spec declares `SamePaneSe
 
 ### Local discovery
 
-`session.rs::discover` reads the provider home: `RIMZ_ANTIGRAVITY_HOME` when set, else `$HOME/.gemini/antigravity-cli`, both from the process environment. `discover_local_sessions` ignores the login env map. One pass serves every admitted workspace:
+Antigravity declares `local_session_discovery = FullScan`. `session.rs::discover` reads the provider home: `RIMZ_ANTIGRAVITY_HOME` when set, else `$HOME/.gemini/antigravity-cli`, both from the process environment. `discover_local_sessions` ignores the login env map. One pass serves every admitted workspace:
 
 1. Catalog. `enumerate_conversations` lists every directory under `brain/` whose name passes `valid_conversation_id`. The shared `IncrementalCatalog` rescans when the stamped topology changes or after the 30-second backstop (`crates/rimz/src/agents/local_session_cache.rs::LOCAL_SESSION_DISCOVERY_BACKSTOP`).
 2. Selection. A conversation counts when `.system_generated/logs/transcript_full.jsonl`, or else `transcript.jsonl`, is a regular file. The 512 newest by that file's mtime are kept (`MAX_DISCOVERED_SESSIONS`).

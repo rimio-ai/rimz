@@ -26,8 +26,8 @@ use serde_json::{Value, json};
 
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -74,7 +74,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: false,
-        local_session_discovery: true,
+        local_session_discovery: LocalSessionDiscovery::FullScan,
         daemon_hooked_sessions: false,
         direct_account_usage: false,
         // `/clear` skips lifecycle hooks; its next `beforeSubmitPrompt` introduces a
