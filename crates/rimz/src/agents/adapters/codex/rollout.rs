@@ -184,6 +184,7 @@ impl CodexTurnContext<'_> {
 pub(crate) struct CodexTokenCount<'a> {
     model: ModelFields<'a>,
     info: Option<CodexUsageInfo<'a>>,
+    rate_limits: Option<CodexRateLimits<'a>>,
 }
 
 impl CodexTokenCount<'_> {
@@ -191,11 +192,53 @@ impl CodexTokenCount<'_> {
         self.info.as_ref()
     }
 
+    pub(super) fn rate_limits(&self) -> Option<&CodexRateLimits<'_>> {
+        self.rate_limits.as_ref()
+    }
+
     pub(crate) fn model(&self) -> Option<&str> {
         self.model
             .value()
             .or_else(|| self.info.as_ref().and_then(CodexUsageInfo::model))
     }
+}
+
+#[derive(Deserialize)]
+pub(super) struct CodexRateLimits<'a> {
+    #[serde(borrow)]
+    plan_type: Option<Cow<'a, str>>,
+    primary: Option<CodexRateLimitWindow>,
+    secondary: Option<CodexRateLimitWindow>,
+    credits: Option<CodexCredits>,
+}
+
+impl CodexRateLimits<'_> {
+    pub(super) fn is_plan(&self) -> bool {
+        non_empty(self.plan_type.as_deref()).is_some()
+    }
+
+    pub(super) fn has_credits(&self) -> bool {
+        self.credits
+            .as_ref()
+            .is_some_and(|credits| credits.has_credits == Some(true))
+    }
+
+    pub(super) fn allowance_exhausted(&self) -> bool {
+        [&self.primary, &self.secondary]
+            .into_iter()
+            .flatten()
+            .any(|window| window.used_percent.is_some_and(|used| used >= 100.0))
+    }
+}
+
+#[derive(Deserialize)]
+struct CodexRateLimitWindow {
+    used_percent: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct CodexCredits {
+    has_credits: Option<bool>,
 }
 
 pub(crate) struct CodexTaskComplete<'a> {
@@ -347,6 +390,7 @@ fn decode_event<'a>(
         Some("token_count") => RolloutKind::TokenCount(CodexTokenCount {
             model: payload.model,
             info: parse_raw(payload.info.raw()),
+            rate_limits: parse_raw(payload.rate_limits.raw()),
         }),
         Some("thread_settings_applied") => RolloutKind::ThreadSettings {
             priority: parse_raw::<ThreadSettingsPayload<'_>>(payload.thread_settings.raw())
@@ -468,6 +512,8 @@ struct EventPayload<'a> {
     model: ModelFields<'a>,
     #[serde(borrow, default)]
     info: RawField<'a>,
+    #[serde(borrow, default)]
+    rate_limits: RawField<'a>,
     #[serde(borrow, default)]
     item: RawField<'a>,
     #[serde(borrow, default)]

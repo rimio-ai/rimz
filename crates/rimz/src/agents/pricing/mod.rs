@@ -104,7 +104,7 @@ impl TokenSplit {
         }
     }
 
-    /// Mark the turn as fast/priority, applying the model's fast multiplier.
+    /// Mark the turn as fast/priority; the selected rates supply its multiplier.
     pub(super) fn fast(self, fast: bool) -> Self {
         Self { fast, ..self }
     }
@@ -157,13 +157,20 @@ pub(super) struct Pricing {
     /// `None` keeps LiteLLM's marginal 200k semantics.
     #[serde(default)]
     pub long_context_threshold: Option<u64>,
-    /// Multiplier applied when the provider records a fast/priority turn.
+    /// List-price multiplier when the provider records a fast/priority turn.
     #[serde(default = "one")]
     pub fast_multiplier: f64,
     /// Maximum accepted input/context tokens when the pricing source publishes
     /// an exact positive integer capacity.
     #[serde(default)]
     pub max_input_tokens: Option<u64>,
+}
+
+/// Select list tiers or base rates with a caller-supplied Fast multiplier.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PricingRates {
+    List,
+    Base { fast_multiplier: f64 },
 }
 
 impl Pricing {
@@ -205,6 +212,22 @@ impl Pricing {
             cache_read_explicit: cache_read.is_some(),
             ..Self::empty()
         }
+    }
+
+    pub(super) fn cost_of_with_rates(self, split: TokenSplit, rates: PricingRates) -> f64 {
+        let price = match rates {
+            PricingRates::List => self,
+            PricingRates::Base { fast_multiplier } => Self {
+                long_context_threshold: None,
+                input_above_200k: None,
+                output_above_200k: None,
+                cache_create_above_200k: None,
+                cache_read_above_200k: None,
+                fast_multiplier,
+                ..self
+            },
+        };
+        price.cost_of(split)
     }
 
     pub(super) fn cost_of(self, split: TokenSplit) -> f64 {
@@ -838,6 +861,67 @@ mod tests {
 
         let long = price.cost_of(TokenSplit::new(300_000, 1_000).cached(0, 100));
         assert!((long - 3.0451).abs() < 1e-9, "long cost was {long}");
+    }
+
+    #[test]
+    fn list_rates_preserve_request_tiers_marginal_tiers_and_fast_pricing() {
+        let price = PriceBook::fixture().price("gpt-5.6-sol").unwrap();
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for price in [
+            price,
+            Pricing {
+                long_context_threshold: None,
+                ..price
+            },
+        ] {
+            for input in [1_000, 272_000, 300_000] {
+                for fast in [false, true] {
+                    let split = TokenSplit::new(input, 1_000).cached(100, 200).fast(fast);
+                    actual.push(price.cost_of_with_rates(split, PricingRates::List));
+                    expected.push(price.cost_of(split));
+                }
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn base_rates_ignore_all_long_context_tiers_and_replace_the_fast_multiplier() {
+        let price = PriceBook::fixture().price("gpt-5.6-sol").unwrap();
+        let split = TokenSplit {
+            input: 300_000,
+            output: 300_000,
+            cache_write: 300_000,
+            cache_write_1h: 300_000,
+            cache_read: 300_000,
+            fast: false,
+        };
+        let mut actual = Vec::new();
+        for price in [
+            price,
+            Pricing {
+                long_context_threshold: None,
+                ..price
+            },
+        ] {
+            for (fast, fast_multiplier) in [(false, 2.5), (true, 2.5), (true, 2.0)] {
+                actual.push(
+                    price.cost_of_with_rates(
+                        split.fast(fast),
+                        PricingRates::Base { fast_multiplier },
+                    ),
+                );
+            }
+        }
+        let expected = [15.525, 38.8125, 31.05, 15.525, 38.8125, 31.05];
+        assert_eq!(
+            actual
+                .iter()
+                .map(|cost| (cost * 1e9).round() as u64)
+                .collect::<Vec<_>>(),
+            expected.map(|cost| (cost * 1e9_f64).round() as u64),
+        );
     }
 
     #[test]

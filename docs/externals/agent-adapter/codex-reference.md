@@ -706,7 +706,9 @@ Codex also reads rate-limit state from response headers on model requests (`code
 | `x-codex-rate-limit-reached-type` | a `RateLimitReachedType` value |
 | `x-codex-promo-message` | backend promotional text |
 
-Every `x-*-primary-used-percent` header names one limit id, so `parse_all_rate_limits` returns one snapshot per limit present. The same state reaches rollouts as `token_count.rate_limits` and app-server clients as `account/rateLimits/updated`.
+Every `x-*-primary-used-percent` header names one limit id, so `parse_all_rate_limits` returns one snapshot per limit present. It also returns the default `codex` snapshot even with empty headers: `limit_id: "codex"`, with the other fields null ([`codex-api/src/rate_limits.rs`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/codex-api/src/rate_limits.rs)). The session's latest snapshot reaches rollouts as `token_count.rate_limits` and app-server clients as `account/rateLimits/updated`.
+
+The snapshot carries nullable `plan_type`, `primary`, `secondary`, and `credits`. A window carries `used_percent`, `window_minutes`, and `resets_at`; credits carry `has_credits`, `unlimited`, and nullable `balance` ([`RateLimitSnapshot`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/protocol/src/protocol.rs)). Only WebSocket `codex.rate_limits` messages set `plan_type`; HTTP header parsing writes it as null ([`parse_rate_limit_event` and `parse_rate_limit_for_limit`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/codex-api/src/rate_limits.rs)). Before publication, `merge_rate_limit_fields` carries missing `plan_type` and `credits` forward from the prior session snapshot, but not the windows or `rate_limit_reached_type` ([`core/src/state/session.rs`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/state/session.rs)). A null `plan_type` therefore does not prove API-key authentication: a ChatGPT session with only HTTP readings can also lack it.
 
 ### ChatGPT usage endpoints
 

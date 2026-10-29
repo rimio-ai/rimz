@@ -539,6 +539,7 @@ fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
         tool_calls: BTreeMap::new(),
         timing: None,
         fast: false,
+        basis: CodexPricingBasis::List,
     };
     let key = |event: &parse::CodexTokenEvent| {
         codex_event_dedup_key(&event.timestamp, &event.model, event)
@@ -851,6 +852,255 @@ fn count_line(second: u64) -> String {
         }},
     })
     .to_string()
+}
+
+fn plan_count_line(second: u64, rate_limits: serde_json::Value, input: u64) -> String {
+    serde_json::json!({
+        "timestamp": format!("2026-01-01T10:00:{second:02}.000Z"),
+        "type": "event_msg",
+        "payload": {"type": "token_count", "rate_limits": rate_limits, "info": {
+            "last_token_usage": {
+                "input_tokens": input, "cached_input_tokens": 200,
+                "cache_write_input_tokens": 100, "output_tokens": 100
+            }
+        }},
+    })
+    .to_string()
+}
+
+#[test]
+fn plan_burn_uses_each_requests_snapshot_without_losing_malformed_usage() {
+    use serde_json::json;
+    let cases = [
+        (
+            "pro included",
+            json!({"plan_type":"pro", "primary":{"used_percent":99.9},
+                "credits":{"has_credits":true}}),
+            1_000,
+            true,
+            0.0180625,
+        ),
+        (
+            "primary credits",
+            json!({"plan_type":"pro", "primary":{"used_percent":100.0},
+                "credits":{"has_credits":true}}),
+            1_000,
+            true,
+            0.01445,
+        ),
+        (
+            "secondary credits",
+            json!({"plan_type":"pro", "secondary":{"used_percent":100.1},
+                "credits":{"has_credits":true}}),
+            1_000,
+            true,
+            0.01445,
+        ),
+        (
+            "team included",
+            json!({"plan_type":"team", "primary":{"used_percent":100.0}, "credits":null}),
+            1_000,
+            true,
+            0.0180625,
+        ),
+        (
+            "no credits",
+            json!({"plan_type":"pro", "primary":{"used_percent":100.0},
+                "credits":{"has_credits":false}}),
+            1_000,
+            true,
+            0.0180625,
+        ),
+        (
+            "unknown credits",
+            json!({"plan_type":"pro", "primary":{"used_percent":100.0}, "credits":{}}),
+            1_000,
+            true,
+            0.0180625,
+        ),
+        (
+            "reached type alone",
+            json!({"plan_type":"pro", "rate_limit_reached_type":"usage_limit",
+                "credits":{"has_credits":true}}),
+            1_000,
+            true,
+            0.0180625,
+        ),
+        (
+            "business plan",
+            json!({"plan_type":"self_serve_business_usage_based"}),
+            1_000,
+            true,
+            0.0180625,
+        ),
+        (
+            "standard included",
+            json!({"plan_type":"pro"}),
+            1_000,
+            false,
+            0.007225,
+        ),
+        (
+            "standard credits",
+            json!({"plan_type":"pro", "primary":{"used_percent":100},
+                "credits":{"has_credits":true}}),
+            1_000,
+            false,
+            0.007225,
+        ),
+        (
+            "long included",
+            json!({"plan_type":"pro"}),
+            300_000,
+            true,
+            3.7555625,
+        ),
+        (
+            "long credits",
+            json!({"plan_type":"pro", "primary":{"used_percent":100},
+                "credits":{"has_credits":true}}),
+            300_000,
+            true,
+            3.00445,
+        ),
+        ("null after plan", json!(null), 1_000, true, 0.007225),
+        ("long list", json!(null), 300_000, true, 3.00295),
+        (
+            "http default",
+            json!({"limit_id":"codex", "plan_type":null, "primary":null,
+                "secondary":null, "credits":null}),
+            1_000,
+            true,
+            0.007225,
+        ),
+        (
+            "http only plan miss",
+            json!({"primary":{"used_percent":100.0}, "credits":{"has_credits":true}}),
+            1_000,
+            true,
+            0.007225,
+        ),
+        ("empty plan", json!({"plan_type":""}), 1_000, true, 0.007225),
+        (
+            "blank plan",
+            json!({"plan_type":"  "}),
+            1_000,
+            true,
+            0.007225,
+        ),
+        (
+            "wrong percent type",
+            json!({"plan_type":"pro", "primary":{"used_percent":"100"}}),
+            1_000,
+            true,
+            0.007225,
+        ),
+    ];
+    let mut lines = vec![r#"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#.to_owned()];
+    for (index, (_, snapshot, input, fast, _)) in cases.iter().enumerate() {
+        lines.push(tier_line(
+            index as u64,
+            Some(if *fast { "priority" } else { "default" }),
+        ));
+        lines.push(plan_count_line(index as u64, snapshot.clone(), *input));
+    }
+    let (_dir, path) = write_session(
+        "plan-bases.jsonl",
+        &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let parsed = parse_codex_spend(&path, None, &PriceBook::fixture());
+    let actual = parsed
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.input,
+                entry.cache_write,
+                entry.cache_read,
+                entry.output,
+                (entry.cost_usd * 1e9).round() as u64,
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = cases
+        .iter()
+        .map(|(_, _, input, _, cost)| (input - 300, 100, 200, 100, (cost * 1e9_f64).round() as u64))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected, "cases: {:?}", cases.map(|case| case.0));
+}
+
+#[test]
+fn plan_burn_mixed_basis_resume_matches_cold_entries_and_live_fold() {
+    use serde_json::json;
+    let included = json!({"plan_type":"pro"});
+    let credits =
+        json!({"plan_type":"pro", "primary":{"used_percent":100}, "credits":{"has_credits":true}});
+    let lines = [
+        r#"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#.to_owned(),
+        tier_line(0, Some("priority")),
+        plan_count_line(1, included.clone(), 1_000),
+        plan_count_line(2, credits, 1_000),
+        plan_count_line(3, included.clone(), 300_000),
+        plan_count_line(4, json!(null), 1_000),
+        plan_count_line(5, included, 1_000),
+        json!({"timestamp":"2026-01-01T10:00:06Z", "usage":{
+            "input_tokens":1_000, "cached_input_tokens":200,
+            "cache_write_input_tokens":100, "output_tokens":100
+        }, "rate_limits":{"plan_type":"pro"}})
+        .to_string(),
+        count_line(7),
+    ];
+    let (_dir, path) = write_session(
+        "mixed-plan.jsonl",
+        &lines[..3].iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let prices = PriceBook::fixture();
+    let first = parse_codex_spend(&path, None, &prices);
+    let cursor: SpendCursor =
+        serde_json::from_value(serde_json::to_value(&first.cursor).unwrap()).unwrap();
+    let first_fold = resume_live_fold(
+        &path,
+        None,
+        std::fs::metadata(&path).unwrap().len(),
+        &prices,
+    );
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    for line in &lines[3..] {
+        writeln!(file, "{line}").unwrap();
+    }
+    let resumed = parse_codex_spend(&path, Some(&cursor), &prices);
+    let cold = parse_codex_spend(&path, None, &prices);
+    let mut entries = first.entries;
+    entries.extend(resumed.entries);
+    assert_eq!(entries, cold.entries);
+    assert_eq!(resumed.cursor, cold.cursor);
+    let actual = cold
+        .entries
+        .iter()
+        .map(|entry| (entry.cost_usd * 1e9).round() as u64)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        [
+            18_062_500,
+            14_450_000,
+            3_755_562_500,
+            7_225_000,
+            18_062_500,
+            7_225_000,
+            8_000_000
+        ]
+    );
+    let file_len = std::fs::metadata(&path).unwrap().len();
+    let live = resume_live_fold(&path, Some(&first_fold), file_len, &prices);
+    assert_eq!(live, resume_live_fold(&path, None, file_len, &prices));
+    assert_eq!(
+        live.total_usd,
+        cold.entries.iter().map(|entry| entry.cost_usd).sum::<f64>()
+    );
 }
 
 fn costs(path: &Path, resume: Option<&SpendCursor>) -> (Vec<f64>, SpendCursor) {

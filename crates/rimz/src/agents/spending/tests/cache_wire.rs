@@ -2,8 +2,8 @@ use super::*;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
-const V28: &str = concat!(
-    r#"{"version":28,"files":{"/claude.jsonl":{"s":{"mtime_secs":1750000000,"len":4096},"#,
+const V29: &str = concat!(
+    r#"{"version":29,"files":{"/claude.jsonl":{"s":{"mtime_secs":1750000000,"len":4096},"#,
     r#""c":{"o":4096,"a":123,"s":{"current_message":{"message_id":"msg-1","start_ms":1234},"#,
     r#""latest_user_ms":1200,"pricing_fingerprint":"prices-v1"}},"p":"/workspace","e":["#,
     r#"{"t":1750000000,"u":0.125,"i":100,"o":200,"w":30,"r":40,"n":{"Read":2},"#,
@@ -41,13 +41,13 @@ fn cached_cost_preserves_writer_precision() {
 }
 
 #[test]
-fn v28_cache_preserves_per_file_and_single_file_bytes() {
+fn v29_cache_preserves_per_file_and_single_file_bytes() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("spending.json");
-    std::fs::write(&path, V28).unwrap();
+    std::fs::write(&path, V29).unwrap();
     let cache = read_spending_cache(&path);
-    assert_eq!(cache.version, 28);
-    let raw: RawCache = serde_json::from_str(V28).unwrap();
+    assert_eq!(cache.version, 29);
+    let raw: RawCache = serde_json::from_str(V29).unwrap();
     assert_eq!(cache.files.len(), raw.files.len());
     for (key, value) in &raw.files {
         assert_eq!(
@@ -56,7 +56,7 @@ fn v28_cache_preserves_per_file_and_single_file_bytes() {
         );
         let key_json = serde_json::to_string(key).unwrap();
         let single = format!(
-            "{{\"version\":28,\"files\":{{{key_json}:{}}}}}\n",
+            "{{\"version\":29,\"files\":{{{key_json}:{}}}}}\n",
             value.get()
         );
         std::fs::write(&path, &single).unwrap();

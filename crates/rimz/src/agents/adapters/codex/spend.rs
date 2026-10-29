@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::LocalSpendFold;
-use crate::agents::pricing::{PriceBook, Pricing, TokenSplit};
+use crate::agents::pricing::{PriceBook, Pricing, PricingRates, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_secs, record_unknown_model,
 };
@@ -50,6 +50,40 @@ use parse::CodexLogEntry;
 #[cfg(test)]
 use parse::codex_line_kind;
 use parse::{CodexSpendState, parse_codex_session};
+
+const INCLUDED_ALLOWANCE_FAST_MULTIPLIER: f64 = 2.5;
+const PURCHASED_CREDITS_FAST_MULTIPLIER: f64 = 2.0;
+
+#[derive(Clone, Copy, Debug)]
+enum CodexPricingBasis {
+    List,
+    IncludedAllowance,
+    PurchasedCredits,
+}
+
+impl CodexPricingBasis {
+    fn from_snapshot(snapshot: Option<&super::rollout::CodexRateLimits<'_>>) -> Self {
+        let Some(snapshot) = snapshot.filter(|snapshot| snapshot.is_plan()) else {
+            return Self::List;
+        };
+        if snapshot.has_credits() && snapshot.allowance_exhausted() {
+            return Self::PurchasedCredits;
+        }
+        Self::IncludedAllowance
+    }
+
+    fn rates(self) -> PricingRates {
+        match self {
+            Self::List => PricingRates::List,
+            Self::IncludedAllowance => PricingRates::Base {
+                fast_multiplier: INCLUDED_ALLOWANCE_FAST_MULTIPLIER,
+            },
+            Self::PurchasedCredits => PricingRates::Base {
+                fast_multiplier: PURCHASED_CREDITS_FAST_MULTIPLIER,
+            },
+        }
+    }
+}
 
 // ── Path discovery ────────────────────────────────────────────────────────────
 
@@ -107,8 +141,8 @@ pub(super) fn legacy_spend_relative(path: &Path) -> bool {
 /// model's cache-read rate when it is explicit (else at the input rate, per
 /// [`codex_billed_split`]), cache writes at the model's cache-create rate, and
 /// output (which already includes reasoning tokens) at the output rate. An
-/// event after a priority-tier `thread_settings_applied` bills at the model's
-/// fast multiplier.
+/// event after a priority-tier `thread_settings_applied` uses its per-line
+/// basis's Fast multiplier: plan burn at base rates, or the model's list tiers.
 /// Automatic cache population records zero writes; explicit prompt caching can
 /// record nonzero writes. Events whose model has no known price still
 /// contribute tokens and sessions with zero dollars while recording an
@@ -140,7 +174,9 @@ pub(crate) fn parse_codex_spend(
             .cached(event.cache_write_input_tokens, event.cached_input_tokens)
             .fast(event.fast);
         let cost = match prices.price(model) {
-            Some(price) => price.cost_of(codex_billed_split(price, split)),
+            Some(price) => {
+                price.cost_of_with_rates(codex_billed_split(price, split), event.basis.rates())
+            }
             None => {
                 record_unknown_model(&mut unknown_models, model, ts_secs);
                 0.0

@@ -1502,6 +1502,61 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
 }
 
 #[test]
+fn refresh_transcript_context_publishes_plan_burn_matching_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-plan.jsonl");
+    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let lines = [
+        json!({"type":"turn_context", "payload":{"model":"gpt-5.6-sol"}}),
+        json!({"type":"event_msg", "payload":{"type":"thread_settings_applied",
+            "thread_settings":{"service_tier":"priority"}}}),
+        json!({"type":"event_msg", "timestamp":"2026-01-01T10:00:00Z", "payload":{
+            "type":"token_count", "rate_limits":{"plan_type":"pro"}, "info":{
+                "last_token_usage":{"input_tokens":1_000, "cached_input_tokens":200,
+                    "cache_write_input_tokens":100, "output_tokens":100}
+            }
+        }}),
+    ];
+    std::fs::write(&path, lines.map(|line| line.to_string()).join("\n") + "\n").unwrap();
+    PriceBook::write_fixture_cache(&pricing_cache_path);
+    let refresh = refresh_transcript_context(
+        "sess-plan",
+        None,
+        Some(path.to_string_lossy().as_ref()),
+        None,
+        None,
+        &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+    let actual = refresh
+        .context
+        .cost
+        .as_set()
+        .unwrap()
+        .total_cost_usd
+        .unwrap();
+    let history = crate::agents::adapters::codex::spend::parse_codex_spend(
+        &path,
+        None,
+        &PriceBook::fixture(),
+    );
+    assert!(
+        (actual - 0.0180625).abs() < 1e-12,
+        "published cost: {actual}"
+    );
+    assert_eq!(
+        actual,
+        history
+            .entries
+            .iter()
+            .map(|entry| entry.cost_usd)
+            .sum::<f64>()
+    );
+    assert_eq!(refresh.spend_fold.into_set().unwrap().total_usd, actual);
+}
+
+#[test]
 fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
     let dir = tempfile::tempdir().unwrap();
     let transcript_path = dir.path().join("rollout-session.jsonl");

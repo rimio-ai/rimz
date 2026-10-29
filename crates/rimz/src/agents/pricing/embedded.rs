@@ -162,9 +162,13 @@ mod tests {
     #[test]
     fn parse_fills_fast_multiplier_from_overrides() {
         let table = parse(
-            r#"{"claude-opus-4.8-20260528": {"input_cost_per_token": 5e-6, "output_cost_per_token": 25e-6}}"#,
+            r#"{
+                "claude-opus-4.8-20260528": {"input_cost_per_token": 5e-6, "output_cost_per_token": 25e-6},
+                "gpt-6.1-sol": {"input_cost_per_token": 2e-6, "output_cost_per_token": 10e-6}
+            }"#,
         );
 
         assert_eq!(table["claude-opus-4.8-20260528"].fast_multiplier, 2.0);
+        assert_eq!(table["gpt-6.1-sol"].fast_multiplier, 2.0);
     }
 }
