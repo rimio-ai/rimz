@@ -5,7 +5,7 @@ use super::hook_install::{
     write_uninstall_result,
 };
 use super::*;
-use rimz::agents::{HookUninstallReport, LoginConfigErr};
+use rimz::agents::{HookUninstallReport, LoginConfigErr, ProviderHomeLogin, provider_home_logins};
 
 pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
     let login_env = rimz::agents::ambient_env();
@@ -83,44 +83,9 @@ fn install_definitions(
     Ok(adapters)
 }
 
-/// A provider home's account, its adapter, and its launch environment.
-type ProviderHomeLogin = (
-    rimz::ids::LoginKey,
-    &'static rimz::agents::AgentDefinition,
-    std::collections::BTreeMap<String, String>,
-);
-
-/// Every native and declared account home; a refused catalog yields native homes alongside its error.
-pub(crate) fn provider_home_logins() -> (Vec<ProviderHomeLogin>, Option<LoginConfigErr>) {
-    let ambient = rimz::agents::ambient_env();
-    let (logins, config_err) =
-        match rimz::agents::LoginCatalog::from_config(&crate::cli::machine_config().accounts) {
-            Ok(catalog) => (catalog.all().cloned().collect::<Vec<_>>(), None),
-            Err(err) => (
-                rimz::agents::known_kinds()
-                    .map(|kind| {
-                        rimz::agents::ProviderLogin::default_for(
-                            rimz::ids::AgentKind::new_unchecked(kind),
-                        )
-                    })
-                    .collect(),
-                Some(err),
-            ),
-        };
-    let logins = logins
-        .into_iter()
-        .filter_map(|login| {
-            let adapter = rimz::agents::find_definition(login.kind().as_str())?;
-            let login_env = login.env(&ambient);
-            Some((login.key(), adapter, login_env))
-        })
-        .collect();
-    (logins, config_err)
-}
-
 /// Every provider home carrying RimZ-managed hooks, alongside any catalog error.
 fn managed_hook_logins() -> (Vec<ProviderHomeLogin>, Option<LoginConfigErr>) {
-    let (logins, config_err) = provider_home_logins();
+    let (logins, config_err) = provider_home_logins(&crate::cli::machine_config().accounts);
     let logins = logins
         .into_iter()
         .filter(|(_, adapter, env)| adapter.managed_hook_artifacts_present(env))

@@ -844,6 +844,38 @@ pub fn ambient_env() -> BTreeMap<String, String> {
         .collect()
 }
 
+/// A provider home's account, its adapter, and its launch environment.
+pub type ProviderHomeLogin = (
+    LoginKey,
+    &'static super::AgentDefinition,
+    BTreeMap<String, String>,
+);
+
+/// Every native and declared home; a refused catalog yields native homes alongside its error.
+pub fn provider_home_logins(
+    accounts: &AccountsConfig,
+) -> (Vec<ProviderHomeLogin>, Option<LoginConfigErr>) {
+    let ambient = ambient_env();
+    let (logins, config_err) = match LoginCatalog::from_config(accounts) {
+        Ok(catalog) => (catalog.all().cloned().collect::<Vec<_>>(), None),
+        Err(err) => (
+            super::known_kinds()
+                .map(|kind| ProviderLogin::default_for(AgentKind::new_unchecked(kind)))
+                .collect(),
+            Some(err),
+        ),
+    };
+    let logins = logins
+        .into_iter()
+        .filter_map(|login| {
+            let adapter = super::find_definition(login.kind().as_str())?;
+            let login_env = login.env(&ambient);
+            Some((login.key(), adapter, login_env))
+        })
+        .collect();
+    (logins, config_err)
+}
+
 /// Resolve a session's stamped account; an unstamped session uses the provider's own home.
 pub fn session_login(
     kind: &AgentKind,
