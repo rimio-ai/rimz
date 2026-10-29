@@ -96,10 +96,10 @@ struct SkillCatalog<'a> {
 }
 
 impl<'a> SkillCatalog<'a> {
-    fn new(check: SkillCheck<'a>, home: &Path) -> Self {
+    fn new(check: SkillCheck<'a>, home: &Path, packs: &ResolvedPacks) -> Self {
         Self {
             check,
-            chain: crate::agents::skills::SkillChain::from_home(home),
+            chain: crate::agents::skills::SkillChain::from_resolved(home, packs),
             inventories: RefCell::default(),
             texts: RefCell::default(),
         }
@@ -379,7 +379,7 @@ fn load_resolved(
     native_auto_compact: Option<u64>,
     packs: &ResolvedPacks,
 ) -> LoadedDefinitions {
-    let catalog = SkillCatalog::new(skills, agents_home);
+    let catalog = SkillCatalog::new(skills, agents_home, packs);
     let mut loaded = LoadedDefinitions::default();
     loaded.warnings.clone_from(&packs.warnings);
     loaded.errors.extend(packs.problems.iter().map(|problem| {

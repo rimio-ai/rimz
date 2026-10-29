@@ -75,7 +75,7 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
         env: &env,
         machine_isolation: super::super::Isolation::Scoped,
     };
-    let catalog = SkillCatalog::new(check, root.path());
+    let catalog = SkillCatalog::new(check, root.path(), &crate::packs::resolve(root.path()));
     assert!(
         catalog
             .enumerate("claude")
@@ -102,7 +102,7 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
             .contains_key("second")
     );
     assert!(
-        SkillCatalog::new(check, root.path())
+        SkillCatalog::new(check, root.path(), &crate::packs::resolve(root.path()))
             .enumerate("claude")
             .unwrap()
             .unwrap()
@@ -2650,7 +2650,7 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
 #[test]
 fn traits_deduplicate_and_preserve_unrelated_placeholders() {
     let root = fixture();
-    let catalog = SkillCatalog::new(SkillCheck::Skip, root.path());
+    let catalog = SkillCatalog::new(SkillCheck::Skip, root.path(), &ResolvedPacks::default());
     write(root.path(), "traits/one.md", " One.\n");
     write(root.path(), "traits/two.md", "Two.");
     let source = root.path().join("agents/probe.md");

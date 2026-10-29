@@ -1138,7 +1138,7 @@ impl ConfigStamp {
             )
             .chain(packs.problems.iter().map(|problem| problem.path.clone()))
             .chain(
-                crate::agents::skills::SkillChain::from_home(agents_home)
+                crate::agents::skills::SkillChain::from_resolved(agents_home, &packs)
                     .roots()
                     .iter()
                     .flat_map(|root| skill_library_paths(root)),
