@@ -395,9 +395,9 @@ The work-counter index below distinguishes thread-local reads from process total
 
 ### Benchmarks
 
-`cargo xtask perf` runs the divan benches in `crates/rimz/benches/` over synthetic stores and pane frames, through the same entry points the sidebar uses. It starts no providers and spends no tokens; the ignored host-scale bench runs a real private tmux room with parked agent stand-ins. The benches stay out of `gate` and `ci`, so a busy CI runner never fails a build on their timing, but the regression ceilings below fail `cargo xtask perf` itself. Each failure prints the measured value and the ceiling.
+`cargo xtask perf` runs the divan benches in `crates/rimz/benches/` over synthetic stores and pane frames, through the same entry points the sidebar uses. It starts no providers and spends no tokens; the ignored host-scale bench runs a real private tmux room with parked agent stand-ins. The benches stay out of `gate` and `ci`, so a busy CI runner never fails a build on their timing, but the regression ceilings below fail `cargo xtask perf` itself. Each failure prints the measured value and the ceiling. A bench that takes its input by value (`bench_values`, `bench_local_values`) times the input's drop, so a fixture whose teardown is costly (a tempdir, a large cache) is benched with `bench_refs` or `bench_local_refs`, or returned from the closure so divan drops it outside the sample.
 
-Allocation counts are the steady regression signal, and medians move with host and load. The figures here were captured on `xlab-term`, a loaded LXC container on an AMD Ryzen 9 9950X with 28 online CPUs and the `performance` governor. Requested bytes and allocation requests come from the bench's counting allocator (`crates/rimz/benches/fleet.rs::counted`), which counts allocation and reallocation requests. Alloc/op is Divan's median `alloc` byte count, which excludes the grow bytes Divan reports separately.
+Allocation counts are the steady regression signal, and medians move with host and load. Unless noted otherwise, the figures here were captured on `xlab-term`, a loaded LXC container on an AMD Ryzen 9 9950X with 28 online CPUs and the `performance` governor. Requested bytes and allocation requests come from the bench's counting allocator (`crates/rimz/benches/fleet.rs::counted`), which counts allocation and reallocation requests. Alloc/op is Divan's median `alloc` byte count, which excludes the grow bytes Divan reports separately.
 
 #### Regression ceilings
 
@@ -471,7 +471,12 @@ The latest capture of each bench. Run one group with a name filter, such as `car
 | `hotpath::spending_live_scale_warm_global_refresh` 6k files / 102k entries | 93.5 ms | 50.25 MB alloc/op | 2026-07-20 |
 | `hotpath::spending_live_scale_warm_discovery_only` 6k files | 19.55 ms | 770.9 KB alloc/op | 2026-07-18 |
 | `hotpath::spending_live_scale_warm_discovery_inclusive` 6k files / 102k entries | 140.2 ms | 99.59 MB alloc/op | 2026-07-18 |
-| `hotpath::spending_live_scale_additional_workspace_scope` 6k files / 102k entries | 116.6 ms | 58.59 MB alloc/op | 2026-07-20 |
+| `hotpath::spending_live_scale_additional_workspace_scope` 6k files / 102k entries, all in scope | 100.1 ms | 33.75 MB alloc/op | 2026-10-29 |
+| `hotpath::spending_live_scale_additional_workspace_partial_scope` 6k files / 102k entries, one-third in scope | 28.72 ms | 15.28 MB alloc/op | 2026-10-29 |
+
+The 2026-10-29 scope rows quote the second head run of a base/head/head/base check (three samples per bench), on Linux x86-64 with an EPYC 7502P, 58 available CPUs and Rust 1.97.1 under ambient build load. Both benches use `bench_local_refs`; the medians exclude fixture teardown, including the 6,000-file tempdir removal and walker cache/memo cleanup. Both trees use trunk `d602478a2` plus `test(spending): pin the room spend slice before splitting its fold`; head adds `perf(spending): derive a room's spend slice without the fleet fold`.
+
+Allocation medians were stable across each build's two runs: all-in-scope used 98.28 MB alloc/op on base versus 33.75 MB on head; one-third-in-scope used 80.35 MB versus 15.28 MB. One-minute load before/after each whole command (including compilation and fixture setup) was 30.56/32.21, 32.21/79.63, 79.63/74.96 and 74.96/39.19 in base/head/head/base order. These loaded timing medians are not an isolated speedup measurement.
 
 The 2026-10-14 capture ran at a load average near 45, where two back-to-back runs of the same build read 6.4 ms and 12.2 ms for one arm, so this table quotes no median from it. The `kimi`, `grok`, and `droid` changed-session refresh benches have no recorded capture.
 
