@@ -126,6 +126,7 @@ fn show_view(each_worktree: bool) -> ShowView {
     let show_agent_runs =
         has_agent_runs_section(&entry, Some(&TaskAction::Spawn("sweeper".into())));
     ShowView {
+        capacity: BTreeMap::new(),
         name: "sweep".into(),
         kind: schedule::TaskKind::Routine,
         entry,
@@ -2210,6 +2211,12 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
     }
     let cases = [
         (
+            LoopRunResult::CapacityHeld,
+            "○",
+            ui::palette::warn(),
+            "capacity held",
+        ),
+        (
             LoopRunResult::Launched,
             "✓",
             ui::palette::good(),
@@ -2505,6 +2512,8 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         checkout: "/repo/.worktrees/a".into(),
         since_ms,
         reason: Some("cpu pressure 41% >= 25%".to_owned()),
+        kinds: Vec::new(),
+        gives_up_ms: None,
         position: 2,
     };
     let waiting = InFlightRun {
@@ -2512,10 +2521,15 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         run: None,
         held: vec![held.clone()],
     };
+    let phrase = rimz::theme::fmt::capacity_wait(
+        &held.kinds,
+        Timestamp::from_millisecond(since_ms as i64).unwrap(),
+        None,
+    );
     assert_eq!(
         running_text_full(&waiting, now),
         format!(
-            "held: cpu pressure 41% >= 25%, 3m · pid {}",
+            "{phrase} · cpu pressure 41% >= 25% · pid {}",
             holder(200).pid
         )
     );
@@ -2529,7 +2543,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         serde_json::json!(now - jiff::SignedDuration::from_secs(192))
     );
     held.reason = None;
-    assert_eq!(held_run_text(&held, now), "held: waiting for its turn, 3m");
+    assert_eq!(held_run_text(&held), phrase);
 
     let mut readings = Vec::new();
     write_throttle_readings(
@@ -3239,6 +3253,8 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
         checkout: checkout.into(),
         since_ms,
         reason: reason.map(str::to_owned),
+        kinds: Vec::new(),
+        gives_up_ms: None,
         position,
     };
     // Checkout a launched and runs; b and c wait in other processes.
@@ -3270,7 +3286,14 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
     ];
     assert_eq!(
         in_flight_text(Some(running), &held, now),
-        "held: cpu pressure 41% >= 25%, 30s · 1 held: 1 start ahead"
+        format!(
+            "{} · cpu pressure 41% >= 25% · 1 held: 1 start ahead",
+            rimz::theme::fmt::capacity_wait(
+                &held[1].kinds,
+                Timestamp::from_millisecond(held[1].since_ms as i64).unwrap(),
+                None
+            )
+        )
     );
     let (own, _) = split_held(Some(running), &held);
     assert_eq!(own.map(|held| held.pid), Some(41));
@@ -3287,4 +3310,22 @@ fn a_sub_cent_run_cost_is_not_shown_as_free() {
     assert_eq!(run_cost(0.0031), "<$0.01");
     assert_eq!(run_cost(0.006), "$0.01");
     assert_eq!(run_cost(1.239), "$1.24");
+}
+
+#[test]
+fn capacity_blocking_display_uses_the_shared_phrase_without_changing_held_json() {
+    let since: Timestamp = "2026-06-01T15:02:00Z".parse().unwrap();
+    let held = Held {
+        pid: 42,
+        checkout: "/repo".into(),
+        since_ms: since.as_millisecond() as u64,
+        kinds: vec![rimz::ids::AgentKind::new_unchecked("claude")],
+        gives_up_ms: None,
+        reason: Some("1 start ahead".into()),
+        position: 2,
+    };
+    let phrase = rimz::theme::fmt::capacity_wait(&held.kinds, since, None);
+    assert_eq!(held_run_text(&held), format!("{phrase} · 1 start ahead"));
+    assert!(held_json(&held).get("kinds").is_none());
+    assert!(held_json(&held).get("gives_up_ms").is_none());
 }

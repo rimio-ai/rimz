@@ -9,6 +9,86 @@ mod holds;
 const NAME: &str = "task";
 
 #[test]
+fn capacity_non_stay_conditions_retry_at_sixty_seconds_and_stop_after_give_up() {
+    let now = zdt(2026, 6, 24, 8, 0, 0);
+    let tasks = one(loaded(TaskEntry {
+        agent: Some("claude".into()),
+        prompt: Some("repair".into()),
+        when: Some(vec!["team.stage=Done".into()]),
+        ..Default::default()
+    }));
+    let states = one(condition_state(None, now.timestamp(), true));
+    let verdicts = one(Verdict {
+        ok: true,
+        readings: BTreeMap::new(),
+    });
+    let mut record = super::super::launch_ledger::CapacityRecord {
+        since: Some(now.timestamp()),
+        first: now.timestamp(),
+        last: now.timestamp(),
+        count: 1,
+        kinds: vec![crate::ids::AgentKind::new_unchecked("claude")],
+        reason: "no capacity".into(),
+        gives_up_at: None,
+        gave_up: false,
+    };
+    let mut actual = Vec::new();
+    for (seconds, gave_up) in [(59, false), (60, false), (300, true)] {
+        record.gave_up = gave_up;
+        let tick = now
+            .checked_add(jiff::SignedDuration::from_secs(seconds))
+            .unwrap();
+        actual.push(
+            plan(
+                &one(record.clone()),
+                &tasks,
+                &one(now.timestamp()),
+                &BTreeMap::new(),
+                &tick,
+                &states,
+                &verdicts,
+            )
+            .0,
+        );
+    }
+    assert_eq!(actual, [vec![], vec![(NAME.into(), Action::Fire)], vec![]]);
+    let tick = now
+        .checked_add(jiff::SignedDuration::from_secs(301))
+        .unwrap();
+    let capacity = one(record);
+    let (_, stamps, cleared) = plan(
+        &capacity,
+        &tasks,
+        &one(now.timestamp()),
+        &BTreeMap::new(),
+        &tick,
+        &states,
+        &one(Verdict {
+            ok: false,
+            readings: BTreeMap::new(),
+        }),
+    );
+    assert!(
+        cleared.is_empty(),
+        "give-up suppression still folds a false edge"
+    );
+    assert_eq!(
+        plan(
+            &capacity,
+            &tasks,
+            &stamps,
+            &BTreeMap::new(),
+            &tick,
+            &cleared,
+            &verdicts
+        )
+        .0,
+        [(NAME.into(), Action::Fire)],
+        "a new true edge retires the old give-up"
+    );
+}
+
+#[test]
 fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
     let root = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root(root.path()).unwrap();
@@ -520,6 +600,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             })
             .collect();
         let (_, stamps, _) = plan(
+            &BTreeMap::new(),
             &planned,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -528,6 +609,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             &BTreeMap::new(),
         );
         let (actions, _, _) = plan(
+            &BTreeMap::new(),
             &planned,
             &stamps,
             &BTreeMap::new(),
@@ -610,6 +692,7 @@ fn worktree_retries_use_each_checkouts_last_fire() {
         );
     }
     let (actions, next_stamps, _) = plan(
+        &BTreeMap::new(),
         &planned,
         &stamps,
         &BTreeMap::new(),
@@ -651,6 +734,7 @@ fn worktree_holds_have_independent_clocks() {
         .map(|(key, scoped)| (key.clone(), scoped.task.clone()))
         .collect();
     let (_, mut stamps, mut states) = plan(
+        &BTreeMap::new(),
         &planned,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -678,6 +762,7 @@ fn worktree_holds_have_independent_clocks() {
             })
             .collect();
         let (actions, next_stamps, next_states) = plan(
+            &BTreeMap::new(),
             &planned,
             &stamps,
             &BTreeMap::new(),
@@ -934,6 +1019,7 @@ fn condition_replacement_resets_fired_and_hold_state() {
             }
             let should_fire = entry.hold.is_none();
             let (actions, _, states) = plan(
+                &BTreeMap::new(),
                 &one(loaded(entry)),
                 &one(prior),
                 &BTreeMap::new(),
@@ -971,6 +1057,7 @@ fn condition_tick(
         BTreeMap::new()
     };
     plan(
+        &BTreeMap::new(),
         &one(task),
         &stamp.map(one).unwrap_or_default(),
         &arming,
@@ -1010,6 +1097,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
             readings: BTreeMap::new(),
         });
         let (_, mut stamps, mut states) = plan(
+            &BTreeMap::new(),
             &tasks,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -1025,8 +1113,15 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
             (10, 0, stay || workflow),
         ] {
             let tick = zdt(2026, 6, 24, 8, minute, second);
-            let (actions, next_stamps, next_states) =
-                plan(&tasks, &stamps, &BTreeMap::new(), &tick, &states, &verdicts);
+            let (actions, next_stamps, next_states) = plan(
+                &BTreeMap::new(),
+                &tasks,
+                &stamps,
+                &BTreeMap::new(),
+                &tick,
+                &states,
+                &verdicts,
+            );
             assert_eq!(
                 actions,
                 if expected {
@@ -1487,6 +1582,7 @@ impl Tick {
     /// The task's action this tick and the stamp carried into the next one.
     fn run(self, task: &LoadedTask, now: &Zoned) -> (Option<Action>, Option<Timestamp>) {
         let (actions, next, _) = plan(
+            &BTreeMap::new(),
             &one(task.clone()),
             &self.state.map(one).unwrap_or_default(),
             &self
@@ -1570,6 +1666,7 @@ fn plan_arms_fires_and_carries_each_task_state() {
 
     // State for a task the catalog no longer holds is dropped, not carried.
     let (actions, next, _) = plan(
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &one(due),
         &BTreeMap::new(),

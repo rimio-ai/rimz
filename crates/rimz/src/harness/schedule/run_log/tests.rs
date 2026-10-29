@@ -810,6 +810,13 @@ fn throttle_vocabulary_is_durable_snake_case() {
     );
     assert_eq!(LoopRunResult::ThrottleSkipped.label(), "throttle skipped");
     assert_eq!(LoopRunResult::ThrottleSkipped.spawn_exit_code(), None);
+    let capacity = serde_json::to_value(LoopRunResult::CapacityHeld).unwrap();
+    assert_eq!(capacity, "capacity_held");
+    assert_eq!(
+        serde_json::from_value::<LoopRunResult>(capacity).unwrap(),
+        LoopRunResult::CapacityHeld
+    );
+    assert_eq!(LoopRunResult::CapacityHeld.spawn_exit_code(), None);
 }
 
 #[test]

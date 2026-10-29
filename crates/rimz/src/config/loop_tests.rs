@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn task_capacity_wait_accepts_positive_durations_or_forever() {
+    let actual: Vec<_> = ["1s", "2m", "3h", "4d", "forever", "0s", "1ms", "2", "never"]
+        .into_iter()
+        .map(|raw| {
+            toml::from_str::<TaskEntry>(&format!("capacity-wait = '{raw}'"))
+                .ok()
+                .and_then(|entry| serde_json::to_value(entry).ok())
+                .and_then(|value| value["capacity-wait"].as_str().map(str::to_owned))
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            Some("1s".into()),
+            Some("2m".into()),
+            Some("3h".into()),
+            Some("4d".into()),
+            Some("forever".into()),
+            None,
+            None,
+            None,
+            None
+        ]
+    );
+}
+
+#[test]
+fn retired_throttle_wait_warns_and_has_no_effect() {
+    let parsed = super::super::parse_loop_text_collecting(
+        Path::new("loop.toml"),
+        "[throttle]\nmax-wait = 'not a duration'",
+    );
+    assert!(
+        parsed.is_ok(),
+        "a retired value must not be validated: {parsed:?}"
+    );
+    let parsed = parsed.unwrap();
+    assert_eq!(parsed.value.throttle, ThrottleConfig::default());
+    assert_eq!(parsed.unknown_keys, ["throttle.max-wait"]);
+    let warning = super::super::UnknownConfigKey {
+        path: PathBuf::from("loop.toml"),
+        key: "throttle.max-wait".into(),
+    }
+    .to_string();
+    assert!(
+        warning.contains("retired") && warning.contains("capacity-wait"),
+        "{warning}"
+    );
+}
+
+#[test]
 fn narrow_loop_matches_full_lenient_config() {
     for contents in [
         Some(
@@ -185,9 +236,9 @@ fn malformed_agent_checks_preserve_the_cause() {
 }
 
 #[test]
-fn throttle_has_limits_excludes_pacing_and_wait_deadlines() {
+fn throttle_has_limits_excludes_pacing() {
     assert!(!ThrottleConfig::default().has_limits());
-    let pacing: ThrottleConfig = toml::from_str("pace = \"1s\"\nmax-wait = \"2m\"").unwrap();
+    let pacing: ThrottleConfig = toml::from_str("pace = \"1s\"").unwrap();
     assert!(!pacing.has_limits());
     for limit in [
         "cpu-pressure = 25",
@@ -605,11 +656,10 @@ fn throttle_table_parses_with_defaults_and_typed_values() {
     let defaults = LoopConfig::default().throttle;
     assert!(defaults.is_empty());
     assert_eq!(defaults.pace(), Duration::from_secs(10));
-    assert_eq!(defaults.max_wait(), Duration::from_secs(30 * 60));
     assert_eq!(defaults.min_memory_bytes(), None);
 
     let config: LoopConfig = toml::from_str(
-        "[throttle]\npace = \"0s\"\nmax-wait = \"2h\"\nmax-active = 12\n\
+        "[throttle]\npace = \"0s\"\nmax-active = 12\n\
          max-active-per-task = 4\ncpu-pressure = 60\nio-pressure = 40\n\
          memory-pressure = 100\nmin-memory = \"8GB\"\nmin-disk = \"20GB\"\n",
     )
@@ -617,7 +667,6 @@ fn throttle_table_parses_with_defaults_and_typed_values() {
     let throttle = &config.throttle;
     assert!(!config.is_empty(), "a throttle table alone is content");
     assert_eq!(throttle.pace(), Duration::ZERO);
-    assert_eq!(throttle.max_wait(), Duration::from_secs(2 * 60 * 60));
     assert_eq!(throttle.max_active, Some(12));
     assert_eq!(throttle.max_active_per_task, Some(4));
     assert_eq!(
@@ -638,8 +687,8 @@ fn throttle_table_parses_with_defaults_and_typed_values() {
 #[test]
 fn throttle_table_rejects_values_that_could_never_admit() {
     for (text, expected) in [
-        ("max-wait = \"0s\"", "must be greater than zero"),
-        ("max-wait = \"1d\"", "unit"),
+        ("check-timeout = \"0s\"", "must be greater than zero"),
+        ("check-timeout = \"1d\"", "unit"),
         ("pace = \"soon\"", "duration"),
         ("max-active = 0", "must be greater than zero"),
         ("max-active-per-task = 0", "must be greater than zero"),

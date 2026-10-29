@@ -329,6 +329,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
             account: Some("work".parse().expect("login name")),
             throttle: Some(crate::config::ThrottleSwitch::Off),
+            capacity_wait: None,
             overlap: None,
             overlap_limit: None,
         };

@@ -102,8 +102,9 @@ use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
 pub(crate) use loop_::deserialize_judges;
 pub use loop_::{
-    CheckOn, FileMark, Guard, Judge, LoopConfig, OverlapPolicy, TaskCheck, TaskEntry, TaskTarget,
-    Tasks, ThrottleConfig, ThrottleSwitch, WatchSpec, has_absolute_task_root,
+    CapacityWait, CapacityWaitErr, CheckOn, FileMark, Guard, Judge, LoopConfig, OverlapPolicy,
+    TaskCheck, TaskEntry, TaskTarget, Tasks, ThrottleConfig, ThrottleSwitch, WatchSpec,
+    has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::MultiplexerConfig;
@@ -431,6 +432,17 @@ pub struct UnknownConfigKey {
 
 impl std::fmt::Display for UnknownConfigKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if matches!(
+            self.key.as_str(),
+            "throttle.max-wait" | "loop.throttle.max-wait"
+        ) {
+            return write!(
+                formatter,
+                "config key `{}` in {} is retired and has no effect; set `capacity-wait` on each loop task instead; run `rimz setup` to remove it",
+                self.key,
+                self.path.display()
+            );
+        }
         if self.key == "lsp.kill-floor-percent" {
             return write!(
                 formatter,

@@ -171,12 +171,7 @@ pub(super) fn run_one(
     )?
     .with_arrived_at(arrived_at)
     .with_condition(condition)
-    .with_checkout(checkout)
-    .with_hold_notice(move |reason| {
-        if mode == LoopRunMode::Manual {
-            let _ = writeln!(ui::out(), "held: {reason}");
-        }
-    });
+    .with_checkout(checkout);
     if args.drain {
         if !fire.take_backlog()? {
             return Ok(());
@@ -245,7 +240,8 @@ pub(super) fn run_one(
         Err(err) => record_task_error(&mut fire, name, &entry, err)?,
         Ok(
             rimz::harness::schedule::runner::TaskFirePlan::AlreadyLaunched
-            | rimz::harness::schedule::runner::TaskFirePlan::DeclineHeld,
+            | rimz::harness::schedule::runner::TaskFirePlan::DeclineHeld
+            | rimz::harness::schedule::runner::TaskFirePlan::CapacityHeld,
         ) => return Ok(()),
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Resident {
             root,

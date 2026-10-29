@@ -220,6 +220,16 @@ impl TaskAction {
             }
             for (set, field, hint) in [
                 (
+                    entry.throttle.is_some(),
+                    "throttle",
+                    "capacity policy belongs to the workflow's agent steps (`steps.<name>.throttle`)",
+                ),
+                (
+                    entry.capacity_wait.is_some(),
+                    "capacity-wait",
+                    "capacity policy belongs to the workflow's agent steps (`steps.<name>.capacity-wait`)",
+                ),
+                (
                     entry.stay,
                     "stay",
                     "a workflow run is not a resident agent; its agent steps launch and stop agents",

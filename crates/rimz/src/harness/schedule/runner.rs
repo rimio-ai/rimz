@@ -164,6 +164,7 @@ pub enum TaskFirePlan {
     Done(TaskFireFinished),
     AlreadyLaunched,
     DeclineHeld,
+    CapacityHeld,
     Resident {
         root: PathBuf,
         cwd: PathBuf,
@@ -414,8 +415,6 @@ pub fn discard_backlog(name: &str, root: &Path) -> Result<()> {
     Ok(())
 }
 
-type HoldNotice<'a> = Box<dyn FnMut(&str) + 'a>;
-
 /// One loop fire from ordered gates through one history transition, unless a drain finds no work.
 pub struct TaskFire<'a> {
     name: String,
@@ -449,7 +448,6 @@ pub struct TaskFire<'a> {
     throttle_turn: Option<throttle::Turn>,
     throttle_wait: Option<Duration>,
     resident_groups: Vec<throttle::StartGroup>,
-    hold_notice: Option<HoldNotice<'a>>,
     fired_guard: Vec<FiredCheck>,
     pending: Option<PendingEffect>,
     finished: bool,
@@ -508,7 +506,6 @@ impl<'a> TaskFire<'a> {
             check_interrupts: None,
             throttle_turn: None,
             throttle_wait: None,
-            hold_notice: None,
             fired_guard: Vec::new(),
             pending: None,
             finished: false,
@@ -696,12 +693,6 @@ impl<'a> TaskFire<'a> {
         self
     }
 
-    /// Hear each new reason the start throttle holds this fire on.
-    pub fn with_hold_notice(mut self, notice: impl FnMut(&str) + 'a) -> Self {
-        self.hold_notice = Some(Box::new(notice));
-        self
-    }
-
     /// Report the committed launch of a resident plan, so the throttle turn
     /// this fire holds passes on once the provider reports the agent.
     pub fn report_launch(&self, workspace: &WorkspaceId, agent: &crate::ids::AgentSessionId) {
@@ -710,16 +701,194 @@ impl<'a> TaskFire<'a> {
         }
     }
 
-    /// The last gate of both ladders: take a turn in the start throttle. A
-    /// fire that will not spawn an agent never reaches it.
-    fn prepare_throttle(&mut self) -> Result<Option<TaskFireFinished>> {
-        if self.throttle_turn.is_some() {
+    fn capacity_condition(&self) -> bool {
+        self.mode == LoopRunMode::Scheduled
+            && self.entry.agent.is_some()
+            && self.entry.when.is_some()
+            && self.entry.throttle != Some(ThrottleSwitch::Off)
+    }
+
+    fn capacity_now(&self) -> Result<Timestamp> {
+        Ok(Timestamp::from_millisecond(i64::try_from(
+            self.throttle_host.now_ms(),
+        )?)?)
+    }
+
+    fn capacity_gives_up_at(&self, first: Timestamp) -> Result<Option<Timestamp>> {
+        use crate::config::CapacityWait;
+        let until = match self.entry.capacity_wait {
+            Some(CapacityWait::Forever) => None,
+            Some(CapacityWait::Duration(duration)) => first.checked_add(duration).ok(),
+            None => match self
+                .task
+                .trigger()
+                .as_ref()
+                .ok()
+                .map(|parsed| &parsed.trigger)
+            {
+                Some(Trigger::Schedule(schedule)) if !schedule.once => {
+                    let runtime = RuntimePaths::for_project_root(&self.entry.resolved_root())?;
+                    let key = self
+                        .checkout
+                        .as_ref()
+                        .filter(|_| self.entry.each_worktree)
+                        .map_or_else(
+                            || self.name.clone(),
+                            |checkout| super::fire::scope_key(&self.name, checkout),
+                        );
+                    let stamp = super::fire::last_stamps(&runtime)
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(self.now);
+                    schedule
+                        .schedule
+                        .next_after(stamp, &self.now.to_zoned(self.config.time_zone()))
+                        .and_then(|at| at.checked_sub(Duration::from_secs(1)).ok())
+                }
+                _ => None,
+            },
+        };
+        Ok(match (until, self.entry.deadline) {
+            (Some(until), Some(deadline)) => Some(until.min(deadline)),
+            (until, deadline) => until.or(deadline),
+        })
+    }
+
+    fn clear_capacity(&self) -> Result<()> {
+        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+        if let Err(error) = super::launch_ledger_store::remove_checkout_capacity(
+            &paths,
+            &self.name,
+            &self.launch_checkout(),
+        ) {
+            tracing::warn!(
+                task = %self.name, path = %super::launch_ledger::capacity_path(&paths).display(),
+                %error, "failed to clear loop capacity wait"
+            );
+        }
+        Ok(())
+    }
+
+    fn prepare_capacity_end(&mut self) -> Result<Option<TaskFirePlan>> {
+        if !self.capacity_condition() {
             return Ok(None);
         }
-        let listening = self.check_interrupts.take();
-        if self.entry.throttle == Some(ThrottleSwitch::Off) {
+        if self.entry.deadline.is_some()
+            && let Some(done) = self.prepare_deadline_at(self.capacity_now()?)?
+        {
+            return Ok(Some(TaskFirePlan::Done(done)));
+        }
+        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+        let waits = super::launch_ledger::load_capacity(&paths)?;
+        let Some(wait) = waits
+            .get(&self.name)
+            .and_then(|checkouts| checkouts.get(&self.launch_checkout()))
+            .filter(|wait| {
+                wait.since
+                    == self
+                        .condition
+                        .as_ref()
+                        .and_then(|condition| condition.since)
+            })
+        else {
+            return Ok(None);
+        };
+        if wait.gave_up {
+            self.finished = true;
+            return Ok(Some(TaskFirePlan::CapacityHeld));
+        }
+        let now = self.capacity_now()?;
+        if wait.gives_up_at.is_some_and(|at| now >= at) {
+            return self
+                .record_capacity_hold(wait.reason.clone(), wait.kinds.clone())
+                .map(Some);
+        }
+        Ok(None)
+    }
+
+    fn record_capacity_hold(
+        &mut self,
+        reason: String,
+        kinds: Vec<AgentKind>,
+    ) -> Result<TaskFirePlan> {
+        let now = self.capacity_now()?;
+        let since = self
+            .condition
+            .as_ref()
+            .and_then(|condition| condition.since);
+        let gives_up_at = self.capacity_gives_up_at(now)?;
+        let wait = super::launch_ledger_store::record_capacity(
+            &StatePaths::for_project_root(&self.entry.resolved_root())?,
+            &self.name,
+            &self.launch_checkout(),
+            |previous| {
+                let previous = previous.filter(|wait| wait.since == since);
+                let first = previous.as_ref().map_or(now, |wait| wait.first);
+                let gives_up_at = previous
+                    .as_ref()
+                    .map_or(gives_up_at, |wait| wait.gives_up_at);
+                super::launch_ledger::CapacityRecord {
+                    since,
+                    first,
+                    last: now,
+                    count: previous.map_or(1, |wait| wait.count.saturating_add(1)),
+                    kinds,
+                    reason,
+                    gives_up_at,
+                    gave_up: gives_up_at.is_some_and(|at| now >= at),
+                }
+            },
+        )?;
+        if wait.gave_up {
+            let waited = Duration::from_millis(
+                u64::try_from(now.duration_since(wait.first).as_millis()).unwrap_or(0),
+            );
+            return Ok(TaskFirePlan::Done(self.record_gate(
+                LoopRunResult::ThrottleSkipped,
+                format!(
+                    "gave up waiting for capacity after {}; {}",
+                    crate::utils::time::format_duration_compact(waited),
+                    wait.reason
+                ),
+            )));
+        }
+        if wait.count == 1 {
+            self.record_terminal_with(
+                LoopRunResult::CapacityHeld,
+                LoopRunPresentation::default(),
+                TaskFireNotice::None,
+                Some(self.now),
+                |record| record.error = Some(wait.reason),
+            );
+        } else {
+            self.finished = true;
+        }
+        Ok(TaskFirePlan::CapacityHeld)
+    }
+
+    fn prepare_capacity_look(&mut self) -> Result<Option<TaskFirePlan>> {
+        if let Some(plan) = self.prepare_capacity_end()? {
+            return Ok(Some(plan));
+        }
+        if !self.capacity_condition()
+            || (self.entry.guard().shell.is_none() && self.entry.guard().judges.is_empty())
+        {
             return Ok(None);
         }
+        let run = self.throttle_run()?;
+        let held = throttle::look_in(
+            self.throttle_host.as_ref(),
+            &self.config.r#loop.throttle,
+            &run,
+        )?;
+        if let Some(plan) = self.prepare_capacity_end()? {
+            return Ok(Some(plan));
+        }
+        held.map(|hold| self.record_capacity_hold(hold.text, hold.kinds))
+            .transpose()
+    }
+
+    fn throttle_run(&self) -> Result<throttle::Run> {
         let root = self.entry.resolved_root();
         let groups = match self
             .context
@@ -733,14 +902,11 @@ impl<'a> TaskFire<'a> {
             }],
             None => self.resident_groups.clone(),
         };
-        let run = throttle::Run {
+        Ok(throttle::Run {
             groups,
-            gives_up_ms: Some(
-                self.throttle_host.now_ms().saturating_add(
-                    u64::try_from(self.config.r#loop.throttle.max_wait().as_millis())
-                        .unwrap_or(u64::MAX),
-                ),
-            ),
+            gives_up_ms: self
+                .capacity_gives_up_at(self.capacity_now()?)?
+                .and_then(|at| u64::try_from(at.as_millisecond()).ok()),
             task: self.name.clone(),
             workspace: StatePaths::for_project_root(&root)?.workspace_id,
             root,
@@ -750,18 +916,51 @@ impl<'a> TaskFire<'a> {
                 &self.config.agents.worktree,
                 self.launch_checkout(),
             ),
-        };
-        let mut silent = |_: &str| {};
+        })
+    }
+
+    /// Only a spawning fire reaches admission; condition fires never keep a ticket while held.
+    fn prepare_throttle(&mut self) -> Result<Option<TaskFirePlan>> {
+        if self.entry.deadline.is_some()
+            && let Some(done) = self.prepare_deadline_at(self.capacity_now()?)?
+        {
+            return Ok(Some(TaskFirePlan::Done(done)));
+        }
+        if self.throttle_turn.is_some() {
+            return Ok(None);
+        }
+        if self.mode == LoopRunMode::Manual || self.entry.throttle == Some(ThrottleSwitch::Off) {
+            self.clear_capacity()?;
+            return Ok(None);
+        }
+        if let Some(plan) = self.prepare_capacity_end()? {
+            return Ok(Some(plan));
+        }
+        let run = self.throttle_run()?;
+        if self.capacity_condition() {
+            let attempt =
+                throttle::try_admit_in(&self.throttle_host, &self.config.r#loop.throttle, &run)?;
+            if let Some(plan) = self.prepare_capacity_end()? {
+                return Ok(Some(plan));
+            }
+            match attempt {
+                throttle::Attempt::Held(hold) => {
+                    return self.record_capacity_hold(hold.text, hold.kinds).map(Some);
+                }
+                throttle::Attempt::Turn(turn) => self.throttle_turn = Some(turn),
+                throttle::Attempt::Open => {}
+            }
+            self.clear_capacity()?;
+            return Ok(None);
+        }
+        let listening = self.check_interrupts.take();
         let admission = throttle::admit(
             &self.throttle_host,
             &self.config.r#loop.throttle,
             &run,
             listening,
-            match self.hold_notice.as_mut() {
-                Some(notice) => notice.as_mut(),
-                None => &mut silent,
-            },
         )?;
+        self.clear_capacity()?;
         match admission {
             throttle::Admission::Open => Ok(None),
             throttle::Admission::Turn { turn, waited } => {
@@ -769,19 +968,26 @@ impl<'a> TaskFire<'a> {
                 self.throttle_wait = waited;
                 Ok(None)
             }
-            throttle::Admission::Skipped { reason } => Ok(Some(
-                self.record_gate(LoopRunResult::ThrottleSkipped, reason),
-            )),
-            throttle::Admission::Interrupted => Ok(Some(self.record_terminal_with(
-                LoopRunResult::Canceled,
-                LoopRunPresentation {
-                    exit_code: Some(130),
-                    ..LoopRunPresentation::default()
-                },
-                TaskFireNotice::None,
-                None,
-                |record| record.error = Some("interrupted while held".to_owned()),
-            ))),
+            throttle::Admission::Skipped { reason } => {
+                if let Some(done) = self.prepare_deadline_at(self.capacity_now()?)? {
+                    return Ok(Some(TaskFirePlan::Done(done)));
+                }
+                Ok(Some(TaskFirePlan::Done(
+                    self.record_gate(LoopRunResult::ThrottleSkipped, reason),
+                )))
+            }
+            throttle::Admission::Interrupted => {
+                Ok(Some(TaskFirePlan::Done(self.record_terminal_with(
+                    LoopRunResult::Canceled,
+                    LoopRunPresentation {
+                        exit_code: Some(130),
+                        ..LoopRunPresentation::default()
+                    },
+                    TaskFireNotice::None,
+                    None,
+                    |record| record.error = Some("interrupted while held".to_owned()),
+                ))))
+            }
         }
     }
 
@@ -816,6 +1022,10 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
 
+        if let Some(plan) = self.prepare_capacity_look()? {
+            return Ok(plan);
+        }
+
         let check = if self.run_lock.is_none()
             && self
                 .context
@@ -835,7 +1045,7 @@ impl<'a> TaskFire<'a> {
         }
         if self.run_lock.is_none() || self.needs_room {
             if let Some(done) = self.prepare_throttle()? {
-                return Ok(TaskFirePlan::Done(done));
+                return Ok(done);
             }
             before_check(&self.context_root()?)?;
             self.needs_room = false;
@@ -858,7 +1068,7 @@ impl<'a> TaskFire<'a> {
         {
             TaskAction::Spawn(spec) => {
                 if let Some(done) = self.prepare_throttle()? {
-                    return Ok(TaskFirePlan::Done(done));
+                    return Ok(done);
                 }
                 if let Some(done) = self.reconcile_backlog()? {
                     return Ok(TaskFirePlan::Done(done));
@@ -1046,6 +1256,7 @@ impl<'a> TaskFire<'a> {
                 .get(&self.name)
                 .is_some_and(|launches| launches.contains_key(&cwd))
         {
+            self.clear_capacity()?;
             self.finished = true;
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
@@ -1063,6 +1274,7 @@ impl<'a> TaskFire<'a> {
             )
             .is_some()
         {
+            self.clear_capacity()?;
             self.finished = true;
             return Ok(TaskFirePlan::DeclineHeld);
         }
@@ -1072,11 +1284,14 @@ impl<'a> TaskFire<'a> {
         if let Some(done) = self.prepare_deadline()? {
             return Ok(TaskFirePlan::Done(done));
         }
+        if let Some(plan) = self.prepare_capacity_look()? {
+            return Ok(plan);
+        }
         if let ControlFlow::Break(done) = self.prepare_check(before_launch)? {
             return Ok(TaskFirePlan::Done(done));
         }
         if let Some(done) = self.prepare_throttle()? {
-            return Ok(TaskFirePlan::Done(done));
+            return Ok(done);
         }
         let TaskAction::Spawn(spec) = self
             .action
@@ -1120,7 +1335,11 @@ impl<'a> TaskFire<'a> {
     }
 
     fn prepare_deadline(&mut self) -> Result<Option<TaskFireFinished>> {
-        if !deadline_expired_at(&self.entry, self.now) {
+        self.prepare_deadline_at(self.now)
+    }
+
+    fn prepare_deadline_at(&mut self, now: Timestamp) -> Result<Option<TaskFireFinished>> {
+        if !deadline_expired_at(&self.entry, now) {
             return Ok(None);
         }
         if self.mode == LoopRunMode::Scheduled {
@@ -2115,6 +2334,12 @@ impl<'a> TaskFire<'a> {
             && let Err(err) = self.remove_schedule()
         {
             tracing::warn!(task = %self.name, error = %format!("{err:#}"), "failed to remove a fired fire-at task");
+        }
+        if record.result != LoopRunResult::CapacityHeld
+            && !(record.result == LoopRunResult::ThrottleSkipped && self.capacity_condition())
+            && let Err(error) = self.clear_capacity()
+        {
+            tracing::warn!(task = %self.name, %error, "failed to clear loop capacity wait");
         }
         let result = record.result;
         let transition = self.record_and_release(&mut record);

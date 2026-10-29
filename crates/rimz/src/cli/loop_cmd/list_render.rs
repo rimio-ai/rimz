@@ -136,7 +136,16 @@ fn needs_you(
         .map(|row| {
             let mut cells = name_cells(row, worktree);
             cells.extend([row.head.clone(), row.reason.clone()]);
-            (cells, row.continuation.clone(), reason_style(row.attention))
+            let continuation = if row.capacity_wait.is_some() {
+                [row.continuation.as_str(), &row.state_text(now)]
+                    .into_iter()
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            } else {
+                row.continuation.clone()
+            };
+            (cells, continuation, reason_style(row.attention))
         })
         .collect::<Vec<_>>();
     write_table(
@@ -261,9 +270,13 @@ fn routine_rows(
             let mut cells = name_cells(row, worktree);
             cells.extend([
                 row.head.clone(),
-                row.next_at
-                    .map(|at| ui::rel_until(at, now))
-                    .unwrap_or_else(|| "—".into()),
+                if row.capacity_wait.is_some() {
+                    row.state_text(now)
+                } else {
+                    row.next_at
+                        .map(|at| ui::rel_until(at, now))
+                        .unwrap_or_else(|| "—".into())
+                },
                 action(row),
                 row.last_text(now),
             ]);
@@ -313,6 +326,9 @@ fn waiting_rows(
                 if count.not_read > 0 {
                     trigger.push_str(&format!(" · {} not read", count.not_read));
                 }
+            }
+            if row.capacity_wait.is_some() {
+                trigger.push_str(&format!(" · {}", row.state_text(now)));
             }
             let mut cells = name_cells(row, worktree);
             cells.extend([trigger, action(row)]);

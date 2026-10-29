@@ -10,11 +10,12 @@
 # Loop runs that start an agent take turns across every room on this machine.
 # A start holds the turn until the provider reports the new agent, or for
 # `pace` at most ("0s" turns pacing off without a check). With a capacity check,
-# the ceiling is at least 2m. A run still waiting after `max-wait` is skipped.
+# the ceiling is at least 2m. Manual loop fires bypass capacity.
 # Per task, `throttle = "off"` starts without taking a turn.
+# `capacity-wait` is a positive s/m/h/d duration or "forever". Conditions,
+# signals and watches default to forever; clocks stop before the next fire.
 # [throttle]
 # pace = "10s"
-# max-wait = "30m"
 ## check = "my-capacity-check"         # 0 admits, 75 holds, anything else errors
 # check-timeout = "30s"               # a timeout holds as an error; doctor shows the fix
 ## max-active = 6                      # hold while this many agents are working, in every room

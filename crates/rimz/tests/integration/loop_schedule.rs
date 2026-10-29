@@ -5952,10 +5952,15 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
             }
             _ => unreachable!(),
         };
+        let throttle = if kind == "workflow" {
+            ""
+        } else {
+            "throttle = 'off'\n"
+        };
         write_loop_config(
             &env,
             &format!(
-                "[tasks.lookup]\nroot = {:?}\nevery = '1h'\nthrottle = 'off'\n{effect}",
+                "[tasks.lookup]\nroot = {:?}\nevery = '1h'\n{throttle}{effect}",
                 env.project_root,
             ),
         );
@@ -10139,7 +10144,7 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
 }
 
 /// A fire that would start an agent waits behind another start's turn: it
-/// is skipped at `max-wait`, shows as held while it waits, and a stop leaves
+/// gives up at its `capacity-wait`, shows as held while it waits, and a stop leaves
 /// one `canceled` row and nothing of its own in the queue.
 #[cfg(unix)]
 #[test]
@@ -10150,8 +10155,18 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "queued", "--agent", "claude", "--prompt", "work", "--stay", "--every",
+            "loop",
+            "add",
+            "queued",
+            "--agent",
+            "claude",
+            "--prompt",
+            "work",
+            "--stay",
+            "--every",
             "1h",
+            "--capacity-wait",
+            "2s",
         ],
     );
     // Another start holds the turn for as long as this test process lives.
@@ -10169,7 +10184,6 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     .expect("write the held turn");
     let queued = || std::fs::read_dir(&queue).expect("read queue").count();
 
-    loop_ok(&env, &["config", "set", "loop.throttle.max-wait", "2s"]);
     let output = env
         .rimz()
         .args(["loop", "run", "queued"])
@@ -10182,11 +10196,18 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     );
     let record = last_loop_record(&env);
     assert_eq!(record.result, LoopRunResult::ThrottleSkipped);
-    assert_eq!(record.error.as_deref(), Some("1 start ahead; held 2s"));
+    let reason = record.error.as_deref().unwrap();
+    assert!(
+        reason.starts_with("gave up waiting for capacity after ")
+            && reason.ends_with("; 1 start ahead"),
+        "{record:?}"
+    );
+    // The deadline clock truncates to milliseconds.
+    assert!(record.duration_ms.is_some_and(|duration| duration >= 1_999));
     assert_eq!(queued(), 1, "a skipped run leaves the queue");
     let show = loop_ok(&env, &["loop", "show", "queued"]);
     assert!(
-        show.contains("throttle skipped") && show.contains("1 start ahead; held 2s"),
+        show.contains("throttle skipped") && show.contains(reason),
         "{show}"
     );
     assert!(
@@ -10194,7 +10215,10 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
         "{show}"
     );
 
-    loop_ok(&env, &["config", "set", "loop.throttle.max-wait", "30m"]);
+    loop_ok(
+        &env,
+        &["config", "set", "loop.tasks.queued.capacity-wait", "30m"],
+    );
     let mut runner = env
         .rimz()
         .args(["loop", "run", "queued"])
@@ -10206,7 +10230,7 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let show = loop {
         let show = loop_ok(&env, &["loop", "show", "queued"]);
-        if show.contains("held: 1 start ahead") {
+        if show.contains("waiting for capacity (claude)") {
             break show;
         }
         assert!(Instant::now() < deadline, "never shown as held: {show}");
@@ -10218,7 +10242,7 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     );
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
-        list.contains("held: 1 start ahead") && !list.contains("▸ running"),
+        list.contains("waiting for capacity (claude)") && !list.contains("▸ running"),
         "{list}"
     );
     let document: serde_json::Value =
@@ -10256,7 +10280,7 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
         show.contains(&format!(
             "pid {} · 1 held: waiting for its turn",
             runner.id()
-        )) && show.contains("held: 1 start ahead"),
+        )) && show.contains("waiting for capacity (claude)"),
         "{show}"
     );
     let list = loop_ok(&env, &["loop", "list"]);
@@ -10282,7 +10306,8 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     rimz::harness::run::create(&paths, &active).unwrap();
     let show = loop_ok(&env, &["loop", "show", "queued"]);
     assert!(
-        show.contains("held: 1 start ahead") && !show.contains(&active.run_id.to_string()),
+        show.contains("waiting for capacity (claude)")
+            && !show.contains(&active.run_id.to_string()),
         "{show}"
     );
     let document: serde_json::Value =
@@ -10310,13 +10335,13 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     assert!(document["held"].is_null() && document["running"].is_null());
 }
 
-/// Ctrl-C ends a manual fire held by the start throttle after its check
+/// Ctrl-C ends a hidden scheduled run held by the start throttle after its check
 /// passed: the check's own interrupt handling is gone by then, so the hold
 /// listens for itself. The fire records `canceled` with the check it ran,
 /// leaves no ticket, and launches nothing.
 #[cfg(unix)]
 #[test]
-fn ctrl_c_ends_a_manual_fire_held_after_its_check_passed() {
+fn ctrl_c_ends_a_hidden_run_held_after_its_check_passed() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     loop_ok(
@@ -10361,7 +10386,7 @@ fn ctrl_c_ends_a_manual_fire_held_after_its_check_passed() {
 
     let mut runner = env
         .rimz()
-        .args(["loop", "fire", "checked"])
+        .args(["loop", "run", "checked"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -10412,7 +10437,7 @@ fn ctrl_c_ends_a_manual_fire_held_after_its_check_passed() {
     // Fired again and released mid-wait, the fire records how long it held.
     let mut runner = env
         .rimz()
-        .args(["loop", "fire", "checked"])
+        .args(["loop", "run", "checked"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

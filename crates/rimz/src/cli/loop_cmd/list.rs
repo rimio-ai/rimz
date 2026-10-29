@@ -381,6 +381,9 @@ pub(super) struct TaskRow {
     budget_per_day_usd: Option<f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     workflow_runs: Vec<WorkflowRunRow>,
+    capacity_wait: Option<CapacityWaitView>,
+    #[serde(skip)]
+    capacity_count: usize,
     #[serde(skip)]
     head: String,
     #[serde(skip)]
@@ -416,6 +419,31 @@ struct RowContext<'a> {
     watcher_pid: Option<u32>,
     launch: Option<&'a launch_ledger::LaunchRecord>,
     now: Timestamp,
+}
+
+#[derive(Serialize)]
+pub(super) struct CapacityWaitView {
+    kinds: Vec<rimz::ids::AgentKind>,
+    since: Timestamp,
+    gives_up_at: Option<Timestamp>,
+    reason: String,
+}
+
+impl From<&launch_ledger::CapacityRecord> for CapacityWaitView {
+    fn from(record: &launch_ledger::CapacityRecord) -> Self {
+        Self {
+            kinds: record.kinds.clone(),
+            since: record.first,
+            gives_up_at: record.gives_up_at,
+            reason: record.reason.clone(),
+        }
+    }
+}
+
+impl CapacityWaitView {
+    pub(super) fn text(&self) -> String {
+        rimz::theme::fmt::capacity_wait(&self.kinds, self.since, self.gives_up_at)
+    }
 }
 
 enum LoadScope {
@@ -511,6 +539,16 @@ fn load(
             .ok()
             .and_then(|paths| rimz::store::workflow::list(&paths).ok())
             .unwrap_or_default();
+        let capacity = runtime
+            .as_ref()
+            .map(|runtime| {
+                load_launch_memory(
+                    &root,
+                    |paths| launch_ledger::load_live_capacity(paths, runtime),
+                    &mut warnings,
+                )
+            })
+            .unwrap_or_default();
         let mut tasks = Vec::new();
         for (name, task) in catalog.visible() {
             let entry = task.entry();
@@ -578,6 +616,13 @@ fn load(
                     now,
                 },
             );
+            if let Some(checkouts) = capacity.get(name) {
+                row.capacity_count = checkouts.len();
+                row.capacity_wait = checkouts
+                    .values()
+                    .min_by_key(|wait| wait.first)
+                    .map(CapacityWaitView::from);
+            }
             row.worktree_here = here
                 && workspace.is_some_and(|workspace| match task.entry().worktree.as_deref() {
                     Some(name) => {
@@ -740,6 +785,8 @@ impl TaskRow {
                 .and_then(|raw| raw.parse::<rimz::harness::budget::BudgetSpec>().ok())
                 .map(|budget| budget.cap_usd),
             workflow_runs: Vec::new(),
+            capacity_wait: None,
+            capacity_count: 0,
             head,
             continuation,
             reason: String::new(),
@@ -851,6 +898,8 @@ impl TaskRow {
             spend_today_usd: 0.0,
             budget_per_day_usd: None,
             workflow_runs: Vec::new(),
+            capacity_wait: None,
+            capacity_count: 0,
             head: "one-shot fired".into(),
             continuation: String::new(),
             reason: String::new(),
@@ -892,6 +941,15 @@ impl TaskRow {
     fn state_text(&self, now: Timestamp) -> String {
         if self.state == TaskState::Running {
             return render::in_flight_text(self.running.flatten(), &self.held, now);
+        }
+        if self.state == TaskState::Live
+            && let Some(wait) = &self.capacity_wait
+        {
+            let mut text = wait.text();
+            if self.capacity_count > 1 {
+                text.push_str(&format!(" · +{} more", self.capacity_count - 1));
+            }
+            return text;
         }
         if self.state == TaskState::WaitsForRoom {
             return self.state.label().into();
@@ -1224,19 +1282,13 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
             format!("disabled after {strikes} strikes"),
         );
     }
-    if let (Some(holder), others) = render::split_held(row.running.flatten(), &row.held) {
-        let at = Timestamp::from_millisecond(i64::try_from(holder.since_ms).unwrap_or(i64::MAX))
-            .unwrap_or(now);
-        let others = render::others_held_text(others)
-            .map(|others| format!(" · {others}"))
-            .unwrap_or_default();
+    if render::split_held(row.running.flatten(), &row.held)
+        .0
+        .is_some()
+    {
         return (
             Some(Attention::Held),
-            format!(
-                "held: {} · {}{others}",
-                holder.reason.as_deref().unwrap_or("waiting for its turn"),
-                elapsed(at, now)
-            ),
+            render::in_flight_text(row.running.flatten(), &row.held, now),
         );
     }
     if row.running.is_none()
