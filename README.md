@@ -307,7 +307,7 @@ Both are off by default, and setting one back to `false` undoes it. The [remote 
 
 ## Configuration
 
-RimZ runs with zero configuration, and everything you can tune is a plain file you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), so the files are their own reference. Agent profiles, teams, and skills are Markdown beside them, under `~/.rimz/agents/`, `~/.rimz/teams/`, and `~/.rimz/skills/`. After setup, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
+RimZ runs with zero configuration, and everything you can tune is a plain file you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), so the files are their own reference. Agent profiles, teams, and skills are Markdown beside them, under `~/.rimz/agents/`, `~/.rimz/teams/`, and `~/.rimz/skills/`. [Linked packs](./docs/reference/cli/packs.md) supply definitions and skills below your own home files, with checkout edits loading without a copy or reinstall. After setup, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
 
 For the best experience, we recommend one pass of these:
 
@@ -343,7 +343,7 @@ rimz config set agents.isolation scoped       # Linux: a bubblewrap mount view f
 ```
 
 - A [provider account](./docs/guide/accounts.md) has its own login and limits; its sessions, spend, and budget are shared with the provider's own account unless you declare it standalone. Pin a room's account with `rimz start --account` or `rimz accounts use`, or leave it unpinned to follow trusted project and machine defaults live. `rimz accounts use --reset claude` unpins Claude; `rimz accounts use claude default` pins Claude's own home instead. Agents already running keep their account; the guide covers child and loop-task overrides.
-- [Scoped isolation](./docs/guide/security.md#scoped-isolation) gives each agent the room's own `/tmp` and the RimZ skill library merged into its provider's skill root, with a profile's `skills:` list deciding which skills the model may call on its own. It is a mount view and not containment: the host filesystem stays writable and your credentials stay readable. `rimz start` warns when bubblewrap is missing or unusable, while a scoped agent launch refuses; `--isolation host|scoped` overrides the setting for one launch.
+- [Scoped isolation](./docs/guide/security.md#scoped-isolation) gives each agent the room's own `/tmp` and the RimZ library and pack skills merged below its provider's own skills, with a profile's `skills:` list deciding which skills the model may call on its own. It is a mount view and not containment: the host filesystem stays writable and your credentials stay readable. `rimz start` warns when bubblewrap is missing or unusable, while a scoped agent launch refuses; `--isolation host|scoped` overrides the setting for one launch.
 
 The [setup guide](./docs/guide/setup.md) walks the whole first pass, agent hooks included; the [Zellij and tmux guide](./docs/guide/multiplexer.md) has a modern baseline with [ready-to-adopt example configs](./examples/README.md), and the full key catalog is the [configuration guide](./docs/guide/configuration.md).
 

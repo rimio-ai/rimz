@@ -196,6 +196,7 @@ Agent hibernation spans `harness/hibernate.rs` (read-only selection and wake-hel
 - Process and config — `config`, `observability`, `agent_activity`, `lane`, `proc` user-shell selection and process inspection, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
 - Start preconditions — `blocker` typed problems and user-run fixes, including privacy and security surfaces; the CLI owns their presentation.
 - Install lifecycle — `update` install-origin detection, release verification, and atomic binary replacement; `uninstall` machine-wide removal mechanics.
+- Pack sources: `packs/` linked-source manifests, durable install records, exclusions, and shared namespace claims; definition and skill readers own item scanning.
 - Shared language servers — `lsp/` admission, process leases, registry, cost history, broker, editor attachment, saved-file watching, memory watchdog, and read-only queries.
 
 ## Documentation map
@@ -210,6 +211,8 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 - [sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen: cockpit, agent cards, provider dashboard, rendered frames, glyph legend.
 
 **Reference** — `docs/reference/` answers a specific flag or field, and [its README](./docs/reference/README.md) indexes the pages by topic. [cli.md](./docs/reference/cli.md) is the command map and indexes a page per scene under `docs/reference/cli/`; [agent-support.md](./docs/reference/agent-support.md) carries per-agent status, integration surface, and permission-mode mapping for every built-in adapter, and [agent-plugins.md](./docs/reference/agent-plugins.md) the external bundle, canonical wire, and probe contracts.
+
+- [packs.md](./docs/reference/cli/packs.md): linked local definition and skill packs, item fates and exclusions, the manifest, and the installation record.
 
 **Internals** — `docs/internals/` documents each subsystem for people who read the code; [README.md](./docs/internals/README.md) is the index: a page table per area, and a table from each source tree to the page that documents it. The three multi-doc subsystems (`agents/`, `harness/`, `sidebar/`) keep a folder; every other subsystem is one flat file. The experimental OMP mapping is [adapter_omp.md](./docs/internals/agents/adapter_omp.md).
 

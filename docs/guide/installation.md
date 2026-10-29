@@ -268,7 +268,7 @@ It prints every root, room, hook, and binary it is about to touch and waits for 
 - the per-machine config, themes, and trust grants,
 - every `rimz` binary it can find.
 
-Four things survive on purpose: your agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`) and `handoffs/`; the provider account homes under `~/.rimz/accounts/`, whose credentials belong to the provider; project-local `.rimz/` directories; and RimZ-owned worktrees, which can hold unlanded work. A Homebrew install needs `brew uninstall rimz` as well. Partial removals through `--state`, `--config`, and `--keep-binary`, and the root-by-root table of what each one takes, are in the [maintenance reference](../reference/cli/maintenance.md#uninstall-rimz).
+Four things survive on purpose: your agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`), installed `packs/`, and `handoffs/`; the provider account homes under `~/.rimz/accounts/`, whose credentials belong to the provider; project-local `.rimz/` directories; and RimZ-owned worktrees, which can hold unlanded work. Owned skill links into the library and packs are removed, not their sources. A Homebrew install needs `brew uninstall rimz` as well. Partial removals through `--state`, `--config`, and `--keep-binary`, and the root-by-root table of what each one takes, are in the [maintenance reference](../reference/cli/maintenance.md#uninstall-rimz).
 
 ## Troubleshooting
 

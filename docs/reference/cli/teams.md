@@ -44,7 +44,7 @@ Cohorts needing attention sort first, then blocked, paused, idle, working, and s
 
 A broken definition keeps a row at the top, with `STATUS` replaced by `broken: <error>`. A live cohort whose team is no longer defined keeps its state with ` · not defined` appended. Resolved roles and models appear in [`show`](#inspect-one-team).
 
-The catalogue merges machine [Markdown definitions](../definitions.md) under `<agents_home>/teams/<name>.md` with the repository's `.rimz/config.toml` when trusted. Invalid definitions fail with their source errors; unknown frontmatter keys are errors, not ignored settings. Run `rimz agents validate` to inspect the complete library. The built-in roleless `peer` team remains unless replaced. With no user teams, the listing includes an install hint.
+The catalogue merges home and installed-pack [Markdown definitions](../definitions.md#definition-tiers) with the repository's `.rimz/config.toml` when trusted. Invalid definitions fail with their source errors; unknown frontmatter keys are errors, not ignored settings. Run `rimz agents validate` to inspect the complete library. The built-in roleless `peer` team remains unless a home or pack team replaces it. With no user teams, the listing includes an install hint.
 
 `--json` prints an array of [team records](#json-report). `--json` works only on the list forms and `show`: `rimz teams forge --json` is refused with a pointer to `rimz teams show forge --json`.
 
@@ -545,11 +545,11 @@ rimz teams install forge --force
 rimz teams install forge --ref main
 ```
 
-Bare `install` lists the bundles under `examples/teams/` in the RimZ GitHub repository as a `TEAM REF` table. `install <name>` fetches `<name>.md` and the agent definitions selected by its roster, writing `<agents_home>/teams/<name>.md` and `<agents_home>/agents/<agent>.md`. The bundle's kind bases (`agents/claude.md`, `agents/codex.md`) are written only where the machine has none; an existing base is never replaced, `--force` included. The default agents home is `~/.rimz`, which `RIMZ_HOME` relocates; `RIMZ_AGENTS_HOME` overrides only the definition trees and skill library.
+Bare `install` lists the bundles under `examples/teams/` in the RimZ GitHub repository as a `TEAM REF` table. `install <name>` fetches `<name>.md` and the agent definitions selected by its roster, writing `<agents_home>/teams/<name>.md` and `<agents_home>/agents/<agent>.md`. The bundle's kind bases (`agents/claude.md`, `agents/codex.md`) are written only where the home has no base file; an existing home base is never replaced, `--force` included. The default agents home is `~/.rimz`, which `RIMZ_HOME` relocates; `RIMZ_AGENTS_HOME` overrides the definition trees, skill library, and installed packs. This command writes home files, not a pack installation record; use [`rimz packs`](./packs.md) for linked pack sources.
 
 | Flag | Effect |
 | --- | --- |
 | `--ref TAG\|BRANCH` | Fetch from this tag or branch. The default is the release tag of the running binary, `v<version>`, so the bundle matches the command. When that tag is missing (a development build), the error suggests `--ref main`. |
 | `--force` | Overwrite existing target definition files. Unrelated files stay. Requires a name. |
 
-Without `--force`, any existing target is refused. Each file is written atomically. Network, GitHub API, parsing, and filesystem failures stop the install and name the failing source or destination. Run `rimz agents validate` after installation to check the resulting definitions and skill library.
+Without `--force`, any existing target is refused. Each file is written atomically. Network, GitHub API, parsing, and filesystem failures stop the install and name the failing source or destination. Run `rimz agents validate` after installation to check the merged definitions and skill chain.
