@@ -516,7 +516,7 @@ pub(super) fn resume_lane(
             let lanes = super::list::known_lanes_suffix(&lanes);
             if fresh || !session_id_shaped(&scope) {
                 bail!(
-                    "no lane '{scope}' in this workspace{lanes}; resume one closed session with `rimz agents resume @<handle>`"
+                    "no lane '{scope}' in this workspace{lanes}; resume one closed session with `rimz agents resume @<handle>` or `@<session-id>`"
                 );
             }
             return resume_session_on_lane_miss(

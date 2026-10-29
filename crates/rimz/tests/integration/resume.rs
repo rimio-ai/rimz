@@ -1126,7 +1126,7 @@ mod agent_ref {
         let output = fixture.output("nope");
         assert_resume_refusal(
             &output,
-            "no lane 'nope' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>`",
+            "no lane 'nope' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>` or `@<session-id>`",
             "no session matched",
         );
         fixture.assert_no_placement();
@@ -1144,7 +1144,7 @@ mod agent_ref {
         assert_resume_refusal(
             &output,
             &format!(
-                "no lane '{UUID}' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>`"
+                "no lane '{UUID}' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>` or `@<session-id>`"
             ),
             "no session matched",
         );
