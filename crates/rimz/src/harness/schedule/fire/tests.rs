@@ -1219,7 +1219,7 @@ fn condition_not_live_carries_both_maps() {
 fn workflow_tick_advances_leave_the_timer_service_like_loop_runs() {
     let exe = Path::new("/opt/rimz");
     let id = crate::ids::WorkflowRunId::new();
-    let advance = crate::harness::workflow::advance_args(Path::new("/repo"), Some(&id), None);
+    let advance = crate::harness::workflow::advance_args(Path::new("/repo"), Some(&id), None, None);
     assert_eq!(
         workflow_advance_command(LoopRunHost::Detached, exe, Path::new("/repo"), &id),
         (exe.as_os_str().to_owned(), advance.clone()),

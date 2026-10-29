@@ -3,6 +3,49 @@ use super::*;
 use std::fs;
 
 #[test]
+fn spawn_arguments_name_only_the_current_hook_frame() {
+    use crate::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use crate::ids::{AgentKind, EventId};
+    use crate::store::ingress::HookIngress;
+
+    let (_home, _state, record, _spec) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\n",
+    );
+    let ordinary: Vec<std::ffi::OsString> = vec![
+        "--root".into(),
+        record.project_root.as_os_str().into(),
+        "workflow".into(),
+        "advance".into(),
+        record.id.as_str().into(),
+    ];
+    assert_eq!(spawn_args(&record), ordinary);
+    let frame = HookIngress {
+        boot_id: None,
+        schema_version: "1".into(),
+        event_id: EventId::new(),
+        ts: Timestamp::UNIX_EPOCH,
+        source: AgentKind::new_unchecked("codex"),
+        event: Some("Stop".into()),
+        payload: "{}".into(),
+        cwd: record.project_root.clone(),
+        hook_pid: std::process::id(),
+        env: BTreeMap::new(),
+    };
+    let mut woken = ordinary.clone();
+    woken.extend(["--woken-by".into(), frame.event_id.to_string().into()]);
+    for attempt in [
+        FrameAttempt::First,
+        FrameAttempt::Redo,
+        FrameAttempt::Replay,
+    ] {
+        with_frame_env(&frame, attempt, || {
+            assert_eq!(spawn_args(&record), woken);
+        });
+        assert_eq!(spawn_args(&record), ordinary);
+    }
+}
+
+#[test]
 fn accounting_uses_closed_waits_and_evaluation_origin() {
     use crate::harness::assist_log;
     if std::env::var_os("RIMZ_TEST_WORKFLOW_ACCOUNTING").is_none() {

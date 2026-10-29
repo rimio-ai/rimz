@@ -8,7 +8,7 @@ use rimz::config::definitions::{self, SkillCheck};
 use rimz::disk::paths;
 use rimz::harness::schedule::signal::Signal;
 use rimz::harness::workflow::{self, Validation};
-use rimz::ids::WorkflowRunId;
+use rimz::ids::{EventId, WorkflowRunId};
 use rimz::store::workflow::{self as records, RunRecord};
 
 use super::render;
@@ -63,6 +63,8 @@ enum Command {
             value_parser = |raw: &str| serde_json::from_str::<Signal>(raw)
         )]
         wake_signal: Option<Signal>,
+        #[arg(long, hide = true, requires = "id", conflicts_with = "wake_signal")]
+        woken_by: Option<EventId>,
     },
     /// Validate one workflow directory, or every machine workflow.
     Validate {
@@ -85,7 +87,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         Command::Show { id, json } => show(&id, json, globals),
         Command::Cancel { id } => {
             let (state, _) = locate(&id)?;
-            let changed = workflow::cancel(&state, &id, &Host::new(&state, globals))?;
+            let changed = workflow::cancel(&state, &id, &Host::new(&state, globals, None))?;
             writeln!(
                 render::out(),
                 "{id}: {}",
@@ -103,9 +105,17 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             writeln!(render::out(), "{id}: resumed")?;
             Ok(())
         }
-        Command::Advance { id: Some(id), .. } => {
+        Command::Advance {
+            id: Some(id),
+            woken_by,
+            ..
+        } => {
             let (state, _) = locate(&id)?;
-            Ok(workflow::advance(&state, &id, &Host::new(&state, globals))?)
+            Ok(workflow::advance(
+                &state,
+                &id,
+                &Host::new(&state, globals, woken_by),
+            )?)
         }
         Command::Advance {
             wake_signal: Some(signal),
@@ -438,7 +448,7 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         .is_some_and(|wait| wait.outcome == "takeover")
     {
         match workflow::AttemptHost::occupancy(
-            &Host::new(&state_paths, globals),
+            &Host::new(&state_paths, globals, None),
             &record.scope.path,
             &record.project_root,
         ) {

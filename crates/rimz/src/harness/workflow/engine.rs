@@ -178,6 +178,17 @@ fn refuse_existing(state: &StatePaths, name: &str, roots: &ScopeRoots) -> Result
     }
 }
 
+fn spawn_args(record: &RunRecord) -> Vec<std::ffi::OsString> {
+    super::advance_args(
+        &record.project_root,
+        Some(&record.id),
+        None,
+        crate::harness::hook_drain::frame_event_id().as_ref(),
+    )
+}
+
+/// Name the applying hook frame so this advance does not wait on its own wake before the
+/// drainer publishes the applied cursor. Advances outside a frame carry no ingress id.
 fn spawn(record: &RunRecord) -> Result<()> {
     crate::child_process::spawn_detached_reaped(
         crate::proc::rimz_exe(),
@@ -189,11 +200,7 @@ fn spawn(record: &RunRecord) -> Result<()> {
                 // The advance must survive closing the pane that woke it.
                 command.process_group(0);
             }
-            command.args(super::advance_args(
-                &record.project_root,
-                Some(&record.id),
-                None,
-            ));
+            command.args(spawn_args(record));
             Ok(())
         },
         "workflow advance",

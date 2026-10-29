@@ -80,6 +80,7 @@ pub enum FrameAttempt {
 
 struct FrameContext {
     env: BTreeMap<String, String>,
+    event_id: EventId,
     attempt: FrameAttempt,
     timestamp: jiff::Timestamp,
 }
@@ -155,6 +156,7 @@ pub fn with_frame_env<T>(
     let previous = FRAME.with(|context| {
         context.replace(Some(FrameContext {
             env: frame.env.clone(),
+            event_id: frame.event_id.clone(),
             attempt,
             timestamp: frame.ts,
         }))
@@ -190,6 +192,10 @@ pub fn env_value(name: &str) -> Option<String> {
         Some(frame) => frame.env.get(name).cloned(),
         None => std::env::var(name).ok(),
     })
+}
+
+pub(super) fn frame_event_id() -> Option<EventId> {
+    FRAME.with(|frame| frame.borrow().as_ref().map(|frame| frame.event_id.clone()))
 }
 
 pub fn frame_attempt() -> FrameAttempt {
