@@ -58,7 +58,7 @@ pub(super) fn produce_pr_states(
     let needed = needed_worktree_paths(snapshot, condition_scopes.keys().cloned().collect());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
-    let hot = hot_worktree_paths(snapshot);
+    let hot = hot_worktree_paths(snapshot).into_keys().collect();
     let focused = focused_worktree_paths(snapshot);
     if let Some(due) = cached_due_repo_keys(
         &condition_scopes,

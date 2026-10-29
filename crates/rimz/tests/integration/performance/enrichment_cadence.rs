@@ -347,7 +347,7 @@ fn idle_room_produce_runs_no_enrichment_io() {
     let now_ms = unix_now_ms();
 
     // Backdate the per-worktree git stamps into the tier gap: stale under
-    // DIFF_STATS_TTL (5s), fresh under DIFF_STATS_IDLE_TTL (60s).
+    // DIFF_STATS_TTL (5s), fresh under DIFF_STATS_IDLE_TTL (5 min).
     let diff_stats_path = runtime.diff_stats_path();
     let mut diff_stats =
         serde_json::from_slice::<DiffStatsCache>(&std::fs::read(&diff_stats_path).unwrap())
