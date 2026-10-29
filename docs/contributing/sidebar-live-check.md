@@ -61,6 +61,8 @@ Focus: target/debug/xtask sandbox in '<root>' -- zellij --session '<session>' ac
 
 Its pane ids read `zellij:terminal_<n>`, and every other command carries `--zellij` in place of `--tmux`.
 
+Look moves the client to the sidebar's tab (`pane focus` on tmux, `go-to-tab` on Zellij). Arriving there arms the tab-read dwell ([`crates/rimz/src/sidebar/timing.rs::TAB_READ_DWELL`](../../crates/rimz/src/sidebar/timing.rs), 2.5 seconds): once the client has stayed that long, every unread card whose agent's pane is on that tab reads. A card marked unread with `sidebar mark-unread` and then looked at through its own tab's sidebar is usually read by the time you capture it, so capture an unread card through a sidebar on another tab.
+
 ## Seven checks
 
 Run the sequence on both backends, using each room's own card.
