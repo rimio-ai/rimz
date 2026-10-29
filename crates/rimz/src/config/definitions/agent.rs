@@ -53,17 +53,40 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
 
 /// Resolves every definition of one tree into `loaded`.
 pub(super) fn resolve_namespace(mut resolver: Resolver<'_>, loaded: &mut LoadedDefinitions) {
-    for name in resolver.tree.definitions.keys() {
+    for name in resolver
+        .tree
+        .definitions
+        .keys()
+        .filter(|name| !name.contains(':'))
+    {
         if resolver.resolve(name).is_none() {
-            loaded
-                .failed
-                .entry(name.clone())
-                .or_default()
-                .insert(resolver.tree.definitions[name].path.clone());
+            let paths = loaded.failed.entry(name.clone()).or_default();
+            paths.insert(resolver.tree.definitions[name].path.clone());
+            let mut dependency = name.as_str();
+            let mut seen = BTreeSet::new();
+            // Failed qualified ancestors have no launchable name to own their diagnostics.
+            while seen.insert(dependency) {
+                let definition = &resolver.tree.definitions[dependency];
+                if dependency.contains(':') {
+                    paths.insert(definition.path.clone());
+                }
+                let Some(parent) = definition
+                    .frontmatter
+                    .agent
+                    .as_deref()
+                    .filter(|parent| matches!(resolver.resolved.get(*parent), Some(None)))
+                else {
+                    break;
+                };
+                dependency = parent;
+            }
         }
     }
     loaded.errors.extend(resolver.errors);
     for (name, resolved) in resolver.resolved {
+        if name.contains(':') {
+            continue;
+        }
         if let Some(resolved) = resolved {
             loaded.insert(
                 resolver.namespace,
@@ -212,7 +235,7 @@ impl Resolver<'_> {
             empty_profile("")
         } else if let Some(kind) = agents::find_definition(&parent_name) {
             empty_profile(kind.spec().kind)
-        } else if self.tree.definitions.contains_key(&parent_name)
+        } else if self.tree.lookup(&parent_name, path)?.is_some()
             || self.tree.failed.contains(&parent_name)
         {
             let parent = self.resolve(&parent_name).ok_or_else(|| {
@@ -366,10 +389,19 @@ impl Resolver<'_> {
     /// The definition along `name`'s `agent:` chain whose own frontmatter sets `effort:`.
     fn effort_source<'n>(&'n self, mut name: &'n str) -> &'n str {
         loop {
-            let own = &self.tree.definitions[name].frontmatter;
+            let Ok(Some(definition)) = self.tree.lookup(name, self.scope.home) else {
+                return name;
+            };
+            let own = &definition.frontmatter;
             match own.agent.as_deref() {
                 Some(parent)
-                    if own.effort.is_none() && self.tree.definitions.contains_key(parent) =>
+                    if own.effort.is_none()
+                        && self
+                            .tree
+                            .lookup(parent, &definition.path)
+                            .ok()
+                            .flatten()
+                            .is_some() =>
                 {
                     name = parent;
                 }
@@ -389,18 +421,16 @@ impl Resolver<'_> {
         let kind = profile.agent.as_str();
         let takes_system_prompt = agents::find_definition(kind)
             .is_some_and(|definition| definition.spec().launch.takes_system_prompt());
-        let base = self.scope.home.join("agents").join(format!("{kind}.md"));
-        if self.scope.failed_bases.contains(&base) {
-            let message = if takes_system_prompt {
-                format!(
-                    "runs on {kind}, {}",
-                    super::failed_kind_base(self.scope.home, kind)
-                )
+        if let Some(error) = self.scope.failed_bases.get(kind) {
+            let message = if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
+                error.message.clone()
+            } else if takes_system_prompt {
+                format!("runs on {kind}, {}", super::failed_kind_base(&error.path))
             } else {
                 format!(
                     "runs on {kind}, which takes no system prompt; its kind base {} failed to \
                      load — delete that file",
-                    base.display()
+                    error.path.display()
                 )
             };
             return Err(DefinitionErr::new(path, message).with_cause(
@@ -485,6 +515,9 @@ impl Resolver<'_> {
                 ));
             }
             let names = names(path, "subagents", listed)?;
+            for name in &names {
+                self.foreign.lookup(name, path)?;
+            }
             if let Some(failed) = names.iter().find(|name| {
                 (self.foreign.definitions.contains_key(*name)
                     || self.foreign.failed.contains(*name))
@@ -570,6 +603,7 @@ impl Resolver<'_> {
         profile.description = Some(frontmatter::description(path, fm.description.as_deref())?);
         let craft = traits::render(
             self.scope.home,
+            self.scope.traits,
             path,
             &definition.body,
             fm.traits.as_deref().unwrap_or_default(),

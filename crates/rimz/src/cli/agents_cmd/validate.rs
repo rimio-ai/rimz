@@ -128,7 +128,14 @@ fn warnings(
     machine: Isolation,
     tiers: &rimz::config::tiers::TierConfig,
 ) -> Vec<Warning> {
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<_> = loaded
+        .warnings
+        .iter()
+        .map(|warning| Warning {
+            path: warning.path.clone(),
+            message: warning.message.clone(),
+        })
+        .collect();
     for row in &loaded.rows {
         let profiles = if row.namespace == "subagents" {
             &loaded.subagent_profiles

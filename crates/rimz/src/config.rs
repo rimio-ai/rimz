@@ -416,6 +416,7 @@ pub struct ConfigNotices {
     pub unreadable_files: BTreeMap<PathBuf, String>,
     pub unknown_keys: Vec<UnknownConfigKey>,
     pub definition_errors: Vec<definitions::DefinitionErr>,
+    pub definition_warnings: Vec<crate::packs::Problem>,
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
     /// One warning per setting that asked for scoped isolation on a machine without it, now running on the host.
     pub host_isolation_fallback: Vec<String>,
@@ -831,6 +832,7 @@ impl MachineConfig {
         self.agents.teams.0.extend(loaded.teams.0);
         notices.failed_definitions = loaded.failed;
         notices.definition_errors.extend(loaded.errors);
+        notices.definition_warnings.extend(loaded.warnings);
         if let Err(error) = validate_agents_file(&self.agents, &self.subagents, agents_home) {
             notices.definition_errors.push(definitions::DefinitionErr {
                 path: agents_home.to_path_buf(),
@@ -912,7 +914,8 @@ impl MachineConfig {
         )
     }
 
-    /// Failures no definition name owns (a namespace collision, an unreadable tree): the set itself is inconsistent, so every launch refuses.
+    /// Unowned definition-set failures (a namespace collision, an unreadable home tree)
+    /// refuse every launch. Pack-scoped diagnostics do not fail the set.
     fn unattributed_definition_failure(&self) -> Option<String> {
         let owned: std::collections::BTreeSet<&PathBuf> =
             self.notices.failed_definitions.values().flatten().collect();
@@ -920,7 +923,10 @@ impl MachineConfig {
             .notices
             .definition_errors
             .iter()
-            .filter(|notice| !owned.contains(&notice.path))
+            .filter(|notice| {
+                notice.cause != definitions::DefinitionCause::PackProblem
+                    && !owned.contains(&notice.path)
+            })
             .map(|notice| format!("{}: {}", notice.path.display(), notice.message))
             .collect();
         (!lines.is_empty()).then(|| lines.join("\n\n"))
@@ -1108,8 +1114,22 @@ struct ConfigStamp {
 impl ConfigStamp {
     fn from_inputs(config_path: &Path, agents_home: &Path) -> Self {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
+        let packs = crate::packs::resolve(agents_home);
+        let packs_dir = paths::packs_dir(agents_home);
         let definitions = definitions::source_paths(agents_home)
             .into_iter()
+            .chain(std::iter::once(packs_dir.join("installed.json")))
+            .chain(packs.record.sources.iter().flat_map(|source| {
+                let entry = packs_dir.join(&source.entry);
+                [entry.join("rimz-packs.toml"), entry]
+            }))
+            .chain(
+                packs
+                    .packs
+                    .iter()
+                    .flat_map(|pack| definitions::source_paths(&pack.root)),
+            )
+            .chain(packs.problems.iter().map(|problem| problem.path.clone()))
             .chain(
                 crate::agents::skills::SkillChain::from_home(agents_home)
                     .roots()

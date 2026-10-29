@@ -938,7 +938,18 @@ upward-dependencies = [
 # LoopConfig::load_lenient keeps read-only task catalogs on the loop file alone (+1).
 # AccountsConfig::with_lenient replaces the earlier reader without cloning account declarations.
 # MachineConfig::load_time_zone_lenient shares the core-only lifecycle time zone (+1).
-surface-budget = 230
+# PackDefinition and PackDefinitionFate expose every shipped definition's loading fate (+2).
+surface-budget = 232
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::PackDefinition"
+reason = "Pack show and exclusion matching consume the loader's complete definition inventory."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::PackDefinitionFate"
+reason = "Pack show distinguishes loaded, shadowed, excluded, conflicting, and failed definitions."
 
 [[verdict]]
 kind = "item"

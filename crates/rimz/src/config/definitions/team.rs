@@ -11,7 +11,7 @@ use crate::store::message::AutoCompact;
 use super::frontmatter::{RoleFrontmatter, SignalFrontmatter, TeamFrontmatter};
 use super::{
     Definition, DefinitionCause, DefinitionErr, LoadScope, LoadedDefinitions, Namespace, agent,
-    files, frontmatter,
+    catalog, frontmatter,
 };
 
 struct SeatLoader<'a> {
@@ -25,6 +25,7 @@ pub(super) fn load(
     scope: LoadScope<'_>,
     [agents, subagents]: [&Namespace; 2],
     children: &BTreeSet<String>,
+    sources: &catalog::Catalog,
     loaded: &mut LoadedDefinitions,
 ) {
     let seats = SeatLoader {
@@ -33,15 +34,13 @@ pub(super) fn load(
         subagents,
         children,
     };
-    let paths = match files(scope.home, "teams") {
-        Ok(paths) => paths,
-        Err(error) => {
-            loaded.errors.push(error);
-            return;
-        }
-    };
     let mut names = BTreeMap::new();
-    for path in paths {
+    for item in sources
+        .items
+        .iter()
+        .filter(|item| item.kind == crate::packs::ItemType::Teams && item.selected())
+    {
+        let path = item.path.clone();
         let mut name = path
             .file_stem()
             .unwrap_or_default()
@@ -49,7 +48,9 @@ pub(super) fn load(
             .into_owned();
         let mut role_names = Vec::new();
         let result = (|| {
-            let text = std::fs::read_to_string(&path)
+            let text = scope
+                .skills
+                .read_text(&path)
                 .map_err(|error| DefinitionErr::new(&path, error.to_string()))?;
             let (yaml, body) = frontmatter::split(&path, &text)?;
             let fm: TeamFrontmatter = frontmatter::parse(&path, yaml)?;
@@ -259,7 +260,7 @@ impl SeatLoader<'_> {
         team: &TeamFrontmatter,
         loaded: &LoadedDefinitions,
     ) -> Result<Profile, DefinitionErr> {
-        let definition = self.agents.definitions.get(&role.agent)
+        let definition = self.agents.lookup(&role.agent, path)?
             .filter(|_| loaded.agent_profiles.0.contains_key(&role.agent))
             .ok_or_else(|| {
                 let handle = role.role.as_deref().unwrap_or(&role.agent);
@@ -287,7 +288,9 @@ impl SeatLoader<'_> {
                 .frontmatter
                 .agent
                 .as_ref()
-                .and_then(|name| self.agents.definitions.get(name));
+                .map(|name| self.agents.lookup(name, path))
+                .transpose()?
+                .flatten();
         }
         let kind = fm
             .model
@@ -348,6 +351,7 @@ impl SeatLoader<'_> {
                 },
             )]),
             failed: BTreeSet::new(),
+            ..Namespace::default()
         };
         let mut seat = LoadedDefinitions::default();
         agent::resolve_namespace(
