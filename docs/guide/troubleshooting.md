@@ -10,13 +10,13 @@ Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess abo
 rimz doctor
 ```
 
-The report reads top to bottom, machine setup first and live room state last. If a bare-name `agents.shell` selected the wrong shell, the informational row in `MULTIPLEXER` shows the room's saved path and other copies you can pin with `rimz config set agents.shell <path>` ([doctor rows](../reference/cli/getting-started.md#diagnose-with-doctor)). This capture excerpt comes from `rimz doctor --audit`, which adds the disk figures under `STORAGE`. It uses a fresh home with hibernation disabled and legacy directories still present; the reporting-agent list reflects that machine at capture time, not the current built-in roster including Muse, and the machine-dependent `TEMP UNITS` section is omitted:
+The report reads top to bottom, machine setup first and live room state last. If a bare-name `agents.shell` selected the wrong shell, the informational row in `MULTIPLEXER` shows the room's saved path and other copies you can pin with `rimz config set agents.shell <path>` ([doctor rows](../reference/cli/getting-started.md#diagnose-with-doctor)). This capture excerpt comes from `rimz doctor --audit`, which adds disk figures under `STORAGE` and a per-folder breakdown when a room exists. It uses a fresh home with hibernation disabled and legacy directories still present; the `HOOKS` rows reflect the providers on that machine at capture time, and the machine-dependent `TEMP UNITS` section is omitted:
 
 ```console
 RimZ doctor
-  version: 0.4.3+gd4a4fa34b3f4.dirty
+  version: 0.4.3+g430c3ca5e4a4.dirty
   user:    marvin (uid 1000)
-  binary:  /tmp/doctor-round5.urAnxRtn/rimz
+  binary:  /tmp/rimz-doctor-storage.S9M3a44k/rimz
 
 WORKSPACE
   id:              ws_225df3094012a213addf6b7d
@@ -25,19 +25,19 @@ WORKSPACE
   worktree root:   /home/me/project
   worktree branch: <detached>
   session:         project-225d
-  sock headroom:   ✓ OK (67/108 bytes for /tmp/dr5uArT/rimz/ws/project-225d/sock)
+  sock headroom:   ✓ OK (69/108 bytes for /run/user/1000/rimz/ws/project-225d/sock)
 
 MULTIPLEXER
   backend:    tmux
-  version:    tmux 3.7c
+  version:    tmux 3.8
   tmux floor: ✓ OK (>= 3.5.0 required)
   tmux popup: ✓ supported
-  binary:     /home/me/bin/tmux — tmux 3.7c
+  binary:     /home/me/bin/tmux — tmux 3.8
   log:        server logging off (start tmux with `-v` to enable)
-  socket:     /tmp/dr5uArT/rimz/tmux/server
+  socket:     /run/user/1000/rimz/tmux/server
   room:       absent
   presence:   not applicable — this workspace room is absent on tmux
-  ttyd web:   ✓ ttyd version 1.7.7 (/usr/bin/ttyd)
+  ttyd web:   ✓ ttyd version 1.7.7 (/home/me/bin/ttyd)
     ✓ duplicate sessions: none
 
 TERMINAL
@@ -53,7 +53,7 @@ MACHINE CONFIG
 
 SANDBOX
   mode:    host
-  bwrap:   /usr/bin/bwrap
+  bwrap:   /home/me/bin/bwrap
   version: bubblewrap 0.11.0
   probe:   ▸ passed
 
@@ -65,7 +65,8 @@ HOOKS
   no agent reports to RimZ yet
    AGENT   STATUS
 ✗  claude  not installed
-    · not found on this machine: amp, antigravity, codex, copilot, cursor, droid, grok, hermes, kimi, kiro, opencode, pi, qoder, qwen
+✗  muse    blocked
+    · not found on this machine: amp, antigravity, codex, copilot, cursor, droid, grok, hermes, kimi, kiro, minimax, omp, opencode, pi, qoder, qwen
       RimZ offers their hooks as soon as one appears
 
 FOLDER TRUST
@@ -76,6 +77,7 @@ ACCOUNTS
    KIND    NAME     HOME  STATUS  DEFAULT FOR
 ✓  claude  default  -     ready   new rooms
 ✓  codex   default  -     ready   new rooms
+✓  pi      default  -     ready   new rooms
 
 LOOP TASKS
   none configured
@@ -87,10 +89,11 @@ REMOTE CONTROL
   remote control: off
 
 STORAGE
-  rimz on disk: 38 B
+  rimz on disk: 67 B
    AREA     SIZE  PATH
-·  home     38 B  ~/.rimz
-·  runtime     -  /tmp/dr5uArT/rimz
+·  home     67 B  ~/.rimz
+·  runtime     -  /run/user/1000/rimz
+  room: ~/.rimz/ws/project-225d (not created)
 
 PROTOCOLS
   event:   rimz.event.v2
@@ -108,9 +111,11 @@ MESSAGES
 DIAGNOSTICS
   no recent records (/home/me/.rimz/ws/ws-225df3094012a213addf6b7d/audit/diag.log.jsonl)
 
-✗ 1 problem in HOOKS  ·  ! 2 warnings in HOME, FOLDER TRUST
+✗ 2 problems in HOOKS  ·  ! 2 warnings in HOME, FOLDER TRUST
   ✗ HOOKS: claude not installed
       fix: run `rimz hooks install claude` to wire claude agents
+  ✗ HOOKS: muse blocked
+      fix: install failed for muse: Muse Code 1.4.9 or later is required (found unavailable or unparseable); update Muse to 1.4.9 or later
   ! HOME: legacy roots ~/.config/rimz, ~/.local/state/rimz are still on disk and not read
       fix: move what you still need from ~/.config/rimz, ~/.local/state/rimz into ~/.rimz by hand, then delete them (docs/guide/configuration.md#moving-from-the-xdg-roots)
   ! FOLDER TRUST: claude@default folder trust is undecided
@@ -121,6 +126,8 @@ Most symptoms below show up as a named doctor row, with the next action collecte
 
 For low disk space, read `TEMP UNITS` after `STORAGE`: it shows free space against the configured floor and counts of reclaimable scratch units and units still in use. A normal run skips file-tree size walks; `rimz doctor --audit` adds disk use in `STORAGE` and byte totals in `TEMP UNITS`. A warning normally offers `rimz gc --tmp-floor` to reclaim ended agents' units early. With `gc.auto = false`, an `eviction` row names the pause, and the warning instead offers `rimz config set gc.auto true` to resume pressure eviction, plus `rimz gc --all` to remove units already past the grace when such units exist. A problem means no reclaimable units remain, so stop or restart the agents holding the largest directories. `rimz agents show @handle` prints the directory path. While paused, their units stay until eviction resumes, or a hand `rimz gc --all` removes them once past the grace. The [garbage-collection settings](./configuration.md#garbage-collection) control the floor and grace.
 
+If a room folder grows to hundreds of thousands of files or directories, an editor's file watcher can stay busy and scans can slow down. Run `rimz doctor --audit` and read `STORAGE`: its per-folder entry counts show where the growth is, and a warning's closing fix names the folder and its largest subfolder. The check deletes nothing. See the [storage warning rule](../reference/cli/getting-started.md#diagnose-with-doctor) for which folders need manual attention.
+
 If agent state stays stale or messages wait behind queued hooks, look for a drain-lag warning in DIAGNOSTICS. It shows the episode's worst sampled delay and peak backlog size. The warning clears after 15 minutes without another lag report; `rimz doctor --clear` dismisses the retained history immediately without deleting the evidence.
 
 ### Reading the report
@@ -130,7 +137,7 @@ Start at the closing block, not at the longest table. Rows have two tiers:
 - `!` warnings and `✗` problems need attention. Each counts once. Findings in the same section that share a fix are collected into one closing entry naming their count and subjects, with the fix printed once.
 - `▸` context and `·` neutral background facts do not count. `✓` means the check is healthy.
 
-The closing headline counts findings and names their sections, followed by all problems and then all warnings with their fixes. Work down that list. If nothing counts, the report ends with `✓ everything checked is healthy`, even when context rows remain. `--audit` adds rows without changing that verdict: agents waiting for an answer belong in the sidebar, and ended sessions are history, not doctor findings.
+The closing headline counts findings and names their sections, followed by all problems and then all warnings with their fixes. Work down that list. If nothing counts, the report ends with `✓ everything checked is healthy`, even when context rows remain. `--audit` adds rows without changing that verdict, except that its `STORAGE` warnings on unswept folders count. Agents waiting for an answer belong in the sidebar, and ended sessions are history, not doctor findings.
 
 A spent account with a future reset is context, not another warning to clear. Its row names agents paused or failed on that limit, without counting them again under `AGENTS`. An account with no credits and no reset warns instead. Account readings come from the cache and show their age; doctor does not refresh provider usage. Agent rows use the same status as their cards.
 
