@@ -126,6 +126,10 @@ fn a_simulated_reboot_drops_pending_frames_and_fresh_frames_apply_once() {
         old_ids.push(frame.event_id.clone());
         append_frame(&env, frame);
     }
+    // Prevent a spawned drainer from winning the election so --once drains inline
+    // and writes timing records to its own stderr.
+    let spawning =
+        WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
     let output = env
         .rimz()
         .args(["hooks", "drain", "--project-root"])
@@ -134,6 +138,7 @@ fn a_simulated_reboot_drops_pending_frames_and_fresh_frames_apply_once() {
         .env("RIMZ_TEST_HOOK_DRAIN_TIMING", "1")
         .output()
         .unwrap();
+    drop(spawning);
     assert!(output.status.success(), "{output:?}");
     let events = rimz::store::event_log::read_all(&env.store().paths().events_log).unwrap();
     assert!(
@@ -716,9 +721,14 @@ fn timing_is_published_only_after_the_applied_cursor() {
 fn timing_marks_a_processor_error_as_unapplied() {
     let env = Env::new();
     env.record(&env.project_root);
+    let store = env.store();
     let mut frame = stop_frame(&env);
     frame.payload = "{".into();
     let (frame, _) = append_frame(&env, frame);
+    // Prevent a spawned drainer from winning the election so --once drains inline
+    // and writes timing records to its own stderr.
+    let _spawning =
+        WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
     let output = drain_command(&env)
         .arg("--once")
         .env("RIMZ_TEST_HOOK_DRAIN_TIMING", "1")
