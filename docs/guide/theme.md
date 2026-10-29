@@ -88,7 +88,7 @@ Four sidebar cues are lightness shifts finer than one step of the 256-color cube
 | a breathing pulse | the base tone with a `DIM` or `BOLD` weight | the weight alone |
 | the unread shimmer or blink | the base tone, bold toggled | the bold toggle alone |
 | the selected band and the unread wash | one cube cell either side of `selection_bg` | no fill |
-| a calm card's dimmed name | the full brand color | the `body` tone |
+| the softened brand colors: a calm card's name and lead glyph, subagent type names, finished-roster names, and the off-screen focus marker's agent name | the full brand color | the `body` tone |
 
 The step sizes are [`[theme.display.highlight_steps]`](#highlight-steps).
 
