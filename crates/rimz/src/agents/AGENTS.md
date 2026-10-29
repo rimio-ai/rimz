@@ -59,7 +59,7 @@ A new `Ignored` edge in `lifecycle::step` is decided in its early-return chain a
 
 A test for a new typed mapping must fail with that mapping removed: give the payload a fallback input that would classify differently. A shared test that needs an adapter lacking some capability uses an unregistered kind (`"unregistered"`), never a real built-in that may gain it.
 
-A spend parser that counts a new source needs the adapter's live cost push to count it too: the observed-cost merge (`crates/rimz/src/agents/context/record.rs::merge_observed_cost`) writes the incoming total outright, so a settled reconcile that raised the row is pulled back by the next envelope.
+A spend parser that counts a new source needs the adapter's live cost push to count it too. Both pushes write the incoming total outright: the observed-cost merge (`crates/rimz/src/agents/context/record.rs::merge_observed_cost`), and the local refresh patch (`crates/rimz/src/agents/context.rs::LocalContextPatch::apply`, whose `FieldPatch::Set` on `cost` is how Codex's live card cost lands). So a settled reconcile that raised the row is pulled back by the next envelope or refresh.
 
 Declare both halves of the support contract in the descriptor. `coverage` states the mechanism: every integration concern as wired, partial (no native signal, reconstructed by derivation, with the gap named), or unsupported. `user_coverage` states the behavior: every user capability as full, partial (what lands, plus the limit), or unsupported, written in what the user sees and when.
 
