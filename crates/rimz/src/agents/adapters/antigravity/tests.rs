@@ -1598,7 +1598,7 @@ mod local_account_api {
     }
     #[test]
     fn socket_parsers_accept_process_owned_loopback_listeners_only() {
-        let inodes = BTreeSet::from(["12345".to_owned(), "67890".to_owned()]);
+        let inodes = BTreeSet::from([12345, 67890]);
         let tcp = "\
   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n\
    0: 0100007F:1F90 00000000:0000 0A 0:0 00:0 0 501 0 12345\n\
@@ -1620,11 +1620,6 @@ mod local_account_api {
             (IpAddr::V6(Ipv6Addr::LOCALHOST), 6379)
         );
         assert_eq!(ipv6.len(), 1);
-        assert_eq!(
-            local_api::process::socket_inode("socket:[12345]").as_deref(),
-            Some("12345")
-        );
-        assert!(local_api::process::socket_inode("pipe:[12345]").is_none());
         let endpoints = local_api::process::parse_lsof(
             "p42\nn127.0.0.1:5000\nn[::1]:5001\nn0.0.0.0:5002\nn10.0.0.2:5003\n",
         );

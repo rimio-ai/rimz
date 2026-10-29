@@ -633,7 +633,18 @@ fn spawn_gate(
         path: PathBuf::from("/proc/self/exe"),
         source,
     })?;
-    let mut spec = CommandSpec::new(exe.display().to_string())
+    spawn_detached(gate_spec(&exe, listen, upstream, allow, auth, auth_users))
+}
+
+fn gate_spec(
+    program: &Path,
+    listen: SocketAddr,
+    upstream: SocketAddr,
+    allow: &[String],
+    auth: &WebAuth,
+    auth_users: &[String],
+) -> CommandSpec {
+    let mut spec = CommandSpec::new(program.display().to_string())
         .args(["web", "gate", "--listen"])
         .arg(listen.to_string())
         .arg("--upstream")
@@ -647,7 +658,7 @@ fn spawn_gate(
     for user in auth_users {
         spec = spec.arg("--auth-user").arg(user.clone());
     }
-    spawn_detached(spec)
+    super::without_ttyd_launch_context(spec)
 }
 
 pub(super) fn create_token(config: &MachineConfig, name: &str) -> Result<TokenCreated> {

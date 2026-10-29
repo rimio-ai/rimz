@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use rimz::child_process::StderrTail;
 use rimz::remote::forward::{PortAction, PortSync, cancel_spec, open_spec};
 use rimz::remote::link::{
-    LinkAck, LinkEvent, LinkMonitor, LinkProbe, SessionLinkAction, SessionLinkState,
+    LinkAck, LinkEvent, LinkMonitor, LinkProbe, PortsScope, SessionLinkAction, SessionLinkState,
     blackout_after_from_env, control_check_spec, probe_interval_from_env, probe_stream_spec,
     probe_timeout_from_env,
 };
@@ -1811,7 +1811,7 @@ impl ProbeChild {
             drain.acked |= outcome.accepted;
             drain.reported_rtt_changed |= outcome.reported_rtt_changed;
             if let (Some(sync), Some(ports)) = (port_sync, ack.ports) {
-                apply_port_report(sync, &ports, target, control_path);
+                apply_port_report(sync, &ports, ack.ports_scope, target, control_path);
             }
             for event in outcome.events {
                 let _ = events.send(event);
@@ -1920,12 +1920,13 @@ fn run_probe_stream(
 fn apply_port_report(
     sync: &Mutex<PortSync>,
     ports: &[u16],
+    ports_scope: Option<PortsScope>,
     target: &RemoteTarget,
     control_path: &Path,
 ) {
     let actions = match sync.lock() {
-        Ok(mut sync) => sync.observe(ports),
-        Err(poisoned) => poisoned.into_inner().observe(ports),
+        Ok(mut sync) => sync.observe(ports, ports_scope),
+        Err(poisoned) => poisoned.into_inner().observe(ports, ports_scope),
     };
     apply_port_actions(sync, actions, target, control_path);
 }

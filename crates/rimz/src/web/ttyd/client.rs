@@ -153,11 +153,8 @@ fn ensure_custom_index(
 fn fetch_stock_index(program: &Path) -> Result<String, String> {
     let port = choose_ephemeral_port().map_err(|err| err.to_string())?;
     let secret = random_secret();
-    let spec = CommandSpec::new(program.display().to_string())
-        .args(["-c", &format!("rimz:{secret}"), "-i", "127.0.0.1", "-p"])
-        .arg(port.to_string())
-        .arg("sh");
-    let pid = spawn_detached(spec).map_err(|err| err.to_string())?;
+    let pid =
+        spawn_detached(stock_index_spec(program, port, &secret)).map_err(|err| err.to_string())?;
     let record = WritableDaemonRecord::basic_loopback(pid, port);
     if !wait_for_port(port, START_TIMEOUT) {
         terminate_record(&record);
@@ -169,6 +166,15 @@ fn fetch_stock_index(program: &Path) -> Result<String, String> {
     let fetched = get_stock_index(port, &secret);
     terminate_record(&record);
     fetched
+}
+
+fn stock_index_spec(program: &Path, port: u16, secret: &str) -> CommandSpec {
+    crate::web::without_ttyd_launch_context(
+        CommandSpec::new(program.display().to_string())
+            .args(["-c", &format!("rimz:{secret}"), "-i", "127.0.0.1", "-p"])
+            .arg(port.to_string())
+            .arg("sh"),
+    )
 }
 
 fn get_stock_index(port: u16, secret: &str) -> Result<String, String> {
@@ -911,6 +917,11 @@ mod tests {
     use super::*;
     use crate::config::{InlineAnsiColors, InlinePrimaryColors};
 
+    #[test]
+    fn stock_index_listener_does_not_inherit_the_room_pin() {
+        let spec = stock_index_spec(Path::new("/usr/bin/ttyd"), 8202, "secret");
+        assert!(spec.env_remove.contains(crate::workspace::ENV_WORKSPACE_ID));
+    }
     #[test]
     fn pixel_bootstrap_constants_are_byte_identical() {
         let bootstrap = client_bootstrap(None);

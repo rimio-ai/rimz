@@ -607,6 +607,7 @@ fn ack_probe_stream() {
     let reported_port = env::var("RIMZ_TEST_PROBE_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok());
+    let room_scoped = env::var("RIMZ_TEST_PROBE_PORTS_SCOPE").as_deref() == Ok("room");
     loop {
         let mut line = String::new();
         match stdin.read_line(&mut line) {
@@ -633,6 +634,13 @@ fn ack_probe_stream() {
             }
         }
         match reported_port {
+            Some(port) if room_scoped => {
+                writeln!(
+                    stdout,
+                    r#"{{"v":"rimz.link.v1","seq":{seq},"ports":[{port}],"ports_scope":"room"}}"#
+                )
+                .expect("write ack");
+            }
             Some(port) if ack_count > 0 => {
                 writeln!(
                     stdout,

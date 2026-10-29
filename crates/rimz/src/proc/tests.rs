@@ -1,5 +1,11 @@
 use super::*;
 
+#[test]
+fn socket_inode_parser_accepts_only_numeric_socket_targets() {
+    assert_eq!(socket_inode("socket:[12345]"), Some(12345));
+    assert!(socket_inode("pipe:[12345]").is_none());
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn production_memo_shares_primitive_and_composite_reads() {

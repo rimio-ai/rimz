@@ -24,6 +24,8 @@ pub(crate) use command::{
     command_program_basename, program_label, rimz_exec_worktree_path, sole_agent_child,
 };
 
+#[cfg(target_os = "linux")]
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -505,6 +507,75 @@ fn parse_environ_pairs(raw: &[u8]) -> Vec<(String, String)> {
 #[cfg(target_os = "linux")]
 fn parse_environ_pair(pair: &str) -> Option<(&str, &str)> {
     pair.split_once('=')
+}
+
+/// Socket inodes held by a Linux process, bounded to 4096 file descriptors.
+#[cfg(target_os = "linux")]
+pub(crate) fn socket_inodes(fd_dir: &Path) -> BTreeSet<u64> {
+    let Ok(entries) = std::fs::read_dir(fd_dir) else {
+        return BTreeSet::new();
+    };
+    entries
+        .flatten()
+        .take(4096)
+        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+        .filter_map(|target| socket_inode(target.as_os_str().to_string_lossy().as_ref()))
+        .collect()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn socket_inode(target: &str) -> Option<u64> {
+    target
+        .strip_prefix("socket:[")?
+        .strip_suffix(']')?
+        .parse()
+        .ok()
+}
+
+/// Resolve requested Linux socket inodes in one same-uid process sweep.
+/// Any readable owner with the matching environment value qualifies the socket.
+#[cfg(target_os = "linux")]
+pub fn socket_inodes_for_env(
+    proc_root: &Path,
+    uid: u32,
+    key: &str,
+    value: &str,
+    requested: &BTreeSet<u64>,
+) -> BTreeSet<u64> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let mut found = BTreeSet::new();
+    if requested.is_empty() {
+        return found;
+    }
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+            .is_none()
+            || !entry.metadata().is_ok_and(|metadata| metadata.uid() == uid)
+        {
+            continue;
+        }
+        let inodes = socket_inodes(&entry.path().join("fd"));
+        if inodes.is_disjoint(requested) {
+            continue;
+        }
+        let Ok(environ) = std::fs::read(entry.path().join("environ")) else {
+            continue;
+        };
+        if parse_environ(&environ, key).as_deref() == Some(value) {
+            found.extend(inodes.intersection(requested));
+            if found.len() == requested.len() {
+                break;
+            }
+        }
+    }
+    found
 }
 
 /// Trim the trailing newline `/proc/<pid>/comm` always carries; an empty name is
