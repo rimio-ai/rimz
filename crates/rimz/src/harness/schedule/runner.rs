@@ -3903,7 +3903,7 @@ pub(crate) fn run_command(
         std::thread::sleep(CHECK_POLL_INTERVAL);
     };
     let capacity_drain = matches!(deadline, WatchDeadline::CapacityCheck(_));
-    let drain_deadline = if capacity_drain {
+    let drain_deadline = if capacity_drain && !(timed_out || interrupted) {
         kill_at
     } else {
         (timed_out || interrupted).then(|| Instant::now() + CHECK_DRAIN_GRACE)

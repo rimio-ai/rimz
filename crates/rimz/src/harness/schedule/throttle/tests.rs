@@ -735,6 +735,24 @@ fn capacity_removed_check_stops_reporting_cached_errors() {
 }
 
 #[test]
+fn capacity_check_timeout_keeps_its_first_stderr_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = run("first");
+    run.root = dir.path().to_owned();
+    run.checkout = run.root.clone();
+    let configured = config("check = 'echo boom >&2; sleep 5'\ncheck-timeout = '1s'");
+    let timeout = configured.check_timeout();
+    let checked = SystemHost.check(&configured, &run, &run.groups[0], timeout);
+    assert_eq!(
+        check_answer(checked, timeout),
+        (
+            CheckAnswer::Error,
+            "capacity check timed out after 1s: boom".to_owned()
+        )
+    );
+}
+
+#[test]
 fn capacity_check_bounds_pipe_holders_after_the_leader_exits() {
     let dir = tempfile::tempdir().unwrap();
     let mut run = run("first");
