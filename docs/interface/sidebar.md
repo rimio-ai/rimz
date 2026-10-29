@@ -63,7 +63,7 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 | `!` | failed | the turn errored, died on a provider API error, went silent past the stall window (also a launched child whose first turn never started), or repeated one tool call 20 times | yes |
 | `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection, or one of the children it launched is; the description quotes the reason in italics while the provider recovers; a pause that can no longer resume becomes `!` | after recovery: prompt the parked agent to continue, or let [auto-continue](../guide/loops.md#auto-continue) do it (off by default) |
 | `✓` | done | the turn finished cleanly | a look |
-| `⢿` | working | running a turn, waiting on in-flight work, or running a background shell; the cell animates through braille frames (`⣾`, `⣽`, ...), and any of them reads as working | no |
+| `⢿` | working | running a turn, waiting on in-flight work, or running a background shell; active turns animate through braille frames (`⣾`, `⣽`, ...), while a resting turn uses the waiting head below | no |
 | `☾` | sleeping | resting on a timer, signal, condition, or file watch, including through a child | no |
 | `○` | idle | alive, nothing in flight | no |
 
@@ -77,7 +77,7 @@ A running agent can show a head in place of `⢿`. Whichever head it shows, it c
 |-------|------|---------|
 | `⠁` | thinking | the turn has not edited a file yet; a research turn that never edits stays here to the end |
 | `▇` | compacting | condensing its context window |
-| `⢄` | waiting on subagents | delegated to running children; their entries are listed under the card; a launched child's provider park replaces this head with `⏸︎`, or `!` once it can no longer resume |
+| `⢄` | waiting on handed-off work | delegated to running children; their entries are listed under the card; also a turn that ended waiting on a command, check, PID, team, or peer agent, or a background shell; a launched child's provider park replaces this head with `⏸︎`, or `!` once it can no longer resume |
 | `⠙` | resolving | a working-family spinner, themable as `resolving` |
 
 Each head's frames, color, effect, and speed are configurable under [`[theme.animations]`](../guide/theme.md#animations).
@@ -501,7 +501,7 @@ A sleeping card names its first sleeping wait in the description:
 
 Subagent waits draw no separate entry and do not count in `⧖`: the child is already visible, as a row under `⧉` or, for a peer launched with `rimz agents`, as its own root card. A team wait counts in `⧖` and draws a static `team · stage Review` entry with its elapsed age, or `stage unknown` when its board is unavailable.
 
-`☾` replaces only an idle or done status, for timers, signals, conditions, and file watches, including a child's sleeping wait. A PID, command, check, unfinished team, working child, or listed background shell instead keeps the card working. A working-through-wait card names its first working wait. Waiting, failed, and paused (including a launched child's provider park) take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
+`☾` replaces only an idle or done status, for timers, signals, conditions, and file watches, including a child's sleeping wait. A PID, command, check, unfinished team, working child, or listed background shell instead keeps the card working. After the turn ends, that card shows the `⢄` waiting head and still counts as working in the cockpit. A working-through-wait card names its first working wait. Waiting, failed, and paused (including a launched child's provider park) take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 
 Hibernation does not change a card's state, glyph, ranking, or unread result. A frozen agent keeps the same working or sleeping wait classification, or its idle or done state when nothing is pending. `rimz agents show` carries the hibernation details.
 

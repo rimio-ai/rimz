@@ -373,6 +373,10 @@ fn agent(
     let now = fixed_now();
     AgentState {
         status,
+        phase: match status {
+            AgentStatus::Running => crate::agents::TurnPhase::Acting,
+            _ => crate::agents::TurnPhase::Idle,
+        },
         worktree_path: worktree_path.map(ToOwned::to_owned),
         worktree_branch: branch.map(ToOwned::to_owned),
         task: task.map(ToOwned::to_owned),

@@ -180,9 +180,8 @@ pub(in crate::sidebar_pane::render) fn compacting_head_style(
     role_style(theme, AnimationRole::Compacting, animation_phase)
 }
 
-/// The waiting-on-subagents head's tone: the agent's clay, same as the working
-/// fill — the parent is still its live head, just delegating; the quiet wave
-/// motion, not the color, carries "the work is in the children".
+/// The handed-off-work head's tone: the agent's clay, same as the working fill.
+/// The quiet wave motion, not the color, says the agent is waiting on that work.
 pub(in crate::sidebar_pane::render) fn subagent_head_style(
     theme: &Theme,
     animation_phase: u64,

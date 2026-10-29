@@ -39,10 +39,11 @@ pub(super) fn identity_line(
 
 /// The leading status cell for an agent row, applying the two transient render
 /// overlays before the base status glyph: a **compacting** head (a violet bar
-/// pulsing as the context window condenses) and a **waiting-on-subagents** head
-/// (a quiet clay wave while a live child runs). Both are short-lived and stay
-/// out of the cockpit tally — they ride over the row's base status here. A
-/// human-blocked `?`/`!` always wins, so the overlays defer to those; otherwise
+/// pulsing as the context window condenses) and a **waiting** head (a quiet clay
+/// wave while waiting on handed-off work: a running child, or, after the turn
+/// ends, a command, check, PID, team, or peer wait or a background shell). Both
+/// stay out of the cockpit tally — they ride over the row's base status here.
+/// A human-blocked `?`/`!` always wins, so the overlays defer to those; otherwise
 /// the cell is the animated working/thinking fill or the static status glyph.
 pub(super) fn agent_lead_cell(
     theme: &Theme,
@@ -60,10 +61,12 @@ pub(super) fn agent_lead_cell(
     }
     if status == AgentStatus::Running
         && row.as_agent().is_some_and(|agent| {
-            agent
-                .sub_agents
-                .iter()
-                .any(|child| child.holds_parent_turn())
+            // Same resting-turn condition as AgentCard::description's wait sentence.
+            matches!(agent.phase, TurnPhase::Idle | TurnPhase::Parked)
+                || agent
+                    .sub_agents
+                    .iter()
+                    .any(|child| child.holds_parent_turn())
         })
     {
         return Span::styled(

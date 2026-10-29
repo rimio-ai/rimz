@@ -1,8 +1,129 @@
 use super::*;
-use crate::agents::{ATTENTION_AGE_CEILING_SECS, BackgroundShell, PendingWait, PendingWaitTrigger};
+use crate::agents::{
+    ATTENTION_AGE_CEILING_SECS, BackgroundShell, PendingWait, PendingWaitTrigger, TurnPhase,
+};
 use crate::config::AnimationRole;
 use crate::sidebar_pane::render::labels::{elapsed_glyph, role_glyph};
 use crate::sidebar_pane::render::theme::Component;
+
+#[test]
+fn resting_command_wait_uses_the_delegating_head() {
+    for phase in [TurnPhase::Idle, TurnPhase::Parked] {
+        let mut parent = agent(
+            "parent",
+            "claude",
+            AgentStatus::Success,
+            Some("/repo/main"),
+            Some("main"),
+            Some("finished work"),
+        );
+        parent.phase = phase;
+        parent.pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
+            name: "command".into(),
+            trigger: PendingWaitTrigger::Command {
+                command: "cargo test".into(),
+            },
+            armed_at: Some(fixed_now()),
+        });
+        let snapshot = snapshot_with(vec![parent]);
+        let theme = Theme::fixed(false);
+        let screen = line_texts(&group_lines(&snapshot, &theme, 0)).join("\n");
+        assert!(screen.contains("wakes after cargo test"), "{screen}");
+        assert!(
+            screen.contains(&format!(
+                "{} claude",
+                role_glyph(&theme, AnimationRole::Delegating, 0)
+            )),
+            "{phase:?}: {screen}"
+        );
+    }
+}
+
+#[test]
+fn resting_background_shell_uses_the_delegating_head() {
+    for phase in [TurnPhase::Idle, TurnPhase::Parked] {
+        let mut parent = agent(
+            "parent",
+            "claude",
+            AgentStatus::Success,
+            Some("/repo/main"),
+            Some("main"),
+            Some("finished work"),
+        );
+        parent.phase = phase;
+        parent.background_shells.push(BackgroundShell {
+            id: "shell".into(),
+            command: Some("cargo test".into()),
+            description: None,
+            started_at: fixed_now(),
+        });
+        let snapshot = snapshot_with(vec![parent]);
+        let theme = Theme::fixed(false);
+        let screen = line_texts(&group_lines(&snapshot, &theme, 0)).join("\n");
+        assert!(
+            screen.contains(&format!(
+                "{} claude",
+                role_glyph(&theme, AnimationRole::Delegating, 0)
+            )),
+            "{phase:?}: {screen}"
+        );
+    }
+}
+
+#[test]
+fn resting_timer_wait_keeps_the_sleeping_head() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished work"),
+    );
+    parent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
+        name: "timer".into(),
+        trigger: PendingWaitTrigger::Timer {
+            due: fixed_now() + Duration::from_secs(300),
+            delay: None,
+        },
+        armed_at: Some(fixed_now()),
+    });
+    let screen = snapshot_to_screen(&snapshot_with(vec![parent]), 54, 24);
+    assert!(screen.contains("☾ claude"), "{screen}");
+}
+
+#[test]
+fn live_turn_with_background_shell_keeps_its_active_head() {
+    for (phase, role) in [
+        (TurnPhase::Acting, AnimationRole::Working),
+        (TurnPhase::Reasoning, AnimationRole::Thinking),
+    ] {
+        let mut parent = agent(
+            "parent",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("working"),
+        );
+        parent.phase = phase;
+        parent.background_shells.push(BackgroundShell {
+            id: "shell".into(),
+            command: Some("cargo test".into()),
+            description: None,
+            started_at: fixed_now(),
+        });
+        let snapshot = snapshot_with(vec![parent]);
+        let theme = Theme::fixed(false);
+        let screen = line_texts(&group_lines(&snapshot, &theme, 0)).join("\n");
+        assert!(
+            screen.contains(&format!("{} claude", role_glyph(&theme, role, 0))),
+            "{phase:?}: {screen}"
+        );
+    }
+}
 
 #[test]
 fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
@@ -385,7 +506,7 @@ fn wait_entries_show_trigger_program_and_command() {
     let mut parent = agent(
         "claude-1",
         "claude",
-        AgentStatus::Running,
+        AgentStatus::Success,
         Some("/repo/main"),
         Some("main"),
         Some("working"),
