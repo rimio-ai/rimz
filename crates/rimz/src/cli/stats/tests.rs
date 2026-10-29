@@ -2851,7 +2851,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     use rimz::ids::{AgentKind, AgentSessionId};
 
     let ts = |second| jiff::Timestamp::from_second(second).unwrap();
-    let records = vec![
+    let mut records = vec![
         AssistRecord {
             at: ts(4_000),
             assist: Assist::AutoRedeem {
@@ -2962,6 +2962,23 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             },
         },
     ];
+    let forwards = [
+        serde_json::json!({
+            "at":ts(3500),"assist":"port_forward","host":"dev-box","remote":3000,"local":3001
+        }),
+        serde_json::json!({
+            "at":ts(3550),"assist":"port_forward","host":"dev-box","remote":9000,
+            "error":"forwarding disabled"
+        }),
+    ]
+    .into_iter()
+    .map(serde_json::from_value::<AssistRecord>)
+    .collect::<Result<Vec<_>, _>>();
+    assert!(
+        forwards.is_ok(),
+        "forward outcomes are assist records: {forwards:?}"
+    );
+    records.extend(forwards.unwrap());
     let stats = AssistStats::from_records("7d", records);
 
     assert_eq!(
@@ -2972,6 +2989,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             workflow_routes: 0,
             workflow_parks: 0,
             workflow_ends: 0,
+            port_forwards: 1,
             stall_notices: 0,
             resident_launches: 0,
             judge_declines: 0,
@@ -2997,12 +3015,16 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             sweeps: 1,
             tmp_evictions: 0,
             reclaimed_bytes: 2_048,
-            held: [("resumes", 1), ("sweeps", 1)].into(),
+            held: [("resumes", 1), ("sweeps", 1), ("port_forwards", 1)].into(),
         }
     );
-    assert_eq!(stats.events.len(), 8, "every assist outcome stays forensic");
-    assert_eq!(stats.timeline(0, false).0.len(), 6);
-    assert_eq!(stats.timeline(0, true).0.len(), 8);
+    assert_eq!(
+        stats.events.len(),
+        10,
+        "every assist outcome stays forensic"
+    );
+    assert_eq!(stats.timeline(0, false).0.len(), 7);
+    assert_eq!(stats.timeline(0, true).0.len(), 10);
     let categories = category_rows(&stats.rollup, assists::CategoryMode::Timeline)
         .into_iter()
         .map(|row| strip_ansi(&row))
@@ -3012,12 +3034,27 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         "Auto-resume: 1 (2 agents)"
     );
     assert_eq!(categories.last().unwrap(), "Auto-gc: 1 (2 KB, 1 held)");
+    assert!(
+        categories
+            .iter()
+            .any(|line| line == "Port forwards: 1 (1 held)")
+    );
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
         .iter()
         .map(|event| benefit_line(event, &zone))
         .collect::<Vec<_>>();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("dev-box:3000 forwarded to localhost:3001"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("dev-box:9000 forward held: forwarding disabled"))
+    );
     assert!(
         lines
             .iter()
@@ -3076,6 +3113,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     let json = serde_json::to_value(&stats).unwrap();
     assert_eq!(json["rollup"]["resumes"], 1);
     assert_eq!(json["rollup"]["sweeps"], 1);
+    assert_eq!(json["rollup"]["port_forwards"], 1);
     assert_eq!(json["events"][0]["assist"], "auto_gc");
     let envelope = json::assists_value(&stats, 1, false, &shanghai(1_728_921_600));
     assert_eq!(keys(&envelope), ["as_of", "events", "older", "rollup"]);

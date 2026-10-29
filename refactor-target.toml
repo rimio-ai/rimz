@@ -3197,6 +3197,7 @@ allowed-dependencies = [
     "cli::remote::ports",
     "cli::remote::tty",
     "config",
+    "harness::assist_log",
     "mux",
     "osc",
     "remote",

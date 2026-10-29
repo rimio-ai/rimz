@@ -257,3 +257,59 @@ fn stats_counts_tmp_evictions_separately_from_sweeps() {
     assert!(text.contains("Auto-gc: 1 (5 KB, 1 held)"), "{text}");
     assert!(text.contains("Temp evictions: 2 (1 held)"), "{text}");
 }
+
+#[test]
+fn stats_counts_forward_successes_and_retains_refusals_as_held() {
+    let env = Env::new();
+    let now = jiff::Timestamp::now();
+    let records = [
+        json!({"at":now,"assist":"port_forward","host":"dev-box","remote":3000,"local":3001}),
+        json!({
+            "at":now,"assist":"port_forward","host":"dev-box","remote":9000,
+            "error":"forwarding disabled"
+        }),
+    ];
+    let logs = env.rimz_home().join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let wire = records
+        .iter()
+        .map(|record| serde_json::to_string(record).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(logs.join("assists.log.jsonl"), wire).unwrap();
+
+    let output = env
+        .rimz()
+        .args(["stats", "--assists", "--all", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["rollup"]["port_forwards"], 1, "{report}");
+    assert_eq!(report["rollup"]["held"]["port_forwards"], 1, "{report}");
+    assert_eq!(report["events"].as_array().unwrap().len(), 2, "{report}");
+    let output = env
+        .rimz()
+        .args(["stats", "--assists", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["events"].as_array().unwrap().len(), 1, "{report}");
+    assert_eq!(report["events"][0]["assist"], "port_forward");
+
+    let output = env
+        .rimz()
+        .args(["stats", "--assists", "--all"])
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&output.get_output().stdout);
+    assert!(text.contains("Port forwards: 1 (1 held)"), "{text}");
+    assert!(
+        text.contains("dev-box:3000 forwarded to localhost:3001"),
+        "{text}"
+    );
+    assert!(
+        text.contains("dev-box:9000 forward held: forwarding disabled"),
+        "{text}"
+    );
+}

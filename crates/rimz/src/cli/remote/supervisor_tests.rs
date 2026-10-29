@@ -3,6 +3,68 @@ use std::time::{Duration, Instant};
 use super::*;
 
 #[test]
+fn exhausted_retries_report_one_held_assist_then_a_success() {
+    let mut sync = PortSync::default();
+    let mut assists = Vec::new();
+    for (now_ms, available) in [(1_000, false), (2_000, false), (3_000, true)] {
+        for action in sync.observe(now_ms, &[3000], Some(PortsScope::Room)) {
+            let (local, report_exhaustion) =
+                choose_local_forward_port(&mut sync, now_ms, 3000, |_| available, || None);
+            if let Some(local) = local {
+                sync.mark_opened(now_ms, 3000);
+                assists.extend(port_forward_assist(action, "dev-box", Some(local), None));
+            } else if report_exhaustion {
+                assists.extend(port_forward_assist(
+                    action,
+                    "dev-box",
+                    None,
+                    Some("no free local port".into()),
+                ));
+            }
+        }
+    }
+    assert_eq!(
+        serde_json::to_value(assists).unwrap(),
+        serde_json::json!([
+            {"assist":"port_forward","host":"dev-box","remote":3000,
+             "error":"no free local port"},
+            {"assist":"port_forward","host":"dev-box","remote":3000,"local":3000}
+        ]),
+        "persistent exhaustion records one held attempt, then a successful forward"
+    );
+}
+
+#[test]
+fn report_opens_record_assists_but_master_reopens_and_closes_do_not() {
+    let assist = port_forward_assist(PortAction::Open(3000), "dev-box", Some(3001), None);
+    assert_eq!(
+        assist.map(|assist| serde_json::to_value(assist).unwrap()),
+        Some(serde_json::json!({
+            "assist":"port_forward","host":"dev-box","remote":3000,"local":3001
+        }))
+    );
+    let refused = port_forward_assist(
+        PortAction::Open(9000),
+        "dev-box",
+        None,
+        Some("forwarding disabled".into()),
+    )
+    .unwrap();
+    let refused = serde_json::to_value(refused).unwrap();
+    assert_eq!(refused["error"], "forwarding disabled");
+    assert!(refused.get("local").is_none());
+    for action in [
+        PortAction::Reopen(3000),
+        PortAction::Close {
+            remote: 3000,
+            local: 3001,
+        },
+    ] {
+        assert!(port_forward_assist(action, "dev-box", Some(3001), None).is_none());
+    }
+}
+
+#[test]
 fn stderr_drain_keeps_a_bounded_tail_and_the_final_ssh_line() {
     let mut child = std::process::Command::new("sh")
         .args(["-c", "i=0; while [ \"$i\" -lt 12000 ]; do printf 'discarded\\n' >&2; i=$((i + 1)); done; printf 'Killed by signal 2.\\n' >&2"])

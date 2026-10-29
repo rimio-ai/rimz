@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use rimz::child_process::StderrTail;
-use rimz::remote::forward::{PortAction, cancel_spec, open_spec};
+use rimz::remote::forward::{ForwardState, PortAction, PortSync, cancel_spec, open_spec};
 use rimz::remote::link::{
     LinkAck, LinkEvent, LinkMonitor, LinkProbe, PortsScope, SessionLinkAction, SessionLinkState,
     blackout_after_from_env, control_check_spec, probe_interval_from_env, probe_stream_spec,
@@ -1949,6 +1949,18 @@ fn reopen_port_forwards(
     apply_port_actions(sync, actions, target, control_path);
 }
 
+fn choose_local_forward_port(
+    sync: &mut PortSync,
+    now_ms: u64,
+    port: u16,
+    available: impl FnMut(u16) -> bool,
+    fallback: impl FnMut() -> Option<u16>,
+) -> (Option<u16>, bool) {
+    let was_exhausted = sync.state(port) == Some(&ForwardState::NoLocalPort);
+    let local = sync.choose_local_port(now_ms, port, available, fallback);
+    (local, local.is_none() && !was_exhausted)
+}
+
 fn apply_port_actions(
     sync: &Mutex<ForwardPublisher>,
     actions: Vec<PortAction>,
@@ -1958,19 +1970,31 @@ fn apply_port_actions(
     for action in actions {
         match action {
             PortAction::Open(port) | PortAction::Reopen(port) => {
-                let (tried, local) = {
+                let (tried, local, report_exhaustion) = {
                     let mut publisher =
                         sync.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     let tried = publisher.local_port(port).unwrap_or(port);
-                    let local = publisher.update(|sync, now_ms| {
-                        sync.choose_local_port(now_ms, port, local_forward_port_available, || {
-                            rimz::remote::web::reserve_forward_port().ok()
-                        })
+                    let (local, report_exhaustion) = publisher.update(|sync, now_ms| {
+                        choose_local_forward_port(
+                            sync,
+                            now_ms,
+                            port,
+                            local_forward_port_available,
+                            || rimz::remote::web::reserve_forward_port().ok(),
+                        )
                     });
-                    (tried, local)
+                    (tried, local, report_exhaustion)
                 };
                 let Some(local) = local else {
-                    tracing::warn!(port, "remote port auto-forward has no free local port");
+                    if report_exhaustion {
+                        tracing::warn!(port, "remote port auto-forward has no free local port");
+                        record_port_forward(
+                            action,
+                            target,
+                            None,
+                            Some("no free local port".into()),
+                        );
+                    }
                     continue;
                 };
                 match open_spec(target, control_path, local, port)
@@ -1981,13 +2005,15 @@ fn apply_port_actions(
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .update(|sync, now_ms| sync.mark_opened(now_ms, port));
                         tracing::info!(port, local, "remote port auto-forward opened");
+                        record_port_forward(action, target, Some(local), None);
                         if local != tried {
                             emit_remapped_port_forward_notice(port, local, tried);
                         }
                     }
                     Err(error) => {
                         tracing::warn!(port, local, %error, "remote port auto-forward open refused");
-                        mark_port_open_failed(sync, port, error);
+                        let error = mark_port_open_failed(sync, port, error);
+                        record_port_forward(action, target, None, Some(error));
                     }
                 }
             }
@@ -2029,7 +2055,42 @@ fn local_forward_port_available(port: u16) -> bool {
     TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
 }
 
-fn mark_port_open_failed(sync: &Mutex<ForwardPublisher>, port: u16, error: rimz::mux::MuxErr) {
+fn port_forward_assist(
+    action: PortAction,
+    host: &str,
+    local: Option<u16>,
+    error: Option<String>,
+) -> Option<rimz::harness::assist_log::Assist> {
+    let PortAction::Open(remote) = action else {
+        return None;
+    };
+    Some(rimz::harness::assist_log::Assist::PortForward {
+        host: host.to_owned(),
+        remote,
+        local,
+        error,
+    })
+}
+
+fn record_port_forward(
+    action: PortAction,
+    target: &RemoteTarget,
+    local: Option<u16>,
+    error: Option<String>,
+) {
+    if let Some(assist) = port_forward_assist(action, target.host_display(), local, error) {
+        rimz::harness::assist_log::append(&rimz::harness::assist_log::AssistRecord {
+            at: jiff::Timestamp::now(),
+            assist,
+        });
+    }
+}
+
+fn mark_port_open_failed(
+    sync: &Mutex<ForwardPublisher>,
+    port: u16,
+    error: rimz::mux::MuxErr,
+) -> String {
     let message = match &error {
         rimz::mux::MuxErr::Command { stderr, .. } => stderr
             .lines()
@@ -2041,7 +2102,8 @@ fn mark_port_open_failed(sync: &Mutex<ForwardPublisher>, port: u16, error: rimz:
     .unwrap_or_else(|| error.to_string());
     sync.lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .update(|sync, now_ms| sync.mark_open_failed(now_ms, port, message));
+        .update(|sync, now_ms| sync.mark_open_failed(now_ms, port, message.clone()));
+    message
 }
 
 fn attach_forward_record(probe: &mut LinkProbe, port_sync: &Mutex<ForwardPublisher>) {

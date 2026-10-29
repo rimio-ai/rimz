@@ -1179,6 +1179,22 @@ fn supervised_connect_opens_new_remote_listener_forwards() {
         .unwrap();
     assert_ne!(local, port, "the held local port cannot be reused");
     assert_eq!(forwarding, &format!("127.0.0.1:{local}:localhost:{port}"));
+    let assists =
+        std::fs::read_to_string(env.rimz_home().join("logs/assists.log.jsonl")).unwrap_or_default();
+    let assists = assists
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        assists.len(),
+        1,
+        "a report-driven forward records one assist"
+    );
+    assert_eq!(assists[0]["assist"], "port_forward");
+    assert_eq!(assists[0]["host"], "dev-box");
+    assert_eq!(assists[0]["remote"], port);
+    assert_eq!(assists[0]["local"], local);
+    assert!(assists[0].get("error").is_none());
 }
 
 #[test]
