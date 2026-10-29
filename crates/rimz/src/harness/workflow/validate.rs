@@ -423,24 +423,14 @@ pub(super) fn validate_spec(
                 "must be below max-visits, since the total cap trips first",
             );
         }
-        let mut edges = BTreeMap::new();
-        if agent {
-            if let Some(target) = &step.on.capacity {
-                report.target(spec, &format!("{path}.on.capacity"), target);
-                if matches!(target.as_str(), "@user" | "@wait") {
-                    report.error(
-                        &format!("{path}.on.capacity"),
-                        "capacity give-up cannot park or wait; use @failed, @done, or a node",
-                    );
-                }
+        if agent && let Some(target) = &step.on.capacity {
+            report.target(spec, &format!("{path}.on.capacity"), target);
+            if matches!(target.as_str(), "@user" | "@wait") {
+                report.error(
+                    &format!("{path}.on.capacity"),
+                    "capacity give-up cannot park or wait; use @failed, @done, or a node",
+                );
             }
-            edges.insert(
-                "capacity".into(),
-                step.on.capacity.clone().unwrap_or_else(|| "@failed".into()),
-            );
-        }
-        if let Some(target) = &step.then {
-            edges.insert("then".into(), target.clone());
         }
         for (outcome, target) in [("asked", &step.on.asked), ("cap", &step.on.cap)] {
             if outcome == "asked" && !agent {
@@ -458,15 +448,17 @@ pub(super) fn validate_spec(
                     );
                 }
             }
-            if outcome == "cap"
-                || (step.lifecycle.unwrap_or_default().is_turn() && target.is_some())
-            {
-                edges.insert(
-                    outcome.into(),
-                    target.clone().unwrap_or_else(|| "@user".into()),
-                );
-            }
         }
+        let step_edges = step.edges();
+        let edges = step_edges
+            .iter()
+            .filter(|(outcome, _)| match **outcome {
+                "asked" => agent && step.lifecycle.unwrap_or_default().is_turn(),
+                "capacity" => agent,
+                _ => true,
+            })
+            .map(|(&outcome, &(target, _))| (outcome.to_owned(), target.to_owned()))
+            .collect();
         report.rows.push(NodeRow {
             workflow: name.into(),
             node: node.clone(),
@@ -481,12 +473,10 @@ pub(super) fn validate_spec(
             shell: step.shell.clone(),
             agent: step.agent.clone(),
             do_background: do_background.unwrap_or(false),
-            edges: resolved_edges(spec, edges, |outcome| match outcome {
-                "then" => true,
-                "asked" => step.on.asked.is_some(),
-                "cap" => step.on.cap.is_some(),
-                "capacity" => step.on.capacity.is_some(),
-                _ => false,
+            edges: resolved_edges(spec, edges, |outcome| {
+                step_edges
+                    .get(outcome)
+                    .is_some_and(|(_, explicit)| *explicit)
             }),
         });
     }
@@ -863,16 +853,11 @@ fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -
         let targets = if let Some(check) = spec.checks.get(&node) {
             check.edges().into_values().collect::<Vec<_>>()
         } else if let Some(step) = spec.steps.get(&node) {
-            [
-                step.then.as_deref(),
-                step.on.asked.as_deref(),
-                step.on.cap.as_deref(),
-                step.on.capacity.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            .map(str::to_owned)
-            .collect()
+            step.edges()
+                .into_values()
+                .filter(|(_, explicit)| *explicit)
+                .map(|(target, _)| target.to_owned())
+                .collect()
         } else {
             continue;
         };
