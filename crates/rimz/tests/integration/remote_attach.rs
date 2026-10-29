@@ -2378,11 +2378,15 @@ fn established_link_drop_reconnects_and_notifies_once() {
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
     let notify_log = env.project_root.join("notify.log");
+    let port = available_forward_probe_port();
     // First session drops the link (255), the reattach detaches cleanly (0).
     std::fs::write(&plan, "255\n0\n").expect("write plan");
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "500")
+        .env("RIMZ_REMOTE_PROBE_MS", "10")
+        .env("RIMZ_TEST_PROBE_PORT", port.to_string())
+        .env("RIMZ_TEST_WAIT_FOR_PROBE_MS", "500")
         .env("RIMZ_REMOTE_GATETIME_MS", "20")
         .env("RIMZ_NOTIFY_TEST_LOG", &notify_log)
         .bounded_output()
@@ -2398,6 +2402,11 @@ fn established_link_drop_reconnects_and_notifies_once() {
         .collect::<Vec<_>>();
     assert_eq!(invocations.len(), 2, "dropped once, reattached once");
     let all_invocations = shim_invocations(&log);
+    assert_eq!(
+        tunnel_forward_ports(&log),
+        [port, port],
+        "a replacement master reopens the same forward"
+    );
     assert_eq!(
         all_invocations
             .iter()
@@ -2590,12 +2599,16 @@ fn established_mux_disconnect_reconnects() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
+    let port = available_forward_probe_port();
     // A mux client can return nonzero when its server process dies; the
     // replacement attach then detaches cleanly.
     std::fs::write(&plan, "1\n0\n").expect("write plan");
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "500")
+        .env("RIMZ_REMOTE_PROBE_MS", "10")
+        .env("RIMZ_TEST_PROBE_PORT", port.to_string())
+        .env("RIMZ_TEST_WAIT_FOR_PROBE_MS", "500")
         .env("RIMZ_REMOTE_GATETIME_MS", "20")
         .bounded_output()
         .expect("run rimz remote connect --attach");
@@ -2621,6 +2634,11 @@ fn established_mux_disconnect_reconnects() {
         "the mux disconnect is reported separately from link loss"
     );
     assert!(!stderr.contains("link to dev-box lost"), "{stderr}");
+    assert_eq!(
+        tunnel_forward_ports(&log),
+        [port],
+        "reattach leaves the held forward alone"
+    );
 }
 
 #[test]

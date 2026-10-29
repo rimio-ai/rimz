@@ -62,7 +62,7 @@ pub(crate) fn is_master_invocation(argv: &[String]) -> bool {
 
 pub(crate) fn is_main_invocation(argv: &[String]) -> bool {
     !is_probe_invocation(argv)
-        && !is_control_check_invocation(argv)
+        && !argv.iter().any(|arg| arg == "-O")
         && !is_config_query_invocation(argv)
         && !is_master_invocation(argv)
         && !is_path_preflight_invocation(argv)

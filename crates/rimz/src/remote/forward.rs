@@ -79,11 +79,23 @@ pub enum PortAction {
     Close(u16),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ForwardHold {
+    Held,
+    Lost,
+}
+
+#[derive(Debug)]
+struct ActiveForward {
+    missing: u8,
+    hold: ForwardHold,
+}
+
 /// Local diff state for listener reports across probe streams and reconnects.
 #[derive(Debug, Default)]
 pub struct PortSync {
     baseline: Option<BTreeSet<u16>>,
-    active: BTreeMap<u16, u8>,
+    active: BTreeMap<u16, ActiveForward>,
     parked: BTreeSet<u16>,
 }
 
@@ -99,12 +111,12 @@ impl PortSync {
 
         let mut actions = Vec::new();
         let mut closed = Vec::new();
-        for (port, missing) in &mut self.active {
+        for (port, forward) in &mut self.active {
             if report.contains(port) {
-                *missing = 0;
+                forward.missing = 0;
             } else {
-                *missing = missing.saturating_add(1);
-                if *missing >= CLOSE_MISSING_REPORTS {
+                forward.missing = forward.missing.saturating_add(1);
+                if forward.missing >= CLOSE_MISSING_REPORTS {
                     closed.push(*port);
                 }
             }
@@ -122,7 +134,13 @@ impl PortSync {
                 && !self.active.contains_key(&port)
                 && !self.parked.contains(&port)
             {
-                self.active.insert(port, 0);
+                self.active.insert(
+                    port,
+                    ActiveForward {
+                        missing: 0,
+                        hold: ForwardHold::Held,
+                    },
+                );
                 actions.push(PortAction::Open(port));
             }
         }
@@ -135,9 +153,24 @@ impl PortSync {
         self.parked.insert(port);
     }
 
+    pub fn mark_master_lost(&mut self) {
+        for forward in self.active.values_mut() {
+            forward.hold = ForwardHold::Lost;
+        }
+    }
+
     /// Reopen active ports after the supervisor replaces the SSH master.
-    pub fn reopen_active(&self) -> Vec<PortAction> {
-        self.active.keys().copied().map(PortAction::Open).collect()
+    pub fn reopen_active(&mut self) -> Vec<PortAction> {
+        self.active
+            .iter_mut()
+            .filter_map(|(port, forward)| {
+                if forward.hold == ForwardHold::Held {
+                    return None;
+                }
+                forward.hold = ForwardHold::Held;
+                Some(PortAction::Open(*port))
+            })
+            .collect()
     }
 }
 
@@ -227,7 +260,10 @@ mod tests {
         let mut sync = PortSync::default();
         assert!(sync.observe(&[1500]).is_empty());
         assert_eq!(sync.observe(&[1500, 3000]), [PortAction::Open(3000)]);
-        assert_eq!(sync.reopen_active(), [PortAction::Open(3000)]);
+        assert!(
+            sync.reopen_active().is_empty(),
+            "held forwards stay untouched"
+        );
         assert!(sync.observe(&[1500]).is_empty());
         assert!(sync.observe(&[1500]).is_empty());
         assert_eq!(sync.observe(&[1500]), [PortAction::Close(3000)]);
@@ -249,6 +285,31 @@ mod tests {
         assert_eq!(actions.len(), MAX_ACTIVE_FORWARDS);
         assert_eq!(actions.first(), Some(&PortAction::Open(2000)));
         assert_eq!(actions.last(), Some(&PortAction::Open(2015)));
+    }
+
+    #[test]
+    fn port_sync_reopens_only_after_the_master_is_lost() {
+        let mut sync = PortSync::default();
+        sync.observe(&[]);
+        assert_eq!(
+            sync.observe(&[3000, 4000]),
+            [PortAction::Open(3000), PortAction::Open(4000)]
+        );
+        sync.mark_master_lost();
+        assert_eq!(
+            sync.reopen_active(),
+            [PortAction::Open(3000), PortAction::Open(4000)]
+        );
+        assert!(
+            sync.reopen_active().is_empty(),
+            "a replacement opens each forward once"
+        );
+        assert!(sync.observe(&[]).is_empty());
+        assert!(sync.observe(&[]).is_empty());
+        assert_eq!(
+            sync.observe(&[]),
+            [PortAction::Close(3000), PortAction::Close(4000)]
+        );
     }
 
     #[test]
