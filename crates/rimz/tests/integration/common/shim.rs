@@ -188,6 +188,11 @@ pub fn write_path_shim(dir: &Path, program: &str, body: &str) -> PathBuf {
 /// session work, so a sidebar probe never registers an agent or reads as a
 /// launch to a test tracing invocations.
 ///
+/// Before its first hook, a `claude` stub saves a one-line conversation at
+/// `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<flattened $PWD>/<session>.jsonl`,
+/// as Claude does, so resume, restart and rebirth planning find the session.
+/// Journey and live tests that `gate` does not run depend on that file.
+///
 /// `RIMZ_TEST_AGENT_LAUNCH_LOG` names a file that gains one line per session
 /// launch (a hook helper's `app-server` call is not one), and the first
 /// `RIMZ_TEST_AGENT_STARTUP_DEATHS` of those launches exit 7 before any hook,
