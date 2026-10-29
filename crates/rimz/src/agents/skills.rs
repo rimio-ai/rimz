@@ -314,7 +314,7 @@ fn scan_pack(
                 }
                 Ok(None) => continue,
                 Err(error) => {
-                    let message = error.to_string();
+                    let message = format!("{error}{}", exclusion_fix(pack.name.as_str(), &name));
                     problems.push(packs::Problem {
                         path: match error {
                             SkillErr::Io { path, .. } => path,
@@ -357,6 +357,19 @@ fn scan_pack(
         inventory.pack_problems.insert(pack.name.clone(), problems);
     }
     inventory
+}
+
+/// The `; run ...` tail naming the command that excludes one pack skill, the
+/// same tail a failed pack definition carries.
+fn exclusion_fix(pack: &str, skill: &str) -> String {
+    let target = format!("{pack}:{skill}");
+    // A file name cannot carry NUL, so quoting fails only in theory; the
+    // pack-wide `--type skills` exclusion still sets the skill aside then.
+    let target = shlex::try_quote(&target).unwrap_or_else(|_| pack.into());
+    format!(
+        "; run `rimz packs exclude {target} --type {}`",
+        ItemType::Skills.as_str()
+    )
 }
 
 enum LibraryRead {
