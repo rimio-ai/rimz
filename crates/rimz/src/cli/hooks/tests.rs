@@ -701,16 +701,10 @@ fn lifecycle_records_pane_roles_for_roots_and_native_children() {
         };
         let feed = || feed_event(event, &payload);
         let reply = feed();
-        let directory = store
+        let path = store
             .runtime_paths()
-            .shared_provider_spending_path()
-            .parent()
-            .unwrap()
-            .join("session-roles");
-        let path = directory.join(format!(
-            "{}.jsonl",
-            frame.ts.to_zoned(jiff::tz::TimeZone::UTC).year()
-        ));
+            .spending_history
+            .roles(frame.ts.to_zoned(jiff::tz::TimeZone::UTC).year());
         assert!(path.exists(), "hook must persist session provenance");
         let before = std::fs::read(&path).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&before).unwrap();
@@ -765,6 +759,7 @@ fn lifecycle_records_pane_roles_for_roots_and_native_children() {
                 "a registering frame indexes a session the room already knows"
             );
         }
+        let directory = store.runtime_paths().spending_history.roles_dir();
         std::fs::remove_dir_all(&directory).unwrap();
         std::fs::write(&directory, b"not a directory").unwrap();
         assert_eq!(

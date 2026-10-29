@@ -260,6 +260,7 @@ fn spending_walk_threads_user_inputs_into_session_headline() {
     }];
     let spec = HeadlineSpec::default();
     let mut req = WalkRequest {
+        history: &crate::disk::paths::SpendingHistoryPaths::under(dir.path()),
         files: &files,
         prices: &prices,
         now_secs: NOW_SECS,

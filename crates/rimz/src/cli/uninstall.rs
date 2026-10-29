@@ -656,6 +656,7 @@ mod tests {
                 "ws",
                 "profiles",
                 "accounts",
+                "accounts/.history",
                 "packs",
                 "cache/providers",
                 "trust",
@@ -676,6 +677,7 @@ mod tests {
             for child in ["profiles", "accounts", "packs", "handoffs"] {
                 assert!(home.join(child).join("user-file").exists());
             }
+            assert!(home.join("accounts/.history/user-file").exists());
             assert!(!home.join("cache").exists());
         }
     }

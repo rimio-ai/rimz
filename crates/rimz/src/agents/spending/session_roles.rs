@@ -1,15 +1,15 @@
-//! Durable, home-wide session provenance for spending attribution.
+//! Durable, account-shared session provenance for spending attribution.
 
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::disk::atomic::{self, AtomicErr};
-use crate::disk::parse_cache::ParseCache;
-use crate::disk::paths::RuntimePaths;
+use crate::disk::parse_cache::{FileStamp, ParseCache, StampedPath};
+use crate::disk::paths::{RuntimePaths, SpendingHistoryPaths};
 use crate::ids::{AgentKind, AgentSessionId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,65 +90,48 @@ pub(super) struct RoleIndex {
 
 #[derive(Default)]
 struct Segment {
-    roles: RoleMap,
-    recorded_since_secs: Option<u64>,
+    records: Vec<SessionRoleRecord>,
     unfinished_tail: bool,
 }
 
-thread_local! {
-    // One slot for each retained year; a different root or year replaces the slot.
-    static SEGMENTS: [ParseCache<Segment>; 2] = const { [ParseCache::new(), ParseCache::new()] };
-}
+static SEGMENTS: Mutex<BTreeMap<PathBuf, ParseCache<Segment>>> = Mutex::new(BTreeMap::new());
 
 #[must_use = "durability barrier; check the result"]
 pub fn record(paths: &RuntimePaths, record: &SessionRoleRecord) -> Result<(), AtomicErr> {
     let year = record.at.to_zoned(jiff::tz::TimeZone::UTC).year();
     let path = paths.shared_session_roles(year);
-    let current = read_segment(&path, 1);
-    if current
-        .roles
-        .get(&record.kind)
-        .is_some_and(|rows| rows.contains_key(&record.session))
+    let segments = read_segments(&paths.spending_history, year);
+    let matches_session = |candidate: &SessionRoleRecord| {
+        candidate.kind == record.kind && candidate.session == record.session
+    };
+    if segments
+        .iter()
+        .filter(|(segment_year, _)| *segment_year == year)
+        .flat_map(|(_, segment)| segment.records.iter())
+        .any(matches_session)
     {
         return Ok(());
     }
-    let previous = read_segment(&paths.shared_session_roles(year - 1), 0);
     let mut record = record.clone();
-    if let Some(role) = previous
-        .roles
-        .get(&record.kind)
-        .and_then(|rows| rows.get(&record.session))
+    if let Some(previous) = segments
+        .iter()
+        .filter(|(segment_year, _)| *segment_year == year - 1)
+        .flat_map(|(_, segment)| segment.records.iter())
+        .filter(|candidate| matches_session(candidate))
+        .min_by_key(|record| record.at)
     {
-        record.role = role.clone();
-    }
-    let created = !path.exists();
-    // The append syncs the segment's own entry; the directory's entry needs its parent synced.
-    if let Some(directory) = path.parent()
-        && !directory.exists()
-    {
-        std::fs::create_dir_all(directory).map_err(|source| AtomicErr::Io {
-            path: directory.to_path_buf(),
-            source,
-        })?;
-        if let Some(providers) = directory.parent() {
-            atomic::sync_dir(providers)?;
-        }
+        record.role = previous.role.clone();
     }
     let mut bytes = Vec::new();
-    if current.unfinished_tail {
+    if read_segment(&path).unfinished_tail {
         bytes.push(b'\n');
     }
     serde_json::to_writer(&mut bytes, &record)?;
     bytes.push(b'\n');
-    atomic::append_record_bytes(&path, &bytes)?;
-    atomic::sync_file_data(&path)?;
-    if created {
-        prune_segments(&path, year)?;
-    }
-    Ok(())
+    super::history::append(&paths.spending_history, &path, &bytes)
 }
 
-pub(super) fn load(cursor: &Path, now_secs: u64) -> RoleIndex {
+pub(super) fn load(paths: &SpendingHistoryPaths, now_secs: u64) -> RoleIndex {
     let Some(at) = i64::try_from(now_secs)
         .ok()
         .and_then(|second| Timestamp::from_second(second).ok())
@@ -156,22 +139,27 @@ pub(super) fn load(cursor: &Path, now_secs: u64) -> RoleIndex {
         return RoleIndex::default();
     };
     let year = at.to_zoned(jiff::tz::TimeZone::UTC).year();
+    let segments = read_segments(paths, year);
+    let mut records = BTreeMap::<_, &SessionRoleRecord>::new();
+    for record in segments.iter().flat_map(|(_, segment)| &segment.records) {
+        let earliest = records
+            .entry((record.kind.clone(), record.session.clone()))
+            .or_insert(record);
+        if record.at < earliest.at {
+            *earliest = record;
+        }
+    }
     let mut roles = RoleMap::new();
     let mut recorded_since_secs = None;
-    for (slot, year) in [year - 1, year].into_iter().enumerate() {
-        let segment = read_segment(&RuntimePaths::session_roles_for_cursor(cursor, year), slot);
+    for ((kind, session), record) in records {
+        roles
+            .entry(kind)
+            .or_default()
+            .insert(session, record.role.clone());
         recorded_since_secs = recorded_since_secs
             .into_iter()
-            .chain(segment.recorded_since_secs)
+            .chain(u64::try_from(record.at.as_second()).ok())
             .min();
-        for (kind, sessions) in &segment.roles {
-            let entries = roles.entry(kind.clone()).or_default();
-            for (session, role) in sessions {
-                entries
-                    .entry(session.clone())
-                    .or_insert_with(|| role.clone());
-            }
-        }
     }
     RoleIndex {
         roles,
@@ -180,82 +168,88 @@ pub(super) fn load(cursor: &Path, now_secs: u64) -> RoleIndex {
     }
 }
 
-pub(super) fn load_history(cursor: &Path, now_secs: u64) -> RoleIndex {
+pub(super) fn load_history(paths: &SpendingHistoryPaths, now_secs: u64) -> RoleIndex {
     RoleIndex {
-        effort: super::session_effort::load(cursor, now_secs),
-        ..load(cursor, now_secs)
+        effort: super::session_effort::load(paths, now_secs),
+        ..load(paths, now_secs)
     }
 }
 
-fn read_segment(path: &Path, slot: usize) -> Arc<Segment> {
+fn read_segments(paths: &SpendingHistoryPaths, year: i16) -> Vec<(i16, Arc<Segment>)> {
+    let files: BTreeMap<_, _> = super::history::segments(&paths.roles_dir())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|path| {
+            let segment_year = super::history::segment_year(&path)?;
+            (segment_year == year || segment_year == year - 1).then_some((path, segment_year))
+        })
+        .collect();
+    SEGMENTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|path, _| files.contains_key(path));
+    files
+        .into_iter()
+        .map(|(path, year)| (year, read_segment(&path)))
+        .collect()
+}
+
+fn read_segment(path: &Path) -> Arc<Segment> {
     let Ok(meta) = std::fs::metadata(path) else {
         return Arc::default();
     };
-    let Ok(modified) = meta.modified() else {
+    let stamped = StampedPath {
+        path: path.to_path_buf(),
+        stamp: FileStamp::from_metadata(&meta),
+    };
+    let mut memos = SEGMENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    let memo = memos
+        .entry(path.to_path_buf())
+        .or_insert_with(ParseCache::new);
+    if let Some(segment) = memo.get_stamped(&stamped) {
+        return segment;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
         return Arc::default();
     };
-    SEGMENTS.with(|slots| {
-        let memo = &slots[slot];
-        if let Some(value) = memo.get(path, modified, meta.len()) {
-            return value;
-        }
-        let Ok(bytes) = std::fs::read(path) else {
-            return Arc::default();
-        };
-        let mut roles = RoleMap::new();
-        let mut recorded_since_secs = None;
-        for line in bytes.split(|byte| *byte == b'\n') {
-            let Ok(record) = serde_json::from_slice::<SessionRoleRecord>(line) else {
-                continue;
-            };
-            recorded_since_secs = recorded_since_secs
-                .into_iter()
-                .chain(u64::try_from(record.at.as_second()).ok())
-                .min();
-            roles
-                .entry(record.kind)
-                .or_default()
-                .entry(record.session)
-                .or_insert(record.role);
-        }
-        let segment = Arc::new(Segment {
-            roles,
-            recorded_since_secs,
-            unfinished_tail: bytes.last().is_some_and(|byte| *byte != b'\n'),
-        });
-        memo.store(path, modified, meta.len(), Arc::clone(&segment));
-        segment
-    })
+    let segment = Arc::new(Segment {
+        records: bytes
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| serde_json::from_slice(line).ok())
+            .collect(),
+        unfinished_tail: bytes.last().is_some_and(|byte| *byte != b'\n'),
+    });
+    memo.store_stamped(&stamped, Arc::clone(&segment));
+    segment
 }
 
-fn prune_segments(path: &Path, year: i16) -> Result<(), AtomicErr> {
-    let Some(directory) = path.parent() else {
+pub(super) fn prune_segments(
+    hold: &super::history::Maintenance,
+    now_secs: u64,
+) -> Result<(), AtomicErr> {
+    let Some(at) = i64::try_from(now_secs)
+        .ok()
+        .and_then(|second| Timestamp::from_second(second).ok())
+    else {
         return Ok(());
     };
-    let io = |source| AtomicErr::Io {
-        path: directory.to_path_buf(),
-        source,
-    };
-    for entry in std::fs::read_dir(directory).map_err(io)? {
-        let entry = entry.map_err(io)?;
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "jsonl")
-            || !entry.file_type().map_err(io)?.is_file()
-            || !path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| stem.parse::<i16>().ok())
-                .is_some_and(|old| old < year - 1)
-        {
+    let year = at.to_zoned(jiff::tz::TimeZone::UTC).year();
+    let directory = hold.paths.roles_dir();
+    let mut removed = false;
+    for path in super::history::segments(&directory)? {
+        if !super::history::segment_year(&path).is_some_and(|old| old < year - 1) {
             continue;
         }
         match std::fs::remove_file(&path) {
-            Ok(()) => {}
+            Ok(()) => removed = true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => return Err(AtomicErr::Io { path, source }),
         }
     }
-    atomic::sync_dir(directory)
+    if removed {
+        atomic::sync_dir(&directory)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -354,7 +348,7 @@ mod tests {
     }
 
     fn load(paths: &RuntimePaths, at: Timestamp) -> RoleMap {
-        super::load(&paths.shared_spending_cursor_path(), at.as_second() as u64).roles
+        super::load(&paths.spending_history, at.as_second() as u64).roles
     }
 
     fn fixture() -> (tempfile::TempDir, RuntimePaths) {
@@ -419,7 +413,7 @@ mod tests {
         crate::disk::atomic::append_record_bytes(&paths.shared_session_roles(2026), b"{\"kind\":")
             .unwrap();
         let now = row(2026, agent()).at;
-        let loaded = super::load(&paths.shared_spending_cursor_path(), now.as_second() as u64);
+        let loaded = super::load(&paths.spending_history, now.as_second() as u64);
         assert_eq!(
             loaded.recorded_since_secs,
             Some(first.at.as_second() as u64)
@@ -439,13 +433,13 @@ mod tests {
     }
 
     #[test]
-    fn new_year_carries_forward_and_prunes_only_older_segments() {
+    fn new_year_carries_forward_without_pruning_older_segments() {
         let (_dir, paths) = fixture();
         append_fixture(&paths, &row(2024, agent()));
         append_fixture(&paths, &row(2025, child()));
         let current = row(2026, agent());
         record(&paths, &current).unwrap();
-        assert!(!paths.shared_session_roles(2024).exists());
+        assert!(paths.shared_session_roles(2024).exists());
         assert!(paths.shared_session_roles(2025).exists());
         let saved: SessionRoleRecord =
             serde_json::from_slice(&std::fs::read(paths.shared_session_roles(2026)).unwrap())

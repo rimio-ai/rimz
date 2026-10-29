@@ -1,22 +1,21 @@
-//! Durable, home-wide active-time releases and conversation counts.
+//! Durable, account-shared active-time releases and conversation counts.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use jiff::Timestamp;
-use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
 use crate::disk::atomic::{self, AtomicErr};
 use crate::disk::parse_cache::{ParseCache, StampedPath};
-use crate::disk::paths::RuntimePaths;
+use crate::disk::paths::{RuntimePaths, SpendingHistoryPaths};
 use crate::ids::{AgentKind, AgentSessionId};
 
 use super::{EffortWindow, RoleTallies, aggregate, session_roles};
 
-const RETAIN_SECS: u64 = 366 * 86_400;
+pub(super) const RETAIN_SECS: u64 = 366 * 86_400;
 
 // Only existing daily segments from one root within the 366-day retention window survive a load.
 static SEGMENTS: Mutex<BTreeMap<PathBuf, ParseCache<Vec<SessionEffortRecord>>>> =
@@ -101,24 +100,11 @@ impl SessionEffortRecord {
 pub fn record(paths: &RuntimePaths, record: &SessionEffortRecord) -> Result<(), AtomicErr> {
     let date = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
     let path = paths.shared_session_effort(date);
-    if let Some(directory) = path.parent()
-        && !directory.exists()
-    {
-        std::fs::create_dir_all(directory).map_err(|source| AtomicErr::Io {
-            path: directory.to_path_buf(),
-            source,
-        })?;
-        if let Some(providers) = directory.parent() {
-            atomic::sync_dir(providers)?;
-        }
-    }
     // Separate a torn prior tail without reading the segment on the hook path.
     let mut bytes = vec![b'\n'];
     serde_json::to_writer(&mut bytes, record)?;
     bytes.push(b'\n');
-    atomic::append_record_bytes(&path, &bytes)?;
-    atomic::sync_file_data(&path)?;
-    Ok(())
+    super::history::append(&paths.spending_history, &path, &bytes)
 }
 
 /// Decode intact records, ignoring unknown fields and malformed lines.
@@ -135,8 +121,11 @@ fn try_read_segment(path: &Path) -> std::io::Result<Vec<SessionEffortRecord>> {
         .collect())
 }
 
-pub(super) fn load(cursor: &Path, now_secs: u64) -> Vec<Arc<Vec<SessionEffortRecord>>> {
-    segments(cursor, now_secs)
+pub(super) fn load(
+    paths: &SpendingHistoryPaths,
+    now_secs: u64,
+) -> Vec<Arc<Vec<SessionEffortRecord>>> {
+    segments(paths, now_secs)
         .unwrap_or_default()
         .into_iter()
         .filter(|(_, end)| *end > now_secs.saturating_sub(RETAIN_SECS))
@@ -144,7 +133,10 @@ pub(super) fn load(cursor: &Path, now_secs: u64) -> Vec<Arc<Vec<SessionEffortRec
         .collect()
 }
 
-fn segments(cursor: &Path, now_secs: u64) -> Result<BTreeMap<PathBuf, u64>, AtomicErr> {
+fn segments(
+    paths: &SpendingHistoryPaths,
+    now_secs: u64,
+) -> Result<BTreeMap<PathBuf, u64>, AtomicErr> {
     let mut segments = BTreeMap::new();
     let Some(now) = i64::try_from(now_secs)
         .ok()
@@ -153,40 +145,8 @@ fn segments(cursor: &Path, now_secs: u64) -> Result<BTreeMap<PathBuf, u64>, Atom
         return Ok(segments);
     };
     let today = now.to_zoned(TimeZone::UTC).date();
-    let path = RuntimePaths::session_effort_for_cursor(cursor, today);
-    let Some(directory) = path.parent() else {
-        return Ok(segments);
-    };
-    let io = |source| AtomicErr::Io {
-        path: directory.to_path_buf(),
-        source,
-    };
-    let entries = match std::fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            SEGMENTS
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clear();
-            return Ok(segments);
-        }
-        Err(error) => return Err(io(error)),
-    };
-    for entry in entries {
-        let entry = entry.map_err(io)?;
-        let path = entry.path();
-        if path
-            .extension()
-            .is_none_or(|extension| extension != "jsonl")
-            || !entry.file_type().map_err(io)?.is_file()
-        {
-            continue;
-        }
-        let Some(date) = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .and_then(|stem| stem.parse::<Date>().ok())
-        else {
+    for path in super::history::segments(&paths.effort_dir())? {
+        let Some(date) = super::history::segment_date(&path) else {
             continue;
         };
         if date > today {
@@ -277,8 +237,8 @@ pub(super) fn fold(
     }
 }
 
-pub(super) fn maintain(cursor: &Path, now_secs: u64) -> Result<(), AtomicErr> {
-    let segments = segments(cursor, now_secs)?;
+pub(super) fn maintain(hold: &super::history::Maintenance, now_secs: u64) -> Result<(), AtomicErr> {
+    let segments = segments(&hold.paths, now_secs)?;
     let mut removed = false;
     for (path, end) in &segments {
         if *end <= now_secs.saturating_sub(RETAIN_SECS) {
@@ -333,7 +293,7 @@ pub(super) fn maintain(cursor: &Path, now_secs: u64) -> Result<(), AtomicErr> {
             )?;
             bytes.push(b'\n');
         }
-        super::super::provider_file::write_bytes(path, &bytes)?;
+        super::super::provider_file::write_bytes_mode(path, &bytes, super::history::FILE_MODE)?;
     }
     if removed && let Some(directory) = segments.keys().next().and_then(|path| path.parent()) {
         atomic::sync_dir(directory)?;
@@ -424,15 +384,15 @@ mod tests {
             }],
         );
         let current = segment_fixture(&paths, now, std::slice::from_ref(&record));
-        let cursor = paths.shared_spending_cursor_path();
+        let history = paths.spending_history.clone();
         let now_secs = now.as_second() as u64;
-        let first = load(&cursor, now_secs);
+        let first = load(&history, now_secs);
         assert_eq!(first.len(), 2, "both retained segments must load");
-        let second = load(&cursor, now_secs);
+        let second = load(&history, now_secs);
         assert!(Arc::ptr_eq(&first[0], &second[0]));
         assert!(Arc::ptr_eq(&first[1], &second[1]));
-        let other_cursor = cursor.clone();
-        let other_thread = std::thread::spawn(move || load(&other_cursor, now_secs))
+        let other_history = history.clone();
+        let other_thread = std::thread::spawn(move || load(&other_history, now_secs))
             .join()
             .unwrap();
         assert!(
@@ -449,7 +409,7 @@ mod tests {
             .unwrap()
             .set_modified(std::time::SystemTime::UNIX_EPOCH)
             .unwrap();
-        let third = load(&cursor, now_secs);
+        let third = load(&history, now_secs);
         assert!(
             Arc::ptr_eq(&first[0], &third[0]),
             "closed segment must not reparse"
@@ -465,7 +425,7 @@ mod tests {
             .unwrap()
             .set_modified(std::time::SystemTime::UNIX_EPOCH)
             .unwrap();
-        let fourth = load(&cursor, now_secs);
+        let fourth = load(&history, now_secs);
         assert!(Arc::ptr_eq(&third[0], &fourth[0]));
         assert!(
             !Arc::ptr_eq(&third[1], &fourth[1]),
@@ -474,7 +434,7 @@ mod tests {
         assert_eq!(fourth[1].len(), 2);
         std::fs::remove_file(closed).unwrap();
         assert_eq!(
-            load(&cursor, now_secs).len(),
+            load(&history, now_secs).len(),
             1,
             "deleted segments leave the memo"
         );
@@ -566,9 +526,8 @@ mod tests {
             }],
         );
         let young_bytes = std::fs::read(&young_path).unwrap();
-        let cursor = paths.shared_spending_cursor_path();
         let fold = || {
-            let index = session_roles::load_history(&cursor, now_secs);
+            let index = session_roles::load_history(&paths.spending_history, now_secs);
             super::super::aggregate_walk_publish(
                 &[],
                 &Default::default(),
@@ -584,7 +543,10 @@ mod tests {
             .roles
         };
         let before = serde_json::to_value(fold()).unwrap();
-        maintain(&cursor, now_secs).unwrap();
+        let hold = super::super::history::try_maintain(&paths.spending_history)
+            .unwrap()
+            .unwrap();
+        maintain(&hold, now_secs).unwrap();
         let compacted = read_segment(&old_path);
         assert!(
             compacted
@@ -630,7 +592,7 @@ mod tests {
         );
         let bytes = std::fs::read(&old_path).unwrap();
         let modified = std::fs::metadata(&old_path).unwrap().modified().unwrap();
-        maintain(&cursor, now_secs).unwrap();
+        maintain(&hold, now_secs).unwrap();
         assert_eq!(std::fs::read(&old_path).unwrap(), bytes);
         assert_eq!(
             std::fs::metadata(&old_path).unwrap().modified().unwrap(),

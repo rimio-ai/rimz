@@ -1196,6 +1196,7 @@ allowed-dependencies = [
 # skills_library_under shares explicit home and pack skill roots with the chain (+1).
 # Remove the unused ambient skills_library accessor (-1).
 # SpendingHistoryPaths and exact-mode publication/locking share account-history disk mechanics (+16).
+# The cursor-coupled ledger accessors become migration-only legacy accessors (+0).
 surface-budget = 314
 
 [[verdict]]
@@ -1510,7 +1511,7 @@ reason = "The hook records explicit solo or team/role provenance; profile dots a
 [[verdict]]
 kind = "item"
 key = "agents::spending::session_roles::SessionRoleRecord"
-reason = "Home-wide provenance survives room and run removal and is shared with the hook writer."
+reason = "Account-shared provenance survives room and run removal and is shared with the hook writer."
 
 [[verdict]]
 kind = "item"
@@ -1520,17 +1521,17 @@ reason = "Single durable append boundary, with retained first-record identity an
 [[verdict]]
 kind = "item"
 key = "disk::paths::RuntimePaths::shared_session_roles"
-reason = "Hook provenance shares the account-global durable provider root rather than room lifetime."
+reason = "Hook provenance uses the account-shared history root rather than room lifetime."
 
 [[verdict]]
 kind = "item"
-key = "disk::paths::RuntimePaths::session_roles_for_cursor"
-reason = "Walker reads provenance beside its explicit cursor, including isolated roots, without constructing paths outside disk."
+key = "disk::paths::RuntimePaths::legacy_session_roles"
+reason = "Migration alone reads this home's legacy role segments from the provider cache."
 
 [[verdict]]
 kind = "item"
 key = "agents::spending::session_effort::SessionEffortRecord"
-reason = "The hook records native session identity and event time in the home-wide effort ledger."
+reason = "The hook records native session identity and event time in the account-shared effort ledger."
 
 [[verdict]]
 kind = "item"
@@ -1540,7 +1541,7 @@ reason = "Typed active releases and received messages cross the hook-to-ledger b
 [[verdict]]
 kind = "item"
 key = "agents::spending::session_effort::record"
-reason = "Single read-free durable append boundary for home-wide effort, outside the source effect's lock."
+reason = "Single read-free durable append boundary for account-shared effort, outside the source effect's lock."
 
 [[verdict]]
 kind = "item"
@@ -1550,12 +1551,12 @@ reason = "The ledger decoder serves spending readers and binary/integration regr
 [[verdict]]
 kind = "item"
 key = "disk::paths::RuntimePaths::shared_session_effort"
-reason = "Hook effort shares the account-global durable provider root rather than room lifetime."
+reason = "Hook effort uses the account-shared history root rather than room lifetime."
 
 [[verdict]]
 kind = "item"
-key = "disk::paths::RuntimePaths::session_effort_for_cursor"
-reason = "The spending reader addresses daily effort segments beside its explicit cursor without constructing paths outside disk."
+key = "disk::paths::RuntimePaths::legacy_session_effort"
+reason = "Migration alone reads this home's legacy effort segments from the provider cache."
 
 [[module]]
 path = "crates/rimz/src/forge"

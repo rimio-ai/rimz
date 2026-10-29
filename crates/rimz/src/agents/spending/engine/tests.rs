@@ -132,6 +132,7 @@ fn walker_includes_effort_without_any_transcript_files() {
     let result = SpendingWalker::new().walk_local(
         &runtime.shared_spending_cursor_path(),
         &crate::agents::spending::WalkRequest {
+            history: &runtime.spending_history,
             files: &[],
             prices: &Default::default(),
             now_secs,
@@ -219,6 +220,57 @@ fn empty_fleet_publication_includes_effort_and_maintains_old_segments() {
         ),
         "the producer must maintain effort segments even with no spend files"
     );
+}
+
+#[test]
+fn empty_fleet_still_publishes_when_shared_maintenance_is_unavailable() {
+    use crate::agents::spending::session_effort::{SessionEffortEvent, SessionEffortRecord};
+    use crate::disk::lock::WorkspaceLock;
+
+    for mark in [None, Some("2\n"), Some("invalid\n")] {
+        let (_dir, runtime, now_secs) = effort_fixture();
+        let paths = &runtime.spending_history;
+        std::fs::create_dir_all(&paths.history_root).unwrap();
+        let hold = if let Some(mark) = mark {
+            std::fs::write(paths.format(), mark).unwrap();
+            None
+        } else {
+            WorkspaceLock::try_acquire_mode(&paths.maintain_lock(), 0o664).unwrap()
+        };
+        let old = Timestamp::from_second(now_secs as i64 - 10 * 86_400).unwrap();
+        let old_path = runtime.shared_session_effort(old.to_zoned(jiff::tz::TimeZone::UTC).date());
+        let record = SessionEffortRecord {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: "effort-only".into(),
+            at: old,
+            event: SessionEffortEvent::FromUser,
+        };
+        let bytes = serde_json::to_vec(&record).unwrap();
+        std::fs::write(&old_path, &bytes).unwrap();
+        let request = service_request(&runtime, None, &HeadlineSpec::default());
+        let context = super::request_context(&request, true);
+        let result = super::walk_fleet_spending_files(
+            &mut SpendingWalker::new(),
+            &runtime,
+            &context,
+            true,
+            &mut |_| {},
+            &[],
+            now_secs,
+        );
+        assert_eq!(
+            std::fs::read(&old_path).unwrap(),
+            bytes,
+            "busy or newer stores must not compact"
+        );
+        let published = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+        assert!(
+            published.refreshed_at_ms > 0,
+            "skipping maintenance must not skip publication"
+        );
+        assert_eq!(published.refreshed_at_ms, result.provider.refreshed_at_ms);
+        drop(hold);
+    }
 }
 
 fn publish_workspace(runtime: &RuntimePaths, scope_hash: &str, usd: f64) {
@@ -1149,6 +1201,7 @@ fn producer_missing_scope_applies_live_origin_before_reusing_warm_memo() {
     let origin_overrides = std::collections::HashMap::new();
     let user_inputs = Vec::new();
     let request = crate::agents::spending::WalkRequest {
+        history: &runtime.spending_history,
         files: &files,
         prices: &prices,
         now_secs: now_secs + 1,

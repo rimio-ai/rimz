@@ -408,6 +408,7 @@ fn claude_live_addback_uses_its_session_not_its_project_folder() {
     let result = SpendingWalker::new().walk_local(
         &dir.path().join("spending.json"),
         &WalkRequest {
+            history: &crate::disk::paths::SpendingHistoryPaths::under(dir.path()),
             files: &files,
             prices: &crate::agents::pricing::PriceBook::default(),
             now_secs: published.as_second() as u64,
@@ -487,6 +488,7 @@ fn claude_fork_live_addback_does_not_recount_copied_history() {
         let result = SpendingWalker::new().walk_local(
             &dir.path().join("spending.json"),
             &WalkRequest {
+                history: &crate::disk::paths::SpendingHistoryPaths::under(dir.path()),
                 files: &files,
                 prices: &crate::agents::pricing::PriceBook::default(),
                 now_secs: published.as_second() as u64,

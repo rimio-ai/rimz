@@ -1,6 +1,6 @@
 # Spend and token pricing
 
-RimZ totals what agents cost by walking their transcripts, and prices token-only transcripts through a per-model price table. This page owns both: the cost coverage a live card carries, the full-history spending walk and its caches, the service that keeps one walk per namespace, the [`PriceBook`](../../../crates/rimz/src/agents/pricing/mod.rs), and the two home-wide ledgers that attribute spend and effort to roles. Accounts, subscription windows, and paid-usage balances are [providers.md](./providers.md). The dollar caps that read these totals are [budget.md](../harness/budget.md).
+RimZ totals what agents cost by walking their transcripts, and prices token-only transcripts through a per-model price table. This page owns both: the cost coverage a live card carries, the full-history spending walk and its caches, the service that keeps one walk per namespace, the [`PriceBook`](../../../crates/rimz/src/agents/pricing/mod.rs), and the two account-shared ledgers that attribute spend and effort to roles. Accounts, subscription windows, and paid-usage balances are [providers.md](./providers.md). The dollar caps that read these totals are [budget.md](../harness/budget.md).
 
 Spend is enrichment. A missing transcript store, a failed price fetch, or an unknown model degrades to stale prices or to zero-dollar token usage inside a real tally, never to an error.
 
@@ -302,28 +302,50 @@ The 5-minute cache-creation slice bills at the cache-create rate, and the 1-hour
 
 Two providers feed the split differently. Codex passes uncached input and output. It bills cached input at the cache-read rate when `cache_read_explicit` is set and at the input rate otherwise, so a model without a published discount does not discount cached tokens ([adapter_codex.md](./adapter_codex.md#cost)). Claude splits `message.usage.cache_creation` into 5-minute and 1-hour creation when present, and treats flat `cache_creation_input_tokens` as 5-minute creation otherwise. Managed contracted rates apply when deployed ([adapter_claude.md](./adapter_claude.md)).
 
+## Shared history store
+
+Role and effort records live under `~/.rimz/accounts/.history/`, shared by every RimZ home whose accounts folder is shared. The per-home cursor and publications stay in `cache/providers/`. Uninstall and reset keep the history with the accounts folder.
+
+```text
+accounts/.history/
+  format                            1\n
+  maintain.lock                     exclusive non-blocking flock
+  session-roles/<YYYY>[.<tag>].jsonl
+  session-effort/<YYYY-MM-DD>[.<tag>].jsonl
+```
+
+The history root and its subdirectories are created at `02775`, and files at `0664`, independent of umask. Missing ancestors, including `accounts/`, follow the process umask without adding setgid. The history root takes the accounts directory's group on a best-effort basis; subdirectories take the history root's group, including after a racing first creation. Existing files are not chmodded by another user's append. Whole-file rewrites follow file symlinks through the shared provider-file writer.
+
+Hook writers only append and data-sync. Each home's elected spending publisher tries `maintain.lock` without waiting. While holding it, a missing format mark is durably created as `1`; a newer, malformed, or unreadable mark disables maintenance. Reads and appends remain allowed. Every ledger rewrite or segment removal holds this shared lock and requires a mark no greater than the build understands. A busy lock or a maintenance error never prevents spend publication.
+
+Format 1 permits effort compaction after eight days, effort expiry after 366 days, and role expiry before the previous UTC year. Roles are never rewritten. A later build may add role fields without raising the mark; it must raise the mark before introducing effort fields or events an older compactor would lose, or extending retention beyond what an older maintainer keeps.
+
+At each publishing walk, migration copies retained, nonempty legacy role and effort segments from this home's `cache/providers/` whole, then removes the originals and syncs their directory. Each copy is published durably without replacing an existing target as `<stem>.<tag>.jsonl`, where the tag is the first eight bytes of SHA-256 over the canonical RimZ home path, a zero byte, and the original bytes, encoded as 16 lowercase hex characters. An existing copy only needs its unchanged legacy original removed, so retrying the same bytes does not duplicate effort. Changed legacy bytes get their own copy on the next walk. If a crash falls between publishing the copy and removing the legacy file, and an older build appends to that file before the retry, the grown copy gets a new tag and its already copied effort counts twice. Role records are unaffected because the earliest `at` wins. Expired or empty legacy files are removed without copying; empty legacy directories are removed too. There is no legacy read fallback. A pre-upgrade writer in the same home can lose an append made between copying and removal.
+
+Readers recognize bare segment stems and stems with one valid migration tag. Unknown filenames are ignored and never removed. Decoded segments are memoized by file stamp; deleted, expired, and different-root segments leave the memo.
+
 ## Session role provenance
 
-`cache/providers/session-roles/<UTC-year>.jsonl` records which role each native session ran in, home-wide and independent of run records and room state. The walk joins it to spend to publish solo, team-role, and subagent tallies.
+`accounts/.history/session-roles/<UTC-year>[.<tag>].jsonl` records which role each native session ran in, across homes sharing accounts and independent of run records and room state. The walk joins it to spend to publish solo, team-role, and subagent tallies.
 
 Each line carries `kind`, native `session`, `role` (`agent` or `subagent`), `profile`, and RFC 3339 `at`. A subagent requires a profile and carries no seat. An agent's profile is optional, and an agent row carries `seat`: `"solo"`, or `{"team":"<team>","role":"<role>"}` when `RIMZ_TEAM` is set. The seat's role is `RIMZ_AGENT_ROLE`, else the row's profile, else the provider kind. A row without a seat is unrecorded provenance, never a solo seat. Readers ignore unknown fields and skip malformed lines.
 
 ### Writing a row
 
-The lifecycle funnel writes a row for a primary, derived, or replayed observation with a native id, side conversations excluded, when the observation creates the session's row in the room or registers the session (a fresh start or a resume). Every other frame skips the index. Each hook frame applies in a fresh `rimz hooks apply` child with a cold parse memo, and `session_roles::record` reads the current and previous year segments to keep first-wins provenance, so writing on every frame would cost a two-segment read each time.
+The lifecycle funnel writes a row for a primary, derived, or replayed observation with a native id, side conversations excluded, when the observation creates the session's row in the room or registers the session (a fresh start or a resume). Every other frame skips the index. Each hook frame applies in a fresh `rimz hooks apply` child with a cold parse memo, and `session_roles::record` reads every segment of the current and previous UTC year to preserve provenance, so writing on every frame would reread those files each time.
 
 - A pane whose run resolves to `subagent = true` supplies the subagent role, with its environment profile, else the provider kind, as the profile.
 - Every other observed session is an agent.
 - Native provider children inherit the pane's role and seat. Claude companions join their parent's id, and Codex children join their own observed id.
 - An unobserved session has no row. Its spend still counts in provider totals.
 
-Appends use `append_record_bytes` followed by `sync_file_data`, without a lock, and creating `session-roles/` syncs `cache/providers/`. A hook write error warns and leaves the hook reply unchanged.
+Appends use exact-mode `append_record_bytes_mode` followed by `sync_file_data`, without a lock; directory creation syncs its parent. A hook write error warns and leaves the hook reply unchanged.
 
-On the first observation in a new year, the writer carries the previous year's role, profile, and seat forward and ignores the pane's current identity. A session absent from both segments is recorded fresh. Creating a segment removes segments older than the previous year.
+On the first observation in a new year, the writer carries the previous year's earliest role, profile, and seat forward and ignores the pane's current identity. A session absent from both retained years is recorded fresh. Only the shared maintainer removes older years, never the hook writer.
 
 ### Reading and placement
 
-Readers fold the previous-year segment, then the current-year one, and the first record wins. A stat-keyed parse memo bounds retained memory to those two segments.
+Readers fold every file of the previous and current UTC years, and the record with the earliest `at` wins for each provider and native session, independently of filename order. A stat-keyed parse memo retains only those files.
 
 A profile string alone does not identify a team. A Markdown team seat records profile `<team>.<role>`, a TOML `[agents.teams]` seat records its role binding's profile, and a standalone profile may itself contain a dot. `crates/rimz/src/agents/spending/session_roles.rs::SessionRole::placement` serves both the spend join and the effort fold, and places a row by the first case that matches:
 
@@ -346,7 +368,7 @@ Two stamps say how far back the ledgers reach:
 
 | Field | Value |
 | --- | --- |
-| `roles.recorded_since_secs` | the earliest parsed role record's epoch second across both retained segments, over all roles |
+| `roles.recorded_since_secs` | the earliest parsed role record's epoch second across all files of the two retained years, over all roles |
 | `roles.effort_since_secs` | the earliest retained effort record, whether or not it joins a known role |
 
 Empty ledgers publish `None`, and malformed tails contribute nothing. Both stamps name the first retained record, not necessarily the first ever, and effort compaction can move its earliest stamp within a UTC day.
@@ -355,7 +377,7 @@ Solo, team-role, and subagent spend together is a subset of fleet spend in every
 
 ## Session effort ledger
 
-`cache/providers/session-effort/<UTC-date>.jsonl` holds home-wide active-time releases and message counts, independent of room and run retention. Each record carries provider `kind`, native `session`, RFC 3339 `at`, and a flattened `event`:
+`accounts/.history/session-effort/<UTC-date>[.<tag>].jsonl` holds active-time releases and message counts across homes sharing accounts, independent of room and run retention. Each record carries provider `kind`, native `session`, RFC 3339 `at`, and a flattened `event`:
 
 | Event | Payload | Meaning |
 | --- | --- | --- |
@@ -395,7 +417,7 @@ The spending walker, the checkpoint publisher, and the empty-fleet publisher sha
 
 Windows use the spend fold's local-midnight starts and 7, 30, and 364-local-day membership, with no headline window. Active credit lands at the release timestamp, even across midnight, and messages at their transcript timestamp. Each retained daily segment has a process-wide stat-keyed parse memo. An unchanged segment reuses its parsed records, and a deleted, expired, or different-root segment leaves the memo.
 
-Only the elected spending engine maintains the ledger, never the hook. A segment whose entire UTC day is older than `RAW_RETAIN_SECS` (8 days) is durably replaced with `totals` records grouped by provider, native session, and the UTC day of each event's `at`. Sender-side message credit is materialized into the sender's totals. The latest event timestamp in each group becomes its `at`, which preserves window totals to UTC-day granularity. The seven-local-day window keeps raw timestamps, because its segments are not compacted. Compacted segments are left untouched. A segment whose entire UTC day is older than 366 days is deleted with a directory sync. A maintenance error warns and does not block spend publication.
+Only an elected spending publisher holding the shared maintenance lock under a compatible format mark maintains the ledger, never the hook. A segment whose entire UTC day is older than `RAW_RETAIN_SECS` (8 days) is durably replaced in place with `totals` records grouped by provider, native session, and the UTC day of each event's `at`. Each tagged copy compacts under its own name, never into a sibling segment. Sender-side message credit is materialized into the sender's totals. The latest event timestamp in each group becomes its `at`, which preserves window totals to UTC-day granularity. The seven-local-day window keeps raw timestamps, because its segments are not compacted. Compacted segments are left untouched. A segment whose entire UTC day is older than 366 days is deleted with a directory sync. A maintenance error warns and does not block spend publication.
 
 ## See also
 

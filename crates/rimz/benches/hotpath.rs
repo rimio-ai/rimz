@@ -2111,6 +2111,7 @@ fn spending_fixture_scaled(
         let user_inputs = Vec::new();
         let spec = rimz::agents::spending::HeadlineSpec::default();
         let req = rimz::agents::spending::WalkRequest {
+            history: &rimz::disk::paths::SpendingHistoryPaths::under(tempdir.path()),
             files: &files,
             prices: &prices,
             now_secs: SPENDING_NOW_SECS,
@@ -2225,6 +2226,7 @@ fn spending_walk_cold(bencher: Bencher) {
             let user_inputs = Vec::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
+                history: &rimz::disk::paths::SpendingHistoryPaths::under(fixture._tempdir.path()),
                 files: &fixture.files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
@@ -2250,6 +2252,7 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
             let user_inputs = Vec::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
+                history: &rimz::disk::paths::SpendingHistoryPaths::under(fixture._tempdir.path()),
                 files: &fixture.files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
@@ -2275,6 +2278,7 @@ fn spending_live_scale_cold_hydrate(bencher: Bencher) {
             let user_inputs = Vec::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
+                history: &rimz::disk::paths::SpendingHistoryPaths::under(fixture._tempdir.path()),
                 files: &fixture.files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
@@ -2300,6 +2304,7 @@ fn spending_live_scale_warm_global_refresh(bencher: Bencher) {
             let user_inputs = Vec::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
+                history: &rimz::disk::paths::SpendingHistoryPaths::under(fixture._tempdir.path()),
                 files: &fixture.files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
@@ -2330,6 +2335,7 @@ fn spending_live_scale_cold_discovery_inclusive(bencher: Bencher) {
             let user_inputs = Vec::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
+                history: &rimz::disk::paths::SpendingHistoryPaths::under(fixture._tempdir.path()),
                 files: &files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
@@ -2360,6 +2366,7 @@ fn spending_live_scale_warm_discovery_inclusive(bencher: Bencher) {
             let user_inputs = Vec::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
+                history: &rimz::disk::paths::SpendingHistoryPaths::under(fixture._tempdir.path()),
                 files: &files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
@@ -2427,6 +2434,7 @@ fn spending_live_scale_additional_workspace_partial_scope(bencher: Bencher) {
             }
             rimz::agents::spending::write_spending_cache(&fixture.cache_path, &cache);
             let req = rimz::agents::spending::WalkRequest {
+                history: &rimz::disk::paths::SpendingHistoryPaths::under(fixture._tempdir.path()),
                 files: &fixture.files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,

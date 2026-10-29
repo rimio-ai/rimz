@@ -373,6 +373,7 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 | The external [loop timer](./loop.md) | Removed | |
 | The runtime tree and `~/.rimz/cache/`, including the provider caches under `cache/providers/` | Removed | |
 | [Provider account](./accounts.md) homes under `~/.rimz/accounts/` | Kept: their credentials and history belong to the provider; the preview names each existing declared home and the `rm -rf` command to clear it by hand | |
+| RimZ role and effort history under `accounts/.history/` | Always kept: other homes sharing the accounts folder use these durable ledgers | |
 | Durable stores and spend history (`ws/`, `logs/`, `loops/`, `web/`, `builds/` under `~/.rimz`) | Kept | `--state` removes them |
 | Per-machine config, themes, trust grants, plugins, and remote aliases (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`, `trust/`, `agents.d/` under `~/.rimz`) | Kept | `--config` removes them |
 | Agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`), installed `packs/`, and `handoffs/` | Always kept, including linked pack checkouts | |
