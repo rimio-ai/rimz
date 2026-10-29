@@ -547,6 +547,7 @@ fn compaction_default_follows_the_engine_but_declared_values_warn() {
         root.path(),
         crate::config::definitions::SkillCheck::Skip,
         &Default::default(),
+        &root.path().join("config.toml"),
         &Default::default(),
         Some(272_000),
     );
@@ -4269,6 +4270,7 @@ fn tier_override_changes_the_supervised_launch_runtime() {
         root.path(),
         crate::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
+        &root.path().join("config.toml"),
         &machine.tiers,
         machine.harness.auto_compact,
     );

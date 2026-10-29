@@ -274,6 +274,7 @@ pub(super) fn load_catalog(
         &rimz::disk::paths::agents_home(),
         rimz::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
+        &rimz::config::MachineConfig::config_path(),
         &machine.tiers,
         machine.harness.auto_compact,
     )

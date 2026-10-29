@@ -130,6 +130,7 @@ fn unknown_model_cannot_invent_a_family_from_a_tier_only_parent() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -162,6 +163,7 @@ fn tier_frontmatter_refusals_explain_the_fix() {
             root.path(),
             SkillCheck::Skip,
             &CommandsConfig::default(),
+            &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
             Some(272_000),
         );
@@ -194,6 +196,7 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -204,6 +207,7 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -236,6 +240,7 @@ fn listed_concrete_model_refuses_its_unbuildable_family_with_a_tier_hint() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -295,6 +300,7 @@ fn tier_key_and_concrete_model_choose_the_nearest_runtime() {
             root.path(),
             SkillCheck::Skip,
             &CommandsConfig::default(),
+            &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
             Some(272_000),
         );
@@ -392,6 +398,7 @@ fn allowed_tools_refuse_malformed_rules_with_shape_and_rule() {
             root.path(),
             SkillCheck::Skip,
             &CommandsConfig::default(),
+            &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
             Some(272_000),
         );
@@ -834,6 +841,7 @@ fn keep_warm_blocks_resolve_team_fields_and_yaml_off() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -858,6 +866,7 @@ fn keep_warm_blocks_resolve_team_fields_and_yaml_off() {
             root.path(),
             SkillCheck::Skip,
             &CommandsConfig::default(),
+            &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
             Some(272_000),
         );
@@ -906,6 +915,7 @@ fn keep_warm_while_is_refused_on_standalone_definitions_in_both_namespaces() {
                 root.path(),
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
+                &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
                 Some(272_000),
             );
@@ -1138,6 +1148,7 @@ fn team_signal_wildcards_preserve_branch_scope_but_reject_self_wakes() {
                 root.path(),
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
+                &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
                 Some(272_000),
             );
@@ -1308,6 +1319,7 @@ fn invalid_teams_publish_neither_roster_nor_seats() {
             root.path(),
             SkillCheck::Skip,
             &CommandsConfig::default(),
+            &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
             Some(272_000),
         );
@@ -1365,6 +1377,7 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
                 root.path(),
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
+                &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
                 Some(272_000),
             )
@@ -1377,6 +1390,7 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
                 root.path(),
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
+                &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
                 Some(272_000),
             )
@@ -1434,6 +1448,7 @@ fn unsupported_preset_fields_fail_at_the_definition() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1497,6 +1512,7 @@ fn unsupported_tuning_fields_load_for_launch_time_normalization() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1558,6 +1574,7 @@ fn duplicate_team_names_remove_all_seats_and_sources() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1599,6 +1616,7 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1618,6 +1636,7 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1633,6 +1652,7 @@ fn team_roles_distinguish_failed_agents_from_unknown_agents() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1668,6 +1688,7 @@ fn duplicate_agent_names_record_both_sources_in_one_namespace() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1735,6 +1756,7 @@ fn even_a_bodyless_seat_needs_its_runtime_base() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1770,6 +1792,7 @@ fn load_checked(root: &Path) -> LoadedDefinitions {
             machine_isolation: crate::config::Isolation::Scoped,
         },
         &CommandsConfig::default(),
+        &root.join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     )
@@ -1794,6 +1817,7 @@ fn clean(root: &Path) -> LoadedDefinitions {
         root,
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -1806,6 +1830,7 @@ fn error(root: &Path, needle: &str) {
         root,
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -2150,6 +2175,7 @@ fn failed_parents_exclude_dependents_and_keep_independent_profiles() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -2253,6 +2279,7 @@ fn names_and_kind_bases_are_validated() {
                 root.path(),
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
+                &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
                 Some(272_000),
             )
@@ -2276,6 +2303,7 @@ fn names_and_kind_bases_are_validated() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -2310,6 +2338,7 @@ fn names_and_kind_bases_are_validated() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -2579,6 +2608,7 @@ fn agents_and_seats_allow_loaded_subagents_and_commands() {
         root.path(),
         SkillCheck::Skip,
         &commands,
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -2602,6 +2632,7 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
@@ -2626,6 +2657,8 @@ fn traits_deduplicate_and_preserve_unrelated_placeholders() {
     let sources = catalog::Catalog::new(
         root.path(),
         &crate::packs::ResolvedPacks::default(),
+        &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &catalog,
         &mut LoadedDefinitions::default(),
     );
@@ -2692,6 +2725,7 @@ fn native_compaction_default_is_configurable_and_preserves_inheritance() {
             root.path(),
             SkillCheck::Skip,
             &CommandsConfig::default(),
+            &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
             window,
         );
@@ -2720,6 +2754,7 @@ fn native_compaction_default_is_configurable_and_preserves_inheritance() {
         root.path(),
         SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
         None,
     );
@@ -3262,7 +3297,10 @@ fn packs_claim_each_namespace_even_when_the_home_file_is_broken() {
             loaded.pack_items.iter().any(|item| {
                 item.kind == *kind
                     && item.name == *name
-                    && item.fate == PackDefinitionFate::Overridden(home.path().join(&home_file))
+                    && item.fate
+                        == ItemFate::Overridden {
+                            path: home.path().join(&home_file),
+                        }
             }) && !loaded
                 .errors
                 .iter()
@@ -3532,15 +3570,12 @@ fn dangling_home_definition_claims_its_name_before_pack_fallback() {
 }
 
 #[test]
-fn traits_keep_contributor_note_names_in_home_and_pack_tiers() {
+fn traits_keep_contributor_note_names_only_in_home() {
     let home = fixture();
     let pack = linked_pack(home.path(), "crew");
-    for (root, name) in [
-        (home.path(), "README"),
-        (pack.path(), "AGENTS"),
-        (pack.path(), "CLAUDE"),
-    ] {
-        write(root, &format!("traits/{name}.md"), name);
+    for name in ["README", "AGENTS", "CLAUDE"] {
+        write(home.path(), &format!("traits/{name}.md"), name);
+        write(pack.path(), &format!("traits/{name}.md"), "Documentation.");
     }
     definition(
         home.path(),
@@ -3609,9 +3644,9 @@ fn packs_failed_bases_name_the_supplied_file_and_item_fates_are_complete() {
         assert!(
             matches!(
                 (expected, fate),
-                ("failed", PackDefinitionFate::Failed(_))
-                    | ("loads", PackDefinitionFate::Loads)
-                    | ("type", PackDefinitionFate::ExcludedType)
+                ("failed", ItemFate::Failed { .. })
+                    | ("loads", ItemFate::Loads)
+                    | ("type", ItemFate::ExcludedType)
             ),
             "{name}: {fate:?}"
         );
@@ -3638,9 +3673,10 @@ fn packs_unreadable_traits_have_failed_fates() {
             .any(|error| error.path.ends_with("agents/worker.md")
                 && error.message.contains("cannot read trait"))
     );
-    assert!(
-        matches!(&loaded.pack_items.iter().find(|item| item.name == "broken").unwrap().fate, PackDefinitionFate::Failed(message) if message.contains("UTF-8"))
-    );
+    assert!(matches!(
+        &loaded.pack_items.iter().find(|item| item.name == "broken").unwrap().fate,
+        ItemFate::Failed { message } if message.contains("UTF-8")
+    ));
 }
 
 #[test]

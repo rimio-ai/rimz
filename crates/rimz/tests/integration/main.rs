@@ -39,6 +39,7 @@ mod message;
 mod mux_command;
 mod oauth_usage;
 mod output_files;
+mod packs;
 mod paths;
 mod performance;
 mod presence_wake;

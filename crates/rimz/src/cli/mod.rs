@@ -29,6 +29,7 @@ mod loop_cmd;
 mod loop_timer;
 mod lsp;
 mod message;
+mod packs;
 mod pane;
 mod paths;
 mod pricing_refresh;
@@ -259,6 +260,7 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Paths(args)) => paths::run(args, &globals),
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
         Some(Subcmd::Logins(args)) => accounts::run(args, &globals),
+        Some(Subcmd::Packs(args)) => packs::run(args),
         Some(Subcmd::Budget(args)) => budget::run(args, &globals),
         Some(Subcmd::ListPets(args)) => list_pets::run(args, &globals),
         Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
@@ -715,6 +717,8 @@ enum Subcmd {
     /// A named account is a separate provider home a room launches into.
     #[command(name = "accounts")]
     Logins(accounts::AccountsArgs),
+    /// Install, inspect, and select linked definition and skill packs.
+    Packs(packs::PacksArgs),
     /// Inspect or change room and provider-account dollar caps.
     Budget(budget::BudgetArgs),
     /// Preview the bundled provider-dashboard pets.

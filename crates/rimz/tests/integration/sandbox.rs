@@ -2703,6 +2703,35 @@ fn sandbox_unconfigured_skills_without_library_add_no_mounts() {
 }
 
 #[test]
+fn sandbox_listed_library_marker_errors_keep_the_read_failure() {
+    let env = Env::new();
+    let marker = env.agents_home().join("skills/broken/SKILL.md");
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("SKILL.md", &marker).unwrap();
+    let listed = vec!["broken".parse().unwrap()];
+    let result = skill_prepare(
+        &env,
+        &environment(&env),
+        SkillInputs {
+            kind: "codex",
+            home: Some(env.home_root.join(".agents/skills")),
+            manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
+            callable: Some(&listed),
+        },
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(SandboxErr::SkillDiscovery(rimz::agents::skills::SkillErr::Io { path, .. }))
+                if path == &marker
+        ),
+        "a listed library marker's read failure must not become UnknownSkill: {:?}",
+        result.as_ref().err()
+    );
+}
+
+#[test]
 fn sandbox_unconfigured_unreadable_skills_keep_native_launch_behavior() {
     let execute = available();
     for invalid_name in [false, true] {

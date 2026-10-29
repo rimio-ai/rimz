@@ -35,6 +35,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
         "Configure and maintain",
         &[
             "config",
+            "packs",
             "coverage",
             "list-pets",
             "list-themes",

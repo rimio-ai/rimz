@@ -102,6 +102,7 @@ fn load(
         home,
         check,
         &machine.agents.commands,
+        &rimz::config::MachineConfig::config_path(),
         &machine.tiers,
         machine.harness.auto_compact,
     );

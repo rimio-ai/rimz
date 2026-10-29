@@ -777,15 +777,26 @@ pub(crate) fn validate_config(
     teams: &TeamsConfig,
 ) -> Result<()> {
     validate_profile_namespace(profiles, commands, teams)?;
-    for name in teams.0.keys() {
-        let team = teams
-            .0
-            .get(name)
-            .expect("team config key exists during validation");
-        let prepared = prepare_team(name, team, profiles, None)?;
-        if team.layout.is_some() {
-            compile_team(name, prepared, profiles, commands, None)?;
-        }
+    for (name, team) in &teams.0 {
+        validate_team(name, team, profiles, commands)?;
+    }
+    Ok(())
+}
+
+/// Validate one team before its seats and name enter the merged namespace.
+pub(crate) fn validate_team(
+    name: &str,
+    team: &Team,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<()> {
+    validate_team_names(std::iter::once(name))?;
+    if is_cell_word(name, profiles, commands) {
+        return Err(LayoutErr::ReservedTeamName(name.to_owned()));
+    }
+    let prepared = prepare_team(name, team, profiles, None)?;
+    if team.layout.is_some() {
+        compile_team(name, prepared, profiles, commands, None)?;
     }
     Ok(())
 }
@@ -799,7 +810,7 @@ fn validate_profile_namespace(
 ) -> Result<()> {
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
-    validate_team_names(teams)?;
+    validate_team_names(teams.0.keys().map(String::as_str))?;
     for name in teams.0.keys() {
         if is_cell_word(name, profiles, commands) {
             return Err(LayoutErr::ReservedTeamName(name.clone()));
@@ -941,7 +952,7 @@ pub(super) fn resolve_spec_with_agent_override(
 ) -> Result<LayoutSpec> {
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
-    validate_team_names(teams)?;
+    validate_team_names(teams.0.keys().map(String::as_str))?;
     let base_override = resolve_agent_override(agent_override, profiles)?;
     let Some(raw) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(LayoutSpec::single(Cell::shell()));
@@ -2056,16 +2067,18 @@ fn is_kind_ordinal_shape(name: &str) -> bool {
     crate::agents::find_definition(kind).is_some() && ordinal.parse::<u32>().is_ok_and(|n| n > 0)
 }
 
-fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
-    if let Some(name) = teams.0.keys().find(|name| name.contains(['.', '/'])) {
-        return Err(LayoutErr::InvalidTeamName { name: name.clone() });
+fn validate_team_names<'a>(mut names: impl Iterator<Item = &'a str> + Clone) -> Result<()> {
+    if let Some(name) = names.clone().find(|name| name.contains(['.', '/'])) {
+        return Err(LayoutErr::InvalidTeamName {
+            name: name.to_owned(),
+        });
     }
-    if let Some(name) = teams.0.keys().find(|name| {
-        petname::RESERVED_AGENT_WORDS.contains(&name.as_str())
-            || petname::HEADER_PSEUDO_HANDLES.contains(&name.as_str())
-            || name.as_str() == "me"
+    if let Some(name) = names.find(|name| {
+        petname::RESERVED_AGENT_WORDS.contains(name)
+            || petname::HEADER_PSEUDO_HANDLES.contains(name)
+            || *name == "me"
     }) {
-        return Err(LayoutErr::ReservedTeamName(name.clone()));
+        return Err(LayoutErr::ReservedTeamName(name.to_owned()));
     }
     Ok(())
 }

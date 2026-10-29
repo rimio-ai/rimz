@@ -34,6 +34,7 @@ pub struct SkillLinkPlan {
 pub struct SkillLinkOutcome {
     pub linked: usize,
     pub unlinked: usize,
+    pub unlinked_names: Vec<String>,
     pub shadowed: Vec<String>,
 }
 
@@ -190,8 +191,10 @@ pub fn plan(
     }
     let mut wanted = BTreeMap::new();
     if !matches!(desired, Desired::None) {
-        for (name, skill) in chain.inventory(|_| true)?.skills {
-            wanted.insert(name, absolute(&skill.path)?);
+        for (name, skill) in chain.inventory_for_links()?.skills {
+            if skill.path.join("SKILL.md").is_file() {
+                wanted.insert(name, absolute(&skill.path)?);
+            }
         }
     }
     for (name, _) in entries(&plan.root)? {
@@ -244,7 +247,10 @@ pub fn apply(plan: &SkillLinkPlan) -> Result<SkillLinkOutcome, SkillLinkErr> {
                     continue;
                 }
                 match fs::remove_file(&path) {
-                    Ok(()) => outcome.unlinked += 1,
+                    Ok(()) => {
+                        outcome.unlinked += 1;
+                        outcome.unlinked_names.push(name.clone());
+                    }
                     Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                     Err(err) => return Err(io_err(&path, err)),
                 }
@@ -271,6 +277,27 @@ pub fn apply(plan: &SkillLinkPlan) -> Result<SkillLinkOutcome, SkillLinkErr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_names_only_links_it_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("provider");
+        let home = temp.path().join("home");
+        let chain = SkillChain::from_home(&home);
+        fs::create_dir(&root).unwrap();
+        for name in ["removed", "missing", "foreign"] {
+            std::os::unix::fs::symlink(home.join("packs/gone/skills").join(name), root.join(name))
+                .unwrap();
+        }
+        let plan = plan(&root, &chain, Desired::Prune).unwrap();
+        fs::remove_file(root.join("missing")).unwrap();
+        fs::remove_file(root.join("foreign")).unwrap();
+        std::os::unix::fs::symlink("/foreign/skill", root.join("foreign")).unwrap();
+        let outcome = apply(&plan).unwrap();
+        assert_eq!(outcome.unlinked_names, ["removed"]);
+        assert_eq!(outcome.unlinked, 1);
+        assert_eq!(outcome.shadowed, ["foreign"]);
+    }
 
     #[test]
     fn ownership_is_lexical_and_component_bounded() {

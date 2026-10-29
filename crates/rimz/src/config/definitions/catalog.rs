@@ -3,34 +3,45 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::packs::{self, ClaimResolution, ItemType, PackClaim, PackName, ResolvedPacks};
-
-use super::{
-    DefinitionCause, DefinitionErr, LoadedDefinitions, PackDefinition, PackDefinitionFate,
-    SkillCatalog,
+use crate::packs::{
+    self, ClaimResolution, ItemFate, ItemType, PackClaim, PackItem, PackName, ResolvedPacks,
 };
+
+use super::{CommandsConfig, DefinitionCause, DefinitionErr, LoadedDefinitions, SkillCatalog};
 
 pub(super) struct Item {
     pub name: String,
     pub kind: ItemType,
     pub path: PathBuf,
     pub pack: Option<PackName>,
-    pub fate: Option<PackDefinitionFate>,
+    pub fate: Option<ItemFate>,
 }
 
 impl Item {
     pub fn selected(&self) -> bool {
-        matches!(self.fate, None | Some(PackDefinitionFate::Loads))
+        matches!(self.fate, None | Some(ItemFate::Loads))
     }
 
     pub fn excluded(&self) -> bool {
-        matches!(
-            self.fate,
-            Some(PackDefinitionFate::Excluded | PackDefinitionFate::ExcludedType)
-        )
+        matches!(self.fate, Some(ItemFate::Excluded | ItemFate::ExcludedType))
     }
 
-    fn namespace(&self) -> &str {
+    pub fn error(&self, message: impl std::fmt::Display) -> DefinitionErr {
+        let mut error = DefinitionErr::new(&self.path, message.to_string());
+        if let Some(pack) = &self.pack {
+            error.cause = DefinitionCause::PackProblem;
+            let target = format!("{pack}:{}", self.name);
+            // YAML can carry NUL, which argv cannot; exclude the type in that case.
+            let target = shlex::try_quote(&target).unwrap_or_else(|_| pack.as_str().into());
+            error.message.push_str(&format!(
+                "; run `rimz packs exclude {target} --type {}`",
+                self.kind.as_str()
+            ));
+        }
+        error
+    }
+
+    pub(super) fn namespace(&self) -> &str {
         if self.kind == ItemType::Agents
             && self
                 .path
@@ -41,7 +52,7 @@ impl Item {
             return "bases";
         }
         match self.kind {
-            ItemType::Agents | ItemType::Subagents => "definitions",
+            ItemType::Agents | ItemType::Subagents | ItemType::Teams => "definitions",
             _ => self.kind.as_str(),
         }
     }
@@ -56,6 +67,8 @@ impl Catalog {
     pub fn new(
         home: &Path,
         packs: &ResolvedPacks,
+        commands: &CommandsConfig,
+        config_path: &Path,
         texts: &SkillCatalog<'_>,
         loaded: &mut LoadedDefinitions,
     ) -> Self {
@@ -75,14 +88,25 @@ impl Catalog {
                 let paths = match super::files(root, kind.as_str()) {
                     Ok(paths) => paths,
                     Err(mut error) => {
-                        if pack.is_some() {
+                        if let Some(pack) = pack {
                             error.cause = DefinitionCause::PackProblem;
+                            loaded
+                                .pack_problems
+                                .entry(pack.name.clone())
+                                .or_default()
+                                .push(packs::Problem {
+                                    path: error.path.clone(),
+                                    message: error.message.clone(),
+                                });
                         }
                         loaded.errors.push(error);
                         continue;
                     }
                 };
                 for path in paths {
+                    if pack.is_some() && kind == ItemType::Traits && super::reserved(root, &path) {
+                        continue;
+                    }
                     let stem = path
                         .file_stem()
                         .unwrap_or_default()
@@ -109,11 +133,15 @@ impl Catalog {
                     };
                     let fate = pack.map(|pack| {
                         if pack.excluded.types.contains(&kind) {
-                            PackDefinitionFate::ExcludedType
+                            ItemFate::ExcludedType
                         } else if pack.excluded.contains(kind, &name) {
-                            PackDefinitionFate::Excluded
+                            ItemFate::Excluded
+                        } else if kind == ItemType::Teams && commands.0.contains_key(&name) {
+                            ItemFate::Overridden {
+                                path: config_path.to_owned(),
+                            }
                         } else {
-                            PackDefinitionFate::Loads
+                            ItemFate::Loads
                         }
                     });
                     items.push(Item {
@@ -127,10 +155,13 @@ impl Catalog {
             }
         }
         let mut claims = BTreeMap::new();
-        for namespace in ["definitions", "bases", "teams", "traits"] {
+        for namespace in ["definitions", "bases", "traits"] {
             let members: Vec<_> = items
                 .iter()
-                .filter(|item| item.namespace() == namespace)
+                .filter(|item| {
+                    item.namespace() == namespace
+                        && !matches!(item.fate, Some(ItemFate::Overridden { .. }))
+                })
                 .collect();
             let resolved = packs::resolve_claims(
                 members
@@ -140,6 +171,7 @@ impl Catalog {
                 members.iter().filter_map(|item| {
                     Some(PackClaim {
                         name: item.name.clone(),
+                        kind: item.kind,
                         pack: item.pack.clone()?,
                         path: item.path.clone(),
                         excluded: item.excluded(),
@@ -159,24 +191,20 @@ impl Catalog {
                             .extend(claims.iter().map(|claim| claim.path.clone()));
                     }
                     loaded.errors.push(error);
-                    if namespace == "teams" {
-                        for claim in claims {
-                            if let Ok(text) = texts.read_text(&claim.path)
-                                && let Ok((yaml, _)) = super::frontmatter::split(&claim.path, &text)
-                                && let Ok(team) = super::frontmatter::parse::<
-                                    super::frontmatter::TeamFrontmatter,
-                                >(
-                                    &claim.path, yaml
-                                )
-                            {
-                                for role in team.roles {
-                                    let handle = role.role.as_deref().unwrap_or(&role.agent);
-                                    loaded
-                                        .failed
-                                        .entry(format!("{name}.{handle}"))
-                                        .or_default()
-                                        .extend(claims.iter().map(|claim| claim.path.clone()));
-                                }
+                    for claim in claims.iter().filter(|claim| claim.kind == ItemType::Teams) {
+                        if let Ok(text) = texts.read_text(&claim.path)
+                            && let Ok((yaml, _)) = super::frontmatter::split(&claim.path, &text)
+                            && let Ok(team) = super::frontmatter::parse::<
+                                super::frontmatter::TeamFrontmatter,
+                            >(&claim.path, yaml)
+                        {
+                            for role in team.roles {
+                                let handle = role.role.as_deref().unwrap_or(&role.agent);
+                                loaded
+                                    .failed
+                                    .entry(format!("{name}.{handle}"))
+                                    .or_default()
+                                    .extend(claims.iter().map(|claim| claim.path.clone()));
                             }
                         }
                     }
@@ -185,13 +213,16 @@ impl Catalog {
             claims.insert(namespace.to_owned(), resolved);
         }
         for item in &mut items {
-            if item.pack.is_none() || item.excluded() {
+            if item.pack.is_none()
+                || item.excluded()
+                || matches!(item.fate, Some(ItemFate::Overridden { .. }))
+            {
                 continue;
             }
             item.fate = Some(match &claims[item.namespace()][&item.name] {
-                ClaimResolution::Home(path) => PackDefinitionFate::Overridden(path.clone()),
-                ClaimResolution::Pack(_) => PackDefinitionFate::Loads,
-                ClaimResolution::Conflict { claims, message } => PackDefinitionFate::Conflict {
+                ClaimResolution::Home(path) => ItemFate::Overridden { path: path.clone() },
+                ClaimResolution::Pack(_) => ItemFate::Loads,
+                ClaimResolution::Conflict { claims, message } => ItemFate::Conflict {
                     claims: claims.clone(),
                     message: message.clone(),
                 },
@@ -204,22 +235,26 @@ impl Catalog {
         &self,
         loaded: &LoadedDefinitions,
         texts: &SkillCatalog<'_>,
-    ) -> Vec<PackDefinition> {
+    ) -> Vec<PackItem> {
         self.items
             .iter()
             .filter_map(|item| {
                 let mut fate = item.fate.clone()?;
-                if fate == PackDefinitionFate::Loads {
+                if fate == ItemFate::Loads {
                     if let Some(error) = loaded.errors.iter().find(|error| error.path == item.path)
                     {
-                        fate = PackDefinitionFate::Failed(error.message.clone());
+                        fate = ItemFate::Failed {
+                            message: error.message.clone(),
+                        };
                     } else if item.kind == ItemType::Traits
                         && let Err(error) = texts.read_text(&item.path)
                     {
-                        fate = PackDefinitionFate::Failed(error.to_string());
+                        fate = ItemFate::Failed {
+                            message: error.to_string(),
+                        };
                     }
                 }
-                Some(PackDefinition {
+                Some(PackItem {
                     pack: item.pack.clone()?,
                     kind: item.kind,
                     name: item.name.clone(),

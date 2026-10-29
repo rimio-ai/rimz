@@ -69,6 +69,44 @@ pub enum ItemType {
     Skills,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ItemFate {
+    Loads,
+    Overridden {
+        path: PathBuf,
+    },
+    Excluded,
+    ExcludedType,
+    Conflict {
+        claims: Vec<PackClaim>,
+        message: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+impl ItemFate {
+    pub(crate) fn problem(&self) -> Option<&str> {
+        match self {
+            Self::Conflict { message, .. } | Self::Failed { message } => Some(message),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PackItem {
+    #[serde(skip)]
+    pub pack: PackName,
+    #[serde(rename = "type")]
+    pub kind: ItemType,
+    pub name: String,
+    pub path: PathBuf,
+    pub fate: ItemFate,
+}
+
 impl ItemType {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -396,6 +434,7 @@ pub struct ResolvedPacks {
     pub packs: Vec<ResolvedPack>,
     pub problems: Vec<Problem>,
     pub warnings: Vec<Problem>,
+    pub(crate) pack_problems: BTreeMap<PackName, Vec<Problem>>,
 }
 
 /// Read recorded packs in order, retaining problems while omitting unusable packs.
@@ -416,11 +455,18 @@ fn resolve_dir(root: &Path) -> ResolvedPacks {
     let mut packs = Vec::new();
     let mut problems = Vec::new();
     let mut warnings = Vec::new();
+    let mut pack_problems = BTreeMap::<PackName, Vec<Problem>>::new();
     for source in &record.sources {
         let entry = root.join(&source.entry);
         let manifest = match read_manifest(&entry) {
             Ok(manifest) => manifest,
             Err(error) => {
+                for pack in &source.packs {
+                    pack_problems
+                        .entry(pack.name.clone())
+                        .or_default()
+                        .push(error.clone());
+                }
                 problems.push(error);
                 continue;
             }
@@ -438,12 +484,21 @@ fn resolve_dir(root: &Path) -> ResolvedPacks {
                     "recorded pack {name} is no longer listed; restore its manifest entry \
                      or run `rimz packs remove {name}`"
                 );
-                problems.push(problem(&entry.join("rimz-packs.toml"), message));
+                let error = problem(&entry.join("rimz-packs.toml"), message);
+                pack_problems
+                    .entry(name.clone())
+                    .or_default()
+                    .push(error.clone());
+                problems.push(error);
                 continue;
             };
             let pack_root = match roots.remove(&pack.name) {
                 Some(Ok(root)) => root,
                 Some(Err(error)) => {
+                    pack_problems
+                        .entry(pack.name.clone())
+                        .or_default()
+                        .push(error.clone());
                     problems.push(error);
                     continue;
                 }
@@ -466,14 +521,19 @@ fn resolve_dir(root: &Path) -> ResolvedPacks {
         packs,
         problems,
         warnings,
+        pack_problems,
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PackClaim {
+    #[serde(skip)]
     pub name: String,
+    #[serde(skip)]
+    pub kind: ItemType,
     pub pack: PackName,
     pub path: PathBuf,
+    #[serde(skip)]
     pub excluded: bool,
 }
 
@@ -514,7 +574,13 @@ pub fn resolve_claims(
                     .join(", ");
                 let fixes = claims
                     .iter()
-                    .map(|claim| format!("`rimz packs exclude {}:{name}`", claim.pack))
+                    .map(|claim| {
+                        format!(
+                            "`rimz packs exclude {}:{name} --type {}`",
+                            claim.pack,
+                            claim.kind.as_str()
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(" or ");
                 let message = format!(
@@ -785,9 +851,10 @@ pub struct RemoveOutcome {
     pub pack: PackName,
     pub source: String,
     pub removed_entry: Option<PathBuf>,
+    pub cleanup_warning: Option<Problem>,
 }
 
-/// Commit removal before entry cleanup; a cleanup error can follow a committed removal.
+/// Commit removal before entry cleanup, returning any cleanup failure alongside the receipt.
 pub fn remove(agents_home: &Path, name: &PackName) -> Result<RemoveOutcome> {
     let root = paths::packs_dir(agents_home);
     let _guard = WorkspaceLock::acquire(&root.join("installed.lock"))?;
@@ -801,6 +868,7 @@ pub fn remove(agents_home: &Path, name: &PackName) -> Result<RemoveOutcome> {
         .is_empty()
         .then(|| record.sources.remove(index));
     write_record(&root, &record)?;
+    let mut cleanup_warning = None;
     let removed_entry = if let Some(source) = removed {
         let path = root.join(source.entry);
         let result = if source.linked {
@@ -811,9 +879,16 @@ pub fn remove(agents_home: &Path, name: &PackName) -> Result<RemoveOutcome> {
         match result {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(io_err(&path, error)),
+            Err(error) => {
+                cleanup_warning = Some(problem(
+                    &path,
+                    format!(
+                        "entry cleanup failed: {error}; this unrecorded entry is ignored by loaders and replaced by the next install of this source"
+                    ),
+                ));
+            }
         }
-        Some(path)
+        cleanup_warning.is_none().then_some(path)
     } else {
         None
     };
@@ -821,6 +896,7 @@ pub fn remove(agents_home: &Path, name: &PackName) -> Result<RemoveOutcome> {
         pack: name.clone(),
         source: source_text,
         removed_entry,
+        cleanup_warning,
     })
 }
 

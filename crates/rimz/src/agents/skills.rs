@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::SkillName;
-use crate::packs::{self, ClaimResolution, ItemType, PackClaim, PackName, ResolvedPack};
+use crate::packs::{
+    self, ClaimResolution, ItemFate, ItemType, PackClaim, PackItem, PackName, ResolvedPack,
+};
 use crate::utils::path::normalize_path_lexical;
 
 #[derive(Clone, Debug)]
@@ -14,36 +16,19 @@ pub struct SkillChain {
     packs: Vec<ResolvedPack>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PackSkillFate {
-    Loads,
-    Overridden(PathBuf),
-    Excluded,
-    ExcludedType,
-    Conflict {
-        claims: Vec<PackClaim>,
-        message: String,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub struct PackSkill {
-    pub pack: PackName,
-    pub name: String,
-    pub path: PathBuf,
-    pub fate: PackSkillFate,
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SkillInventory {
     pub(crate) skills: BTreeMap<String, SkillDir>,
     pub(crate) conflicts: BTreeMap<String, packs::Problem>,
-    pack_skills: Vec<PackSkill>,
+    pub(crate) pack_skills: Vec<PackItem>,
+    pub(crate) pack_problems: BTreeMap<PackName, Vec<packs::Problem>>,
 }
 
 impl SkillChain {
     pub fn from_home(home: &Path) -> Self {
-        let home = normalize_path_lexical(home);
+        let home = std::path::absolute(home)
+            .map(|home| normalize_path_lexical(&home))
+            .unwrap_or_else(|_| home.to_owned());
         Self {
             library: crate::disk::paths::skills_library_under(&home),
             packs_dir: crate::disk::paths::packs_dir(&home),
@@ -52,11 +37,8 @@ impl SkillChain {
     }
 
     pub(crate) fn from_env(env: &BTreeMap<String, String>) -> Option<Self> {
-        Some(Self {
-            library: normalize_path_lexical(&crate::disk::paths::skills_library_in(env)?),
-            packs_dir: normalize_path_lexical(&crate::disk::paths::packs_dir_in(env)?),
-            packs: packs::resolve_in(env).packs,
-        })
+        let library = crate::disk::paths::skills_library_in(env)?;
+        Some(Self::from_home(library.parent()?))
     }
 
     pub(crate) fn roots(&self) -> Vec<PathBuf> {
@@ -67,10 +49,6 @@ impl SkillChain {
                     .map(|pack| crate::disk::paths::skills_library_under(&pack.root)),
             )
             .collect()
-    }
-
-    pub fn pack_skills(&self) -> Result<Vec<PackSkill>, SkillErr> {
-        Ok(self.inventory(|_| true)?.pack_skills)
     }
 
     pub(super) fn owned_roots(&self) -> [&Path; 2] {
@@ -104,57 +82,79 @@ impl SkillChain {
         &self,
         keep: impl Fn(&str) -> bool,
     ) -> Result<SkillInventory, SkillErr> {
-        let home = scan(&self.library, None, &keep, true)?;
+        self.read_inventory(keep, LibraryRead::Strict)
+    }
+
+    pub(super) fn inventory_for_links(&self) -> Result<SkillInventory, SkillErr> {
+        self.read_inventory(|_| true, LibraryRead::SkipUnreadable)
+    }
+
+    fn read_inventory(
+        &self,
+        keep: impl Fn(&str) -> bool,
+        library_read: LibraryRead,
+    ) -> Result<SkillInventory, SkillErr> {
+        let mut home = BTreeMap::new();
+        let mut inventory = SkillInventory::default();
+        for (name, path) in skill_paths(&self.library, &keep, true)? {
+            match read_skill(name.clone(), path.clone(), false) {
+                Ok(Some(skill)) => {
+                    inventory.skills.insert(name.clone(), skill);
+                }
+                Ok(None) if !path.is_symlink() => continue,
+                Ok(None) => {}
+                Err(_) if matches!(library_read, LibraryRead::SkipUnreadable) => {}
+                Err(error) => return Err(error),
+            }
+            home.insert(name, path);
+        }
         let mut shipped = Vec::new();
         for pack in &self.packs {
-            let root = crate::disk::paths::skills_library_under(&pack.root);
-            for (name, skill) in scan(&root, None, &keep, true)? {
+            let scanned = scan_pack(pack, &home, &keep);
+            inventory.pack_skills.extend(scanned.pack_skills);
+            inventory.pack_problems.extend(scanned.pack_problems);
+            for (name, skill) in scanned.skills {
                 shipped.push((pack, name, skill));
             }
         }
         let claims = packs::resolve_claims(
             home.iter()
-                .map(|(name, skill)| (name.clone(), skill.path.join("SKILL.md"))),
+                .map(|(name, path)| (name.clone(), path.join("SKILL.md"))),
             shipped.iter().map(|(pack, name, skill)| PackClaim {
                 name: name.clone(),
+                kind: ItemType::Skills,
                 pack: pack.name.clone(),
                 path: skill.path.join("SKILL.md"),
                 excluded: pack.excluded.contains(ItemType::Skills, name),
             }),
         );
-        let mut inventory = SkillInventory {
-            skills: home,
-            ..SkillInventory::default()
-        };
         for (pack, name, skill) in shipped {
-            let fate = if pack.excluded.types.contains(&ItemType::Skills) {
-                PackSkillFate::ExcludedType
-            } else if pack.excluded.contains(ItemType::Skills, &name) {
-                PackSkillFate::Excluded
-            } else {
-                match &claims[&name] {
-                    ClaimResolution::Home(path) => PackSkillFate::Overridden(path.clone()),
-                    ClaimResolution::Pack(_) => {
-                        inventory.skills.insert(name.clone(), skill.clone());
-                        PackSkillFate::Loads
-                    }
-                    ClaimResolution::Conflict { claims, message } => {
-                        inventory
-                            .conflicts
-                            .entry(name.clone())
-                            .or_insert_with(|| packs::Problem {
-                                path: skill.path.join("SKILL.md"),
-                                message: message.clone(),
-                            });
-                        PackSkillFate::Conflict {
-                            claims: claims.clone(),
+            let fate = match &claims[&name] {
+                ClaimResolution::Home(path) => ItemFate::Overridden { path: path.clone() },
+                ClaimResolution::Pack(_) => {
+                    inventory.skills.insert(name.clone(), skill.clone());
+                    ItemFate::Loads
+                }
+                ClaimResolution::Conflict { claims, message } => {
+                    let message = format!(
+                        "{message}; a provider-root skill of this name still wins for that provider"
+                    );
+                    inventory
+                        .conflicts
+                        .entry(name.clone())
+                        .or_insert_with(|| packs::Problem {
+                            path: skill.path.join("SKILL.md"),
                             message: message.clone(),
-                        }
+                        });
+                    ItemFate::Conflict {
+                        claims: claims.clone(),
+                        message,
                     }
                 }
             };
-            inventory.pack_skills.push(PackSkill {
+            inventory.pack_skills.push(PackItem {
                 pack: pack.name.clone(),
+                kind: ItemType::Skills,
                 name,
                 path: skill.path,
                 fate,
@@ -264,10 +264,8 @@ pub(crate) fn enumerate(
     chain: Option<&SkillChain>,
     keep: fn(&str) -> bool,
 ) -> Result<SkillInventory, SkillErr> {
-    let provider = provider_root.map_or_else(
-        || Ok(BTreeMap::new()),
-        |root| scan(root, chain, keep, false),
-    )?;
+    let provider =
+        provider_root.map_or_else(|| Ok(BTreeMap::new()), |root| scan(root, chain, keep))?;
     let mut inventory = chain.map_or_else(
         || Ok(SkillInventory::default()),
         |chain| chain.inventory(|name| keep(name) && !provider.contains_key(name)),
@@ -276,16 +274,105 @@ pub(crate) fn enumerate(
     Ok(inventory)
 }
 
-fn scan(
-    root: &Path,
-    chain: Option<&SkillChain>,
+fn scan_pack(
+    pack: &ResolvedPack,
+    home: &BTreeMap<String, PathBuf>,
     keep: impl Fn(&str) -> bool,
-    require_file: bool,
-) -> Result<BTreeMap<String, SkillDir>, SkillErr> {
-    let mut skills = BTreeMap::new();
+) -> SkillInventory {
+    let root = crate::disk::paths::skills_library_under(&pack.root);
+    let mut inventory = SkillInventory::default();
+    let paths = match skill_paths(&root, keep, false) {
+        Ok(paths) => paths,
+        Err(error) => {
+            if !pack.excluded.types.contains(&ItemType::Skills) {
+                inventory.pack_problems.insert(
+                    pack.name.clone(),
+                    vec![packs::Problem {
+                        path: root,
+                        message: error.to_string(),
+                    }],
+                );
+            }
+            return inventory;
+        }
+    };
+    let mut problems = Vec::new();
+    for (name, path) in paths {
+        let fate = if pack.excluded.types.contains(&ItemType::Skills) {
+            ItemFate::ExcludedType
+        } else if pack.excluded.contains(ItemType::Skills, &name) {
+            ItemFate::Excluded
+        } else if let Some(path) = home.get(&name) {
+            ItemFate::Overridden {
+                path: path.join("SKILL.md"),
+            }
+        } else {
+            match read_skill(name.clone(), path.clone(), true) {
+                Ok(Some(skill)) => {
+                    inventory.skills.insert(name, skill);
+                    continue;
+                }
+                Ok(None) => continue,
+                Err(error) => {
+                    let message = error.to_string();
+                    problems.push(packs::Problem {
+                        path: match error {
+                            SkillErr::Io { path, .. } => path,
+                            _ => path.clone(),
+                        },
+                        message: message.clone(),
+                    });
+                    ItemFate::Failed { message }
+                }
+            }
+        };
+        inventory.pack_skills.push(PackItem {
+            pack: pack.name.clone(),
+            kind: ItemType::Skills,
+            name,
+            path,
+            fate,
+        });
+    }
+    if let Some(broken) = inventory
+        .pack_skills
+        .iter()
+        .find(|item| matches!(item.fate, ItemFate::Failed { .. }))
+    {
+        let message = format!(
+            "withheld: skill `{}` in this pack could not be read",
+            broken.name
+        );
+        for (name, skill) in std::mem::take(&mut inventory.skills) {
+            inventory.pack_skills.push(PackItem {
+                pack: pack.name.clone(),
+                kind: ItemType::Skills,
+                name,
+                path: skill.path,
+                fate: ItemFate::Failed {
+                    message: message.clone(),
+                },
+            });
+        }
+        inventory.pack_problems.insert(pack.name.clone(), problems);
+    }
+    inventory
+}
+
+enum LibraryRead {
+    Strict,
+    SkipUnreadable,
+}
+
+fn skill_paths(
+    root: &Path,
+    keep: impl Fn(&str) -> bool,
+    include_symlinks: bool,
+) -> Result<BTreeMap<String, PathBuf>, SkillErr> {
+    let mut paths = BTreeMap::new();
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(skills),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(paths),
         Err(source) => {
             return Err(SkillErr::Io {
                 path: root.to_owned(),
@@ -305,33 +392,63 @@ fn scan(
             continue;
         }
         let path = entry.path();
+        if path.is_dir()
+            || (include_symlinks
+                && entry
+                    .file_type()
+                    .map_err(|source| SkillErr::Io {
+                        path: path.clone(),
+                        source,
+                    })?
+                    .is_symlink())
+        {
+            paths.insert(name, path);
+        }
+    }
+    Ok(paths)
+}
+
+fn scan(
+    root: &Path,
+    chain: Option<&SkillChain>,
+    keep: impl Fn(&str) -> bool,
+) -> Result<BTreeMap<String, SkillDir>, SkillErr> {
+    let mut skills = BTreeMap::new();
+    for (name, path) in skill_paths(root, keep, false)? {
         if let Some(chain) = chain
             && chain.owned_link(&path)?.is_some()
         {
             continue;
         }
-        if !path.is_dir() {
-            continue;
+        if let Some(skill) = read_skill(name.clone(), path, false)? {
+            skills.insert(name, skill);
         }
-        let marker = path.join("SKILL.md");
-        match marker.metadata() {
-            Ok(metadata) if !require_file || metadata.is_file() => {}
-            Ok(_) => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(source) => {
-                return Err(SkillErr::Io {
-                    path: marker,
-                    source,
-                });
-            }
-        }
-        let source = path.canonicalize().map_err(|source| SkillErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        skills.insert(name.clone(), SkillDir { name, source, path });
     }
     Ok(skills)
+}
+
+fn read_skill(
+    name: String,
+    path: PathBuf,
+    require_file: bool,
+) -> Result<Option<SkillDir>, SkillErr> {
+    let marker = path.join("SKILL.md");
+    match marker.metadata() {
+        Ok(metadata) if !require_file || metadata.is_file() => {}
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(SkillErr::Io {
+                path: marker,
+                source,
+            });
+        }
+    }
+    let source = path.canonicalize().map_err(|source| SkillErr::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(Some(SkillDir { name, source, path }))
 }
 
 impl HostSkills {
@@ -408,6 +525,39 @@ impl HostSkills {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_homes_keep_absolute_owned_link_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let relative = std::env::current_dir()
+            .unwrap()
+            .ancestors()
+            .skip(1)
+            .map(|_| "..")
+            .collect::<PathBuf>()
+            .join(temp.path().strip_prefix("/").unwrap());
+        let provider = temp.path().join("provider");
+        std::fs::create_dir(&provider).unwrap();
+        for target in [
+            temp.path().join("skills/one"),
+            temp.path().join("packs/one"),
+        ] {
+            let link = provider.join("owned");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            for chain in [
+                SkillChain::from_home(&relative),
+                SkillChain::from_env(&BTreeMap::from([(
+                    "RIMZ_AGENTS_HOME".into(),
+                    relative.to_str().unwrap().into(),
+                )]))
+                .unwrap(),
+            ] {
+                assert!(chain.roots().iter().all(|root| root.is_absolute()));
+                assert_eq!(chain.owned_link(&link).unwrap(), Some(target.clone()));
+            }
+            std::fs::remove_file(link).unwrap();
+        }
+    }
 
     #[test]
     fn discovery_prefers_provider_skips_broken_links_and_records_sources() {
@@ -492,6 +642,14 @@ mod tests {
         assert_eq!(
             skills.keys().map(String::as_str).collect::<Vec<_>>(),
             ["hidden", "one", "two"]
+        );
+        let marker = library.join("hidden/SKILL.md");
+        std::fs::remove_file(&marker).unwrap();
+        std::os::unix::fs::symlink("SKILL.md", &marker).unwrap();
+        let result = enumerate(None, Some(&chain), |_| true);
+        assert!(
+            matches!(&result, Err(SkillErr::Io { path, .. }) if path == &marker),
+            "an unreadable library winner must fail, not reveal pack copies: {result:?}"
         );
     }
 }

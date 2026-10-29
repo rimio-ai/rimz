@@ -26,6 +26,7 @@ pub(super) fn load(
     [agents, subagents]: [&Namespace; 2],
     children: &BTreeSet<String>,
     sources: &catalog::Catalog,
+    commands: &super::CommandsConfig,
     loaded: &mut LoadedDefinitions,
 ) {
     let seats = SeatLoader {
@@ -104,6 +105,17 @@ pub(super) fn load(
                 loaded.errors.extend(errors);
                 return Ok(());
             }
+            if item.pack.is_some() {
+                let mut namespace = loaded.agent_profiles.clone();
+                namespace.0.extend(loaded.subagent_profiles.0.clone());
+                namespace.0.extend(
+                    profiles
+                        .iter()
+                        .map(|(binding, profile)| (binding.profile.clone(), profile.clone())),
+                );
+                crate::harness::spec::validate_team(&name, &team, &namespace, commands)
+                    .map_err(|error| item.error(error))?;
+            }
             for (binding, profile) in profiles {
                 loaded.insert("agents", &binding.profile, &path, profile);
                 if let Some(row) = loaded.rows.last_mut() {
@@ -120,7 +132,13 @@ pub(super) fn load(
             Ok(())
         })();
         if let Err(error) = result {
-            loaded.errors.push(error);
+            loaded.errors.push(
+                if item.pack.is_some() && error.cause != DefinitionCause::PackProblem {
+                    item.error(error.message)
+                } else {
+                    error
+                },
+            );
         }
         if !loaded.teams.0.contains_key(&name) {
             for failed in std::iter::once(&name).chain(&role_names) {

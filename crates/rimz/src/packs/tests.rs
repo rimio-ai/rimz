@@ -401,6 +401,7 @@ fn unreadable_pack_does_not_hide_other_packs_and_orphans_never_load() {
 fn claims_share_home_precedence_exclusions_and_conflict_fixes() {
     let claim = |pack: &str, excluded| PackClaim {
         name: "coder".into(),
+        kind: ItemType::Agents,
         pack: name(pack),
         path: PathBuf::from(format!("/{pack}/agents/coder.md")),
         excluded,
@@ -615,7 +616,15 @@ fn remove_commits_the_record_before_entry_cleanup() {
     fs::create_dir(home.join("packs/source")).unwrap();
     write(&home.join("packs/source/unexpected"), "not a linked entry");
     let result = remove(&home, &name("crew"));
-    assert!(result.is_err(), "{result:?}");
+    assert!(
+        result.is_ok(),
+        "committed removal must return its receipt: {result:?}"
+    );
+    let result = result.unwrap();
+    assert!(result.removed_entry.is_none());
+    let warning = result.cleanup_warning.unwrap();
+    assert_eq!(warning.path, home.join("packs/source"));
+    assert!(warning.message.contains("ignored"), "{warning}");
     let record: Record =
         serde_json::from_str(&fs::read_to_string(home.join("packs/installed.json")).unwrap())
             .unwrap();

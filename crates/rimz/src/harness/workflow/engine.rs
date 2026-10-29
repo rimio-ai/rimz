@@ -87,6 +87,7 @@ pub fn create(
         &crate::disk::paths::agents_home(),
         crate::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
+        &crate::config::MachineConfig::config_path(),
         &machine.tiers,
         machine.harness.auto_compact,
     );
