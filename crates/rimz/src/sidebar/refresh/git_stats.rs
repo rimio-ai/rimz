@@ -1100,30 +1100,59 @@ fn commits_ahead_behind(worktree: &Path, trunk: &str) -> Option<(u32, u32)> {
 struct WorktreeStatus {
     clean: bool,
     untracked_added: u32,
-    /// Entries a refresh scans but cannot bring up to date: worktree
+    /// Entries a refresh cannot bring up to date: worktree
     /// modifications, type changes, intent-to-add paths, and worktree renames
     /// or copies. Deletions fail `lstat` first, and refresh skips unmerged entries
     /// (an unmerged `AA` or `UA` still counts, erring toward no lock).
     scanned_changes: u64,
+    /// Deletions, including worktree rename sources, reach `sum_lstat` but not `sum_scan`.
+    deleted_paths: u64,
 }
 
-fn index_scan_count(stderr: &[u8]) -> u64 {
+/// Preload leaves only racy or stale entries for refresh to stat. Without it,
+/// lstat counts the whole index, so only rehashed entries prove staleness.
+fn index_stale_count(stderr: &[u8], status: &WorktreeStatus) -> u64 {
     #[derive(Deserialize)]
     struct TraceData<'a> {
         event: &'a str,
+        #[serde(default)]
+        sid: &'a str,
+        #[serde(default)]
         category: &'a str,
+        #[serde(default)]
         key: &'a str,
+        #[serde(default)]
         value: &'a str,
     }
 
-    stderr
+    let mut preloaded = false;
+    let mut lstatted: u64 = 0;
+    let mut scanned: u64 = 0;
+    let mut session = None;
+    for data in stderr
         .split(|&byte| byte == b'\n')
         .filter_map(|line| serde_json::from_slice::<TraceData<'_>>(line).ok())
-        .find(|data| {
-            data.event == "data" && data.category == "index" && data.key == "refresh/sum_scan"
-        })
-        .and_then(|data| data.value.parse().ok())
-        .unwrap_or(0)
+    {
+        if data.sid != *session.get_or_insert(data.sid)
+            || data.event != "data"
+            || data.category != "index"
+        {
+            continue;
+        }
+        match data.key {
+            "preload/sum_lstat" => preloaded = true,
+            "refresh/sum_lstat" => lstatted = data.value.parse().unwrap_or(0),
+            "refresh/sum_scan" => scanned = data.value.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    if preloaded {
+        lstatted
+            .saturating_sub(status.scanned_changes)
+            .saturating_sub(status.deleted_paths)
+    } else {
+        scanned.saturating_sub(status.scanned_changes)
+    }
 }
 
 /// `git status --porcelain=v1 -z --untracked-files=all`: emptiness → clean, and
@@ -1133,9 +1162,8 @@ fn index_scan_count(stderr: &[u8]) -> u64 {
 /// parseable (paths decode lossily, so a non-UTF-8 path still dirties the tree
 /// but counts no lines). Only host status enables trace2. Optional index locks
 /// stay disabled unless the prior status found at least 128 stale entries
-/// after subtracting the changed entries a refresh cannot fix, and no locked
-/// status started within 60 seconds. A contended attempt consumes that window
-/// too; one-shot callers never enable the lock.
+/// through [`index_stale_count`], and no locked status started within 60 seconds.
+/// A contended attempt consumes that window too; one-shot callers never lock.
 fn worktree_status(
     worktree: &Path,
     prior: &UntrackedLineMemo,
@@ -1171,8 +1199,7 @@ fn worktree_status(
         memoized_untracked_added_lines(worktree, path, prior, &mut next, &mut budget)
     });
     if let Some(state) = index_refresh {
-        state.stale_entries =
-            index_scan_count(&output.stderr).saturating_sub(status.scanned_changes);
+        state.stale_entries = index_stale_count(&output.stderr, &status);
     }
     (Some(status), Some(next))
 }
@@ -1244,6 +1271,7 @@ fn parse_status_entries(
     let mut clean = true;
     let mut untracked_added: u32 = 0;
     let mut scanned_changes = 0;
+    let mut deleted_paths = 0;
     let mut tokens = output.split('\0').filter(|token| !token.is_empty());
     while let Some(entry) = tokens.next() {
         clean = false;
@@ -1256,6 +1284,9 @@ fn parse_status_entries(
         if matches!(code.as_bytes()[1], b'M' | b'T' | b'A' | b'R' | b'C') {
             scanned_changes += 1;
         }
+        if matches!(code.as_bytes()[1], b'D' | b'R') {
+            deleted_paths += 1;
+        }
         if code.starts_with("??") {
             untracked_added = untracked_added.saturating_add(untracked_lines(path));
         }
@@ -1264,6 +1295,7 @@ fn parse_status_entries(
         clean,
         untracked_added,
         scanned_changes,
+        deleted_paths,
     }
 }
 

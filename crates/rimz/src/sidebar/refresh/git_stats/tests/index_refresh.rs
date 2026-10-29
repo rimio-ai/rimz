@@ -25,20 +25,33 @@ fn index_refresh_requires_stale_entries_and_a_sixty_second_cooldown() {
 }
 
 #[test]
-fn trace2_scan_count_requires_the_index_refresh_data_event() {
+fn trace2_stale_count_uses_preload_evidence_and_subtracts_unfixable_paths() {
     let cases: &[(&[u8], u64)] = &[
         (b"", 0),
         (b"warning: ordinary git stderr\n", 0),
-        (br#"{"event":"data","category":"index","key":"refresh/sum_scan","value":"128"}"#, 128),
+        (br#"{"event":"data","category":"index","key":"refresh/sum_scan","value":"128"}"#, 126),
         (br#"{"event":"data","category":"other","key":"refresh/sum_scan","value":"999"}"#, 0),
         (br#"{"event":"data","category":"index","key":"refresh/sum_lstat","value":"999"}"#, 0),
         (br#"{"event":"data","category":"index","key":"refresh/sum_scan","value":"bad"}"#, 0),
         (br#"{"event":"data","category":"index","key":"refresh/sum_scan","value":"0"}"#, 0),
-        (b"not json\n{\"event\":\"data\",\"category\":\"index\",\"key\":\"refresh/sum_scan\",\"value\":\"129\"}\n", 129),
+        (b"not json\n{\"event\":\"data\",\"category\":\"index\",\"key\":\"refresh/sum_scan\",\"value\":\"129\"}\n", 127),
+        (br#"{"event":"data","category":"index","key":"preload/sum_lstat","value":"1500"}
+{"event":"data","category":"index","key":"refresh/sum_lstat","value":"1500"}
+{"event":"data","category":"index","key":"refresh/sum_scan","value":"2"}"#, 1497),
+        (br#"{"event":"data","category":"index","key":"refresh/sum_lstat","value":"1500"}
+{"event":"data","category":"index","key":"preload/sum_lstat","value":"0"}"#, 1497),
+        (br#"{"event":"data","category":"index","key":"preload/sum_lstat","value":"1500"}"#, 0),
+        (br#"{"event":"data","category":"index","key":"preload/sum_lstat","value":"1500"}
+{"event":"data","category":"index","key":"refresh/sum_lstat","value":"1"}"#, 0),
+        (br#"{"event":"start","sid":"parent"}
+{"event":"data","sid":"parent","category":"index","key":"refresh/sum_scan","value":"128"}
+{"event":"data","sid":"parent/child","category":"index","key":"preload/sum_lstat","value":"1500"}
+{"event":"data","sid":"parent/child","category":"index","key":"refresh/sum_lstat","value":"1500"}"#, 126),
     ];
+    let status = parse_status_entries(" M changed\0 A added\0 D deleted\0?? untracked\0", |_| 0);
     let actual: Vec<_> = cases
         .iter()
-        .map(|(stderr, _)| index_scan_count(stderr))
+        .map(|(stderr, _)| index_stale_count(stderr, &status))
         .collect();
     assert_eq!(
         actual,
@@ -49,19 +62,289 @@ fn trace2_scan_count_requires_the_index_refresh_data_event() {
 #[test]
 fn status_counts_only_worktree_changes_not_staged_or_untracked_paths() {
     let cases = [
-        (" M f\0MM g\0M  h\0?? u\0", 2),
-        (" D f\0 T g\0R  new\0 M source\0 R moved\0old\0", 2),
+        (" M f\0MM g\0M  h\0?? u\0", (2, 0)),
+        (" D f\0 T g\0R  new\0 M source\0 R moved\0old\0", (2, 2)),
         (
             " D deleted\0UU unmerged\0 A intent-to-add\0 C copied\0original\0",
-            2,
+            (2, 1),
         ),
-        ("", 0),
+        (
+            "AA added\0UA added-by-them\0DD deleted\0UD deleted-by-them\0",
+            (2, 2),
+        ),
+        ("", (0, 0)),
     ];
     let actual: Vec<_> = cases
         .iter()
-        .map(|(output, _)| parse_status_entries(output, |_| 0).scanned_changes)
+        .map(|(output, _)| {
+            let status = parse_status_entries(output, |_| 0);
+            (status.scanned_changes, status.deleted_paths)
+        })
         .collect();
     assert_eq!(actual, cases.map(|(_, modified)| modified));
+}
+
+fn racy_repo(count: usize) -> GitFixture {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    assert!(repo.initialized);
+    assert!(repo.git(&["config", "core.preloadindex", "true"]));
+    for index in 0..count {
+        repo.write(&format!("f{index:03}.txt"), "base\n");
+    }
+    stale_files(&repo, count, 1);
+    assert!(repo.git(&["add", "."]));
+    assert!(repo.git(&["commit", "-qm", "base"]));
+    std::fs::File::options()
+        .write(true)
+        .open(index_path(&repo))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000 - 3600))
+        .unwrap();
+    repo
+}
+
+#[test]
+fn racy_index_locks_once_when_preload_ran_then_stays_warm() {
+    let repo = racy_repo(1500);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo.path())
+        .args([
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ])
+        .env("GIT_TRACE2_EVENT", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let preloaded = String::from_utf8_lossy(&output.stderr).lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .is_ok_and(|event| event["category"] == "index" && event["key"] == "preload/sum_lstat")
+    });
+    let (_dir, runtime) = runtime_for(repo.path());
+    let mut state = GitRefreshState::default();
+    let before = index_snapshot(&repo);
+    pass(&repo, &runtime, &mut state, GitPass::Host);
+    assert_eq!(index_snapshot(&repo), before);
+    let stale = state.index_refresh[repo.path_str()].stale_entries;
+    assert_eq!(stale >= 128, preloaded, "racy stale count: {stale}");
+    pass(&repo, &runtime, &mut state, GitPass::Host);
+    assert_eq!(index_snapshot(&repo) != before, preloaded);
+    assert_eq!(
+        state.index_refresh[repo.path_str()]
+            .last_locked_at
+            .is_some(),
+        preloaded
+    );
+    let warm = index_snapshot(&repo);
+    pass(&repo, &runtime, &mut state, GitPass::Host);
+    assert!(state.index_refresh[repo.path_str()].stale_entries < 128);
+    assert_eq!(index_snapshot(&repo), warm);
+}
+
+#[test]
+fn deleted_files_do_not_trigger_index_refresh() {
+    let repo = tracked_repo(1500);
+    assert!(repo.git(&["config", "core.preloadindex", "true"]));
+    assert!(repo.git(&["update-index", "--refresh"]));
+    for index in 0..1500 {
+        std::fs::remove_file(repo.path().join(format!("f{index:03}.txt"))).unwrap();
+    }
+    let (_dir, runtime) = runtime_for(repo.path());
+    let mut state = GitRefreshState::default();
+    let before = index_snapshot(&repo);
+    pass(&repo, &runtime, &mut state, GitPass::Host);
+    pass(&repo, &runtime, &mut state, GitPass::Host);
+    assert_eq!(state.index_refresh[repo.path_str()].stale_entries, 0);
+    assert!(
+        state.index_refresh[repo.path_str()]
+            .last_locked_at
+            .is_none()
+    );
+    assert_eq!(index_snapshot(&repo), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_change_codes_do_not_trigger_index_refresh_with_preload() {
+    let mut actual = Vec::new();
+    let mut counters = Vec::new();
+    for code in ['M', 'T', 'A', 'R', 'C'] {
+        let repo = tracked_repo(1500);
+        assert!(repo.git(&["config", "core.preloadindex", "true"]));
+        stale_files(&repo, 1500, 1);
+        assert!(repo.git(&["update-index", "--refresh"]));
+        if code == 'C' {
+            assert!(repo.git(&["config", "status.renames", "copies"]));
+        }
+        let added: Vec<String> = (0..128).map(|index| format!("n{index:03}.txt")).collect();
+        for (index, target) in added.iter().enumerate() {
+            let source = format!("f{index:03}.txt");
+            match code {
+                'M' => repo.write(&source, "base\nedit\n"),
+                'T' => {
+                    std::fs::remove_file(repo.path().join(&source)).unwrap();
+                    std::os::unix::fs::symlink("target", repo.path().join(&source)).unwrap();
+                }
+                'A' => repo.write(target, "new\n"),
+                'R' => {
+                    std::fs::rename(repo.path().join(&source), repo.path().join(target)).unwrap()
+                }
+                'C' => {
+                    repo.write(target, "base\n");
+                    repo.write(&source, "base\nedit\n");
+                }
+                _ => unreachable!("the cases enumerate worktree change codes"),
+            }
+        }
+        if matches!(code, 'A' | 'R' | 'C') {
+            let mut args = vec!["add", "-N", "--"];
+            args.extend(added.iter().map(String::as_str));
+            assert!(repo.git(&args));
+        }
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args([
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ])
+            .env("GIT_TRACE2_EVENT", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let prefix = format!(" {code} ");
+        assert_eq!(
+            output
+                .stdout
+                .split(|&byte| byte == 0)
+                .filter(|entry| entry.starts_with(prefix.as_bytes()))
+                .count(),
+            128,
+            "git must emit worktree code {code}"
+        );
+        let trace: BTreeMap<String, String> = String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| event["event"] == "data" && event["category"] == "index")
+            .filter_map(|event| {
+                Some((
+                    event["key"].as_str()?.into(),
+                    event["value"].as_str()?.into(),
+                ))
+            })
+            .collect();
+        counters.push((code, trace));
+        let (_dir, runtime) = runtime_for(repo.path());
+        let mut state = GitRefreshState::default();
+        let before = index_snapshot(&repo);
+        pass(&repo, &runtime, &mut state, GitPass::Host);
+        let stale = state.index_refresh[repo.path_str()].stale_entries;
+        pass(&repo, &runtime, &mut state, GitPass::Host);
+        actual.push((
+            code,
+            stale,
+            state.index_refresh[repo.path_str()]
+                .last_locked_at
+                .is_some(),
+            index_snapshot(&repo) == before,
+        ));
+    }
+    assert_eq!(
+        actual,
+        ['M', 'T', 'A', 'R', 'C'].map(|code| (code, 0, false, true)),
+        "trace2 counters: {counters:?}"
+    );
+}
+
+#[test]
+fn unmerged_status_codes_do_not_trigger_index_refresh() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let cases: &[(&str, &[u8])] = &[
+        ("DD", &[1]),
+        ("AU", &[2]),
+        ("UD", &[1, 2]),
+        ("UA", &[3]),
+        ("DU", &[1, 3]),
+        ("AA", &[2, 3]),
+        ("UU", &[1, 2, 3]),
+    ];
+    for &(code, stages) in cases {
+        let repo = tracked_repo(1500);
+        stale_files(&repo, 1500, 1);
+        assert!(repo.git(&["update-index", "--refresh"]));
+        let blob = git_line(repo.path(), &["rev-parse", "HEAD:f000.txt"]).unwrap();
+        let mut entries = String::new();
+        for index in 0..128 {
+            let path = format!("f{index:03}.txt");
+            entries.push_str(&format!("0 {}\t{path}\n", "0".repeat(blob.len())));
+            for stage in stages {
+                entries.push_str(&format!("100644 {blob} {stage}\t{path}\n"));
+            }
+        }
+        let mut update = Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["update-index", "--index-info"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        update
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(entries.as_bytes())
+            .unwrap();
+        assert!(update.wait().unwrap().success());
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args([
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let prefix = format!("{code} ");
+        assert_eq!(
+            output
+                .stdout
+                .split(|&byte| byte == 0)
+                .filter(|entry| entry.starts_with(prefix.as_bytes()))
+                .count(),
+            128,
+            "git must emit unmerged code {code}"
+        );
+        let (_dir, runtime) = runtime_for(repo.path());
+        let mut state = GitRefreshState::default();
+        let before = index_snapshot(&repo);
+        pass(&repo, &runtime, &mut state, GitPass::Host);
+        pass(&repo, &runtime, &mut state, GitPass::Host);
+        assert_eq!(
+            state.index_refresh[repo.path_str()].stale_entries,
+            0,
+            "{code}"
+        );
+        assert!(
+            state.index_refresh[repo.path_str()]
+                .last_locked_at
+                .is_none(),
+            "{code}"
+        );
+        assert_eq!(index_snapshot(&repo), before, "{code}");
+    }
 }
 
 fn tracked_repo(count: usize) -> GitFixture {
