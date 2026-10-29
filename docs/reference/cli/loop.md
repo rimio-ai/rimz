@@ -452,7 +452,7 @@ The `[throttle]` table of `loop.toml` (`loop.throttle.*` to `rimz config set`) s
 | `check` | unset | This shell command answers no capacity (exit `75`) or errors. Exit `0` admits; every other exit, timeout, signal, or failure to start holds. |
 | `check-timeout` | `30s` | Maximum time for one capacity check; a timeout is an error, not permission to start. |
 | `max-active` | unset | That many agents are mid-turn across every workspace of this home. |
-| `max-active-per-task` | unset | That many agents this task started are mid-turn in its project. |
+| `max-active-per-task` | unset | That many agents this task started are mid-turn in its project, including agent cells of its nonterminal workflow runs. |
 | `cpu-pressure`, `io-pressure`, `memory-pressure` | unset | Either the 10-second or the 60-second pressure-stall average of that resource is at or above this percent (`1` to `100`). |
 | `min-memory` | unset | Available memory is below this size (`8GB`). |
 | `min-disk` | unset | Free disk where the run will write is below this size: for a `--worktree` task, the filesystem its new worktree goes on (`[agents.worktree] dir`); otherwise the launch checkout. |
@@ -465,7 +465,7 @@ The capacity check runs through `sh -c` in the task's run directory (`dir` or ro
 
 Scheduled condition agent fires try once and leave no queue ticket when held. They retry every 60 seconds while the condition remains true, including non-stay tasks. Before a shell check or judges, a speculative capacity look avoids paying for a guard while the door is closed; admission checks again after the guard passes. The first hold in a stretch records `capacity held`; later holds update the wait without another row. Giving up records `throttle skipped` with the waited duration and last reason, and suppresses further fires until the condition turns false and true again. Admission, a guard miss, another gate, an error, or expiry clears the wait.
 
-`loop list` shows the oldest live condition capacity wait and a count of additional checkouts; `loop show` shows each checkout's wait. Their JSON adds `capacity_wait: {kinds, since, gives_up_at, reason}`, with `since` the first capacity hold and `gives_up_at: null` for forever. `show` puts it on each worktree row, or at the top level for a single-checkout task. An absent wait is `null`. Blocking queue tickets keep the existing `held` JSON shape instead.
+`loop list` shows the oldest live condition capacity wait or Active workflow capacity wait for the task, and a count of additional waits; `loop show` shows each checkout's wait. Their JSON adds `capacity_wait: {kinds, since, gives_up_at, reason}`, with `since` the first capacity hold and `gives_up_at: null` for forever. `show` puts it on each worktree row, or at the top level for a single-checkout task. An absent wait is `null`. Blocking queue tickets keep the existing `held` JSON shape instead.
 
 Signal, watch, and clock fires block, retaining their run lock and queue ticket. A later scheduled fire follows the task's overlap policy. A coalescing fire absorbs waiting triggers again after admission, without starting a second run. Ctrl-C ends a held hidden `loop run` from a terminal: it records `canceled` with exit code `130`, keeps the check it ran, and starts nothing. `rimz loop fire` bypasses capacity entirely and prints no hold notice. A fire admitted after a hold records how long it waited, shown as `queued 3m` in its `NOTE`. `loop stop` ends a held run like any other and leaves one `canceled` record.
 

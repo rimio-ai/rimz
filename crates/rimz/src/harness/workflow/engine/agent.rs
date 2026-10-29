@@ -219,6 +219,7 @@ pub(super) fn launch(
     spec: &WorkflowSpec,
     record: &RunRecord,
     prompt: std::result::Result<String, String>,
+    throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
     host: &dyn AttemptHost,
 ) -> Result<bool> {
     // Preparation publishes the attempt before entering this off-lock launch.
@@ -239,6 +240,7 @@ pub(super) fn launch(
                 lifecycle: attempt.lifecycle,
                 prompt,
                 cwd: record.scope.path.clone(),
+                throttle_turn,
             })
             .unwrap_or_else(|error| {
                 Err(LaunchFailure {

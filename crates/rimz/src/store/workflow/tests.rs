@@ -17,6 +17,34 @@ fn record() -> RunRecord {
 }
 
 #[test]
+fn manual_origin_round_trips_without_changing_legacy_records() {
+    let mut value = serde_json::to_value(record()).unwrap();
+    assert!(value.get("manual").is_none());
+    value["manual"] = json!(true);
+    let manual: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(manual).unwrap(), value);
+}
+
+#[test]
+fn capacity_wait_round_trips_and_legacy_waits_still_load() {
+    let wait = json!({
+        "node":"build", "outcome":"capacity", "detail":"no capacity for claude",
+        "first":"2026-01-01T00:00:00Z", "last":"2026-01-01T00:00:00Z",
+        "count":2, "recheck_at":null, "kinds":["claude", "codex"],
+        "gives_up_at":"2026-01-01T02:00:00Z"
+    });
+    let decoded: Wait = serde_json::from_value(wait.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), wait);
+    let mut legacy = wait;
+    legacy.as_object_mut().unwrap().remove("kinds");
+    legacy.as_object_mut().unwrap().remove("gives_up_at");
+    let decoded: Wait = serde_json::from_value(legacy).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert!(encoded.get("kinds").is_none());
+    assert!(encoded.get("gives_up_at").is_none());
+}
+
+#[test]
 fn until_session_round_trips_with_its_verdict_and_version_fence() {
     let turn = json!({
         "agent_id":"leader", "started_at":"2026-01-01T00:00:00Z",

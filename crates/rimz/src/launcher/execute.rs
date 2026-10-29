@@ -38,6 +38,7 @@ pub struct LeaderRun {
     pub grace: Option<Duration>,
     pub loop_task: Option<String>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
+    pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
     pub reader: Option<String>,
     pub response_receipt: bool,
     pub completion: RunCompletion,

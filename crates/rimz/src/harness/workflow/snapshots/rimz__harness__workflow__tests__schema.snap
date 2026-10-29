@@ -191,6 +191,12 @@ expression: value
             "null"
           ]
         },
+        "capacity-wait": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "lifecycle": {
           "anyOf": [
             {
@@ -247,6 +253,12 @@ expression: value
         "then": {
           "type": "string"
         },
+        "throttle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "timeout": {
           "type": [
             "string",
@@ -275,6 +287,12 @@ expression: value
           ]
         },
         "cap": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capacity": {
           "type": [
             "string",
             "null"

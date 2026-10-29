@@ -623,6 +623,29 @@ fn load(
                     .min_by_key(|wait| wait.first)
                     .map(CapacityWaitView::from);
             }
+            for wait in workflows
+                .iter()
+                .filter(|run| {
+                    run.started_by(name)
+                        && run.project_root == root
+                        && run.state == rimz::store::workflow::RunState::Active
+                })
+                .filter_map(|run| run.wait.as_ref().filter(|wait| wait.outcome == "capacity"))
+            {
+                row.capacity_count += 1;
+                if row
+                    .capacity_wait
+                    .as_ref()
+                    .is_none_or(|oldest| wait.first < oldest.since)
+                {
+                    row.capacity_wait = Some(CapacityWaitView {
+                        kinds: wait.kinds.clone(),
+                        since: wait.first,
+                        gives_up_at: wait.gives_up_at,
+                        reason: wait.detail.clone().unwrap_or_default(),
+                    });
+                }
+            }
             row.worktree_here = here
                 && workspace.is_some_and(|workspace| match task.entry().worktree.as_deref() {
                     Some(name) => {

@@ -64,7 +64,7 @@ Validate the definition first. The command prints every node with the edges it r
 $ rimz workflow validate ~/.rimz/workflows/fix-tests
 WORKFLOW   NODE   KIND   RUNNER      BACKGROUND  EDGES
 fix-tests  tests  check  cargo test  —           deadline → @user (default), fail → fix (explicit), invalid → @user (default), pass → @done (explicit), timeout → @user (default)
-fix-tests  fix    step   claude      yes         cap → @user (default), deadline → @user (default), then → tests (explicit)
+fix-tests  fix    step   claude      yes         cap → @user (default), capacity → @failed (default), deadline → @user (default), then → tests (explicit)
 warning: fix-tests: steps.fix: auto-continue is off; a provider limit mid-attempt ends the attempt as limited
 ```
 
@@ -128,6 +128,8 @@ Use `lifecycle = "stay"` when you want to work with the agent across turns. The 
 Use `lifecycle = "until"` to work across turns until the check says you are done. At each leader turn end, once the leader is at rest with no pending work, blocking question, or provider limit, RimZ runs `then` once. A route back to this step or to `@wait` keeps the layout open without another visit; every other route closes it and follows that route without repeating the check. A kept `@wait` waits for your next turn end, not a timer or signal. While the check runs, `list` reads `with you; checking <check>`, with any waiting detail appended; a blocking question still takes precedence. If RimZ observes a newer turn when it rechecks a closing verdict, it discards that verdict without stopping your session. Provider exit, deadline, and cancel still end the session as for `stay`. Both `stay` and `until` are staying steps.
 
 An agent step does not start in a checkout another agent is using. It waits until the checkout is free. With `takeover = true` it stops an idle agent there to make room, but an agent in the middle of a turn still makes it wait. Agents in other RimZ worktrees do not count.
+
+When a loop starts the run automatically, its agent steps also wait for [capacity](./loops.md#pace-agent-starts), before stopping any occupant. A held step uses no visit and retries about once a minute. `list` and `show` print `waiting for capacity (claude) since 15:02`; a bounded wait also prints its give-up time. On an agent step, set `capacity-wait = "6h"` to give up after six hours, or leave the default `forever`. Giving up ends the run as failed unless `on.capacity` names `@done` or another node. It cannot park at `@user` or `@wait`. A window or occupancy wait restarts this clock, and the run deadline still applies. `throttle = "off"` skips capacity for that step. Runs you start with `rimz workflow run` or `rimz loop fire`, and runs detached by removing their loop task, are never limited; neither are command steps, checks, or an already-open staying session.
 
 A judge runs headless, with no pane, and [the judge section](#let-a-model-decide) covers what it may touch.
 
@@ -347,7 +349,7 @@ A shell check constructs its answer for you: `outcome` is `pass` or `fail`, `cod
 
 Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, `@failed`, or `@user`. A step's `then` must name a check. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
-A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its fixed or inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` may override the default, but `on.hold` is never an edge.
+A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its fixed or inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` may override the default, but `on.hold` is never an edge.
 
 ### The context file
 

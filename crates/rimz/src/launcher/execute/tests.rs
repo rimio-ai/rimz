@@ -118,6 +118,7 @@ impl Fixture {
             grace: None,
             loop_task: None,
             workflow: None,
+            throttle_turn: None,
             reader: None,
             response_receipt: false,
             completion: RunCompletion::Watched {

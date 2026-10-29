@@ -1137,6 +1137,7 @@ impl<'a> TaskFire<'a> {
             },
             prompt,
             Some(self.name.clone()),
+            self.mode == LoopRunMode::Manual,
         );
         let (result, id, error) = match result {
             Ok(run) => {

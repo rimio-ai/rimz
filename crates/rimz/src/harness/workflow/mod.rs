@@ -101,6 +101,7 @@ pub struct StepLaunch {
     pub lifecycle: crate::store::workflow::StepLifecycle,
     pub prompt: String,
     pub cwd: PathBuf,
+    pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
 }
 
 #[derive(Clone, Debug)]
