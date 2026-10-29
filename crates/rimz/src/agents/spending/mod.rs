@@ -19,6 +19,7 @@ mod cache;
 mod discovery;
 mod effort;
 mod engine;
+mod history;
 mod publish;
 mod refresh;
 pub mod service;
@@ -331,6 +332,7 @@ struct SpendingMemoKey {
 }
 
 pub struct WalkRequest<'a> {
+    pub history: &'a crate::disk::paths::SpendingHistoryPaths,
     pub files: &'a [SpendingFile],
     pub prices: &'a PriceBook,
     pub now_secs: u64,
@@ -515,10 +517,13 @@ impl SpendingWalker {
             self.memo = None;
         }
 
+        let _maintenance = persist
+            .then(|| history::maintain(req.history, req.now_secs))
+            .flatten();
         self.ensure_memo(req.files, &mut stats);
         let memo = self.memo.as_ref().expect("memo seeded above");
         let counted = indexed_counted_entries(req.files, &self.cache, &memo.counted);
-        let roles = session_roles::load_history(cache_path, req.now_secs);
+        let roles = session_roles::load_history(req.history, req.now_secs);
         let mut result = aggregate_counted_rollups(
             req.files,
             &self.cache,

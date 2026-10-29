@@ -260,6 +260,9 @@ macro_rules! walk_spending {
         let user_inputs = Vec::new();
         let spec = HeadlineSpec::default();
         let req = WalkRequest {
+            history: &crate::disk::paths::SpendingHistoryPaths::under(
+                ($cache_path).parent().unwrap(),
+            ),
             files: $files,
             prices: &prices,
             now_secs: $now_secs,

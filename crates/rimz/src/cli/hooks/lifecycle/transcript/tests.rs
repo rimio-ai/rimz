@@ -176,10 +176,7 @@ fn conversation_input<'a>(
 }
 
 fn effort_records(store: &Store) -> Vec<serde_json::Value> {
-    let directory = store
-        .runtime_paths()
-        .shared_spending_cursor_path()
-        .with_file_name("session-effort");
+    let directory = store.runtime_paths().spending_history.effort_dir();
     std::fs::read_dir(directory)
         .into_iter()
         .flatten()

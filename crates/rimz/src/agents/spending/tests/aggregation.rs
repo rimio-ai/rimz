@@ -731,7 +731,7 @@ fn effort_uses_spend_windows_and_shared_placement_without_requiring_spend() {
         bytes.push(b'\n');
     }
     std::fs::write(segment, bytes).unwrap();
-    let history = session_roles::load_history(&paths.shared_spending_cursor_path(), NOW_SECS);
+    let history = session_roles::load_history(&paths.spending_history, NOW_SECS);
     let transcript = PathBuf::from("/x/opencode.db");
     let files = vec![spending_file(opencode_adapter(), transcript.clone())];
     let entries = seconds
@@ -912,7 +912,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
             .unwrap();
         }
     }
-    let roles = super::super::session_roles::load(&runtime.shared_spending_cursor_path(), NOW_SECS);
+    let roles = super::super::session_roles::load(&runtime.spending_history, NOW_SECS);
     let locations = dedup_cached_entry_locations(&files, &cache);
     let counted = indexed_counted_entries(&files, &cache, &locations);
     let result = aggregate_counted_rollups(
@@ -1083,7 +1083,7 @@ fn codex_revision_spend_joins_the_threads_role_and_counts_one_session() {
             },
         )
         .unwrap();
-        let roles = session_roles::load(&runtime.shared_spending_cursor_path(), NOW_SECS);
+        let roles = session_roles::load(&runtime.spending_history, NOW_SECS);
         let result = aggregate_counted_rollups(
             &files,
             &cache,

@@ -348,11 +348,8 @@ fn walk_fleet_spending_files(
         read_provider_spending_cache, write_provider_spending_cache,
     };
 
-    if publish
-        && let Err(error) =
-            super::session_effort::maintain(&runtime.shared_spending_cursor_path(), now_secs)
-    {
-        tracing::warn!(%error, "failed to maintain session effort ledger");
+    if publish && let Err(error) = super::history::migrate(runtime, now_secs) {
+        tracing::warn!(%error, "failed to migrate shared spending history");
     }
     let provider_path = runtime.shared_provider_spending_path();
     let scope = SpendScope::for_workspace(
@@ -366,6 +363,9 @@ fn walk_fleet_spending_files(
         total_files: files.len(),
     });
     if files.is_empty() {
+        let _maintenance = publish
+            .then(|| super::history::maintain(&runtime.spending_history, now_secs))
+            .flatten();
         // A non-authoritative empty scan retains prior publications; an
         // authoritative empty index is a real deletion and publishes zero.
         let published = read_provider_spending_cache(&provider_path);
@@ -377,8 +377,7 @@ fn walk_fleet_spending_files(
         }
         let refreshed_at_ms = unix_now_ms();
         let user_inputs = user_input::load();
-        let roles =
-            super::session_roles::load_history(&runtime.shared_spending_cursor_path(), now_secs);
+        let roles = super::session_roles::load_history(&runtime.spending_history, now_secs);
         let result = crate::agents::spending::aggregate_walk_publish(
             files,
             &Default::default(),
@@ -432,6 +431,7 @@ fn walk_fleet_spending_files(
     };
     let user_inputs = user_input::load();
     let req = WalkRequest {
+        history: &runtime.spending_history,
         files,
         prices: &prices,
         now_secs,
@@ -498,10 +498,8 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
     }
 
     fn on_interval(&mut self, cache: &crate::agents::spending::SpendingDiskCache) {
-        let roles = super::session_roles::load_history(
-            &self.runtime.shared_spending_cursor_path(),
-            self.now_secs,
-        );
+        let roles =
+            super::session_roles::load_history(&self.runtime.spending_history, self.now_secs);
         let result = crate::agents::spending::aggregate_walk_publish(
             self.files,
             cache,

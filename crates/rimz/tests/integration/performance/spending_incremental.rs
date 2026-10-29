@@ -140,6 +140,9 @@ macro_rules! walk_spending {
         let user_inputs = Vec::new();
         let spec = HeadlineSpec::default();
         let req = WalkRequest {
+            history: &rimz::disk::paths::SpendingHistoryPaths::under(
+                ($cache_path).parent().unwrap(),
+            ),
             files: $files,
             prices: $prices,
             now_secs: $now_secs,
@@ -372,6 +375,7 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
     };
     let origin_overrides = HashMap::new();
     let request = WalkRequest {
+        history: &rimz::disk::paths::SpendingHistoryPaths::under(dir.path()),
         files: &files,
         prices: &prices,
         now_secs,

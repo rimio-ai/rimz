@@ -63,6 +63,7 @@ fn session_role_spend_survives_run_and_room_removal() {
     let result = SpendingWalker::new().walk_local(
         &cache,
         &WalkRequest {
+            history: &h.runtime_paths.spending_history,
             files: &files,
             prices: &Default::default(),
             now_secs: at.as_second() as u64,

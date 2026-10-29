@@ -808,7 +808,7 @@ fn completed_effort_releases_are_not_repeated_on_replay() {
     stop.ts = started + Duration::from_secs(10);
     let (stop, _) = append_frame(&env, stop);
     let (mut drainer, release) = paused_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY");
-    let directory = env.rimz_home().join("cache/providers/session-effort");
+    let directory = env.rimz_home().join("accounts/.history/session-effort");
     let read_effort = || {
         std::fs::read_dir(&directory)
             .into_iter()
@@ -843,7 +843,7 @@ fn completed_effort_releases_are_not_repeated_on_replay() {
 fn effort_write_failure_warns_without_changing_the_hook_reply() {
     let env = Env::new();
     env.record(&env.project_root);
-    let directory = env.rimz_home().join("cache/providers");
+    let directory = env.rimz_home().join("accounts/.history");
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(directory.join("session-effort"), "block effort writes").unwrap();
     let started = Timestamp::now() - Duration::from_secs(10);

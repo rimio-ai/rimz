@@ -828,6 +828,7 @@ pub struct RuntimePaths {
     /// cross-workspace cache paths.
     pub persistent_shared_root: PathBuf,
     pub spending_history: SpendingHistoryPaths,
+    pub(crate) spending_legacy_home: PathBuf,
     pub sock_dir: PathBuf,
     pub live_dir: PathBuf,
     pub lanes_dir: PathBuf,
@@ -921,6 +922,7 @@ impl RuntimePaths {
         let mut paths = Self::under_named(sentinel, dir_name, &runtime_home());
         paths.persistent_shared_root = providers_cache_dir();
         paths.spending_history = SpendingHistoryPaths::under(&accounts_dir());
+        paths.spending_legacy_home = rimz_home();
         paths
     }
 
@@ -972,6 +974,7 @@ impl RuntimePaths {
             shared_root,
             persistent_shared_root,
             spending_history,
+            spending_legacy_home: runtime_root.to_path_buf(),
             sock_dir,
             live_dir,
             lanes_dir,
@@ -996,6 +999,7 @@ impl RuntimePaths {
         SockBudget::for_sock_dir(&paths.sock_dir).validate()?;
         paths.persistent_shared_root = providers_cache_dir();
         paths.spending_history = SpendingHistoryPaths::under(&accounts_dir());
+        paths.spending_legacy_home = rimz_home();
         Ok(paths)
     }
 
@@ -1009,6 +1013,7 @@ impl RuntimePaths {
         paths.shared_root = self.shared_root.clone();
         paths.persistent_shared_root = self.persistent_shared_root.clone();
         paths.spending_history = self.spending_history.clone();
+        paths.spending_legacy_home = self.spending_legacy_home.clone();
         Ok(paths)
     }
 
@@ -1263,23 +1268,19 @@ impl RuntimePaths {
     }
 
     pub(crate) fn shared_session_roles(&self, year: i16) -> PathBuf {
-        Self::session_roles_for_cursor(&self.shared_spending_cursor_path(), year)
+        self.spending_history.roles(year)
     }
 
     pub(crate) fn shared_session_effort(&self, date: jiff::civil::Date) -> PathBuf {
-        Self::session_effort_for_cursor(&self.shared_spending_cursor_path(), date)
+        self.spending_history.effort(date)
     }
 
-    pub(crate) fn session_effort_for_cursor(cursor: &Path, date: jiff::civil::Date) -> PathBuf {
-        cursor
-            .with_file_name("session-effort")
-            .join(format!("{date}.jsonl"))
+    pub(crate) fn legacy_session_effort(&self) -> PathBuf {
+        self.persistent_shared_root.join("session-effort")
     }
 
-    pub(crate) fn session_roles_for_cursor(cursor: &Path, year: i16) -> PathBuf {
-        cursor
-            .with_file_name("session-roles")
-            .join(format!("{year:04}.jsonl"))
+    pub(crate) fn legacy_session_roles(&self) -> PathBuf {
+        self.persistent_shared_root.join("session-roles")
     }
 
     /// The component of an account budget ledger's file name; `None` for any
