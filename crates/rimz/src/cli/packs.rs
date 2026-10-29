@@ -105,6 +105,9 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
         PacksSubcmd::Install {
             source: InstallSource::Linked(source),
         } => install(&home, &source, &mut receipt)?,
+        PacksSubcmd::Install {
+            source: InstallSource::Git(_),
+        } => bail!("Git source installation is not available yet"),
         PacksSubcmd::Remove { pack } => {
             let outcome = packs::remove(&home, &pack)?;
             writeln!(receipt, "Removed {} from {}.", outcome.pack, outcome.source)?;

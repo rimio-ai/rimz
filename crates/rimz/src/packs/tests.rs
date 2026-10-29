@@ -1,4 +1,5 @@
 use super::*;
+mod git_sources;
 mod layout;
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -440,18 +441,21 @@ fn claims_share_home_precedence_exclusions_and_conflict_fixes() {
 }
 
 #[test]
-fn install_arguments_accept_only_explicit_path_forms() {
-    let accepted = [".", "..", "/src/crew", "./crew", "../crew", "~/crew", "~"];
-    let refused = [
+fn install_arguments_accept_linked_and_git_sources() {
+    let accepted = [
+        ".",
+        "..",
+        "/src/crew",
+        "./crew",
+        "../crew",
+        "~/crew",
+        "~",
         "crew",
         "skills/git",
         "github:owner/repo",
         "https://github.com/a/b",
-        "",
-        "foo/../crew",
-        "~user",
-        "~user/crew",
     ];
+    let refused = ["", "foo/../crew", "~user", "~user/crew"];
     let results: Vec<_> = accepted
         .iter()
         .map(|value| (value, value.parse::<InstallSource>().is_ok()))
