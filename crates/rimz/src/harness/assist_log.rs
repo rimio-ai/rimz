@@ -26,6 +26,14 @@ pub struct AssistRecord {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
+    PortForward {
+        host: String,
+        remote: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     WorkflowStart {
         run: crate::ids::WorkflowRunId,
         workflow: String,
@@ -507,6 +515,13 @@ mod tests {
 
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
+        let forwarded = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "port_forward",
+            "host": "dev-box", "remote": 3000, "local": 3001
+        });
+        let decoded = serde_json::from_value::<AssistRecord>(forwarded.clone());
+        assert!(decoded.is_ok(), "port forwarding is an assist: {decoded:?}");
+        assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), forwarded);
         let molted = serde_json::json!({
             "at": "2026-06-02T12:00:00Z", "assist": "molt",
             "kind": "claude", "agent_id": "session-1", "label": "@fox",

@@ -260,7 +260,9 @@ impl PortSync {
                 forward.set_state(ForwardState::Limit, now_ms);
                 continue;
             }
-            forward.set_state(ForwardState::Reopening, now_ms);
+            if forward.state != ForwardState::NoLocalPort {
+                forward.set_state(ForwardState::Reopening, now_ms);
+            }
             active += 1;
             actions.push(forward.origin.action(*remote));
         }
@@ -308,6 +310,9 @@ impl PortSync {
             });
         if let Some(local) = local {
             self.pins.insert(remote, local);
+            if let Some(forward) = self.forwards.get_mut(&remote) {
+                forward.set_state(ForwardState::Reopening, now_ms);
+            }
         } else if let Some(forward) = self.forwards.get_mut(&remote) {
             forward.set_state(ForwardState::NoLocalPort, now_ms);
         }
@@ -431,7 +436,7 @@ mod tests {
         assert_eq!(limit.since_ms, 1_000);
         let unavailable = &entries[0];
         assert_eq!(unavailable.state, ForwardState::NoLocalPort);
-        assert_eq!(unavailable.since_ms, 4_000);
+        assert_eq!(unavailable.since_ms, 2_000);
         assert_eq!(unavailable.local, None);
     }
 

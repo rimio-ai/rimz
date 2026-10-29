@@ -28,6 +28,7 @@ pub(super) struct AssistRollup {
     pub(super) workflow_parks: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub(super) workflow_ends: usize,
+    pub(super) port_forwards: usize,
     pub(super) molts: usize,
     pub(super) stall_notices: usize,
     pub(super) resident_launches: usize,
@@ -61,6 +62,15 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
+    PortForward {
+        at: Timestamp,
+        host: String,
+        remote: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        local: Option<u16>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     WorkflowStart {
         at: Timestamp,
         run: rimz::ids::WorkflowRunId,
@@ -383,6 +393,7 @@ impl AssistStats {
                 continue;
             }
             match event {
+                AssistEvent::PortForward { .. } => rollup.port_forwards += 1,
                 AssistEvent::WorkflowStart { .. } => rollup.workflow_starts += 1,
                 AssistEvent::WorkflowStep { .. } => rollup.workflow_steps += 1,
                 AssistEvent::WorkflowRoute { .. } => rollup.workflow_routes += 1,
@@ -491,7 +502,9 @@ impl AssistEvent {
             Self::LaunchRetry { relaunched, .. } => *relaunched,
             // A stamp write fails after the reset, so an error does not undo it.
             Self::Redeem { windows_reset, .. } => *windows_reset,
-            Self::Gc { error, .. } | Self::TmpEvict { error, .. } => error.is_none(),
+            Self::Gc { error, .. }
+            | Self::TmpEvict { error, .. }
+            | Self::PortForward { error, .. } => error.is_none(),
             Self::Molt { .. }
             | Self::IdleStopWithdrawn { .. }
             | Self::WorkflowStart { .. }
@@ -511,6 +524,7 @@ impl AssistEvent {
     /// The `AssistRollup` field this event counts toward, named as it serializes.
     fn count_key(&self) -> &'static str {
         match self {
+            Self::PortForward { .. } => "port_forwards",
             Self::WorkflowStart { .. } => "workflow_starts",
             Self::WorkflowStep { .. } => "workflow_steps",
             Self::WorkflowRoute { .. } => "workflow_routes",
@@ -544,6 +558,18 @@ impl AssistEvent {
 
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
+            Assist::PortForward {
+                host,
+                remote,
+                local,
+                error,
+            } => Self::PortForward {
+                at: record.at,
+                host,
+                remote,
+                local,
+                error,
+            },
             Assist::WorkflowStart {
                 run,
                 workflow,
@@ -989,7 +1015,8 @@ impl AssistEvent {
 
     fn at(&self) -> Timestamp {
         match self {
-            Self::Molt { at, .. }
+            Self::PortForward { at, .. }
+            | Self::Molt { at, .. }
             | Self::WorkflowStart { at, .. }
             | Self::WorkflowStep { at, .. }
             | Self::WorkflowRoute { at, .. }
@@ -1152,6 +1179,12 @@ pub(super) fn category_entries(
         rollup.tier_fallbacks,
         None,
     );
+    row(
+        "Port forwards:",
+        "port_forwards",
+        rollup.port_forwards,
+        None,
+    );
     let recovered = (rollup.recovered_secs > 0)
         .then(|| format!("after {} parked", format_hours(rollup.recovered_secs)));
     row("Auto-continue:", "resumes", rollup.resumes, recovered);
@@ -1216,6 +1249,19 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
     let at = event.at().to_zoned(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
+        AssistEvent::PortForward {
+            host,
+            remote,
+            local,
+            error,
+            ..
+        } => match error {
+            Some(error) => format!("{time} {host}:{remote} forward held: {}", first_line(error)),
+            None => format!(
+                "{time} {host}:{remote} forwarded{}",
+                local.map_or_else(String::new, |local| format!(" to localhost:{local}"))
+            ),
+        },
         AssistEvent::WorkflowStart { workflow, task, .. } => format!(
             "{time} workflow {workflow} started{}",
             task.as_ref()
@@ -1640,6 +1686,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         .split_once(' ')
         .map_or_else(|| benefit_line(event, zone), |(_, rest)| rest.to_owned());
     match event {
+        AssistEvent::PortForward { .. } => format!("{at} {benefit}"),
         AssistEvent::WorkflowStart { run, .. }
         | AssistEvent::WorkflowStep { run, .. }
         | AssistEvent::WorkflowRoute { run, .. }
