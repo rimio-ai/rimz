@@ -193,7 +193,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 
 ## The cockpit
 
-The cockpit is the top block. Its lines stay put as agents change status; only the unread banner and [parked workflow runs](#parked-workflow-runs) add or remove rows.
+The cockpit is the top block. Its lines stay put as agents change status; the unread banner, [parked workflow runs](#parked-workflow-runs), and [capacity waits](#waiting-for-capacity) add or remove rows.
 
 ```
  ⌘ query-engine                     ~/code/query-engine
@@ -213,6 +213,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 | 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
 | 3 | `¤` live agents, `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
 | then | one line per [parked workflow run](#parked-workflow-runs), only while a run is parked, above the rule. |
+| then | one [capacity-wait line](#waiting-for-capacity) for the room, only while automated starts are waiting, above the rule. |
 | 4 | the make-up line: units by status. |
 | 5 | the `↑ N need you` or `↓ N need you` banner, only while it applies. |
 
@@ -235,6 +236,14 @@ A [workflow run](../guide/workflows.md) that parks for you adds one line under t
 ```
 
 Each line is the waiting `?` glyph, the workflow, the node it parked at, and the park reason (`user`, `cap`, `deadline`, `timeout`, `invalid`, `asked`, or `check`), followed by its text when the park carries one: the question for `asked`, the check's own `reason` for `user`. The text loses its right end at the pane edge, and the time since the park stays on the right. The line is not a click target: `rimz workflow show <run>` and `rimz workflow resume <run>` act on it ([workflow commands](../reference/cli/workflow.md)). On a watched tab it appears within one data tick of the park.
+
+### Waiting for capacity
+
+Condition loop fires and loop-started workflow steps held for capacity share one inert line beneath any parked workflow runs. It shows the oldest wait's provider kinds, start time, and give-up time in local time, using the same phrase as `rimz loop list` and `rimz workflow list`. A wait without a give-up time omits that clause. With several waits, `· N waiting` counts held checkout scopes and workflow runs, not retries; the count stays on the right when the phrase is clipped by a narrow pane. The line disappears when no durable capacity wait remains. Blocking signal, watch, and periodic fires appear in `rimz loop list` and `rimz loop show`, not here.
+
+```
+ ? waiting for capacity (claude, codex) since HH:MM, gives up at HH:MM                            · 4 waiting
+```
 
 ### The make-up line
 

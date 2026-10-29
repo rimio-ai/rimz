@@ -65,6 +65,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         fenced_sessions: Default::default(),
         resume_outcomes: Some(Default::default()),
         parked_workflows: Vec::new(),
+        capacity_wait: None,
     };
     snapshot.theme.scheme = Some("TokyoNight Night".to_owned());
 

@@ -3,7 +3,7 @@
 
 use crate::SpendWindow;
 use crate::agents::AgentStatus;
-use crate::store::snapshot::{DailyBudgetView, ParkedWorkflow};
+use crate::store::snapshot::{CapacityWaitSummary, DailyBudgetView, ParkedWorkflow};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
@@ -16,6 +16,32 @@ use crate::sidebar_pane::render::labels::{
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 use super::{metric_spans, pin_right, spans_width};
+
+/// One inert capacity-wait line, keeping the count visible when the phrase clips.
+pub(in crate::sidebar_pane::render) fn capacity_wait_line(
+    theme: &Theme,
+    wait: &CapacityWaitSummary,
+    width: usize,
+) -> Line<'static> {
+    let style = status_rest_style(theme, AgentStatus::Waiting);
+    let left = vec![Span::styled(
+        format!(
+            "{} {}",
+            status_glyph(theme, AgentStatus::Waiting),
+            crate::theme::fmt::capacity_wait(&wait.kinds, wait.since, wait.gives_up_at)
+        ),
+        style,
+    )];
+    let right = if wait.count > 1 {
+        vec![Span::styled(
+            format!("{} {} waiting", theme.glyph(GlyphRole::Seam), wait.count),
+            style,
+        )]
+    } else {
+        Vec::new()
+    };
+    pin_right(left, right, width)
+}
 
 /// One parked workflow run beneath the cockpit summary:
 /// `<waiting glyph> <workflow> <node> <reason>[: <text>]` in the waiting tone,
