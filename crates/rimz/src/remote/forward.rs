@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::mux::CommandSpec;
 
 use super::{RemoteTarget, link::PortsScope};
@@ -98,13 +100,39 @@ pub enum PortAction {
     Close { remote: u16, local: u16 },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum ForwardState {
     Forwarded,
     Reopening,
     Limit,
-    Refused { error: String },
+    Refused {
+        error: String,
+    },
     NoLocalPort,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardRecord {
+    pub target: String,
+    pub host: String,
+    pub pid: u32,
+    pub started_at_ms: u64,
+    pub at_ms: u64,
+    pub auto_forward: bool,
+    pub forwards: Vec<ForwardEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardEntry {
+    pub remote: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<u16>,
+    #[serde(flatten)]
+    pub state: ForwardState,
+    pub since_ms: u64,
 }
 
 impl ForwardState {
@@ -132,7 +160,17 @@ impl OpenOrigin {
 struct ListenerForward {
     missing: u8,
     state: ForwardState,
+    since_ms: u64,
     origin: OpenOrigin,
+}
+
+impl ListenerForward {
+    fn set_state(&mut self, state: ForwardState, now_ms: u64) {
+        if self.state != state {
+            self.state = state;
+            self.since_ms = now_ms;
+        }
+    }
 }
 
 /// Local diff state for listener reports across probe streams and reconnects.
@@ -146,7 +184,24 @@ pub struct PortSync {
 }
 
 impl PortSync {
-    pub fn observe(&mut self, report: &[u16], ports_scope: Option<PortsScope>) -> Vec<PortAction> {
+    pub fn snapshot(&self) -> Vec<ForwardEntry> {
+        self.forwards
+            .iter()
+            .map(|(remote, forward)| ForwardEntry {
+                remote: *remote,
+                local: self.local_port(*remote),
+                state: forward.state.clone(),
+                since_ms: forward.since_ms,
+            })
+            .collect()
+    }
+
+    pub fn observe(
+        &mut self,
+        now_ms: u64,
+        report: &[u16],
+        ports_scope: Option<PortsScope>,
+    ) -> Vec<PortAction> {
         let report = report.iter().copied().collect::<BTreeSet<_>>();
         if ports_scope != Some(PortsScope::Room) && self.baseline.is_none() {
             self.baseline = Some(report);
@@ -193,6 +248,7 @@ impl PortSync {
             let forward = self.forwards.entry(*remote).or_insert(ListenerForward {
                 missing: 0,
                 state: ForwardState::Limit,
+                since_ms: now_ms,
                 origin: OpenOrigin::Report,
             });
             if forward.state.occupies_slot()
@@ -201,10 +257,10 @@ impl PortSync {
                 continue;
             }
             if active >= MAX_ACTIVE_FORWARDS {
-                forward.state = ForwardState::Limit;
+                forward.set_state(ForwardState::Limit, now_ms);
                 continue;
             }
-            forward.state = ForwardState::Reopening;
+            forward.set_state(ForwardState::Reopening, now_ms);
             active += 1;
             actions.push(forward.origin.action(*remote));
         }
@@ -212,9 +268,9 @@ impl PortSync {
     }
 
     /// Park a refused open until the listener disappears and later returns.
-    pub fn mark_open_failed(&mut self, remote: u16, error: String) {
+    pub fn mark_open_failed(&mut self, now_ms: u64, remote: u16, error: String) {
         if let Some(forward) = self.forwards.get_mut(&remote) {
-            forward.state = ForwardState::Refused { error };
+            forward.set_state(ForwardState::Refused { error }, now_ms);
         }
     }
 
@@ -228,6 +284,7 @@ impl PortSync {
 
     pub fn choose_local_port(
         &mut self,
+        now_ms: u64,
         remote: u16,
         mut available: impl FnMut(u16) -> bool,
         mut fallback: impl FnMut() -> Option<u16>,
@@ -252,21 +309,21 @@ impl PortSync {
         if let Some(local) = local {
             self.pins.insert(remote, local);
         } else if let Some(forward) = self.forwards.get_mut(&remote) {
-            forward.state = ForwardState::NoLocalPort;
+            forward.set_state(ForwardState::NoLocalPort, now_ms);
         }
         local
     }
 
-    pub fn mark_opened(&mut self, remote: u16) {
+    pub fn mark_opened(&mut self, now_ms: u64, remote: u16) {
         if let Some(forward) = self.forwards.get_mut(&remote) {
-            forward.state = ForwardState::Forwarded;
+            forward.set_state(ForwardState::Forwarded, now_ms);
         }
     }
 
-    pub fn mark_master_lost(&mut self) {
+    pub fn mark_master_lost(&mut self, now_ms: u64) {
         for forward in self.forwards.values_mut() {
             if forward.state == ForwardState::Forwarded {
-                forward.state = ForwardState::Reopening;
+                forward.set_state(ForwardState::Reopening, now_ms);
                 forward.origin = OpenOrigin::MasterReplacement;
             }
         }
@@ -328,6 +385,55 @@ mod tests {
     use std::path::PathBuf;
 
     const HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+
+    #[test]
+    fn forward_record_tracks_pairs_outcomes_and_state_ages() {
+        let mut sync = PortSync::default();
+        sync.observe(1_000, &[3000], Some(PortsScope::Room));
+        sync.choose_local_port(1_100, 3000, |port| port == 3001, || None);
+        sync.mark_opened(1_200, 3000);
+        sync.observe(9_000, &[3000], Some(PortsScope::Room));
+        assert_eq!(
+            serde_json::to_value(sync.snapshot()).unwrap(),
+            serde_json::json!([{"remote":3000,"local":3001,"state":"forwarded","since_ms":1200}])
+        );
+        sync.mark_master_lost(10_000);
+        sync.mark_master_lost(11_000);
+        assert_eq!(sync.snapshot()[0].since_ms, 10_000);
+        assert_eq!(sync.snapshot()[0].state, ForwardState::Reopening);
+        sync.mark_open_failed(12_000, 3000, "forwarding disabled".into());
+        assert_eq!(
+            serde_json::to_value(sync.snapshot()).unwrap()[0],
+            serde_json::json!({
+                "remote":3000,"local":3001,"state":"refused",
+                "error":"forwarding disabled","since_ms":12000
+            })
+        );
+        sync.observe(13_000, &[], Some(PortsScope::Room));
+        assert!(sync.snapshot().is_empty());
+        sync.observe(14_000, &[3000], Some(PortsScope::Room));
+        assert_eq!(sync.snapshot()[0].local, Some(3001));
+        assert_eq!(sync.snapshot()[0].since_ms, 14_000);
+    }
+
+    #[test]
+    fn waiting_forward_ages_survive_unchanged_reports() {
+        let mut sync = PortSync::default();
+        let ports = (3000..3017).collect::<Vec<_>>();
+        sync.observe(1_000, &ports, Some(PortsScope::Room));
+        sync.choose_local_port(2_000, 3000, |_| false, || None);
+        sync.observe(3_000, &ports, Some(PortsScope::Room));
+        sync.choose_local_port(4_000, 3000, |_| false, || None);
+        let entries = sync.snapshot();
+        assert_eq!(entries.len(), 17);
+        let limit = entries.iter().find(|entry| entry.remote == 3016).unwrap();
+        assert_eq!(limit.state, ForwardState::Limit);
+        assert_eq!(limit.since_ms, 1_000);
+        let unavailable = &entries[0];
+        assert_eq!(unavailable.state, ForwardState::NoLocalPort);
+        assert_eq!(unavailable.since_ms, 4_000);
+        assert_eq!(unavailable.local, None);
+    }
 
     fn row(local: &str, state: &str, uid: u32) -> String {
         format!(
@@ -427,7 +533,7 @@ mod tests {
     fn room_scoped_first_report_opens_existing_listeners() {
         let mut sync = PortSync::default();
         assert_eq!(
-            sync.observe(&[3000], Some(PortsScope::Room)),
+            sync.observe(0, &[3000], Some(PortsScope::Room)),
             [PortAction::Open(3000)]
         );
     }
@@ -435,9 +541,9 @@ mod tests {
     #[test]
     fn room_scope_does_not_inherit_the_legacy_baseline() {
         let mut sync = PortSync::default();
-        assert!(sync.observe(&[3000], None).is_empty());
+        assert!(sync.observe(0, &[3000], None).is_empty());
         assert_eq!(
-            sync.observe(&[3000], Some(PortsScope::Room)),
+            sync.observe(0, &[3000], Some(PortsScope::Room)),
             [PortAction::Open(3000)]
         );
     }
@@ -445,55 +551,67 @@ mod tests {
     #[test]
     fn port_sync_baselines_debounces_parks_and_reoffers() {
         let mut sync = PortSync::default();
-        assert!(sync.observe(&[1500], None).is_empty());
-        assert_eq!(sync.observe(&[1500, 3000], None), [PortAction::Open(3000)]);
-        assert_eq!(sync.choose_local_port(3000, |_| true, || None), Some(3000));
-        sync.mark_opened(3000);
+        assert!(sync.observe(0, &[1500], None).is_empty());
+        assert_eq!(
+            sync.observe(0, &[1500, 3000], None),
+            [PortAction::Open(3000)]
+        );
+        assert_eq!(
+            sync.choose_local_port(0, 3000, |_| true, || None),
+            Some(3000)
+        );
+        sync.mark_opened(0, 3000);
         assert!(
             sync.reopen_active().is_empty(),
             "held forwards stay untouched"
         );
-        assert!(sync.observe(&[1500], None).is_empty());
-        assert!(sync.observe(&[1500], None).is_empty());
+        assert!(sync.observe(0, &[1500], None).is_empty());
+        assert!(sync.observe(0, &[1500], None).is_empty());
         assert_eq!(
-            sync.observe(&[1500], None),
+            sync.observe(0, &[1500], None),
             [PortAction::Close {
                 remote: 3000,
                 local: 3000
             }]
         );
 
-        assert_eq!(sync.observe(&[1500, 4000], None), [PortAction::Open(4000)]);
-        sync.mark_open_failed(4000, "administratively prohibited".to_owned());
+        assert_eq!(
+            sync.observe(0, &[1500, 4000], None),
+            [PortAction::Open(4000)]
+        );
+        sync.mark_open_failed(0, 4000, "administratively prohibited".to_owned());
         assert_eq!(
             sync.state(4000),
             Some(&ForwardState::Refused {
                 error: "administratively prohibited".to_owned()
             })
         );
-        assert!(sync.observe(&[1500, 4000], None).is_empty());
-        assert!(sync.observe(&[1500], None).is_empty());
-        assert_eq!(sync.observe(&[1500, 4000], None), [PortAction::Open(4000)]);
+        assert!(sync.observe(0, &[1500, 4000], None).is_empty());
+        assert!(sync.observe(0, &[1500], None).is_empty());
+        assert_eq!(
+            sync.observe(0, &[1500, 4000], None),
+            [PortAction::Open(4000)]
+        );
     }
 
     #[test]
     fn port_sync_caps_active_forwards() {
         let mut sync = PortSync::default();
-        sync.observe(&[], None);
+        sync.observe(0, &[], None);
         let report = (2000..2020).collect::<Vec<_>>();
-        let actions = sync.observe(&report, None);
+        let actions = sync.observe(0, &report, None);
 
         assert_eq!(actions.len(), MAX_ACTIVE_FORWARDS);
         assert_eq!(actions.first(), Some(&PortAction::Open(2000)));
         assert_eq!(actions.last(), Some(&PortAction::Open(2015)));
         assert_eq!(sync.state(2019), Some(&ForwardState::Limit));
-        sync.choose_local_port(2000, |_| true, || None);
-        sync.mark_opened(2000);
+        sync.choose_local_port(0, 2000, |_| true, || None);
+        sync.mark_opened(0, 2000);
         let report = (2001..2020).collect::<Vec<_>>();
-        assert!(sync.observe(&report, None).is_empty());
-        assert!(sync.observe(&report, None).is_empty());
+        assert!(sync.observe(0, &report, None).is_empty());
+        assert!(sync.observe(0, &report, None).is_empty());
         assert_eq!(
-            sync.observe(&report, None),
+            sync.observe(0, &report, None),
             [
                 PortAction::Close {
                     remote: 2000,
@@ -507,32 +625,35 @@ mod tests {
     #[test]
     fn port_sync_reopens_only_after_the_master_is_lost() {
         let mut sync = PortSync::default();
-        sync.observe(&[], None);
+        sync.observe(0, &[], None);
         assert_eq!(
-            sync.observe(&[3000, 4000], None),
+            sync.observe(0, &[3000, 4000], None),
             [PortAction::Open(3000), PortAction::Open(4000)]
         );
-        sync.choose_local_port(3000, |port| port != 3000, || None);
-        sync.choose_local_port(4000, |_| true, || None);
-        sync.mark_opened(3000);
-        sync.mark_opened(4000);
-        sync.mark_master_lost();
+        sync.choose_local_port(0, 3000, |port| port != 3000, || None);
+        sync.choose_local_port(0, 4000, |_| true, || None);
+        sync.mark_opened(0, 3000);
+        sync.mark_opened(0, 4000);
+        sync.mark_master_lost(0);
         assert_eq!(sync.state(3000), Some(&ForwardState::Reopening));
         assert_eq!(
             sync.reopen_active(),
             [PortAction::Reopen(3000), PortAction::Reopen(4000)]
         );
-        assert_eq!(sync.choose_local_port(3000, |_| true, || None), Some(3001));
-        sync.mark_opened(3000);
-        sync.mark_opened(4000);
+        assert_eq!(
+            sync.choose_local_port(0, 3000, |_| true, || None),
+            Some(3001)
+        );
+        sync.mark_opened(0, 3000);
+        sync.mark_opened(0, 4000);
         assert!(
             sync.reopen_active().is_empty(),
             "a replacement opens each forward once"
         );
-        assert!(sync.observe(&[], None).is_empty());
-        assert!(sync.observe(&[], None).is_empty());
+        assert!(sync.observe(0, &[], None).is_empty());
+        assert!(sync.observe(0, &[], None).is_empty());
         assert_eq!(
-            sync.observe(&[], None),
+            sync.observe(0, &[], None),
             [
                 PortAction::Close {
                     remote: 3000,
@@ -551,6 +672,7 @@ mod tests {
         let mut sync = PortSync::default();
         let mut tried = Vec::new();
         let local = sync.choose_local_port(
+            0,
             3000,
             |port| {
                 tried.push(port);
@@ -569,17 +691,17 @@ mod tests {
     #[test]
     fn local_port_pins_survive_close_and_reserve_the_port_for_the_listener() {
         let mut sync = PortSync::default();
-        sync.observe(&[], None);
-        sync.observe(&[3000], None);
+        sync.observe(0, &[], None);
+        sync.observe(0, &[3000], None);
         assert_eq!(
-            sync.choose_local_port(3000, |port| port != 3000, || None),
+            sync.choose_local_port(0, 3000, |port| port != 3000, || None),
             Some(3001)
         );
-        sync.mark_opened(3000);
-        sync.observe(&[], None);
-        sync.observe(&[], None);
+        sync.mark_opened(0, 3000);
+        sync.observe(0, &[], None);
+        sync.observe(0, &[], None);
         assert_eq!(
-            sync.observe(&[], None),
+            sync.observe(0, &[], None),
             [PortAction::Close {
                 remote: 3000,
                 local: 3001
@@ -590,16 +712,19 @@ mod tests {
             Some(3001),
             "a closed listener keeps its pin"
         );
-        sync.observe(&[3001], None);
+        sync.observe(0, &[3001], None);
         assert_eq!(
-            sync.choose_local_port(3001, |_| true, || None),
+            sync.choose_local_port(0, 3001, |_| true, || None),
             Some(3002),
             "another remote never takes a dormant pin"
         );
-        sync.mark_opened(3001);
-        assert_eq!(sync.observe(&[3000, 3001], None), [PortAction::Open(3000)]);
+        sync.mark_opened(0, 3001);
         assert_eq!(
-            sync.choose_local_port(3000, |_| true, || None),
+            sync.observe(0, &[3000, 3001], None),
+            [PortAction::Open(3000)]
+        );
+        assert_eq!(
+            sync.choose_local_port(0, 3000, |_| true, || None),
             Some(3001),
             "a returning listener keeps its URL even if its original port is free"
         );
@@ -609,11 +734,11 @@ mod tests {
     fn local_port_selection_moves_a_busy_pin_upwards() {
         let mut sync = PortSync::default();
         assert_eq!(
-            sync.choose_local_port(3000, |port| port != 3000, || None),
+            sync.choose_local_port(0, 3000, |port| port != 3000, || None),
             Some(3001)
         );
         assert_eq!(
-            sync.choose_local_port(3000, |port| port != 3001, || None),
+            sync.choose_local_port(0, 3000, |port| port != 3001, || None),
             Some(3002),
             "reopen scans above the pin, not from the now-free remote port"
         );
@@ -625,6 +750,7 @@ mod tests {
         let mut sync = PortSync::default();
         let mut tried = Vec::new();
         let local = sync.choose_local_port(
+            0,
             3000,
             |port| {
                 tried.push(port);
@@ -641,7 +767,7 @@ mod tests {
         assert_eq!(tried.last(), Some(&45000));
         assert!(tried.len() > 2);
         assert_eq!(
-            sync.choose_local_port(u16::MAX, |port| port == 45001, || Some(45001)),
+            sync.choose_local_port(0, u16::MAX, |port| port == 45001, || Some(45001)),
             Some(45001),
             "the nearby scan does not wrap at the last port"
         );
@@ -651,12 +777,12 @@ mod tests {
     fn local_port_selection_rejects_an_os_pick_reserved_by_another_remote() {
         let mut sync = PortSync::default();
         assert_eq!(
-            sync.choose_local_port(4000, |port| port == 45000, || Some(45000)),
+            sync.choose_local_port(0, 4000, |port| port == 45000, || Some(45000)),
             Some(45000)
         );
         let mut picks = [45000, 45001].into_iter();
         assert_eq!(
-            sync.choose_local_port(3000, |port| port >= 45000, || picks.next()),
+            sync.choose_local_port(0, 3000, |port| port >= 45000, || picks.next()),
             Some(45001)
         );
     }
@@ -664,11 +790,11 @@ mod tests {
     #[test]
     fn local_port_exhaustion_is_visible_and_retried_on_the_next_report() {
         let mut sync = PortSync::default();
-        sync.observe(&[], None);
-        sync.observe(&[3000], None);
-        assert_eq!(sync.choose_local_port(3000, |_| false, || None), None);
+        sync.observe(0, &[], None);
+        sync.observe(0, &[3000], None);
+        assert_eq!(sync.choose_local_port(0, 3000, |_| false, || None), None);
         assert_eq!(sync.state(3000), Some(&ForwardState::NoLocalPort));
-        assert_eq!(sync.observe(&[3000], None), [PortAction::Open(3000)]);
+        assert_eq!(sync.observe(0, &[3000], None), [PortAction::Open(3000)]);
     }
 
     #[test]
@@ -699,22 +825,25 @@ mod tests {
     #[test]
     fn master_reopen_keeps_its_origin_when_local_port_allocation_is_retried() {
         let mut sync = PortSync::default();
-        sync.observe(&[], None);
-        sync.observe(&[3000], None);
-        sync.choose_local_port(3000, |_| true, || None);
-        sync.mark_opened(3000);
-        sync.mark_master_lost();
+        sync.observe(0, &[], None);
+        sync.observe(0, &[3000], None);
+        sync.choose_local_port(0, 3000, |_| true, || None);
+        sync.mark_opened(0, 3000);
+        sync.mark_master_lost(0);
         assert_eq!(sync.reopen_active(), [PortAction::Reopen(3000)]);
         for _ in 0..2 {
-            assert_eq!(sync.choose_local_port(3000, |_| false, || None), None);
+            assert_eq!(sync.choose_local_port(0, 3000, |_| false, || None), None);
             assert_eq!(
-                sync.observe(&[3000], None),
+                sync.observe(0, &[3000], None),
                 [PortAction::Reopen(3000)],
                 "an allocation retry must remain master recovery, not a new report open"
             );
         }
-        assert_eq!(sync.choose_local_port(3000, |_| true, || None), Some(3000));
-        sync.mark_opened(3000);
+        assert_eq!(
+            sync.choose_local_port(0, 3000, |_| true, || None),
+            Some(3000)
+        );
+        sync.mark_opened(0, 3000);
         assert!(sync.reopen_active().is_empty());
     }
 }

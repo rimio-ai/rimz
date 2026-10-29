@@ -29,7 +29,7 @@ fn remote_link_badge_renders_with_reconstructed_agents() {
         "rendered remote room should reconstruct agent rows from the store:\n{screen}"
     );
 
-    room.publish_link_stats(&LinkStatsFile::new(
+    let mut file = LinkStatsFile::new(
         unix_now_ms(),
         "client".to_owned(),
         LinkStats {
@@ -37,7 +37,17 @@ fn remote_link_badge_renders_with_reconstructed_agents() {
             miss_pct: 0,
             window: 12,
         },
-    ));
+    );
+    file.forwards = Some(rimz::remote::forward::ForwardRecord {
+        target: "dev".into(),
+        host: "dev-box".into(),
+        pid: 123,
+        started_at_ms: 1_000,
+        at_ms: 2_000,
+        auto_forward: true,
+        forwards: Vec::new(),
+    });
+    room.publish_link_stats(&file);
 
     let screen = room.wait_for(
         |s| s.contains("coder") && s.contains("⇄ remote 210ms"),

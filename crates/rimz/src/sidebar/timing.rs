@@ -234,11 +234,6 @@ pub(super) const CODEX_DAEMON_REAP_STALE: Duration = Duration::from_secs(90);
 /// viewer of the same room should not see a false hard failure.
 pub(super) const LINK_STATS_STALE: Duration = Duration::from_secs(10);
 
-/// Link stats older than this are ignored entirely. A cleanly ended probe
-/// stream removes its sidecar; this is the backstop for hard drops and killed
-/// publishers so they do not leave a permanent "remote room" badge behind.
-pub(super) const LINK_STATS_EXPIRE: Duration = Duration::from_secs(120);
-
 /// How often a renderer re-stamps its heartbeat. 2s keeps two missed writes of
 /// slack under [`SIDEBAR_HEARTBEAT_TTL`](crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL) — the same 2.5× ratio
 /// [`PRESENCE_STAMP_FRESH`](crate::mux::PRESENCE_STAMP_FRESH) keeps over the plugin keepalive — while avoiding an

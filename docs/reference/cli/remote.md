@@ -10,6 +10,7 @@ rimz remote update <name> [target] [same pairs as add] [--no-mux]
 rimz remote rename <old> <new>
 rimz remote rm <name>
 rimz remote list [--json]            # alias: ls
+rimz remote ports [--json]
 ```
 
 Every subcommand also takes the [global flags](../cli.md#global-flags). `--mux`, `--zellij`, and `--tmux` matter on `connect`, `add`, and `update` only.
@@ -86,6 +87,38 @@ With or without `--no-reconnect`, the host's refusals come through as their own 
 | `67` | The explicit path does not exist on the host. |
 | `127` | `rimz` is not on the host's `PATH`. Run `rimz remote setup`. |
 | `255` | `ssh` could not connect or the connection dropped. |
+
+## Inspect forwarded ports
+
+`rimz remote ports [--json]` shows the current connection when run in a participant room with a fresh link sidecar. Otherwise it lists live supervised connections on this machine, oldest first. The connection header names the host; machine groups also name the original target and supervisor pid. `--web` and `--no-reconnect` connections are not listed.
+
+Rows have `REMOTE`, `LOCAL`, `STATE`, `SINCE`, and `REASON` columns. `SINCE` is the age of the current state, not the connection. A busy port does not need a remembered notification: the remapped local port stays here for the whole connection.
+
+| State | Reason |
+| --- | --- |
+| `forwarded` | The local and remote ports match. |
+| `remapped` | `{remote} is busy here`; use the `LOCAL` port. |
+| `reopening` | `link reconnecting`. |
+| `not forwarded` | `over the 16-forward limit`, `ssh refused: {error}`, or `no free local port`. |
+| `unknown` | `state not understood by this RimZ`; the peer reported a newer state. |
+
+A connection with forwarding disabled says `auto-forward is off for this connection`; one without listeners says `no listeners forwarded yet`. A connection from an older laptop says `no forward data from this connection`. With no live local record, the machine view says `no rimz remote connect is running on this machine`.
+
+```console
+$ rimz remote ports
+1 connection on this machine
+
+connection to dev-box (dev; pid 1234)
+REMOTE  LOCAL  STATE          SINCE  REASON
+3000    3001   remapped       6m     3000 is busy here
+5173    5173   forwarded      6m
+8080    8080   reopening      6m     link reconnecting
+8081    -      not forwarded  6m     over the 16-forward limit
+9000    9000   not forwarded  6m     ssh refused: administratively prohibited
+9001    -      not forwarded  6m     no free local port
+```
+
+`--json` prints `{"scope":"connection"|"machine","connections":[...]}`. Each record has `target`, `host`, `pid`, `started_at_ms`, `at_ms`, `auto_forward`, and `forwards`. Entries have `remote`, optional `local`, `state` (`forwarded`, `reopening`, `limit`, `refused`, `no_local_port`, or `unknown` for an unrecognized peer state), `age_secs`, and `error` only on refusal. A legacy sidecar gives an empty `connections` array. The command exits `0` when its inputs can be read, including empty and not-forwarded results.
 
 ## Saved aliases
 

@@ -1717,6 +1717,10 @@ pub fn runtime_rimz_root() -> PathBuf {
     runtime_rimz_root_under(&runtime_home())
 }
 
+pub fn forward_records_dir() -> PathBuf {
+    runtime_rimz_root().join("link/forwards")
+}
+
 pub(crate) fn lsp_runtime_dir() -> PathBuf {
     runtime_rimz_root().join("lsp")
 }

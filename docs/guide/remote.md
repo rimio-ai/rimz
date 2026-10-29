@@ -45,6 +45,7 @@ Save the target once and the trip is one word. An alias carries the target and i
 rimz remote add dev dev-box:~/code/query-engine   # save the target as `dev`
 rimz remote connect dev                           # open it, reconnecting link and all
 rimz remote list                                  # every saved alias (alias: ls)
+rimz remote ports                                 # local URLs and forwarding reasons
 rimz remote update dev dev-box:~/code/api         # change the target, keep saved settings
 rimz remote rename dev devbox                     # rename one
 rimz remote rm devbox                             # forget one
@@ -92,6 +93,8 @@ Attach normally, then start `python3 -m http.server 3000`, `pnpm serve`, or anot
 The server must be started from the room, but it can already be running when you attach. RimZ recognizes the room environment it inherits; a server that strips that environment is not forwarded. Agent CLIs' own loopback servers, such as OpenCode's, are forwarded too. The listener must belong to your remote user, use port 1024 or above, and bind a loopback or wildcard address. The local side binds `127.0.0.1` only, so the forwarded service stays on your machine. Discovery keeps the thirty-two lowest qualifying room-started ports, and at most sixteen forwards stay open at once. Other rooms' servers do not crowd this room's out. With an older host that cannot identify room-started servers, only new listeners appearing after attach are forwarded.
 
 A forward closes shortly after its server stops, reopens with the room after a link recovery, and every forward closes when you detach. Its chosen local port stays reserved for that remote port throughout the connection, so restarting a server keeps its URL. Only a local port that becomes busy at reopen moves the URL again, with another notification. An SSH refusal, unlike a busy local port, waits for the remote listener to disappear from a report and return before retrying.
+
+Run `rimz remote ports` to find the local URL or why a listener has not been forwarded. On your laptop it lists the running connections; in a remote room it shows that room's connection. The table keeps the chosen local ports visible even after a notification is gone. See the [port view reference](../reference/cli/remote.md#inspect-forwarded-ports) for its states and JSON output.
 
 `rimz remote connect dev --no-auto-forward` turns forwarding off for one connection, and `rimz remote add dev dev-box:~/code/query-engine --no-auto-forward` saves the switch. Forwarding needs the supervised link, so `--no-reconnect` and `--web` connections never forward, and listener discovery reads the host's `/proc`, so Linux hosts only. Other hosts keep the normal remote connection without automatic forwards.
 

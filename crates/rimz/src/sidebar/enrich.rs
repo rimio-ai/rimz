@@ -39,7 +39,8 @@ use super::refresh::git_stats::{
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
 use super::refresh::rate_limits::apply_cached_rate_limits;
-use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
+use super::timing::LINK_STATS_STALE;
+use crate::remote::link::LINK_STATS_EXPIRE;
 
 #[cfg(test)]
 mod tests;

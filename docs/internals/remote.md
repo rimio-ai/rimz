@@ -6,7 +6,7 @@ The [remote guide](../guide/remote.md) shows what a user sees, and the [CLI refe
 
 ## Where the code lives
 
-Two splits shape the code. The first is local versus remote. The local side owns the SSH child, reconnect decisions, terminal hygiene, the connection panel, link measurement, and port forwards. The remote side owns the room. Neither reaches across: the local process never opens the remote store, and the remote room learns nothing about its supervisor beyond the environment variables the launch snippet exports.
+Two splits shape the code. The first is local versus remote. The local side owns the SSH child, reconnect decisions, terminal hygiene, the connection panel, link measurement, and port forwards. The remote side owns the room. The local process never opens the remote store; the remote room learns its supervisor's forward record over the probe stream, in addition to the environment variables the launch snippet exports.
 
 The second split is library versus process. [`crates/rimz/src/remote/`](../../crates/rimz/src/remote/) parses targets, builds [`CommandSpec`](../../crates/rimz/src/mux/command.rs) values, classifies exits, and advances state machines from durations the caller supplies. It spawns nothing, reads no clock, and writes no terminal. Its I/O is limited to two places: `remote/aliases.rs` reads and writes `remote.toml`, and `remote/web.rs` binds loopback ports ([invariants](#invariants-worth-preserving)). [`crates/rimz/src/cli/remote/`](../../crates/rimz/src/cli/remote/) owns every process, timer, thread, and terminal write. A new decision belongs in the library with a unit test, and only its execution belongs in the CLI.
 
@@ -28,6 +28,7 @@ The second split is library versus process. [`crates/rimz/src/remote/`](../../cr
 | [`cli/remote/relay.rs`](../../crates/rimz/src/cli/remote/relay.rs) | Per-attach stdout relay, bounded output drain, scrollback framing, and screen-aware session-end cleanup. |
 | [`cli/remote/web.rs`](../../crates/rimz/src/cli/remote/web.rs) | Web prep, the local auth relay, and tunnel supervision. |
 | [`cli/remote/link_stats.rs`](../../crates/rimz/src/cli/remote/link_stats.rs) | The remote-side `rimz remote link-stats ingest` service and listener sampling. |
+| [`cli/remote/ports.rs`](../../crates/rimz/src/cli/remote/ports.rs) | The lifetime-locked local forward record and the machine/connection views of `rimz remote ports`. |
 | [`cli/remote/tty.rs`](../../crates/rimz/src/cli/remote/tty.rs) | `TtyGuard`: local termios snapshot, restore, reply fence, and emulator reset. |
 | [`cli/remote/setup.rs`](../../crates/rimz/src/cli/remote/setup.rs), [`cli/remote/list.rs`](../../crates/rimz/src/cli/remote/list.rs) | Install and alias listing handlers. |
 
@@ -333,9 +334,9 @@ The local side writes one JSON line every two seconds (`LINK_PROBE_INTERVAL`), p
 
 ### Protocol
 
-All three shapes carry the schema version `rimz.link.v1`. `LinkProbe` carries `seq`, `sent_at_ms`, and the stats settled before this line, so the remote file always holds a complete window. `LinkAck` carries `seq`, an optional `ports` array, and `ports_scope: "room"` whenever that array comes from room-scoped discovery. An ack without `ports` omits `ports_scope` too. `LinkStatsFile` carries the remote `received_at_ms`, the SSH client identity (`SSH_CONNECTION`), and the latest stats.
+All three shapes carry the schema version `rimz.link.v1`. `LinkProbe` carries `seq`, `sent_at_ms`, and the stats settled before this line, so the remote file always holds a complete window. Its optional `forwards` field repeats the local supervisor's current forward record on every line, including stats refreshes. `LinkAck` carries `seq`, an optional `ports` array, and `ports_scope: "room"` whenever that array comes from room-scoped discovery. An ack without `ports` omits `ports_scope` too. `LinkStatsFile` carries the remote `received_at_ms`, the SSH client identity (`SSH_CONNECTION`), the latest stats, and the probe's optional `forwards` record. A probe lacking that field clears the previous value. Unknown forward-state tags normalize to `unknown` without discarding the record or link stats.
 
-The `ports` and `ports_scope` fields are optional so both skew directions keep working: an older remote can omit them, and an older local ignores unknown fields. A scope-less port report or an unknown scope retains the legacy first-report baseline; a room-scoped report forwards listeners already present at attach. A probe whose version the remote rejects makes `ingest` exit `2`. The local probe loop treats exit `2` or `127` as terminal and stops probing for that session without touching the room.
+The `ports`, `ports_scope`, and `forwards` fields are optional so both skew directions keep working: an older peer can omit them, and readers ignore unknown fields. A scope-less port report or an unknown scope retains the legacy first-report baseline; a room-scoped report forwards listeners already present at attach. A probe whose version the remote rejects makes `ingest` exit `2`. The local probe loop treats exit `2` or `127` as terminal and stops probing for that session without touching the room.
 
 ### Measurement
 
@@ -376,7 +377,7 @@ A suspended laptop or a NAT rebind can leave an SSH child holding the tty on a t
 
 ### Publication and freshness
 
-`ingest` writes the sidecar `<runtime>/lanes/link-stats.json` (`link::stats_path`, through `RuntimePaths::lane_path`) with temp-file-plus-rename cache semantics, and the sidebar reads it on every enrichment fold. When the probe stream ends, `ingest` removes the sidecar if its `client` still matches this connection's `SSH_CONNECTION`. Age expiry covers hard drops where no shutdown ran. Local rooms never have the file, so their footer shows no badge.
+`ingest` writes the sidecar `<runtime>/lanes/link-stats.json` (`link::stats_path`, through `RuntimePaths::lane_path`) with temp-file-plus-rename cache semantics, and the sidebar reads it on every enrichment fold. When the probe stream ends, `ingest` removes the sidecar if its `client` still matches this connection's `SSH_CONNECTION`. Age expiry covers hard drops where no shutdown ran. `remote::link::LINK_STATS_EXPIRE` supplies the same 120-second expiry to the sidebar and `remote ports`. Local rooms never have the file, so their footer shows no badge.
 
 | Age | Freshness | Footer |
 | --- | --- | --- |
@@ -427,6 +428,12 @@ Each remote port pins a local port for the whole connection, even while its list
 Only a successful remap raises a local terminal notification, respecting notification preferences and running no handlers. Its title is `RimZ: port remapped` and its body is `Port {remote} forwarded to localhost:{local} ({tried} is busy here)`, where `tried` is the pin or remote port tried first. A same-port open, a refusal, and the cap send none. The forward is `ssh -O forward -L 127.0.0.1:<local>:localhost:<remote>` on the live master with a two-second timeout, and `ssh -O cancel` with the identical pair closes it, so the local side never listens on a public address.
 
 The legacy baseline and active set live for the whole `rimz remote connect`, across probe-stream and transport replacements. Each active forward is held on the current master or lost. Immediately before transport recovery replaces the master, `supervise_remote` marks its forwards lost. The next attach session's probe thread reopens only those lost forwards before reports resume (`reopen_port_forwards`). A `Reattach` keeps the healthy master and its held forwards untouched: no local bind check, new forward request, or notice. They remain tracked and close when their listeners disappear. The master's exit tears every forward down at detach. Restarting `rimz remote connect` takes a new legacy baseline, when the host sends scope-less reports.
+
+`remote::forward::ForwardRecord` carries the original target, displayed host, supervisor pid, connection and publication timestamps, `auto_forward`, and one entry per tracked listener. Entries carry the remote port, optional local pin, state (`forwarded`, `reopening`, `limit`, `refused`, `no_local_port`, or `unknown` for an unrecognized peer state), the state's `since_ms`, and an SSH error only for `refused`. `PortSync` receives timestamps from its caller; an unchanged state keeps its age.
+
+After connecting, the supervisor holds a `WorkspaceLock` on `<runtime_rimz_root()>/link/forwards/<pid>.lock` before publishing `<pid>.json`, and removes both on return. The directory comes from `disk::paths::forward_records_dir` and uses the control socket's private-runtime hardening. Publication uses `write_temp_then_rename_cache` after every state or pin change. A directory, lock, or publication failure warns once and disables only the machine file for that connection; forwarding and probe-line records continue from memory. The lock stays close-on-exec, so SSH children cannot keep a dead supervisor visible. Machine readers show only locked records; acquiring a free lock lets them remove a dead record and its lock. Even `--no-auto-forward` publishes an empty record, while `--web` and `--no-reconnect` publish none.
+
+`rimz remote ports` uses a fresh, version-compatible participant-room sidecar for connection scope, otherwise the machine's live records, oldest connect first. Multiple connections to one room follow the sidecar's last-writer rule. A legacy sidecar without `forwards` reports no forward data. Local ages are `now - since_ms`; in-room ages are `(at_ms - since_ms) + (now - received_at_ms)`, never a subtraction between machines' clocks. Its JSON replaces each entry's `since_ms` with `age_secs`; the [reference](../reference/cli/remote.md#inspect-forwarded-ports) defines the human view.
 
 ## Web tunnels
 
@@ -479,5 +486,5 @@ The table lists the module's test overrides. Every other duration is fixed, so a
 - Keep the attach alive only while the master is. The pinned `ControlPersist=no`, `ConnectionAttempts=1`, and `ClearAllForwardings=yes` options exist so inherited SSH configuration cannot break that ([the `ForkAfterAuthentication` gap](#proving-the-transport)).
 - Require all three guards before killing a session as a zombie: established, blacked out, and independently reachable.
 - Restore the terminal on every exit path: snapshot termios at connect, restore after each session, fence terminal replies before each replacement attach, and write the emulator reset at every session end.
-- Keep new ack and sidecar fields optional, so each is invisible to a peer on the other side of a version skew.
+- Keep new ack, probe, and sidecar fields optional, so each is invisible to a peer on the other side of a version skew, and give every enum on those shapes a `#[serde(other)]` fallback. A new value is not a new field: a reader that cannot parse it loses the whole line, and the laptop skips that ack while the host's `ingest` exits on that probe.
 - Let the remote host own the room. Put a new remote capability behind a `rimz` subcommand the snippet execs, so the local side keeps reaching the host through the one channel it already supervises.

@@ -18,6 +18,8 @@ use super::{RemoteTarget, env_ms, remote_path_prefix};
 
 const LINK_SCHEMA_VERSION: &str = "rimz.link.v1";
 const LINK_STATS_FILE: &str = "link-stats.json";
+/// Expire room link sidecars after hard drops or killed publishers.
+pub const LINK_STATS_EXPIRE: Duration = Duration::from_secs(120);
 const LINK_PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const LINK_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const LINK_BLACKOUT_AFTER: Duration = Duration::from_secs(8);
@@ -46,6 +48,8 @@ pub struct LinkProbe {
     pub seq: u64,
     pub sent_at_ms: u64,
     pub stats: LinkStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forwards: Option<super::forward::ForwardRecord>,
 }
 
 impl LinkProbe {
@@ -55,6 +59,7 @@ impl LinkProbe {
             seq,
             sent_at_ms,
             stats,
+            forwards: None,
         }
     }
 
@@ -114,6 +119,8 @@ pub struct LinkStatsFile {
     pub received_at_ms: u64,
     pub client: String,
     pub stats: LinkStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forwards: Option<super::forward::ForwardRecord>,
 }
 
 impl LinkStatsFile {
@@ -123,10 +130,11 @@ impl LinkStatsFile {
             received_at_ms,
             client,
             stats,
+            forwards: None,
         }
     }
 
-    pub(crate) fn version_ok(&self) -> bool {
+    pub fn version_ok(&self) -> bool {
         self.v == LINK_SCHEMA_VERSION
     }
 }
@@ -1026,13 +1034,44 @@ mod tests {
         .unwrap();
         let mut sync = super::super::forward::PortSync::default();
         assert!(
-            sync.observe(ack.ports.as_ref().unwrap(), ack.ports_scope)
+            sync.observe(0, ack.ports.as_ref().unwrap(), ack.ports_scope)
                 .is_empty()
         );
         assert_eq!(
-            sync.observe(&[3000, 4000], ack.ports_scope),
+            sync.observe(1, &[3000, 4000], ack.ports_scope),
             [super::super::forward::PortAction::Open(4000)]
         );
+    }
+
+    #[test]
+    fn unknown_forward_states_keep_probe_and_sidecar_data_readable() {
+        let forwards = serde_json::json!({
+            "target":"dev", "host":"dev-box", "pid":123,
+            "started_at_ms":10, "at_ms":20, "auto_forward":true,
+            "forwards":[{"remote":3000,"local":3000,"state":"paused","since_ms":10}]
+        });
+        let stats = serde_json::json!({"miss_pct":0,"window":1});
+        let probe = serde_json::from_value::<LinkProbe>(serde_json::json!({
+            "v":"rimz.link.v1", "seq":42, "sent_at_ms":20,
+            "stats":stats, "forwards":forwards
+        }));
+        let file = serde_json::from_value::<LinkStatsFile>(serde_json::json!({
+            "v":"rimz.link.v1", "received_at_ms":30, "client":"client",
+            "stats":stats, "forwards":forwards
+        }));
+        assert_eq!(
+            [probe.is_ok(), file.is_ok()],
+            [true, true],
+            "unknown forward state must not discard link data: {probe:?}, {file:?}"
+        );
+        for record in [
+            probe.unwrap().forwards.unwrap(),
+            file.unwrap().forwards.unwrap(),
+        ] {
+            let value = serde_json::to_value(record).unwrap();
+            assert_eq!(value["forwards"][0]["state"], "unknown");
+            assert_eq!(value["forwards"][0]["remote"], 3000);
+        }
     }
 
     #[test]
@@ -1083,6 +1122,21 @@ mod tests {
         let old: OldLinkAck = serde_json::from_str(&serde_json::to_string(&ack).unwrap()).unwrap();
         assert_eq!(old.v, LINK_SCHEMA_VERSION);
         assert_eq!(old.seq, 43);
+
+        #[derive(Deserialize)]
+        struct OldLinkProbe {
+            v: String,
+            seq: u64,
+            sent_at_ms: u64,
+            stats: LinkStats,
+        }
+        let mut new_probe = serde_json::to_value(&probe).unwrap();
+        new_probe["forwards"] = serde_json::json!({"host": "new supervisor data"});
+        let old: OldLinkProbe = serde_json::from_value(new_probe).unwrap();
+        assert_eq!(old.v, LINK_SCHEMA_VERSION);
+        assert_eq!(old.seq, probe.seq);
+        assert_eq!(old.sent_at_ms, probe.sent_at_ms);
+        assert_eq!(old.stats, probe.stats);
 
         let file = LinkStatsFile::new(2_000, "client-port server-port".to_owned(), probe.stats);
         let parsed: LinkStatsFile = serde_json::from_str(&serde_json::to_string(&file).unwrap())

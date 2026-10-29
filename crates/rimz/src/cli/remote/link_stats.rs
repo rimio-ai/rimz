@@ -56,11 +56,12 @@ fn ingest_probes(path: &Path, client: &str, workspace_id: WorkspaceId) -> Result
             remove_stats_if_owned(path, client);
             std::process::exit(LINK_SCHEMA_MISMATCH_EXIT);
         }
-        let file = LinkStatsFile::new(
+        let mut file = LinkStatsFile::new(
             rimz::utils::time::unix_now_ms(),
             client.to_owned(),
             probe.stats.clone(),
         );
+        file.forwards = probe.forwards;
         rimz::disk::atomic::write_temp_then_rename_cache(path, &file)
             .with_context(|| format!("writing {}", path.display()))?;
         let ack = match ports.report() {

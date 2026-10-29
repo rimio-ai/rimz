@@ -19,6 +19,7 @@ use rimz::remote::{
 mod link_stats;
 mod list;
 mod outage_ui;
+mod ports;
 mod relay;
 mod setup;
 mod supervisor;
@@ -33,6 +34,12 @@ pub struct RemoteArgs {
 
 #[derive(Debug, Subcommand)]
 enum RemoteSubcmd {
+    /// Show automatic port forwards for this connection or machine.
+    Ports {
+        /// Print forward records with state ages as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Save a named remote target.
     #[command(
         after_help = "With `remote add`, --mux <name> pins the saved alias. --no-auto-forward disables listener forwarding for it."
@@ -266,6 +273,7 @@ impl RemoteArgs {
             RemoteSubcmd::Rm { .. } => "remote rm",
             RemoteSubcmd::Rename { .. } => "remote rename",
             RemoteSubcmd::List { .. } => "remote list",
+            RemoteSubcmd::Ports { .. } => "remote ports",
             RemoteSubcmd::LinkStats { .. } => "remote link-stats",
         }
     }
@@ -273,6 +281,7 @@ impl RemoteArgs {
 
 pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
+        RemoteSubcmd::Ports { json } => ports::run(json, globals),
         RemoteSubcmd::Add { name, args } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
             let entry = args.into_alias(name, globals.mux);

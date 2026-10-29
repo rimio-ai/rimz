@@ -29,6 +29,9 @@ use crate::common::ssh_trace::{
 };
 use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 
+#[path = "remote_ports.rs"]
+mod ports;
+
 fn stdout_line(out: &Output) -> String {
     assert!(
         out.status.success(),
@@ -1007,6 +1010,11 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
         "v": "rimz.link.v1",
         "seq": 7,
         "sent_at_ms": 1_000u64,
+        "forwards": {
+            "target": "dev", "host": "dev-box", "pid": 123,
+            "started_at_ms": 100, "at_ms": 1000, "auto_forward": true,
+            "forwards": [{"remote":3000,"local":3001,"state":"forwarded","since_ms":500}]
+        },
         "stats": {
             "rtt_ms": 42,
             "miss_pct": 3,
@@ -1024,6 +1032,22 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
     assert_eq!(ack["seq"], 7);
     assert_eq!(ack["ports"], serde_json::json!([3000, 8080]));
     assert_eq!(ack["ports_scope"], "room");
+
+    let sidecar = rimz::remote::link::stats_path(&env.runtime_paths());
+    let published: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+    assert_eq!(published["forwards"], probe["forwards"]);
+    let mut legacy_probe = probe.clone();
+    legacy_probe.as_object_mut().unwrap().remove("forwards");
+    writeln!(stdin, "{legacy_probe}").unwrap();
+    let mut legacy_ack = String::new();
+    stdout.read_line(&mut legacy_ack).unwrap();
+    let published: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+    assert!(
+        published.get("forwards").is_none(),
+        "legacy probes clear the previous record"
+    );
 
     std::fs::write(proc_root.join("101/environ"), b"PATH=/bin\0").unwrap();
     std::fs::write(

@@ -13,6 +13,17 @@ use rimz::trust::TrustState;
 
 use super::palette;
 
+pub(crate) fn forward(state: &rimz::remote::forward::ForwardState) -> anstyle::Style {
+    use rimz::remote::forward::ForwardState;
+    role(match state {
+        ForwardState::Forwarded => StateRole::Success,
+        ForwardState::Reopening => StateRole::Working,
+        ForwardState::Limit => StateRole::Waiting,
+        ForwardState::Refused { .. } | ForwardState::NoLocalPort => StateRole::Unavailable,
+        ForwardState::Unknown => StateRole::Neutral,
+    })
+}
+
 pub(crate) fn worktree(verdict: rimz::worktree::LandedVerdict) -> anstyle::Style {
     match verdict {
         rimz::worktree::LandedVerdict::Landed => role(StateRole::Success),
