@@ -40,6 +40,151 @@ fn resting_command_wait_uses_the_delegating_head() {
     }
 }
 
+fn command_wait_snapshot(unread: bool) -> SidebarSnapshot {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished work"),
+    );
+    parent.prompt = Some("finish the work".into());
+    parent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
+        name: "command".into(),
+        trigger: PendingWaitTrigger::Command {
+            command: "cargo test".into(),
+        },
+        armed_at: Some(fixed_now()),
+    });
+    let mut snapshot = snapshot_with(vec![parent]);
+    snapshot.rows_mut().next().expect("the parent row").unread = unread;
+    snapshot
+}
+
+fn command_wait_identity(
+    snapshot: &SidebarSnapshot,
+    theme: &Theme,
+    selected_index: usize,
+    phase: u64,
+    lead: bool,
+) -> Line<'static> {
+    let cost_rolls = CostRolls::default();
+    let mut ctx = test_row_ctx(snapshot, theme, 54, selected_index, phase, &cost_rolls);
+    ctx.lead_unread = lead.then_some("parent");
+    worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None)
+        .lines
+        .into_iter()
+        .find(|line| line.to_string().contains("claude"))
+        .expect("the command-wait card has an identity line")
+}
+
+#[test]
+fn unread_waiting_head_shares_the_non_lead_card_crest() {
+    let theme = truecolor_sidebar_theme();
+    let unread = command_wait_identity(&command_wait_snapshot(true), &theme, usize::MAX, 0, false);
+    assert_eq!(
+        unread.spans[1].content,
+        role_glyph(&theme, AnimationRole::Delegating, 0)
+    );
+    assert_eq!(unread.spans[3].content, "claude");
+    assert_eq!(unread.spans[1].style, unread.spans[3].style);
+
+    let selected = command_wait_identity(&command_wait_snapshot(false), &theme, 0, 0, false);
+    assert_ne!(unread.spans[1].style.fg, selected.spans[1].style.fg);
+    assert_eq!(
+        selected.spans[1].style.fg,
+        theme.animations.natural_color(AnimationRole::Delegating)
+    );
+}
+
+#[test]
+fn lead_unread_waiting_head_shimmers_with_the_name() {
+    let theme = truecolor_sidebar_theme();
+    let snapshot = command_wait_snapshot(true);
+    let start = command_wait_identity(&snapshot, &theme, usize::MAX, 0, true);
+    let later = command_wait_identity(&snapshot, &theme, usize::MAX, 12, true);
+    assert_eq!(
+        start.spans[1].content,
+        role_glyph(&theme, AnimationRole::Delegating, 0)
+    );
+    assert_eq!(
+        later.spans[1].content,
+        role_glyph(&theme, AnimationRole::Delegating, 12)
+    );
+    assert_ne!(
+        start.spans[1].style.fg,
+        theme.animations.natural_color(AnimationRole::Delegating)
+    );
+    assert_ne!(start.spans[1].style, later.spans[1].style);
+    assert_eq!(start.spans[3].content, "c");
+    assert_ne!(start.spans[3].style, later.spans[3].style);
+}
+
+#[test]
+fn calm_waiting_head_shares_the_name_and_working_head_soft_tone() {
+    let theme = truecolor_sidebar_theme();
+    let snapshot = command_wait_snapshot(false);
+    let calm = command_wait_identity(&snapshot, &theme, usize::MAX, 0, false);
+    assert_eq!(
+        calm.spans[1].content,
+        role_glyph(&theme, AnimationRole::Delegating, 0)
+    );
+    assert_eq!(calm.spans[1].style, calm.spans[3].style);
+    assert_eq!(
+        calm.spans[1].style,
+        theme.body_brand(theme.provider_brand_tone("claude"))
+    );
+    let selected = command_wait_identity(&snapshot, &theme, 0, 0, false);
+    assert_ne!(calm.spans[1].style.fg, selected.spans[1].style.fg);
+
+    let acting = snapshot_with(vec![agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("working"),
+    )]);
+    let working = command_wait_identity(&acting, &theme, usize::MAX, 0, false);
+    assert_eq!(
+        working.spans[1].content,
+        role_glyph(&theme, AnimationRole::Working, 0)
+    );
+    assert_eq!(calm.spans[1].style, working.spans[1].style);
+}
+
+#[test]
+fn compacting_head_takes_the_card_soft_tone_and_unread_crest() {
+    let theme = truecolor_sidebar_theme();
+    let mut snapshot = command_wait_snapshot(false);
+    let row = snapshot.rows_mut().next().expect("the parent row");
+    row.as_agent_mut().expect("an agent row").compacting = true;
+    let calm = command_wait_identity(&snapshot, &theme, usize::MAX, 0, false);
+    assert_eq!(
+        calm.spans[1].content,
+        role_glyph(&theme, AnimationRole::Compacting, 0)
+    );
+    let meta = theme
+        .animations
+        .natural_color(AnimationRole::Compacting)
+        .expect("the compacting head has a meta tone");
+    assert_eq!(calm.spans[1].style, theme.body_brand(meta));
+    let selected = command_wait_identity(&snapshot, &theme, 0, 0, false);
+    assert_eq!(selected.spans[1].style.fg, Some(meta));
+
+    snapshot.rows_mut().next().expect("the parent row").unread = true;
+    let unread = command_wait_identity(&snapshot, &theme, usize::MAX, 0, false);
+    assert_eq!(
+        unread.spans[1].content,
+        role_glyph(&theme, AnimationRole::Compacting, 0)
+    );
+    assert!(unread.spans[1].style.add_modifier.contains(Modifier::BOLD));
+    assert_ne!(unread.spans[1].style.fg, Some(meta));
+    assert_ne!(unread.spans[1].style.fg, calm.spans[1].style.fg);
+}
+
 #[test]
 fn resting_background_shell_uses_the_delegating_head() {
     for phase in [TurnPhase::Idle, TurnPhase::Parked] {

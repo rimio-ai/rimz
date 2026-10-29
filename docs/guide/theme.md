@@ -181,7 +181,7 @@ effect = "breathe"
 
 - `frames` is a string, split into one frame per Unicode codepoint (`"⠁⠂⠄⡀"`), or an array, which keeps a multi-codepoint single-cell glyph intact (`["⏸︎"]`). Every frame must occupy exactly one cell.
 - `color` takes a semantic slot (`good`, `warn`, `caution`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, `faint`), a palette role name, the fixed brand tone `clay`, a `#rrggbb` hex, or a raw index.
-- `effect` is `static` or `breathe`.
+- `effect` is `static` or `breathe`. `breathe` shows in three places: a subagent entry's lead glyph (`thinking`, `working`, and the six resting heads), the current stage of a team's pipeline line (its owner's `working` or resting head), and a busy process row (`working`). An agent card's lead glyph takes [the card's emphasis](#unread-attention) instead, so `breathe` on `compacting` or `delegating` shows nowhere. An explicit `static` also stills the pet motion that role drives, unless you supply multi-frame `frames`.
 - `speed` is `slow`, `normal`, or `fast`, and paces both the frame advance and the effect.
 
 The six resting heads (`idle`, `success`, `paused`, `sleeping`, `waiting`, `failed`) take their shape from [`[theme.glyphs] set`](#glyphs); the five spinners keep their Unicode frames in every preset. The cockpit's `? ! ⏸ ✓` counters show each head's still glyph. A literal blink is just a frame sequence, `frames = [" ", "!"]`.
