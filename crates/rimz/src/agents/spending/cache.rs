@@ -18,8 +18,8 @@ use crate::agents::TranscriptStat;
 use crate::agents::pricing::TokenSplit;
 
 use super::aggregate::{
-    DedupPayload, SidechainDedup, cold_parse_out_of_window, within_raw_retain_window,
-    within_widest_window,
+    DedupPayload, SessionKey, SidechainDedup, cold_parse_out_of_window, file_session_key,
+    session_key, within_raw_retain_window, within_widest_window,
 };
 
 /// Bumped whenever the cached parse shape *or values* change, so an upgrade
@@ -665,18 +665,34 @@ fn retained_raw_message_ids(
     now_secs: u64,
 ) -> BTreeSet<Box<str>> {
     let mut message_ids = BTreeSet::new();
-    for SpendingFile { path: file, .. } in files {
+    let mut old_message_sessions = HashMap::<&str, SessionKey<'_>>::new();
+    for SpendingFile {
+        adapter,
+        path: file,
+        ..
+    } in files
+    {
         let file_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&file_key) else {
             continue;
         };
-        message_ids.extend(
-            cached_file
-                .entries
-                .iter()
-                .filter(|entry| !entry.rolled && within_raw_retain_window(entry.ts_secs, now_secs))
-                .filter_map(|entry| entry.message_id.clone()),
-        );
+        let file_session = file_session_key(adapter, file);
+        for entry in cached_file.entries.iter().filter(|entry| !entry.rolled) {
+            let Some(message_id) = entry.message_id.as_deref() else {
+                continue;
+            };
+            if within_raw_retain_window(entry.ts_secs, now_secs) {
+                message_ids.insert(message_id.into());
+                continue;
+            }
+            // A row two sessions share (a fork's copied history) stays raw in both: a
+            // rollup of the global winner alone would drop it from the other session's
+            // live baseline.
+            let session = session_key(adapter.spec().kind, file_session, entry);
+            if *old_message_sessions.entry(message_id).or_insert(session) != session {
+                message_ids.insert(message_id.into());
+            }
+        }
     }
     message_ids
 }

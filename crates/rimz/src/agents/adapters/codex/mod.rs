@@ -1621,7 +1621,7 @@ impl super::account::ResetCreditAction for CodexResetCreditAction {
 }
 
 impl crate::agents::capabilities::SpendingCapability for CodexAdapter {
-    fn spending_session_id(&self, path: &Path) -> Option<String> {
+    fn spending_session_id<'p>(&self, path: &'p Path) -> Option<&'p str> {
         local_sessions::session_id_from_filename(path)
     }
 

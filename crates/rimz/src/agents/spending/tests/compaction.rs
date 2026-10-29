@@ -176,9 +176,10 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
 
 #[test]
 fn cache_compaction_handles_sidechain_replay_edges() {
-    let session = PathBuf::from("/x/session");
-    let main = session.join("chat.jsonl");
-    let replay = session.join("subagents/worker.jsonl");
+    let project = PathBuf::from("/projects/slug");
+    let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let main = project.join(format!("{id}.jsonl"));
+    let replay = project.join(id).join("subagents/agent-worker.jsonl");
     let ts = NOW_SECS - 40 * 86_400;
     let main_entry = CachedEntry {
         ts_secs: ts,
@@ -351,6 +352,67 @@ fn cache_compaction_evicts_dead_file_records() {
     assert!(!cache.files.contains_key(&discovered_key));
     assert!(!cache.files.contains_key(&deleted_key));
     assert!(cache.files.contains_key(&recent_key));
+}
+
+#[test]
+fn cache_compaction_keeps_rows_two_sessions_share_raw() {
+    let project = Path::new("/repo/project");
+    let source = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let fork = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let source_path = PathBuf::from(format!("/projects/slug/{source}.jsonl"));
+    let fork_path = PathBuf::from(format!("/projects/slug/{fork}.jsonl"));
+    let mut shared = cached_entry(NOW_SECS - 10 * 86_400, 9.0, "");
+    shared.thread_id = None;
+    shared.message_id = Some("msg-shared".into());
+    shared.request_id = Some("req-shared".into());
+    let own = CachedEntry {
+        ts_secs: NOW_SECS,
+        cost_usd: 1.0,
+        message_id: Some("msg-own".into()),
+        request_id: Some("req-own".into()),
+        ..shared.clone()
+    };
+    let scope = SpendScope::from_roots(Some(project), &[]);
+    for source_first in [true, false] {
+        let mut cache = SpendingDiskCache {
+            version: SPENDING_CACHE_VERSION,
+            files: HashMap::from([
+                cached_file_with_origin(&source_path, project, vec![shared.clone()]),
+                cached_file_with_origin(&fork_path, project, vec![shared.clone(), own.clone()]),
+            ]),
+            ..Default::default()
+        };
+        let mut files = vec![
+            spending_file(claude_adapter(), source_path.clone()),
+            spending_file(claude_adapter(), fork_path.clone()),
+        ];
+        if !source_first {
+            files.reverse();
+        }
+
+        compact_spending_cache(&mut cache, &files, NOW_SECS);
+        let scoped = compute_scoped_spending_checked(
+            &files,
+            &cache,
+            &[],
+            &scope,
+            NOW_SECS,
+            &HeadlineSpec::default(),
+        );
+
+        assert!(
+            cache
+                .files
+                .values()
+                .flat_map(|file| &file.entries)
+                .all(|entry| !entry.rolled)
+        );
+        assert_eq!(
+            scoped.live_baselines,
+            BTreeMap::from([(format!("claude:{fork}"), 10.0)])
+        );
+        assert_eq!(scoped.tally.year.usd, 10.0);
+    }
 }
 
 #[test]

@@ -1169,9 +1169,10 @@ pub trait AccountCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait SpendingCapability: CoreCapability {
-    /// Native session identity encoded in a spend file's path, when cached rows
-    /// do not carry it. Other providers join provenance through `thread_id`.
-    fn spending_session_id(&self, _path: &Path) -> Option<String> {
+    /// The native session a spend file's rows belong to, read from its path
+    /// when the rows carry no `thread_id`. Companion files, such as Claude
+    /// subagent transcripts, name their parent's session.
+    fn spending_session_id<'p>(&self, _path: &'p Path) -> Option<&'p str> {
         None
     }
 

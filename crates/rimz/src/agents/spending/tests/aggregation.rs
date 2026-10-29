@@ -27,6 +27,7 @@ fn utc_month_publication_counts_raw_and_compacted_pool_spend() {
         &files,
         &cache,
         &counted,
+        &contested_session_locations(&files, &cache),
         None,
         HeadlineContext {
             user_inputs: &[],
@@ -50,7 +51,7 @@ fn utc_month_publication_counts_raw_and_compacted_pool_spend() {
         second("2026-10-01T00:00:00Z")
     );
     assert_eq!(publication["month_by_login"].as_object().unwrap().len(), 1);
-    assert_eq!(publication["version"], 24);
+    assert_eq!(publication["version"], 25);
 }
 
 #[test]
@@ -86,6 +87,7 @@ fn session_start_is_machine_wide_and_independent_of_headline_mode() {
                 &files,
                 &cache,
                 &counted,
+                &contested_session_locations(&files, &cache),
                 Some(&scope),
                 HeadlineContext {
                     user_inputs: inputs,
@@ -133,6 +135,7 @@ fn history_days_follow_published_zone_including_rolled_rows() {
         &files,
         &cache,
         &counted,
+        &contested_session_locations(&files, &cache),
         None,
         HeadlineContext {
             user_inputs: &[],
@@ -261,6 +264,7 @@ fn local_day_windows_conserve_chart_dollars_and_session_edges_across_dst() {
         &files,
         &cache,
         &counted,
+        &contested_session_locations(&files, &cache),
         Some(&scope),
         HeadlineContext {
             user_inputs: &[],
@@ -366,6 +370,7 @@ fn hourly_chart_cells_use_wall_clock_hours_and_only_recent_raw_rows() {
             &files,
             &cache,
             &counted,
+            &contested_session_locations(&files, &cache),
             None,
             HeadlineContext {
                 user_inputs: &[],
@@ -448,6 +453,7 @@ fn chart_cells_conserve_local_days_and_seven_day_blocks_with_bounded_history() {
         &files,
         &cache,
         &counted,
+        &contested_session_locations(&files, &cache),
         None,
         HeadlineContext {
             user_inputs: &[],
@@ -522,6 +528,7 @@ fn chart_cells_conserve_local_days_and_seven_day_blocks_with_bounded_history() {
         &files,
         &cache,
         &counted,
+        &contested_session_locations(&files, &cache),
         None,
         HeadlineContext {
             user_inputs: &[],
@@ -578,6 +585,7 @@ fn model_identity_uses_year_spend_then_tokens_then_kind() {
             &files,
             &cache,
             &counted,
+            &contested_session_locations(&files, &cache),
             None,
             HeadlineContext {
                 user_inputs: &[],
@@ -783,11 +791,13 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     let child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     let named = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
     let paths = [
-        PathBuf::from(format!("/x/{parent}.jsonl")),
-        PathBuf::from(format!("/x/{parent}/subagents/agent-native.jsonl")),
+        PathBuf::from(format!("/projects/slug/{parent}.jsonl")),
+        PathBuf::from(format!(
+            "/projects/slug/{parent}/subagents/agent-native.jsonl"
+        )),
         PathBuf::from(format!("/x/rollout-2026-01-01T00-00-00-{child}.jsonl")),
         PathBuf::from("/x/opencode.db"),
-        PathBuf::from(format!("/x/{named}.jsonl")),
+        PathBuf::from(format!("/projects/slug/{named}.jsonl")),
     ];
     let mut root = cached_entry(NOW_SECS, 1.0, "");
     root.thread_id = None;
@@ -909,6 +919,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         &files,
         &cache,
         &counted,
+        &contested_session_locations(&files, &cache),
         None,
         HeadlineContext {
             user_inputs: &[],
@@ -963,7 +974,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         |t| &t.month,
         |t| &t.year,
     ];
-    for window in windows {
+    for (window, expected_sessions) in windows.into_iter().zip([2, 2, 3, 4, 5]) {
         let mut sum = SpendWindow::default();
         for tally in result
             .roles
@@ -982,11 +993,14 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         assert!(sum.usd <= window(&result.spending.total).usd);
         assert!(sum.tokens <= window(&result.spending.total).tokens);
         assert!(sum.cache_read <= window(&result.spending.total).cache_read);
+        assert!(sum.sessions <= window(&result.spending.total).sessions);
+        assert_eq!(window(&result.spending.total).sessions, expected_sessions);
     }
     let empty = aggregate_counted_rollups(
         &files,
         &cache,
         &counted,
+        &contested_session_locations(&files, &cache),
         None,
         HeadlineContext {
             user_inputs: &[],
@@ -1018,18 +1032,20 @@ fn user_input(second: u64, kind: &str, origin: Option<&Path>) -> user_input::Use
 fn token_windows_and_native_sessions_populate_public_tallies() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
-    let session = dir.path().join("sess-1");
+    let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let project = dir.path().join("projects/slug");
+    let session = project.join(id);
     std::fs::create_dir_all(session.join("subagents")).unwrap();
     let main = write_jsonl(
-        &session,
-        "chat.jsonl",
+        &project,
+        &format!("{id}.jsonl"),
         &[&format!(
             r#"{{"timestamp":"{today}T15:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":12000,"output_tokens":64000,"cache_creation_input_tokens":12000,"cache_read_input_tokens":68000}}}}}}"#
         )],
     );
     let sub = write_jsonl(
         &session.join("subagents"),
-        "worker.jsonl",
+        "agent-worker.jsonl",
         &[&format!(
             r#"{{"timestamp":"{today}T15:01:00.000Z","costUSD":0.1,"requestId":"req-2","isSidechain":true,"message":{{"id":"msg-2","usage":{{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":2000}}}}}}"#
         )],
@@ -1093,6 +1109,189 @@ fn token_windows_and_native_sessions_populate_public_tallies() {
     assert_eq!(spending.total.headline.sessions, 1);
     assert_eq!(spending.total.week.sessions, 2);
     assert_eq!(spending.by_provider["opencode"].week.sessions, 2);
+}
+
+#[test]
+fn claude_sessions_in_one_project_populate_every_session_tally() {
+    let project = PathBuf::from("/repo/project");
+    let paths = [
+        PathBuf::from("/projects/slug/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl"),
+        PathBuf::from("/projects/slug/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl"),
+    ];
+    let files = paths
+        .iter()
+        .map(|path| spending_file(claude_adapter(), path.clone()))
+        .collect::<Vec<_>>();
+    let mut entry = cached_entry(NOW_SECS, 1.0, "");
+    entry.thread_id = None;
+    let cache = SpendingDiskCache {
+        files: paths
+            .iter()
+            .map(|path| cached_file_with_origin(path, &project, vec![entry.clone()]))
+            .collect(),
+        ..Default::default()
+    };
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Trailing24h,
+        timezone: Some("UTC".into()),
+    };
+    let locations = dedup_cached_entry_locations(&files, &cache);
+    for counted in [
+        dedup_cached_entries(&files, &cache).into_counted(),
+        indexed_counted_entries(&files, &cache, &locations),
+    ] {
+        let result = aggregate_counted_rollups(
+            &files,
+            &cache,
+            &counted,
+            &contested_session_locations(&files, &cache),
+            Some(&scope),
+            HeadlineContext {
+                user_inputs: &[],
+                now_secs: NOW_SECS,
+                spec: &spec,
+            },
+            None,
+        );
+        let login = &files[0].login;
+        for tally in [
+            &result.spending.total,
+            &result.spending.by_provider["claude"],
+            &result.spending.by_login[login],
+            &result.workspace.tally,
+        ] {
+            for window in [
+                &tally.headline,
+                &tally.day,
+                &tally.week,
+                &tally.month,
+                &tally.year,
+            ] {
+                assert_eq!(window.sessions, 2);
+            }
+        }
+        assert_eq!(result.login_day[login].sessions, 2);
+        assert_eq!(result.login_month[login].sessions, 2);
+        assert_eq!(result.provider_day["claude"].sessions, 2);
+        assert_eq!(result.workspace.day.sessions, 2);
+    }
+}
+
+#[test]
+fn claude_non_uuid_transcripts_keep_their_own_file_identity() {
+    let project = PathBuf::from("/repo/project");
+    let paths = [
+        PathBuf::from("/projects/slug/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl"),
+        PathBuf::from("/projects/slug/agent-legacy.jsonl"),
+        PathBuf::from("/projects/slug/chat.jsonl"),
+    ];
+    let files = paths
+        .iter()
+        .map(|path| spending_file(claude_adapter(), path.clone()))
+        .collect::<Vec<_>>();
+    let mut entry = cached_entry(NOW_SECS, 1.0, "");
+    entry.thread_id = None;
+    let cache = SpendingDiskCache {
+        files: paths
+            .iter()
+            .map(|path| cached_file_with_origin(path, &project, vec![entry.clone()]))
+            .collect(),
+        ..Default::default()
+    };
+    let scoped = compute_scoped_spending(
+        &files,
+        &cache,
+        &user_inputs_from_cache(&files, &cache),
+        &SpendScope::from_roots(Some(&project), &[]),
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    );
+    assert_eq!(scoped.tally.headline.sessions, 3);
+    assert_eq!(
+        scoped.live_baselines,
+        BTreeMap::from([
+            (
+                "claude:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                1.0
+            ),
+            (paths[1].display().to_string(), 1.0),
+            (paths[2].display().to_string(), 1.0),
+        ])
+    );
+}
+
+#[test]
+fn path_native_sessions_fold_copies_and_prefer_nonempty_row_ids() {
+    let project = PathBuf::from("/repo/project");
+    let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    for kind in ["codex", "pi", "omp"] {
+        let adapter = crate::agents::definition_by_kind(kind).unwrap();
+        let name = if kind == "codex" {
+            format!("rollout-2026-01-01T00-00-00-{id}.jsonl")
+        } else {
+            format!("2026-01-01T00-00-00_{id}.jsonl")
+        };
+        let paths = [
+            PathBuf::from("/sessions/active").join(&name),
+            PathBuf::from("/sessions/archived").join(&name),
+        ];
+        let files = paths
+            .iter()
+            .map(|path| spending_file(adapter, path.clone()))
+            .collect::<Vec<_>>();
+        for row_id in [None, Some("  "), Some(" row-id ")] {
+            let mut entry = cached_entry(NOW_SECS, 1.0, "");
+            entry.thread_id = row_id.map(Into::into);
+            let cache = SpendingDiskCache {
+                files: paths
+                    .iter()
+                    .map(|path| cached_file_with_origin(path, &project, vec![entry.clone()]))
+                    .collect(),
+                ..Default::default()
+            };
+            let scoped = compute_scoped_spending(
+                &files,
+                &cache,
+                &user_inputs_from_cache(&files, &cache),
+                &SpendScope::from_roots(Some(&project), &[]),
+                NOW_SECS,
+                &HeadlineSpec::default(),
+            );
+            assert_eq!(scoped.tally.headline.sessions, 1, "{kind}: {row_id:?}");
+            let expected = if row_id == Some(" row-id ") {
+                "row-id"
+            } else {
+                id
+            };
+            assert_eq!(
+                scoped.live_baselines,
+                BTreeMap::from([(format!("{kind}:{expected}"), 2.0)])
+            );
+        }
+    }
+}
+
+#[test]
+fn session_dir_fallback_keeps_kimi_live_keys_and_uses_the_immediate_parent() {
+    let adapter = crate::agents::definition_by_kind("kimi").unwrap();
+    let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let path = PathBuf::from(format!("/sessions/bucket/{id}/agents/root/wire.jsonl"));
+    assert_eq!(
+        live_session_keys(adapter, id, &path),
+        vec![
+            path.parent().unwrap().display().to_string(),
+            format!("kimi:{id}"),
+        ]
+    );
+    assert_eq!(
+        live_session_keys(
+            adapter,
+            "",
+            Path::new("/plugin/session/subagents/usage.jsonl")
+        ),
+        vec!["/plugin/session/subagents"]
+    );
 }
 
 #[test]
@@ -1268,6 +1467,7 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
         &files,
         &cache,
         &counted,
+        &contested_session_locations(&files, &cache),
         Some(&scope),
         HeadlineContext {
             user_inputs: &user_inputs,
@@ -1356,9 +1556,10 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
         BTreeMap::from([("claude:live".to_owned(), 1.25)])
     );
 
-    let session = PathBuf::from("/tmp/claude/sess-1");
-    let main = session.join("chat.jsonl");
-    let sub = session.join("subagents/worker.jsonl");
+    let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let project_dir = PathBuf::from("/tmp/claude/projects/slug");
+    let main = project_dir.join(format!("{id}.jsonl"));
+    let sub = project_dir.join(id).join("subagents/agent-worker.jsonl");
     let mut main_entry = cached_entry(NOW_SECS, 0.50, "");
     main_entry.thread_id = None;
     let mut sub_entry = cached_entry(NOW_SECS, 0.10, "");
@@ -1388,7 +1589,7 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
     assert!((scoped.tally.week.usd - 0.60).abs() < 1e-9);
     assert_eq!(
         scoped.live_baselines,
-        BTreeMap::from([(session.to_string_lossy().into_owned(), 0.60)])
+        BTreeMap::from([(format!("claude:{id}"), 0.60)])
     );
 
     let codex_file = PathBuf::from("/tmp/codex/rollout.jsonl");
@@ -1422,6 +1623,248 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
             ("codex:sibling".to_owned(), 3.0),
         ])
     );
+}
+
+#[test]
+fn contested_sessions_only_flag_components_shared_across_owners() {
+    let source = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let fork = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let source_path = PathBuf::from(format!("/projects/slug/{source}.jsonl"));
+    let fork_path = PathBuf::from(format!("/projects/slug/{fork}.jsonl"));
+    let child_path = PathBuf::from(format!(
+        "/projects/slug/{source}/subagents/agent-worker.jsonl"
+    ));
+    let shared = CachedEntry {
+        thread_id: None,
+        message_id: Some("shared".into()),
+        request_id: Some("request".into()),
+        ..cached_entry(NOW_SECS, 9.0, "")
+    };
+    let rewrite = CachedEntry {
+        input: 1,
+        ..shared.clone()
+    };
+    let replay = CachedEntry {
+        is_sidechain: true,
+        request_id: Some("replay".into()),
+        ..shared.clone()
+    };
+    let provider_keyed = CachedEntry {
+        message_id: None,
+        dedup_key: Some("shared".into()),
+        ..shared.clone()
+    };
+    for (rows, expected) in [
+        (
+            vec![(source_path.clone(), vec![shared.clone(), rewrite])],
+            vec![],
+        ),
+        (
+            vec![
+                (source_path.clone(), vec![shared.clone()]),
+                (fork_path.clone(), vec![shared.clone()]),
+            ],
+            vec![source, fork],
+        ),
+        (
+            vec![
+                (source_path.clone(), vec![shared.clone()]),
+                (child_path, vec![replay]),
+            ],
+            vec![source],
+        ),
+        (
+            vec![
+                (source_path.clone(), vec![provider_keyed.clone()]),
+                (fork_path.clone(), vec![provider_keyed.clone()]),
+            ],
+            vec![source, fork],
+        ),
+        (
+            vec![
+                (source_path.clone(), vec![shared.clone()]),
+                (fork_path, vec![provider_keyed]),
+            ],
+            vec![],
+        ),
+        (
+            vec![(
+                source_path,
+                vec![
+                    shared.clone(),
+                    CachedEntry {
+                        thread_id: Some(fork.into()),
+                        ..shared
+                    },
+                ],
+            )],
+            vec![source, fork],
+        ),
+    ] {
+        let files: Vec<_> = rows
+            .iter()
+            .map(|(path, _)| spending_file(claude_adapter(), path.clone()))
+            .collect();
+        let cache = SpendingDiskCache {
+            files: rows
+                .into_iter()
+                .map(|(path, entries)| cached_file(&path, entries))
+                .collect(),
+            ..Default::default()
+        };
+        let locations = aggregate::contested_session_locations(&files, &cache);
+        let counted = indexed_counted_entries(&files, &cache, &locations);
+        let mut actual: Vec<_> = counted.iter().map(CountedPayload::session_key).collect();
+        actual.sort_unstable();
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|thread_id| aggregate::SessionKey::Native {
+                kind: "claude",
+                thread_id,
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn claude_fork_baselines_include_copied_rows_in_both_file_orders() {
+    let project = Path::new("/repo/project");
+    let source = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let fork = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let source_path = PathBuf::from(format!("/projects/slug/{source}.jsonl"));
+    let fork_path = PathBuf::from(format!("/projects/slug/{fork}.jsonl"));
+    let mut shared = cached_entry(NOW_SECS, 9.0, "");
+    shared.thread_id = None;
+    shared.message_id = Some("msg-shared".into());
+    shared.request_id = Some("req-shared".into());
+    let own = CachedEntry {
+        cost_usd: 1.0,
+        message_id: Some("msg-own".into()),
+        request_id: Some("req-own".into()),
+        ..shared.clone()
+    };
+    let cache = SpendingDiskCache {
+        version: SPENDING_CACHE_VERSION,
+        files: HashMap::from([
+            cached_file_with_origin(&source_path, project, vec![shared.clone()]),
+            cached_file_with_origin(&fork_path, project, vec![shared, own]),
+        ]),
+        ..Default::default()
+    };
+    let mut files = vec![
+        spending_file(claude_adapter(), source_path),
+        spending_file(claude_adapter(), fork_path),
+    ];
+    let scope = SpendScope::from_roots(Some(project), &[]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Trailing24h,
+        timezone: Some("UTC".into()),
+    };
+    let dir = TempDir::new().unwrap();
+    let cache_path = dir.path().join("spending.json");
+    write_spending_cache(&cache_path, &cache);
+    let expected = BTreeMap::from([
+        (format!("claude:{source}"), 9.0),
+        (format!("claude:{fork}"), 10.0),
+    ]);
+    for _ in 0..2 {
+        let scoped = compute_scoped_spending_checked(&files, &cache, &[], &scope, NOW_SECS, &spec);
+        assert_eq!(scoped.tally.headline.usd, 10.0);
+        assert_eq!(scoped.tally.headline.sessions, 2);
+        assert_eq!(scoped.live_baselines, expected);
+        let mut walker = SpendingWalker::new();
+        for _ in 0..2 {
+            let warm = walker.scoped_from_cache(&cache_path, &files, &[], &scope, NOW_SECS, &spec);
+            assert_eq!(warm.scoped.live_baselines, expected);
+            assert_eq!(warm.scoped.tally.headline.usd, 10.0);
+        }
+        files.reverse();
+    }
+}
+
+#[test]
+fn live_baselines_deduplicate_each_sessions_rewrites_and_replays() {
+    let project = Path::new("/repo/project");
+    let source = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let fork = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let source_path = PathBuf::from(format!("/projects/slug/{source}.jsonl"));
+    let fork_path = PathBuf::from(format!("/projects/slug/{fork}.jsonl"));
+    let child_path = PathBuf::from(format!(
+        "/projects/slug/{fork}/subagents/agent-worker.jsonl"
+    ));
+    let mut shared = cached_entry(NOW_SECS, 9.0, "");
+    shared.thread_id = None;
+    shared.message_id = Some("msg-shared".into());
+    shared.request_id = Some("req-shared".into());
+    let own = CachedEntry {
+        cost_usd: 1.0,
+        message_id: Some("msg-own".into()),
+        request_id: Some("req-own".into()),
+        ..shared.clone()
+    };
+    let partial = CachedEntry {
+        cost_usd: 0.5,
+        input: 1,
+        ..own.clone()
+    };
+    let replay = CachedEntry {
+        is_sidechain: true,
+        request_id: Some("req-replay".into()),
+        ..own.clone()
+    };
+    let provider_keyed = CachedEntry {
+        cost_usd: 2.0,
+        message_id: None,
+        request_id: None,
+        dedup_key: Some("provider-shared".into()),
+        ..shared.clone()
+    };
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file_with_origin(
+                &source_path,
+                project,
+                vec![shared.clone(), provider_keyed.clone()],
+            ),
+            cached_file_with_origin(
+                &fork_path,
+                project,
+                vec![shared, partial, own.clone(), provider_keyed.clone()],
+            ),
+            cached_file_with_origin(&child_path, project, vec![own, replay, provider_keyed]),
+        ]),
+        ..Default::default()
+    };
+    let mut files = vec![
+        spending_file(claude_adapter(), source_path),
+        spending_file(claude_adapter(), fork_path),
+        spending_file(claude_adapter(), child_path),
+    ];
+    let scope = SpendScope::from_roots(Some(project), &[]);
+    for _ in 0..2 {
+        let scoped = compute_scoped_spending_checked(
+            &files,
+            &cache,
+            &[],
+            &scope,
+            NOW_SECS,
+            &HeadlineSpec {
+                mode: SpendWindowMode::Trailing24h,
+                timezone: Some("UTC".into()),
+            },
+        );
+        assert_eq!(scoped.tally.headline.usd, 12.0);
+        assert_eq!(scoped.tally.headline.sessions, 2);
+        assert_eq!(
+            scoped.live_baselines,
+            BTreeMap::from([
+                (format!("claude:{source}"), 11.0),
+                (format!("claude:{fork}"), 12.0),
+            ])
+        );
+        files.reverse();
+    }
 }
 
 #[test]

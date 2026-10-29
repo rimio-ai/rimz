@@ -760,9 +760,9 @@ impl crate::agents::capabilities::AccountCapability for PiAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for PiAdapter {
-    fn spending_session_id(&self, path: &Path) -> Option<String> {
+    fn spending_session_id<'p>(&self, path: &'p Path) -> Option<&'p str> {
         let (_, id) = path.file_stem()?.to_str()?.rsplit_once('_')?;
-        uuid::Uuid::parse_str(id).ok().map(|_| id.to_owned())
+        uuid::Uuid::parse_str(id).ok().map(|_| id)
     }
 
     fn spending_sources(

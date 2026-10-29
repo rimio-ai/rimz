@@ -39,6 +39,8 @@ Models, Providers, Agents, Teams, then Subagents follow, each labelled with the 
 
 Providers includes all spend by provider kind, including historical and unobserved sessions. Agents groups solo sessions by profile; Teams sums each team's seats into one row; Subagents groups sessions launched by `rimz subagents` by profile, even when launched by a team. These are subsets of Providers. A bare-kind launch uses its provider kind as its profile key, merging with a profile of that name. Agents hides unless a profile not named for a provider has spend or recorded effort in the selected window; when visible, it includes the provider-named rows too. Teams and Subagents hide only when empty. Native provider children inherit their pane's role, not a separate subagent row.
 
+Claude sessions in one project count separately; a native subagent's work counts toward its parent session.
+
 `AGENT-TIME` is estimated time working, summed across sessions and parallel seats: `45s`, `41m`, `6h12m`, or `1d03h`. `MESSAGES` counts incoming human prompts and agent messages once on the receiving side, for example `10 (1 you)`, or `10` without human prompts. Zero effort cells read `-`. A row with only agent-time or messages still appears. A team's sent-message split stays in `roles[]` in JSON, not in panel rows.
 
 For example, a compact Teams row:

@@ -53,7 +53,7 @@ Each adapter is a private unit struct under [`adapters/<kind>/`](../../../crates
 | Vocabulary | `tools.input_key` (the payload key holding tool arguments), `tools.mutating`, `tools.editing` (a validated subset of mutating), `tools.blocking` (tool name paired with its [`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs)) |
 | Policy | `capabilities` (below) |
 | Claims | `coverage`, `user_coverage`, `lifecycle_hooks` ([declared coverage](#declared-coverage)) |
-| Accounts and spend | `sub_providers` (the subscription providers whose budget the agent meters), `thread_key` (how transcript files map to billing threads) |
+| Accounts and spend | `sub_providers` (the subscription providers whose budget the agent meters), `thread_key` (fallback session grouping when neither a row nor its path supplies a native id: per file or immediate parent directory) |
 | Defaults | `default_model`, `default_context_window` |
 | Skills | `host_skills` (the provider's host-mode skill switch, or `Unsupported`), `tool_rules` (how a definition's tool rules render into provider settings, or `Unsupported`) |
 | Launch | `launch`: program, fixed args, prompt style, resume, picker, and fork argv, per-mode permission args, max-turn flag, compact command, interrupt key, preset matchers, optional headless form |

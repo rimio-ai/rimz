@@ -86,6 +86,7 @@ fn compute_spending_with_origins_and_scope(
         files,
         cache,
         &counted,
+        &contested_session_locations(files, cache),
         scope,
         HeadlineContext {
             user_inputs: &user_inputs,
@@ -124,6 +125,7 @@ fn aggregate_spending_with_user_inputs(
         files,
         cache,
         counted,
+        &contested_session_locations(files, cache),
         None,
         HeadlineContext {
             user_inputs,
@@ -167,6 +169,7 @@ fn compute_daily_spend(
         files,
         cache,
         &counted,
+        &contested_session_locations(files, cache),
         None,
         HeadlineContext {
             user_inputs: &user_inputs,
@@ -192,6 +195,7 @@ fn compute_model_breakdown(
         files,
         cache,
         &counted,
+        &contested_session_locations(files, cache),
         None,
         HeadlineContext {
             user_inputs: &user_inputs,
@@ -235,6 +239,7 @@ pub(super) fn compute_scoped_spending_checked(
         files,
         cache,
         &counted,
+        &contested_session_locations(files, cache),
         Some(scope),
         HeadlineContext {
             user_inputs,
