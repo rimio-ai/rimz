@@ -55,7 +55,8 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// The viewport target is `ViewState::scroll_offset`, resolved here each frame:
 /// anchored to the selected or topmost surviving card from the previous target
 /// window, then clamped to the zone. Only the sidebar's own input reveals a
-/// changed selection, and only when no card line is visible.
+/// changed card selection when no card line is visible, or an entry selection
+/// whose lines are clipped inside an already visible card.
 /// Wheel, banner, and toggle inputs make the offset authoritative once; opening
 /// the landed chip also reveals its first newly shown receipt, and the banner
 /// reveals the full-roster lead where it sits. The unread
@@ -131,26 +132,7 @@ pub(super) fn compose_lines_with_meter(
         .sum::<usize>()
         .min(height);
 
-    let selected_id = view
-        .selected_index
-        .and_then(|index| roster.row(index))
-        .map(|row| &row.id);
-    let shared_held = view
-        .focus_placement
-        .as_ref()
-        .filter(|placement| Some(&placement.row_id) == selected_id)
-        .map(|placement| &placement.held);
-    let mut held_expansions = shared_held.unwrap_or(&view.held_expansions).clone();
-    if shared_held.is_none()
-        && selected_id != view.drawn_selection.as_ref()
-        && let Some(previous) = &view.drawn_selection
-    {
-        held_expansions.insert(previous.clone());
-    }
-    held_expansions.retain(|id| Some(id) != selected_id && roster.ordinal_of_id(id).is_some());
-    if view.freeze.is_none() {
-        held_expansions.clear();
-    }
+    let held_expansions = view.effective_held_expansions(&roster);
     let (scroll, landed_span) = scroll_lines_windowed(
         snapshot,
         view,
@@ -168,6 +150,7 @@ pub(super) fn compose_lines_with_meter(
         ui,
         roster: &roster,
         scroll_map: scroll.interactions.row_map(),
+        scroll_interactions: &scroll.interactions,
         card_starts: &scroll.card_starts,
         landed_span,
         scroll_len: scroll.lines.len(),
@@ -350,6 +333,7 @@ struct ZoneInputs<'a, 'snapshot> {
     ui: &'a UiState,
     roster: &'a VisibleRoster<'snapshot>,
     scroll_map: &'a [Option<usize>],
+    scroll_interactions: &'a FrameInteractions,
     card_starts: &'a [(usize, usize)],
     landed_span: Option<(usize, usize)>,
     scroll_len: usize,
@@ -799,6 +783,25 @@ fn resolve_scroll_offset(
     let Some(selected_index) = view.selected_index.filter(|_| selected.is_some()) else {
         return resolved;
     };
+    if view.own_input_reveal
+        && let (Some(cursor), Some(row)) = (&view.entry_cursor, selected)
+    {
+        let target = match cursor {
+            super::EntryCursor::SubAgent(pane) => HitTarget::SubAgentPane(pane.clone()),
+            super::EntryCursor::Older => HitTarget::ToggleDelegationHistory(row.id.clone()),
+        };
+        if let Some(span) = input.scroll_interactions.target_rows(&target) {
+            resolved.offset = nudge_into_view(
+                span.start,
+                span.end.saturating_sub(1),
+                resolved.offset,
+                viewport,
+            )
+            .min(max_offset);
+            resolved.snap = true;
+            return resolved;
+        }
+    }
     let visible = input
         .card_starts
         .iter()
@@ -1171,7 +1174,7 @@ fn scroll_lines_windowed(
         stale_after_secs: snapshot.theme.display.stale_after_secs,
         selected_index: view.selected_index,
         held_expansions,
-        focused_pane: snapshot.focused_pane.as_ref(),
+        entry_cursor: view.entry_cursor.as_ref(),
         animation_phase: view.cosmetic_phase.unwrap_or(view.animation_phase),
         money_phase: view.animation_phase,
         cost_rolls: &view.cost_rolls,

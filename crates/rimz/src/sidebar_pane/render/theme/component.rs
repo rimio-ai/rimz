@@ -33,6 +33,9 @@ pub(crate) enum Component {
     /// The selected worktree's lane bracket spine — the dim selection tone, so
     /// the bracket, band, and bright card spine read as one selection language.
     LaneSpine,
+    /// The light `▏` beside the selected card's cursor entry — the selection
+    /// tone without bold, lighter than the card spine it sits inside.
+    EntrySpine,
     /// A worktree group header — a neutral, authoritative heading (`body`) that
     /// anchors the group without competing with attention or selection.
     WorktreeHeader,
@@ -132,6 +135,7 @@ impl Component {
     pub(crate) const ALL: &'static [Component] = &[
         Component::Sessions,
         Component::LaneSpine,
+        Component::EntrySpine,
         Component::WorktreeHeader,
         Component::WorktreeQualifier,
         Component::TeamLabel,
@@ -179,7 +183,7 @@ impl Component {
         use Component::*;
         tone_color(match self {
             Sessions | Output | HelpKey | WindowHuge => palette.accent,
-            LaneSpine => palette.selection,
+            LaneSpine | EntrySpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
             WorktreePristine | WindowSmall => palette.faint,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {

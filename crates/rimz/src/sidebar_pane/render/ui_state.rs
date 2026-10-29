@@ -48,11 +48,21 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) gate_notice: Option<GateNotice>,
 }
 
+/// A jumpable delegation entry under the selected card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::sidebar_pane) enum EntryCursor {
+    SubAgent(PaneId),
+    Older,
+}
+
 /// Client presentation state, independent of a pane's render resources and hit geometry.
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) hook_drainer_alert: Option<Alert>,
     pub(in crate::sidebar_pane) selected_index: Option<usize>,
+    pub(in crate::sidebar_pane) entry_cursor: Option<EntryCursor>,
+    /// Last agreed working-pane focus, finer-grained than the owning card baseline.
+    pub(in crate::sidebar_pane) entry_focus: Option<PaneId>,
     pub(in crate::sidebar_pane) help_visible: bool,
     /// Wall-clock animation frame counter, advanced by the serve loop's
     /// animation tick. The renderer derives the running-agent spin frame from
@@ -110,7 +120,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Target first scroll-zone content line of the agent-cards viewport.
     /// Resolved around the previous target window's selected or topmost card,
     /// clamped to the zone, and written back like frame interactions. Only this
-    /// sidebar's own input reveals an off-screen selection; visible cards never reveal.
+    /// sidebar's own input reveals an off-screen card or a clipped entry within it.
     /// The line actually shown is [`Self::scroll_ease`]'s visible row.
     /// Travels with the client view between painting panes.
     pub(in crate::sidebar_pane) scroll_offset: usize,
@@ -148,8 +158,8 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// its later acceptance cannot seed the viewport a second time. `0` before
     /// any jump handoff.
     pub(in crate::sidebar_pane) last_focus_anchor_ms: u64,
-    /// This sidebar's input changed selection, or its requested focus landed.
-    /// The next draw may reveal that card, then consumes the mark.
+    /// This sidebar's input changed the card or entry selection, or its requested focus landed.
+    /// The next draw may reveal that stop, then consumes the mark.
     pub(in crate::sidebar_pane) own_input_reveal: bool,
     /// The loop owns the dwell clock; render only consumes readiness.
     pub(in crate::sidebar_pane) focus_marker_ready: bool,
@@ -223,6 +233,77 @@ impl UiState {
 }
 
 impl ViewState {
+    pub(super) fn effective_held_expansions(&self, roster: &VisibleRoster<'_>) -> BTreeSet<String> {
+        let selected_id = self
+            .selected_index
+            .and_then(|index| roster.row(index))
+            .map(|row| &row.id);
+        let shared = self
+            .focus_placement
+            .as_ref()
+            .filter(|placement| Some(&placement.row_id) == selected_id)
+            .map(|placement| &placement.held);
+        let mut held = shared.unwrap_or(&self.held_expansions).clone();
+        if shared.is_none()
+            && selected_id != self.drawn_selection.as_ref()
+            && let Some(previous) = &self.drawn_selection
+        {
+            held.insert(previous.clone());
+        }
+        held.retain(|id| Some(id) != selected_id && roster.ordinal_of_id(id).is_some());
+        if self.freeze.is_none() {
+            held.clear();
+        }
+        held
+    }
+
+    pub(in crate::sidebar_pane) fn entry_stops(
+        &self,
+        snapshot: &SidebarSnapshot,
+        index: usize,
+    ) -> Vec<EntryCursor> {
+        if self.search_draft.is_some() {
+            return Vec::new();
+        }
+        let roster = self.visible_roster(snapshot);
+        let Some(row) = roster.row(index) else {
+            return Vec::new();
+        };
+        let Some(group) = roster
+            .groups()
+            .iter()
+            .find(|group| group.range().contains(&index))
+        else {
+            return Vec::new();
+        };
+        let held = self.effective_held_expansions(&roster);
+        let reach =
+            super::sections::row_selection_reach(&roster, group, index, self.selected_index, &held);
+        let expansion = super::sections::CardExpansion::resolve(
+            &self.delegation_overrides,
+            &self.delegation_history,
+            snapshot.theme.display.card_density,
+            row,
+            reach,
+        );
+        super::sections::delegation_entry_stops(
+            row,
+            expansion,
+            &snapshot.theme.display,
+            snapshot.now,
+        )
+    }
+
+    pub(in crate::sidebar_pane) fn validate_entry_cursor(&mut self, snapshot: &SidebarSnapshot) {
+        if let Some(cursor) = &self.entry_cursor
+            && !self
+                .selected_index
+                .is_some_and(|index| self.entry_stops(snapshot, index).contains(cursor))
+        {
+            self.entry_cursor = None;
+        }
+    }
+
     pub(in crate::sidebar_pane) fn visible_roster<'a>(
         &self,
         snapshot: &'a SidebarSnapshot,
@@ -303,9 +384,9 @@ pub(in crate::sidebar_pane) struct DashboardTab {
 
 /// Browse pins `pane` above session focus. Motion roams every visible row
 /// without moving focus; a click pins the owning card before dispatching focus.
-/// Holds until the derived baseline genuinely changes from
-/// `baseline_at_start` — the value captured when browsing began. A `None`
-/// derivation holds the baseline, so an inert frame never ends a browse.
+/// Holds while the card baseline equals `baseline_at_start` and the agreed
+/// working-pane focus stays unchanged, including between sibling children.
+/// A `None` derivation holds both, so an inert frame never ends a browse.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct Browse {
     pub(in crate::sidebar_pane) pane: PaneId,

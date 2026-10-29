@@ -1051,6 +1051,56 @@ fn auto_scroll_nudges_the_selection_minimally_into_view() {
 }
 
 #[test]
+fn entry_reveal_nudges_both_lines_inside_a_card_taller_than_the_viewport() {
+    let parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        None,
+        Some("delegate the scan"),
+    );
+    let mut snapshot = snapshot_with(vec![parent]);
+    let panes: Vec<PaneId> = (0..20)
+        .map(|index| format!("zellij:terminal_child_{index}").parse().unwrap())
+        .collect();
+    let card = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap();
+    card.sub_agent_count = 20;
+    card.sub_agents = panes
+        .iter()
+        .enumerate()
+        .map(|(index, pane)| {
+            serde_json::from_value(serde_json::json!({
+                "id": format!("child-{index}"), "kind": "claude", "name": "worker",
+                "status": "running", "last_activity": snapshot.now, "pane": pane, "model": "Haiku",
+            }))
+            .unwrap()
+        })
+        .collect();
+    let target = HitTarget::SubAgentPane(panes.last().unwrap().clone());
+    let view = ViewState {
+        selected_index: Some(0),
+        entry_cursor: Some(EntryCursor::SubAgent(panes.last().unwrap().clone())),
+        own_input_reveal: true,
+        ..Default::default()
+    };
+    let theme = Theme::fixed(false);
+    let all = compose_lines(&snapshot, None, &view, &UiState::default(), &theme, 54, 200);
+    let last_entry =
+        usize::from(all.interactions.line_for_target(&target).unwrap().1) - all.top_height;
+    let frame = compose_lines(&snapshot, None, &view, &UiState::default(), &theme, 54, 18);
+    let viewport = 18 - frame.top_height - frame.bottom_height;
+    assert_eq!(
+        frame.scroll_offset,
+        (last_entry + 2).saturating_sub(viewport)
+    );
+    let (column, line) = frame.interactions.line_for_target(&target).unwrap();
+    assert_eq!(frame.interactions.target_at(column, line + 1), Some(target));
+}
+
+#[test]
 fn scroll_thumb_reads_top_and_bottom_true() {
     // 10 zone lines through a 5-row viewport: the thumb spans half the track.
     assert_eq!(scroll_thumb(0, 10, 5), (0, 2));

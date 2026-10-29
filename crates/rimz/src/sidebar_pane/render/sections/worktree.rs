@@ -229,7 +229,8 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
             assert_eq!(height, paint(None).len(), "cached height for {}", row.id);
         }
         let visible = cached.is_some_and(|height| walk.intersects(block.lines.len(), height));
-        let lines = if cached.is_none() || visible {
+        let measure_entry = walk.measuring && selected && ctx.entry_cursor.is_some();
+        let lines = if cached.is_none() || visible || measure_entry {
             Some(walk.measured.remove(&this_row).unwrap_or_else(|| {
                 let lines = paint(meter_pixels.as_deref_mut());
                 if let Some(cache) = walk.heights.as_deref_mut() {
@@ -250,7 +251,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
             .map(Vec::len)
             .or(cached)
             .expect("a cache miss paints the card to measure it");
-        if walk.intersects(block.lines.len(), height) {
+        if walk.intersects(block.lines.len(), height) || measure_entry {
             for line in lines.expect("intersecting cards are painted or carried from measurement") {
                 block.push_with_regions(
                     line.line,

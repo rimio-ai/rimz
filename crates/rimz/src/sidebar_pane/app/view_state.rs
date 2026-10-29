@@ -63,6 +63,7 @@ pub(super) enum FocusMarker {
 pub(super) struct FocusRollback {
     pub(super) target: PaneId,
     pub(super) baseline: Option<PaneId>,
+    pub(super) entry_focus: Option<PaneId>,
     pub(super) label: String,
 }
 
@@ -291,6 +292,8 @@ impl ViewContext {
             .focus_rollback
             .take_if(|request| request.target == *target)?;
         state.baseline_pane = rollback.baseline;
+        state.entry_focus = rollback.entry_focus;
+        state.entry_cursor = state.entry_focus.clone().map(render::EntryCursor::SubAgent);
         state.browse = None;
         state.focus_placement = None;
         self.focus_landing = None;

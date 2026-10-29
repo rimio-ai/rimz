@@ -113,6 +113,18 @@ impl FrameInteractions {
         &self.row_by_line
     }
 
+    pub(super) fn target_rows(&self, target: &HitTarget) -> Option<Range<usize>> {
+        let mut rows = self
+            .regions
+            .iter()
+            .filter(|region| &region.target == target)
+            .map(|region| &region.rows);
+        let first = rows.next()?.clone();
+        Some(rows.fold(first, |span, rows| {
+            span.start.min(rows.start)..span.end.max(rows.end)
+        }))
+    }
+
     #[cfg(test)]
     pub(in crate::sidebar_pane) fn row_at_line(&self, line: usize) -> Option<usize> {
         self.row_by_line.get(line).copied().flatten()

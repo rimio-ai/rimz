@@ -492,7 +492,7 @@ fn help_body_rows(
         (
             movement(
                 format!("{}/{}", chord_label(&keys.down), chord_label(&keys.up)),
-                "rows",
+                "cards/entries",
             ),
             Some(movement(
                 format!(
@@ -530,7 +530,7 @@ fn help_body_rows(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysFocus)),
                 "l",
-                "focus",
+                "focus/open",
             )),
         ),
         (

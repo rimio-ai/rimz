@@ -7,9 +7,9 @@ use crate::mux::WidthAdjust;
 use crate::store::snapshot::{SidebarSnapshot, lead_unread_row, triage_key};
 
 use crate::sidebar_pane::render::{
-    BodyFilter, Browse, DashboardTab, HitTarget, UiState, ViewState, active_dashboard_tab,
-    dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs, selected_agent_kind,
-    selected_sub_provider,
+    BodyFilter, Browse, DashboardTab, EntryCursor, HitTarget, UiState, ViewState,
+    active_dashboard_tab, dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs,
+    selected_agent_kind, selected_sub_provider,
 };
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
 
@@ -203,6 +203,43 @@ pub(super) fn handle_key(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
+    let previous = view.entry_cursor.clone();
+    let entry_step = matches!(action, KeyAction::Up | KeyAction::Down);
+    view.validate_entry_cursor(snapshot);
+    if view.search_draft.is_some()
+        || matches!(
+            action,
+            KeyAction::Search
+                | KeyAction::WorktreeUp
+                | KeyAction::WorktreeDown
+                | KeyAction::Top
+                | KeyAction::Bottom
+                | KeyAction::PageUp
+                | KeyAction::PageDown
+                | KeyAction::ScreenTop
+                | KeyAction::ScreenBottom
+                | KeyAction::Digit(_)
+                | KeyAction::InboxNext
+                | KeyAction::InboxPrev
+        )
+    {
+        view.entry_cursor = None;
+    }
+    let mut outcome = key_outcome(action, view, ui, snapshot);
+    let entry_changed = previous != view.entry_cursor;
+    if entry_changed && entry_step {
+        view.offset_authoritative = false;
+    }
+    outcome.redraw |= entry_changed;
+    outcome
+}
+
+fn key_outcome(
+    action: KeyAction,
+    view: &mut ViewState,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+) -> InputOutcome {
     match action {
         KeyAction::Search => {
             view.search_draft = Some(view.make_up_filter.query.clone().unwrap_or_default());
@@ -245,6 +282,8 @@ pub(super) fn handle_key(
             effects: vec![InputEffect::Reload],
             ..InputOutcome::default()
         },
+        KeyAction::Up if view.search_draft.is_none() => step_entry(view, snapshot, false),
+        KeyAction::Down if view.search_draft.is_none() => step_entry(view, snapshot, true),
         KeyAction::Up => select_to_index(
             view,
             snapshot,
@@ -275,6 +314,24 @@ pub(super) fn handle_key(
                     outcome.effects.push(InputEffect::Focus(pane));
                 }
                 return outcome;
+            }
+            match view.entry_cursor.clone() {
+                Some(EntryCursor::SubAgent(pane)) => return InputOutcome::focus(pane),
+                Some(EntryCursor::Older) => {
+                    if let Some(row) = view
+                        .selected_index
+                        .and_then(|index| view.visible_roster(snapshot).row(index))
+                    {
+                        toggle_delegation_history(view, snapshot, row.id.clone());
+                    }
+                    view.entry_cursor = None;
+                    let mut outcome = InputOutcome::redraw();
+                    if let Some(pane) = view.selected_pane.clone() {
+                        outcome.effects.push(InputEffect::Focus(pane));
+                    }
+                    return outcome;
+                }
+                None => {}
             }
             // Focus the current visible row without moving the highlight — it
             // follows once the derived baseline catches up.
@@ -327,6 +384,39 @@ fn select_first_search_match(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     let roster = ui.visible_roster(snapshot);
     select_row_in(ui, &roster, 0);
     ui.browse = None;
+}
+
+fn step_entry(view: &mut ViewState, snapshot: &SidebarSnapshot, down: bool) -> InputOutcome {
+    let Some(index) = view.selected_index else {
+        return select_to_index(view, snapshot, 0);
+    };
+    let stops = view.entry_stops(snapshot, index);
+    let position = view
+        .entry_cursor
+        .as_ref()
+        .and_then(|cursor| stops.iter().position(|stop| stop == cursor));
+    if down {
+        if let Some(stop) = stops.get(position.map_or(0, |position| position + 1)) {
+            view.entry_cursor = Some(stop.clone());
+            begin_or_continue_browse(view);
+            return InputOutcome::redraw();
+        }
+        return select_to_index(view, snapshot, index.saturating_add(1));
+    }
+    if let Some(position) = position {
+        view.entry_cursor = position
+            .checked_sub(1)
+            .map(|position| stops[position].clone());
+        begin_or_continue_browse(view);
+        return InputOutcome::redraw();
+    }
+    let Some(previous) = index.checked_sub(1) else {
+        return InputOutcome::default();
+    };
+    let last_stop = view.entry_stops(snapshot, previous).pop();
+    let outcome = select_to_index(view, snapshot, previous);
+    view.entry_cursor = last_stop;
+    outcome
 }
 
 pub(super) fn finish_search(
@@ -525,6 +615,8 @@ fn select_clicked_pane(
         return InputOutcome::default();
     };
     select_row_in(ui, &roster, index);
+    ui.entry_cursor = Some(EntryCursor::SubAgent(pane.clone()));
+    ui.validate_entry_cursor(snapshot);
     begin_or_continue_browse(ui);
     InputOutcome {
         redraw: true,
@@ -650,6 +742,7 @@ fn select_adjacent_worktree(
 /// roster instead. A changed pick reveals on the
 /// next draw only if no line of its card is visible.
 fn select_row_in(ui: &mut ViewState, roster: &VisibleRoster<'_>, index: usize) {
+    ui.entry_cursor = None;
     ui.selected_pane = roster.pane_at_ordinal(index);
     ui.selected_index = (ui.selected_pane.is_some()
         || (ui.search_draft.is_some() && index < roster.len()))
@@ -677,9 +770,9 @@ fn agent_row_mark_target_at(
 }
 
 /// Pin the just-selected pane as the arrow-browse pick. The first arrow of a
-/// browse captures the baseline it began from — the clear condition — and a
-/// later arrow only moves the pick, so a long browse keeps one anchor and a
-/// mid-browse baseline change still ends it. Roams matching rows, other tabs' rows included.
+/// browse captures the card baseline it began from, and a later arrow only moves
+/// the pick. A card-baseline or agreed working-pane focus change ends it.
+/// Roams matching rows, other tabs' rows included.
 fn begin_or_continue_browse(ui: &mut ViewState) {
     if let Some(pane) = ui.selected_pane.clone() {
         let baseline_at_start = match ui.browse.take() {
@@ -708,6 +801,8 @@ fn clamp_selection_in(ui: &mut ViewState, roster: &VisibleRoster<'_>) {
 /// Leave selection behind when a view arrives from another pane before this pane's topology.
 /// Clear the painted and held sources too, so arrival's freeze cannot reopen the old card.
 pub(super) fn unseat_selection(ui: &mut ViewState) {
+    ui.entry_cursor = None;
+    ui.entry_focus = None;
     ui.baseline_pane = None;
     ui.browse = None;
     ui.selected_pane = None;
@@ -734,14 +829,14 @@ pub(super) fn unseat_selection(ui: &mut ViewState) {
 /// 1. **Hold-last baseline.** A `Some` derivation advances `baseline_pane`; a
 ///    `None` holds it, so a momentary "no active row" gap (the sidebar itself
 ///    focused) never blanks or moves the highlight.
-/// 2. **Browse.** A live browse pins its pick while the baseline still equals
-///    the value captured at browse start; a genuine baseline change ends it.
+/// 2. **Browse.** A live browse pins its pick while the card baseline and agreed
+///    working-pane focus hold; sibling-child focus changes end it too.
 /// 3. **Follow the baseline** — the steady state.
 /// 4. **Reanchor.** State whose pane left the room is dropped, and
 ///    `anchor_selection` re-derives `selected_index` by identity. A frameless
 ///    fold (`panes_produced_at_ms == None`) holds the selection, browse pick,
-///    and baseline by pane identity; only the index is withheld until a frame
-///    returns.
+///    and baseline by pane identity; the index is withheld until a frame
+///    returns, and the entry cursor, which needs it, drops.
 /// 5. **Dashboard hold-last.** A selection-derived provider kind with a
 ///    dashboard panel advances the remembered dashboard default; non-agent
 ///    rows hold it.
@@ -753,9 +848,36 @@ pub(super) fn reconcile_selection(
     snapshot: &SidebarSnapshot,
     derived: Option<PaneId>,
 ) {
+    let focus = derived.as_ref().map(|card| {
+        snapshot
+            .focused_pane
+            .as_ref()
+            .filter(|focused| {
+                snapshot
+                    .row_owning_pane(focused)
+                    .and_then(|row| row.pane.as_ref())
+                    .is_some_and(|pane| pane.pane_id == *card)
+            })
+            .unwrap_or(card)
+            .clone()
+    });
+    let focus_changed = focus
+        .as_ref()
+        .is_some_and(|focus| Some(focus) != ui.entry_focus.as_ref().or(ui.baseline_pane.as_ref()));
+    if focus.is_some() {
+        ui.entry_focus = focus;
+    }
+    if focus_changed {
+        ui.browse = None;
+        ui.entry_cursor = None;
+    }
     reconcile_filter_and_baseline(ui, snapshot, derived);
     reconcile_browse_and_selection(ui, snapshot);
     reconcile_dashboard(ui, snapshot);
+    if focus_changed {
+        ui.entry_cursor = ui.entry_focus.clone().map(EntryCursor::SubAgent);
+    }
+    ui.validate_entry_cursor(snapshot);
 }
 
 fn reconcile_filter_and_baseline(
@@ -838,12 +960,13 @@ fn reconcile_dashboard(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
 /// Re-derive `selected_index` from the identity-keyed `selected_pane`. When the
 /// selected pane has left the room — or the make-up filter hides its row — drop
 /// the dangling identity and index; the held baseline or the next
-/// pick re-seats it. Without a frame, hold the pane identity and withhold only
-/// the index.
+/// pick re-seats it. Without a frame, hold the pane identity and withhold the
+/// index; the entry cursor, which needs the index, drops.
 pub(super) fn anchor_selection(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     if let Some(roster) = framed_selection_roster(ui, snapshot) {
         anchor_selection_in(ui, &roster);
     }
+    ui.validate_entry_cursor(snapshot);
 }
 
 fn framed_selection_roster<'a>(

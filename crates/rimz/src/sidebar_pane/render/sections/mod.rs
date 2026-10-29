@@ -20,7 +20,6 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
-use crate::ids::PaneId;
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 use crate::store::snapshot::SidebarRow;
 
@@ -38,7 +37,7 @@ mod worktree;
 
 pub(in crate::sidebar_pane) use agent_card::agent_card_cost_usd;
 pub(in crate::sidebar_pane::render) use agent_card::{
-    awaiting_first_prompt_affordance, delegation_motion,
+    awaiting_first_prompt_affordance, delegation_entry_stops, delegation_motion,
 };
 pub(super) use cockpit::{
     CockpitBadges, cockpit_spend_line, cockpit_summary_line, parked_overflow_line,
@@ -144,7 +143,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) stale_after_secs: u64,
     pub(in crate::sidebar_pane::render) selected_index: Option<usize>,
     pub(in crate::sidebar_pane::render) held_expansions: &'a BTreeSet<String>,
-    pub(in crate::sidebar_pane::render) focused_pane: Option<&'a PaneId>,
+    pub(in crate::sidebar_pane::render) entry_cursor: Option<&'a super::EntryCursor>,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
     pub(in crate::sidebar_pane::render) money_phase: u64,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
