@@ -1,11 +1,11 @@
-//! The per-worktree git facts: the activity-tiered, single-flighted diff-stats
-//! refresh (trunk ref → merge-base → status + numstat, where a clean tree at the
-//! HEAD and merge-base the stored `+/-` was measured at skips the numstat →
-//! one folded `rev-parse` for head/branch/merge state → landed verdict + one
-//! `rev-list --left-right`), and their parsers. Commit-tier facts (ahead/behind,
-//! landed, did_work) carry forward while HEAD/trunk and the clean verdict stay
-//! unchanged. An unborn HEAD makes the folded `rev-parse` fail, so
-//! head/branch/merge facts publish as absent until the first commit.
+//! Per-worktree git facts: activity-tiered, single-flighted refreshes and parsers.
+//! Local facts combine status and numstat against the trunk merge-base; matching
+//! HEAD, merge-base and dirty-record metadata reuse tracked `+/-` without numstat.
+//! Checkout ancestry resolves HEAD/trunk in-process when possible; one folded
+//! `rev-parse` supplies HEAD/branch/merge state when that read fails. Commit facts
+//! (ahead/behind, landed, did_work) can carry forward while HEAD, trunk and the
+//! clean verdict stay unchanged. An unborn HEAD makes the fallback `rev-parse`
+//! fail, leaving HEAD/branch/merge facts absent until the first commit.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::{git_line, git_output};
 use crate::PaneId;
@@ -191,6 +192,14 @@ pub struct DiffStatsCacheEntry {
     /// with `stats_head_sha`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats_merge_base: Option<String>,
+    /// SHA-256 of the measured tracked status records, path metadata and
+    /// submodule HEADs. `None` without stats or complete status provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats_dirty_key: Option<String>,
+    /// The untracked share of `added`, recomputed after each successful status.
+    /// `None` without stats or a successful status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untracked_added: Option<u32>,
 }
 
 impl DiffStatsCacheEntry {
@@ -685,7 +694,7 @@ struct LocalFacts {
     /// The `(head, merge-base)` pair `stats` was measured or reused at.
     stats_at: Option<(String, String)>,
     branch: Option<String>,
-    clean: Option<bool>,
+    status: Option<WorktreeStatus>,
     merge_in_progress: Option<bool>,
     untracked_memo: Option<UntrackedLineMemo>,
 }
@@ -842,7 +851,14 @@ fn refresh_entry_with_memo(
         entry.stats_head_sha = stats_head_sha;
         entry.stats_merge_base = stats_merge_base;
         entry.branch = local.branch;
-        entry.clean = local.clean;
+        entry.clean = local.status.as_ref().map(|status| status.clean);
+        let (stats_dirty_key, untracked_added) = local
+            .stats
+            .and(local.status)
+            .map(|status| (status.dirty_key, status.untracked_added))
+            .unzip();
+        entry.stats_dirty_key = stats_dirty_key.flatten();
+        entry.untracked_added = untracked_added;
         entry.merge_in_progress = local.merge_in_progress;
         replacement_memo = local.untracked_memo;
     }
@@ -913,21 +929,29 @@ fn cached_commit_facts_match(
         && landed_fact_reusable(prior)
 }
 
-/// The prior `added`/`removed`, when a clean tree at the same `(head, base)`
-/// they were measured at makes a fresh `git diff` redundant. `measured_at` is
-/// `None` without resolved refs or a base, which always diffs.
+/// The prior tracked counts, when HEAD, base and the status's dirty-record key
+/// match their measurement. Failed status or missing provenance always diffs.
 fn reusable_diff_stats(
     prior: Option<&DiffStatsCacheEntry>,
     measured_at: Option<(&str, &str)>,
-    clean: Option<bool>,
+    status: Option<&WorktreeStatus>,
 ) -> Option<DiffStats> {
+    let status = status?;
+    let dirty_key = status.dirty_key.as_deref()?;
     let (head_sha, merge_base) = measured_at?;
     let prior = prior?;
-    (clean == Some(true)
-        && prior.clean == Some(true)
-        && prior.stats_head_sha.as_deref() == Some(head_sha)
-        && prior.stats_merge_base.as_deref() == Some(merge_base))
-    .then(|| prior.stats())?
+    if prior.stats_head_sha.as_deref() != Some(head_sha)
+        || prior.stats_merge_base.as_deref() != Some(merge_base)
+        || prior.stats_dirty_key.as_deref() != Some(dirty_key)
+    {
+        return None;
+    }
+    let untracked_added = prior.untracked_added?;
+    let stats = prior.stats()?;
+    Some(DiffStats {
+        added: stats.added.saturating_sub(untracked_added),
+        removed: stats.removed,
+    })
 }
 
 fn landed_fact_reusable(prior: &DiffStatsCacheEntry) -> bool {
@@ -939,8 +963,8 @@ fn landed_fact_reusable(prior: &DiffStatsCacheEntry) -> bool {
     )
 }
 
-/// Status runs first: a clean tree whose diff inputs match the prior entry's
-/// measurement reuses its numbers and forks no `git diff`.
+/// Status and dirty-path metadata run before numstat. Matching inputs reuse
+/// tracked counts; every successful status supplies the current untracked share.
 fn refresh_local_facts(
     worktree: &Path,
     base: Option<&str>,
@@ -951,8 +975,7 @@ fn refresh_local_facts(
     index_refresh: Option<&mut IndexRefreshState>,
 ) -> LocalFacts {
     let (status, untracked_memo) = worktree_status(worktree, prior_memo, index_refresh);
-    let clean = status.as_ref().map(|status| status.clean);
-    let stats = reusable_diff_stats(prior, measured_at, clean)
+    let stats = reusable_diff_stats(prior, measured_at, status.as_ref())
         .or_else(|| base.and_then(|base| worktree_diff_stats(worktree, base)));
     let stats_at = stats
         .and(measured_at)
@@ -971,7 +994,7 @@ fn refresh_local_facts(
         stats,
         stats_at,
         branch: head.branch.clone(),
-        clean,
+        status,
         merge_in_progress: head.merge_in_progress,
         untracked_memo,
     }
@@ -1131,12 +1154,14 @@ fn commits_ahead_behind(worktree: &Path, trunk: &str) -> Option<(u32, u32)> {
 struct WorktreeStatus {
     clean: bool,
     untracked_added: u32,
-    /// Entries a refresh cannot bring up to date: worktree
-    /// modifications, type changes, intent-to-add paths, and worktree renames
-    /// or copies. Deletions fail `lstat` first, and refresh skips unmerged entries
-    /// (an unmerged `AA` or `UA` still counts, erring toward no lock).
+    dirty_key: Option<String>,
+    /// Entries a refresh cannot bring up to date: worktree modifications, type
+    /// changes, intent-to-add paths, and worktree renames or copies. Deletions
+    /// fail `lstat` first, and refresh skips unmerged entries (an unmerged `AA`
+    /// or `UA` still counts, erring toward no lock).
     scanned_changes: u64,
-    /// Deletions, including worktree rename sources, reach `sum_lstat` but not `sum_scan`.
+    /// Deletions, including worktree rename sources, reach `sum_lstat` but not
+    /// `sum_scan`.
     deleted_paths: u64,
 }
 
@@ -1190,11 +1215,12 @@ fn index_stale_count(stderr: &[u8], status: &WorktreeStatus) -> u64 {
 /// each `??` entry's file line-counts into the untracked churn.
 /// `--untracked-files=all` lists files inside untracked directories
 /// individually so the count sees them; `-z` keeps newline-bearing filenames
-/// parseable (paths decode lossily, so a non-UTF-8 path still dirties the tree
-/// but counts no lines). Only host status enables trace2. Optional index locks
-/// stay disabled unless the prior status found at least 128 stale entries
-/// through [`index_stale_count`], and no locked status started within 60 seconds.
-/// A contended attempt consumes that window too; one-shot callers never lock.
+/// parseable. Untracked paths decode lossily, so a non-UTF-8 path still dirties
+/// the tree but counts no lines; tracked paths stay byte-exact for the dirty key.
+/// Only host status enables trace2. Optional index locks stay disabled unless
+/// the prior status found at least 128 stale entries through
+/// [`index_stale_count`], and no locked status started within 60 seconds. A
+/// contended attempt consumes that window too; one-shot callers never lock.
 fn worktree_status(
     worktree: &Path,
     prior: &UntrackedLineMemo,
@@ -1226,9 +1252,17 @@ fn worktree_status(
     }
     let mut budget = UNTRACKED_READ_BUDGET;
     let mut next = UntrackedLineMemo::new();
-    let status = parse_status_entries(&String::from_utf8_lossy(&output.stdout), |path| {
-        memoized_untracked_added_lines(worktree, path, prior, &mut next, &mut budget)
-    });
+    let mut metadata_complete = true;
+    let mut status = parse_status_entries(
+        &output.stdout,
+        |path| memoized_untracked_added_lines(worktree, path, prior, &mut next, &mut budget),
+        |path, digest| {
+            metadata_complete &= hash_dirty_metadata(worktree, path, digest).is_some();
+        },
+    );
+    if !metadata_complete {
+        status.dirty_key = None;
+    }
     if let Some(state) = index_refresh {
         state.stale_entries = index_stale_count(&output.stderr, &status);
     }
@@ -1291,43 +1325,101 @@ fn memoized_untracked_added_lines_with(
 }
 
 /// Fold a porcelain v1 `-z` status stream: any entry means a dirty tree, and
-/// each untracked (`??`) path feeds the line counter. A rename/copy entry —
-/// detected in either status column — carries its source path as a second
-/// NUL-separated token, consumed and skipped so it never reads as an entry of
-/// its own.
+/// each untracked (`??`) path feeds the line counter. Other records feed the
+/// dirty key in output order: code, raw paths and caller-supplied metadata.
+/// A rename/copy in either column carries its source as a second NUL token;
+/// hash that path too, without treating it as another status entry.
 fn parse_status_entries(
-    output: &str,
+    output: impl AsRef<[u8]>,
     mut untracked_lines: impl FnMut(&str) -> u32,
+    mut tracked_metadata: impl FnMut(&[u8], &mut Sha256),
 ) -> WorktreeStatus {
     let mut clean = true;
     let mut untracked_added: u32 = 0;
     let mut scanned_changes = 0;
     let mut deleted_paths = 0;
-    let mut tokens = output.split('\0').filter(|token| !token.is_empty());
+    let mut digest = Sha256::new();
+    let mut tokens = output
+        .as_ref()
+        .split(|&byte| byte == 0)
+        .filter(|token| !token.is_empty());
     while let Some(entry) = tokens.next() {
         clean = false;
         let Some((code, path)) = entry.split_at_checked(3) else {
             continue;
         };
-        if code.get(..2).is_some_and(|xy| xy.contains(['R', 'C'])) {
-            tokens.next();
-        }
-        if matches!(code.as_bytes()[1], b'M' | b'T' | b'A' | b'R' | b'C') {
+        let source = if code[..2].contains(&b'R') || code[..2].contains(&b'C') {
+            tokens.next()
+        } else {
+            None
+        };
+        if matches!(code[1], b'M' | b'T' | b'A' | b'R' | b'C') {
             scanned_changes += 1;
         }
-        if matches!(code.as_bytes()[1], b'D' | b'R') {
+        if matches!(code[1], b'D' | b'R') {
             deleted_paths += 1;
         }
-        if code.starts_with("??") {
-            untracked_added = untracked_added.saturating_add(untracked_lines(path));
+        if code.starts_with(b"??") {
+            untracked_added =
+                untracked_added.saturating_add(untracked_lines(&String::from_utf8_lossy(path)));
+            continue;
+        }
+        digest.update(&code[..2]);
+        for path in std::iter::once(path).chain(source) {
+            digest.update((path.len() as u64).to_le_bytes());
+            digest.update(path);
+            tracked_metadata(path, &mut digest);
         }
     }
     WorktreeStatus {
         clean,
         untracked_added,
+        dirty_key: Some(hex::encode(digest.finalize())),
         scanned_changes,
         deleted_paths,
     }
+}
+
+/// An initialized submodule needs a resolved HEAD before its counts can be reused.
+fn hash_dirty_metadata(worktree: &Path, path: &[u8], digest: &mut Sha256) -> Option<()> {
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStrExt;
+        worktree.join(std::ffi::OsStr::from_bytes(path))
+    };
+    #[cfg(not(unix))]
+    let path = worktree.join(String::from_utf8_lossy(path).as_ref());
+    let metadata = std::fs::symlink_metadata(&path).ok();
+    if let Some((metadata, modified)) = metadata.as_ref().and_then(|metadata| {
+        metadata
+            .modified()
+            .ok()
+            .map(|modified| (metadata, modified))
+    }) {
+        let (sign, nanos) = match modified.duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(duration) => (1, duration.as_nanos()),
+            Err(before) => (2, before.duration().as_nanos()),
+        };
+        digest.update([sign]);
+        digest.update(metadata.len().to_le_bytes());
+        digest.update(nanos.to_le_bytes());
+    } else {
+        digest.update([0]);
+    }
+    let git_dir = metadata.filter(|metadata| metadata.is_dir()).and_then(|_| {
+        worktree::git_admin_dir_from_checkout_metadata(&path)
+            .ok()
+            .flatten()
+    });
+    let head = if let Some(git_dir) = git_dir {
+        let common_dir = super::git_refs::common_dir(&git_dir)?;
+        super::git_refs::head_sha(&git_dir, &common_dir)?
+    } else {
+        String::new()
+    };
+    digest.update((head.len() as u64).to_le_bytes());
+    digest.update(head.as_bytes());
+    Some(())
 }
 
 /// Shared byte budget for one status probe's untracked reads. A file past the
