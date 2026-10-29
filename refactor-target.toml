@@ -317,12 +317,23 @@ upward-dependencies = ["address"]
 # LocalSessionDiscovery and its re-export name the host's discovery policy (+2).
 # PaneSessionDemand, PaneSessionNeed, NamedSession, fresh_window and the capability/login seam (+6).
 # SkillChain, its six shared readers, SkillInventory, PackSkill and PackSkillFate share pack skills (+10).
-surface-budget = 1192
+# ProviderHomeLogin and provider_home_logins, with facade exports, share native/account homes (+4).
+surface-budget = 1196
 
 [[verdict]]
 kind = "item"
 key = "agents::definition::LocalSessionDiscovery"
 reason = "The host dispatches provider-local discovery by unsupported, full-scan or per-pane policy."
+
+[[verdict]]
+kind = "item"
+key = "agents::login::ProviderHomeLogin"
+reason = "Hooks, uninstall and packs share the provider-home inventory's typed rows."
+
+[[verdict]]
+kind = "item"
+key = "agents::login::provider_home_logins"
+reason = "Native and configured provider homes are inventoried once for maintenance callers."
 
 [[verdict]]
 kind = "item"

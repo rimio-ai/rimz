@@ -78,7 +78,8 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     let disk_usage = rimz::disk::usage::measure(None);
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
-    let (logins, accounts_err) = super::hooks::provider_home_logins();
+    let (logins, accounts_err) =
+        rimz::agents::provider_home_logins(&super::machine_config().accounts);
     if let Some(err) = accounts_err {
         failures.push(format!(
             "read provider accounts: {err}; only the providers' own homes were cleaned"
