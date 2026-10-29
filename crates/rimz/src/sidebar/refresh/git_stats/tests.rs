@@ -7,6 +7,242 @@ use std::process::Command;
 
 mod index_refresh;
 
+fn hot_paths(paths: impl IntoIterator<Item = String>) -> BTreeMap<String, HotWorktree> {
+    paths
+        .into_iter()
+        .map(|path| {
+            (
+                path,
+                HotWorktree {
+                    latest_activity_ms: 0,
+                    tool_hooked: false,
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn hot_git_gate_obeys_floor_activity_and_quiet_fallback() {
+    let path = "/wt".to_owned();
+    let needed = [path.clone()];
+    let cache = DiffStatsCache {
+        entries: BTreeMap::from([(
+            path.clone(),
+            DiffStatsCacheEntry {
+                refreshed_at_ms: 1_000,
+                commit_refreshed_at_ms: Some(1_000),
+                ..Default::default()
+            },
+        )]),
+    };
+    for (activity, hooked, at, expected) in [
+        (999, true, 6_001, false),
+        (999, true, 61_000, false),
+        (999, true, 61_001, true),
+        (1_000, true, 6_000, false),
+        (1_000, true, 6_001, true),
+        (1_001, true, 6_000, false),
+        (1_001, true, 6_001, true),
+        (90_000, true, 6_001, true),
+        (90_000, true, 500, false),
+        (999, false, 6_000, false),
+        (999, false, 6_001, true),
+    ] {
+        let hot = BTreeMap::from([(
+            path.clone(),
+            HotWorktree {
+                latest_activity_ms: activity,
+                tool_hooked: hooked,
+            },
+        )]);
+        let due = stale_paths(
+            &cache,
+            &needed,
+            &BTreeSet::new(),
+            &hot,
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+            at,
+        );
+        assert_eq!(
+            due,
+            if expected {
+                vec![(path.clone(), DueFacts::all())]
+            } else {
+                vec![]
+            },
+            "activity={activity}, hooked={hooked}, at={at}"
+        );
+    }
+
+    for (local, commit) in [(1_000, 6_000), (6_000, 1_000)] {
+        let mut split = cache.clone();
+        let entry = split.entries.get_mut(&path).unwrap();
+        entry.refreshed_at_ms = local;
+        entry.commit_refreshed_at_ms = Some(commit);
+        let hot = BTreeMap::from([(
+            path.clone(),
+            HotWorktree {
+                latest_activity_ms: 2_000,
+                tool_hooked: true,
+            },
+        )]);
+        assert_eq!(
+            stale_paths(
+                &split,
+                &needed,
+                &BTreeSet::new(),
+                &hot,
+                &BTreeSet::new(),
+                &BTreeMap::new(),
+                6_501,
+            ),
+            vec![(path.clone(), DueFacts::all())],
+            "each half compares activity with its own stamp"
+        );
+    }
+    let hot = BTreeMap::from([(
+        path.clone(),
+        HotWorktree {
+            latest_activity_ms: 999,
+            tool_hooked: true,
+        },
+    )]);
+    for (at, local, commit) in [
+        (4_000, false, false),
+        (4_001, true, false),
+        (11_000, true, false),
+        (11_001, true, true),
+    ] {
+        assert_eq!(
+            stale_paths(
+                &cache,
+                &needed,
+                &BTreeSet::from([path.clone()]),
+                &hot,
+                &BTreeSet::new(),
+                &BTreeMap::new(),
+                at,
+            ),
+            if local || commit {
+                vec![(path.clone(), DueFacts { local, commit })]
+            } else {
+                vec![]
+            },
+            "focused facts ignore quiet hot activity at {at}"
+        );
+    }
+}
+
+#[test]
+fn hot_map_merges_activity_and_hook_coverage_across_agent_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = Timestamp::from_second(1_750_000_000).unwrap();
+    let latest = now - SignedDuration::from_secs(1);
+    let (cold, warm) = (180, 30);
+    for (running_kind, recent_kind, split, hooked) in [
+        ("claude", "claude", Some(("claude", cold)), true),
+        ("claude", "claude", Some(("unregistered", cold)), true),
+        ("unregistered", "unregistered", None, false),
+        ("claude", "unregistered", None, false),
+        ("claude", "claude", Some(("unregistered", warm)), false),
+    ] {
+        let mut running = activity_row(
+            true,
+            Some(AgentStatus::Running),
+            now - SignedDuration::from_secs(120),
+            dir.path(),
+        );
+        running.name = running_kind.into();
+        let mut recent = activity_row(true, Some(AgentStatus::Idle), latest, dir.path());
+        recent.name = recent_kind.into();
+        let process = activity_row(
+            false,
+            None,
+            now + SignedDuration::from_secs(120),
+            dir.path(),
+        );
+        let mut groups = vec![worktree_group(dir.path(), vec![running, recent, process])];
+        if let Some((kind, age)) = split {
+            let mut row = activity_row(
+                true,
+                Some(AgentStatus::Idle),
+                now - SignedDuration::from_secs(age),
+                dir.path(),
+            );
+            row.name = kind.into();
+            let mut group = worktree_group(dir.path(), vec![row]);
+            group.key.push_str("\nother-branch");
+            groups.push(group);
+        }
+        let mut snapshot =
+            SidebarSnapshot::build(WorkspaceId::from_project_root(dir.path()), vec![], now);
+        snapshot.worktree_groups = groups.into();
+        assert_eq!(
+            hot_worktree_paths(&snapshot),
+            BTreeMap::from([(
+                dir.path().display().to_string(),
+                HotWorktree {
+                    latest_activity_ms: latest.as_millisecond() as u64,
+                    tool_hooked: hooked,
+                },
+            )]),
+            "running={running_kind}, recent={recent_kind}, split={split:?}"
+        );
+    }
+}
+
+#[test]
+fn diff_stats_pass_stamp_keeps_a_tool_call_during_git_due() {
+    let repo = feature_branch_fixture();
+    assert!(repo.initialized);
+    let (_dir, runtime) = runtime_for(repo.path());
+    let path = repo.path_str().to_owned();
+    let started = BACKLOG_NOW_MS;
+    let cache = refresh_diff_stats(
+        &runtime.diff_stats_path(),
+        &runtime,
+        std::slice::from_ref(&path),
+        &BTreeSet::new(),
+        &hot_paths([path.clone()]),
+        &BTreeSet::new(),
+        started,
+        None,
+        GitPass::Host,
+        &mut GitRefreshState::default(),
+    );
+    let mut snapshot = SidebarSnapshot::build(
+        runtime.workspace_id.clone(),
+        vec![],
+        Timestamp::from_millisecond((started + 5_001) as i64).unwrap(),
+    );
+    snapshot.worktree_groups = vec![worktree_group(
+        repo.path(),
+        vec![activity_row(
+            true,
+            Some(AgentStatus::Running),
+            Timestamp::from_millisecond((started + 1) as i64).unwrap(),
+            repo.path(),
+        )],
+    )]
+    .into();
+    let due = stale_paths(
+        &cache,
+        std::slice::from_ref(&path),
+        &BTreeSet::new(),
+        &hot_worktree_paths(&snapshot),
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+        started + 5_001,
+    );
+    let entry = &cache.entries[&path];
+    assert_eq!(
+        (entry.refreshed_at_ms, entry.commit_refreshed_at_ms, due),
+        (started, Some(started), vec![(path, DueFacts::all())]),
+    );
+}
+
 #[test]
 fn condition_scopes_union_with_panes_without_duplicates() {
     let pane_dir = tempfile::tempdir().unwrap();
@@ -357,7 +593,7 @@ fn git_cache_freshness_boundaries_are_inclusive() {
 }
 
 #[test]
-fn hibernated_tier_sits_below_focus_and_hot_above_settled() {
+fn hibernated_tier_sits_below_focus_and_hot_above_idle() {
     let none = BTreeSet::new();
     let held = BTreeSet::from(["/wt".to_owned()]);
     let entry = DiffStatsCacheEntry {
@@ -368,16 +604,18 @@ fn hibernated_tier_sits_below_focus_and_hot_above_settled() {
         ..Default::default()
     };
     let ttl = crate::sidebar::timing::DIFF_STATS_HIBERNATED_TTL;
+    assert_eq!(ttl, Duration::from_secs(600));
+    let hot = hot_paths(held.clone());
     assert_eq!(
-        diff_stats_tier("/wt", Some(&entry), &none, &none, &held),
+        diff_stats_tier("/wt", &none, &BTreeMap::new(), &held),
         (ttl, ttl)
     );
     assert_eq!(
-        diff_stats_tier("/wt", Some(&entry), &held, &held, &held),
+        diff_stats_tier("/wt", &held, &hot, &held),
         (DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL)
     );
     assert_eq!(
-        diff_stats_tier("/wt", Some(&entry), &none, &held, &held),
+        diff_stats_tier("/wt", &none, &hot, &held),
         (DIFF_STATS_TTL, DIFF_STATS_TTL)
     );
     let cache = DiffStatsCache {
@@ -386,18 +624,14 @@ fn hibernated_tier_sits_below_focus_and_hot_above_settled() {
     for (at, held_paths, due) in [
         (1_000 + ttl.as_millis() as u64, &held, false),
         (1_001 + ttl.as_millis() as u64, &held, true),
-        (
-            1_001 + DIFF_STATS_SETTLED_TTL.as_millis() as u64,
-            &none,
-            true,
-        ),
+        (1_001 + DIFF_STATS_IDLE_TTL.as_millis() as u64, &none, true),
     ] {
         assert_eq!(
             !stale_paths(
                 &cache,
                 &["/wt".into()],
                 &none,
-                &none,
+                &BTreeMap::new(),
                 held_paths,
                 &BTreeMap::new(),
                 at
@@ -489,14 +723,24 @@ fn thaw_force_accepts_only_peer_stamps_after_both_baselines() {
                 },
             )]),
         };
-        observations
-            .push(!stale_paths(&cache, &needed, &none, &none, &none, &thawed, 1_001).is_empty());
+        observations.push(
+            !stale_paths(
+                &cache,
+                &needed,
+                &none,
+                &BTreeMap::new(),
+                &none,
+                &thawed,
+                1_001,
+            )
+            .is_empty(),
+        );
     }
     assert_eq!(observations, [true, true, true, false, true]);
 }
 
 #[test]
-fn settled_tier_boundaries_and_precedence() {
+fn idle_tier_boundaries_and_precedence() {
     let path = "/wt";
     let settled = DiffStatsCacheEntry {
         refreshed_at_ms: 1_000,
@@ -510,7 +754,7 @@ fn settled_tier_boundaries_and_precedence() {
     let needed = [path.to_owned()];
     let due_at = |entry: &DiffStatsCacheEntry,
                   focused: &BTreeSet<String>,
-                  hot: &BTreeSet<String>,
+                  hot: &BTreeMap<String, HotWorktree>,
                   at: u64| {
         let cache = DiffStatsCache {
             entries: BTreeMap::from([(path.to_owned(), entry.clone())]),
@@ -518,23 +762,21 @@ fn settled_tier_boundaries_and_precedence() {
         !stale_paths(&cache, &needed, focused, hot, &none, &BTreeMap::new(), at).is_empty()
     };
     let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
-    let settled_ttl = DIFF_STATS_SETTLED_TTL.as_millis() as u64;
-    assert_eq!(DIFF_STATS_SETTLED_TTL, Duration::from_secs(300));
+    assert_eq!(DIFF_STATS_IDLE_TTL, Duration::from_secs(300));
 
-    assert!(!due_at(&settled, &none, &none, 1_000 + idle + 1));
-    assert!(!due_at(&settled, &none, &none, 1_000 + settled_ttl));
-    assert!(due_at(&settled, &none, &none, 1_001 + settled_ttl));
+    assert!(!due_at(&settled, &none, &BTreeMap::new(), 1_000 + idle));
+    assert!(due_at(&settled, &none, &BTreeMap::new(), 1_001 + idle));
 
-    // Focused and hot win over settled.
-    assert!(due_at(&settled, &only, &none, 1_000 + 11_000));
+    // Focused and hot win over idle, including clean and landed entries.
+    assert!(due_at(&settled, &only, &BTreeMap::new(), 1_000 + 11_000));
     assert!(due_at(
         &settled,
         &none,
-        &only,
+        &hot_paths(only),
         1_001 + DIFF_STATS_TTL.as_millis() as u64
     ));
 
-    // Anything short of clean-and-landed reads idle.
+    // Clean and landed facts do not change the idle cadence.
     for unsettled in [
         DiffStatsCacheEntry {
             clean: None,
@@ -553,14 +795,22 @@ fn settled_tier_boundaries_and_precedence() {
             ..settled.clone()
         },
     ] {
-        assert!(!due_at(&unsettled, &none, &none, 1_000 + idle));
-        assert!(due_at(&unsettled, &none, &none, 1_001 + idle));
+        assert!(!due_at(&unsettled, &none, &BTreeMap::new(), 1_000 + idle));
+        assert!(due_at(&unsettled, &none, &BTreeMap::new(), 1_001 + idle));
     }
 
     // A missing entry is due in full.
     let empty = DiffStatsCache::default();
     assert_eq!(
-        stale_paths(&empty, &needed, &none, &none, &none, &BTreeMap::new(), 1),
+        stale_paths(
+            &empty,
+            &needed,
+            &none,
+            &BTreeMap::new(),
+            &none,
+            &BTreeMap::new(),
+            1
+        ),
         vec![(path.to_owned(), DueFacts::all())]
     );
 }
@@ -659,19 +909,22 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
     let hot = hot_worktree_paths(&snapshot);
 
     let path_of = |p: &Path| p.display().to_string();
-    assert!(hot.contains(&path_of(&running)));
-    assert!(hot.contains(&path_of(&recent)));
+    assert!(hot.contains_key(&path_of(&running)));
+    assert!(hot.contains_key(&path_of(&recent)));
     assert!(
-        hot.contains(&path_of(&boundary)),
+        hot.contains_key(&path_of(&boundary)),
         "boundary-exact: <= window"
     );
-    assert!(!hot.contains(&path_of(&idle)), "stale activity is cold");
+    assert!(!hot.contains_key(&path_of(&idle)), "stale activity is cold");
     assert!(
-        !hot.contains(&path_of(&procs)),
+        !hot.contains_key(&path_of(&procs)),
         "process rows carry no heat"
     );
-    assert!(!hot.contains(&path_of(&external_kind)));
-    assert!(!hot.contains(&path_of(&dead)), "hot is a subset of needed");
+    assert!(!hot.contains_key(&path_of(&external_kind)));
+    assert!(
+        !hot.contains_key(&path_of(&dead)),
+        "hot is a subset of needed"
+    );
     assert_eq!(hot.len(), 3);
 }
 
@@ -694,7 +947,7 @@ fn hot_worktree_paths_treats_future_activity_as_hot() {
     )]
     .into();
 
-    assert!(hot_worktree_paths(&snapshot).contains(&dir.path().display().to_string()));
+    assert!(hot_worktree_paths(&snapshot).contains_key(&dir.path().display().to_string()));
 }
 
 #[test]
@@ -1473,7 +1726,7 @@ fn focused_diff_stats_refreshes_local_facts_before_commit_facts() {
         &runtime,
         std::slice::from_ref(&path),
         &BTreeSet::from([path.clone()]),
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         &BTreeSet::new(),
         1_000 + DIFF_STATS_FOCUSED_LOCAL_TTL.as_millis() as u64 + 1,
         None,
@@ -1541,7 +1794,7 @@ fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
         &runtime,
         std::slice::from_ref(&path),
         &BTreeSet::new(),
-        &BTreeSet::from([path.clone()]),
+        &hot_paths([path.clone()]),
         &BTreeSet::new(),
         now_ms,
         None,
@@ -1564,28 +1817,8 @@ fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
     );
     assert_eq!(entry.behind, Some(0));
     assert_eq!(entry.landed, Some(true));
-    assert!(
-        entry
-            .commit_refreshed_at_ms
-            .is_some_and(|stamp| stamp > now_ms),
-        "commit facts stamp at completion, not at stale-check time"
-    );
-}
-
-#[test]
-fn diff_stats_refresh_stamps_fact_groups_at_completion() {
-    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
-    if !repo.initialized {
-        return;
-    }
-    repo.write("base.txt", "base\n");
-    let _ = repo.git(&["add", "base.txt"]);
-    let _ = repo.git(&["commit", "-q", "-m", "base"]);
-
-    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
-
-    assert!(entry.refreshed_at_ms > 0);
-    assert!(entry.commit_refreshed_at_ms.is_some_and(|stamp| stamp > 0));
+    assert_eq!(entry.refreshed_at_ms, now_ms);
+    assert_eq!(entry.commit_refreshed_at_ms, Some(now_ms));
 }
 
 #[test]
@@ -2127,7 +2360,7 @@ fn trunk_ladder_prefers_a_configured_branch_that_resolves() {
     assert_eq!(trunk_ref(repo.path(), None).as_deref(), Some("main"));
 }
 
-/// Idle, dirty (never settled) entries for `count` scratch directories that are
+/// Idle, dirty entries for `count` scratch directories that are
 /// not git repositories: a refresh stamps them without needing a fixture. All
 /// are due at `BACKLOG_NOW_MS`, entry `i` stamped `1_000 + i`.
 const BACKLOG_NOW_MS: u64 = 1_000_000;
@@ -2160,7 +2393,7 @@ fn refreshed_paths(cache: &DiffStatsCache) -> Vec<&str> {
     cache
         .entries
         .iter()
-        .filter(|(_, entry)| entry.refreshed_at_ms > BACKLOG_NOW_MS)
+        .filter(|(_, entry)| entry.refreshed_at_ms == BACKLOG_NOW_MS)
         .map(|(path, _)| path.as_str())
         .collect()
 }
@@ -2169,7 +2402,7 @@ fn run_pass(
     runtime: &crate::RuntimePaths,
     needed: &[String],
     focused: &BTreeSet<String>,
-    hot: &BTreeSet<String>,
+    hot: &BTreeMap<String, HotWorktree>,
     pass: GitPass,
 ) -> DiffStatsCache {
     refresh_diff_stats(
@@ -2207,7 +2440,7 @@ fn diff_stats_publication_leaves_group_roots_byte_identical() {
         &runtime,
         &needed,
         &BTreeSet::new(),
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         GitPass::Host,
     );
 
@@ -2244,7 +2477,7 @@ fn pre_split_diff_stats_keeps_fresh_entries_without_forks() {
         &runtime,
         &needed,
         &BTreeSet::new(),
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         GitPass::OneShot,
     );
 
@@ -2287,10 +2520,9 @@ fn selection_puts_priority_first_then_oldest_and_caps_the_rest() {
             .map(|path| (path.clone(), DueFacts::all()))
             .collect()
     };
-    let hot = BTreeSet::from([paths[0].clone()]);
     let focused = BTreeSet::from([paths[1].clone()]);
     let order = |limit| -> Vec<String> {
-        select_for_pass(due(), &cache, &focused, &hot, &BTreeMap::new(), limit)
+        select_for_pass(due(), &cache, &focused, &BTreeMap::new(), limit)
             .into_iter()
             .map(|(path, _)| path)
             .collect()
@@ -2299,12 +2531,12 @@ fn selection_puts_priority_first_then_oldest_and_caps_the_rest() {
         indexes.iter().map(|index| paths[*index].clone()).collect()
     };
 
-    // Focused, hot, then the missing entry (stamp 0), oldest stamp, tie in `needed` order.
-    assert_eq!(order(None), by(&[1, 0, 5, 2, 3, 4]));
-    assert_eq!(order(Some(4)), by(&[1, 0, 5, 2]));
+    // Focused, then missing (stamp 0), oldest stamp, ties in `needed` order.
+    assert_eq!(order(None), by(&[1, 5, 0, 2, 3, 4]));
+    assert_eq!(order(Some(4)), by(&[1, 5, 0, 2]));
     // Priority entries are never dropped, even past the limit.
-    assert_eq!(order(Some(1)), by(&[1, 0]));
-    assert_eq!(order(Some(0)), by(&[1, 0]));
+    assert_eq!(order(Some(1)), by(&[1]));
+    assert_eq!(order(Some(0)), by(&[1]));
 }
 
 #[test]
@@ -2315,7 +2547,7 @@ fn host_pass_refreshes_a_capped_oldest_first_share_and_one_shot_all() {
     atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
     let none = BTreeSet::new();
 
-    let host = run_pass(&runtime, &needed, &none, &none, GitPass::Host);
+    let host = run_pass(&runtime, &needed, &none, &BTreeMap::new(), GitPass::Host);
     assert_eq!(
         refreshed_paths(&host),
         needed[..MAX_HOST_PASS_ENTRIES]
@@ -2326,12 +2558,12 @@ fn host_pass_refreshes_a_capped_oldest_first_share_and_one_shot_all() {
     );
 
     // The next passes drain the backlog without repeating an entry.
-    let second = run_pass(&runtime, &needed, &none, &none, GitPass::Host);
+    let second = run_pass(&runtime, &needed, &none, &BTreeMap::new(), GitPass::Host);
     assert_eq!(refreshed_paths(&second).len(), total);
     assert!(
         needed
             .iter()
-            .all(|path| second.entries[path].refreshed_at_ms > BACKLOG_NOW_MS)
+            .all(|path| second.entries[path].refreshed_at_ms == BACKLOG_NOW_MS)
     );
     let first_wave = host.entries[&needed[0]].refreshed_at_ms;
     assert_eq!(
@@ -2340,7 +2572,7 @@ fn host_pass_refreshes_a_capped_oldest_first_share_and_one_shot_all() {
     );
 
     atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
-    let one_shot = run_pass(&runtime, &needed, &none, &none, GitPass::OneShot);
+    let one_shot = run_pass(&runtime, &needed, &none, &BTreeMap::new(), GitPass::OneShot);
     assert_eq!(
         refreshed_paths(&one_shot).len(),
         total,
@@ -2356,8 +2588,8 @@ fn thawed_paths_are_due_and_priority_beyond_the_host_cap() {
     let thawed: BTreeSet<_> = needed[MAX_HOST_PASS_ENTRIES..].iter().cloned().collect();
     for path in &thawed {
         let entry = cache.entries.get_mut(path).unwrap();
-        entry.refreshed_at_ms = BACKLOG_NOW_MS;
-        entry.commit_refreshed_at_ms = Some(BACKLOG_NOW_MS);
+        entry.refreshed_at_ms = BACKLOG_NOW_MS - 1;
+        entry.commit_refreshed_at_ms = Some(BACKLOG_NOW_MS - 1);
     }
     atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
     let none = BTreeSet::new();
@@ -2370,7 +2602,7 @@ fn thawed_paths_are_due_and_priority_beyond_the_host_cap() {
         &runtime,
         &needed,
         &none,
-        &none,
+        &BTreeMap::new(),
         &none,
         BACKLOG_NOW_MS,
         None,
@@ -2386,21 +2618,36 @@ fn thawed_paths_are_due_and_priority_beyond_the_host_cap() {
 }
 
 #[test]
-fn host_pass_always_takes_every_due_focused_and_hot_entry() {
+fn host_pass_always_takes_every_due_focused_and_thawed_entry() {
     let total = MAX_HOST_PASS_ENTRIES + 4;
     let (root, needed, cache) = backlog_fixture(total);
     let (_runtime_dir, runtime) = runtime_for(root.path());
     atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
     // The two newest entries are the last the age order would reach.
     let focused = BTreeSet::from([needed[total - 1].clone()]);
-    let hot = BTreeSet::from([needed[total - 2].clone()]);
-
-    let pass = run_pass(&runtime, &needed, &focused, &hot, GitPass::Host);
+    let thawed = BTreeSet::from([needed[total - 2].clone()]);
+    let hot = hot_paths(needed.clone());
+    let pass = refresh_diff_stats(
+        &runtime.diff_stats_path(),
+        &runtime,
+        &needed,
+        &focused,
+        &hot,
+        &BTreeSet::new(),
+        BACKLOG_NOW_MS,
+        None,
+        GitPass::Host,
+        &mut GitRefreshState {
+            hibernated: thawed,
+            ..Default::default()
+        },
+    );
 
     let refreshed = refreshed_paths(&pass);
     assert_eq!(refreshed.len(), MAX_HOST_PASS_ENTRIES);
     assert!(refreshed.contains(&needed[total - 1].as_str()));
     assert!(refreshed.contains(&needed[total - 2].as_str()));
+    assert!(!refreshed.contains(&needed[total - 3].as_str()));
 }
 
 fn hold_diff_stats_lock(runtime: &crate::RuntimePaths) -> single_flight::ProducerGuard {
@@ -2443,7 +2690,7 @@ fn loser_returns_a_peers_publication_of_its_selection_without_forking() {
 
     let none = BTreeSet::new();
     let before = crate::proc::testkit::spawn_count();
-    let loser = run_pass(&runtime, &needed, &none, &none, GitPass::Host);
+    let loser = run_pass(&runtime, &needed, &none, &BTreeMap::new(), GitPass::Host);
     writer.join().unwrap();
     drop(guard);
 
@@ -2468,11 +2715,25 @@ fn timed_out_loser_refreshes_at_most_its_own_selection_and_writes_nothing() {
     let guard = hold_diff_stats_lock(&runtime);
     let none = BTreeSet::new();
 
-    let loser = run_pass(&runtime, &needed, &none, &none, GitPass::Host);
+    let mut published = cache.clone();
+    let peer_start = BACKLOG_NOW_MS - DIFF_STATS_IDLE_TTL.as_millis() as u64 - 1;
+    for path in &needed[..MAX_HOST_PASS_ENTRIES] {
+        let entry = published.entries.get_mut(path).unwrap();
+        entry.refreshed_at_ms = peer_start;
+        entry.commit_refreshed_at_ms = Some(peer_start);
+    }
+    let writer_path = cache_path.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        atomic::write_temp_then_rename_cache(&writer_path, &published).unwrap();
+    });
+    let loser = run_pass(&runtime, &needed, &none, &BTreeMap::new(), GitPass::Host);
+    writer.join().unwrap();
     drop(guard);
 
     assert_eq!(refreshed_paths(&loser).len(), MAX_HOST_PASS_ENTRIES);
     let on_disk: DiffStatsCache = atomic::read_json_cache(&cache_path);
+    assert_eq!(on_disk.entries[&needed[0]].refreshed_at_ms, peer_start);
     assert!(
         refreshed_paths(&on_disk).is_empty(),
         "a local fallback never writes the shared cache"

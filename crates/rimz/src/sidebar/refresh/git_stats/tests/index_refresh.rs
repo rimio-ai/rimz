@@ -392,14 +392,21 @@ fn pass(
     state: &mut GitRefreshState,
     kind: GitPass,
 ) -> DiffStatsCacheEntry {
+    let cache: DiffStatsCache = atomic::read_json_cache(&runtime.diff_stats_path());
+    let now_ms = cache
+        .entries
+        .get(repo.path_str())
+        .map_or(1_000_000, |entry| {
+            entry.refreshed_at_ms + DIFF_STATS_HIBERNATED_TTL.as_millis() as u64 + 1
+        });
     refresh_diff_stats(
         &runtime.diff_stats_path(),
         runtime,
         &[repo.path_str().to_owned()],
         &BTreeSet::new(),
+        &BTreeMap::new(),
         &BTreeSet::new(),
-        &BTreeSet::new(),
-        u64::MAX,
+        now_ms,
         Some("main"),
         kind,
         state,
@@ -582,7 +589,7 @@ fn a_contended_index_refresh_returns_facts_and_consumes_its_lock_window() {
             &runtime,
             &[],
             &BTreeSet::new(),
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             &BTreeSet::new(),
             u64::MAX,
             Some("main"),

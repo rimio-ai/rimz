@@ -21,7 +21,7 @@ use crate::disk::atomic;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::sidebar::timing::{
     DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_HIBERNATED_TTL,
-    DIFF_STATS_IDLE_TTL, DIFF_STATS_SETTLED_TTL, DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
+    DIFF_STATS_IDLE_TTL, DIFF_STATS_QUIET_TTL, DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
 };
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 use crate::utils::time::unix_now_ms;
@@ -123,10 +123,10 @@ impl WorktreeRootsCache {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DiffStatsCacheEntry {
-    /// Local/edit-sensitive facts stamp: churn, dirty/untracked state, and live
-    /// branch label.
+    /// Pass-start stamp for local/edit-sensitive facts: churn, dirty/untracked
+    /// state, and live branch label.
     pub refreshed_at_ms: u64,
-    /// Commit/PR-shaped facts stamp: ahead/behind counts and landed markers.
+    /// Pass-start stamp for commit/PR facts: ahead/behind and landed markers.
     /// `None` means stale for entries written before the split.
     #[serde(default)]
     pub commit_refreshed_at_ms: Option<u64>,
@@ -253,9 +253,9 @@ pub(super) fn refresh_diff_stats_for(
 ) {
     let cache_path = runtime.diff_stats_path();
     let now_ms = unix_now_ms();
-    // Focus tiers edit-sensitive facts first; activity still keeps recently
-    // worked background worktrees on the hot TTL. Hibernated roots take the
-    // slowest tier unless a live condition demands their facts.
+    // Focus tiers edit-sensitive facts first; activity gates recently worked
+    // background worktrees. Hibernated roots take the slowest tier unless a
+    // live condition demands their facts.
     let condition_scopes =
         crate::harness::schedule::when::probe_demand(runtime, snapshot.project_root.as_deref());
     let condition_scopes = condition_scopes.into_keys().collect();
@@ -341,22 +341,47 @@ fn is_worktree_channel(path: &str, label: &str) -> bool {
         .is_some_and(|marker| marker.name == label)
 }
 
-/// The worktree paths whose git facts refresh on the fast [`DIFF_STATS_TTL`].
-pub(super) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct HotWorktree {
+    latest_activity_ms: u64,
+    tool_hooked: bool,
+}
+
+/// Hot paths, each with the latest agent activity of its hot groups and
+/// whether every agent kind in those groups supplies native tool hooks.
+pub(super) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeMap<String, HotWorktree> {
     let window = SignedDuration::try_from(crate::sidebar::timing::GIT_ACTIVITY_WINDOW)
         .unwrap_or(SignedDuration::MAX);
-    let mut hot = BTreeSet::new();
+    let mut paths: BTreeMap<String, HotWorktree> = BTreeMap::new();
     for group in snapshot.worktree_groups.iter() {
-        let any_hot = group.rows.iter().any(|row| {
-            row.is_agent()
-                && (row.status() == Some(AgentStatus::Running)
-                    || snapshot.now.duration_since(row.last_activity) <= window)
+        let mut agents = group.rows.iter().filter(|row| row.is_agent());
+        let Some(latest) = agents.clone().map(|row| row.last_activity).max() else {
+            continue;
+        };
+        let any_hot = agents.clone().any(|row| {
+            row.status() == Some(AgentStatus::Running)
+                || snapshot.now.duration_since(row.last_activity) <= window
         });
-        if any_hot && let Some(path) = git_backed_worktree_path(group) {
-            hot.insert(path);
+        if !any_hot {
+            continue;
         }
+        let Some(path) = git_backed_worktree_path(group) else {
+            continue;
+        };
+        let tool_hooked = agents.all(|row| {
+            crate::agents::spec_by_kind(&row.name)
+                .is_some_and(|spec| spec.lifecycle_hooks.tool_used.is_native())
+        });
+        let activity = paths.entry(path).or_insert(HotWorktree {
+            latest_activity_ms: 0,
+            tool_hooked: true,
+        });
+        activity.latest_activity_ms = activity
+            .latest_activity_ms
+            .max(u64::try_from(latest.as_millisecond()).unwrap_or(0));
+        activity.tool_hooked &= tool_hooked;
     }
-    hot
+    paths
 }
 
 /// The worktree paths whose edit-sensitive git facts refresh on the focused
@@ -383,9 +408,8 @@ pub(super) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<Str
 /// forks no git. Otherwise one elected producer forks git for the stale entries
 /// ([`select_for_pass`]: on a [`GitPass::Host`] pass only a capped share) and
 /// writes the shared cache once; the rest read its write back once their own
-/// selection is fresh, or (if it wedges) refresh that selection locally for
-/// their own frame without writing — never clobbering the producer's fresher
-/// map.
+/// selection is fresh, or refresh that selection locally after a bounded wait
+/// without writing — never overwriting the elected producer's map.
 #[allow(
     clippy::too_many_arguments,
     reason = "the refresh boundary carries its selected roots, cadence tiers, and process-local memo"
@@ -395,7 +419,7 @@ fn refresh_diff_stats(
     runtime: &crate::RuntimePaths,
     needed: &[String],
     focused: &BTreeSet<String>,
-    hot: &BTreeSet<String>,
+    hot: &BTreeMap<String, HotWorktree>,
     hibernated: &BTreeSet<String>,
     now_ms: u64,
     configured_trunk: Option<&str>,
@@ -436,14 +460,7 @@ fn refresh_diff_stats(
     // The capped winner leaves some entries due on purpose, so the loser waits
     // for, and falls back to, only the selection it fixed from its first read.
     let select = |cache: &DiffStatsCache| {
-        select_for_pass(
-            stale(cache),
-            cache,
-            focused,
-            hot,
-            &thawed,
-            pass.entry_limit(),
-        )
+        select_for_pass(stale(cache), cache, focused, &thawed, pass.entry_limit())
     };
     let selection = select(&cache);
     let selected: HashSet<&str> = selection.iter().map(|(path, _)| path.as_str()).collect();
@@ -468,7 +485,14 @@ fn refresh_diff_stats(
         // run in parallel across worktrees — and write once.
         Coalesced::Produce(_guard) => {
             let mut cache: DiffStatsCache = atomic::read_json_cache(cache_path);
-            let refreshed = refresh_entries(&select(&cache), &cache, configured_trunk, pass, state);
+            let refreshed = refresh_entries(
+                &select(&cache),
+                &cache,
+                now_ms,
+                configured_trunk,
+                pass,
+                state,
+            );
             let changed = !refreshed.is_empty();
             for (path, entry, memo, index_refresh) in refreshed {
                 cache.entries.insert(path.clone(), entry);
@@ -482,12 +506,12 @@ fn refresh_diff_stats(
             }
             cache
         }
-        // The producer wedged: refresh locally for our own frame, but do not
-        // write — the producer's map will be fresher.
+        // No peer publication read fresh in time: refresh locally for our own
+        // frame, without overwriting the elected producer's map.
         Coalesced::ProduceLocal => {
             let mut cache = cache;
             for (path, entry, memo, index_refresh) in
-                refresh_entries(&selection, &cache, configured_trunk, pass, state)
+                refresh_entries(&selection, &cache, now_ms, configured_trunk, pass, state)
             {
                 cache.entries.insert(path.clone(), entry);
                 if pass == GitPass::Host {
@@ -506,7 +530,7 @@ fn stale_paths(
     cache: &DiffStatsCache,
     needed: &[String],
     focused: &BTreeSet<String>,
-    hot: &BTreeSet<String>,
+    hot: &BTreeMap<String, HotWorktree>,
     hibernated: &BTreeSet<String>,
     thawed: &BTreeMap<String, (u64, u64)>,
     now_ms: u64,
@@ -526,12 +550,21 @@ fn stale_paths(
             }) {
                 return Some((path.clone(), DueFacts::all()));
             }
-            let (local_ttl, commit_ttl) =
-                diff_stats_tier(path, Some(entry), focused, hot, hibernated);
+            let (local_ttl, commit_ttl) = diff_stats_tier(path, focused, hot, hibernated);
             let mut due = DueFacts {
                 local: !entry.local_fresh_for(now_ms, local_ttl),
                 commit: !entry.commit_fresh_for(now_ms, commit_ttl),
             };
+            if !focused.contains(path)
+                && let Some(activity) = hot.get(path).filter(|activity| activity.tool_hooked)
+            {
+                due.local &= activity.latest_activity_ms >= entry.refreshed_at_ms
+                    || !entry.local_fresh_for(now_ms, DIFF_STATS_QUIET_TTL);
+                due.commit &= entry
+                    .commit_refreshed_at_ms
+                    .is_none_or(|stamp| activity.latest_activity_ms >= stamp)
+                    || !entry.commit_fresh_for(now_ms, DIFF_STATS_QUIET_TTL);
+            }
             if local_ttl == commit_ttl {
                 due = DueFacts::same(due.local || due.commit);
             }
@@ -541,22 +574,21 @@ fn stale_paths(
 }
 
 /// The due entries this pass refreshes, in refresh order: focused paths, then
-/// hot ones, then thawed ones (each in `needed` order), then oldest due first
-/// (a missing entry or stamp reads 0), ties in `needed` order. A limit keeps
-/// every priority entry and fills up to it from the rest.
+/// thawed ones (each in `needed` order), then oldest due first (a missing entry
+/// or stamp reads 0), ties in `needed` order. A limit keeps every priority
+/// entry and fills up to it from the rest.
 fn select_for_pass(
     due: Vec<(String, DueFacts)>,
     cache: &DiffStatsCache,
     focused: &BTreeSet<String>,
-    hot: &BTreeSet<String>,
     thawed: &BTreeMap<String, (u64, u64)>,
     limit: Option<usize>,
 ) -> Vec<(String, DueFacts)> {
-    let (mut priority, mut rest): (Vec<_>, Vec<_>) = due.into_iter().partition(|(path, _)| {
-        focused.contains(path) || hot.contains(path) || thawed.contains_key(path)
-    });
-    // Stable sorting keeps `needed` order within focused, hot, and thawed tiers.
-    priority.sort_by_key(|(path, _)| (!focused.contains(path), !hot.contains(path)));
+    let (mut priority, mut rest): (Vec<_>, Vec<_>) = due
+        .into_iter()
+        .partition(|(path, _)| focused.contains(path) || thawed.contains_key(path));
+    // Stable sorting keeps `needed` order within focused and thawed tiers.
+    priority.sort_by_key(|(path, _)| !focused.contains(path));
     rest.sort_by_key(|(path, _)| oldest_due_stamp(cache.entries.get(path.as_str())));
     let take = limit.map_or(rest.len(), |limit| limit.saturating_sub(priority.len()));
     rest.truncate(take);
@@ -572,23 +604,19 @@ fn oldest_due_stamp(entry: Option<&DiffStatsCacheEntry>) -> u64 {
     })
 }
 
-/// `(local, commit)` TTLs: focused, hot, hibernated, settled (clean and landed),
-/// else idle. A missing entry, or `None` in either fact, is never settled.
+/// `(local, commit)` TTLs: focused, hot, hibernated, else idle.
 fn diff_stats_tier(
     path: &str,
-    entry: Option<&DiffStatsCacheEntry>,
     focused: &BTreeSet<String>,
-    hot: &BTreeSet<String>,
+    hot: &BTreeMap<String, HotWorktree>,
     hibernated: &BTreeSet<String>,
 ) -> (Duration, Duration) {
     if focused.contains(path) {
         (DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL)
-    } else if hot.contains(path) {
+    } else if hot.contains_key(path) {
         (DIFF_STATS_TTL, DIFF_STATS_TTL)
     } else if hibernated.contains(path) {
         (DIFF_STATS_HIBERNATED_TTL, DIFF_STATS_HIBERNATED_TTL)
-    } else if entry.is_some_and(|entry| entry.clean == Some(true) && entry.landed == Some(true)) {
-        (DIFF_STATS_SETTLED_TTL, DIFF_STATS_SETTLED_TTL)
     } else {
         (DIFF_STATS_IDLE_TTL, DIFF_STATS_IDLE_TTL)
     }
@@ -685,8 +713,8 @@ const MAX_PARALLEL_GIT: usize = 8;
 
 /// Most due worktrees one host pass refreshes, one wave of the worker pool. A
 /// cold start or a clump of expiring stamps then spreads over several passes
-/// instead of bursting in one. Viewed and hot worktrees count against it but
-/// are always selected, first.
+/// instead of bursting in one. Viewed and just-thawed worktrees count against
+/// it but are always selected, first.
 const MAX_HOST_PASS_ENTRIES: usize = 8;
 
 type RefreshedEntry = (
@@ -704,6 +732,7 @@ type RefreshedEntry = (
 fn refresh_entries(
     paths: &[(String, DueFacts)],
     cache: &DiffStatsCache,
+    now_ms: u64,
     configured_trunk: Option<&str>,
     pass: GitPass,
     state: &GitRefreshState,
@@ -728,6 +757,7 @@ fn refresh_entries(
                 path,
                 prior.as_ref(),
                 *due,
+                now_ms,
                 configured_trunk,
                 &prior_memo,
                 (pass == GitPass::Host).then_some(&mut index_refresh),
@@ -739,7 +769,7 @@ fn refresh_entries(
 
 /// Produce a merged diff-stats entry for one worktree path. The trunk and
 /// merge-base are resolved once when either half is due; local and commit facts
-/// update only their own fields and completion stamps, so a focused worktree's
+/// update only their own fields and pass-start stamps, so a focused worktree's
 /// edit tick does not pay for commit/landed facts.
 #[cfg(test)]
 fn refresh_entry(
@@ -752,6 +782,7 @@ fn refresh_entry(
         path,
         prior,
         due,
+        unix_now_ms(),
         configured_trunk,
         &Default::default(),
         None,
@@ -763,6 +794,7 @@ fn refresh_entry_with_memo(
     path: &str,
     prior: Option<&DiffStatsCacheEntry>,
     due: DueFacts,
+    now_ms: u64,
     configured_trunk: Option<&str>,
     prior_memo: &UntrackedLineMemo,
     index_refresh: Option<&mut IndexRefreshState>,
@@ -852,12 +884,11 @@ fn refresh_entry_with_memo(
         entry.merge_base = base;
     }
 
-    let completed_at_ms = unix_now_ms();
     if due.local {
-        entry.refreshed_at_ms = completed_at_ms;
+        entry.refreshed_at_ms = now_ms;
     }
     if due.commit {
-        entry.commit_refreshed_at_ms = Some(completed_at_ms);
+        entry.commit_refreshed_at_ms = Some(now_ms);
     }
     (entry, replacement_memo)
 }
