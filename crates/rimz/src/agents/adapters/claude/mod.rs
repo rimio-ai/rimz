@@ -898,7 +898,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
     fn allow_routine_rimz_args(
         &self,
         (cwd, artifact_dir): (&Path, &Path),
-        skill_roots: (Option<&Path>, Option<&Path>),
+        skill_roots: (Option<&Path>, Option<&crate::agents::skills::SkillChain>),
         dirs: &[PathBuf; 2],
         extra_args: &mut Vec<String>,
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
@@ -912,7 +912,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         let allow = ROUTINE_RIMZ_PREFIXES
             .iter()
             .map(|prefix| format!("Bash({prefix} *)"))
-            .chain(skills.keys().map(|name| format!("Skill({name})")));
+            .chain(skills.skills.keys().map(|name| format!("Skill({name})")));
         let environment = format!(
             "rimz is this machine's agent-coordination CLI. These subcommands are routine \
              coordination: {}. $TMPDIR ({tmp}) is this agent's temporary directory, including \

@@ -57,19 +57,20 @@ fn standalone_profile(profile: &str) -> Option<String> {
         .map(|binding| binding.agent)
 }
 
-/// Whether enforced skill lists must resolve, and where: the kind's provider skill root under `env`, then `library`, the order the scoped skill view merges them. Enforcement uses the inherited definition isolation, then `machine_isolation`; off Linux every definition runs on the host.
-/// The check reads the host's skill roots and is meaningless through a scoped view; callers inside a view must skip it.
+/// Whether enforced skill lists resolve against the provider root under `env`, then the
+/// RimZ skill chain derived from the loader's home. Enforcement uses inherited isolation,
+/// then `machine_isolation`; off Linux every definition runs on the host.
+/// The check reads host roots; callers inside a scoped view must skip it.
 #[derive(Clone, Copy, Debug)]
 pub enum SkillCheck<'a> {
     Skip,
     Check {
         env: &'a BTreeMap<String, String>,
-        library: &'a Path,
         machine_isolation: super::Isolation,
     },
 }
 
-type SkillInventory = Rc<BTreeMap<String, crate::agents::skills::SkillDir>>;
+type SkillInventory = Rc<crate::agents::skills::SkillInventory>;
 type TextRead = Result<Rc<str>, Rc<std::io::Error>>;
 
 #[cfg(test)]
@@ -84,14 +85,16 @@ fn count_text_read(path: &Path) {
 
 struct SkillCatalog<'a> {
     check: SkillCheck<'a>,
+    chain: crate::agents::skills::SkillChain,
     inventories: RefCell<BTreeMap<String, Result<SkillInventory, String>>>,
     texts: RefCell<BTreeMap<PathBuf, TextRead>>,
 }
 
 impl<'a> SkillCatalog<'a> {
-    fn new(check: SkillCheck<'a>) -> Self {
+    fn new(check: SkillCheck<'a>, home: &Path) -> Self {
         Self {
             check,
+            chain: crate::agents::skills::SkillChain::from_home(home),
             inventories: RefCell::default(),
             texts: RefCell::default(),
         }
@@ -110,7 +113,7 @@ impl<'a> SkillCatalog<'a> {
     }
 
     fn enumerate(&self, kind: &str) -> Result<Option<SkillInventory>, String> {
-        let SkillCheck::Check { env, library, .. } = self.check else {
+        let SkillCheck::Check { env, .. } = self.check else {
             return Ok(None);
         };
         self.inventories
@@ -121,7 +124,7 @@ impl<'a> SkillCatalog<'a> {
                     crate::agents::find_definition(kind)
                         .and_then(|definition| definition.skills_home(env))
                         .as_deref(),
-                    Some(library),
+                    Some(&self.chain),
                     |_| true,
                 )
                 .map(Rc::new)
@@ -155,7 +158,7 @@ pub struct DefinitionErr {
 /// Why a definition could not load, for surfaces that group failures.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DefinitionCause {
-    /// A listed skill is absent from the provider root and the shared library.
+    /// A listed skill is absent from the provider root and RimZ skill chain.
     MissingSkill {
         skill: super::SkillName,
         roots: Vec<PathBuf>,
@@ -312,8 +315,19 @@ pub fn load(
     tiers: &super::tiers::TierConfig,
     native_auto_compact: Option<u64>,
 ) -> LoadedDefinitions {
-    let catalog = SkillCatalog::new(skills);
+    let catalog = SkillCatalog::new(skills, agents_home);
     let mut loaded = LoadedDefinitions::default();
+    if let Ok(inventory) = catalog.chain.inventory(|_| true) {
+        for conflict in inventory.conflicts.values() {
+            loaded.errors.push(DefinitionErr::new(
+                &conflict.path,
+                format!(
+                    "{}; a provider-root skill of this name still wins for that provider",
+                    conflict.message,
+                ),
+            ));
+        }
+    }
     let mut agents = Namespace::default();
     let mut subagents = Namespace::default();
     let mut bases = BTreeSet::new();

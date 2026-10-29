@@ -11,12 +11,10 @@ pub(super) fn run(json: bool) -> Result<()> {
     let home = rimz::disk::paths::agents_home();
     let machine = crate::cli::machine_config();
     let env = rimz::agents::ambient_env();
-    let library = home.join("skills");
     let in_sandbox = Isolation::ambient(&env).is_some_and(Isolation::is_scoped);
     let check = if !in_sandbox {
         SkillCheck::Check {
             env: &env,
-            library: &library,
             machine_isolation: machine.agents.isolation,
         }
     } else {

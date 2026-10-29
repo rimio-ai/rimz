@@ -442,7 +442,6 @@ mod tests {
                 root.path(),
                 rimz::config::definitions::SkillCheck::Check {
                     env: &env,
-                    library: &root.path().join("skills"),
                     machine_isolation: rimz::config::Isolation::Scoped,
                 },
                 &rimz::config::CommandsConfig::default(),

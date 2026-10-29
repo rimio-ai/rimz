@@ -1886,14 +1886,14 @@ fn agents_home_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
 
 const SKILLS_SUBDIR: &str = "skills";
 
-/// Shared RimZ skill library under the agent library root.
-pub fn skills_library() -> PathBuf {
-    agents_home().join(SKILLS_SUBDIR)
-}
-
 /// Resolve the shared skill library from a launch environment.
 pub(crate) fn skills_library_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
     agents_home_in(env).map(|root| root.join(SKILLS_SUBDIR))
+}
+
+/// Skill directories under an explicit agent-library or pack root.
+pub(crate) fn skills_library_under(home: &Path) -> PathBuf {
+    home.join(SKILLS_SUBDIR)
 }
 
 /// Installed pack entries and their record under an explicit agent library root.

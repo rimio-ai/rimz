@@ -1178,6 +1178,7 @@ fn compile_agent_process_with_extra_env(
         )?;
     }
     let skill_env = login_env;
+    let skill_chain = crate::agents::skills::SkillChain::from_env(&skill_env);
     let (listed, withheld) = request.launch_skills();
     let (host_skills, mut settings_artifact) = if let Some(runtime) = host_runtime
         && (listed.is_some()
@@ -1191,7 +1192,7 @@ fn compile_agent_process_with_extra_env(
         match adapter.spec().host_skills.apply(
             (listed.as_deref(), withheld),
             adapter.skills_home(&skill_env).as_deref(),
-            crate::disk::paths::skills_library_in(&skill_env).as_deref(),
+            skill_chain.as_ref(),
             (cwd, &artifact_dir),
             &mut args,
         ) {
@@ -1234,7 +1235,7 @@ fn compile_agent_process_with_extra_env(
             (cwd, artifact_dir),
             (
                 adapter.skills_home(&skill_env).as_deref(),
-                crate::disk::paths::skills_library_in(&skill_env).as_deref(),
+                skill_chain.as_ref(),
             ),
             dirs,
             action.extra_args_mut(),

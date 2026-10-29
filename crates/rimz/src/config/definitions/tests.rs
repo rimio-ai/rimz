@@ -73,15 +73,15 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
     let env = BTreeMap::new();
     let check = SkillCheck::Check {
         env: &env,
-        library: &library,
         machine_isolation: super::super::Isolation::Scoped,
     };
-    let catalog = SkillCatalog::new(check);
+    let catalog = SkillCatalog::new(check, root.path());
     assert!(
         catalog
             .enumerate("claude")
             .unwrap()
             .unwrap()
+            .skills
             .contains_key("first")
     );
     std::fs::rename(library.join("first"), library.join("second")).unwrap();
@@ -90,6 +90,7 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
             .enumerate("claude")
             .unwrap()
             .unwrap()
+            .skills
             .contains_key("first")
     );
     assert!(
@@ -97,13 +98,15 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
             .enumerate("codex")
             .unwrap()
             .unwrap()
+            .skills
             .contains_key("second")
     );
     assert!(
-        SkillCatalog::new(check)
+        SkillCatalog::new(check, root.path())
             .enumerate("claude")
             .unwrap()
             .unwrap()
+            .skills
             .contains_key("second")
     );
 }
@@ -1764,7 +1767,6 @@ fn load_checked(root: &Path) -> LoadedDefinitions {
         root,
         SkillCheck::Check {
             env: &env,
-            library: &root.join("skills"),
             machine_isolation: crate::config::Isolation::Scoped,
         },
         &CommandsConfig::default(),
@@ -2604,7 +2606,7 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
 #[test]
 fn traits_deduplicate_and_preserve_unrelated_placeholders() {
     let root = fixture();
-    let catalog = SkillCatalog::new(SkillCheck::Skip);
+    let catalog = SkillCatalog::new(SkillCheck::Skip, root.path());
     write(root.path(), "traits/one.md", " One.\n");
     write(root.path(), "traits/two.md", "Two.");
     let source = root.path().join("agents/probe.md");
@@ -3042,6 +3044,73 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
         "{}",
         loaded.errors[0].message
     );
+}
+
+#[test]
+fn skill_checks_resolve_pack_skills_and_report_conflicts_not_missing() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "agent: claude\ntools: [Skill]\nskills: [packed]",
+        "",
+    );
+    let sources = tempfile::tempdir().unwrap();
+    let mut messages = Vec::new();
+    for name in ["one", "two"] {
+        let source = sources.path().join(name);
+        write(
+            &source,
+            "rimz-packs.toml",
+            &format!("[[pack]]\nname = '{name}'\ndescription = 'Skills'\npath = '.'\n"),
+        );
+        write(
+            &source,
+            "skills/packed/SKILL.md",
+            "---\ndescription: Skill\n---\nSkill.",
+        );
+        crate::packs::install(root.path(), &source).unwrap();
+        let loaded = load_checked(root.path());
+        messages.push(
+            loaded
+                .errors
+                .iter()
+                .map(|error| error.message.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert!(messages[0].is_empty(), "{messages:?}");
+    assert!(!messages[1].is_empty(), "{messages:?}");
+    for conflict in &messages[1] {
+        for text in [
+            "pack conflict",
+            "one",
+            "two",
+            "skills/packed/SKILL.md",
+            "rimz packs exclude",
+            "file of your own",
+        ] {
+            assert!(conflict.contains(text), "{conflict}");
+        }
+        assert!(!conflict.contains("missing"), "{conflict}");
+    }
+    assert!(load_checked(root.path()).failed.contains_key("worker"));
+    write(
+        root.path(),
+        ".claude/skills/packed/SKILL.md",
+        "---\ndescription: Provider skill\n---\nSkill.",
+    );
+    let loaded = load_checked(root.path());
+    assert!(
+        loaded.agent_profiles.0.contains_key("worker"),
+        "{:?}",
+        loaded.errors
+    );
+    assert!(loaded.errors.iter().any(|error| {
+        error
+            .message
+            .contains("provider-root skill of this name still wins")
+    }));
 }
 
 #[test]

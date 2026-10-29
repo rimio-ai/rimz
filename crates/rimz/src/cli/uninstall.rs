@@ -97,14 +97,14 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
         .filter(|(_, adapter, env)| adapter.managed_hook_artifacts_present(env))
         .map(|(key, _, _)| hook_label(key))
         .collect::<Vec<_>>();
-    let library = paths::skills_library();
+    let chain = rimz::agents::skills::SkillChain::from_home(&paths::agents_home());
     let skill_roots = logins
         .iter()
         .filter_map(|(_, adapter, env)| adapter.skills_home(env))
         .collect::<BTreeSet<_>>();
     let mut skill_links = Vec::new();
     for root in skill_roots {
-        match skill_links::plan(&root, &library, Desired::None) {
+        match skill_links::plan(&root, &chain, Desired::None) {
             Ok(plan) if plan.has_owned_changes() => skill_links.push(plan),
             Ok(_) => {}
             Err(err) => failures.push(format!("plan skill link removal: {err}")),
@@ -552,6 +552,7 @@ fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static s
         "teams",
         "traits",
         "skills",
+        "packs",
         "accounts",
         "handoffs",
     ];
@@ -654,6 +655,7 @@ mod tests {
                 "ws",
                 "profiles",
                 "accounts",
+                "packs",
                 "cache/providers",
                 "trust",
                 "handoffs",
@@ -670,7 +672,7 @@ mod tests {
             assert_eq!(home.join("ws/user-file").exists(), !remove_state);
             assert_eq!(home.join("trust/user-file").exists(), !remove_config);
             assert_eq!(home.join("config.toml").exists(), !remove_config);
-            for child in ["profiles", "accounts", "handoffs"] {
+            for child in ["profiles", "accounts", "packs", "handoffs"] {
                 assert!(home.join(child).join("user-file").exists());
             }
             assert!(!home.join("cache").exists());

@@ -25,6 +25,8 @@ pub(crate) const ASIDE_DIR: &str = ".rimz-aside";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShareErr {
+    #[error(transparent)]
+    SkillLinks(#[from] skill_links::SkillLinkErr),
     #[error("`--home` names the provider's own home, which is the `default` account ({}); choose another home", home.display())]
     SameHome { home: PathBuf },
     #[error("cannot resolve {kind}'s own home; set HOME")]
@@ -593,11 +595,10 @@ fn apply(
         {
             skill_links::plan(
                 &slot,
-                &crate::disk::paths::skills_library(),
+                &super::skills::SkillChain::from_home(&crate::disk::paths::agents_home()),
                 skill_links::Desired::None,
             )
-            .and_then(|plan| skill_links::apply(&plan))
-            .map_err(|skill_links::SkillLinkErr::Io { path, source }| io_err(&path, source))?;
+            .and_then(|plan| skill_links::apply(&plan))?;
         }
         match action {
             Action::Current => {

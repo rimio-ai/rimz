@@ -5,10 +5,12 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::skills::SkillChain;
 use crate::utils::path::normalize_path_lexical;
 
 pub enum Desired {
     Library,
+    Prune,
     None,
 }
 
@@ -22,6 +24,8 @@ pub enum SkillLinkAction {
 pub struct SkillLinkPlan {
     root: PathBuf,
     library: PathBuf,
+    #[serde(skip)]
+    packs: PathBuf,
     actions: Vec<SkillLinkAction>,
     shadowed: Vec<String>,
 }
@@ -36,10 +40,14 @@ pub struct SkillLinkOutcome {
 #[derive(Debug, thiserror::Error)]
 pub enum SkillLinkErr {
     #[error(
-        "cannot reconcile RimZ skill links at {}: {source}; fix access to that path, or empty the RimZ skill library to launch without links",
+        "cannot reconcile RimZ skill links at {}: {source}; fix access to that path, or remove the affected library or pack skill to launch without links",
         path.display()
     )]
     Io { path: PathBuf, source: io::Error },
+    #[error(
+        "{0}; fix skill root access, or remove the affected library or pack skill to launch without links"
+    )]
+    Skills(#[from] super::skills::SkillErr),
 }
 
 impl SkillLinkPlan {
@@ -69,7 +77,7 @@ impl SkillLinkPlan {
 
     pub fn shadowed_report(&self, names: &[String]) -> Option<String> {
         (!names.is_empty()).then(|| format!(
-            "{} library skill(s) not linked into {}: {} — these entries are yours; move them into {} or delete them",
+            "{} RimZ skill(s) not linked into {}: {} — these entries are yours; move them into {} or delete them",
             names.len(), self.root.display(), names.join(", "), self.library.display()
         ))
     }
@@ -131,22 +139,22 @@ fn entries(root: &Path) -> Result<BTreeMap<String, PathBuf>, SkillLinkErr> {
     Ok(named)
 }
 
-/// A library entry is a skill when it resolves to a directory holding `SKILL.md`;
-/// a broken or looping user symlink is simply not one.
-fn is_skill(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|meta| meta.is_dir())
-        && fs::metadata(path.join("SKILL.md")).is_ok_and(|meta| meta.is_file())
-}
-
-fn owned_target(root: &Path, library: &Path, target: &Path) -> Option<PathBuf> {
+pub(super) fn owned_target(root: &Path, roots: [&Path; 2], target: &Path) -> Option<PathBuf> {
     let target = normalize_path_lexical(&root.join(target));
-    target.starts_with(library).then_some(target)
+    roots
+        .iter()
+        .any(|root| target.starts_with(root))
+        .then_some(target)
 }
 
-fn owned(root: &Path, library: &Path, name: &str) -> Result<Option<PathBuf>, SkillLinkErr> {
-    let path = root.join(name);
+fn owned(plan: &SkillLinkPlan, name: &str) -> Result<Option<PathBuf>, SkillLinkErr> {
+    let path = plan.root.join(name);
     match fs::read_link(&path) {
-        Ok(target) => Ok(owned_target(root, library, &target)),
+        Ok(target) => Ok(owned_target(
+            &plan.root,
+            [&plan.library, &plan.packs],
+            &target,
+        )),
         Err(err)
             if matches!(
                 err.kind(),
@@ -159,47 +167,58 @@ fn owned(root: &Path, library: &Path, name: &str) -> Result<Option<PathBuf>, Ski
     }
 }
 
-pub fn plan(root: &Path, library: &Path, desired: Desired) -> Result<SkillLinkPlan, SkillLinkErr> {
+pub fn plan(
+    root: &Path,
+    chain: &SkillChain,
+    desired: Desired,
+) -> Result<SkillLinkPlan, SkillLinkErr> {
     let root = absolute(root)?;
-    let library = absolute(library)?;
+    let [library, packs] = chain.owned_roots();
     let mut plan = SkillLinkPlan {
         root,
-        library,
+        library: absolute(library)?,
+        packs: absolute(packs)?,
         actions: Vec::new(),
         shadowed: Vec::new(),
     };
-    // A library that is, or nests with, the provider root is read natively or not at
-    // all; linking there would replace the library's own entries with self-links.
-    if plan.root.starts_with(&plan.library) || plan.library.starts_with(&plan.root) {
+    // Overlapping roots would replace RimZ's own entries with self-links.
+    if [&plan.library, &plan.packs]
+        .iter()
+        .any(|path| plan.root.starts_with(path) || path.starts_with(&plan.root))
+    {
         return Ok(plan);
     }
     let mut wanted = BTreeMap::new();
-    if matches!(desired, Desired::Library) {
-        for (name, path) in entries(&plan.library)? {
-            if is_skill(&path) {
-                wanted.insert(name, path);
-            }
+    if !matches!(desired, Desired::None) {
+        for (name, skill) in chain.inventory(|_| true)?.skills {
+            wanted.insert(name, absolute(&skill.path)?);
         }
     }
     for (name, _) in entries(&plan.root)? {
         let target = wanted.remove(&name);
-        match owned(&plan.root, &plan.library, &name)? {
+        match owned(&plan, &name)? {
             Some(current) if target.as_ref() != Some(&current) => {
                 plan.actions
                     .push(SkillLinkAction::Unlink { name: name.clone() });
-                if let Some(target) = target {
+                if let Some(target) = target
+                    && matches!(desired, Desired::Library)
+                {
                     plan.actions.push(SkillLinkAction::Link { name, target });
                 }
             }
-            None if target.is_some() => plan.shadowed.push(name),
+            None if target.is_some() && matches!(desired, Desired::Library) => {
+                plan.shadowed.push(name)
+            }
             _ => {}
         }
     }
-    plan.actions.extend(
-        wanted
-            .into_iter()
-            .map(|(name, target)| SkillLinkAction::Link { name, target }),
-    );
+    if matches!(desired, Desired::Library) {
+        plan.actions.extend(
+            wanted
+                .into_iter()
+                .map(|(name, target)| SkillLinkAction::Link { name, target }),
+        );
+    }
     Ok(plan)
 }
 
@@ -216,7 +235,7 @@ pub fn apply(plan: &SkillLinkPlan) -> Result<SkillLinkOutcome, SkillLinkErr> {
         match action {
             SkillLinkAction::Unlink { name } => {
                 let path = plan.root.join(name);
-                if owned(&plan.root, &plan.library, name)?.is_none() {
+                if owned(plan, name)?.is_none() {
                     match fs::symlink_metadata(&path) {
                         Ok(_) => outcome.shadowed.push(name.clone()),
                         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -235,7 +254,7 @@ pub fn apply(plan: &SkillLinkPlan) -> Result<SkillLinkOutcome, SkillLinkErr> {
                 match std::os::unix::fs::symlink(target, &path) {
                     Ok(()) => outcome.linked += 1,
                     Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                        if owned(&plan.root, &plan.library, name)?.as_ref() != Some(target) {
+                        if owned(plan, name)?.as_ref() != Some(target) {
                             outcome.shadowed.push(name.clone());
                         }
                     }
@@ -257,14 +276,23 @@ mod tests {
     fn ownership_is_lexical_and_component_bounded() {
         let root = Path::new("/provider/skills");
         let library = Path::new("/rimz/skills");
+        let roots = [library, Path::new("/rimz/packs")];
         for target in ["/rimz/skills/gone", "../../rimz/skills/a/../gone"] {
             assert_eq!(
-                owned_target(root, library, Path::new(target)),
+                owned_target(root, roots, Path::new(target)),
                 Some(library.join("gone"))
             );
         }
         for target in ["/rimz/skills-other/a", "/rimz/skills/../foreign", "local"] {
-            assert_eq!(owned_target(root, library, Path::new(target)), None);
+            assert_eq!(owned_target(root, roots, Path::new(target)), None);
         }
+        assert_eq!(
+            owned_target(root, roots, Path::new("/rimz/packs/entry/skills/gone")),
+            Some(PathBuf::from("/rimz/packs/entry/skills/gone"))
+        );
+        assert_eq!(
+            owned_target(root, roots, Path::new("/rimz/packs-x/gone")),
+            None
+        );
     }
 }

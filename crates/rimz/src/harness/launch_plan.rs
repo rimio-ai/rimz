@@ -879,8 +879,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let skill_links = if inputs.bwrap.is_none() {
         adapter
             .skills_home(&env)
-            .zip(crate::disk::paths::skills_library_in(&env))
-            .map(|(root, library)| skill_links::plan(&root, &library, Desired::Library))
+            .zip(crate::agents::skills::SkillChain::from_env(&env))
+            .map(|(root, chain)| skill_links::plan(&root, &chain, Desired::Library))
             .transpose()?
             .filter(|plan| !plan.is_empty())
     } else {

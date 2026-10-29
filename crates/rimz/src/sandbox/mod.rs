@@ -94,6 +94,8 @@ pub enum SandboxErr {
         "unknown skill {name:?}; searched {roots:?}; install the skill or remove it from the profile"
     )]
     UnknownSkill { name: String, roots: Vec<PathBuf> },
+    #[error(transparent)]
+    SkillDiscovery(#[from] crate::agents::skills::SkillErr),
     #[error(
         "skills {listed:?} and {unlisted:?} resolve to {path} but have conflicting invocation policies; list both names or neither in the profile skills list"
     )]
