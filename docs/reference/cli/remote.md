@@ -98,7 +98,7 @@ Rows have `REMOTE`, `LOCAL`, `STATE`, `SINCE`, and `REASON` columns. `SINCE` is 
 | --- | --- |
 | `forwarded` | The local and remote ports match. |
 | `remapped` | `{remote} is busy here`; use the `LOCAL` port. |
-| `reopening` | `link reconnecting`. |
+| `reopening` | `link reconnecting`; an existing forward is waiting to be restored after the link was replaced. |
 | `not forwarded` | `over the 16-forward limit`, `ssh refused: {error}`, or `no free local port`. |
 | `unknown` | `state not understood by this RimZ`; the peer reported a newer state. |
 
