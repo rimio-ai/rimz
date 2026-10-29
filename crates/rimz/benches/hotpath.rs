@@ -2393,7 +2393,7 @@ fn spending_live_scale_warm_discovery_only(bencher: Bencher) {
 fn spending_live_scale_additional_workspace_scope(bencher: Bencher) {
     bencher
         .with_inputs(|| spending_fixture_scaled(6_000, 17, true, true))
-        .bench_local_values(|mut fixture| {
+        .bench_local_refs(|fixture| {
             let root = fixture._tempdir.path().to_path_buf();
             let scope = rimz::agents::spending::SpendScope::from_roots(Some(&root), &[]);
             let spec = rimz::agents::spending::HeadlineSpec::default();
@@ -2404,6 +2404,54 @@ fn spending_live_scale_additional_workspace_scope(bencher: Bencher) {
                 &scope,
                 SPENDING_NOW_SECS,
                 &spec,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
+fn spending_live_scale_additional_workspace_partial_scope(bencher: Bencher) {
+    bencher
+        .with_inputs(|| {
+            let mut fixture = spending_fixture_scaled(6_000, 17, false, true);
+            let mut cache = rimz::agents::spending::read_spending_cache(&fixture.cache_path);
+            for (index, file) in fixture.files.iter().enumerate() {
+                let origin = fixture
+                    ._tempdir
+                    .path()
+                    .join(format!("project-{}", index % 3));
+                cache
+                    .files
+                    .get_mut(&file.path.to_string_lossy().into_owned())
+                    .expect("fixture file")
+                    .origin_path = Some(origin);
+            }
+            rimz::agents::spending::write_spending_cache(&fixture.cache_path, &cache);
+            let req = rimz::agents::spending::WalkRequest {
+                files: &fixture.files,
+                prices: &fixture.prices,
+                now_secs: SPENDING_NOW_SECS,
+                origin_overrides: &HashMap::new(),
+                user_inputs: &[],
+                scope: None,
+                spec: &rimz::agents::spending::HeadlineSpec::default(),
+            };
+            let _ = fixture.walker.walk(
+                &fixture.cache_path,
+                &req,
+                &mut rimz::agents::spending::SilentWalk,
+            );
+            fixture
+        })
+        .bench_local_refs(|fixture| {
+            let root = fixture._tempdir.path().join("project-0");
+            let scope = rimz::agents::spending::SpendScope::from_roots(Some(&root), &[]);
+            divan::black_box(rimz::testkit::spending_scope_from_warm_walker(
+                &mut fixture.walker,
+                &fixture.cache_path,
+                &fixture.files,
+                &scope,
+                SPENDING_NOW_SECS,
+                &rimz::agents::spending::HeadlineSpec::default(),
             ));
         });
 }
