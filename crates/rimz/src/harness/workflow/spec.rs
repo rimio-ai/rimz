@@ -70,6 +70,7 @@ pub struct HeaderEdges {
 pub struct StepEdges {
     pub asked: Option<String>,
     pub cap: Option<String>,
+    pub capacity: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -191,8 +192,9 @@ impl Check {
     }
 }
 
-pub(super) const RESERVED_OUTCOMES: [&str; 6] =
-    ["timeout", "invalid", "cap", "deadline", "unknown", "hold"];
+pub(super) const RESERVED_OUTCOMES: [&str; 7] = [
+    "timeout", "invalid", "cap", "capacity", "deadline", "unknown", "hold",
+];
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -204,6 +206,10 @@ pub struct Step {
     pub prompt_file: Option<String>,
     pub window: Option<String>,
     pub takeover: Option<bool>,
+    #[schemars(with = "Option<String>")]
+    pub throttle: Option<crate::config::ThrottleSwitch>,
+    #[schemars(with = "Option<String>")]
+    pub capacity_wait: Option<crate::config::CapacityWait>,
     #[schemars(required)]
     pub then: Option<String>,
     #[serde(default)]

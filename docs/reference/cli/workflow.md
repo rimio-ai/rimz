@@ -30,9 +30,11 @@ Before creating a run, the command validates the definition and refuses on any e
 
 When `-w` selects a project-scoped workflow, stderr prints `note: <workflow> has scope = project; the run is at <project root>, not <worktree path>`. The command still exits 0 and stdout is unchanged.
 
-A step selects exactly one of `agent`, `run`, or `shell`, and requires `then` naming a check. A run or shell step requires `timeout` and accepts the common visit bounds and `on.cap`. `run` is a literally passed argv, with slash-containing words confined to the definition directory; `shell` runs through `sh -c` without path confinement. Command steps refuse `prompt-file`, `lifecycle`, `window`, `takeover`, and `on.asked`, and never wait for checkout occupancy. Their stdin is closed, both streams go to `work/<seq>.step.log`, and they inherit the workspace pin and workflow environment.
+A step selects exactly one of `agent`, `run`, or `shell`, and requires `then` naming a check. A run or shell step requires `timeout` and accepts the common visit bounds and `on.cap`. `run` is a literally passed argv, with slash-containing words confined to the definition directory; `shell` runs through `sh -c` without path confinement. Command steps refuse `prompt-file`, `lifecycle`, `window`, `takeover`, `throttle`, `capacity-wait`, `on.capacity`, and `on.asked`, and never wait for checkout occupancy or capacity. Their stdin is closed, both streams go to `work/<seq>.step.log`, and they inherit the workspace pin and workflow environment.
 
 An agent step requires `prompt-file`. Its `agent` accepts the fresh-launch layout grammar, including agent and command cells. `lifecycle` is `turn` by default, `stay` to keep the attempt live until the leader's session exits, or `until` to check `then` at each eligible leader turn end and close when its route is neither this step nor `@wait`. A staying step (`stay` or `until`) has neither `timeout` nor `on.asked`. A kept `@wait` on `until` has no timed recheck: the next leader turn end checks again. Teams, command-only layouts, and ambiguous prompt leaders refuse with a field-specific fix. Judge checks still take one profile. An agent step's `window` gates every agent cell's provider.
+
+Agent steps of automatically loop-started runs also ask the [start throttle](./loop.md#the-start-throttle) before taking over a checkout. `throttle = "off"` bypasses it. `capacity-wait` accepts a positive `s`, `m`, `h`, or `d` duration, or `forever` (the default). A held step spends no visit and retries about once a minute. Giving up follows `on.capacity`, default `@failed`; it may instead name `@done` or a node, but not `@user` or `@wait`, since capacity give-up never parks a run. A window or occupancy wait restarts the capacity clock. The run deadline still applies. Runs created by `workflow run` or `loop fire`, and runs detached by `loop remove`, bypass capacity, as do checks, command steps, and already-open staying sessions.
 
 ## Inspect runs
 
@@ -48,6 +50,7 @@ A run at a wait carries one line, in local time:
 waiting: pick, said in-flight, since 14:02, ×12, recheck 14:40
 waiting: triage, window 5h.left=12<42, since 15:02, ×40
 waiting: sweep, takeover, since 09:10, ×3
+waiting for capacity (claude) since 15:02, gives up at 21:02 · build, no capacity for claude, ×40
 ```
 
 | Part | Meaning |
@@ -59,6 +62,7 @@ waiting: sweep, takeover, since 09:10, ×3
 | `window <term>` | An agent step or judge whose provider `window` is closed, with the failing term and its reading. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot evict it yet. |
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
+| `waiting for capacity (<kinds>)` | A loop-started agent step is held by the start throttle. Its give-up time is absent for `forever`; node, reason, and count follow ` · `. |
 | `since` | First time the run waited here. |
 | `×N` | How many advances found it still waiting. |
 | `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal matching that check's subscription clears it. For a `for` hold it is when the hold completes, and subscribed signals and the minute tick re-sample the case before then. |
@@ -80,7 +84,7 @@ An active run accepts `--extend` alone; `--at` needs a parked run. A finished ru
 
 `rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, step layout, judge profile, or `condition`), `BACKGROUND` (whether the step's leader reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. A step's `asked` edge appears only when `on.asked` is set, always as explicit; staying steps have none. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `runner = "run" | "shell" | "agent" | "condition"`, nullable `run`, `shell`, and `agent` fields, `workflow`, `node`, `kind`, `do_background`, and resolved `edges`. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
 
-Command-step validation rows have `kind = "step"`, `runner = "run" | "shell"`, the command in the corresponding field, `agent = null`, and `do_background = false`. Their edges are `then`, `cap`, and `deadline`, never `asked`; `BACKGROUND` prints `—`. Agent-only warnings do not apply.
+Command-step validation rows have `kind = "step"`, `runner = "run" | "shell"`, the command in the corresponding field, `agent = null`, and `do_background = false`. Their edges are `then`, `cap`, and `deadline`, never `asked` or `capacity`; `BACKGROUND` prints `—`. Agent-step rows include `capacity → @failed (default)` unless `on.capacity` overrides it. Agent-only warnings do not apply to commands.
 
 Turn and `until` steps warn when the leader adapter has no background reporting: a turn end may finish the attempt while provider background work remains. Staying steps skip the auto-continue warning; live provider limits do not end their sessions.
 
@@ -134,6 +138,8 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 `show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries. An active attempt's optional `asking` is `{since, text, kind, handle}`, with `kind` one of `question`, `permission`, or `plan_approval`; `asked_ms` accumulates closed pauses. These fields pause a turn step's timeout, not the run deadline. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
 
+A capacity wait has `record.wait.outcome = "capacity"`, provider `kinds`, and optional `gives_up_at` (absent for `forever`), alongside the usual `node`, `detail`, `first`, `last`, and `count`. Giving up journals a `capacity` route with input `{outcome: "capacity", step, reason, kinds, waited_ms}` and any inherited `key`.
+
 Runs whose sealed spec contains `until` use `record.version = 2`; other runs remain version 1. While checking an open session, optional `held` is `{attempt, entered_at, verdict?}`: the session attempt, the step's entry time, and the saved check verdict. Optional `attempt.judged` is `{agent_id, started_at, ended_at}`, the consumed leader turn end. A verdict is `{node, entered_at, target, object, reason}`; a closing attempt carries it in optional `attempt.ending.route` until the stop settles. Older binaries refuse version 2 and skip those runs in lists.
 
 Each consumed turn end writes a journal row with `event = "turn_end"`, the session's `seq` and step `node`, `action = "kept" | "closed" | "discarded" | "interrupted"`, `turn = {agent_id, started_at, ended_at}`, and `check`. A saved verdict supplies optional `outcome` and `target`; `reason` explains an interruption or a moved-turn discard. Text history prints the action and any outcome and target.
@@ -150,7 +156,7 @@ A visit cap routes `on.cap` with `{outcome: "cap", step, bound: "max-visits" | "
 
 A shell answer is `{outcome, code, log}` plus an inherited `key` when present. Exit 0 is `pass`; another exit or signal is `fail`. `code` is an integer, or null after a signal. `log` is the absolute `work/<seq>.check.log` path, containing stdout and stderr together. Only `fail` has `reason` (`exited N` or `killed by signal`); output tails are not journaled. Both `on.pass` and `on.fail` are required. The only additional routes are `on.timeout` and `on.invalid`, each defaulting to `@user`; command spawn or log-open errors are `invalid`. The check's optional timeout spans waits and evaluations, without inheriting the loop's default timeout. A timeout routes `timeout`; a run deadline follows `workflow.on.deadline`. Both stop the shell's process group rather than answering `fail`. A `fail` routed to `@wait` shows `said fail` in the waiting line.
 
-A condition's answer has `outcome`, `readings` (a map from term key to string or null), and the winning zero-based `case` (omitted for `else` and `unknown`). A case's fixed string or integer `key`, or the inherited run key, is included when present. `unknown` includes a `reason` naming each unread key. While a case's `for` hold runs, the outcome is `hold`; `record.wait` carries `case`, `detail` (the case's outcome), `first`, `last`, `count`, and `recheck_at`. Without a hold, `wait.case` is omitted. `unknown` defaults to `@wait`; `timeout` and `invalid` default to `@user`. Explicit `on` entries override those defaults. `hold`, `unknown`, `timeout`, `invalid`, `cap`, and `deadline` are reserved outcome words, and `on.hold` is refused.
+A condition's answer has `outcome`, `readings` (a map from term key to string or null), and the winning zero-based `case` (omitted for `else` and `unknown`). A case's fixed string or integer `key`, or the inherited run key, is included when present. `unknown` includes a `reason` naming each unread key. While a case's `for` hold runs, the outcome is `hold`; `record.wait` carries `case`, `detail` (the case's outcome), `first`, `last`, `count`, and `recheck_at`. Without a hold, `wait.case` is omitted. `unknown` defaults to `@wait`; `timeout` and `invalid` default to `@user`. Explicit `on` entries override those defaults. `hold`, `unknown`, `timeout`, `invalid`, `cap`, `capacity`, and `deadline` are reserved outcome words, and `on.hold` is refused.
 
 The bare-`ci` commit fence sets `readings.ci` to null. When that makes the answer `unknown`, `reason` includes one of these, using the first seven characters of each commit OID (or all of a shorter OID):
 

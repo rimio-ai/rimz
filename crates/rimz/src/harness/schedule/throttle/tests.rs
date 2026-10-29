@@ -21,6 +21,7 @@ pub(in crate::harness::schedule) struct FakeHost {
     disk: Mutex<u64>,
     disk_reads: Mutex<Vec<PathBuf>>,
     rooms: Mutex<BTreeMap<String, Result<Vec<AgentState>, String>>>,
+    workflows: Mutex<Vec<crate::store::workflow::RunRecord>>,
     agent_reads: AtomicUsize,
     on_sleep: Mutex<Option<SleepHook>>,
     on_lock: Mutex<Option<SleepHook>>,
@@ -51,6 +52,7 @@ impl FakeHost {
             disk: Mutex::new(u64::MAX),
             disk_reads: Mutex::new(Vec::new()),
             rooms: Mutex::new(BTreeMap::new()),
+            workflows: Mutex::new(Vec::new()),
             agent_reads: AtomicUsize::new(0),
             on_sleep: Mutex::new(None),
             on_lock: Mutex::new(None),
@@ -230,6 +232,14 @@ impl Host for FakeHost {
     fn task_runs(&self, _workspace: &WorkspaceId, _task: &str) -> Result<Vec<RunRecord>, String> {
         Ok(Vec::new())
     }
+
+    fn task_workflows(
+        &self,
+        _workspace: &WorkspaceId,
+        _task: &str,
+    ) -> Result<Vec<crate::store::workflow::RunRecord>, String> {
+        Ok(self.workflows.lock().unwrap().clone())
+    }
 }
 
 fn config(text: &str) -> ThrottleConfig {
@@ -329,6 +339,45 @@ fn nothing_configured_writes_no_ticket() {
     let open = admit_quiet(&fake, &config("pace = \"0s\"\n"), &run("nightly"));
     assert!(matches!(open, Admission::Open), "{open:?}");
     assert_eq!(fake.tickets(), 0);
+}
+
+#[test]
+fn capacity_task_cap_counts_working_agents_of_live_task_workflows() {
+    let id = crate::ids::WorkflowRunId::new();
+    let workflow: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+        "version":1, "id":id, "workflow":"review", "task":"nightly", "spec_dir":"/defs",
+        "spec_digest":"test", "scope":{"kind":"project", "path":"/project"},
+        "project_root":"/project", "created_at":Timestamp::UNIX_EPOCH,
+        "entered_at":Timestamp::UNIX_EPOCH, "node":"build", "state":"active",
+        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1
+    }))
+    .unwrap();
+    let mut working = agent("builder", AgentStatus::Running);
+    working.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: id,
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    });
+    let agents = vec![working];
+    let mut actual = Vec::new();
+    for (task, state) in [
+        ("nightly", crate::store::workflow::RunState::Active),
+        ("other", crate::store::workflow::RunState::Active),
+        ("nightly", crate::store::workflow::RunState::Done),
+    ] {
+        let mut run = workflow.clone();
+        run.state = state;
+        let counted = task_working(&agents, &[], &[run.clone()], task, Timestamp::now()).len();
+        let fake = FakeHost::new();
+        let candidate = self::run(task);
+        fake.set_agents(&candidate.workspace, agents.clone());
+        *fake.workflows.lock().unwrap() = vec![run];
+        let held = limit_hold(fake.as_ref(), &config("max-active-per-task=1"), &candidate)
+            .unwrap()
+            .is_some();
+        actual.push((counted, held));
+    }
+    assert_eq!(actual, vec![(1, true), (0, false), (0, false)]);
 }
 
 #[test]

@@ -321,7 +321,7 @@ fn bound_routes_stop_when_waiting_or_inactive() {
             &mut BTreeSet::new(),
             &super::super::tests::FakeHost::new(),
             &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
-            &mut None,
+            &mut Admission::default(),
         )
         .unwrap();
         assert!(
@@ -353,6 +353,7 @@ fn create_validates_the_spec_it_reads_before_publication() {
         },
         || Ok(None),
         None,
+        false,
     )
     .unwrap_err();
     assert!(
@@ -425,6 +426,7 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
             },
             || Ok(None),
             None,
+            false,
         )
         .unwrap_err();
         assert_eq!(
@@ -474,6 +476,7 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
             },
             || Err("prompt was read".into()),
             None,
+            false,
         )
         .unwrap_err();
         assert_eq!(
@@ -485,6 +488,60 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
             assert!(error.to_string().contains("prompt was read"), "{error}");
         }
     }
+}
+
+#[test]
+fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
+    let (_home, state, mut record, spec) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[steps.pr]\nagent='claude'\nprompt-file='prompt.md'\ntakeover=true\nthen='@done'\n",
+    );
+    record.task = Some("nightly".into());
+    let paths = state.workflow(&record.id);
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    workflow::write(&paths, &record, &guard).unwrap();
+    drop(guard);
+    let host = super::super::tests::FakeHost::new();
+    *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
+    let mut admission = Admission::default();
+    let decision = prepare(
+        &state,
+        &paths,
+        &spec,
+        &mut BTreeSet::new(),
+        &host,
+        &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
+        &mut admission,
+    )
+    .unwrap();
+    assert!(
+        matches!(decision, Decision::Admit(_)),
+        "capacity must be decided before eviction"
+    );
+    admission.capacity = Some((
+        record.next_seq,
+        record.node.clone(),
+        Ok(throttle::Attempt::Held(
+            serde_json::from_value(
+                json!({"kind":"capacity", "text":"no capacity", "kinds":["claude"]}),
+            )
+            .unwrap(),
+        )),
+    ));
+    let decision = prepare(
+        &state,
+        &paths,
+        &spec,
+        &mut BTreeSet::new(),
+        &host,
+        &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
+        &mut admission,
+    )
+    .unwrap();
+    assert!(matches!(decision, Decision::Stop));
+    let current = workflow::load(&paths).unwrap();
+    assert!(current.attempt.is_none());
+    assert!(current.visits.is_empty());
+    assert_eq!(current.wait.unwrap().outcome, "capacity");
 }
 
 #[test]
@@ -531,7 +588,7 @@ fn admission_after_occupancy(expires: bool) {
         &mut BTreeSet::new(),
         &host,
         &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
-        &mut None,
+        &mut Admission::default(),
     )
     .unwrap();
     let after_occupancy = observed_at.get().expect("admission must reach occupancy");
@@ -602,7 +659,7 @@ fn step_window_waits_for_a_closed_companion_provider() {
         &mut BTreeSet::new(),
         &super::super::tests::FakeHost::new(),
         &windows,
-        &mut None,
+        &mut Admission::default(),
     );
     assert!(
         result.is_ok(),
@@ -669,7 +726,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
                 &mut BTreeSet::new(),
                 &host,
                 &windows,
-                &mut None,
+                &mut Admission::default(),
             )
             .unwrap();
             assert_eq!(matches!(decision, Decision::Launch(_)), open);
@@ -708,7 +765,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
         &mut BTreeSet::new(),
         &host,
         &WindowReadings::fixed(now, BTreeMap::new()),
-        &mut None,
+        &mut Admission::default(),
     )
     .unwrap();
     let paths = state.workflow(&record.id);
@@ -734,7 +791,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
             &mut BTreeSet::new(),
             &host,
             &windows,
-            &mut None
+            &mut Admission::default()
         )
         .unwrap(),
         Decision::Again
@@ -751,7 +808,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
             &mut BTreeSet::new(),
             &host,
             &windows,
-            &mut None
+            &mut Admission::default()
         )
         .unwrap(),
         Decision::Evaluate(_)

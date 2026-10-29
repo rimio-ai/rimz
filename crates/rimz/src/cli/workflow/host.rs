@@ -207,6 +207,7 @@ impl workflow::AttemptHost for Host<'_> {
                     grace: None,
                     loop_task: None,
                     workflow: Some(step.workflow),
+                    throttle_turn: step.throttle_turn,
                     reader: None,
                     response_receipt: false,
                     completion: launcher::RunCompletion::Detached,

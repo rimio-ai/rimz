@@ -373,6 +373,10 @@ pub struct Wait {
     pub case: Option<u32>,
     #[serde(default)]
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<AgentKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gives_up_at: Option<Timestamp>,
     pub first: Timestamp,
     pub last: Timestamp,
     pub count: u64,
@@ -392,6 +396,8 @@ pub struct RunRecord {
     pub workflow: String,
     #[serde(default)]
     pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual: bool,
     pub spec_dir: PathBuf,
     pub spec_digest: String,
     pub prompt: Option<String>,

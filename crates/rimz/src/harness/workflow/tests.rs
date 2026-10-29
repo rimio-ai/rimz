@@ -7,7 +7,7 @@ use std::fs;
 use std::rc::Rc;
 
 pub(super) struct FakeHost {
-    occupancy: RefCell<Occupancy>,
+    pub(super) occupancy: RefCell<Occupancy>,
     launched: RefCell<Vec<StepLaunch>>,
     observed: Rc<RefCell<Observed>>,
     failure: RefCell<Option<LaunchFailure>>,
@@ -489,6 +489,16 @@ fn validation_rejects_each_invalid_spec() {
             "steps.build",
         ),
         (
+            "unbounded capacity cycle",
+            format!(
+                "{}\n[checks.after]\nrun='true'\non.done='@done'\n",
+                VALID
+                    .replace("max-visits = 3", "")
+                    .replace("then = \"pick\"", "then = 'after'\non.capacity = 'pick'")
+            ),
+            "steps.build",
+        ),
+        (
             "hot check cycle",
             VALID
                 .replace("ready = \"build\"", "ready = 'pick'")
@@ -872,6 +882,58 @@ fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
             .iter()
             .any(|issue| issue.message.contains("broken definition"))
     );
+}
+
+#[test]
+fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
+    let (home, dir) = fixture();
+    let mut actual = Vec::new();
+    for (extra, field) in [
+        (
+            "capacity-wait='2h'\nthrottle='off'\non.capacity='pick'",
+            None,
+        ),
+        ("capacity-wait='forever'", None),
+        ("capacity-wait='0s'", Some("steps.build")),
+        ("throttle='sometimes'", Some("steps.build")),
+        ("on.capacity='@user'", Some("steps.build.on.capacity")),
+        ("on.capacity='@wait'", Some("steps.build.on.capacity")),
+    ] {
+        fs::write(dir.join("workflow.toml"), format!("{VALID}{extra}\n")).unwrap();
+        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        actual.push(match field {
+            Some(field) => report.errors.iter().any(|issue| issue.path == field),
+            None => {
+                report.errors.is_empty()
+                    && report.rows.iter().any(|row| {
+                        row.node == "build"
+                            && row.edges.iter().any(|edge| {
+                                edge.outcome == "capacity"
+                                    && edge.target
+                                        == if extra.contains("on.capacity") {
+                                            "pick"
+                                        } else {
+                                            "@failed"
+                                        }
+                            })
+                    })
+            }
+        });
+    }
+    let command = VALID
+        .replace("agent = \"claude\"", "shell='true'\ntimeout='1m'")
+        .replace("prompt-file = \"prompts/build.md\"", "");
+    for (extra, field) in [
+        ("throttle='off'", "steps.build.throttle"),
+        ("capacity-wait='1h'", "steps.build.capacity-wait"),
+        ("on.capacity='@failed'", "steps.build.on.capacity"),
+    ] {
+        fs::write(dir.join("workflow.toml"), format!("{command}{extra}\n")).unwrap();
+        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        actual.push(report.errors.iter().any(|issue| issue.path == field));
+    }
+    assert_eq!(actual, vec![true; 9]);
+    assert!(super::spec::RESERVED_OUTCOMES.contains(&"capacity"));
 }
 
 #[test]

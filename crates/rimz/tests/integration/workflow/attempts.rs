@@ -13,6 +13,7 @@ struct Room {
     bin: PathBuf,
 }
 
+mod capacity;
 mod until;
 
 fn dummy_agent_process() -> std::process::Child {

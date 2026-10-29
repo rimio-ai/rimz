@@ -172,6 +172,11 @@ pub(super) trait Host: Send + Sync {
     fn agents(&self, workspace: &WorkspaceId) -> Result<Vec<AgentState>, String>;
     /// The open supervised runs one loop task owns in a workspace.
     fn task_runs(&self, workspace: &WorkspaceId, task: &str) -> Result<Vec<RunRecord>, String>;
+    fn task_workflows(
+        &self,
+        workspace: &WorkspaceId,
+        task: &str,
+    ) -> Result<Vec<crate::store::workflow::RunRecord>, String>;
 }
 
 /// The real machine: the home's queue, `/proc`, and the known workspaces.
@@ -310,6 +315,32 @@ impl Host for SystemHost {
         let mut runs =
             crate::harness::run::list(&state).map_err(|err| unreadable(&format!("{err:#}")))?;
         runs.retain(|run| !run.status.is_terminal() && run.loop_task.as_deref() == Some(task));
+        Ok(runs)
+    }
+
+    fn task_workflows(
+        &self,
+        workspace: &WorkspaceId,
+        task: &str,
+    ) -> Result<Vec<crate::store::workflow::RunRecord>, String> {
+        let unreadable =
+            |err: &dyn fmt::Display| format!("workspace {workspace} unreadable: {err}");
+        let state = StatePaths::for_workspace(workspace.clone()).map_err(|err| unreadable(&err))?;
+        let mut runs = Vec::new();
+        for paths in state.workflow_runs().map_err(|err| unreadable(&err))? {
+            let record = match crate::store::workflow::load(&paths) {
+                Ok(record) => record,
+                Err(crate::store::workflow::WorkflowStoreErr::Io { source, .. })
+                    if source.kind() == io::ErrorKind::NotFound =>
+                {
+                    continue;
+                }
+                Err(err) => return Err(unreadable(&err)),
+            };
+            if !record.state.is_terminal() && record.task.as_deref() == Some(task) {
+                runs.push(record);
+            }
+        }
         Ok(runs)
     }
 }
@@ -1094,10 +1125,11 @@ fn working(agent: &AgentState, now: Timestamp) -> bool {
 }
 
 /// The working agents task `task` started: stamped with it, or matched by one
-/// of its open runs.
+/// of its open runs or live workflows.
 fn task_working<'a>(
     agents: &'a [AgentState],
     runs: &[RunRecord],
+    workflows: &[crate::store::workflow::RunRecord],
     task: &str,
     now: Timestamp,
 ) -> Vec<&'a AgentState> {
@@ -1107,6 +1139,13 @@ fn task_working<'a>(
         .filter(|agent| {
             agent.loop_task.as_deref() == Some(task)
                 || runs.iter().any(|run| run.matches_agent(agent))
+                || agent.workflow.as_ref().is_some_and(|pin| {
+                    workflows.iter().any(|run| {
+                        run.id == pin.run
+                            && !run.state.is_terminal()
+                            && run.task.as_deref() == Some(task)
+                    })
+                })
         })
         .collect()
 }
@@ -1160,13 +1199,14 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
     if let Some(cap) = config.max_active_per_task {
         let read = host.agents(&run.workspace).and_then(|agents| {
             let runs = host.task_runs(&run.workspace, &run.task)?;
-            Ok((agents, runs))
+            let workflows = host.task_workflows(&run.workspace, &run.task)?;
+            Ok((agents, runs, workflows))
         });
-        let (agents, runs) = match read {
+        let (agents, runs, workflows) = match read {
             Ok(read) => read,
             Err(text) => return store_hold(text),
         };
-        let counted = task_working(&agents, &runs, &run.task, now);
+        let counted = task_working(&agents, &runs, &workflows, &run.task, now);
         let mut names = Vec::new();
         name_counted(&mut names, &agents, &counted);
         if let Some(hold) = cap_hold(
@@ -1422,7 +1462,8 @@ fn readings_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Vec<(&'st
     if let Some(cap) = config.max_active_per_task {
         let counted = host.agents(&run.workspace).and_then(|agents| {
             let runs = host.task_runs(&run.workspace, &run.task)?;
-            Ok(task_working(&agents, &runs, &run.task, now).len())
+            let workflows = host.task_workflows(&run.workspace, &run.task)?;
+            Ok(task_working(&agents, &runs, &workflows, &run.task, now).len())
         });
         if let Ok(counted) = counted {
             rows.push((

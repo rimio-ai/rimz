@@ -11,6 +11,7 @@ use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::schedule::{
     arm,
     signal::{Signal, SignalResolution, resolve_subscription},
+    throttle,
     when::WindowReadings,
 };
 use crate::ids::WorkflowRunId;
@@ -44,6 +45,8 @@ pub enum WorkflowErr {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Time(#[from] crate::utils::time::TimeInputErr),
+    #[error(transparent)]
+    Throttle(#[from] throttle::ThrottleError),
     #[error("{0}")]
     Refused(String),
 }
@@ -58,6 +61,7 @@ pub fn create(
     roots: ScopeRoots,
     prompt: impl FnOnce() -> std::result::Result<Option<String>, String>,
     task: Option<String>,
+    manual: bool,
 ) -> Result<RunRecord> {
     let spec_dir = spec_dir.canonicalize()?;
     let name = spec_dir
@@ -122,6 +126,7 @@ pub fn create(
         id: WorkflowRunId::new(),
         workflow: name,
         task,
+        manual,
         spec_dir,
         spec_digest: script::digest(&bytes),
         prompt,
@@ -236,12 +241,7 @@ fn window_wait(
     Ok((!verdict.ok).then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
 }
 
-fn window_wait_for_launch(
-    record: &RunRecord,
-    agent: &str,
-    raw: &str,
-    windows: &WindowReadings<'_>,
-) -> Result<Option<String>> {
+fn launch_groups(record: &RunRecord, agent: &str) -> Result<Vec<throttle::StartGroup>> {
     let workspace = crate::workspace::WorkspaceResolver::resolve(
         &record.scope.path,
         Some(record.project_root.clone()),
@@ -278,6 +278,7 @@ fn window_wait_for_launch(
         )?)
     })()
     .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    let mut groups: Vec<throttle::StartGroup> = Vec::new();
     for cell in resolved.layout.agent_cells() {
         let requested = cell.launch.login.clone().map_or(
             crate::store::writer::LaunchLogin::RoomDefault,
@@ -285,11 +286,43 @@ fn window_wait_for_launch(
         );
         let login = crate::harness::schedule::runner::task_login(&requested, &cell.kind, &runtime)
             .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+        let account = login.as_ref().map(|login| login.name().clone());
+        match groups
+            .iter_mut()
+            .find(|group| group.kind == cell.kind && group.account == account)
+        {
+            Some(group) => group.agents += 1,
+            None => groups.push(throttle::StartGroup {
+                kind: cell.kind.clone(),
+                account,
+                agents: 1,
+            }),
+        }
+    }
+    Ok(groups)
+}
+
+fn window_wait_for_launch(
+    record: &RunRecord,
+    agent: &str,
+    raw: &str,
+    windows: &WindowReadings<'_>,
+) -> Result<Option<String>> {
+    window_wait_for_groups(record, &launch_groups(record, agent)?, raw, windows)
+}
+
+fn window_wait_for_groups(
+    record: &RunRecord,
+    groups: &[throttle::StartGroup],
+    raw: &str,
+    windows: &WindowReadings<'_>,
+) -> Result<Option<String>> {
+    for group in groups {
         if let Some(detail) = window_wait(
             raw,
             &record.scope.path,
-            &cell.kind,
-            login.as_ref().map(|login| login.key().name).as_ref(),
+            &group.kind,
+            group.account.as_ref(),
             windows,
         )? {
             return Ok(Some(detail));
@@ -302,9 +335,22 @@ enum Decision {
     Stop,
     Again,
     Evaluate(Box<RunRecord>),
-    Launch(Box<(RunRecord, std::result::Result<String, String>)>),
+    Launch(
+        Box<(
+            RunRecord,
+            std::result::Result<String, String>,
+            Option<throttle::Turn>,
+        )>,
+    ),
     End(Box<RunRecord>),
     Evict(Box<RunRecord>),
+    Admit(Box<(u64, String, throttle::Run)>),
+}
+
+#[derive(Default)]
+struct Admission {
+    eviction: Option<(u64, String, Option<String>)>,
+    capacity: Option<(u64, String, std::result::Result<throttle::Attempt, String>)>,
 }
 
 pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -> Result<()> {
@@ -313,7 +359,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     let paths = state.workflow(id);
     let spec = spec::load(&paths.home)?;
     let mut seen = BTreeSet::new();
-    let mut eviction = None;
+    let mut admission = Admission::default();
     loop {
         let windows = WindowReadings::new(Some(&runtime), Timestamp::now());
         let decision = prepare(
@@ -323,20 +369,37 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             &mut seen,
             host,
             &windows,
-            &mut eviction,
+            &mut admission,
         )?;
         let record = match decision {
             Decision::Stop => return Ok(()),
             Decision::Again => continue,
             Decision::Evaluate(record) => record,
+            Decision::Admit(request) => {
+                let (seq, node, run) = *request;
+                let config = crate::config::MachineConfig::load_lenient();
+                admission.capacity = Some((
+                    seq,
+                    node,
+                    throttle::try_admit(&config.r#loop.throttle, &run)
+                        .map_err(|error| error.to_string()),
+                ));
+                #[cfg(feature = "testkit")]
+                crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_ADMISSION_GATE");
+                continue;
+            }
             Decision::Evict(record) => {
                 let error = host.evict(&record.scope.path, &record.project_root).err();
-                eviction = Some((record.next_seq, error.map(|error| error.to_string())));
+                admission.eviction = Some((
+                    record.next_seq,
+                    record.node,
+                    error.map(|error| error.to_string()),
+                ));
                 continue;
             }
             Decision::Launch(launch) => {
-                let (record, prompt) = *launch;
-                if agent::launch(state, &paths, &spec, &record, prompt, host)? {
+                let (record, prompt, turn) = *launch;
+                if agent::launch(state, &paths, &spec, &record, prompt, turn, host)? {
                     continue;
                 }
                 return Ok(());
@@ -495,7 +558,7 @@ fn prepare(
     seen: &mut BTreeSet<String>,
     host: &dyn AttemptHost,
     windows: &WindowReadings<'_>,
-    eviction: &mut Option<(u64, Option<String>)>,
+    admission: &mut Admission,
 ) -> Result<Decision> {
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut t = Transition {
@@ -507,6 +570,13 @@ fn prepare(
     };
     if t.record.state != RunState::Active {
         return Ok(Decision::Stop);
+    }
+    if admission
+        .capacity
+        .as_ref()
+        .is_some_and(|(seq, node, _)| *seq != t.record.next_seq || *node != t.record.node)
+    {
+        admission.capacity = None;
     }
     if t.record.held.is_some()
         && let Some(decision) = until::prepare(&mut t, host, &guard, seen)?
@@ -521,6 +591,7 @@ fn prepare(
         return agent::prepare_end(&mut t, host, &guard);
     }
     if t.bound()? {
+        admission.capacity = None;
         persist(&t, &guard)?;
         return Ok(
             if t.record.state != RunState::Active
@@ -560,7 +631,7 @@ fn prepare(
         persist(&t, &guard)?;
         return Ok(Decision::Stop);
     }
-    let mut eviction_error = None;
+    let mut launch_error = None;
     if let Some(step) = spec.steps.get(&t.record.node) {
         let visits = t.record.visits.get(&t.record.node);
         for (bound, max, visits) in [
@@ -589,21 +660,45 @@ fn prepare(
                 step.on.cap.as_deref().unwrap_or("@user"),
                 ParkReason::Cap,
             )?;
+            admission.capacity = None;
             persist(&t, &guard)?;
             return Ok(Decision::Again);
         }
         if let Some(spec::StepKind::Agent(agent)) = step.kind() {
-            if let Some(raw) = &step.window
-                && let Some(detail) = window_wait_for_launch(&t.record, agent, raw, windows)?
+            let gated = t.record.task.is_some()
+                && !t.record.manual
+                && step.throttle != Some(crate::config::ThrottleSwitch::Off);
+            if gated && let Some((_, _, Err(reason))) = &admission.capacity {
+                launch_error = Some(reason.clone());
+            }
+            let groups = if gated || step.window.is_some() {
+                match launch_groups(&t.record, agent) {
+                    Ok(groups) => groups,
+                    Err(error) => {
+                        launch_error = Some(error.to_string());
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            if launch_error.is_none()
+                && let Some(raw) = &step.window
+                && let Some(detail) = window_wait_for_groups(&t.record, &groups, raw, windows)?
             {
                 t.step_wait("window", Some(detail));
                 persist(&t, &guard)?;
                 return Ok(Decision::Stop);
             }
-            if let Some((_, error)) = eviction.take().filter(|(seq, _)| *seq == t.record.next_seq) {
+            let mut evict = false;
+            if let Some((_, _, error)) = admission
+                .eviction
+                .take()
+                .filter(|(seq, node, _)| *seq == t.record.next_seq && *node == t.record.node)
+            {
                 // A confirmed stop admits only this launch; later visits read occupancy afresh.
-                eviction_error = error;
-            } else {
+                launch_error = launch_error.or(error);
+            } else if launch_error.is_none() {
                 match host.occupancy(&t.record.scope.path, &t.record.project_root)? {
                     Occupancy::Free => {}
                     Occupancy::Blocked(_) => {
@@ -616,7 +711,16 @@ fn prepare(
                         persist(&t, &guard)?;
                         return Ok(Decision::Stop);
                     }
-                    Occupancy::Occupied(_) => return Ok(Decision::Evict(Box::new(t.record))),
+                    Occupancy::Occupied(_) => evict = true,
+                }
+            }
+            t.now = Timestamp::now();
+            if launch_error.is_none() {
+                if let Some(decision) = prepare_capacity(&mut t, step, groups, admission, &guard)? {
+                    return Ok(decision);
+                }
+                if evict {
+                    return Ok(Decision::Evict(Box::new(t.record)));
                 }
             }
         }
@@ -669,6 +773,7 @@ fn prepare(
     };
     t.now = Timestamp::now();
     if t.bound()? {
+        admission.capacity = None;
         persist(&t, &guard)?;
         return Ok(Decision::Again);
     }
@@ -710,12 +815,97 @@ fn prepare(
     persist(&t, &guard)?;
     write_context(&t.record, paths, spec)?;
     if let Some(mut prompt) = prompt {
-        if let Some(reason) = eviction_error {
+        if let Some(reason) = launch_error {
             prompt = Err(reason);
         }
-        return Ok(Decision::Launch(Box::new((t.record, prompt))));
+        let turn = match admission.capacity.take() {
+            Some((_, _, Ok(throttle::Attempt::Turn(turn)))) => Some(turn),
+            _ => None,
+        };
+        return Ok(Decision::Launch(Box::new((t.record, prompt, turn))));
     }
     Ok(Decision::Evaluate(Box::new(t.record)))
+}
+
+fn prepare_capacity(
+    t: &mut Transition<'_>,
+    step: &super::Step,
+    groups: Vec<throttle::StartGroup>,
+    admission: &mut Admission,
+    guard: &WorkspaceLock,
+) -> Result<Option<Decision>> {
+    let Some(task) =
+        t.record.task.as_ref().filter(|_| {
+            !t.record.manual && step.throttle != Some(crate::config::ThrottleSwitch::Off)
+        })
+    else {
+        admission.capacity = None;
+        return Ok(None);
+    };
+    if let Some(wait) = t
+        .record
+        .wait
+        .as_ref()
+        .filter(|wait| wait.outcome == "capacity")
+        && wait.gives_up_at.is_some_and(|at| t.now >= at)
+    {
+        let object = json!({
+            "outcome":"capacity", "step":t.record.node, "reason":wait.detail,
+            "kinds":wait.kinds, "waited_ms":t.now.duration_since(wait.first).as_millis().max(0)
+        });
+        t.engine_route(
+            "capacity",
+            object,
+            step.on.capacity.as_deref().unwrap_or("@failed"),
+            ParkReason::User,
+        )?;
+        admission.capacity = None;
+        persist(t, guard)?;
+        return Ok(Some(Decision::Again));
+    }
+    let Some((_, _, answer)) = &admission.capacity else {
+        return Ok(Some(Decision::Admit(Box::new((
+            t.record.next_seq,
+            t.record.node.clone(),
+            throttle::Run {
+                task: task.clone(),
+                root: t.record.project_root.clone(),
+                checkout: t.record.scope.path.clone(),
+                disk: t.record.scope.path.clone(),
+                workspace: crate::ids::WorkspaceId::from_project_root(&t.record.project_root),
+                groups,
+                gives_up_ms: t
+                    .record
+                    .wait
+                    .as_ref()
+                    .and_then(|wait| wait.gives_up_at)
+                    .and_then(|at| u64::try_from(at.as_millisecond()).ok()),
+            },
+        )))));
+    };
+    if let Ok(throttle::Attempt::Held(hold)) = answer {
+        t.step_wait("capacity", Some(hold.text.clone()));
+        let wait = t
+            .record
+            .wait
+            .as_mut()
+            .expect("capacity wait was just recorded");
+        wait.kinds = hold.kinds.clone();
+        if wait.kinds.is_empty() {
+            wait.kinds = groups.into_iter().map(|group| group.kind).collect();
+            wait.kinds.sort();
+            wait.kinds.dedup();
+        }
+        wait.gives_up_at = match step.capacity_wait {
+            Some(crate::config::CapacityWait::Duration(duration)) => {
+                wait.first.checked_add(duration).ok()
+            }
+            _ => None,
+        };
+        persist(t, guard)?;
+        return Ok(Some(Decision::Stop));
+    }
+    Ok(None)
 }
 
 fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec) -> Result<()> {

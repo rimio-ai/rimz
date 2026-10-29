@@ -310,6 +310,21 @@ pub(super) fn validate_spec(
                     "a command step never waits for occupancy, so it has nothing to take over",
                 ),
                 (
+                    "throttle",
+                    step.throttle.is_some(),
+                    "capacity admission is only for agent steps",
+                ),
+                (
+                    "capacity-wait",
+                    step.capacity_wait.is_some(),
+                    "capacity admission is only for agent steps",
+                ),
+                (
+                    "on.capacity",
+                    step.on.capacity.is_some(),
+                    "capacity admission is only for agent steps",
+                ),
+                (
                     "lifecycle",
                     step.lifecycle.is_some(),
                     "a command step ends when its command exits; lifecycle is for agent steps",
@@ -409,6 +424,21 @@ pub(super) fn validate_spec(
             );
         }
         let mut edges = BTreeMap::new();
+        if agent {
+            if let Some(target) = &step.on.capacity {
+                report.target(spec, &format!("{path}.on.capacity"), target);
+                if matches!(target.as_str(), "@user" | "@wait") {
+                    report.error(
+                        &format!("{path}.on.capacity"),
+                        "capacity give-up cannot park or wait; use @failed, @done, or a node",
+                    );
+                }
+            }
+            edges.insert(
+                "capacity".into(),
+                step.on.capacity.clone().unwrap_or_else(|| "@failed".into()),
+            );
+        }
         if let Some(target) = &step.then {
             edges.insert("then".into(), target.clone());
         }
@@ -455,6 +485,7 @@ pub(super) fn validate_spec(
                 "then" => true,
                 "asked" => step.on.asked.is_some(),
                 "cap" => step.on.cap.is_some(),
+                "capacity" => step.on.capacity.is_some(),
                 _ => false,
             }),
         });
@@ -836,6 +867,7 @@ fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -
                 step.then.as_deref(),
                 step.on.asked.as_deref(),
                 step.on.cap.as_deref(),
+                step.on.capacity.as_deref(),
             ]
             .into_iter()
             .flatten()

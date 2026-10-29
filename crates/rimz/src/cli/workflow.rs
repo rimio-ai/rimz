@@ -193,6 +193,7 @@ fn start(
         },
         || Ok(prompt),
         None,
+        false,
     )?;
     if worktree.is_some() && record.scope.kind == records::ScopeKind::Project {
         writeln!(
@@ -221,6 +222,15 @@ fn locate(id: &WorkflowRunId) -> Result<(rimz::StatePaths, paths::WorkflowPaths)
 
 pub(super) fn waiting(record: &RunRecord) -> Option<String> {
     record.wait.as_ref().map(|w| {
+        if w.outcome == "capacity" {
+            return format!(
+                "{} · {}, {}, ×{}",
+                rimz::theme::fmt::capacity_wait(&w.kinds, w.first, w.gives_up_at),
+                w.node,
+                w.detail.as_deref().unwrap_or("—"),
+                w.count,
+            );
+        }
         let zone = jiff::tz::TimeZone::system();
         let detail = match w.outcome.as_str() {
             "hold" => {
