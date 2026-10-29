@@ -1174,6 +1174,14 @@ impl fmt::Display for LaunchFinalizeWarning {
                         formatter,
                         "warning: `{profile}` effort {value} is unsupported on {agent}; launching without it"
                     ),
+                    SkippedPresetField::EffortNeedsModel(value) => write!(
+                        formatter,
+                        "warning: `{profile}` effort {value} needs a model on {agent}; launching without it; set `model:` or pass --model"
+                    ),
+                    SkippedPresetField::EffortNeedsModelSwitch(value) => write!(
+                        formatter,
+                        "warning: `{profile}` effort {value} reaches {agent} only through a model switch; resuming at the session's saved level; pass --model with --effort"
+                    ),
                     SkippedPresetField::Fast { alternative } => {
                         write!(
                             formatter,
@@ -1484,15 +1492,22 @@ pub(super) fn normalize_cell_preset(
     cell: &mut AgentCell,
     adapter: &crate::agents::AgentDefinition,
 ) -> Vec<crate::agents::definition::SkippedPresetField> {
-    let (preset, skipped) = adapter
-        .spec()
-        .launch
-        .normalize_preset(crate::agents::LaunchPreset {
-            auto_compact: cell.auto_compact.take(),
-            effort: cell.launch.effort.take(),
-            fast: Some(cell.launch.fast),
-            ..Default::default()
-        });
+    let (mut preset, mut skipped) =
+        adapter
+            .spec()
+            .launch
+            .normalize_preset(crate::agents::LaunchPreset {
+                auto_compact: cell.auto_compact.take(),
+                effort: cell.launch.effort.take(),
+                fast: Some(cell.launch.fast),
+                ..Default::default()
+            });
+    if adapter.spec().launch.model_session_step
+        && cell.launch.model.as_deref().is_none_or(str::is_empty)
+        && let Some(effort) = preset.effort.take()
+    {
+        skipped.push(crate::agents::definition::SkippedPresetField::EffortNeedsModel(effort));
+    }
     cell.auto_compact = preset.auto_compact;
     cell.launch.effort = preset.effort;
     cell.launch.fast = preset.fast == Some(true);

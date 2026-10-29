@@ -486,7 +486,9 @@ fn rendered_preset_flags_have_matching_argv_declarations() {
             let preset = field.launch_preset(value.to_owned());
             match definition.render_preset(&preset) {
                 Ok(argv) => {
-                    if field == PresetField::Model && definition.launch.model_session_step {
+                    if matches!(field, PresetField::Model | PresetField::Effort)
+                        && definition.launch.model_session_step
+                    {
                         assert!(argv.is_empty(), "{}: {argv:?}", definition.kind);
                         assert!(definition.launch.preset_arg_matcher(field).is_none());
                         continue;
@@ -526,6 +528,7 @@ fn session_step_declarations_have_an_implementation() {
         let supported = definition.session_step(&super::capabilities::SessionStepRequest {
             session: None,
             model: "model",
+            effort: None,
             provider_argv: &[],
             cwd: std::path::Path::new("/"),
             env: &Default::default(),
@@ -712,12 +715,12 @@ system-prompt-file-flag = "--system-prompt-file"
     pi.empty-AutoCompact=Ok([])
     pi.all=Ok(["--model", "model-x", "--thinking", "high"])
     opencode.Model=Ok([])
-    opencode.Effort=Err(UnsupportedField { agent: "opencode", field: "effort" })
+    opencode.Effort=Ok([])
     opencode.AutoCompact=Err(UnsupportedField { agent: "opencode", field: "auto-compact" })
     opencode.empty-Model=Ok([])
     opencode.empty-Effort=Ok([])
     opencode.empty-AutoCompact=Ok([])
-    opencode.all=Err(UnsupportedField { agent: "opencode", field: "effort" })
+    opencode.all=Ok([])
     antigravity.Model=Ok(["--model", "model-x"])
     antigravity.Effort=Ok(["--effort", "high"])
     antigravity.AutoCompact=Err(UnsupportedField { agent: "antigravity", field: "auto-compact" })

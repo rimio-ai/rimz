@@ -9,8 +9,7 @@ use std::time::{Duration, Instant};
 #[path = "opencode_session_wrapper.rs"]
 mod wrapper;
 
-const CATALOG: &str =
-    r#"{"location":{},"data":[{"providerID":"opencode-go","id":"deepseek-v4.1-flash"}]}"#;
+const CATALOG: &str = r#"{"location":{},"data":[{"providerID":"opencode-go","id":"deepseek-v4.1-flash","variants":[{"id":"low"},{"id":"high"},{"id":"max"}]}]}"#;
 
 fn fake_opencode(env: &Env) -> PathBuf {
     let dir = env.home_root.join("opencode-bin");
@@ -18,7 +17,7 @@ fn fake_opencode(env: &Env) -> PathBuf {
         &dir,
         "opencode",
         r#"
-if [ "${1:-}" = --version ]; then echo 2.1.4; exit 0; fi
+if [ "${1:-}" = --version ]; then echo 2.2.0; exit 0; fi
 if [ "${1:-}" = serve ]; then
   printf '%s\n' "$$" >> "$CHECK_LOG/serve-pids"
   sleep 30 &
@@ -47,10 +46,14 @@ fn step_command(
     origin: &str,
     model: &str,
     session: Option<&str>,
+    effort: Option<&str>,
 ) -> std::process::Command {
     let dir = fake_opencode(env);
     let mut command = env.rimz();
     command.args(["agents", "session-step", "opencode", "--model", model]);
+    if let Some(effort) = effort {
+        command.args(["--effort", effort]);
+    }
     if let Some(session) = session {
         command.args(["--session", session]);
     }
@@ -110,7 +113,7 @@ fn hidden_step_creates_or_switches_then_execs_without_changing_environment() {
             ],
             2,
         );
-        let mut command = step_command(&env, &origin, "deepseek-v4.1-flash", session);
+        let mut command = step_command(&env, &origin, "deepseek-v4.1-flash", session, None);
         let child = command
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -221,16 +224,16 @@ fn hidden_step_refuses_unknown_models_and_http_errors_without_exec() {
     let gone = r#"{"_tag":"SessionNotFoundError","message":"Session not found: ses_gone"}"#;
     for (model, session, routes, reason) in [
         (
-            "deepseek-4-1-flash",
+            "unrelated",
             None,
             vec![("GET /api/model?", 200, CATALOG.into())],
-            "unknown model; did you mean opencode-go/deepseek-v4.1-flash?",
+            "unknown model; run `opencode models` to list configured models",
         ),
         (
             "deepseek-4-1-flash",
             None,
             vec![("GET /api/model?", 404, r#"{"message":"Not Found"}"#.into())],
-            "model list returned HTTP 404 Not Found: Not Found; model selection is verified on OpenCode 2.1.4; ",
+            "model list returned HTTP 404 Not Found: Not Found; model selection is verified on OpenCode 2.2.0; ",
         ),
         (
             "deepseek-v4.1-flash",
@@ -245,7 +248,7 @@ fn hidden_step_refuses_unknown_models_and_http_errors_without_exec() {
         let env = Env::new();
         let requests = routes.len();
         let (origin, server) = crate::oauth_usage::serve_http_routes(routes, requests);
-        let output = step_command(&env, &origin, model, session)
+        let output = step_command(&env, &origin, model, session, None)
             .bounded_output()
             .unwrap();
         assert_eq!(output.status.code(), Some(78));
@@ -272,6 +275,91 @@ fn hidden_step_refuses_unknown_models_and_http_errors_without_exec() {
 }
 
 #[test]
+fn hidden_step_applies_offered_effort_to_created_and_resumed_sessions() {
+    for session in [None, Some("ses_existing")] {
+        let env = Env::new();
+        let route = if session.is_some() {
+            "POST /api/session/ses_existing/model"
+        } else {
+            "POST /api/session "
+        };
+        let (origin, server) = crate::oauth_usage::serve_http_routes(
+            vec![
+                ("GET /api/model?", 200, CATALOG.into()),
+                (route, 204, String::new()),
+            ],
+            2,
+        );
+        let output = step_command(&env, &origin, "deepseek-v4.1-flash", session, Some("high"))
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let requests = server.join().unwrap();
+        let (_, body) = request_parts(&requests[1]);
+        assert_eq!(
+            body["model"],
+            json!({
+                "providerID":"opencode-go", "id":"deepseek-v4.1-flash", "variant":"high"
+            })
+        );
+        assert!(env.home_root.join("final-argv").exists());
+    }
+}
+
+#[test]
+fn hidden_step_refuses_unoffered_effort_without_posting_or_execing() {
+    for (effort, variants, reason) in [
+        (
+            "xhigh",
+            json!([{"id":"low"},{"id":"high"},{"id":"max"}]),
+            "opencode-go/deepseek-v4.1-flash offers no effort xhigh; set effort to one of: low, high, max",
+        ),
+        (
+            "High",
+            json!([{"id":"high"}]),
+            "opencode-go/deepseek-v4.1-flash offers no effort High; set effort to one of: high",
+        ),
+        (
+            "default",
+            json!([{"id":"high"}]),
+            "opencode-go/deepseek-v4.1-flash offers no effort default; set effort to one of: high",
+        ),
+        (
+            "high",
+            json!([]),
+            "opencode-go/deepseek-v4.1-flash offers no effort levels; remove effort",
+        ),
+    ] {
+        let env = Env::new();
+        let mut catalog: Value = serde_json::from_str(CATALOG).unwrap();
+        catalog["data"][0]["variants"] = variants;
+        let (origin, server) = crate::oauth_usage::serve_http_routes(
+            vec![("GET /api/model?", 200, catalog.to_string())],
+            1,
+        );
+        let output = step_command(&env, &origin, "deepseek-v4.1-flash", None, Some(effort))
+            .bounded_output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(78),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap().trim(),
+            format!("rimz: OpenCode model check refused \"deepseek-v4.1-flash\": {reason}")
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert!(!env.home_root.join("final-argv").exists());
+    }
+}
+
+#[test]
 fn killing_the_step_closes_the_helpers_stdin_lease() {
     let env = Env::new();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -290,7 +378,7 @@ fn killing_the_step_closes_the_helpers_stdin_lease() {
         requested.send(line).unwrap();
         let _ = released.recv_timeout(Duration::from_secs(15));
     });
-    let mut command = step_command(&env, &origin, "deepseek-v4.1-flash", None);
+    let mut command = step_command(&env, &origin, "deepseek-v4.1-flash", None, None);
     let mut child = command
         .stdout(Stdio::null())
         .stderr(Stdio::null())

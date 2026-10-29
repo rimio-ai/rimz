@@ -12,6 +12,7 @@ fn finalized_stages_keep_the_step_and_provider_identity_across_rebuilds() {
         },
     );
     invocation.identity.params.model = Some("provider/model".into());
+    invocation.identity.params.effort = Some("high".into());
     let AgentProcessStage::Ready(process) = compile_agent_process_stage_with_extra_env(
         root.path(),
         &invocation,
@@ -46,6 +47,8 @@ fn finalized_stages_keep_the_step_and_provider_identity_across_rebuilds() {
         "opencode",
         "--model",
         "provider/model",
+        "--effort",
+        "high",
         "--",
         "opencode",
         "--standalone",

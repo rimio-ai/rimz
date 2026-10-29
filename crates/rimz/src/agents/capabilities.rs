@@ -23,9 +23,17 @@ pub const SESSION_STEP_REFUSED: i32 = 78;
 pub struct SessionStepRequest<'a> {
     pub session: Option<&'a AgentSessionId>,
     pub model: &'a str,
+    pub effort: Option<&'a str>,
     pub provider_argv: &'a [String],
     pub cwd: &'a Path,
     pub env: &'a BTreeMap<String, String>,
+}
+
+/// Prepared provider command and notices for the CLI to print and record.
+#[derive(Debug)]
+pub struct SessionStepOutput {
+    pub argv: Vec<String>,
+    pub notices: Vec<String>,
 }
 
 /// A single-line reason the provider's session preparation refused the launch.
@@ -362,7 +370,7 @@ pub trait LaunchCapability: CoreCapability {
     fn session_step(
         &self,
         _request: &SessionStepRequest<'_>,
-    ) -> Option<std::result::Result<Vec<String>, SessionStepRefusal>> {
+    ) -> Option<std::result::Result<SessionStepOutput, SessionStepRefusal>> {
         None
     }
 

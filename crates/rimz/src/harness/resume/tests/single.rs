@@ -357,6 +357,115 @@ fn unsupported_explicit_preset_refuses_instead_of_resuming_bare() {
 }
 
 #[test]
+fn opencode_effort_only_resume_warns_and_keeps_the_saved_level() {
+    for explicit in [false, true] {
+        let mut saved = agent("opencode", "saved", "/repo", 0);
+        saved.profile = Some("worker".into());
+        saved.effort = Some("high".into());
+        saved.record = Some(Box::new(LaunchRecord {
+            model: Some("provider/model".into()),
+            effort: Some("high".into()),
+            ..Default::default()
+        }));
+        let (plan, _) = single(
+            &saved,
+            &profiles("worker", profile("opencode")),
+            SingleResumeOptions {
+                overrides: ResumeOverrides {
+                    preset: LaunchPreset {
+                        effort: explicit.then(|| "low".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let expected = if explicit {
+            vec!["warning: `worker` effort low reaches opencode only through a model switch; resuming at the session's saved level; pass --model with --effort".to_owned()]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(plan.warnings, expected);
+        let request = decode_exec_request(&single_pane_argv(&plan));
+        assert_eq!(request.identity.params.effort.as_deref(), Some("high"));
+        assert_eq!(
+            request
+                .identity
+                .params
+                .record
+                .as_ref()
+                .unwrap()
+                .effort
+                .as_deref(),
+            Some("high")
+        );
+        assert!(!request.identity.resume_model_override);
+    }
+}
+
+#[test]
+fn opencode_model_and_agent_resume_overrides_keep_effort_for_the_session_step() {
+    for agent_override in [false, true] {
+        for explicit_effort in [false, true] {
+            let mut saved = agent("opencode", "saved", "/repo", 0);
+            saved.profile = Some("worker".into());
+            saved.record = Some(Box::new(LaunchRecord {
+                model: Some("provider/old".into()),
+                effort: Some("high".into()),
+                ..Default::default()
+            }));
+            let mut profiles = profiles("worker", profile("opencode"));
+            profiles.0.insert(
+                "replacement".into(),
+                Profile {
+                    model: Some("provider/new".into()),
+                    effort: Some("max".into()),
+                    ..profile("opencode")
+                },
+            );
+            let (plan, _) = single(
+                &saved,
+                &profiles,
+                SingleResumeOptions {
+                    overrides: ResumeOverrides {
+                        agent: agent_override.then_some("replacement"),
+                        preset: LaunchPreset {
+                            model: (!agent_override).then(|| "provider/new".into()),
+                            effort: explicit_effort.then(|| "low".into()),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+            let request = decode_exec_request(&single_pane_argv(&plan));
+            assert!(request.identity.resume_model_override);
+            assert_eq!(
+                request.identity.params.model.as_deref(),
+                Some("provider/new")
+            );
+            assert_eq!(
+                request.identity.params.effort.as_deref(),
+                Some(if explicit_effort {
+                    "low"
+                } else if agent_override {
+                    "max"
+                } else {
+                    "high"
+                })
+            );
+            assert_eq!(
+                request.identity.params.record.as_ref().unwrap().effort,
+                request.identity.params.effort
+            );
+        }
+    }
+}
+
+#[test]
 fn unsupported_explicit_effort_warns_and_resumes() {
     let mut saved = agent("kimi", "saved", "/repo", 0);
     saved.profile = Some("worker".into());

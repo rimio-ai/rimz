@@ -1559,6 +1559,15 @@ fn model_session_step_argv(request: &ExecRequest, rimz_bin: &Path) -> Vec<String
         "--model".into(),
         model.to_owned(),
     ];
+    if let Some(effort) = request
+        .identity
+        .params
+        .effort
+        .as_deref()
+        .filter(|effort| !effort.is_empty())
+    {
+        argv.extend(["--effort".into(), effort.to_owned()]);
+    }
     if let Some(session) = session {
         argv.extend(["--session".into(), session.clone()]);
     }

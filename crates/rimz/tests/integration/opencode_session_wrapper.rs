@@ -1,7 +1,7 @@
 use super::*;
 use rimz::store::run::{RunRecord, RunStatus};
 
-const UNKNOWN: &str = "rimz: OpenCode model check refused \"deepseek-4-1-flash\": unknown model; did you mean opencode-go/deepseek-v4.1-flash?";
+const UNKNOWN: &str = "rimz: OpenCode model check refused \"unrelated\": unknown model; run `opencode models` to list configured models";
 
 fn wrapper_request(env: &Env, model: Option<&str>, subagent: bool) -> (ExecRequest, RunRecord) {
     env.record(&env.project_root);
@@ -180,13 +180,27 @@ fn explain_shows_the_model_step_without_changing_the_provider_command() {
         &env,
         "agents",
         "model-worker",
-        "description: Worker\nagent: opencode\nmodel: opencode-go/deepseek-v4.1-flash",
+        "description: Worker\nagent: opencode\nmodel: deepseek-v4.1-flash\neffort: high",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude-worker",
+        "description: Original\nagent: claude\nmodel: opus\neffort: medium\ntools: [Read]",
         "",
     );
     let dir = fake_opencode(&env);
     let output = env
         .rimz()
-        .args(["agents", "explain", "model-worker", "--json"])
+        .args([
+            "agents",
+            "explain",
+            "claude-worker",
+            "--agent",
+            "model-worker",
+            "--json",
+        ])
         .env("PATH", path_with_front(&dir))
         .env("SHELL", write_fake_login_shell(&env, "opencode-shell", &[]))
         .bounded_output()
@@ -206,13 +220,15 @@ fn explain_shows_the_model_step_without_changing_the_provider_command() {
         .map(|arg| arg.as_str().unwrap())
         .collect();
     assert!(
-        argv.windows(6).any(|args| args
+        argv.windows(8).any(|args| args
             == [
                 "agents",
                 "session-step",
                 "opencode",
                 "--model",
-                "opencode-go/deepseek-v4.1-flash",
+                "deepseek-v4.1-flash",
+                "--effort",
+                "high",
                 "--"
             ]),
         "{argv:?}"
@@ -224,6 +240,135 @@ fn explain_shows_the_model_step_without_changing_the_provider_command() {
 }
 
 #[test]
+fn explain_opencode_keeps_effort_for_carried_and_cli_models() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_startup_relaunch_config(&env, "isolation = \"host\"");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "model-worker",
+        "description: Worker\nagent: claude\nmodel: opus\neffort: high\ntools: [Read]",
+        "",
+    );
+    let dir = fake_opencode(&env);
+    for cli_model in [false, true] {
+        let mut command = env.rimz();
+        command.args([
+            "agents",
+            "explain",
+            "model-worker",
+            "--agent",
+            "opencode",
+            "--json",
+        ]);
+        if cli_model {
+            command.args(["--model", "deepseek-v4.1-flash"]);
+        }
+        let output = command
+            .env("PATH", path_with_front(&dir))
+            .env("SHELL", write_fake_login_shell(&env, "opencode-shell", &[]))
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["effort"], "high");
+        let model = if cli_model {
+            "deepseek-v4.1-flash"
+        } else {
+            "opus"
+        };
+        let argv = report["argv"].as_array().unwrap();
+        assert!(
+            argv.windows(4)
+                .any(|args| args == ["--model", model, "--effort", "high"]),
+            "{argv:?}"
+        );
+    }
+}
+
+#[test]
+fn wrapper_model_picks_append_notices_to_the_right_card_and_silent_relaunch_clears_them() {
+    let first = "OpenCode model deepseek-v4.1-flash matched 2 (opencode-go/deepseek-v4.1-flash, opencode/deepseek-v4.1-flash); using opencode-go/deepseek-v4.1-flash, the first `opencode models` lists; write the full name for another";
+    let nearest = "OpenCode model deepseek-v41-flash is not offered; using opencode-go/deepseek-v4.1-flash, the nearest name `opencode models` lists; write the full name for another";
+    for resume in [false, true] {
+        let env = Env::new();
+        let (mut request, _) = wrapper_request(&env, Some("deepseek-v4.1-flash"), false);
+        request.run_id = None;
+        request.close_pane_on_exit = false;
+        if resume {
+            request.action = rimz::harness::launch::ExecAction::Resume {
+                session_id: "launch_opencode_model".into(),
+                extra_args: Vec::new(),
+            };
+            request.identity.resume_model_override = true;
+            request.identity.launch_id = Some("different-launch".into());
+        }
+        let mut catalog: Value = serde_json::from_str(CATALOG).unwrap();
+        let mut other = catalog["data"][0].clone();
+        other["providerID"] = json!("opencode");
+        catalog["data"].as_array_mut().unwrap().insert(0, other);
+        for (model, notice) in [
+            ("deepseek-v4.1-flash", Some(first)),
+            ("deepseek-v41-flash", Some(nearest)),
+            ("opencode-go/deepseek-v4.1-flash", None),
+        ] {
+            request.identity.params.model = Some(model.into());
+            // A skills list makes the wrapper record a warning of its own for the pick to follow.
+            request.skills = notice.map(|_| Vec::new());
+            let route = if resume {
+                "POST /api/session/launch_opencode_model/model"
+            } else {
+                "POST /api/session "
+            };
+            let (origin, server) = crate::oauth_usage::serve_http_routes(
+                vec![
+                    ("GET /api/model?", 200, catalog.to_string()),
+                    (route, 204, String::new()),
+                ],
+                2,
+            );
+            let output = wrapper_command(&env, &request, &origin)
+                .bounded_output()
+                .unwrap();
+            let tail = pane_tail(&env);
+            assert!(output.status.success(), "{}: {tail}", output.status);
+            assert_eq!(server.join().unwrap().len(), 2);
+            let warnings: Vec<_> = tail
+                .lines()
+                .filter_map(|line| line.strip_prefix("rimz: "))
+                .filter(|line| !line.starts_with("agent "))
+                .collect();
+            if let Some(notice) = notice {
+                assert_eq!(warnings.last().copied(), Some(notice), "{tail}");
+                assert!(
+                    warnings.len() > 1,
+                    "the wrapper's warning must precede the pick: {tail}"
+                );
+            } else {
+                assert!(warnings.is_empty(), "{tail}");
+            }
+            let shown = env
+                .rimz()
+                .args(["agents", "show", "@model-worker", "--json"])
+                .bounded_output()
+                .unwrap();
+            assert!(
+                shown.status.success(),
+                "{}",
+                String::from_utf8_lossy(&shown.stderr)
+            );
+            let report: Value = serde_json::from_slice(&shown.stdout).unwrap();
+            assert_eq!(report["agent"]["launch_warnings"], json!(warnings));
+        }
+    }
+}
+
+#[test]
 fn wrapper_model_refusals_do_not_retry_or_report_a_startup_crash() {
     for child in [false, true] {
         let env = Env::new();
@@ -231,7 +376,7 @@ fn wrapper_model_refusals_do_not_retry_or_report_a_startup_crash() {
             vec![("GET /api/model?", 200, CATALOG.into())],
             1,
         );
-        let (request, run) = wrapper_request(&env, Some("deepseek-4-1-flash"), child);
+        let (request, run) = wrapper_request(&env, Some("unrelated"), child);
         let output = wrapper_command(&env, &request, &origin)
             .bounded_output()
             .unwrap();
