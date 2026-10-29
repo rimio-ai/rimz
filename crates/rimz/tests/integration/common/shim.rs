@@ -241,6 +241,12 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
          feed() {{\n\
            printf '%s\\n' \"$1\" | RIMZ_AGENT_PID=${{RIMZ_AGENT_PID:-$$}} \"$rimz\" hooks feed --source \"$agent\" >/dev/null\n\
          }}\n\
+         if [ \"$agent\" = claude ]; then\n\
+           bucket=$(printf '%s' \"$PWD\" | LC_ALL=C tr -c 'A-Za-z0-9' '-')\n\
+           project=\"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/projects/$bucket\"\n\
+           mkdir -p \"$project\" || exit 1\n\
+           printf '{{}}\\n' > \"$project/$session.jsonl\" || exit 1\n\
+         fi\n\
          feed '{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"'\"$session\"'\",\"model\":\"GPT-5.5\",\"reasoning_effort\":\"high\",\"worktree_path\":\"'\"$worktree\"'\",\"worktree_branch\":\"'\"$branch\"'\"}}'\n\
          feed '{{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"'\"$session\"'\",\"prompt\":\"summarize the diff\"}}'\n\
          feed '{{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"'\"$session\"'\",\"tool_name\":\"apply_patch\"}}'\n\

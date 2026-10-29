@@ -2892,15 +2892,10 @@ fn account_room_journey(history: &str) {
     let shim = stub_dir.join("claude");
     let launched_homes = env.home_root.join("launched-homes");
     let body = std::fs::read_to_string(&shim).expect("read claude shim");
-    // A real provider saves its conversation under its home; resume planning
-    // reads that file once any home holds a `projects` directory.
     let body = body.replacen(
         "session=",
         &format!(
             "printf '%s\\n' \"${{CLAUDE_CONFIG_DIR:-native}}\" >> {}\n\
-             saved=\"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/projects/$(printf '%s' \"$PWD\" | sed 's/[^A-Za-z0-9]/-/g')\"\n\
-             mkdir -p \"$saved\"\n\
-             printf '{{}}\\n' > \"$saved/${{RIMZ_TEST_AGENT_SESSION:-sess-hook-agent}}.jsonl\"\n\
              session=",
             shell_quote(&launched_homes.display().to_string())
         ),

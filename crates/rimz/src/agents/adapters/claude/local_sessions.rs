@@ -585,16 +585,17 @@ pub(super) fn discover_under(config_dir: &Path, workspace: &Path) -> Vec<LocalSe
 /// Claude keys its store by config dir, then by the flattened workspace path,
 /// then by session id, so this resolves the same location the provider's own
 /// resume resolves — an id recorded against another workspace reads absent
-/// here exactly as it would there. `None` means no config dir is readable, so
-/// the caller keeps its recorded-transcript fallback rather than declaring a
-/// live session gone.
+/// here exactly as it would there. `None` means no config root exists as a
+/// directory, so the caller keeps its recorded-transcript fallback rather
+/// than declaring a live session gone. If roots exist but none has `projects/`,
+/// this reports `Some(false)`.
 pub(super) fn conversation_present(
     session_id: &AgentSessionId,
     cwd: &Path,
     login_env: &std::collections::BTreeMap<String, String>,
 ) -> Option<bool> {
-    let config_dirs = claude_config_dirs_from(login_env);
-    if config_dirs.is_empty() {
+    let config_dirs = claude_config_roots(login_env);
+    if !config_dirs.iter().any(|dir| dir.is_dir()) {
         return None;
     }
     Some(conversation_present_under_with(

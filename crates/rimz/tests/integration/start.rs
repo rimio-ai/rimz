@@ -1955,6 +1955,7 @@ fn seed_lost_tmux_agent(env: &Env) -> (LostAgent, std::ffi::OsString) {
         rimz::ids::AgentKind::new_unchecked("claude"),
         rimz::ids::AgentSessionId::from("alpha"),
     );
+    crate::common::write_claude_conversation(env, &worktree, lost.1.as_str());
     // Published first: the registering commit below already runs the reap.
     rimz::store::live_roster::publish(&store.paths().live_roster, [lost.clone()].into())
         .expect("publish the dead session's roster");

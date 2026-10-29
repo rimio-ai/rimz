@@ -217,25 +217,15 @@ where
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
-/// Discover Claude config directories in priority order.
+/// Discover Claude config roots that have a `projects/` child.
 ///
-/// 1. `CLAUDE_CONFIG_DIR` env (comma-separated; each entry must have `projects/`)
-/// 2. `$XDG_CONFIG_HOME/claude` / `~/.config/claude`
-/// 3. `~/.claude`
-///
-/// Returns directories that actually have a `projects/` child.
+/// Non-empty `CLAUDE_CONFIG_DIR` entries (comma-separated) are the only roots,
+/// even if none has `projects/`. When it yields no entries, use
+/// `$XDG_CONFIG_HOME/claude` (else `~/.config/claude`) and `~/.claude`.
 pub(super) fn claude_config_dirs_from(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
-    let has_projects = |path: &PathBuf| path.join("projects").is_dir();
-    let dirs = env_config_roots(login_env)
+    claude_config_roots(login_env)
         .into_iter()
-        .filter(has_projects)
-        .collect::<Vec<_>>();
-    if !dirs.is_empty() {
-        return dirs;
-    }
-    default_config_roots(login_env)
-        .into_iter()
-        .filter(has_projects)
+        .filter(|path| path.join("projects").is_dir())
         .collect()
 }
 

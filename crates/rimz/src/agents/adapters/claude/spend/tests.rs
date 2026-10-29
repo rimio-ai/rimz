@@ -159,19 +159,28 @@ fn write_jsonl(dir: &Path, filename: &str, lines: &[&str]) -> PathBuf {
 }
 
 #[test]
-fn config_dirs_fall_back_to_the_default_roots_when_no_env_root_has_projects() {
+fn config_dirs_never_fall_back_past_configured_roots() {
     let dir = TempDir::new().unwrap();
     let native = dir.path().join(".claude");
     std::fs::create_dir_all(native.join("projects")).unwrap();
-    let env = BTreeMap::from([
-        ("HOME".to_owned(), dir.path().display().to_string()),
-        (
-            "CLAUDE_CONFIG_DIR".to_owned(),
-            dir.path().join("empty").display().to_string(),
-        ),
-    ]);
+    let mut env = BTreeMap::from([("HOME".to_owned(), dir.path().display().to_string())]);
+    assert_eq!(claude_config_dirs_from(&env), vec![native.clone()]);
+    env.insert("CLAUDE_CONFIG_DIR".to_owned(), " , , ".to_owned());
     assert_eq!(claude_config_dirs_from(&env), vec![native]);
-    assert_eq!(claude_config_roots(&env), vec![dir.path().join("empty")]);
+
+    let configured = dir.path().join("empty");
+    env.insert(
+        "CLAUDE_CONFIG_DIR".to_owned(),
+        configured.display().to_string(),
+    );
+    assert_eq!(claude_config_roots(&env), vec![configured.clone()]);
+    let missing = claude_config_dirs_from(&env);
+    std::fs::create_dir(&configured).unwrap();
+    let empty = claude_config_dirs_from(&env);
+    assert_eq!([missing, empty], [Vec::<PathBuf>::new(), Vec::new()]);
+
+    std::fs::create_dir(configured.join("projects")).unwrap();
+    assert_eq!(claude_config_dirs_from(&env), vec![configured]);
 }
 
 fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
