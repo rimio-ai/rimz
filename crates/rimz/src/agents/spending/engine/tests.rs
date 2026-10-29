@@ -437,6 +437,99 @@ fn fresh_shared_publish_returns_without_walking() {
 }
 
 #[test]
+fn fresh_publication_derives_other_rooms_without_fleet_folds() {
+    let dir = tempfile::tempdir().unwrap();
+    let projects = ["a", "b", "c"].map(|room| dir.path().join(room));
+    let runtimes = projects.each_ref().map(|project| {
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(project), dir.path())
+            .expect("runtime paths");
+        runtime.ensure_dirs().expect("runtime dirs");
+        runtime
+    });
+    let now_secs = unix_secs_now();
+    let files: Vec<_> = projects
+        .iter()
+        .enumerate()
+        .map(|(index, project)| {
+            let path = dir.path().join(format!("history-{index}/chat.jsonl"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                claude_cost_line_in(
+                    now_secs - 60,
+                    index as f64 + 1.25,
+                    &index.to_string(),
+                    project,
+                ),
+            )
+            .unwrap();
+            super::super::SpendingFile {
+                adapter: crate::agents::definition_by_kind("claude").unwrap(),
+                login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                    "claude",
+                )),
+                path,
+            }
+        })
+        .collect();
+    let _discovered = override_discovered_spending_files_for_test(files.clone());
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Today,
+        timezone: Some("UTC".into()),
+    };
+    let counter = &crate::testkit::WORK_COUNTERS.spending_fleet_folds;
+    let mut walker = SpendingWalker::new();
+    let mut deltas = Vec::new();
+    let mut results = Vec::new();
+    for (project, runtime) in projects.iter().zip(&runtimes) {
+        let before = counter.load(Ordering::Relaxed);
+        results.push(compute_fleet_spending_with_walker(
+            &mut walker,
+            runtime,
+            Some(project),
+            &spec,
+        ));
+        deltas.push(counter.load(Ordering::Relaxed) - before);
+    }
+    assert!(deltas[0] >= 1, "the first room must walk: {deltas:?}");
+    assert_eq!(
+        &deltas[1..],
+        &[0, 0],
+        "fresh rooms must derive only their slice"
+    );
+
+    let raw = read_spending_cache(&runtimes[0].shared_spending_cursor_path());
+    let counted = super::super::dedup_cached_entries(&files, &raw).into_counted();
+    for ((project, runtime), result) in projects.iter().zip(&runtimes).zip(results) {
+        let scope = SpendScope::from_roots(Some(project), &[]);
+        let walked = super::super::aggregate_counted_rollups(
+            &files,
+            &raw,
+            &counted,
+            Some(&scope),
+            super::super::HeadlineContext {
+                user_inputs: &[],
+                now_secs,
+                spec: &spec,
+            },
+            None,
+        );
+        let expected = crate::agents::spending::WorkspaceSpendingCache::from_scoped(
+            &scope.hash(),
+            result.provider.refreshed_at_ms,
+            walked.workspace,
+        );
+        assert_eq!(result.workspace, expected);
+        assert_eq!(
+            read_workspace_spending_cache(&runtime.workspace_spending_path(&scope.hash())),
+            expected,
+        );
+        assert_eq!(result.provider.version, 24);
+        assert_eq!(result.workspace.version, 9);
+    }
+}
+
+#[test]
 fn shared_spending_lock_serves_the_elected_publish_to_a_contender() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
@@ -931,7 +1024,7 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
     };
-    let scoped = crate::agents::spending::compute_scoped_spending(
+    let scoped = super::super::tests::compute_scoped_spending_checked(
         &files,
         &raw,
         &[],

@@ -14,7 +14,8 @@ use crate::agents::definition::ThreadKey;
 use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
 use super::user_input::UserInputRecord;
 use super::{
-    ChartSpend, ModelTally, RoleTallies, ScopedSpending, SpendingFile, SpendingWalkResult,
+    CachedScopedSpending, ChartSpend, ModelTally, RoleTallies, ScopedSpending, SpendingFile,
+    SpendingWalkResult,
 };
 use crate::ids::LoginKey;
 
@@ -269,18 +270,21 @@ pub(crate) fn aggregate_counted_rollups(
     headline: HeadlineContext<'_>,
     history_roles: Option<&super::session_roles::RoleIndex>,
 ) -> SpendingWalkResult {
+    #[cfg(feature = "testkit")]
+    crate::testkit::WORK_COUNTERS
+        .spending_fleet_folds
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     let HeadlineContext {
         user_inputs,
         now_secs,
         spec,
     } = headline;
     let workspace = workspace.filter(|scope| !scope.is_empty());
-    let cutoffs = CountedCutoffs::from_events(counted, user_inputs, workspace, now_secs, spec);
+    let cutoffs = CountedCutoffs::from_events(counted, user_inputs, now_secs, spec);
     let mut spending = Spending::default();
-    let mut workspace_tally = SpendTally::default();
     let day_cutoff_secs = local_day_start_secs(now_secs, spec.timezone.as_deref())
         .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
-    let mut workspace_day = SpendWindow::default();
     let mut provider_day = BTreeMap::<String, SpendWindow>::new();
     let mut login_day = BTreeMap::<LoginKey, SpendWindow>::new();
     let mut login_day_sessions = BTreeMap::<LoginKey, FastHashSet<SessionKey<'_>>>::new();
@@ -290,8 +294,6 @@ pub(crate) fn aggregate_counted_rollups(
     // These collections only establish session uniqueness. Hashing avoids
     // repeatedly ordering transcript paths while the final public maps retain
     // their deterministic `BTreeMap` representation.
-    let mut workspace_day_sessions = FastHashSet::default();
-    let mut workspace_session_totals = FastHashMap::<SessionKey<'_>, (u64, f64)>::default();
     let mut provider_day_sessions = BTreeMap::<String, FastHashSet<SessionKey<'_>>>::new();
     let mut days = BTreeMap::<i64, DaySpend>::new();
     let mut chart = ChartSpend::default();
@@ -393,33 +395,6 @@ pub(crate) fn aggregate_counted_rollups(
                 .or_default()
                 .insert(counted.session_key());
         }
-        if let Some(scope) = workspace
-            && counted
-                .origin()
-                .is_some_and(|origin| scope.contains(origin))
-        {
-            accum(
-                &mut workspace_tally,
-                entry,
-                now_secs,
-                cutoffs.scoped(),
-                window_starts,
-            );
-            if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
-                workspace_day.add(entry.cost_usd, entry);
-                workspace_day_sessions.insert(counted.session_key());
-            }
-            if within_widest_window(entry.ts_secs, now_secs) {
-                workspace_session_totals
-                    .entry(counted.session_key())
-                    .and_modify(|(youngest, usd)| {
-                        *youngest = (*youngest).max(entry.ts_secs);
-                        *usd += entry.cost_usd;
-                    })
-                    .or_insert((entry.ts_secs, entry.cost_usd));
-            }
-        }
-
         if history_roles.is_some() {
             let index =
                 day_boundaries.partition_point(|(start, _)| *start <= i128::from(entry.ts_secs));
@@ -520,18 +495,6 @@ pub(crate) fn aggregate_counted_rollups(
             window_starts,
         );
     }
-    if let Some(scope) = workspace {
-        add_scoped_sessions(
-            &mut workspace_tally,
-            files,
-            cache,
-            scope,
-            now_secs,
-            cutoffs.scoped(),
-            window_starts,
-        );
-    }
-    workspace_day.sessions = workspace_day_sessions.len().try_into().unwrap_or(u32::MAX);
     for (provider, sessions) in provider_day_sessions {
         provider_day.entry(provider).or_default().sessions =
             sessions.len().try_into().unwrap_or(u32::MAX);
@@ -548,22 +511,32 @@ pub(crate) fn aggregate_counted_rollups(
         super::session_effort::fold(index, &mut roles, now_secs, window_starts);
     }
 
+    let workspace = workspace.map_or_else(
+        || ScopedSpending {
+            day_cutoff_secs,
+            ..Default::default()
+        },
+        |scope| {
+            let selected: Vec<_> = counted
+                .iter()
+                .filter(|row| row.origin().is_some_and(|origin| scope.contains(origin)))
+                .collect();
+            let scoped_files = files.iter().filter_map(|file| {
+                let cached = cache.files.get(file.path.to_string_lossy().as_ref())?;
+                cached
+                    .origin_path
+                    .as_deref()
+                    .filter(|origin| scope.contains(origin))?;
+                Some((file, cached))
+            });
+            aggregate_scoped_rollups(selected.iter().copied(), scoped_files, scope, headline)
+        },
+    );
+
     SpendingWalkResult {
         session_start_secs: cutoffs.session_start_secs,
         spending,
-        workspace: ScopedSpending {
-            tally: workspace_tally,
-            headline_cutoff_secs: workspace.map(|_| cutoffs.scoped()).unwrap_or_default(),
-            live_baselines: workspace_session_totals
-                .into_iter()
-                .filter_map(|(session, (youngest, usd))| {
-                    within_raw_retain_window(youngest, now_secs)
-                        .then_some((session.materialize(), usd))
-                })
-                .collect(),
-            day: workspace_day,
-            day_cutoff_secs,
-        },
+        workspace,
         provider_day,
         login_day,
         day_cutoff_secs,
@@ -603,9 +576,80 @@ pub(crate) fn aggregate_counted_rollups(
     }
 }
 
+fn aggregate_scoped_rollups<'a, P: CountedPayload + 'a>(
+    counted: impl Iterator<Item = &'a P> + Clone,
+    files: impl Iterator<Item = (&'a SpendingFile, &'a FileCacheEntry)>,
+    scope: &SpendScope,
+    headline: HeadlineContext<'_>,
+) -> ScopedSpending {
+    let HeadlineContext {
+        user_inputs,
+        now_secs,
+        spec,
+    } = headline;
+    let day_cutoff_secs = local_day_start_secs(now_secs, spec.timezone.as_deref())
+        .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
+    if scope.is_empty() {
+        return ScopedSpending {
+            day_cutoff_secs,
+            ..Default::default()
+        };
+    }
+    let cutoff = uniform_headline_cutoff(spec, now_secs).unwrap_or_else(|| {
+        let activity: Vec<_> = counted.clone().map(|row| row.entry().ts_secs).collect();
+        let prompts: Vec<_> = user_inputs
+            .iter()
+            .filter_map(|record| {
+                record
+                    .origin
+                    .as_deref()
+                    .filter(|origin| scope.contains(origin))?;
+                u64::try_from(record.at.as_second()).ok()
+            })
+            .collect();
+        burst_cutoff(&prompts, &activity, now_secs)
+    });
+    let (_, timezone) = history_zone(crate::config::resolve_time_zone(spec.timezone.as_deref()));
+    let window_starts = WindowStarts::new(now_secs, &timezone);
+    let mut tally = SpendTally::default();
+    let mut day = SpendWindow::default();
+    let mut day_sessions = FastHashSet::default();
+    let mut session_totals = FastHashMap::<SessionKey<'_>, (u64, f64)>::default();
+    for row in counted {
+        let entry = row.entry();
+        accum(&mut tally, entry, now_secs, cutoff, window_starts);
+        if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
+            day.add(entry.cost_usd, entry);
+            day_sessions.insert(row.session_key());
+        }
+        if within_widest_window(entry.ts_secs, now_secs) {
+            session_totals
+                .entry(row.session_key())
+                .and_modify(|(youngest, usd)| {
+                    *youngest = (*youngest).max(entry.ts_secs);
+                    *usd += entry.cost_usd;
+                })
+                .or_insert((entry.ts_secs, entry.cost_usd));
+        }
+    }
+    add_scoped_sessions(&mut tally, files, now_secs, cutoff, window_starts);
+    day.sessions = day_sessions.len().try_into().unwrap_or(u32::MAX);
+    ScopedSpending {
+        tally,
+        headline_cutoff_secs: cutoff,
+        live_baselines: session_totals
+            .into_iter()
+            .filter_map(|(session, (youngest, usd))| {
+                within_raw_retain_window(youngest, now_secs).then_some((session.materialize(), usd))
+            })
+            .collect(),
+        day,
+        day_cutoff_secs,
+    }
+}
+
 struct CountedCutoffs {
     total: u64,
-    scoped: Option<u64>,
     session_start_secs: Option<u64>,
 }
 
@@ -613,54 +657,21 @@ impl CountedCutoffs {
     fn from_events(
         counted: &[impl CountedPayload],
         user_inputs: &[UserInputRecord],
-        scope: Option<&SpendScope>,
         now_secs: u64,
         spec: &HeadlineSpec,
     ) -> Self {
-        let mut total_activity = Vec::new();
-        let mut scoped_activity = Vec::new();
-        for counted in counted {
-            let ts_secs = counted.entry().ts_secs;
-            total_activity.push(ts_secs);
-            if let Some(scope) = scope
-                && counted
-                    .origin()
-                    .is_some_and(|origin| scope.contains(origin))
-            {
-                scoped_activity.push(ts_secs);
-            }
-        }
-
-        let mut total_prompts = Vec::new();
-        let mut scoped_prompts = Vec::new();
-        for record in user_inputs {
-            let Ok(ts_secs) = u64::try_from(record.at.as_second()) else {
-                continue;
-            };
-            total_prompts.push(ts_secs);
-            if let Some(scope) = scope
-                && record
-                    .origin
-                    .as_deref()
-                    .is_some_and(|origin| scope.contains(origin))
-            {
-                scoped_prompts.push(ts_secs);
-            }
-        }
+        let total_activity: Vec<_> = counted.iter().map(|row| row.entry().ts_secs).collect();
+        let total_prompts: Vec<_> = user_inputs
+            .iter()
+            .filter_map(|record| u64::try_from(record.at.as_second()).ok())
+            .collect();
 
         let session_start = burst_cutoff(&total_prompts, &total_activity, now_secs);
         let uniform = uniform_headline_cutoff(spec, now_secs);
         Self {
             total: uniform.unwrap_or(session_start),
-            scoped: scope.map(|_| {
-                uniform.unwrap_or_else(|| burst_cutoff(&scoped_prompts, &scoped_activity, now_secs))
-            }),
             session_start_secs: (session_start != NO_BURST_CUTOFF).then_some(session_start),
         }
-    }
-
-    fn scoped(&self) -> u64 {
-        self.scoped.unwrap_or(NO_BURST_CUTOFF)
     }
 }
 
@@ -736,36 +747,18 @@ fn add_spending_sessions(
     }
 }
 
-fn add_scoped_sessions(
+fn add_scoped_sessions<'a>(
     tally: &mut SpendTally,
-    files: &[SpendingFile],
-    cache: &SpendingDiskCache,
-    scope: &SpendScope,
+    files: impl Iterator<Item = (&'a SpendingFile, &'a FileCacheEntry)>,
     now_secs: u64,
     headline_cutoff: u64,
     window_starts: WindowStarts,
 ) {
     let mut threads = FastHashMap::<SessionKey<'_>, u64>::default();
-    for SpendingFile {
-        adapter,
-        path: file,
-        ..
-    } in files
-    {
-        let cache_key = file.to_string_lossy().into_owned();
-        let Some(cached_file) = cache.files.get(&cache_key) else {
-            continue;
-        };
-        if !cached_file
-            .origin_path
-            .as_deref()
-            .is_some_and(|origin| scope.contains(origin))
-        {
-            continue;
-        }
+    for (file, cached_file) in files {
         for entry in &cached_file.entries {
             threads
-                .entry(session_key(adapter, file, entry))
+                .entry(session_key(file.adapter, &file.path, entry))
                 .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
                 .or_insert(entry.ts_secs);
         }
@@ -1128,57 +1121,94 @@ pub(crate) fn indexed_counted_entries<'a>(
     cache: &'a SpendingDiskCache,
     locations: &[CountedLocation],
 ) -> Vec<Counted<'a>> {
-    struct IndexedFile<'a> {
-        login: &'a LoginKey,
-        adapter: &'static AgentDefinition,
-        path: &'a Path,
-        cache: &'a FileCacheEntry,
+    counted_from_file_table(&indexed_files(files, cache), locations, locations.len())
+}
+
+pub(super) fn aggregate_scoped_locations(
+    files: &[SpendingFile],
+    cache: &SpendingDiskCache,
+    locations: &[CountedLocation],
+    scope: &SpendScope,
+    headline: HeadlineContext<'_>,
+) -> CachedScopedSpending {
+    let mut table = indexed_files(files, cache);
+    let has_discovered_file = table.iter().any(Option::is_some);
+    for file in table.iter_mut().flatten() {
+        file.selected = file
+            .cache
+            .origin_path
+            .as_deref()
+            .is_some_and(|origin| scope.contains(origin));
     }
-
-    let table = files
+    let counted = counted_from_file_table(&table, locations, 0);
+    let scoped_files = table
         .iter()
-        .map(
-            |SpendingFile {
-                 adapter,
-                 path: file,
-                 login,
-             }| {
-                let key = file.to_string_lossy().into_owned();
-                cache.files.get(&key).map(|cached| IndexedFile {
-                    login,
-                    adapter,
-                    path: file,
+        .flatten()
+        .filter(|file| file.selected)
+        .map(|file| (file.file, file.cache));
+    CachedScopedSpending {
+        has_discovered_file,
+        scoped: aggregate_scoped_rollups(counted.iter(), scoped_files, scope, headline),
+    }
+}
+
+struct IndexedFile<'a> {
+    file: &'a SpendingFile,
+    cache: &'a FileCacheEntry,
+    selected: bool,
+}
+
+fn indexed_files<'a>(
+    files: &'a [SpendingFile],
+    cache: &'a SpendingDiskCache,
+) -> Vec<Option<IndexedFile<'a>>> {
+    files
+        .iter()
+        .map(|file| {
+            cache
+                .files
+                .get(file.path.to_string_lossy().as_ref())
+                .map(|cached| IndexedFile {
+                    file,
                     cache: cached,
+                    selected: true,
                 })
-            },
-        )
-        .collect::<Vec<_>>();
-
-    locations
-        .iter()
-        .map(|location| {
-            // The memo key includes the exact file signature and cache
-            // generation that built these locations, so invalid indices are
-            // an impossible internal state rather than recoverable input.
-            let file = table
-                .get(location.file_index)
-                .and_then(Option::as_ref)
-                .expect("counted location must resolve under its memo key");
-            let entry = file
-                .cache
-                .entries
-                .get(location.entry_index)
-                .expect("counted entry must resolve under its memo key");
-            Counted {
-                login: file.login,
-                kind: file.adapter.spec().kind,
-                path: file.path,
-                origin: file.cache.origin_path.as_deref(),
-                session_key: session_key(file.adapter, file.path, entry),
-                entry,
-            }
         })
         .collect()
+}
+
+fn counted_from_file_table<'a>(
+    table: &[Option<IndexedFile<'a>>],
+    locations: &[CountedLocation],
+    capacity: usize,
+) -> Vec<Counted<'a>> {
+    let mut counted = Vec::with_capacity(capacity);
+    counted.extend(locations.iter().filter_map(|location| {
+        // The memo key includes the exact file signature and cache
+        // generation that built these locations, so invalid indices are
+        // an impossible internal state rather than recoverable input.
+        let file = table
+            .get(location.file_index)
+            .and_then(Option::as_ref)
+            .expect("counted location must resolve under its memo key");
+        if !file.selected {
+            return None;
+        }
+        let entry = file
+            .cache
+            .entries
+            .get(location.entry_index)
+            .expect("counted entry must resolve under its memo key");
+        Some(Counted {
+            login: &file.file.login,
+            kind: file.file.adapter.spec().kind,
+            path: &file.file.path,
+            origin: file.cache.origin_path.as_deref(),
+            session_key: session_key(file.file.adapter, &file.file.path, entry),
+            entry,
+        })
+    }));
+    counted
 }
 
 fn uniform_headline_cutoff(spec: &HeadlineSpec, now_secs: u64) -> Option<u64> {

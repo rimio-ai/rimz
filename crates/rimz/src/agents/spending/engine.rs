@@ -35,11 +35,11 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 /// only files whose mtime changed, writes it back if anything was updated, and
 /// loads the shared price book (a TTL-gated remote refresh) so Codex's token
 /// counts become dollars. When only this room's workspace tally is missing or
-/// stale, the producer derives it read-only from the persistent shared
-/// `spending.json` entry cache instead of joining the global walk election. A
-/// timeout fallback grace-serves the last published provider totals while they
-/// are bounded-stale, then computes a seeded local result for its own frame and
-/// leaves the shared files to the elected producer.
+/// stale, the producer joins the same spending-lock election and derives a
+/// scope-only tally from the shared `spending.json` entry cache, publishing only
+/// when it wins. A timeout fallback grace-serves the last published provider
+/// totals while they are bounded-stale, then computes a seeded local result for
+/// its own frame and leaves the shared files to the elected producer.
 ///
 /// Every registered adapter is discovered fleet-wide
 /// ([`spending_sources`](crate::agents::AgentDefinition::spending_sources)) so each

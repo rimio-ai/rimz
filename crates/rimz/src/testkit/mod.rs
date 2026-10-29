@@ -69,7 +69,8 @@ pub fn resume_parked(
     );
 }
 
-/// Process-wide work measured at snapshot, configuration, and worktree-marker boundaries.
+/// Process-wide work measured at snapshot, configuration, worktree-marker, and spending-fold
+/// boundaries.
 #[derive(Default)]
 pub struct WorkCounters {
     pub snapshot_assemblies: std::sync::atomic::AtomicU64,
@@ -78,9 +79,11 @@ pub struct WorkCounters {
     pub latest_bytes_parsed: std::sync::atomic::AtomicU64,
     pub machine_config_loads: std::sync::atomic::AtomicU64,
     pub marker_reads: std::sync::atomic::AtomicU64,
+    pub spending_fleet_folds: std::sync::atomic::AtomicU64,
 }
 
-/// Shared across threads; the binary's work log reads these on return from main.
+/// Shared across threads; the binary's work log reads all but `spending_fleet_folds` on return
+/// from main.
 pub static WORK_COUNTERS: std::sync::LazyLock<WorkCounters> =
     std::sync::LazyLock::new(WorkCounters::default);
 

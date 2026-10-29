@@ -95,6 +95,8 @@ fn session_start_is_machine_wide_and_independent_of_headline_mode() {
                 None,
             );
             actual.push(result.session_start_secs);
+            let scoped = compute_scoped_spending(&files, &cache, inputs, &scope, NOW_SECS, &spec);
+            assert_eq!(format!("{:?}", result.workspace), format!("{scoped:?}"));
         }
     }
     assert_eq!(actual, [Some(NOW_SECS - 100), None].repeat(3));
@@ -267,6 +269,8 @@ fn local_day_windows_conserve_chart_dollars_and_session_edges_across_dst() {
         },
         Some(&Default::default()),
     );
+    let scoped = compute_scoped_spending(&files, &cache, &[], &scope, now_secs, &spec);
+    assert_eq!(format!("{:?}", result.workspace), format!("{scoped:?}"));
     let today = result.chart.today;
     for (index, (start, span)) in starts.into_iter().zip([1, 7, 30, 364]).enumerate() {
         let expected = seconds.iter().filter(|ts| **ts >= start).count() as f64;
@@ -1273,6 +1277,15 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
         None,
     );
 
+    let scoped = compute_scoped_spending(
+        &files,
+        &cache,
+        &user_inputs,
+        &scope,
+        now.as_second() as u64,
+        &spec,
+    );
+    assert_eq!(format!("{:?}", rollups.workspace), format!("{scoped:?}"));
     assert_eq!(
         rollups.chart.today,
         local_day_index(now.as_second() as u64, spec.timezone.as_deref()).unwrap()
@@ -1326,7 +1339,7 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
         ..Default::default()
     };
     let scope = SpendScope::from_roots(Some(&project), &[]);
-    let scoped = compute_scoped_spending(
+    let scoped = compute_scoped_spending_checked(
         &files,
         &cache,
         &user_inputs_from_cache(&files, &cache),
@@ -1361,7 +1374,7 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
         ]),
         ..Default::default()
     };
-    let scoped = compute_scoped_spending(
+    let scoped = compute_scoped_spending_checked(
         &files,
         &cache,
         &user_inputs_from_cache(&files, &cache),
@@ -1391,7 +1404,7 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
         )]),
         ..Default::default()
     };
-    let scoped = compute_scoped_spending(
+    let scoped = compute_scoped_spending_checked(
         &files,
         &cache,
         &user_inputs_from_cache(&files, &cache),
@@ -1432,7 +1445,7 @@ fn live_baselines_sum_year_entries_only_for_recent_sessions() {
         ..Default::default()
     };
     let scope = SpendScope::from_roots(Some(&project), &[]);
-    let scoped = compute_scoped_spending(
+    let scoped = compute_scoped_spending_checked(
         &files,
         &cache,
         &[user_input(NOW_SECS, "claude", Some(&project))],
@@ -1550,7 +1563,7 @@ fn bridged_session_cutoff_stays_stable_while_activity_is_current() {
     };
     let scope = SpendScope::from_roots(Some(&project), &[]);
     let prompts = [user_input(NOW_SECS - 8 * HOUR, "claude", Some(&project))];
-    let first = compute_scoped_spending(
+    let first = compute_scoped_spending_checked(
         &files,
         &cache,
         &prompts,
@@ -1558,7 +1571,7 @@ fn bridged_session_cutoff_stays_stable_while_activity_is_current() {
         NOW_SECS,
         &HeadlineSpec::default(),
     );
-    let later = compute_scoped_spending(
+    let later = compute_scoped_spending_checked(
         &files,
         &cache,
         &prompts,
@@ -1688,8 +1701,9 @@ fn workspace_session_cutoff_uses_only_scoped_user_inputs() {
     let outside_prompt = [user_input(NOW_SECS, "claude", Some(&other))];
 
     let included =
-        compute_scoped_spending(&files, &cache, &project_prompt, &scope, NOW_SECS, &spec);
-    let empty = compute_scoped_spending(&files, &cache, &outside_prompt, &scope, NOW_SECS, &spec);
+        compute_scoped_spending_checked(&files, &cache, &project_prompt, &scope, NOW_SECS, &spec);
+    let empty =
+        compute_scoped_spending_checked(&files, &cache, &outside_prompt, &scope, NOW_SECS, &spec);
 
     assert!((included.tally.headline.usd - 1.0).abs() < 1e-9);
     assert_eq!(empty.tally.headline, SpendWindow::default());

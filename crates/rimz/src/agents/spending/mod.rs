@@ -49,8 +49,9 @@ const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
 pub(crate) use aggregate::CountedPayload;
 pub(in crate::agents) use aggregate::should_replace_usage_duplicate;
 use aggregate::{
-    CountedLocation, HeadlineContext, aggregate_counted_rollups, dedup_cached_entries,
-    dedup_cached_entry_locations, indexed_counted_entries, spending_files_signature,
+    CountedLocation, HeadlineContext, aggregate_counted_rollups, aggregate_scoped_locations,
+    dedup_cached_entries, dedup_cached_entry_locations, indexed_counted_entries,
+    spending_files_signature,
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
@@ -560,9 +561,10 @@ impl SpendingWalker {
     }
 
     /// Compute one scope from the synchronized cursor cache without refreshing
-    /// transcripts or persisting shared state. The producer uses this when the
-    /// provider publication is fresh but its room sidecar is missing, retaining
-    /// the same parsed cache and dedup memo for the next due global walk.
+    /// transcripts, running a fleet fold, or persisting shared state. The producer
+    /// uses this for a missing or stale room sidecar when the provider publication
+    /// is fresh, retaining the same parsed cache and dedup memo for the next due
+    /// global walk.
     pub(crate) fn scoped_from_cache(
         &mut self,
         cache_path: &Path,
@@ -576,27 +578,17 @@ impl SpendingWalker {
         self.sync_from_disk(cache_path, &mut stats);
         self.ensure_memo(files, &mut stats);
         let locations = &self.memo.as_ref().expect("memo seeded above").counted;
-        let counted = indexed_counted_entries(files, &self.cache, locations);
-        let aggregate = aggregate_counted_rollups(
+        aggregate_scoped_locations(
             files,
             &self.cache,
-            &counted,
-            Some(scope),
+            locations,
+            scope,
             HeadlineContext {
                 user_inputs,
                 now_secs,
                 spec,
             },
-            None,
-        );
-        CachedScopedSpending {
-            has_discovered_file: files.iter().any(|SpendingFile { path: file, .. }| {
-                self.cache
-                    .files
-                    .contains_key(&file.to_string_lossy().into_owned())
-            }),
-            scoped: aggregate.workspace,
-        }
+        )
     }
 
     /// Apply trusted live transcript origins before a scope-only derivation.
@@ -808,21 +800,19 @@ fn compute_scoped_spending(
     if scope.is_empty() {
         return ScopedSpending::default();
     }
-    let deduped = dedup_cached_entries(files, cache);
-    let counted = deduped.into_counted();
-    let aggregate = aggregate_counted_rollups(
+    let locations = dedup_cached_entry_locations(files, cache);
+    aggregate_scoped_locations(
         files,
         cache,
-        &counted,
-        Some(scope),
+        &locations,
+        scope,
         HeadlineContext {
             user_inputs,
             now_secs,
             spec,
         },
-        None,
-    );
-    aggregate.workspace
+    )
+    .scoped
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
