@@ -173,22 +173,6 @@ pub(super) fn compacting_style(theme: &Theme) -> Style {
     theme.styled(Component::Compaction, Modifier::empty())
 }
 
-pub(in crate::sidebar_pane::render) fn compacting_head_style(
-    theme: &Theme,
-    animation_phase: u64,
-) -> Style {
-    role_style(theme, AnimationRole::Compacting, animation_phase)
-}
-
-/// The handed-off-work head's tone: the agent's clay, same as the working fill.
-/// The quiet wave motion, not the color, says the agent is waiting on that work.
-pub(in crate::sidebar_pane::render) fn subagent_head_style(
-    theme: &Theme,
-    animation_phase: u64,
-) -> Style {
-    role_style(theme, AnimationRole::Delegating, animation_phase)
-}
-
 pub(in crate::sidebar_pane::render) fn working_style(theme: &Theme, animation_phase: u64) -> Style {
     role_style(theme, AnimationRole::Working, animation_phase)
 }
@@ -410,29 +394,22 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
         selected,
         true,
     );
-    agent_lead_style_with_attention(theme, status, phase, attention)
+    agent_lead_style_with_attention(theme, agent_role(status, phase), attention)
 }
 
 pub(in crate::sidebar_pane::render) fn agent_lead_style_with_attention(
     theme: &Theme,
-    status: AgentStatus,
-    phase: TurnPhase,
+    role: AnimationRole,
     attention: CardAttention,
 ) -> Style {
-    let natural_color = agent_natural_color(theme, status, phase);
+    let natural_color = theme.animations.natural_color(role);
     emphasize(theme, natural_color, attention.emphasis, attention.anim)
 }
 
-/// The lead glyph's resting color: the status/phase role's fixed animation tone —
-/// waiting yellow, failed red, paused blue, a working head clay — held steady,
-/// with a bare (un-themed) idle staying transparent so an idle card reads as
-/// plain identity. The unread attention effect (carried by [`CardAttention`])
-/// supplies any motion; the tone itself never slides with age.
-fn agent_natural_color(theme: &Theme, status: AgentStatus, phase: TurnPhase) -> Option<Color> {
-    theme.animations.natural_color(agent_role(status, phase))
-}
-
-fn agent_role(status: AgentStatus, phase: TurnPhase) -> AnimationRole {
+pub(in crate::sidebar_pane::render) fn agent_role(
+    status: AgentStatus,
+    phase: TurnPhase,
+) -> AnimationRole {
     if status == AgentStatus::Running && phase == TurnPhase::Reasoning {
         AnimationRole::Thinking
     } else {

@@ -80,7 +80,7 @@ A running agent can show a head in place of `⢿`. Whichever head it shows, it c
 | `⢄` | waiting on handed-off work | delegated to running children; their entries are listed under the card; also a turn that ended waiting on a command, check, PID, team, or peer agent, or a background shell; a launched child's provider park replaces this head with `⏸︎`, or `!` once it can no longer resume |
 | `⠙` | resolving | a working-family spinner, themable as `resolving` |
 
-Each head's frames, color, effect, and speed are configurable under [`[theme.animations]`](../guide/theme.md#animations).
+Each head's frames, color, effect, and speed are configurable under [`[theme.animations]`](../guide/theme.md#animations). On a card, each head takes the card's emphasis like the status glyph it replaces.
 
 ### Card glyphs
 

@@ -37,14 +37,13 @@ pub(super) fn identity_line(
     agent_identity_line(row_ctx, row, status, attention, cost_usd)
 }
 
-/// The leading status cell for an agent row, applying the two transient render
-/// overlays before the base status glyph: a **compacting** head (a violet bar
-/// pulsing as the context window condenses) and a **waiting** head (a quiet clay
-/// wave while waiting on handed-off work: a running child, or, after the turn
-/// ends, a command, check, PID, team, or peer wait or a background shell). Both
-/// stay out of the cockpit tally — they ride over the row's base status here.
-/// A human-blocked `?`/`!` always wins, so the overlays defer to those; otherwise
-/// the cell is the animated working/thinking fill or the static status glyph.
+/// The leading status cell for an agent row. Transient overlays choose its role
+/// before the status/phase role: compacting first, then waiting on handed-off
+/// work (a running child or a resting turn's command, check, PID, team, or peer
+/// wait or background shell). A human-blocked `?`/`!` always wins over either
+/// overlay. Every role draws its own frames and natural color under the card
+/// emphasis, shared with the name and description. The overlays stay out of the
+/// cockpit tally — they ride over the row's base status here.
 pub(super) fn agent_lead_cell(
     theme: &Theme,
     row: &SidebarRow,
@@ -52,14 +51,9 @@ pub(super) fn agent_lead_cell(
     attention: CardAttention,
     animation_phase: u64,
 ) -> Span<'static> {
-    let actionable = status.is_actionable();
-    if !actionable && row.as_agent().is_some_and(|agent| agent.compacting) {
-        return Span::styled(
-            role_glyph(theme, AnimationRole::Compacting, animation_phase),
-            compacting_head_style(theme, animation_phase),
-        );
-    }
-    if status == AgentStatus::Running
+    let role = if !status.is_actionable() && row.as_agent().is_some_and(|agent| agent.compacting) {
+        AnimationRole::Compacting
+    } else if status == AgentStatus::Running
         && row.as_agent().is_some_and(|agent| {
             // Same resting-turn condition as AgentCard::description's wait sentence.
             matches!(agent.phase, TurnPhase::Idle | TurnPhase::Parked)
@@ -69,17 +63,13 @@ pub(super) fn agent_lead_cell(
                     .any(|child| child.holds_parent_turn())
         })
     {
-        return Span::styled(
-            role_glyph(theme, AnimationRole::Delegating, animation_phase),
-            subagent_head_style(theme, animation_phase),
-        );
-    }
-    // The card emphasis carries the row's attention level; the glyph never
-    // blanks, so the one-cell column never shifts as it brightens.
-    let style = agent_lead_style_with_attention(theme, status, row.phase(), attention);
+        AnimationRole::Delegating
+    } else {
+        agent_role(status, row.phase())
+    };
     Span::styled(
-        agent_glyph(theme, status, row.phase(), animation_phase),
-        style,
+        role_glyph(theme, role, animation_phase),
+        agent_lead_style_with_attention(theme, role, attention),
     )
 }
 
