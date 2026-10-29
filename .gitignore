@@ -29,7 +29,7 @@ Thumbs.db
 perf.data
 perf.data.old
 flamegraph.svg
-coverage/
+/coverage/
 lcov.info
 
 # Agent Harness
