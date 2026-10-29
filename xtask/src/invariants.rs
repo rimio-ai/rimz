@@ -503,7 +503,7 @@ fn ensure_spending_walker_ownership(root: &Path, files: &[PathBuf]) -> Result<()
                 && !path.starts_with(&sidebar_pane)
                 && path != held_stats.as_path()
         },
-        "sidebar data/render planes and held-stats code must use the elected spending service",
+        "sidebar data/render planes and held-stats code must use the elected spending service; a sidebar unit test may construct one only in a module's sibling `tests.rs`, so move the whole inline `mod tests` there",
     )
 }
 
