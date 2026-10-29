@@ -58,6 +58,10 @@ pub(super) fn head_branch(git_dir: &Path, common_dir: &Path) -> Option<Option<St
     read_head(git_dir, common_dir).map(|head| head.branch)
 }
 
+pub(super) fn head_sha(git_dir: &Path, common_dir: &Path) -> Option<String> {
+    read_head(git_dir, common_dir).map(|head| head.sha)
+}
+
 fn read_head(git_dir: &Path, common_dir: &Path) -> Option<HeadRef> {
     let raw = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
     let raw = raw.trim();

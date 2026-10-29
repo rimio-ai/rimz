@@ -1264,21 +1264,21 @@ fn parse_numstat_sums_text_diff_and_ignores_binary_rows() {
 
 #[test]
 fn parse_status_entries_reads_clean_dirty_and_untracked() {
-    let clean = parse_status_entries("", |_| unreachable!("no entries to count"));
+    let clean = parse_status_entries("", |_| unreachable!("no entries to count"), |_, _| {});
     assert!(clean.clean);
     assert_eq!(clean.untracked_added, 0);
 
     // One modified + two untracked entries; only the `??` paths feed the
     // line counter, and any entry at all reads dirty.
-    let status =
-        parse_status_entries(
-            " M src/lib.rs\0?? notes.txt\0?? docs/new.md\0",
-            |path| match path {
-                "notes.txt" => 3,
-                "docs/new.md" => 4,
-                other => panic!("unexpected untracked path {other}"),
-            },
-        );
+    let status = parse_status_entries(
+        " M src/lib.rs\0?? notes.txt\0?? docs/new.md\0",
+        |path| match path {
+            "notes.txt" => 3,
+            "docs/new.md" => 4,
+            other => panic!("unexpected untracked path {other}"),
+        },
+        |_, _| {},
+    );
     assert!(!status.clean);
     assert_eq!(status.untracked_added, 7);
 
@@ -1291,6 +1291,7 @@ fn parse_status_entries_reads_clean_dirty_and_untracked() {
             assert_eq!(path, "x.txt");
             1
         },
+        |_, _| {},
     );
 
     assert!(!renamed.clean);
@@ -1898,7 +1899,7 @@ fn warm_unchanged_head_skips_commit_forks() {
     let before = crate::proc::testkit::spawn_count();
     let dirty = refresh_entry(repo.path_str(), Some(&warm), DueFacts::all(), None);
     assert!(
-        crate::proc::testkit::spawn_count() - before > 2,
+        crate::proc::testkit::spawn_count() - before > 1,
         "changed clean verdict re-probes commit facts even with stable HEAD"
     );
     assert_eq!(dirty.commits, Some(1));
@@ -1908,7 +1909,7 @@ fn warm_unchanged_head_skips_commit_forks() {
     let dirty_warm = refresh_entry(repo.path_str(), Some(&dirty), DueFacts::all(), None);
     assert_eq!(
         crate::proc::testkit::spawn_count() - before,
-        2,
+        1,
         "unchanged dirty HEAD still carries forward commit facts"
     );
     assert_eq!(dirty_warm.commits, dirty.commits);
@@ -1952,6 +1953,253 @@ fn spawns_during<T>(run: impl FnOnce() -> T) -> (T, u64) {
     (value, crate::proc::testkit::spawn_count() - before)
 }
 
+fn set_mtime(path: &Path, at: SystemTime) {
+    std::fs::File::open(path).unwrap().set_modified(at).unwrap();
+}
+
+#[test]
+fn dirty_counts_reuse_persisted_records_and_recompute_only_untracked_lines() {
+    let repo = feature_branch_fixture();
+    assert!(repo.initialized);
+    let file = repo.path().join("feature.txt");
+    let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+    repo.write("feature.txt", "one\nedit\n");
+    set_mtime(&file, modified);
+    let first = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    let persisted: DiffStatsCacheEntry =
+        serde_json::from_slice(&serde_json::to_vec(&first).unwrap()).unwrap();
+    let (stable, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&persisted), LOCAL_ONLY, None));
+    assert_eq!(
+        spawns, 1,
+        "unchanged dirty records skip numstat across serialization"
+    );
+    assert_eq!(stable.stats(), first.stats());
+
+    repo.write("scratch.txt", "scratch\nmore\n");
+    let (untracked, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&stable), LOCAL_ONLY, None));
+    assert_eq!(
+        spawns, 1,
+        "untracked records do not invalidate tracked counts"
+    );
+    assert_eq!(untracked.added, Some(4));
+    assert_eq!(untracked.untracked_added, Some(2));
+    assert_eq!(untracked.stats_dirty_key, stable.stats_dirty_key);
+
+    repo.write("scratch.txt", "single\n");
+    let (untracked, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&untracked), LOCAL_ONLY, None));
+    assert_eq!(spawns, 1);
+    assert_eq!(untracked.added, Some(3));
+    assert_eq!(untracked.untracked_added, Some(1));
+
+    repo.write("feature.txt", "one\nedit\nmore\n");
+    set_mtime(&file, modified);
+    let (resized, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&untracked), LOCAL_ONLY, None));
+    assert_eq!(spawns, 2, "size changes invalidate even at the same mtime");
+    assert_eq!(resized.added, Some(4));
+
+    assert_eq!("one\nedit\nmore\n".len(), "one\nlong-more\n".len());
+    repo.write("feature.txt", "one\nlong-more\n");
+    set_mtime(&file, modified + Duration::from_secs(10));
+    let (rewritten, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&resized), LOCAL_ONLY, None));
+    assert_eq!(spawns, 2, "mtime changes invalidate a same-size rewrite");
+    assert_eq!(rewritten.added, Some(3));
+
+    repo.write("base.txt", "base\nextra\n");
+    let (entered, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&rewritten), LOCAL_ONLY, None));
+    assert_eq!(spawns, 2, "entering the dirty set invalidates");
+    assert_eq!(entered.added, Some(4));
+    repo.write("base.txt", "base\n");
+    let (left, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&entered), LOCAL_ONLY, None));
+    assert_eq!(spawns, 2, "leaving the dirty set invalidates");
+    assert_eq!(left.added, Some(3));
+}
+
+#[test]
+fn submodule_counts_reuse_inner_dirt_but_invalidate_on_head_moves() {
+    let source = feature_branch_fixture();
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    assert!(source.initialized && repo.initialized);
+    assert!(repo.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        source.path_str(),
+        "sub",
+    ]));
+    assert!(repo.git(&["commit", "-qam", "submodule"]));
+    let sub = repo.path().join("sub");
+    let modified = std::fs::symlink_metadata(&sub).unwrap().modified().unwrap();
+    repo.write("sub/feature.txt", "one\nedit\n");
+    set_mtime(&sub, modified);
+    let dirty = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    assert_eq!(dirty.stats(), Some(DiffStats::default()));
+    let (stable, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&dirty), LOCAL_ONLY, None));
+    assert_eq!(spawns, 1, "stable submodule dirt skips numstat");
+    assert_eq!(stable.stats(), dirty.stats());
+
+    repo.write("sub/feature.txt", "one\nedit\nmore\n");
+    set_mtime(&sub, modified);
+    let (inner_edit, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&stable), LOCAL_ONLY, None));
+    assert_eq!(
+        spawns, 1,
+        "inner file contents do not change the gitlink count"
+    );
+    assert_eq!(inner_edit.stats(), Some(DiffStats::default()));
+
+    assert!(repo.git(&[
+        "-C",
+        "sub",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-qam",
+        "moved",
+    ]));
+    set_mtime(&sub, modified);
+    let (moved, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&inner_edit), LOCAL_ONLY, None));
+    assert_eq!(
+        spawns, 2,
+        "submodule HEAD invalidates with unchanged directory metadata"
+    );
+    assert_eq!(
+        moved.stats(),
+        Some(DiffStats {
+            added: 1,
+            removed: 1
+        })
+    );
+    assert_ne!(moved.stats_dirty_key, inner_edit.stats_dirty_key);
+
+    assert!(repo.git(&[
+        "-C",
+        "sub",
+        "symbolic-ref",
+        "refs/heads/alias",
+        "refs/heads/feature"
+    ]));
+    assert!(repo.git(&["-C", "sub", "symbolic-ref", "HEAD", "refs/heads/alias"]));
+    set_mtime(&sub, modified);
+    let opaque = refresh_entry(repo.path_str(), Some(&moved), LOCAL_ONLY, None);
+    assert_eq!(opaque.stats(), moved.stats());
+    let original = git_line(source.path(), &["rev-parse", "HEAD"]).unwrap();
+    assert!(repo.git(&["-C", "sub", "reset", "--hard", "-q", &original]));
+    repo.write("sub/feature.txt", "one\nedit\n");
+    set_mtime(&sub, modified);
+    let (returned, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&opaque), LOCAL_ONLY, None));
+    assert_eq!(
+        returned.stats(),
+        Some(DiffStats::default()),
+        "an unresolved submodule HEAD must not authorize reuse"
+    );
+    assert_eq!(spawns, 2);
+    assert!(returned.stats_dirty_key.is_none());
+}
+
+#[test]
+fn moved_merge_base_remeasures_line_counts() {
+    let repo = feature_branch_fixture();
+    assert!(repo.initialized);
+    let prior = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    assert_eq!(prior.added, Some(1));
+    assert!(repo.git(&["branch", "-f", "main", "HEAD"]));
+    let (moved, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&prior), LOCAL_ONLY, None));
+    assert_eq!(
+        spawns, 3,
+        "merge-base, status and numstat run after trunk moves"
+    );
+    assert_ne!(moved.stats_merge_base, prior.stats_merge_base);
+    assert_eq!(moved.stats(), Some(DiffStats::default()));
+}
+
+#[test]
+fn dirty_key_covers_codes_order_raw_paths_metadata_and_rename_sources() {
+    use sha2::Digest;
+
+    let key = |output: &[u8], metadata| {
+        parse_status_entries(output, |_| 0, |_, digest| digest.update([metadata]))
+            .dirty_key
+            .unwrap()
+    };
+    assert_eq!(
+        key(b"", 0),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(key(b"", 0), key(b"?? untracked\0", 99));
+    let original = key(b" M file\0 D gone\0", 1);
+    for changed in [
+        key(b"M  file\0 D gone\0", 1),
+        key(b" M other\0 D gone\0", 1),
+        key(b" D gone\0 M file\0", 1),
+        key(b" M file\0 D gone\0", 2),
+    ] {
+        assert_ne!(original, changed);
+    }
+    assert_ne!(key(b" M raw-\xff\0", 0), key(b" M raw-\xfe\0", 0));
+    assert_ne!(
+        key(b" R target\0source\0", 0),
+        key(b" R target\0other\0", 0)
+    );
+    let mut paths = Vec::new();
+    parse_status_entries(
+        b"R  target\0source\0 C copy\0original\0?? ignored\0",
+        |_| 0,
+        |path, _| {
+            paths.push(path.to_vec());
+        },
+    );
+    assert_eq!(
+        paths,
+        [
+            b"target".to_vec(),
+            b"source".to_vec(),
+            b"copy".to_vec(),
+            b"original".to_vec()
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_dirty_paths_reuse_then_invalidate_line_counts() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let repo = feature_branch_fixture();
+    assert!(repo.initialized);
+    let path = repo
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"raw-\xff.txt"));
+    std::fs::write(&path, "first\n").unwrap();
+    assert!(repo.git(&["add", "-N", "."]));
+    let first = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    let (stable, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&first), LOCAL_ONLY, None));
+    assert_eq!(spawns, 1);
+    assert_eq!(stable.added, Some(2));
+
+    std::fs::write(&path, "first\nsecond\nthird\n").unwrap();
+    let (changed, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&stable), LOCAL_ONLY, None));
+    assert_eq!(spawns, 2);
+    assert_eq!(changed.added, Some(4));
+    assert_ne!(changed.stats_dirty_key, stable.stats_dirty_key);
+}
+
 #[test]
 fn dirty_then_clean_pays_one_diff_and_the_next_clean_pass_none() {
     let repo = feature_branch_fixture();
@@ -1965,14 +2213,14 @@ fn dirty_then_clean_pays_one_diff_and_the_next_clean_pass_none() {
     };
     assert_eq!(cold.stats(), Some(committed));
 
-    repo.write("scratch.txt", "scratch\n");
+    repo.write("feature.txt", "one\nscratch\n");
     let (dirty, spawns) =
         spawns_during(|| refresh_entry(repo.path_str(), Some(&cold), LOCAL_ONLY, None));
-    assert_eq!(spawns, 2, "a dirty tree always diffs");
+    assert_eq!(spawns, 2, "a changed tracked record diffs");
     assert_eq!(dirty.clean, Some(false));
-    assert_eq!(dirty.added, Some(2), "untracked lines fold into the churn");
+    assert_eq!(dirty.added, Some(2), "tracked edits fold into the churn");
 
-    std::fs::remove_file(repo.path().join("scratch.txt")).unwrap();
+    repo.write("feature.txt", "one\n");
     let (clean, spawns) =
         spawns_during(|| refresh_entry(repo.path_str(), Some(&dirty), LOCAL_ONLY, None));
     assert_eq!(spawns, 2, "the first clean pass after a dirty one diffs");
@@ -2060,67 +2308,87 @@ fn entry_without_stats_provenance_diffs_once_then_skips() {
     if !repo.initialized {
         return;
     }
-    let mut legacy = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
-    legacy.stats_head_sha = None;
-    legacy.stats_merge_base = None;
+    let prior = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    let empty = serde_json::to_value(DiffStatsCacheEntry::default()).unwrap();
+    assert!(empty.get("stats_dirty_key").is_none());
+    assert!(empty.get("untracked_added").is_none());
+    for field in [
+        "stats_head_sha",
+        "stats_merge_base",
+        "stats_dirty_key",
+        "untracked_added",
+    ] {
+        let mut wire = serde_json::to_value(&prior).unwrap();
+        wire.as_object_mut().unwrap().remove(field);
+        let legacy: DiffStatsCacheEntry = serde_json::from_value(wire).unwrap();
+        let (first, spawns) =
+            spawns_during(|| refresh_entry(repo.path_str(), Some(&legacy), LOCAL_ONLY, None));
+        assert_eq!(spawns, 2, "missing {field} pays one diff");
+        assert!(first.stats_head_sha.is_some() && first.stats_merge_base.is_some());
+        assert!(first.stats_dirty_key.is_some() && first.untracked_added.is_some());
 
-    let (first, spawns) =
-        spawns_during(|| refresh_entry(repo.path_str(), Some(&legacy), LOCAL_ONLY, None));
-    assert_eq!(spawns, 2, "a legacy entry pays one diff");
-    assert!(first.stats_head_sha.is_some() && first.stats_merge_base.is_some());
-
-    let (second, spawns) =
-        spawns_during(|| refresh_entry(repo.path_str(), Some(&first), LOCAL_ONLY, None));
-    assert_eq!(spawns, 1);
-    assert_eq!(second.stats(), first.stats());
+        let (second, spawns) =
+            spawns_during(|| refresh_entry(repo.path_str(), Some(&first), LOCAL_ONLY, None));
+        assert_eq!(spawns, 1);
+        assert_eq!(second.stats(), first.stats());
+    }
 }
 
 #[test]
-fn diff_reuse_requires_clean_status_and_the_measured_inputs() {
+fn diff_reuse_requires_status_and_the_measured_inputs() {
     let prior = DiffStatsCacheEntry {
         added: Some(3),
         removed: Some(1),
-        clean: Some(true),
+        clean: Some(false),
         stats_head_sha: Some("head".to_owned()),
         stats_merge_base: Some("base".to_owned()),
+        stats_dirty_key: Some("dirty".to_owned()),
+        untracked_added: Some(2),
         ..DiffStatsCacheEntry::default()
     };
+    let mut status = parse_status_entries(" M tracked\0", |_| 0, |_, _| {});
+    status.dirty_key = Some("dirty".into());
+    status.untracked_added = 7;
     let at = Some(("head", "base"));
-    let reused = DiffStats {
-        added: 3,
+    let tracked = Some(DiffStats {
+        added: 1,
         removed: 1,
-    };
-    assert_eq!(
-        reusable_diff_stats(Some(&prior), at, Some(true)),
-        Some(reused)
-    );
+    });
+    for clean in [Some(false), Some(true), None] {
+        let entry = DiffStatsCacheEntry {
+            clean,
+            ..prior.clone()
+        };
+        assert_eq!(
+            reusable_diff_stats(Some(&entry), at, Some(&status)),
+            tracked
+        );
+    }
     assert_eq!(
         reusable_diff_stats(Some(&prior), at, None),
         None,
         "status failed"
     );
-    assert_eq!(reusable_diff_stats(Some(&prior), at, Some(false)), None);
-    assert_eq!(reusable_diff_stats(None, at, Some(true)), None);
-    assert_eq!(reusable_diff_stats(Some(&prior), None, Some(true)), None);
+    assert_eq!(reusable_diff_stats(None, at, Some(&status)), None);
+    assert_eq!(reusable_diff_stats(Some(&prior), None, Some(&status)), None);
     assert_eq!(
-        reusable_diff_stats(Some(&prior), Some(("moved", "base")), Some(true)),
+        reusable_diff_stats(Some(&prior), Some(("moved", "base")), Some(&status)),
         None
     );
     assert_eq!(
-        reusable_diff_stats(Some(&prior), Some(("head", "moved")), Some(true)),
+        reusable_diff_stats(Some(&prior), Some(("head", "moved")), Some(&status)),
         None
     );
+    status.dirty_key = Some("changed".into());
+    assert_eq!(reusable_diff_stats(Some(&prior), at, Some(&status)), None);
+    status.dirty_key = Some("dirty".into());
     for broken in [
         DiffStatsCacheEntry {
-            clean: Some(false),
-            ..prior.clone()
-        },
-        DiffStatsCacheEntry {
-            clean: None,
-            ..prior.clone()
-        },
-        DiffStatsCacheEntry {
             added: None,
+            ..prior.clone()
+        },
+        DiffStatsCacheEntry {
+            removed: None,
             ..prior.clone()
         },
         DiffStatsCacheEntry {
@@ -2131,8 +2399,16 @@ fn diff_reuse_requires_clean_status_and_the_measured_inputs() {
             stats_merge_base: None,
             ..prior.clone()
         },
+        DiffStatsCacheEntry {
+            stats_dirty_key: None,
+            ..prior.clone()
+        },
+        DiffStatsCacheEntry {
+            untracked_added: None,
+            ..prior.clone()
+        },
     ] {
-        assert_eq!(reusable_diff_stats(Some(&broken), at, Some(true)), None);
+        assert_eq!(reusable_diff_stats(Some(&broken), at, Some(&status)), None);
     }
 }
 
@@ -2163,7 +2439,9 @@ fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
     // the lines into `+` (`--untracked-files=all` reaches inside the dir).
     std::fs::create_dir_all(repo.path().join("sub")).unwrap();
     repo.write("sub/notes.txt", "n1\nn2\n");
-    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    let (entry, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&entry), LOCAL_ONLY, None));
+    assert_eq!(spawns, 1, "untracked-only dirt skips numstat");
     assert_eq!(entry.clean, Some(false));
     assert_eq!(
         entry.stats(),

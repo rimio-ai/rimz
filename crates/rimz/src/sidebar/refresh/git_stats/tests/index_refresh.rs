@@ -48,7 +48,11 @@ fn trace2_stale_count_uses_preload_evidence_and_subtracts_unfixable_paths() {
 {"event":"data","sid":"parent/child","category":"index","key":"preload/sum_lstat","value":"1500"}
 {"event":"data","sid":"parent/child","category":"index","key":"refresh/sum_lstat","value":"1500"}"#, 126),
     ];
-    let status = parse_status_entries(" M changed\0 A added\0 D deleted\0?? untracked\0", |_| 0);
+    let status = parse_status_entries(
+        " M changed\0 A added\0 D deleted\0?? untracked\0",
+        |_| 0,
+        |_, _| {},
+    );
     let actual: Vec<_> = cases
         .iter()
         .map(|(stderr, _)| index_stale_count(stderr, &status))
@@ -77,7 +81,7 @@ fn status_counts_only_worktree_changes_not_staged_or_untracked_paths() {
     let actual: Vec<_> = cases
         .iter()
         .map(|(output, _)| {
-            let status = parse_status_entries(output, |_| 0);
+            let status = parse_status_entries(output, |_| 0, |_, _| {});
             (status.scanned_changes, status.deleted_paths)
         })
         .collect();
