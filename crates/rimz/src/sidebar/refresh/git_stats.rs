@@ -347,15 +347,12 @@ pub(super) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String>
         .unwrap_or(SignedDuration::MAX);
     let mut hot = BTreeSet::new();
     for group in snapshot.worktree_groups.iter() {
-        let Some(path) = git_backed_worktree_path(group) else {
-            continue;
-        };
         let any_hot = group.rows.iter().any(|row| {
             row.is_agent()
                 && (row.status() == Some(AgentStatus::Running)
                     || snapshot.now.duration_since(row.last_activity) <= window)
         });
-        if any_hot {
+        if any_hot && let Some(path) = git_backed_worktree_path(group) {
             hot.insert(path);
         }
     }
@@ -368,14 +365,12 @@ pub(super) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<Str
     let viewed: HashSet<&PaneId> = snapshot.viewed_panes.iter().collect();
     let mut focused = BTreeSet::new();
     for group in snapshot.worktree_groups.iter() {
-        let Some(path) = git_backed_worktree_path(group) else {
-            continue;
-        };
         if group.rows.iter().any(|row| {
             row.pane
                 .as_ref()
                 .is_some_and(|pane| viewed.contains(&pane.pane_id))
-        }) {
+        }) && let Some(path) = git_backed_worktree_path(group)
+        {
             focused.insert(path);
         }
     }
