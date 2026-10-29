@@ -10,7 +10,7 @@ The code lives in `crates/rimz/src/sandbox/`:
 | --- | --- |
 | `mod.rs` | `plan` (mounts, environment pins, copies), `apply`, `bwrap_argv`, `preflight` and `preflight_launch`, `TmpView`, `SandboxErr` |
 | `linux.rs` | The bubblewrap probe and the `rimz doctor` diagnosis. |
-| `skills.rs` | The scoped skill view: the merged provider root and library, alias checks, omissions. |
+| `skills.rs` | The scoped skill view: the merged provider, library, and pack chain, alias checks, omissions. |
 | `rewrite.rs` | User-only skill copies and system SSH-config mirrors: capture, digest, rewrite, atomic apply. |
 | `bind_guard.rs` | `BindGuard`, the [live repair](#live-protected-bind-repair) of protected binds that a host rename detached. |
 
@@ -296,9 +296,9 @@ Claude uses one `--settings` value with `skillOverrides[<directory name>] = "use
 
 `crates/rimz/src/harness/launch.rs::ExecRequest::launch_skills` derives the launch selection without changing the profile's stored list. A child's explicit list drops `rimz-subagents`; a child with no list keeps `None` and carries a one-name exclusion into `crates/rimz/src/agents/skills.rs::HostSkills::apply` and the scoped `SkillInputs`. The same selection feeds listed-skill permission grants, so a child's profile list does not add a grant for that skill. Routine permission grants do not lift its invocation restriction. An unconfigured host child emits a switch only when the excluded skill is installed. Without a provider switch it emits no unenforced-list warning, and an unavailable optional host view keeps native discovery with a debug diagnostic. Only the profile's own list makes enforcement required.
 
-`crates/rimz/src/agents/skills.rs::enumerate` reads the launch environment's provider skill root and the RimZ library. The provider wins a directory-name collision, and broken symlinks are skipped. Definition loading and validation share this enumeration and the native marker check only where the list is enforced: scoped-resolved definitions of any kind, and host definitions with `HostSkills::Switch`. Resolution uses the inherited definition isolation default before machine policy. Host definitions without a switch skip both skill lookup and marker checks, and callers already inside a scoped view skip definition checks altogether.
+`crates/rimz/src/agents/skills.rs::enumerate` reads the launch environment's provider skill root, then the home library, then installed packs through `crates/rimz/src/agents/skills.rs::SkillChain`. RimZ-owned provider-root links are skipped, foreign links retain provider priority, and broken provider links are skipped. The library hides same-named pack skills, even when its entry is a dangling symlink; that unavailable skill fails only if listed. Otherwise multiple non-excluded pack claims conflict. Definition loading and validation share this enumeration and the native marker check only where the list is enforced: scoped-resolved definitions of any kind, and host definitions with `HostSkills::Switch`. Resolution uses the inherited definition isolation default before machine policy. Host definitions without a switch skip both skill lookup and marker checks, and callers already inside a scoped view skip definition checks altogether.
 
-A listed name missing from both roots refuses a switch-provider launch and names both roots. When two directories share one provider key, their policies must agree, or the launch refuses instead of disabling a listed skill. Entry-point preflights supply runtime paths when the resolved isolation is host, and run the same skill resolution and settings rendering as the exec wrapper before launch allocation or pane mutation. The host gate carries the artifact paths it needs, and default reminders do not imply host isolation. Preflight only plans settings artifacts and leaves the writes to launch-plan apply.
+A listed name missing from the chain refuses a switch-provider launch and lists the searched roots; a conflicted pack name reports the conflict. When two directories share one provider key, their policies must agree, or the launch refuses instead of disabling a listed skill. Entry-point preflights supply runtime paths when the resolved isolation is host, and run the same skill resolution and settings rendering as the exec wrapper before launch allocation or pane mutation. The host gate carries the artifact paths it needs, and default reminders do not imply host isolation. Preflight only plans settings artifacts and leaves the writes to launch-plan apply.
 
 Claude keeps the last user `--settings` value, parsing inline JSON or a JSONC file relative to the provider's working directory. It preserves unrelated keys and listed-skill overrides and overlays the unlisted entries. When the user supplies settings, the single flag points to a content-addressed JSON file under `RuntimePaths::prompt_dir`, which launch-plan apply in the exec wrapper writes at mode `0600` in a directory enforced at `0700`. Compilation, `explain` included, only plans the file, and settings contents never enter provider or wrapped argv. Without user settings, the skill-only object stays inline. Unreadable or invalid settings refuse the launch.
 
@@ -306,7 +306,7 @@ Codex replaces CLI `-c` or `--config` overrides for `skills.config`. Entries fro
 
 When a profile list is configured, directory names it cannot name, such as `odd name`, are still enumerated and always unlisted. Claude uses the raw directory name for their switch keys, and Codex still prefers the frontmatter name.
 
-Neither provider has a wildcard, so skills installed after launch stay callable until restart. Project-chain skills, Codex's `$CODEX_HOME/skills`, and other native roots outside the two enumerated roots keep native behaviour. Host skill files are never rewritten.
+Neither provider has a wildcard, so skills installed after launch stay callable until restart. Project-chain skills, Codex's `$CODEX_HOME/skills`, and other native roots outside the enumerated chain keep native behaviour. Host skill files are never rewritten.
 
 ### Skill roots and user-only markers
 
@@ -329,23 +329,23 @@ Each scoped launch overlays at most one user skill root, declared by the adapter
 
 A provider marked `Unsupported`, or without a root, refuses every configured list under scoped isolation, whatever skills are installed. `Frontmatter` writes `disable-model-invocation: true` into `SKILL.md` frontmatter. `OpenAiPolicy` writes `policy.allow_implicit_invocation: false` into `agents/openai.yaml`.
 
-The RimZ skill library at `agents_home()/skills` (by default `~/.rimz/skills/`, or `$RIMZ_HOME/skills/` when `RIMZ_HOME` relocates the home) is merged into the provider root, and a name already in the provider root shadows the library entry. Host-mode library links are provider-root symlinks, which the view preserves, so they shadow the library entry the same way. `RIMZ_AGENTS_HOME` is the narrower override that moves only the definition trees and the skill library together, and the library is then `$RIMZ_AGENTS_HOME/skills/`. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour.
+The RimZ skill library at `agents_home()/skills` (by default `~/.rimz/skills/`) and installed pack skills merge below the provider's own entries. `RIMZ_HOME` relocates the home; `RIMZ_AGENTS_HOME` overrides it for the definition trees, library, and `packs/` together. Host-mode links into the library or packs are RimZ-owned and skipped as provider claims, so a stale link cannot revive an excluded skill or outrank a new library override. The planner retains an owned link only when it matches the current winner. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour. The chain and exclusions are documented in [configuration](../guide/configuration.md#skills) and [packs](../reference/cli/packs.md).
 
-Definition validation (`crates/rimz/src/config/definitions/agent.rs::skill_policy`) resolves each listed skill through the same two roots in the same order, the adapter's `skills_home` under the ambient environment and then the library, and checks the marker on the copy that wins. It cannot share `skills::plan`, since `config` sits below `sandbox`. A named account's login home is checked when that account launches.
+Definition validation (`crates/rimz/src/config/definitions/agent.rs::skill_policy`) resolves each listed skill through the same provider/library/pack chain and checks the marker on the winning copy. It shares `agents::skills` discovery, not `sandbox::skills::plan`, since `config` sits below `sandbox`. A named account's login home is checked when that account launches.
 
 ### Building the view
 
-`skills::plan` enumerates the provider root and the library on the host, before any overlay hides them. A skill is a directory that contains `SKILL.md`. Other entries, such as `_shared`, `AGENTS.md`, and `CLAUDE.md`, are carried into the view without copying or rewriting. Broken symlinks are skipped with a debug log.
+`crates/rimz/src/sandbox/skills.rs::plan_view` enumerates the provider root and the RimZ skill chain on the host, before any overlay hides them. A skill is a directory that contains `SKILL.md`. Other provider-owned entries, such as `_shared`, `AGENTS.md`, and `CLAUDE.md`, are carried into the view without copying or rewriting; non-skill library and pack entries are not. Broken provider symlinks are skipped with a debug log.
 
 The view preserves the provider root's shape:
 
 - The tmpfs covers the resolved root, since the root itself may be a symlink. A root that does not exist can be created empty on the host when bubblewrap mounts over it.
-- A symlink in the provider root is recreated with its literal target, so a skill script that resolves its own path still reaches its canonical parent and shared sibling modules. Its target is resolved before the overlay hides it.
-- Every other entry, and every library entry, is a read-only bind. The host library path itself is shadowed only when a preserved provider-root symlink points into it.
+- A foreign symlink in the provider root, or an owned link matching the chain's current winner, is recreated with its literal target, so a skill script that resolves its own path still reaches its canonical parent and shared sibling modules. Its target is resolved before the overlay hides it.
+- Every other selected entry, including library and pack skills without a matching owned link, is a read-only bind. A preserved symlink's canonical target is shadowed only when that skill needs a rewritten copy.
 
 Unlisted skills are rewritten once per canonical directory. A provider-root entry binds its rewritten copy directly. A skill reached through a preserved symlink instead gets one read-only shadow of the copy at its canonical path, which can lie outside the declared skill root. Aliases that resolve to the same skill directory must be all listed or all unlisted. A mix refuses the launch with `ConflictingSkillAliases`, naming both and the fix.
 
-A view exists only when it changes something. With no library entries to merge and no copies to make, there is no tmpfs and no snapshot of the host directory. Without a configured list, only a launched child's `rimz-subagents` exclusion can require a user-only rewrite; all other skills keep native invocation. No root, an unsupported marker, or an unavailable optional view keeps native discovery without a new refusal. RimZ never rewrites or removes host skill files or symlinks.
+A view exists only when it changes something. With no chain entries to add, stale owned links to hide, or copies to make, there is no tmpfs and no snapshot of the host directory. A provider root holding exactly the chain's owned links needs no view. Without a configured list, only a launched child's `rimz-subagents` exclusion can require a user-only rewrite; all other skills keep native invocation. No root, an unsupported marker, or an unavailable optional view keeps native discovery without a new refusal. The scoped planner never rewrites or removes host skill files or symlinks.
 
 ### The user-only rewrite
 
@@ -376,9 +376,12 @@ Whether a problem refuses the launch or drops one skill depends on whether a lis
 | --- | --- |
 | No list configured, and the view cannot be built (an unreadable root, an undecodable entry name) | Native discovery unchanged, with a debug diagnostic only. |
 | List configured, and the provider has no skill root or an `Unsupported` marker | Launch refused (`SkillsNeedRoot`, `ManualSkillsUnsupported`). |
-| List configured, and a listed name is in neither the provider root nor the library | Launch refused (`UnknownSkill`, naming the searched roots). |
+| List configured, and a listed name is absent from the provider/library/pack chain | Launch refused (`UnknownSkill`, naming the searched roots). |
+| List configured, and a listed name has conflicting pack claims with no higher-tier winner | Launch refused with the conflict and its fixes. |
 | List configured, and aliases of one skill disagree | Launch refused (`ConflictingSkillAliases`). |
-| List configured, and listing the provider root or the library fails: an unreadable root, an undecodable entry name, or an entry whose path cannot be resolved, such as a symlink loop (a broken symlink is skipped instead) | Launch refused. |
+| A pack skill cannot be read | That pack's skills are withheld and its problem reaches validation, room entry, doctor, and pack inspection. Other packs and the library remain available; excluded and overridden copies are not read. |
+| Host link planning encounters an unreadable library skill entry | Entry skipped, but its name still hides pack copies. Planning continues with the readable entries. |
+| List configured, and listing the provider root or home library fails, or a provider or library entry cannot be resolved, such as a symlink loop (a broken symlink is skipped instead) | Launch refused with the read error. |
 | List configured, and writing under `skills_dir` fails | Launch refused. |
 | List configured, and an unlisted skill has an unreadable file or directory, a directory symlink cycle inside it, a non-file entry, or unsupported metadata | Skill omitted from this launch, and the others proceed. |
 

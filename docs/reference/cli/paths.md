@@ -43,7 +43,7 @@ builds           /home/me/.rimz/builds
 | --- | --- |
 | `home` | The RimZ home: `$RIMZ_HOME` when set, else `~/.rimz`. Every durable row below sits under it. |
 | `config`, `theme`, `loop config`, `remote` | The machine config files. |
-| `agents home` | Where profiles, subagents, teams, traits, and the skill library resolve. It equals `home` unless `RIMZ_AGENTS_HOME` overrides it. |
+| `agents home` | Where profiles, subagents, teams, traits, the skill library, and installed [packs](./packs.md) resolve. It equals `home` unless `RIMZ_AGENTS_HOME` overrides it; packs live in its `packs/` child, with no separate row. |
 | `workspace id` | The room's identity, `ws_<24hex>`, derived from the project root. Flags, JSON fields, and `RIMZ_WORKSPACE_ID` carry this value. |
 | `workspace dir` | The directory name the room's files live under: the project root's basename and the first hex digits of the id. The name lengthens by two hex digits when another project already holds the shorter one, and it stays fixed once created. |
 | `state dir`, `runtime dir` | The room's durable directory under `home/ws/` and its tmpfs directory under `runtime root/ws/`, both named by `workspace dir`. |

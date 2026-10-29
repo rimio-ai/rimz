@@ -27,7 +27,7 @@ The directory is `$RIMZ_HOME`, or `~/.rimz/` when `RIMZ_HOME` is unset; [`rimz p
 
 Two key families land under a different table than their dotted name suggests. `theme.colors.*` lands in the root `[colors.*]` tables of `theme.toml`, so an Alacritty palette pasted there keeps working. `loop.*` drops the `loop.` prefix inside `loop.toml`, so `loop.default-timeout` is the file's top-level `default-timeout`.
 
-The same directory holds `remote.toml` (SSH room aliases, managed by [`rimz remote`](./remote.md)) and `agents/`, `subagents/`, `teams/`, `traits/`, and `skills/` ([Markdown definitions](../definitions.md) and the shared [skill library](../../guide/configuration.md#skills)). `rimz config get` includes loaded definitions; `set` does not edit their source files.
+The same directory holds `remote.toml` (SSH room aliases, managed by [`rimz remote`](./remote.md)) and `agents/`, `subagents/`, `teams/`, `traits/`, and `skills/` ([Markdown definitions](../definitions.md) and the shared [skill library](../../guide/configuration.md#skills)), plus installed [packs](./packs.md) under `packs/`. `RIMZ_AGENTS_HOME` relocates the definition trees, library, and packs together. `rimz config get` includes loaded definitions; `set` does not edit their source files.
 
 ## Write the templates
 
