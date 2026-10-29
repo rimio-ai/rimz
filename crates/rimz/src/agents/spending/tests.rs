@@ -533,4 +533,5 @@ mod cache_wire;
 mod compaction;
 mod discovery;
 mod published_cache;
+mod scoped_pin;
 mod walk_cache;
