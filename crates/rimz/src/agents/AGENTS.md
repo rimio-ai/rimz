@@ -51,6 +51,8 @@ Golden every stdout shape in the adapter's `tests` module with inline `insta::as
 
 A change to a provider's launch argv or its `--settings` JSON also runs `cargo xtask test -E 'binary(integration) & test(sandbox::)'`: `sandbox::sandbox_skills_under_host_use_provider_switches` pins the rendered Claude settings, and adapter-focused filters miss it.
 
+A change to what `local_conversation_present` answers in any case also runs `cargo xtask test -P journey` and `cargo xtask test -P live`. Their rebirth, restart and resume journeys reach `crates/rimz/src/harness/resume.rs::resume_session_present` and depend, without asserting it, on the conversation that the shared stub in `crates/rimz/tests/integration/common/shim.rs` saves. `gate` runs neither profile.
+
 A change to an adapter's permission arguments updates the `Permission modes` table in [agent-support.md](../../../../docs/reference/agent-support.md#permission-modes), which `conformance.rs` pins cell by cell against `LaunchSpec::permission_args`.
 
 A new `Ignored` edge in `lifecycle::step` is decided in its early-return chain and tested from a `compacting: true` prior. An ignore decided inside `map_status` still runs `step`'s tail, which closes the compaction bracket.
