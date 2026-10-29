@@ -43,6 +43,7 @@ pub mod message;
 pub mod mux;
 pub mod observability;
 pub mod osc;
+pub mod packs;
 pub mod pane;
 mod pixel_wire;
 pub mod proc;
