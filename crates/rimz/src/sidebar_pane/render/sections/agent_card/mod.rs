@@ -400,13 +400,15 @@ fn sub_agent_entry_lines(
             agent_glyph(theme, sub.status, sub.phase, animation_phase),
             agent_role_style_at(theme, sub.status, sub.phase, animation_phase),
         );
-        // Prefer the `subagentStatusLine` description; fall back to the task
-        // definition, shown only when it differs from the name (the name already
-        // is the type for most children) rather than repeating it as a headline.
         let detail = sub
             .description
             .as_deref()
-            .or(sub.task.as_deref().filter(|task| *task != sub.name));
+            .filter(|detail| *detail != sub.name)
+            .or(sub.task.as_deref().filter(|detail| *detail != sub.name))
+            .or(sub
+                .first_prompt
+                .as_deref()
+                .filter(|detail| *detail != sub.name));
         // The clock rides line 2; a metadata-free landed child has no line 2,
         // so it pins its frozen runtime ahead of its cost instead.
         let detail_line = sub_agent_metadata_line(ctx, sub, token_col, model_col, focused);
@@ -424,6 +426,11 @@ fn sub_agent_entry_lines(
             ));
         }
         let mut entry_lines = Vec::new();
+        let headline_style = if sub.pane.is_some() {
+            theme.body()
+        } else {
+            theme.muted()
+        };
         push_entry(
             ctx,
             &mut entry_lines,
@@ -439,7 +446,9 @@ fn sub_agent_entry_lines(
                     .as_deref()
                     .and_then(crate::agents::single_line_description)
                     .map(|label| Span::styled(label, theme.body().add_modifier(Modifier::ITALIC)))
-                    .or_else(|| detail.map(|detail| Span::styled(detail.to_owned(), theme.body()))),
+                    .or_else(|| {
+                        detail.map(|detail| Span::styled(detail.to_owned(), headline_style))
+                    }),
                 right,
                 detail: detail_line,
             },

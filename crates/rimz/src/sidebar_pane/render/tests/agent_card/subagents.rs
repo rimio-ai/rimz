@@ -3,6 +3,118 @@ use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph};
 use crate::sidebar_pane::render::theme::Component;
 
+#[test]
+fn child_headlines_are_muted_exactly_when_the_entry_has_no_live_pane() {
+    let theme = Theme::fixed(false);
+    let pane: PaneId = "zellij:terminal_child".parse().unwrap();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (status, live, native, error) in [
+        (AgentStatus::Running, true, false, false),
+        (AgentStatus::Success, false, false, false),
+        (AgentStatus::Running, false, true, false),
+        (AgentStatus::Failed, false, false, true),
+    ] {
+        let mut snapshot = fast_child_snapshot(status, false);
+        let child = &mut fast_children_mut(&mut snapshot)[0];
+        child.fast = false;
+        child.name = "claude".to_owned();
+        child.pane = live.then_some(pane.clone());
+        child.provider_native = native;
+        child.description = Some("audit the trust hash".to_owned());
+        child.turn_error_label = error.then(|| "limit reached".to_owned());
+        let rolls = CostRolls::default();
+        let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+        let label = if error {
+            "limit reached"
+        } else {
+            "audit the trust hash"
+        };
+        let (line_index, line) = block
+            .lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| line.to_string().contains(label))
+            .unwrap();
+        let headline = line
+            .spans
+            .iter()
+            .find(|span| span.content == label)
+            .unwrap();
+        let metadata = block
+            .lines
+            .iter()
+            .position(|line| line.to_string().contains("Haiku"))
+            .unwrap();
+        let has_target = |line| {
+            matches!(
+                block.interactions.target_at(1, line as u16),
+                Some(HitTarget::SubAgentPane(_))
+            )
+        };
+        actual.push((
+            headline.style.fg,
+            headline.style.add_modifier.contains(Modifier::ITALIC),
+            has_target(line_index),
+            has_target(metadata),
+        ));
+        expected.push((
+            if live || error {
+                theme.body().fg
+            } else {
+                theme.muted().fg
+            },
+            error,
+            live,
+            live,
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn child_headline_uses_description_task_then_first_prompt_without_repeating_the_type() {
+    let mut actual = Vec::new();
+    for (description, task, prompt) in [
+        (Some("description"), Some("task"), Some("prompt")),
+        (None, Some("task"), Some("prompt")),
+        (None, None, Some("prompt")),
+        (Some("claude"), Some("claude"), Some("prompt")),
+        (None, None, Some("claude")),
+    ] {
+        let mut snapshot = fast_child_snapshot(AgentStatus::Success, false);
+        let child = &mut fast_children_mut(&mut snapshot)[0];
+        child.name = "claude".to_owned();
+        child.fast = false;
+        child.description = description.map(str::to_owned);
+        child.task = task.map(str::to_owned);
+        let mut wire = serde_json::to_value(&*child).unwrap();
+        wire["first_prompt"] = serde_json::json!(prompt);
+        *child = serde_json::from_value(wire).unwrap();
+        let lines = group_lines(&snapshot, &Theme::fixed(false), 0);
+        actual.push(
+            lines
+                .iter()
+                .map(Line::to_string)
+                .find(|line| line.contains("✓ claude"))
+                .unwrap()
+                .trim_matches(['▌', '▐', ' '])
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        actual,
+        [
+            "✓ claude · description",
+            "✓ claude · task",
+            "✓ claude · prompt",
+            "✓ claude · prompt",
+            "✓ claude"
+        ]
+    );
+}
+
 fn fast_children_mut(
     snapshot: &mut SidebarSnapshot,
 ) -> &mut Vec<crate::store::snapshot::SidebarSubAgent> {
