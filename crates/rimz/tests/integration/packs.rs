@@ -255,7 +255,7 @@ fn reserved_pack_team_cells_are_item_failures_not_set_failures() {
         ("claude-yolo", true),
         ("claude-fast", true),
         ("other-fast", true),
-        ("coder-fast", false),
+        ("coder-fast", true),
     ] {
         let env = Env::new();
         let source = installed_with_home_profile(&env);
