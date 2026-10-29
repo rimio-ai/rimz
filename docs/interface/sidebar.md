@@ -17,7 +17,7 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
  ? 3   ! 0   ⏸︎ 0   ✓ 8                  ⢿ 3   ☾ 1   ○ 1     ← make-up line: units by status
 
 ▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⑃ main🮇    ← worktree header: branch, commits, diff, PR state
-▌⣾ claude · Opus 4.8 · high · 200k                $1.27▐    ← status, handle, model, effort, window, cost
+▌⢄ claude · Opus 4.8 · high · 200k                $1.27▐    ← status, handle, model, effort, window, cost
 ▌  store refactor                                      ▐    ← what the session is on
 ▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────── 38.2% ◔  7m▐    ← context meter and own quiet age
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                        ▐    ← selected card's tokens in the window
