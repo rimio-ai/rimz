@@ -187,6 +187,10 @@ impl PortSync {
     pub fn snapshot(&self) -> Vec<ForwardEntry> {
         self.forwards
             .iter()
+            .filter(|(_, forward)| {
+                forward.state != ForwardState::Reopening
+                    || matches!(forward.origin, OpenOrigin::MasterReplacement)
+            })
             .map(|(remote, forward)| ForwardEntry {
                 remote: *remote,
                 local: self.local_port(*remote),
@@ -395,7 +399,9 @@ mod tests {
     fn forward_record_tracks_pairs_outcomes_and_state_ages() {
         let mut sync = PortSync::default();
         sync.observe(1_000, &[3000], Some(PortsScope::Room));
+        let mut pending = vec![sync.snapshot()];
         sync.choose_local_port(1_100, 3000, |port| port == 3001, || None);
+        pending.push(sync.snapshot());
         sync.mark_opened(1_200, 3000);
         sync.observe(9_000, &[3000], Some(PortsScope::Room));
         assert_eq!(
@@ -417,8 +423,17 @@ mod tests {
         sync.observe(13_000, &[], Some(PortsScope::Room));
         assert!(sync.snapshot().is_empty());
         sync.observe(14_000, &[3000], Some(PortsScope::Room));
+        pending.push(sync.snapshot());
+        sync.choose_local_port(14_100, 3000, |_| true, || None);
+        pending.push(sync.snapshot());
+        sync.mark_opened(14_200, 3000);
         assert_eq!(sync.snapshot()[0].local, Some(3001));
-        assert_eq!(sync.snapshot()[0].since_ms, 14_000);
+        assert_eq!(sync.snapshot()[0].since_ms, 14_200);
+        assert_eq!(
+            pending,
+            vec![Vec::<ForwardEntry>::new(); 4],
+            "new and returned listeners stay unpublished until their report opens settle"
+        );
     }
 
     #[test]
@@ -426,6 +441,10 @@ mod tests {
         let mut sync = PortSync::default();
         let ports = (3000..3017).collect::<Vec<_>>();
         sync.observe(1_000, &ports, Some(PortsScope::Room));
+        for port in 3001..3016 {
+            sync.choose_local_port(1_100, port, |_| true, || None);
+            sync.mark_opened(1_200, port);
+        }
         sync.choose_local_port(2_000, 3000, |_| false, || None);
         sync.observe(3_000, &ports, Some(PortsScope::Room));
         sync.choose_local_port(4_000, 3000, |_| false, || None);
@@ -625,6 +644,16 @@ mod tests {
                 PortAction::Open(2016)
             ]
         );
+        let pending = sync.snapshot();
+        sync.choose_local_port(0, 2016, |_| true, || None);
+        assert!(
+            [pending, sync.snapshot()]
+                .iter()
+                .all(|entries| entries.iter().all(|entry| entry.remote != 2016)),
+            "a limit entry with a free slot stays unpublished until its report open settles"
+        );
+        sync.mark_opened(0, 2016);
+        assert_eq!(sync.snapshot()[0].state, ForwardState::Forwarded);
     }
 
     #[test]
@@ -800,6 +829,13 @@ mod tests {
         assert_eq!(sync.choose_local_port(0, 3000, |_| false, || None), None);
         assert_eq!(sync.state(3000), Some(&ForwardState::NoLocalPort));
         assert_eq!(sync.observe(0, &[3000], None), [PortAction::Open(3000)]);
+        sync.choose_local_port(0, 3000, |_| true, || None);
+        assert!(
+            sync.snapshot().is_empty(),
+            "an allocation retry stays unpublished until its report open settles"
+        );
+        sync.mark_opened(0, 3000);
+        assert_eq!(sync.snapshot()[0].state, ForwardState::Forwarded);
     }
 
     #[test]
@@ -848,6 +884,7 @@ mod tests {
             sync.choose_local_port(0, 3000, |_| true, || None),
             Some(3000)
         );
+        assert_eq!(sync.snapshot()[0].state, ForwardState::Reopening);
         sync.mark_opened(0, 3000);
         assert!(sync.reopen_active().is_empty());
     }
