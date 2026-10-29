@@ -1534,6 +1534,67 @@ fn checkout_metadata_marker_memo_revalidates_files_and_preserves_errors() {
 }
 
 #[test]
+fn checkout_metadata_marker_memo_evicts_the_oldest_parse_at_its_limit() {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    use crate::testkit::WORK_COUNTERS;
+
+    let dir = tempfile::tempdir().unwrap();
+    let checkouts: Vec<PathBuf> = (0..=MARKER_PARSE_LIMIT)
+        .map(|index| {
+            let checkout = dir.path().join(index.to_string());
+            std::fs::create_dir_all(checkout.join(".git")).unwrap();
+            let marker = WorktreeMarker {
+                version: 1,
+                name: format!("lane-{index}"),
+                branch: format!("lane-{index}"),
+                base_branch: None,
+                from_pr: None,
+                base_ref: "HEAD".to_owned(),
+                repo_root: dir.path().to_path_buf(),
+                worktree_path: checkout.clone(),
+                created_at: at(20),
+            };
+            let marker = serde_json::to_vec(&marker).unwrap();
+            std::fs::write(checkout.join(".git").join(MARKER_FILE), marker).unwrap();
+            checkout
+        })
+        .collect();
+    let before = WORK_COUNTERS.marker_reads.load(Relaxed);
+    for checkout in &checkouts {
+        assert!(
+            read_marker_from_checkout_metadata(checkout)
+                .unwrap()
+                .is_some()
+        );
+    }
+    let held = |cache: &MarkerParses| (cache.entries.len(), cache.order.len());
+    assert_eq!(
+        held(&MARKER_PARSES.lock().unwrap()),
+        (MARKER_PARSE_LIMIT, MARKER_PARSE_LIMIT)
+    );
+    let mut reads = vec![WORK_COUNTERS.marker_reads.load(Relaxed) - before];
+    for checkout in [&checkouts[MARKER_PARSE_LIMIT], &checkouts[0]] {
+        assert!(
+            read_marker_from_checkout_metadata(checkout)
+                .unwrap()
+                .is_some()
+        );
+        reads.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+    }
+    let limit = MARKER_PARSE_LIMIT as u64;
+    assert_eq!(
+        reads,
+        [limit + 1, limit + 1, limit + 2],
+        "cold, newest, evicted"
+    );
+    assert_eq!(
+        held(&MARKER_PARSES.lock().unwrap()),
+        (MARKER_PARSE_LIMIT, MARKER_PARSE_LIMIT)
+    );
+}
+
+#[test]
 fn host_discovery_reuses_rows_and_reads_markers_fresh() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_test_repo(dir.path());
