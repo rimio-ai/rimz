@@ -134,7 +134,7 @@ No packs installed. Install a local source: rimz packs install ./path
 
 Every successful mutating verb, including an already-applied change, prunes obsolete RimZ-owned host skill links across native provider roots and declared account homes. Receipts name removed links by root. Mutations add no links; a later host launch creates them. Foreign entries are untouched. Ownership and precedence are in [configuration](../../guide/configuration.md#skills).
 
-The record commits before cleanup. An entry-link cleanup failure still prints the removal receipt and a warning: the unrecorded entry is ignored. Incomplete host skill-link cleanup exits 1 with `pack change committed, but host skill link cleanup is incomplete`; it does not undo the pack change. `rimz uninstall` removes owned library and pack skill links but keeps `packs/` in every mode.
+The record commits before entry cleanup. A repair or collection failure warns but does not prevent removal of a broken source. An entry-link cleanup failure still prints the removal receipt and a warning: the unrecorded entry is ignored. Incomplete host skill-link cleanup exits 1 with `pack change committed, but host skill link cleanup is incomplete`; it does not undo the pack change. `rimz uninstall` removes owned library and pack skill links but keeps `packs/` in every mode.
 
 ## Manifest
 
