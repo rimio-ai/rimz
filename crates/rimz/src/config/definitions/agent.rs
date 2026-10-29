@@ -635,7 +635,9 @@ pub(super) fn auto_compact(path: &Path, value: &str) -> Result<String, Definitio
     Ok(text.to_owned())
 }
 
-/// Under [`SkillCheck::Check`], each listed skill resolves as the scoped view finds it: the kind's provider skill root, then the library. The first root holding `SKILL.md` wins and carries the marker check; only an absent file falls through, so an unreadable copy fails rather than letting a shadowed library copy speak for it.
+/// Under [`SkillCheck::Check`], each listed skill resolves as the scoped view finds it:
+/// provider root, library, then packs. The winning `SKILL.md` carries the marker check;
+/// an unreadable copy fails rather than letting a shadowed copy speak for it.
 pub(super) fn skill_policy(
     path: &Path,
     kind: &str,
@@ -663,15 +665,21 @@ pub(super) fn skill_policy(
     };
     for name in names(path, "skills", listed)? {
         let skill: SkillName = name.parse().map_err(|_| DefinitionErr::new(path, format!("lists skill {name:?}; rimz reads one bare directory name, so a `<name>:<mode>` suffix, a path, or whitespace is refused")))?;
-        if let SkillCheck::Check { env, library, .. } = check {
+        if let SkillCheck::Check { env, .. } = check {
             let roots: Vec<PathBuf> = definition
                 .and_then(|definition| definition.skills_home(env))
                 .into_iter()
-                .chain([library.to_path_buf()])
+                .chain(catalog.chain.roots())
                 .collect();
+            if let Some(conflict) = discovered
+                .as_ref()
+                .and_then(|skills| skills.conflicts.get(&name))
+            {
+                return Err(DefinitionErr::new(path, &conflict.message));
+            }
             let Some(found) = discovered
                 .as_ref()
-                .and_then(|skills| skills.get(skill.as_str()))
+                .and_then(|skills| skills.skills.get(skill.as_str()))
             else {
                 let searched: Vec<String> = roots
                     .iter()

@@ -572,7 +572,7 @@ pub trait LaunchCapability: CoreCapability {
     fn allow_routine_rimz_args(
         &self,
         _paths: (&Path, &Path),
-        _skill_roots: (Option<&Path>, Option<&Path>),
+        _skill_roots: (Option<&Path>, Option<&super::skills::SkillChain>),
         _dirs: &[std::path::PathBuf; 2],
         _extra_args: &mut Vec<String>,
         _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,

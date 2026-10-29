@@ -344,7 +344,6 @@ fn host_skill_warnings_follow_definition_isolation_and_keep_success() {
         root.path(),
         SkillCheck::Check {
             env: &env,
-            library: &root.path().join("skills"),
             machine_isolation: Isolation::Scoped,
         },
         &Default::default(),
@@ -501,7 +500,6 @@ fn validation_checks_skills_even_without_sandbox_config() {
         std::collections::BTreeMap::from([("HOME".to_owned(), root.path().display().to_string())]);
     let check = SkillCheck::Check {
         env: &env,
-        library: &root.path().join("skills"),
         machine_isolation: Isolation::Host,
     };
     let checked = load(root.path(), check, &Default::default());

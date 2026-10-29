@@ -5,6 +5,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use rimz::agents::ManualSkill;
+use rimz::agents::skills::SkillChain;
 use rimz::config::Isolation;
 use rimz::harness::launch::ExecRequest;
 use rimz::ids::AgentKind;
@@ -28,6 +29,31 @@ fn enable(env: &Env) {
     let path = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "[agents]\nisolation = \"scoped\"\n").unwrap();
+}
+
+fn install_skill_pack(home: &Path, source: &Path, name: &str, skills: &[&str]) -> PathBuf {
+    std::fs::create_dir_all(source).unwrap();
+    std::fs::write(
+        source.join("rimz-packs.toml"),
+        format!("[[pack]]\nname = '{name}'\ndescription = 'Skills'\npath = '.'\n"),
+    )
+    .unwrap();
+    for skill in skills {
+        let dir = source.join("skills").join(skill);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {skill}\ndescription: Pack skill\n---\nSkill."),
+        )
+        .unwrap();
+    }
+    rimz::packs::install(home, source).unwrap();
+    rimz::packs::resolve(home)
+        .packs
+        .into_iter()
+        .find(|pack| pack.name.as_str() == name)
+        .unwrap()
+        .root
 }
 
 #[test]
@@ -2997,6 +3023,24 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
             std::fs::create_dir_all(library.join(name)).unwrap();
             std::fs::write(library.join(name).join("SKILL.md"), "library\n").unwrap();
         }
+        let pack = install_skill_pack(
+            library.parent().unwrap(),
+            &env.home_root.join(format!("source-{source}")),
+            "crew",
+            &["shared", "library-only", "pack-only", "excluded"],
+        );
+        rimz::packs::exclude(
+            library.parent().unwrap(),
+            &"crew".parse().unwrap(),
+            &rimz::packs::ExclusionTarget::Item(rimz::packs::ItemKey {
+                kind: rimz::packs::ItemType::Skills,
+                name: "excluded".into(),
+            }),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(pack.join("skills/excluded"), root.join("excluded")).unwrap();
+        std::fs::write(library.join("notes"), "not a skill").unwrap();
+        std::fs::create_dir_all(library.join("not-a-skill")).unwrap();
         let argv = skill_argv(
             &env,
             &vars,
@@ -3018,6 +3062,16 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
             library.join("library-only").canonicalize().unwrap()
         );
         assert_eq!(
+            skill_bind_source(&argv, &root.join("pack-only")),
+            pack.join("skills/pack-only").canonicalize().unwrap()
+        );
+        for name in ["excluded", "notes", "not-a-skill"] {
+            assert!(
+                !argv.iter().any(|arg| Path::new(arg) == root.join(name)),
+                "{argv:?}"
+            );
+        }
+        assert_eq!(
             argv.windows(2).filter(|args| args[0] == "--tmpfs").count(),
             1
         );
@@ -3027,6 +3081,52 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
         );
         assert!(!root.join("library-only").exists());
         assert!(!env.store().paths().skills_dir.exists());
+        std::fs::remove_file(root.join("excluded")).unwrap();
+    }
+}
+
+#[test]
+fn sandbox_matching_owned_pack_links_need_no_view_but_stale_links_do() {
+    let env = Env::new();
+    let pack = install_skill_pack(
+        &env.agents_home(),
+        &env.home_root.join("source"),
+        "crew",
+        &["packed"],
+    );
+    let root = env.home_root.join(".claude/skills");
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(pack.join("skills/packed"), root.join("packed")).unwrap();
+    for excluded in [false, true] {
+        if excluded {
+            rimz::packs::exclude(
+                &env.agents_home(),
+                &"crew".parse().unwrap(),
+                &rimz::packs::ExclusionTarget::Type(rimz::packs::ItemType::Skills),
+            )
+            .unwrap();
+        }
+        let argv = skill_argv(
+            &env,
+            &environment(&env),
+            SkillInputs {
+                kind: "claude",
+                home: Some(root.clone()),
+                manual: ManualSkill::Frontmatter,
+                withheld: None,
+                callable: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv.iter().any(|arg| arg == "--tmpfs"),
+            excluded,
+            "{argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|arg| Path::new(arg) == root.join("packed")),
+            "{argv:?}"
+        );
     }
 }
 
@@ -4149,6 +4249,12 @@ fn sandbox_skills_under_host_use_provider_switches() {
         "---\nname: provider-name\n---\nSkill.\n",
     )
     .unwrap();
+    install_skill_pack(
+        &env.agents_home(),
+        &env.home_root.join("pack-source"),
+        "crew",
+        &["packed", "rimz-packed"],
+    );
     let settings = env.home_root.join("settings.json");
     std::fs::write(
         &settings,
@@ -4180,12 +4286,14 @@ fn sandbox_skills_under_host_use_provider_switches() {
             .paths()
             .temp_unit_dir(request.identity.name.as_deref());
         let mut lists = vec![vec!["missing-skill"], vec![]];
+        lists.push(vec!["packed"]);
         if kind == "claude" {
             lists.push(vec!["commit"]);
         }
         for skills in lists {
             let missing = skills.contains(&"missing-skill");
             let commit_listed = skills.contains(&"commit");
+            let pack_listed = skills.contains(&"packed");
             request.skills = Some(skills.iter().map(|name| name.parse().unwrap()).collect());
             // The listed-skill Claude launch is also fast: its rendered
             // `fastMode` member lands in the same one settings file.
@@ -4238,8 +4346,21 @@ fn sandbox_skills_under_host_use_provider_switches() {
                 .map(|line| line.split_once('=').unwrap().1)
                 .collect();
             if kind == "codex" {
+                let config = argv
+                    .iter()
+                    .find(|arg| arg.starts_with("skills.config="))
+                    .unwrap();
                 assert!(
-                    argv.contains(&"skills.config=[{name=\"provider-name\",enabled=false}]"),
+                    config.contains("{name=\"provider-name\",enabled=false}"),
+                    "{argv:?}"
+                );
+                assert!(
+                    config.contains("{name=\"rimz-packed\",enabled=false}"),
+                    "{argv:?}"
+                );
+                assert_eq!(
+                    config.contains("{name=\"packed\",enabled=false}"),
+                    !pack_listed,
                     "{argv:?}"
                 );
             } else if kind == "claude" {
@@ -4258,6 +4379,11 @@ fn sandbox_skills_under_host_use_provider_switches() {
                 let permissions = routine.remove("permissions").unwrap();
                 let allow = permissions["allow"].as_array().unwrap();
                 assert!(allow.contains(&serde_json::json!("Skill(rimz-probe)")));
+                assert!(allow.contains(&serde_json::json!("Skill(rimz-packed)")));
+                assert_eq!(
+                    allow.contains(&serde_json::json!("Skill(packed)")),
+                    pack_listed
+                );
                 assert_eq!(
                     allow.contains(&serde_json::json!("Skill(commit)")),
                     commit_listed
@@ -4283,6 +4409,10 @@ fn sandbox_skills_under_host_use_provider_switches() {
                 );
                 assert!(sandbox.get("enableWeakerNestedSandbox").is_none());
                 let mut overrides = serde_json::json!({"kept":"enabled", "unlisted-dir":"user-invocable-only", "rimz-probe":"user-invocable-only"});
+                overrides["rimz-packed"] = serde_json::json!("user-invocable-only");
+                if !pack_listed {
+                    overrides["packed"] = serde_json::json!("user-invocable-only");
+                }
                 if !commit_listed {
                     overrides["commit"] = serde_json::json!("user-invocable-only");
                 }
@@ -4571,7 +4701,8 @@ fn host_skill_links_reconcile_only_owned_entries() {
     let env = Env::new();
     let library = env.agents_home().join("skills");
     let root = env.home_root.join(".agents/skills");
-    let empty = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    let chain = SkillChain::from_home(&env.agents_home());
+    let empty = skill_links::plan(&root, &chain, Desired::Library).unwrap();
     assert!(empty.is_empty());
     skill_links::apply(&empty).unwrap();
     assert!(!root.exists());
@@ -4587,7 +4718,7 @@ fn host_skill_links_reconcile_only_owned_entries() {
     symlink("/foreign/missing", root.join("foreign")).unwrap();
     symlink(library.join("gone"), root.join("stale")).unwrap();
     symlink(library.join("created"), root.join("wrong")).unwrap();
-    let plan = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    let plan = skill_links::plan(&root, &chain, Desired::Library).unwrap();
     assert_eq!(plan.shadowed(), ["directory", "foreign"]);
     assert!(plan.actions().windows(2).any(|actions| matches!(actions,
         [SkillLinkAction::Unlink { name }, SkillLinkAction::Link { name: next, .. }]
@@ -4604,18 +4735,18 @@ fn host_skill_links_reconcile_only_owned_entries() {
     }
     assert!(!root.join("stale").is_symlink());
     assert!(!root.join("not-a-skill").exists());
-    let repeated = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    let repeated = skill_links::plan(&root, &chain, Desired::Library).unwrap();
     assert!(!repeated.has_owned_changes());
     assert_eq!(repeated.shadowed(), ["directory", "foreign"]);
     for name in ["directory", "foreign"] {
         std::fs::remove_dir_all(library.join(name)).unwrap();
     }
     assert!(
-        skill_links::plan(&root, &library, Desired::Library)
+        skill_links::plan(&root, &chain, Desired::Library)
             .unwrap()
             .is_empty()
     );
-    let remove = skill_links::plan(&root, &library, Desired::None).unwrap();
+    let remove = skill_links::plan(&root, &chain, Desired::None).unwrap();
     assert!(remove.shadowed().is_empty());
     assert_eq!(skill_links::apply(&remove).unwrap().unlinked, 3);
     assert_eq!(skill_links::apply(&remove).unwrap().unlinked, 0);
@@ -4629,8 +4760,39 @@ fn host_skill_links_reconcile_only_owned_entries() {
     );
     symlink(library.join("gone"), root.join("stale")).unwrap();
     std::fs::remove_dir_all(&library).unwrap();
-    let stale = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    let stale = skill_links::plan(&root, &chain, Desired::Library).unwrap();
     assert_eq!(skill_links::apply(&stale).unwrap().unlinked, 1);
+
+    let pack = install_skill_pack(
+        &env.agents_home(),
+        &env.home_root.join("source"),
+        "crew",
+        &["packed", "new"],
+    );
+    let chain = SkillChain::from_home(&env.agents_home());
+    let target = pack.join("skills/packed");
+    symlink(&target, root.join("packed")).unwrap();
+    symlink(pack.join("skills/gone"), root.join("stale-pack")).unwrap();
+    let prune = skill_links::plan(&root, &chain, Desired::Prune).unwrap();
+    let outcome = skill_links::apply(&prune).unwrap();
+    assert_eq!((outcome.linked, outcome.unlinked), (0, 1));
+    assert_eq!(std::fs::read_link(root.join("packed")).unwrap(), target);
+    assert!(!root.join("new").exists());
+    let full = skill_links::plan(&root, &chain, Desired::Library).unwrap();
+    assert_eq!(skill_links::apply(&full).unwrap().linked, 1);
+    assert_eq!(
+        std::fs::read_link(root.join("new")).unwrap(),
+        pack.join("skills/new")
+    );
+    rimz::packs::remove(&env.agents_home(), &"crew".parse().unwrap()).unwrap();
+    let chain = SkillChain::from_home(&env.agents_home());
+    assert_eq!(
+        skill_links::apply(&skill_links::plan(&root, &chain, Desired::Prune).unwrap())
+            .unwrap()
+            .unlinked,
+        2
+    );
+    assert!(root.join("foreign").is_symlink());
 }
 
 #[test]
@@ -4647,13 +4809,13 @@ fn host_skill_links_leave_a_library_overlapping_the_provider_root_untouched() {
     symlink("loop", root.join("loop")).unwrap();
     std::fs::write(root.join(std::ffi::OsStr::from_bytes(b"\xff")), "mine").unwrap();
 
-    let library = env.home_root.join(".agents/skills");
-    for desired in [Desired::Library, Desired::None] {
-        let plan = skill_links::plan(&root, &library, desired).unwrap();
+    let chain = SkillChain::from_home(root.parent().unwrap());
+    for desired in [Desired::Library, Desired::None, Desired::Prune] {
+        let plan = skill_links::plan(&root, &chain, desired).unwrap();
         assert!(plan.is_empty(), "{plan:?}");
         skill_links::apply(&plan).unwrap();
     }
-    let nested = skill_links::plan(&root, &root.join("created"), Desired::Library).unwrap();
+    let nested = skill_links::plan(&root, &SkillChain::from_home(&root), Desired::Library).unwrap();
     assert!(nested.is_empty(), "{nested:?}");
     assert_eq!(
         std::fs::read_link(root.join("alias")).unwrap(),
@@ -4664,9 +4826,15 @@ fn host_skill_links_leave_a_library_overlapping_the_provider_root_untouched() {
     std::fs::create_dir_all(separate.join("shared")).unwrap();
     std::fs::write(separate.join("shared/SKILL.md"), "skill").unwrap();
     symlink("loop", separate.join("loop")).unwrap();
-    let plan = skill_links::plan(&root, &separate, Desired::Library).unwrap();
+    let chain = SkillChain::from_home(&env.agents_home());
+    let plan = skill_links::plan(&root, &chain, Desired::Library).unwrap();
     assert_eq!(plan.shadowed(), Vec::<String>::new());
     assert_eq!(plan.actions().len(), 1, "{plan:?}");
+    let pack_root = env.agents_home().join("packs");
+    for root in [&pack_root, &pack_root.join("entry")] {
+        let plan = skill_links::plan(root, &chain, Desired::Library).unwrap();
+        assert!(plan.is_empty(), "{plan:?}");
+    }
 }
 
 #[test]
@@ -4677,9 +4845,10 @@ fn host_skill_links_apply_tolerates_siblings_and_reports_foreign_races() {
     let env = Env::new();
     let root = env.home_root.join("provider/skills");
     let library = env.agents_home().join("skills");
+    let chain = SkillChain::from_home(&env.agents_home());
     std::fs::create_dir_all(library.join("skill")).unwrap();
     std::fs::write(library.join("skill/SKILL.md"), "skill").unwrap();
-    let plan = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    let plan = skill_links::plan(&root, &chain, Desired::Library).unwrap();
     assert_eq!(skill_links::apply(&plan).unwrap().linked, 1);
     let sibling = skill_links::apply(&plan).unwrap();
     assert_eq!(sibling.linked, 0);
@@ -4689,7 +4858,7 @@ fn host_skill_links_apply_tolerates_siblings_and_reports_foreign_races() {
     assert_eq!(skill_links::apply(&plan).unwrap().shadowed, ["skill"]);
     std::fs::remove_dir(root.join("skill")).unwrap();
     symlink(library.join("gone"), root.join("skill")).unwrap();
-    let replace = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    let replace = skill_links::plan(&root, &chain, Desired::Library).unwrap();
     std::fs::remove_file(root.join("skill")).unwrap();
     symlink("/foreign/skill", root.join("skill")).unwrap();
     assert_eq!(skill_links::apply(&replace).unwrap().shadowed, ["skill"]);
@@ -4707,6 +4876,12 @@ fn host_exec_links_library_into_codex_and_claude_account_roots_once() {
         let library = env.agents_home().join("skills");
         std::fs::create_dir_all(library.join("shared")).unwrap();
         std::fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
+        let pack = install_skill_pack(
+            &env.agents_home(),
+            &env.home_root.join("source"),
+            "crew",
+            &["packed"],
+        );
         let account = env.home_root.join("named-claude");
         let root = if kind == "claude" {
             account.join("skills")
@@ -4732,13 +4907,17 @@ fn host_exec_links_library_into_codex_and_claude_account_roots_once() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(output.status.success(), "{stderr}");
             assert_eq!(
-                stderr.contains(&format!("linked 1 skill(s) into {}", root.display())),
+                stderr.contains(&format!("linked 2 skill(s) into {}", root.display())),
                 first,
                 "{stderr}"
             );
             assert_eq!(
                 std::fs::read_link(root.join("shared")).unwrap(),
                 library.join("shared")
+            );
+            assert_eq!(
+                std::fs::read_link(root.join("packed")).unwrap(),
+                pack.join("skills/packed")
             );
             assert!(!env.store().paths().skills_dir.exists());
         }

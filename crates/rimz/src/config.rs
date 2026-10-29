@@ -811,11 +811,9 @@ impl MachineConfig {
         if host_only {
             self.fall_back_to_host_isolation(notices);
         }
-        let library = agents_home.join("skills");
         let check = if !Isolation::ambient(env).is_some_and(Isolation::is_scoped) {
             definitions::SkillCheck::Check {
                 env,
-                library: &library,
                 machine_isolation: self.agents.isolation,
             }
         } else {
@@ -1112,7 +1110,12 @@ impl ConfigStamp {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let definitions = definitions::source_paths(agents_home)
             .into_iter()
-            .chain(skill_library_paths(&agents_home.join("skills")))
+            .chain(
+                crate::agents::skills::SkillChain::from_home(agents_home)
+                    .roots()
+                    .iter()
+                    .flat_map(|root| skill_library_paths(root)),
+            )
             .map(|path| StampedPath::of(&path))
             .collect();
         Self {

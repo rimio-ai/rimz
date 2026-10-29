@@ -1,10 +1,11 @@
-//! Merge the provider skill root and RimZ library into a read-only launch view.
+//! Merge the provider skill root and RimZ skill chain into a read-only launch view.
 //! Unlisted skills that cannot be prepared are omitted and reported.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::agents::ManualSkill;
+use crate::agents::skills::{SkillChain, SkillErr};
 
 use super::{DirEntry, DirEntryKind, DirView, SandboxErr, SkillInputs, SkippedSkill, rewrite};
 
@@ -13,6 +14,12 @@ pub(super) struct SkillView {
     pub dir: Option<DirView>,
     pub skipped: Vec<SkippedSkill>,
     pub copies: Vec<rewrite::PlannedCopy>,
+}
+
+#[derive(Default)]
+struct ProviderEntries {
+    entries: BTreeMap<String, DirEntry>,
+    owned: BTreeMap<String, PathBuf>,
 }
 
 pub(super) fn plan(
@@ -51,26 +58,57 @@ fn plan_view(
             kind: inputs.kind.to_owned(),
         });
     }
-    let mut entries = list_dir(home, true)?;
+    let chain = SkillChain::from_env(env);
+    let ProviderEntries {
+        mut entries,
+        mut owned,
+    } = list_dir(home, chain.as_ref())?;
     let mut roots = vec![home.clone()];
     let mut changed = false;
     let mut skipped = Vec::new();
     let mut copies = Vec::new();
-    if let Some(library) = crate::disk::paths::skills_library_in(env) {
-        super::validate_path(&library)?;
-        for (name, source) in list_dir(&library, false)? {
-            if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(name) {
-                entry.insert(source);
-                changed = true;
+    let mut conflicts = BTreeMap::new();
+    if let Some(chain) = &chain {
+        for root in chain.roots() {
+            super::validate_path(&root)?;
+            roots.push(root);
+        }
+        let inventory = chain.inventory(|name| !entries.contains_key(name))?;
+        conflicts = inventory.conflicts;
+        for (name, skill) in inventory.skills {
+            if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(name.clone()) {
+                let kind = match owned.remove(&name) {
+                    Some(target)
+                        if crate::utils::path::normalize_path_lexical(&home.join(&target))
+                            == skill.path =>
+                    {
+                        DirEntryKind::Symlink { target }
+                    }
+                    _ => {
+                        changed = true;
+                        DirEntryKind::Bind
+                    }
+                };
+                entry.insert(DirEntry {
+                    name,
+                    source: skill.source,
+                    kind,
+                });
             }
         }
-        roots.push(library);
     }
+    changed |= !owned.is_empty();
     let mut shadows = BTreeMap::new();
     if let Some(callable) = inputs.callable {
         crate::config::validate_skill_list(callable)?;
         for name in callable {
             if !entries.contains_key(name.as_str()) {
+                if let Some(conflict) = conflicts.get(name.as_str()) {
+                    return Err(SkillErr::Conflict {
+                        message: conflict.message.clone(),
+                    }
+                    .into());
+                }
                 return Err(SandboxErr::UnknownSkill {
                     name: name.to_string(),
                     roots,
@@ -167,13 +205,12 @@ fn plan_view(
     })
 }
 
-fn list_dir(
-    root: &Path,
-    preserve_symlinks: bool,
-) -> Result<BTreeMap<String, DirEntry>, SandboxErr> {
+fn list_dir(root: &Path, chain: Option<&SkillChain>) -> Result<ProviderEntries, SandboxErr> {
     let listing = match std::fs::read_dir(root) {
         Ok(listing) => listing,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ProviderEntries::default());
+        }
         Err(source) => {
             return Err(SandboxErr::Io {
                 path: root.to_path_buf(),
@@ -182,12 +219,26 @@ fn list_dir(
         }
     };
     let mut entries = BTreeMap::new();
+    let mut owned = BTreeMap::new();
     for entry in listing {
         let entry = entry.map_err(|source| SandboxErr::Io {
             path: root.to_path_buf(),
             source,
         })?;
         let path = entry.path();
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| SandboxErr::InvalidPath(path.clone()))?;
+        if let Some(chain) = chain
+            && let Some(target) = chain.owned_link(&path)?
+        {
+            if target.to_str().is_none() {
+                return Err(SandboxErr::InvalidPath(path));
+            }
+            owned.insert(name, target);
+            continue;
+        }
         let source = match path.canonicalize() {
             Ok(source) => source,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -196,11 +247,7 @@ fn list_dir(
             }
             Err(source) => return Err(SandboxErr::Io { path, source }),
         };
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| SandboxErr::InvalidPath(path.clone()))?;
-        let kind = if preserve_symlinks && path.is_symlink() {
+        let kind = if path.is_symlink() {
             let target = std::fs::read_link(&path).map_err(|source| SandboxErr::Io {
                 path: path.clone(),
                 source,
@@ -214,5 +261,5 @@ fn list_dir(
         };
         entries.insert(name.clone(), DirEntry { name, source, kind });
     }
-    Ok(entries)
+    Ok(ProviderEntries { entries, owned })
 }

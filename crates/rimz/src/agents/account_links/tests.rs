@@ -476,7 +476,8 @@ fn migration_removes_owned_skill_links_and_preserves_user_entries() {
         let skills = home.named.join("skills");
         fs::create_dir_all(&skills).unwrap();
         symlink(
-            crate::disk::paths::skills_library().join("owned"),
+            crate::disk::paths::skills_library_under(&crate::disk::paths::agents_home())
+                .join("owned"),
             skills.join("owned"),
         )
         .unwrap();

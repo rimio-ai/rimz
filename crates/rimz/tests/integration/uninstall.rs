@@ -242,6 +242,9 @@ fn uninstall_previews_and_removes_only_owned_skill_links_in_every_mode() {
         fixture.seed_roots();
         let library_home = fixture.env.home_root.join("custom-library");
         let library = library_home.join("skills");
+        let pack_skill = library_home.join("packs/entry/skills/packed");
+        fs::create_dir_all(&pack_skill).unwrap();
+        fs::write(pack_skill.join("SKILL.md"), "pack skill").unwrap();
         fs::create_dir_all(library.join("shared")).unwrap();
         fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
         let account_home = fixture.env.rimz_home().join("accounts/claude/work");
@@ -262,6 +265,7 @@ fn uninstall_previews_and_removes_only_owned_skill_links_in_every_mode() {
             fs::write(root.join("mine/SKILL.md"), "my skill").unwrap();
             symlink(library.join("shared"), root.join("shared")).unwrap();
             symlink(library.join("gone"), root.join("stale")).unwrap();
+            symlink(&pack_skill, root.join("packed")).unwrap();
             symlink(&foreign, root.join("foreign")).unwrap();
         }
 
@@ -287,6 +291,7 @@ fn uninstall_previews_and_removes_only_owned_skill_links_in_every_mode() {
                 library.join("shared")
             );
             assert!(fs::symlink_metadata(root.join("stale")).is_ok());
+            assert!(fs::symlink_metadata(root.join("packed")).is_ok());
         }
 
         let output = fixture
@@ -299,17 +304,18 @@ fn uninstall_previews_and_removes_only_owned_skill_links_in_every_mode() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "{stderr}");
         assert_eq!(
-            stderr.matches("Skill links: removed 2 from ").count(),
+            stderr.matches("Skill links: removed 3 from ").count(),
             roots.len(),
             "{stderr}"
         );
         for root in &roots {
             assert!(
-                stderr.contains(&format!("Skill links: removed 2 from {}", root.display())),
+                stderr.contains(&format!("Skill links: removed 3 from {}", root.display())),
                 "{stderr}"
             );
             assert!(fs::symlink_metadata(root.join("shared")).is_err());
             assert!(fs::symlink_metadata(root.join("stale")).is_err());
+            assert!(fs::symlink_metadata(root.join("packed")).is_err());
             assert_eq!(
                 fs::read_to_string(root.join("mine/SKILL.md")).unwrap(),
                 "my skill"
@@ -317,6 +323,7 @@ fn uninstall_previews_and_removes_only_owned_skill_links_in_every_mode() {
             assert_eq!(fs::read_link(root.join("foreign")).unwrap(), foreign);
         }
         assert!(library.join("shared/SKILL.md").is_file());
+        assert!(pack_skill.join("SKILL.md").is_file());
     }
 }
 

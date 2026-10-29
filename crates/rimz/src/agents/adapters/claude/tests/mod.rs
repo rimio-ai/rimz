@@ -268,7 +268,8 @@ fn routine_rimz_settings_union_and_idempotence() {
     use crate::agents::capabilities::LaunchCapability;
     let root = tempfile::tempdir().unwrap();
     let provider = root.path().join("provider");
-    let library = root.path().join("library");
+    let chain = crate::agents::skills::SkillChain::from_home(root.path());
+    let library = chain.roots()[0].clone();
     for (base, name) in [
         (&provider, "rimz-a"),
         (&provider, "rimz-b"),
@@ -299,7 +300,7 @@ fn routine_rimz_settings_union_and_idempotence() {
         ClaudeAdapter
             .allow_routine_rimz_args(
                 (root.path(), root.path()),
-                (Some(&provider), Some(&library)),
+                (Some(&provider), Some(&chain)),
                 &dirs,
                 &mut args,
                 &mut artifact,
@@ -370,7 +371,7 @@ fn routine_rimz_settings_union_and_idempotence() {
         ClaudeAdapter
             .allow_routine_rimz_args(
                 (root.path(), root.path()),
-                (Some(&provider), Some(&library)),
+                (Some(&provider), Some(&chain)),
                 &dirs,
                 &mut args,
                 &mut artifact,
@@ -385,7 +386,7 @@ fn routine_rimz_file_and_pending_skills_artifact() {
     use crate::agents::capabilities::LaunchCapability;
     let root = tempfile::tempdir().unwrap();
     let provider = root.path().join("provider");
-    let library = root.path().join("library");
+    let chain = crate::agents::skills::SkillChain::from_home(root.path());
     std::fs::write(
         root.path().join("profile.json"),
         "{ // jsonc\n\"env\":{\"TOKEN\":\"private-secret\"},}",
@@ -406,7 +407,7 @@ fn routine_rimz_file_and_pending_skills_artifact() {
         ClaudeAdapter
             .allow_routine_rimz_args(
                 (root.path(), root.path()),
-                (Some(&provider), Some(&library)),
+                (Some(&provider), Some(&chain)),
                 &dirs,
                 &mut args,
                 &mut artifact,
@@ -423,7 +424,7 @@ fn routine_rimz_file_and_pending_skills_artifact() {
         ClaudeAdapter
             .allow_routine_rimz_args(
                 (root.path(), root.path()),
-                (Some(&provider), Some(&library)),
+                (Some(&provider), Some(&chain)),
                 &dirs,
                 &mut args,
                 &mut artifact,
@@ -436,7 +437,7 @@ fn routine_rimz_file_and_pending_skills_artifact() {
         ClaudeAdapter
             .allow_routine_rimz_args(
                 (root.path(), root.path()),
-                (Some(&provider), Some(&library)),
+                (Some(&provider), Some(&chain)),
                 &dirs,
                 &mut args,
                 &mut artifact,
@@ -766,6 +767,7 @@ fn host_skills_merge_settings_once_and_use_directory_names() {
     };
     let skill = SkillDir {
         name: "unlisted".into(),
+        path: root.path().to_owned(),
         source: root.path().to_owned(),
     };
     std::fs::write(root.path().join("SKILL.md"), "---\nname: different\n---\n").unwrap();

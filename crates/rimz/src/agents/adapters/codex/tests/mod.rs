@@ -227,6 +227,7 @@ fn host_skills_replace_cli_config_and_use_frontmatter_names() {
     };
     let key = key(&SkillDir {
         name: "directory".into(),
+        path: root.path().to_owned(),
         source: root.path().to_owned(),
     })
     .unwrap();
@@ -236,6 +237,7 @@ fn host_skills_replace_cli_config_and_use_frontmatter_names() {
     std::fs::write(broken.join("SKILL.md"), "---\nname: [unclosed\n---\n").unwrap();
     let fallback = host_skill_key(&SkillDir {
         name: "broken".into(),
+        path: broken.clone(),
         source: broken,
     })
     .unwrap();

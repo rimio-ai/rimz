@@ -316,12 +316,63 @@ upward-dependencies = ["address"]
 # SessionStepOutput carries the prepared command and launch notices to the CLI (+1).
 # LocalSessionDiscovery and its re-export name the host's discovery policy (+2).
 # PaneSessionDemand, PaneSessionNeed, NamedSession, fresh_window and the capability/login seam (+6).
-surface-budget = 1182
+# SkillChain, its six shared readers, SkillInventory, PackSkill and PackSkillFate share pack skills (+10).
+surface-budget = 1192
 
 [[verdict]]
 kind = "item"
 key = "agents::definition::LocalSessionDiscovery"
 reason = "The host dispatches provider-local discovery by unsupported, full-scan or per-pane policy."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillChain"
+reason = "Definition checks, launch views, host links and uninstall share one library-and-pack tier."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillChain::from_home"
+reason = "Explicit-home definition loads and CLI mutations cannot consult ambient pack roots."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillChain::from_env"
+reason = "Launch consumers use the captured login environment without an ambient fallback."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillChain::roots"
+reason = "Validation, stamps and missing-skill diagnostics name the same ordered tier roots."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillChain::pack_skills"
+reason = "The packs CLI needs every shipped skill's fate, including excluded and conflicting items."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillChain::owned_link"
+reason = "Scoped discovery and host discovery both skip lexical RimZ-owned provider links."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillChain::inventory"
+reason = "Scoped views and definition loading consume the same pack claims as host links."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillInventory"
+reason = "Definition checks and scoped views retain conflicts separately from absent skill names."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::PackSkill"
+reason = "The packs CLI lists skill origins and their resolved library-versus-pack fate."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::PackSkillFate"
+reason = "The packs CLI distinguishes loaded, overridden, excluded and conflicting skill items."
 
 [[verdict]]
 kind = "item"
@@ -1122,7 +1173,14 @@ allowed-dependencies = [
 # KeyedParseCache, its two readers, and testkit parse-cache counters (+5).
 # forward_records_dir owns machine-local supervisor record paths (+1).
 # packs_dir shares the explicit-home pack root (+1).
+# skills_library_under shares explicit home and pack skill roots with the chain (+1).
+# Remove the unused ambient skills_library accessor (-1).
 surface-budget = 298
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::skills_library_under"
+reason = "Skill chains derive library and pack skill directories without bypassing the classed-path gate."
 
 [[verdict]]
 kind = "item"
