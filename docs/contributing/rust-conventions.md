@@ -209,6 +209,8 @@ A provider stub that stays alive answers informational probes such as `--version
 
 A unit test does not wait out a production command deadline (`LIST_SESSIONS_TIMEOUT`, `COMMAND_TIMEOUT` in `crates/rimz/src/mux/command.rs`): when the path behind a deadline matters, the test reaches it through a shorter bound it passes in, or through a cheaper failure such as a missing binary.
 
+Production code never branches on `cfg!(test)` to pick a dependency: inject it (a `Host` trait) and let tests pass the fake.
+
 When a change adds a verdict, marker, or timer to an existing state machine, enumerate how the new input interacts with each existing one and test the plausible simultaneous cases — at minimum a structural and a geometry change arriving together, and a pending classification against every backstop and retry path. Single-input tests pass on a machine whose bugs all live in the combined states.
 
 A test of a polling consumer holds each state the consumer must observe open for at least three poll intervals: a state that opens and closes between two polls is never seen, and the test then passes on the broken build. The negative control for a regression test is the fix commit's files checked out from its parent, run several times when the test is timing-based, never a hand-made mutant of the fixed code.
