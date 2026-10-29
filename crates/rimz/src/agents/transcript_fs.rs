@@ -200,7 +200,11 @@ pub(super) fn read_transcript_tail_with_status(path: &Path) -> Option<Transcript
     use std::io::{Read, Seek, SeekFrom};
 
     const TAIL_BYTES: u64 = 64 * 1024;
+    #[cfg(any(test, feature = "testkit"))]
+    super::local_session_cache::testkit::transcript_read();
     let mut file = fs::File::open(path).ok()?;
+    #[cfg(any(test, feature = "testkit"))]
+    super::local_session_cache::testkit::stat();
     let len = file.metadata().ok()?.len();
     let normal_start = len.saturating_sub(TAIL_BYTES);
     let mut whole_file = normal_start == 0;

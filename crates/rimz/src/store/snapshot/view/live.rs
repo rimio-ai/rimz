@@ -465,7 +465,9 @@ impl SidebarSnapshot {
 }
 
 // Remove this compatibility path only after LocalSessionBindRejected diagnostics
-// show legacy sessions no longer need evidence-free pane binding.
+// from clocked, unsettled panes show legacy binding is unnecessary. Per-pane
+// discovery omits history for evidence-free panes and settled reservations, so
+// silence from those panes no longer supplies that evidence.
 fn legacy_fresh_pane_allows_bind(
     pane: &PaneRef,
     observation: &LocalSessionObservation,

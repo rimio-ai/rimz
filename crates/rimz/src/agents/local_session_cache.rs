@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::hash::Hash;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -26,6 +27,8 @@ pub(super) struct ProviderPathStamp {
 
 impl ProviderPathStamp {
     pub(super) fn read(path: &Path) -> Self {
+        #[cfg(any(test, feature = "testkit"))]
+        testkit::stat();
         match fs::symlink_metadata(path) {
             Ok(metadata) => {
                 let file_type = metadata.file_type();
@@ -315,6 +318,10 @@ where
     K: Eq + Hash + Clone,
     V: Clone,
 {
+    pub(super) fn get(&self, key: &K) -> Option<&V> {
+        self.values.get(key).map(|cached| &cached.value)
+    }
+
     pub(super) fn refresh(
         &mut self,
         key: K,
@@ -384,11 +391,58 @@ pub(super) fn normalized_workspace_inputs(workspaces: &[&Path]) -> Vec<PathBuf> 
     workspaces
 }
 
-fn full_scan_due(last_scan: Option<Instant>, now: Instant) -> bool {
+pub(super) fn full_scan_due(last_scan: Option<Instant>, now: Instant) -> bool {
     last_scan.is_none_or(|last_scan| {
         now.checked_duration_since(last_scan)
             .is_none_or(|elapsed| elapsed >= LOCAL_SESSION_DISCOVERY_BACKSTOP)
     })
+}
+
+pub(super) fn read_dir(path: &Path) -> io::Result<fs::ReadDir> {
+    #[cfg(any(test, feature = "testkit"))]
+    testkit::listing();
+    fs::read_dir(path)
+}
+
+pub(super) fn metadata(path: &Path) -> io::Result<fs::Metadata> {
+    #[cfg(any(test, feature = "testkit"))]
+    testkit::stat();
+    fs::metadata(path)
+}
+
+pub(super) fn entry_file_type(entry: &fs::DirEntry) -> io::Result<fs::FileType> {
+    #[cfg(any(test, feature = "testkit"))]
+    testkit::stat();
+    entry.file_type()
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub(super) mod testkit {
+    use std::cell::Cell;
+
+    thread_local! {
+        static COUNTS: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+    }
+
+    pub(in crate::agents) fn stat() {
+        let (stats, listings, reads) = COUNTS.get();
+        COUNTS.set((stats + 1, listings, reads));
+    }
+
+    pub(in crate::agents) fn listing() {
+        let (stats, listings, reads) = COUNTS.get();
+        COUNTS.set((stats, listings + 1, reads));
+    }
+
+    pub(in crate::agents) fn transcript_read() {
+        let (stats, listings, reads) = COUNTS.get();
+        COUNTS.set((stats, listings, reads + 1));
+    }
+
+    #[cfg(test)]
+    pub(in crate::agents) fn read_counts() -> (usize, usize, usize) {
+        COUNTS.get()
+    }
 }
 
 #[cfg(test)]
