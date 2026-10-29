@@ -306,6 +306,7 @@ struct ShowView {
     records: Vec<LoopRunRecord>,
     heard: Option<run_log::HeardSummary>,
     launches: BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
+    capacity: BTreeMap<PathBuf, schedule::launch_ledger::CapacityRecord>,
     in_flight: Option<InFlightRun>,
     backlog: Option<schedule::backlog::TaskBacklog>,
     condition: String,
@@ -476,10 +477,14 @@ struct WorktreeRow<'a> {
     run: Option<&'a list::WorkflowRunRow>,
     armed: usize,
     short: Vec<&'a str>,
+    capacity: Option<&'a schedule::launch_ledger::CapacityRecord>,
 }
 
 impl WorktreeRow<'_> {
     fn state_name(&self) -> &'static str {
+        if self.capacity.is_some() {
+            return "capacity";
+        }
         if self.blocked.is_some() {
             return "blocked";
         }
@@ -493,6 +498,9 @@ impl WorktreeRow<'_> {
     }
 
     fn rank(&self) -> u8 {
+        if self.capacity.is_some() {
+            return 2;
+        }
         if self.blocked.is_some() {
             return 0;
         }
@@ -587,6 +595,7 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
                 .filter(|subscription| subscription.checkout == checkout)
                 .count();
             WorktreeRow {
+                capacity: view.capacity.get(&condition.checkout),
                 condition,
                 blocked,
                 leader_status,
@@ -611,7 +620,7 @@ fn write_worktrees(
     }
     let mut counts = vec![format!("{} owned", rows.len())];
     for state in [
-        "blocked", "ready", "holding", "waiting", "declined", "launched",
+        "blocked", "ready", "holding", "capacity", "waiting", "declined", "launched",
     ] {
         let count = rows.iter().filter(|row| row.state_name() == state).count();
         if count > 0 {
@@ -703,7 +712,9 @@ fn write_worktrees(
     }
     let now = view.now_zoned.timestamp();
     for row in rendered {
-        let state = if let Some((since, _)) = &row.blocked {
+        let state = if let Some(wait) = row.capacity {
+            list::CapacityWaitView::from(wait).text()
+        } else if let Some((since, _)) = &row.blocked {
             format!("ready · blocked {}", ui::rel_age(*since, now))
         } else {
             match &row.condition.state {
@@ -952,6 +963,7 @@ struct WorktreeJson<'a> {
     checkout: &'a Path,
     name: &'a str,
     state: &'static str,
+    capacity_wait: Option<list::CapacityWaitView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -999,6 +1011,7 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 checkout: &row.condition.checkout,
                 name: &row.condition.name,
                 state: row.state_name(),
+                capacity_wait: row.capacity.map(list::CapacityWaitView::from),
                 reason: None,
                 profile: None,
                 since: None,
@@ -1092,6 +1105,17 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         &view.entry,
         view.kind,
     )?;
+    if !view.entry.each_worktree {
+        for (checkout, wait) in &view.capacity {
+            writeln!(
+                out,
+                "  {} · {} · {}",
+                checkout.display(),
+                list::CapacityWaitView::from(wait).text(),
+                wait.reason
+            )?;
+        }
+    }
     if let Some(backlog) = &view.backlog
         && !backlog.triggers.is_empty()
     {
@@ -1665,7 +1689,41 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         Vec::new()
     };
+    let running_checkout = in_flight.as_ref().and_then(|flight| {
+        flight
+            .run
+            .as_ref()
+            .map(|run| run.worktree_path.as_path())
+            .or_else(|| {
+                flight
+                    .held
+                    .iter()
+                    .find(|held| flight.holder.is_some_and(|holder| holder.pid == held.pid))
+                    .map(|held| held.checkout.as_path())
+            })
+    });
+    let mut capacity = StatePaths::for_project_root(&root)
+        .map_err(anyhow::Error::from)
+        .and_then(|paths| match &runtime {
+            Some(runtime) => Ok(schedule::launch_ledger::load_live_capacity(
+                &paths, runtime,
+            )?),
+            None => Ok(BTreeMap::new()),
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "loop capacity waits unavailable");
+            BTreeMap::new()
+        })
+        .remove(&args.name)
+        .filter(|_| matches!(timing.arm_state(), ArmState::Live))
+        .unwrap_or_default();
+    if let Some(checkout) = running_checkout {
+        capacity.remove(checkout);
+    } else if in_flight.is_some() && !entry.each_worktree {
+        capacity.remove(&entry.run_dir());
+    }
     let view = ShowView {
+        capacity,
         strike_count: strikes::load().get(&key).copied().unwrap_or(0),
         room_is_open,
         show_agent_runs: has_agent_runs_section(task.entry(), task.action().ok()),
@@ -1720,10 +1778,19 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             #[serde(flatten)]
             facts: serde_json::Value,
             worktrees: Vec<WorktreeJson<'a>>,
+            capacity_wait: Option<list::CapacityWaitView>,
         }
         let json = ShowJson {
             facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs, "backlog": backlog }),
             worktrees: worktrees_json(&view),
+            capacity_wait: (!view.entry.each_worktree)
+                .then(|| {
+                    view.capacity
+                        .values()
+                        .min_by_key(|wait| wait.first)
+                        .map(list::CapacityWaitView::from)
+                })
+                .flatten(),
         };
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
     } else {
@@ -1883,6 +1950,7 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
             | LoopRunResult::BudgetSkipped
             | LoopRunResult::AccountSkipped
             | LoopRunResult::ThrottleSkipped
+            | LoopRunResult::CapacityHeld
             | LoopRunResult::SurplusSkipped
     )
 }
@@ -2127,14 +2195,19 @@ pub(super) fn running_text(holder: Option<RunLockInfo>, now: Timestamp) -> Strin
 }
 
 /// A run waiting for its turn in the start throttle, in place of running.
-fn held_run_text(held: &Held, now: Timestamp) -> String {
-    let since = i64::try_from(held.since_ms).unwrap_or(i64::MAX);
-    let elapsed = (now.as_millisecond().saturating_sub(since) / 1_000).max(0) as u64;
-    format!(
-        "held: {}, {}",
-        held.reason.as_deref().unwrap_or("waiting for its turn"),
-        ui::age_label(elapsed)
-    )
+fn held_run_text(held: &Held) -> String {
+    let stamp = |ms| {
+        i64::try_from(ms)
+            .ok()
+            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+    };
+    let since = stamp(held.since_ms).unwrap_or(Timestamp::UNIX_EPOCH);
+    let text =
+        rimz::theme::fmt::capacity_wait(&held.kinds, since, held.gives_up_ms.and_then(stamp));
+    match &held.reason {
+        Some(reason) => format!("{text} · {reason}"),
+        None => text,
+    }
 }
 
 /// The holder's own waiting ticket, matched by pid, and the task's other
@@ -2167,7 +2240,7 @@ pub(super) fn others_held_text<'a>(mut others: impl Iterator<Item = &'a Held>) -
 pub(super) fn in_flight_text(holder: Option<RunLockInfo>, held: &[Held], now: Timestamp) -> String {
     let (own, others) = split_held(holder, held);
     let state = match own {
-        Some(own) => held_run_text(own, now),
+        Some(own) => held_run_text(own),
         None => running_text(holder, now),
     };
     match others_held_text(others) {
@@ -2199,7 +2272,7 @@ fn running_text_full(in_flight: &InFlightRun, now: Timestamp) -> String {
         .unwrap_or_default();
     let (own, others) = split_held(in_flight.holder, &in_flight.held);
     let state = match own {
-        Some(own) => held_run_text(own, now),
+        Some(own) => held_run_text(own),
         None => running_text(in_flight.holder, now),
     };
     let others = others_held_text(others)
@@ -2908,7 +2981,8 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::TakeoverBlocked
         | LoopRunResult::BudgetSkipped
         | LoopRunResult::AccountSkipped
-        | LoopRunResult::ThrottleSkipped => ("○", ui::palette::warn()),
+        | LoopRunResult::ThrottleSkipped
+        | LoopRunResult::CapacityHeld => ("○", ui::palette::warn()),
         LoopRunResult::CheckSkipped
         | LoopRunResult::Deferred
         | LoopRunResult::SignalSkipped

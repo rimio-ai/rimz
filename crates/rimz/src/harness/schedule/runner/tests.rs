@@ -2883,33 +2883,331 @@ fn resident_entry(root: &Path) -> TaskEntry {
 }
 
 #[test]
-fn a_held_resident_fire_is_skipped_at_max_wait_before_room_birth() {
+fn capacity_manual_fires_bypass_even_a_closed_door() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(80.0, 80.0);
+    host.on_sleep(|host| {
+        host.interrupt
+            .store(true, std::sync::atomic::Ordering::SeqCst)
+    });
+    let mut fire = throttled_fire(
+        "manual",
+        resident_entry(root.path()),
+        &catalog,
+        "cpu-pressure = 25",
+        &host,
+    );
+    fire.mode = LoopRunMode::Manual;
+    Arc::make_mut(&mut fire.config).r#loop.throttle.max_active = Some(0);
+    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
+    assert!(matches!(plan, TaskFirePlan::Resident { .. }), "{plan:?}");
+    assert_eq!(host.tickets(), 0);
+    assert_eq!(host.elapsed_ms(), 0);
+}
+
+#[test]
+fn capacity_corrupt_memory_does_not_fail_manual_or_exempt_or_admitted_fires() {
+    let mut actual = Vec::new();
+    for mode in ["manual", "off", "admitted"] {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let host = throttle::tests::FakeHost::new();
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let path = super::super::launch_ledger::capacity_path(&paths);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not json").unwrap();
+        let mut entry = resident_entry(root.path());
+        if mode == "off" {
+            entry.throttle = Some(ThrottleSwitch::Off);
+        }
+        let mut fire = throttled_fire(mode, entry, &catalog, "pace='0s'", &host);
+        if mode == "manual" {
+            fire.mode = LoopRunMode::Manual;
+        }
+        let plan = fire.prepare(&mut |_| Ok(()));
+        actual.push(matches!(plan, Ok(TaskFirePlan::Resident { .. })));
+    }
+    assert_eq!(actual, [true; 3]);
+}
+
+#[test]
+fn capacity_blocking_wait_ends_as_expired_at_the_tasks_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(80.0, 80.0);
+    let now = Timestamp::from_millisecond(host.host().now_ms() as i64).unwrap();
+    let mut entry = resident_entry(root.path());
+    entry.deadline = Some(now + Duration::from_secs(3));
+    let mut fire = throttled_fire("expires-held", entry, &catalog, "cpu-pressure=25", &host);
+    fire.now = now;
+    let TaskFirePlan::Done(done) = fire.prepare(&mut |_| panic!("expired")).unwrap() else {
+        panic!("an expired task must not launch");
+    };
+    assert_eq!(done.record.result, LoopRunResult::Expired);
+    assert_eq!(host.elapsed_ms(), 3_000);
+    assert_eq!(host.tickets(), 0);
+}
+
+#[test]
+fn capacity_condition_holds_are_try_once_and_history_is_once_per_stretch() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(80.0, 80.0);
+    host.on_sleep(|host| {
+        host.interrupt
+            .store(true, std::sync::atomic::Ordering::SeqCst)
+    });
+    let mut entry = resident_entry(root.path());
+    entry.when = Some(vec!["team.stage=Done".into()]);
+    let first = Timestamp::from_millisecond(host.host().now_ms() as i64).unwrap();
+    for attempt in 0..2 {
+        let elapsed = host.elapsed_ms();
+        let mut fire = throttled_fire("owed", entry.clone(), &catalog, "cpu-pressure = 25", &host);
+        fire.prepare(&mut |_| panic!("a held condition fire births no room"))
+            .unwrap();
+        assert_eq!(host.elapsed_ms(), elapsed);
+        if attempt == 0 {
+            host.host().sleep(Duration::from_secs(60));
+        }
+    }
+    let rows = run_log::task_records(&logs_dir(), "owed", Some(root.path()));
+    assert_eq!(
+        rows.iter()
+            .map(|row| serde_json::to_value(row.result).unwrap())
+            .collect::<Vec<_>>(),
+        [serde_json::json!("capacity_held")]
+    );
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let waits: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(StatePaths::class_path(
+            &paths.root,
+            crate::disk::paths::Class::Records,
+            "loop-capacity-waits.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let wait = &waits["owed"][root.path().to_str().unwrap()];
+    assert_eq!(wait["count"], 2);
+    assert_eq!(wait["first"], serde_json::to_value(first).unwrap());
+    assert_ne!(wait["first"], wait["last"]);
+    assert_eq!(host.tickets(), 0);
+}
+
+#[test]
+fn capacity_look_holds_before_running_a_guard() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(80.0, 80.0);
+    host.on_sleep(|host| {
+        host.interrupt
+            .store(true, std::sync::atomic::Ordering::SeqCst)
+    });
+    let mut entry = resident_entry(root.path());
+    entry.when = Some(vec!["team.stage=Done".into()]);
+    entry.check = Some("true".into());
+    entry.judge = vec![toml::from_str("agent='claude'\nprompt='Should this start?'").unwrap()];
+    entry.on = Some(CheckOn::Success);
+    let mut fire = throttled_fire("guarded-owed", entry, &catalog, "cpu-pressure = 25", &host);
+    fire.check_process = |_, _, _, _, _, _| panic!("a capacity-held guard must spawn no judge");
+    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
+    assert!(fire.fired_guard.is_empty(), "{plan:?}");
+    assert_eq!(host.elapsed_ms(), 0);
+}
+
+#[test]
+fn capacity_admission_rechecks_a_deadline_after_guard_work() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    let mut entry = resident_entry(root.path());
+    entry.deadline =
+        Some(Timestamp::from_millisecond(host.host().now_ms() as i64 + 1_000).unwrap());
+    let mut fire = throttled_fire("late-guard", entry, &catalog, "pace='0s'", &host);
+    host.host().sleep(Duration::from_secs(2));
+    let plan = fire.prepare_throttle().unwrap();
+    assert!(
+        matches!(plan, Some(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::Expired)
+    );
+    assert_eq!(host.tickets(), 0);
+}
+
+#[test]
+fn capacity_memory_clears_on_admission_and_other_fire_endings() {
+    for ending in ["admitted", "guard-miss", "gate", "error", "expiry"] {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let host = throttle::tests::FakeHost::new();
+        host.set_pressure(80.0, 80.0);
+        let mut entry = resident_entry(root.path());
+        entry.when = Some(vec!["team.stage=Done".into()]);
+        let mut held = throttled_fire(ending, entry.clone(), &catalog, "cpu-pressure=25", &host);
+        assert!(matches!(
+            held.prepare(&mut |_| panic!("held")).unwrap(),
+            TaskFirePlan::CapacityHeld
+        ));
+        drop(held);
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        assert!(
+            super::super::launch_ledger::load_capacity(&paths)
+                .unwrap()
+                .contains_key(ending)
+        );
+        host.set_pressure(0.0, 0.0);
+        if ending == "guard-miss" {
+            entry.check = Some("false".into());
+            entry.on = Some(CheckOn::Success);
+        }
+        if ending == "expiry" {
+            entry.deadline = Some(Timestamp::UNIX_EPOCH);
+        }
+        let mut next = throttled_fire(ending, entry, &catalog, "cpu-pressure=25", &host);
+        match ending {
+            "gate" => {
+                next.record_gate(LoopRunResult::BudgetSkipped, "no budget".into());
+            }
+            "error" => {
+                next.finish_error(&anyhow::anyhow!("launch failed"));
+            }
+            _ => {
+                next.prepare(&mut |_| Ok(())).unwrap();
+            }
+        }
+        assert!(
+            !super::super::launch_ledger::load_capacity(&paths)
+                .unwrap()
+                .contains_key(ending),
+            "{ending}"
+        );
+    }
+}
+
+#[test]
+fn capacity_give_up_is_silent_until_a_new_condition_stretch() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(80.0, 80.0);
+    host.on_sleep(|host| {
+        host.interrupt
+            .store(true, std::sync::atomic::Ordering::SeqCst)
+    });
+    let mut entry: TaskEntry = toml::from_str("capacity-wait='2s'").unwrap();
+    entry.root = root.path().to_owned();
+    entry.agent = Some("claude".into());
+    entry.prompt = Some("repair".into());
+    entry.when = Some(vec!["team.stage=Done".into()]);
+    let mut first = None;
+    for (delay, since) in [(0, 0), (2, 0), (0, 0), (0, 1)] {
+        host.host().sleep(Duration::from_secs(delay));
+        let mut fire = throttled_fire(
+            "bounded-owed",
+            entry.clone(),
+            &catalog,
+            "cpu-pressure=25",
+            &host,
+        );
+        fire.now =
+            Timestamp::from_millisecond(i64::try_from(host.host().now_ms()).unwrap()).unwrap();
+        fire.condition = Some(
+            serde_json::from_value(serde_json::json!({
+                "since": Timestamp::from_second(since).unwrap(), "when": "team.stage=Done",
+                "held_ms": 0, "readings": {}
+            }))
+            .unwrap(),
+        );
+        fire.prepare(&mut |_| panic!("held")).unwrap();
+        let rows = run_log::task_records(&logs_dir(), "bounded-owed", Some(root.path()));
+        if first.is_none() {
+            assert_eq!(
+                serde_json::to_value(rows[0].result).unwrap(),
+                "capacity_held"
+            );
+            first = Some(rows[0].at);
+        }
+    }
+    let rows = run_log::task_records(&logs_dir(), "bounded-owed", Some(root.path()));
+    assert_eq!(
+        rows.iter()
+            .map(|row| serde_json::to_value(row.result).unwrap())
+            .collect::<Vec<_>>(),
+        [
+            serde_json::json!("capacity_held"),
+            serde_json::json!("throttle_skipped"),
+            serde_json::json!("capacity_held")
+        ]
+    );
+    assert!(
+        rows[1]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("gave up waiting for capacity after 2s")
+    );
+}
+
+#[test]
+fn capacity_one_off_clock_defaults_to_forever() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    let mut entry = resident_entry(root.path());
+    entry.stay = false;
+    entry.at = Some("12:00".into());
+    let fire = throttled_fire("once-owed", entry, &catalog, "pace='0s'", &host);
+    assert_eq!(fire.throttle_run().unwrap().gives_up_ms, None);
+}
+
+#[test]
+fn capacity_periodic_default_gives_up_before_the_next_occurrence() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(80.0, 80.0);
+    let mut entry = resident_entry(root.path());
+    entry.every = Some("1h".into());
+    let mut fire = throttled_fire("hourly-owed", entry, &catalog, "cpu-pressure=25", &host);
+    fire.now = Timestamp::from_millisecond(i64::try_from(host.host().now_ms()).unwrap()).unwrap();
+    let TaskFirePlan::Done(done) = fire.prepare(&mut |_| panic!("held")).unwrap() else {
+        panic!("held")
+    };
+    assert_eq!(host.elapsed_ms(), 3_599_000);
+    assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
+    assert!(
+        done.record
+            .error
+            .as_deref()
+            .unwrap()
+            .starts_with("gave up waiting for capacity after 3599s")
+    );
+}
+
+#[test]
+fn a_held_resident_fire_is_skipped_at_capacity_wait_before_room_birth() {
     let root = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
     let host = throttle::tests::FakeHost::new();
     host.set_pressure(41.0, 12.0);
-    let heard = std::cell::RefCell::new(Vec::new());
-    let mut fire = throttled_fire(
-        "throttle-held",
-        resident_entry(root.path()),
-        &catalog,
-        "cpu-pressure = 25\nmax-wait = \"3s\"\n",
-        &host,
-    )
-    .with_hold_notice(|reason| heard.borrow_mut().push(reason.to_owned()));
+    let mut entry = resident_entry(root.path());
+    entry.capacity_wait = Some("3s".parse().unwrap());
+    let mut fire = throttled_fire("throttle-held", entry, &catalog, "cpu-pressure = 25", &host);
     let TaskFirePlan::Done(done) = fire
         .prepare(&mut |_| panic!("a held fire births no room"))
         .unwrap()
     else {
-        panic!("a fire held past max-wait is done")
+        panic!("a fire held past capacity-wait is done")
     };
     assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
     assert_eq!(
         done.record.error.as_deref(),
-        Some("cpu pressure 41% >= 25%; held 3s")
+        Some("gave up waiting for capacity after 3s; cpu pressure 41% >= 25%")
     );
     assert!(matches!(done.notice, TaskFireNotice::Gate { .. }));
-    assert_eq!(*heard.borrow(), ["cpu pressure 41% >= 25%"]);
     assert_eq!(host.tickets(), 0);
     assert_eq!(
         run_log::task_records(&logs_dir(), "throttle-held", Some(root.path()))
@@ -3055,6 +3353,7 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
         prompt: Some("repair".to_owned()),
         root: dir.path().to_path_buf(),
         fire_at: Some(Timestamp::UNIX_EPOCH),
+        capacity_wait: Some("3s".parse().unwrap()),
         ..TaskEntry::default()
     };
     let exempt = TaskEntry {
@@ -3085,8 +3384,7 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
     }
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     let host = throttle::tests::FakeHost::new();
-    let throttle_config: crate::config::ThrottleConfig =
-        toml::from_str("max-wait = \"3s\"\n").unwrap();
+    let throttle_config = crate::config::ThrottleConfig::default();
     // Another start holds the turn: the queue itself holds every gated fire.
     host.become_owner(9);
     let throttle::Admission::Turn { turn: holder, .. } = throttle::admit(
@@ -3102,7 +3400,6 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
             workspace: state.workspace_id.clone(),
         },
         None,
-        &mut |_| {},
     )
     .unwrap() else {
         panic!("an empty queue admits")
@@ -3110,7 +3407,7 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
     host.become_owner(1);
     let gated = |name: &str| {
         let mut fire = skipped_fire(name, &catalog, None);
-        fire.config = Arc::new(toml::from_str("[loop.throttle]\nmax-wait = \"3s\"\n").unwrap());
+        fire.config = Arc::new(MachineConfig::default());
         fire.throttle_host = host.host();
         fire
     };
@@ -3145,7 +3442,10 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
         panic!("a held spawn is done")
     };
     assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
-    assert_eq!(done.record.error.as_deref(), Some("1 start ahead; held 3s"));
+    assert_eq!(
+        done.record.error.as_deref(),
+        Some("gave up waiting for capacity after 3s; 1 start ahead")
+    );
     assert_eq!(done.record.check.expect("the fired check").code, Some(0));
     assert_eq!(host.elapsed_ms(), 3_000);
     assert!(!row("held"));
@@ -3280,7 +3580,7 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
     crate::harness::schedule::instances::insert(&state, "checked", &checked).unwrap();
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     let host = throttle::tests::FakeHost::new();
-    let config: MachineConfig = toml::from_str("[loop.throttle]\nmax-wait = \"3s\"\n").unwrap();
+    let config = MachineConfig::default();
     // Another start holds the turn, so this fire would be held.
     host.become_owner(9);
     let throttle::Admission::Turn { turn: _holder, .. } = throttle::admit(
@@ -3296,7 +3596,6 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
             workspace: state.workspace_id.clone(),
         },
         None,
-        &mut |_| {},
     )
     .unwrap() else {
         panic!("an empty queue admits")

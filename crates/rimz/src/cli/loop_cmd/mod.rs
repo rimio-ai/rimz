@@ -304,6 +304,9 @@ struct AddArgs {
     /// Whether the task's agent starts take their turn in the loop throttle; unset is on.
     #[arg(long, value_name = "on|off", value_parser = ["on", "off"], requires = "agent")]
     throttle: Option<String>,
+    /// How long to wait for capacity: a positive s/m/h/d duration, or forever.
+    #[arg(long, value_name = "DURATION|forever", requires = "agent")]
+    capacity_wait: Option<rimz::config::CapacityWait>,
     /// Busy scheduled triggers: skip (default), coalesce, queue, or replace (stop for newest).
     #[arg(long, value_name = "POLICY", value_parser = ["skip", "coalesce", "queue", "replace"])]
     overlap: Option<String>,

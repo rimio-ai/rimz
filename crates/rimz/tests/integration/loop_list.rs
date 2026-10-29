@@ -39,6 +39,182 @@ fn record(name: &str, root: &Path, result: LoopRunResult, minutes: i64) -> LoopR
 }
 
 #[test]
+fn capacity_waits_reach_list_and_show_as_text_and_json() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    config(
+        &env,
+        BTreeMap::from([(
+            "owed".into(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                agent: Some("claude".into()),
+                prompt: Some("repair".into()),
+                when: Some(vec!["team.stage=Done".into()]),
+                ..Default::default()
+            },
+        )]),
+    );
+    let since: Timestamp = "2026-06-01T15:02:00Z".parse().unwrap();
+    let paths = env.state_path_for(&env.project_root);
+    let runtime = env.runtime_paths();
+    let when_path = runtime.lane_path("loop-when.json");
+    let clock = json!({"since": since, "fired": true});
+    rimz::disk::atomic::write_temp_then_rename_cache(&when_path, &json!({"owed": clock})).unwrap();
+    let path = paths.root.join("records/loop-capacity-waits.json");
+    rimz::disk::atomic::write_temp_then_rename(
+        &path,
+        &json!({"owed": {
+            env.project_root.to_str().unwrap(): {
+                "since": since, "first": since, "last": since, "count": 2,
+                "kinds": ["claude"], "reason": "claude: no capacity (exit 75)", "gave_up": false
+            }
+        }}),
+    )
+    .unwrap();
+    let phrase = rimz::theme::fmt::capacity_wait(
+        &[rimz::ids::AgentKind::new_unchecked("claude")],
+        since,
+        None,
+    );
+    let listed: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    let task = &listed["rooms"][0]["tasks"][0];
+    assert_eq!(
+        task["capacity_wait"],
+        json!({"kinds": ["claude"], "since": since, "gives_up_at": null, "reason": "claude: no capacity (exit 75)"})
+    );
+    let shown: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "owed", "--json"])).unwrap();
+    assert_eq!(shown["capacity_wait"], task["capacity_wait"]);
+    for args in [vec!["loop", "list"], vec!["loop", "show", "owed"]] {
+        let output = loop_ok(&env, &args);
+        assert!(output.contains(&phrase), "{output}");
+    }
+    let now = Timestamp::now();
+    write_loop_arming(
+        &env,
+        &BTreeMap::from([(
+            machine_task_key("owed"),
+            Arming {
+                enabled: true,
+                at: Some(now),
+                pause_until: Some(now + SignedDuration::from_mins(20)),
+                strikes: None,
+            },
+        )]),
+    );
+    let paused = [
+        loop_ok(&env, &["loop", "list"]),
+        loop_ok(&env, &["loop", "show", "owed"]),
+    ];
+    write_loop_arming(&env, &BTreeMap::new());
+    let mut stale = Vec::new();
+    for clocks in [
+        json!({"owed": {"since": since + Duration::from_secs(1), "fired": true}}),
+        json!({}),
+    ] {
+        rimz::disk::atomic::write_temp_then_rename_cache(&when_path, &clocks).unwrap();
+        let listed: serde_json::Value =
+            serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+        let shown: serde_json::Value =
+            serde_json::from_str(&loop_ok(&env, &["loop", "show", "owed", "--json"])).unwrap();
+        stale.push((
+            listed["rooms"][0]["tasks"][0]["capacity_wait"].is_null(),
+            shown["capacity_wait"].is_null(),
+            !loop_ok(&env, &["loop", "list"]).contains(&phrase),
+            !loop_ok(&env, &["loop", "show", "owed"]).contains(&phrase),
+        ));
+    }
+    assert_eq!(
+        stale,
+        [(true, true, true, true); 2],
+        "stale and absent condition clocks must remove the wait from text and JSON"
+    );
+    assert!(
+        paused
+            .iter()
+            .all(|output| output.contains("paused") && !output.contains(&phrase)),
+        "paused tasks keep their own state instead of capacity: {paused:#?}"
+    );
+}
+
+#[test]
+fn capacity_other_checkouts_stay_visible_while_one_checkout_runs() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
+    for name in ["capacity-running", "capacity-waiting"] {
+        loop_ok(&env, &["worktree", "new", name]);
+    }
+    let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
+    let running = owned[0].marker.worktree_path.canonicalize().unwrap();
+    let waiting = owned[1].marker.worktree_path.canonicalize().unwrap();
+    config(
+        &env,
+        BTreeMap::from([(
+            "owed".into(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                agent: Some("claude".into()),
+                prompt: Some("repair".into()),
+                when: Some(vec!["team.stage=Done".into()]),
+                each_worktree: true,
+                ..Default::default()
+            },
+        )]),
+    );
+    let paths = env.state_path_for(&env.project_root);
+    let since: Timestamp = "2026-06-01T15:02:00Z".parse().unwrap();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &env.runtime_paths().lane_path("loop-when.json"),
+        &json!({"owed":{"since":since,"fired":true}}),
+    )
+    .unwrap();
+    let wait = json!({
+        "since":since,"first":since,"last":since,"count":1,
+        "kinds":["claude"],"reason":"no capacity","gave_up":false
+    });
+    rimz::disk::atomic::write_temp_then_rename(
+        &paths.root.join("records/loop-capacity-waits.json"),
+        &json!({"owed":{running.to_str().unwrap():wait, waiting.to_str().unwrap():wait}}),
+    )
+    .unwrap();
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "repair".into(),
+        running.clone(),
+    );
+    run.status = rimz::store::run::RunStatus::Running;
+    run.loop_task = Some("owed".into());
+    rimz::harness::run::create(&paths, &run).unwrap();
+    let _lock = hold_loop_run_lock(
+        &loop_run_lock_path(&env, "owed"),
+        &RunLockInfo {
+            pid: std::process::id(),
+            started_at: Timestamp::now(),
+        },
+    );
+    let shown: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "owed", "--json"])).unwrap();
+    let waits = shown["worktrees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| !row["capacity_wait"].is_null())
+        .map(|row| row["checkout"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(waits, [json!(waiting)], "{shown:#}");
+    let text = loop_ok(&env, &["loop", "show", "owed"]);
+    assert!(
+        text.contains("waiting for capacity (claude) since"),
+        "{text}"
+    );
+}
+
+#[test]
 fn expanded_wakes_nest_live_children_and_fall_back_without_agent_rows() {
     use crate::common::wait::{register_agent, register_calling_agent};
     use rimz::agents::LaunchParams;

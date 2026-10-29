@@ -864,6 +864,7 @@ fn build_task_entry(
         prompt: args.prompt.clone(),
         prompt_file: args.prompt_file.clone(),
         max_strikes: args.max_strikes,
+        capacity_wait: args.capacity_wait,
         overlap: args.overlap.as_deref().map(|value| match value {
             "coalesce" => rimz::config::OverlapPolicy::Coalesce,
             "queue" => rimz::config::OverlapPolicy::Queue,

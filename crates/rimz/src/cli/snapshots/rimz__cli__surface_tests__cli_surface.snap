@@ -1647,6 +1647,7 @@ rimz loop add
     --at <AT>  [action=set takes=1..=1]
     --budget <AMOUNT[/day]>  [action=set takes=1..=1]
     --budget-per-day <AMOUNT>  [action=set takes=1..=1]
+    --capacity-wait <DURATION|forever>  [action=set takes=1..=1]
     --check <CMD>  [action=set takes=1..=1]
     --check-timeout <DUR>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]

@@ -95,7 +95,7 @@ pub struct ThrottleConfig {
     pub check: Option<String>,
     #[serde(
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_max_wait"
+        deserialize_with = "deserialize_throttle_check_timeout"
     )]
     pub check_timeout: Option<String>,
     #[serde(
@@ -103,11 +103,6 @@ pub struct ThrottleConfig {
         deserialize_with = "deserialize_throttle_pace"
     )]
     pub pace: Option<String>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_max_wait"
-    )]
-    pub max_wait: Option<String>,
     #[serde(
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_throttle_cap"
@@ -152,7 +147,6 @@ impl ThrottleConfig {
     }
 
     pub const DEFAULT_PACE: &'static str = "10s";
-    pub const DEFAULT_MAX_WAIT: &'static str = "30m";
 
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
@@ -175,12 +169,6 @@ impl ThrottleConfig {
     pub fn pace(&self) -> Duration {
         throttle_duration(self.pace.as_deref().unwrap_or(Self::DEFAULT_PACE))
             .unwrap_or(Duration::from_secs(10))
-    }
-
-    /// How long a run waits for its turn before it is skipped.
-    pub fn max_wait(&self) -> Duration {
-        throttle_duration(self.max_wait.as_deref().unwrap_or(Self::DEFAULT_MAX_WAIT))
-            .unwrap_or(Duration::from_secs(30 * 60))
     }
 
     pub fn min_memory_bytes(&self) -> Option<u64> {
@@ -223,7 +211,7 @@ where
     Ok(raw)
 }
 
-fn deserialize_throttle_max_wait<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+fn deserialize_throttle_check_timeout<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -271,6 +259,56 @@ where
         return Err(D::Error::custom("must be greater than zero"));
     }
     Ok(raw)
+}
+
+/// How long an automated agent start may wait for capacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum CapacityWait {
+    Forever,
+    Duration(Duration),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CapacityWaitErr {
+    #[error(transparent)]
+    Duration(#[from] crate::utils::time::TimeInputErr),
+    #[error("capacity-wait must be greater than zero, or forever")]
+    Zero,
+}
+
+impl std::str::FromStr for CapacityWait {
+    type Err = CapacityWaitErr;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        if raw == "forever" {
+            return Ok(Self::Forever);
+        }
+        let duration = parse_duration_units(raw, DEFAULT_TIMEOUT_UNITS)?;
+        if duration.is_zero() {
+            return Err(CapacityWaitErr::Zero);
+        }
+        Ok(Self::Duration(duration))
+    }
+}
+
+impl TryFrom<String> for CapacityWait {
+    type Error = CapacityWaitErr;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        raw.parse()
+    }
+}
+
+impl From<CapacityWait> for String {
+    fn from(wait: CapacityWait) -> Self {
+        match wait {
+            CapacityWait::Forever => "forever".to_owned(),
+            CapacityWait::Duration(duration) => {
+                crate::utils::time::format_duration_compact(duration)
+            }
+        }
+    }
 }
 
 /// A task's own `throttle` key; absent means on.
@@ -543,6 +581,8 @@ pub struct TaskEntry {
     /// `off` exempts every fire of the task from the start throttle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub throttle: Option<ThrottleSwitch>,
+    #[serde(rename = "capacity-wait", skip_serializing_if = "Option::is_none")]
+    pub capacity_wait: Option<CapacityWait>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlap: Option<OverlapPolicy>,
     #[serde(rename = "overlap-limit", skip_serializing_if = "Option::is_none")]

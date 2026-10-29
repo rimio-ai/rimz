@@ -1,7 +1,6 @@
-//! Loop start throttle: one queue per RimZ home that every loop run starting
-//! an agent takes a turn in.
+//! Loop start throttle: one capacity door per RimZ home for automated agent starts.
 //!
-//! A gated run writes a ticket and rechecks the queue until it holds the turn.
+//! Blocking runs keep a ticket; condition fires try once and leave none when held.
 //! The turn passes on when the launch it admitted is reported and the provider
 //! then reports the new agent, or the ceiling passes, whichever is first; a later
 //! scanner releases it, so the launching process never lingers. Caps and
@@ -375,10 +374,6 @@ pub(in crate::harness) struct StartGroup {
 }
 
 #[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "loop and workflow callers will consume the one-pass result"
-)]
 pub(in crate::harness) enum Attempt {
     Open,
     Turn(Turn),
@@ -387,15 +382,15 @@ pub(in crate::harness) enum Attempt {
 
 /// Try once at the queue's tail. A held start leaves no ticket behind, and no
 /// turn is granted at or past the run's give-up instant.
-#[expect(
-    dead_code,
-    reason = "the loop and workflow callers land after the shared door"
-)]
 pub(in crate::harness) fn try_admit(config: &ThrottleConfig, run: &Run) -> Result<Attempt> {
     try_admit_in(&(Arc::new(SystemHost) as Arc<dyn Host>), config, run)
 }
 
-fn try_admit_in(host: &Arc<dyn Host>, config: &ThrottleConfig, run: &Run) -> Result<Attempt> {
+pub(super) fn try_admit_in(
+    host: &Arc<dyn Host>,
+    config: &ThrottleConfig,
+    run: &Run,
+) -> Result<Attempt> {
     if !gates(config) {
         return Ok(Attempt::Open);
     }
@@ -429,15 +424,7 @@ fn try_admit_in(host: &Arc<dyn Host>, config: &ThrottleConfig, run: &Run) -> Res
 }
 
 /// Inspect the same tail without a ticket or reservation, even during its check.
-#[expect(
-    dead_code,
-    reason = "guarded try-once loop fires land after the shared door"
-)]
-pub(in crate::harness) fn look(config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
-    look_in(&SystemHost, config, run)
-}
-
-fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
+pub(super) fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
     if !gates(config) {
         return Ok(None);
     }
@@ -798,15 +785,14 @@ pub fn preflight(config: &ThrottleConfig) -> Result<()> {
     }
 }
 
-/// Take a turn for `run`, waiting until its give-up instant. `on_hold` hears each new
-/// blocking reason. A caller already `listening` for Ctrl-C hands its
+/// Take a turn for `run`, waiting until its give-up instant.
+/// A caller already `listening` for Ctrl-C hands its
 /// listener over; without one, the run listens once it is held.
 pub(super) fn admit(
     host: &Arc<dyn Host>,
     config: &ThrottleConfig,
     run: &Run,
     listening: Option<Interrupts>,
-    on_hold: &mut dyn FnMut(&str),
 ) -> Result<Admission> {
     if !gates(config) {
         return Ok(Admission::Open);
@@ -825,7 +811,7 @@ pub(super) fn admit(
     let skipped = |reason: &str| {
         Ok(Admission::Skipped {
             reason: format!(
-                "{reason}; held {}",
+                "gave up waiting for capacity after {}; {reason}",
                 format_duration_compact(Duration::from_millis(
                     host.now_ms().saturating_sub(enqueued_ms)
                 ))
@@ -885,14 +871,10 @@ pub(super) fn admit(
                 waited: heard.is_some().then(|| Duration::from_millis(waited_ms)),
             });
         };
-        // Listen before announcing the hold, so a Ctrl-C prompted by it lands.
         if interrupts.is_none() {
             interrupts = Some(host.interrupts().map_err(ThrottleError::Interrupts)?);
         }
-        if heard.as_deref() != Some(hold.text.as_str()) {
-            on_hold(&hold.text);
-            heard = Some(hold.text);
-        }
+        heard = Some(hold.text);
         host.sleep(RECHECK);
     }
 }
@@ -1286,6 +1268,8 @@ pub struct Held {
     pub pid: u32,
     pub checkout: PathBuf,
     pub since_ms: u64,
+    pub kinds: Vec<AgentKind>,
+    pub gives_up_ms: Option<u64>,
     /// The blocking reason, once the run's first pass recorded one.
     pub reason: Option<String>,
     /// 1-based place among the runs waiting or holding the turn.
@@ -1316,6 +1300,8 @@ fn held_in(host: &dyn Host, name: &str, root: &Path) -> Vec<Held> {
                     pid: ticket.owner.pid,
                     checkout: ticket.checkout.clone(),
                     since_ms: ticket.enqueued_ms,
+                    kinds: ticket.kinds.clone(),
+                    gives_up_ms: ticket.gives_up_ms,
                     reason: reason.as_ref().map(|hold| hold.text.clone()),
                     position: index + 1,
                 },

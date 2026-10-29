@@ -889,6 +889,16 @@ reason = "Machine task loading, replacement, and doctor share absolute-root admi
 
 [[verdict]]
 kind = "item"
+key = "config::loop_::CapacityWait"
+reason = "Loop tasks and workflow agent steps share a parsed positive duration or forever capacity policy."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::CapacityWaitErr"
+reason = "Configuration and CLI parsing report invalid capacity durations without accepting a zero wait."
+
+[[verdict]]
+kind = "item"
 key = "config::loop_::LoopConfig::load_lenient"
 reason = "Read-only task catalogs share memoized lenient loop-file settings without definitions or theme."
 
@@ -1475,7 +1485,29 @@ path = "crates/rimz/src/harness"
 # hibernation_entry shares the open-agent join with the transcript watcher (+1).
 # LeaderTurn and leader_turn share locked workflow eligibility with the CLI attempt host (+2).
 # Observation limits leader-turn reads to workflow decisions that consume them (+1).
-surface-budget = 1021
+# CapacityRecord, CapacityWaits and load_capacity share read-only waits; removing the hold notice offsets one (+2 net).
+# load_live_capacity filters capacity waits against the planner's current condition clocks (+1).
+surface-budget = 1024
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::CapacityRecord"
+reason = "Detached loop fires persist condition capacity waits for planner and renderers."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::CapacityWaits"
+reason = "Read-only consumers share the per-task per-checkout wait map."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::load_capacity"
+reason = "Planner, CLI and sidebar read strict capacity memory without locks or writes."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::launch_ledger::load_live_capacity"
+reason = "CLI and sidebar display only capacity waits matching the planner's current condition clock."
 
 [[verdict]]
 kind = "item"
@@ -2970,7 +3002,13 @@ upward-dependencies = ["agents"]
 # fmt::active_duration shares agent-time formatting between attribution and stats (+1).
 # BrandColor::shade shares provider-relative model tones with renderers (+1).
 # fmt::age_label and fmt::rel_age give CLI reports and launcher entry facts one age vocabulary (+2).
-surface-budget = 39
+# fmt::capacity_wait shares the local-time phrase across loop, workflow and sidebar surfaces (+1).
+surface-budget = 40
+
+[[verdict]]
+kind = "item"
+key = "theme::fmt::capacity_wait"
+reason = "All capacity waits share one phrase, provider list and local-time vocabulary."
 
 [[verdict]]
 kind = "item"

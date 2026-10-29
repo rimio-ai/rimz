@@ -5,6 +5,25 @@ use jiff::civil::date;
 use jiff::civil::Weekday::{Friday, Monday, Wednesday};
 
 #[test]
+fn workflow_tasks_refuse_capacity_policy_owned_by_steps() {
+    let errors: Vec<_> = ["throttle = 'off'", "capacity-wait = '1h'"]
+        .into_iter()
+        .map(|key| {
+            let entry: TaskEntry = toml::from_str(&format!("workflow = 'review'\n{key}")).unwrap();
+            TaskAction::from_entry("review", &entry)
+                .err()
+                .map(|error| error.to_string())
+        })
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.as_ref().is_some_and(|error| error.contains("steps"))),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn delivery_owners_follow_provenance_and_precedence() {
     let meta = crate::config::WaitMeta {
         armed_at: Timestamp::UNIX_EPOCH,

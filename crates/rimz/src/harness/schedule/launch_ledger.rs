@@ -1,4 +1,4 @@
-//! Read-only resident and condition workflow launch memory, plus judge declines.
+//! Read-only launch memory, judge declines, and condition capacity waits.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -16,6 +16,57 @@ pub struct LaunchRecord {
 }
 
 pub type Ledger = BTreeMap<String, BTreeMap<PathBuf, LaunchRecord>>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapacityRecord {
+    pub since: Option<Timestamp>,
+    pub first: Timestamp,
+    pub last: Timestamp,
+    pub count: u64,
+    pub kinds: Vec<crate::ids::AgentKind>,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gives_up_at: Option<Timestamp>,
+    pub gave_up: bool,
+}
+
+pub type CapacityWaits = BTreeMap<String, BTreeMap<PathBuf, CapacityRecord>>;
+
+pub(super) fn capacity_path(paths: &crate::StatePaths) -> PathBuf {
+    crate::StatePaths::class_path(
+        &paths.root,
+        crate::disk::paths::Class::Records,
+        "loop-capacity-waits.json",
+    )
+}
+
+pub fn load_capacity(paths: &crate::StatePaths) -> Result<CapacityWaits, LedgerErr> {
+    match std::fs::read(capacity_path(paths)) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(CapacityWaits::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Unfinished capacity waits still matching the planner's current condition clocks.
+pub fn load_live_capacity(
+    paths: &crate::StatePaths,
+    runtime: &crate::RuntimePaths,
+) -> Result<CapacityWaits, LedgerErr> {
+    let clocks = super::fire::last_when_states(runtime);
+    let mut waits = load_capacity(paths)?;
+    waits.retain(|name, checkouts| {
+        checkouts.retain(|checkout, wait| {
+            !wait.gave_up
+                && clocks
+                    .get(&super::fire::scope_key(name, checkout))
+                    .or_else(|| clocks.get(name))
+                    .is_some_and(|clock| wait.since == Some(clock.since))
+        });
+        !checkouts.is_empty()
+    });
+    Ok(waits)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowLaunchRecord {
@@ -245,6 +296,100 @@ pub fn load(paths: &crate::StatePaths) -> Result<Ledger, LedgerErr> {
 mod tests {
     use super::*;
     use crate::config::{CheckOn, Judge, TaskCheck, TaskEntry};
+
+    #[test]
+    fn capacity_loader_is_strict_and_read_only() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::for_project_root(root.path()).unwrap();
+        assert!(load_capacity(&paths).unwrap().is_empty());
+        assert!(!paths.root.exists());
+        let path = capacity_path(&paths);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"broken").unwrap();
+        assert!(
+            load_capacity(&paths).is_err(),
+            "corruption is not an empty wait file"
+        );
+    }
+
+    #[test]
+    fn live_capacity_requires_the_current_scoped_or_task_condition_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let paths = crate::StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let runtime = crate::RuntimePaths::under(workspace, dir.path()).unwrap();
+        let at = Timestamp::from_second(100).unwrap();
+        let wait = CapacityRecord {
+            since: Some(at),
+            first: at,
+            last: at,
+            count: 1,
+            kinds: vec![crate::ids::AgentKind::new_unchecked("claude")],
+            reason: "no capacity".into(),
+            gives_up_at: None,
+            gave_up: false,
+        };
+        let mut waits = CapacityWaits::new();
+        for name in ["live", "stale", "missing", "no-since", "gave-up", "fanout"] {
+            waits.insert(
+                name.into(),
+                BTreeMap::from([(PathBuf::from("/repo/a"), wait.clone())]),
+            );
+        }
+        waits
+            .get_mut("no-since")
+            .unwrap()
+            .get_mut(std::path::Path::new("/repo/a"))
+            .unwrap()
+            .since = None;
+        waits
+            .get_mut("gave-up")
+            .unwrap()
+            .get_mut(std::path::Path::new("/repo/a"))
+            .unwrap()
+            .gave_up = true;
+        waits
+            .get_mut("fanout")
+            .unwrap()
+            .insert("/repo/b".into(), wait);
+        let path = capacity_path(&paths);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&waits).unwrap()).unwrap();
+        let clock = |since| super::super::when::WhenState {
+            fingerprint: None,
+            since,
+            fired: true,
+        };
+        let clocks = BTreeMap::from([
+            ("live".into(), clock(at)),
+            ("stale".into(), clock(Timestamp::from_second(101).unwrap())),
+            ("no-since".into(), clock(at)),
+            ("gave-up".into(), clock(at)),
+            (
+                super::super::fire::scope_key("fanout", std::path::Path::new("/repo/a")),
+                clock(at),
+            ),
+        ]);
+        let when = runtime.lane_path("loop-when.json");
+        std::fs::create_dir_all(when.parent().unwrap()).unwrap();
+        std::fs::write(when, serde_json::to_vec(&clocks).unwrap()).unwrap();
+        let live = load_live_capacity(&paths, &runtime).unwrap();
+        let scopes = live
+            .iter()
+            .flat_map(|(name, checkouts)| {
+                checkouts
+                    .keys()
+                    .map(move |path| (name.as_str(), path.as_path()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            scopes,
+            [
+                ("fanout", std::path::Path::new("/repo/a")),
+                ("live", std::path::Path::new("/repo/a"))
+            ]
+        );
+    }
 
     fn judge(prompt: &str, recheck: Option<&str>) -> Judge {
         Judge {

@@ -281,6 +281,21 @@ fn loop_overlap_fields_do_not_enter_project_trust_hash() {
 }
 
 #[test]
+fn loop_capacity_wait_does_not_enter_project_trust_hash() {
+    let base = "[tasks.x]\nagent='claude'\nprompt='repair'\nwhen=['team.stage=Done']\n";
+    let configured = format!("{base}capacity-wait='2h'\n");
+    let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
+    assert_eq!(
+        serde_json::to_value(&entry.tasks.0["x"]).unwrap()["capacity-wait"],
+        "2h"
+    );
+    assert_eq!(
+        executable_surface_hash(&toml::from_str::<ProjectConfig>(base).unwrap()),
+        executable_surface_hash(&toml::from_str::<ProjectConfig>(&configured).unwrap())
+    );
+}
+
+#[test]
 fn runtime_env_key_does_not_enter_trust_hash() {
     let base = project_with("");
     let extra = project_with("[agents]\nruntime-env = false\n");

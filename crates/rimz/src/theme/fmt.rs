@@ -4,6 +4,37 @@ use jiff::Timestamp;
 
 use crate::agents::RateLimitWindow;
 
+/// `waiting for capacity (claude) since 15:02, gives up at 21:02` in local
+/// time; a wait without a give-up instant omits that clause.
+pub fn capacity_wait(
+    kinds: &[crate::ids::AgentKind],
+    since: Timestamp,
+    gives_up_at: Option<Timestamp>,
+) -> String {
+    let zone = jiff::tz::TimeZone::system();
+    let kinds = kinds
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let providers = if kinds.is_empty() {
+        String::new()
+    } else {
+        format!(" ({kinds})")
+    };
+    let mut text = format!(
+        "waiting for capacity{providers} since {}",
+        since.to_zoned(zone.clone()).strftime("%H:%M")
+    );
+    if let Some(until) = gives_up_at {
+        text.push_str(&format!(
+            ", gives up at {}",
+            until.to_zoned(zone).strftime("%H:%M")
+        ));
+    }
+    text
+}
+
 /// Format bytes for human reports with 1024-based units.
 pub fn fmt_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -366,5 +397,41 @@ mod tests {
         assert_eq!(duration_label(59), "59m");
         assert_eq!(duration_label(60), "1h");
         assert_eq!(duration_label(1_440), "1d");
+    }
+
+    #[test]
+    fn capacity_wait_phrase_has_one_vocabulary_for_all_renderers() {
+        let since: Timestamp = "2026-06-01T15:02:00Z".parse().unwrap();
+        let until: Timestamp = "2026-06-01T21:02:00Z".parse().unwrap();
+        let local = jiff::tz::TimeZone::system();
+        let clock = |at: Timestamp| at.to_zoned(local.clone()).strftime("%H:%M").to_string();
+        assert_eq!(
+            [
+                capacity_wait(
+                    &[crate::ids::AgentKind::new_unchecked("claude")],
+                    since,
+                    Some(until)
+                ),
+                capacity_wait(
+                    &[
+                        crate::ids::AgentKind::new_unchecked("claude"),
+                        crate::ids::AgentKind::new_unchecked("codex")
+                    ],
+                    since,
+                    None
+                ),
+            ],
+            [
+                format!(
+                    "waiting for capacity (claude) since {}, gives up at {}",
+                    clock(since),
+                    clock(until)
+                ),
+                format!(
+                    "waiting for capacity (claude, codex) since {}",
+                    clock(since)
+                ),
+            ]
+        );
     }
 }

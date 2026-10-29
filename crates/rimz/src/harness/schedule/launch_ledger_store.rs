@@ -1,7 +1,8 @@
-//! Locked durable mutations of resident/workflow launch memory and judge declines.
+//! Locked durable mutations of launch memory, judge declines, and capacity waits.
 //!
 //! The catalog's per-task removals and renames (`remove`, `remove_workflows`,
-//! `rename_workflows`, `remove_declines`, `rename_declines`) read their file first and return
+//! `rename_workflows`, `remove_declines`, `rename_declines`, `remove_capacity`, `rename_capacity`)
+//! read their file first and return
 //! before taking the lock when it holds nothing for the task: taking the lock creates room state
 //! in a project with no room (`loop_schedule::loop_rename_without_a_room_does_not_create_state`).
 
@@ -147,6 +148,100 @@ pub(super) fn record_decline(
                 .insert(checkout.to_owned(), record);
         },
         after_write,
+    )
+}
+
+pub(super) fn record_capacity(
+    paths: &crate::StatePaths,
+    task: &str,
+    checkout: &Path,
+    update: impl FnOnce(Option<launch_ledger::CapacityRecord>) -> launch_ledger::CapacityRecord,
+) -> Result<launch_ledger::CapacityRecord, LedgerWriteErr> {
+    let mut record = None;
+    mutate(
+        paths,
+        launch_ledger::capacity_path,
+        "loop-capacity-waits.lock",
+        launch_ledger::load_capacity,
+        |waits| waits,
+        |waits| {
+            let checkouts = waits.entry(task.to_owned()).or_default();
+            let next = update(checkouts.remove(checkout));
+            checkouts.insert(checkout.to_owned(), next.clone());
+            record = Some(next);
+        },
+        || Ok(()),
+    )?;
+    // A successful mutate always calls its edit closure.
+    Ok(record.expect("capacity edit supplied its record"))
+}
+
+pub(super) fn remove_checkout_capacity(
+    paths: &crate::StatePaths,
+    task: &str,
+    checkout: &Path,
+) -> Result<(), LedgerWriteErr> {
+    if !launch_ledger::load_capacity(paths)?
+        .get(task)
+        .is_some_and(|checkouts| checkouts.contains_key(checkout))
+    {
+        return Ok(());
+    }
+    mutate(
+        paths,
+        launch_ledger::capacity_path,
+        "loop-capacity-waits.lock",
+        launch_ledger::load_capacity,
+        |waits| waits,
+        |waits| {
+            if let Some(checkouts) = waits.get_mut(task) {
+                checkouts.remove(checkout);
+                if checkouts.is_empty() {
+                    waits.remove(task);
+                }
+            }
+        },
+        || Ok(()),
+    )
+}
+
+pub(super) fn remove_capacity(paths: &crate::StatePaths, task: &str) -> Result<(), LedgerWriteErr> {
+    if !launch_ledger::load_capacity(paths)?.contains_key(task) {
+        return Ok(());
+    }
+    mutate(
+        paths,
+        launch_ledger::capacity_path,
+        "loop-capacity-waits.lock",
+        launch_ledger::load_capacity,
+        |waits| waits,
+        |waits| {
+            waits.remove(task);
+        },
+        || Ok(()),
+    )
+}
+
+pub(super) fn rename_capacity(
+    paths: &crate::StatePaths,
+    task: &str,
+    name: &str,
+) -> Result<(), LedgerWriteErr> {
+    if !launch_ledger::load_capacity(paths)?.contains_key(task) {
+        return Ok(());
+    }
+    mutate(
+        paths,
+        launch_ledger::capacity_path,
+        "loop-capacity-waits.lock",
+        launch_ledger::load_capacity,
+        |waits| waits,
+        |waits| {
+            if let Some(checkouts) = waits.remove(task) {
+                waits.insert(name.to_owned(), checkouts);
+            }
+        },
+        || Ok(()),
     )
 }
 
@@ -419,6 +514,15 @@ mod tests {
             )
             .unwrap();
             let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+            let capacity = serde_json::json!({
+                "since": null, "first": "2026-06-01T00:00:00Z", "last": "2026-06-01T00:00:00Z",
+                "count": 1, "kinds": ["claude"], "reason": "no capacity", "gave_up": false
+            });
+            crate::disk::atomic::write_temp_then_rename(
+                &launch_ledger::capacity_path(&paths),
+                &serde_json::json!({"guard": {root.path().display().to_string(): capacity}}),
+            )
+            .unwrap();
             match operation {
                 "rename" => {
                     catalog.rename("guard", "renamed").unwrap();
@@ -430,6 +534,12 @@ mod tests {
                     catalog.remove("guard").unwrap();
                 }
             }
+            let capacity: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(launch_ledger::capacity_path(&paths)).unwrap(),
+            )
+            .unwrap();
+            assert!(capacity.get("guard").is_none(), "{operation}: {capacity}");
+            assert_eq!(capacity.get("renamed").is_some(), operation == "rename");
             let memory: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(launch_ledger::decline_path(&paths)).unwrap(),
             )

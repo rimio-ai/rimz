@@ -363,6 +363,17 @@ fn fire_tasks(
         .into_iter()
         .map(|worktree| worktree.marker.worktree_path)
         .collect::<Vec<_>>();
+    let capacity = (|| {
+        let paths = match project_root {
+            Some(root) => StatePaths::for_project_root(root)?,
+            None => StatePaths::for_workspace(runtime.workspace_id.clone())?,
+        };
+        super::launch_ledger::load_capacity(&paths)
+    })()
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, "loop capacity waits unavailable; planning without them");
+        BTreeMap::new()
+    });
     let scoped = scoped_tasks(
         &tasks,
         &ledger,
@@ -378,6 +389,20 @@ fn fire_tasks(
         }
     }
     let definitions = tasks;
+    let capacity = scoped
+        .iter()
+        .filter_map(|(key, scope)| {
+            capacity
+                .get(&scope.name)?
+                .get(
+                    &scope
+                        .checkout
+                        .clone()
+                        .unwrap_or_else(|| scope.task.entry().run_dir()),
+                )
+                .map(|record| (key.clone(), record.clone()))
+        })
+        .collect();
     let tasks: BTreeMap<_, _> = scoped
         .iter()
         .map(|(key, scope)| (key.clone(), scope.task.clone()))
@@ -412,8 +437,15 @@ fn fire_tasks(
             }
         })
         .collect();
-    let (mut actions, mut next_state, next_when) =
-        plan(&tasks, &state, &arming, now, &when_states, &verdicts);
+    let (mut actions, mut next_state, next_when) = plan(
+        &capacity,
+        &tasks,
+        &state,
+        &arming,
+        now,
+        &when_states,
+        &verdicts,
+    );
     // Declined scopes must still fold false/true edges before suppressing helpers.
     let eligible = scoped_tasks(
         &definitions,
@@ -604,6 +636,7 @@ type PlannedTasks = (
 );
 
 fn plan(
+    capacity: &BTreeMap<String, super::launch_ledger::CapacityRecord>,
     tasks: &BTreeMap<String, LoadedTask>,
     state: &BTreeMap<String, Timestamp>,
     arming_entries: &BTreeMap<String, Arming>,
@@ -676,9 +709,21 @@ fn plan(
                 let elapsed =
                     u128::try_from(now.timestamp().duration_since(state.since).as_millis())
                         .unwrap_or(0);
-                let retry_due = task.entry().dedupes_checkout()
-                    && now.timestamp().duration_since(last_fire).as_secs() >= RESIDENT_RETRY_SECS;
-                if (!state.fired || retry_due)
+                let wait = capacity
+                    .get(name)
+                    .filter(|wait| wait.since == Some(state.since));
+                let retry_secs = if wait.is_some() {
+                    Some(60)
+                } else {
+                    task.entry()
+                        .dedupes_checkout()
+                        .then_some(RESIDENT_RETRY_SECS)
+                };
+                let retry_due = retry_secs.is_some_and(|seconds| {
+                    now.timestamp().duration_since(last_fire).as_secs() >= seconds
+                });
+                if !wait.is_some_and(|wait| wait.gave_up)
+                    && (!state.fired || retry_due)
                     && elapsed >= hold.map_or(0, |duration| duration.as_millis())
                 {
                     actions.push((name.clone(), Action::Fire));
