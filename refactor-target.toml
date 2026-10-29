@@ -1086,7 +1086,8 @@ allowed-dependencies = [
 # Runtime checkpoint binding, path accessors, Snapshots and its never-create writer (+7).
 # StatePaths::legacy_snapshots_dir contains the retired checkpoint layout (+1).
 # KeyedParseCache, its two readers, and testkit parse-cache counters (+5).
-surface-budget = 296
+# forward_records_dir owns machine-local supervisor record paths (+1).
+surface-budget = 297
 
 [[verdict]]
 kind = "item"
@@ -2423,8 +2424,9 @@ path = "crates/rimz/src/remote"
 # PortSync::mark_master_lost separates transport recovery from reattach (+1).
 # ForwardState and PortSync's pin selection, state readers and open outcome (+5).
 # Listener, its inode field, candidate_listeners and LinkAck.ports_scope scope discovery (+4).
+# ForwardRecord, ForwardEntry, their fields, PortSync::snapshot, probe/sidecar fields and expiry (+17).
 # PortsScope types the listener-report scope with an unknown-value fallback (+1).
-surface-budget = 196
+surface-budget = 213
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -3192,6 +3194,7 @@ allowed-dependencies = [
     "cli",
     "cli::remote",
     "cli::remote::outage_ui",
+    "cli::remote::ports",
     "cli::remote::tty",
     "config",
     "mux",
@@ -4192,6 +4195,26 @@ reason = "Strict readers surface I/O, malformed records and unsupported versions
 kind = "item"
 key = "harness::schedule::backlog::load"
 reason = "The sidebar-safe scheduler backstop and CLI inspection share strict durable backlog reads."
+
+[[verdict]]
+kind = "item"
+key = "remote::forward::ForwardRecord"
+reason = "The supervisor publishes one forward record locally and over the link protocol."
+
+[[verdict]]
+kind = "item"
+key = "remote::forward::ForwardEntry"
+reason = "The forward state machine exposes timestamped pinned pairs to both port views."
+
+[[verdict]]
+kind = "item"
+key = "remote::link::LINK_STATS_EXPIRE"
+reason = "The sidebar and remote ports share the sidecar's hard-drop expiry."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::forward_records_dir"
+reason = "The supervisor and machine port reader share the private runtime forward directory."
 
 [[verdict]]
 kind = "item"

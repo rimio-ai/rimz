@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use rimz::child_process::StderrTail;
-use rimz::remote::forward::{PortAction, PortSync, cancel_spec, open_spec};
+use rimz::remote::forward::{PortAction, cancel_spec, open_spec};
 use rimz::remote::link::{
     LinkAck, LinkEvent, LinkMonitor, LinkProbe, PortsScope, SessionLinkAction, SessionLinkState,
     blackout_after_from_env, control_check_spec, probe_interval_from_env, probe_stream_spec,
@@ -29,6 +29,7 @@ use rimz::remote::recovery::{
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
 use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent};
+use super::ports::ForwardPublisher;
 use super::relay::{OutputRelay, RelayOutput};
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(200);
@@ -262,12 +263,16 @@ pub(super) fn supervise_remote(
     let host = target.host_display();
     let mut first_attempt = true;
     let guard = super::tty::TtyGuard::acquire();
-    let port_sync = auto_forward.then(|| Arc::new(Mutex::new(PortSync::default())));
     let Some(mut supervisor) =
         LinkSupervisor::connect(plan, control_path, HandoffStage::Multiplexer)?
     else {
         return Ok(());
     };
+    let port_sync = Arc::new(Mutex::new(ForwardPublisher::new(
+        setup_hint,
+        host,
+        auto_forward,
+    )));
     let zombie_interval = supervisor
         .dial_plan
         .as_ref()
@@ -397,12 +402,10 @@ pub(super) fn supervise_remote(
                 }
             }
         };
-        if let Some(sync) = port_sync.as_ref() {
-            match sync.lock() {
-                Ok(mut sync) => sync.mark_master_lost(),
-                Err(poisoned) => poisoned.into_inner().mark_master_lost(),
-            }
-        }
+        port_sync
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .update(|sync, now_ms| sync.mark_master_lost(now_ms));
         if !supervisor.recover(retry_cause)? {
             return Ok(());
         }
@@ -1581,7 +1584,7 @@ impl ProbeHandle {
         target: RemoteTarget,
         control_path: PathBuf,
         events: mpsc::Sender<LinkEvent>,
-        port_sync: Option<Arc<Mutex<PortSync>>>,
+        port_sync: Arc<Mutex<ForwardPublisher>>,
     ) -> Self {
         if let Err(err) = prepare_control_path(&control_path) {
             tracing::debug!(
@@ -1598,7 +1601,7 @@ impl ProbeHandle {
         target: RemoteTarget,
         control_path: PathBuf,
         events: mpsc::Sender<LinkEvent>,
-        port_sync: Option<Arc<Mutex<PortSync>>>,
+        port_sync: Arc<Mutex<ForwardPublisher>>,
     ) -> Self {
         spawn_probe_loop(target, control_path, events, port_sync, true, false)
     }
@@ -1638,7 +1641,7 @@ fn spawn_probe_loop(
     target: RemoteTarget,
     control_path: PathBuf,
     events: mpsc::Sender<LinkEvent>,
-    port_sync: Option<Arc<Mutex<PortSync>>>,
+    port_sync: Arc<Mutex<ForwardPublisher>>,
     control_confirmed: bool,
     remove_control_path: bool,
 ) -> ProbeHandle {
@@ -1691,7 +1694,7 @@ fn probe_loop(
     interval: Duration,
     events: mpsc::Sender<LinkEvent>,
     stop: Arc<AtomicBool>,
-    port_sync: Option<Arc<Mutex<PortSync>>>,
+    port_sync: Arc<Mutex<ForwardPublisher>>,
     mut control_confirmed: bool,
 ) {
     let mut monitor =
@@ -1704,9 +1707,7 @@ fn probe_loop(
         }
         control_confirmed = false;
         if !reopened {
-            if let Some(sync) = port_sync.as_ref() {
-                reopen_port_forwards(sync, &target, &control_path);
-            }
+            reopen_port_forwards(&port_sync, &target, &control_path);
             reopened = true;
         }
         match run_probe_stream(
@@ -1716,7 +1717,7 @@ fn probe_loop(
             &events,
             &stop,
             &mut monitor,
-            port_sync.as_ref(),
+            &port_sync,
         ) {
             ProbeStreamExit::Stopped | ProbeStreamExit::VersionSkew => return,
             ProbeStreamExit::Ended { acked } => {
@@ -1803,15 +1804,15 @@ impl ProbeChild {
         events: &mpsc::Sender<LinkEvent>,
         target: &RemoteTarget,
         control_path: &Path,
-        port_sync: Option<&Arc<Mutex<PortSync>>>,
+        port_sync: &Mutex<ForwardPublisher>,
     ) -> ProbeAckDrain {
         let mut drain = ProbeAckDrain::default();
         for ack in self.acknowledgements.try_iter() {
             let outcome = monitor.record_ack(ack.seq, rimz::utils::time::unix_now_ms());
             drain.acked |= outcome.accepted;
             drain.reported_rtt_changed |= outcome.reported_rtt_changed;
-            if let (Some(sync), Some(ports)) = (port_sync, ack.ports) {
-                apply_port_report(sync, &ports, ack.ports_scope, target, control_path);
+            if let Some(ports) = ack.ports {
+                apply_port_report(port_sync, &ports, ack.ports_scope, target, control_path);
             }
             for event in outcome.events {
                 let _ = events.send(event);
@@ -1849,7 +1850,7 @@ fn run_probe_stream(
     events: &mpsc::Sender<LinkEvent>,
     stop: &AtomicBool,
     monitor: &mut LinkMonitor,
-    port_sync: Option<&Arc<Mutex<PortSync>>>,
+    port_sync: &Mutex<ForwardPublisher>,
 ) -> ProbeStreamExit {
     let mut child = match ProbeChild::spawn(target, control_path) {
         Ok(spawned) => spawned,
@@ -1885,7 +1886,8 @@ fn run_probe_stream(
         let drain = child.drain_acknowledgements(monitor, events, target, control_path, port_sync);
         acked |= drain.acked;
         if drain.reported_rtt_changed {
-            let probe = monitor.stats_refresh_probe(rimz::utils::time::unix_now_ms());
+            let mut probe = monitor.stats_refresh_probe(rimz::utils::time::unix_now_ms());
+            attach_forward_record(&mut probe, port_sync);
             if write_link_probe(&mut child.stdin, &probe).is_err() {
                 break ProbeStreamStop::Ended;
             }
@@ -1895,7 +1897,8 @@ fn run_probe_stream(
         }
 
         if Instant::now() >= next_tick {
-            let probe = monitor.next_probe(rimz::utils::time::unix_now_ms());
+            let mut probe = monitor.next_probe(rimz::utils::time::unix_now_ms());
+            attach_forward_record(&mut probe, port_sync);
             if write_link_probe(&mut child.stdin, &probe).is_err() {
                 break ProbeStreamStop::Ended;
             }
@@ -1918,29 +1921,36 @@ fn run_probe_stream(
 }
 
 fn apply_port_report(
-    sync: &Mutex<PortSync>,
+    sync: &Mutex<ForwardPublisher>,
     ports: &[u16],
     ports_scope: Option<PortsScope>,
     target: &RemoteTarget,
     control_path: &Path,
 ) {
-    let actions = match sync.lock() {
-        Ok(mut sync) => sync.observe(ports, ports_scope),
-        Err(poisoned) => poisoned.into_inner().observe(ports, ports_scope),
+    let actions = {
+        let mut publisher = sync.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !publisher.enabled() {
+            return;
+        }
+        publisher.update(|sync, now_ms| sync.observe(now_ms, ports, ports_scope))
     };
     apply_port_actions(sync, actions, target, control_path);
 }
 
-fn reopen_port_forwards(sync: &Mutex<PortSync>, target: &RemoteTarget, control_path: &Path) {
-    let actions = match sync.lock() {
-        Ok(sync) => sync.reopen_active(),
-        Err(poisoned) => poisoned.into_inner().reopen_active(),
-    };
+fn reopen_port_forwards(
+    sync: &Mutex<ForwardPublisher>,
+    target: &RemoteTarget,
+    control_path: &Path,
+) {
+    let actions = sync
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .reopen_active();
     apply_port_actions(sync, actions, target, control_path);
 }
 
 fn apply_port_actions(
-    sync: &Mutex<PortSync>,
+    sync: &Mutex<ForwardPublisher>,
     actions: Vec<PortAction>,
     target: &RemoteTarget,
     control_path: &Path,
@@ -1949,10 +1959,13 @@ fn apply_port_actions(
         match action {
             PortAction::Open(port) | PortAction::Reopen(port) => {
                 let (tried, local) = {
-                    let mut sync = sync.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let tried = sync.local_port(port).unwrap_or(port);
-                    let local = sync.choose_local_port(port, local_forward_port_available, || {
-                        rimz::remote::web::reserve_forward_port().ok()
+                    let mut publisher =
+                        sync.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let tried = publisher.local_port(port).unwrap_or(port);
+                    let local = publisher.update(|sync, now_ms| {
+                        sync.choose_local_port(now_ms, port, local_forward_port_available, || {
+                            rimz::remote::web::reserve_forward_port().ok()
+                        })
                     });
                     (tried, local)
                 };
@@ -1966,7 +1979,7 @@ fn apply_port_actions(
                     Ok(_) => {
                         sync.lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .mark_opened(port);
+                            .update(|sync, now_ms| sync.mark_opened(now_ms, port));
                         tracing::info!(port, local, "remote port auto-forward opened");
                         if local != tried {
                             emit_remapped_port_forward_notice(port, local, tried);
@@ -2016,7 +2029,7 @@ fn local_forward_port_available(port: u16) -> bool {
     TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
 }
 
-fn mark_port_open_failed(sync: &Mutex<PortSync>, port: u16, error: rimz::mux::MuxErr) {
+fn mark_port_open_failed(sync: &Mutex<ForwardPublisher>, port: u16, error: rimz::mux::MuxErr) {
     let message = match &error {
         rimz::mux::MuxErr::Command { stderr, .. } => stderr
             .lines()
@@ -2026,10 +2039,16 @@ fn mark_port_open_failed(sync: &Mutex<PortSync>, port: u16, error: rimz::mux::Mu
         _ => None,
     }
     .unwrap_or_else(|| error.to_string());
-    match sync.lock() {
-        Ok(mut sync) => sync.mark_open_failed(port, message),
-        Err(poisoned) => poisoned.into_inner().mark_open_failed(port, message),
-    }
+    sync.lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .update(|sync, now_ms| sync.mark_open_failed(now_ms, port, message));
+}
+
+fn attach_forward_record(probe: &mut LinkProbe, port_sync: &Mutex<ForwardPublisher>) {
+    let publisher = port_sync
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    probe.forwards = Some(publisher.record(rimz::utils::time::unix_now_ms()));
 }
 
 fn write_link_probe(stdin: &mut impl Write, probe: &LinkProbe) -> std::io::Result<()> {

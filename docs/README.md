@@ -15,7 +15,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 - [Sidebar](./guide/sidebar.md): read the column that routes your attention, from the cockpit and the agent cards to the eight states a session moves through, and follow the ranking that decides which agent needs you next.
 - [Agents](./guide/fleet.md): run the stock CLIs in the room, shape an agent for one job with a profile, compose several into one layout, and read and drive the running fleet.
 - [Token insight](./guide/insight.md): read what the fleet costs and how hard it is working, across `rimz stats`, the live cockpit, and the provider dashboard, and how every figure is counted and priced.
-- [Remote](./guide/remote.md): attach to a room on another host over SSH with a self-healing link, kept alive across reboots, and answer agent asks from the providers' own mobile apps.
+- [Remote](./guide/remote.md): attach to a room on another host over SSH with a self-healing link, kept alive across reboots, inspect forwarded ports, and answer agent asks from the providers' own mobile apps.
 - [Web](./guide/web.md): open a room in a browser behind one authenticated local address, on this machine or tunnelled from a server, pick among live rooms in the session manager, broadcast one room read-only, and put your own reverse proxy in front.
 
 ## Harness Engineering
