@@ -2551,7 +2551,7 @@ fn created_hook_timeout_is_a_failure() {
     .unwrap();
     for command in [
         "echo before-timeout >&2; sleep 30",
-        "echo before-timeout >&2; sleep 1 & exit 0",
+        "echo before-timeout >&2; sleep 30 & exit 0",
     ] {
         let hooks = crate::config::WorktreeHooks {
             created: Some(command.to_owned()),
@@ -2562,7 +2562,7 @@ fn created_hook_timeout_is_a_failure() {
             &hooks,
             hooks::WorktreeHookEvent::Created,
             &created.marker,
-            Duration::from_millis(30),
+            Duration::from_secs(1),
         )
         .expect_err("timeout must fail");
         assert!(start.elapsed() < Duration::from_secs(5));
