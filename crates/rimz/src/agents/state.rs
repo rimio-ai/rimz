@@ -828,7 +828,9 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_at: Option<Timestamp>,
     pub status: AgentStatus,
-    /// Entry into the current success/failed stretch, stable across terminal updates.
+    /// When the row first came to rest on a verdict: `success`, `failed`, or a
+    /// clean turn end parked on background work ([`TurnPhase::Parked`]), which
+    /// reads as success. Kept while the row rests on one; `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<Timestamp>,
     /// The running turn's shape (reasoning / acting / parked on background

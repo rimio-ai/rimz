@@ -435,7 +435,7 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 Entries list in a fixed order, and opening more of the list only appends rows:
 
 1. Unfinished subagents, including paused and stalled children, in the order they started. They are never capped.
-2. Finished subagents, newest finish first, that finished within `recent_subagent_secs` (900 seconds by default), up to `max_recent_subagents` (5 by default). Closing a pane or reaping a session does not change that finish instant.
+2. Finished subagents, newest finish first, that finished within `recent_subagent_secs` (900 seconds by default), up to `max_recent_subagents` (5 by default). A child whose turn ended cleanly with background work still running takes that turn end as its finish instant once its entry shows `✓`. Closing a pane or reaping a session does not change that finish instant, except that reaping such a child rests it at idle, back among the unfinished entries.
 3. Waits: timers by due time, then watches, then background shells, then signals. A wait leaves the list when it fires or its job ends.
 4. `+K older`, which folds every other finished subagent. Click it to append them and focus the parent's live pane. When no subagent is unfinished or recent, opening the section lists the older ones directly.
 

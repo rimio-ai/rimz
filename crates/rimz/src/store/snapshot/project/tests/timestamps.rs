@@ -169,6 +169,76 @@ fn finished_clock_uses_the_final_status_on_ends_launches_and_state_snapshots() {
 }
 
 #[test]
+fn finished_clock_stamps_a_clean_end_parked_on_background_work() {
+    let mut payload = launch_payload("child", "worker");
+    payload.launch.parent_agent_id = Some("parent".into());
+    payload.launch.launch_depth = Some(1);
+    let mut launch = launch_event("claude", payload);
+    launch.timestamp = epoch();
+    let lifecycle = |offset, event_name: &str, signal: serde_json::Value| {
+        raw_lifecycle_at(
+            "claude",
+            offset,
+            json!({"agent_id": "child", "event_name": event_name, "signal": signal}),
+        )
+    };
+    let parked = vec![
+        launch,
+        lifecycle(
+            1,
+            "Stop",
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": true}),
+        ),
+        lifecycle(2, "PreCompact", json!({"signal": "compacting"})),
+    ];
+    let row = reduce_agent_states(&parked).remove(0);
+    let turn_end = parked[1].timestamp;
+    assert_eq!(
+        (row.status, row.phase, row.last_activity, row.finished_at),
+        (
+            AgentStatus::Running,
+            TurnPhase::Parked,
+            parked[2].timestamp,
+            Some(turn_end)
+        )
+    );
+    let projected = sub_agent_from_state(
+        &row,
+        epoch() + std::time::Duration::from_secs(100),
+        false,
+        1_800,
+    );
+    assert_eq!(
+        (
+            projected.status,
+            projected.finished_at,
+            projected.elapsed_secs
+        ),
+        (AgentStatus::Success, Some(turn_end), Some(1))
+    );
+
+    let mut actual = Vec::new();
+    for (event_name, signal) in [
+        ("SessionEnd", json!({"signal": "ended"})),
+        ("ReapedDead", json!({"signal": "ended"})),
+        ("Prompt", json!({"signal": "turn_started"})),
+    ] {
+        let mut events = parked.clone();
+        events.push(lifecycle(3, event_name, signal));
+        let row = reduce_agent_states(&events).remove(0);
+        actual.push((event_name, row.status, row.finished_at));
+    }
+    assert_eq!(
+        actual,
+        [
+            ("SessionEnd", AgentStatus::Failed, Some(turn_end)),
+            ("ReapedDead", AgentStatus::Idle, None),
+            ("Prompt", AgentStatus::Running, None),
+        ]
+    );
+}
+
+#[test]
 fn closed_turn_id_reads_the_legacy_key_and_writes_the_new_key() {
     let row = crate::testkit::agent_state("codex", "session", epoch());
     let mut legacy = serde_json::to_value(row).unwrap();
