@@ -266,6 +266,7 @@ pub(crate) fn aggregate_counted_rollups(
     files: &[SpendingFile],
     cache: &SpendingDiskCache,
     counted: &[impl CountedPayload],
+    contested: &[CountedLocation],
     workspace: Option<&SpendScope>,
     headline: HeadlineContext<'_>,
     history_roles: Option<&super::session_roles::RoleIndex>,
@@ -306,19 +307,6 @@ pub(crate) fn aggregate_counted_rollups(
     let joined_roles = history_roles
         .map(|index| &index.roles)
         .filter(|roles| !roles.is_empty());
-    let file_sessions: FastHashMap<_, _> = if joined_roles.is_some() {
-        files
-            .iter()
-            .map(|file| {
-                (
-                    file.path.as_path(),
-                    file.adapter.spending_session_id(&file.path),
-                )
-            })
-            .collect()
-    } else {
-        FastHashMap::default()
-    };
     let (zone, timezone) = history_zone(crate::config::resolve_time_zone(spec.timezone.as_deref()));
     let today = local_day_index(now_secs, Some(&timezone)).unwrap_or((now_secs / 86_400) as i64);
     chart.today = today;
@@ -447,12 +435,13 @@ pub(crate) fn aggregate_counted_rollups(
                 producer.add(entry.cost_usd, entry);
             }
             if let Some(index) = joined_roles {
-                let native = file_sessions
-                    .get(counted.path())
-                    .and_then(|id| id.as_deref())
-                    .or(entry.thread_id.as_deref())
-                    .filter(|id| !id.is_empty());
-                let Some(role) = native.and_then(|session| index.get(provider)?.get(session))
+                let session = counted.session_key();
+                let SessionKey::Native { thread_id, .. } = session else {
+                    continue;
+                };
+                let Some(role) = index
+                    .get(provider)
+                    .and_then(|sessions| sessions.get(thread_id))
                 else {
                     continue;
                 };
@@ -464,12 +453,6 @@ pub(crate) fn aggregate_counted_rollups(
                     cutoffs.total,
                     window_starts,
                 );
-                let session = native
-                    .map(|thread_id| SessionKey::Native {
-                        kind: provider,
-                        thread_id,
-                    })
-                    .unwrap_or_else(|| counted.session_key());
                 role_sessions
                     .entry((placement, session))
                     .and_modify(|youngest: &mut u64| *youngest = (*youngest).max(entry.ts_secs))
@@ -529,7 +512,13 @@ pub(crate) fn aggregate_counted_rollups(
                     .filter(|origin| scope.contains(origin))?;
                 Some((file, cached))
             });
-            aggregate_scoped_rollups(selected.iter().copied(), scoped_files, scope, headline)
+            aggregate_scoped_rollups(
+                selected.iter().copied(),
+                scoped_files,
+                &contested_session_keys(files, cache, contested),
+                scope,
+                headline,
+            )
         },
     );
 
@@ -579,6 +568,7 @@ pub(crate) fn aggregate_counted_rollups(
 fn aggregate_scoped_rollups<'a, P: CountedPayload + 'a>(
     counted: impl Iterator<Item = &'a P> + Clone,
     files: impl Iterator<Item = (&'a SpendingFile, &'a FileCacheEntry)>,
+    contested: &FastHashSet<SessionKey<'a>>,
     scope: &SpendScope,
     headline: HeadlineContext<'_>,
 ) -> ScopedSpending {
@@ -622,7 +612,8 @@ fn aggregate_scoped_rollups<'a, P: CountedPayload + 'a>(
             day.add(entry.cost_usd, entry);
             day_sessions.insert(row.session_key());
         }
-        if within_widest_window(entry.ts_secs, now_secs) {
+        if within_widest_window(entry.ts_secs, now_secs) && !contested.contains(&row.session_key())
+        {
             session_totals
                 .entry(row.session_key())
                 .and_modify(|(youngest, usd)| {
@@ -632,17 +623,25 @@ fn aggregate_scoped_rollups<'a, P: CountedPayload + 'a>(
                 .or_insert((entry.ts_secs, entry.cost_usd));
         }
     }
-    add_scoped_sessions(&mut tally, files, now_secs, cutoff, window_starts);
+    add_scoped_sessions(
+        &mut tally,
+        files,
+        contested,
+        &mut session_totals,
+        now_secs,
+        cutoff,
+        window_starts,
+    );
+    let live_baselines = session_totals
+        .into_iter()
+        .filter(|(_, (youngest, _))| within_raw_retain_window(*youngest, now_secs))
+        .map(|(session, (_, usd))| (session.materialize(), usd))
+        .collect();
     day.sessions = day_sessions.len().try_into().unwrap_or(u32::MAX);
     ScopedSpending {
         tally,
         headline_cutoff_secs: cutoff,
-        live_baselines: session_totals
-            .into_iter()
-            .filter_map(|(session, (youngest, usd))| {
-                within_raw_retain_window(youngest, now_secs).then_some((session.materialize(), usd))
-            })
-            .collect(),
+        live_baselines,
         day,
         day_cutoff_secs,
     }
@@ -675,9 +674,9 @@ impl CountedCutoffs {
     }
 }
 
-/// Session counts, keyed by provider-native thread id when one is available
-/// and by transcript file grouping otherwise. A Claude session's subagent
-/// files fold under its `session_id` directory so one thread counts once.
+/// Session counts prefer a row's trimmed, non-empty native thread id, then the
+/// adapter's path-derived native session id, then transcript file grouping.
+/// Claude subagent files name their parent's native session.
 /// Each thread is single-provider; we track its youngest entry and bump every
 /// window that youngest reading still falls within. Counted from the raw
 /// cached entries (not the deduped set) since a thread that ran is a thread,
@@ -706,13 +705,15 @@ fn add_spending_sessions(
         let Some(cached_file) = cache.files.get(&cache_key) else {
             continue;
         };
+        let file_key = file_session_key(adapter, file);
         for entry in &cached_file.entries {
+            let session = session_key(adapter.spec().kind, file_key, entry);
             login_threads
-                .entry((login.clone(), session_key(adapter, file, entry)))
+                .entry((login.clone(), session))
                 .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
                 .or_insert(entry.ts_secs);
             threads
-                .entry(session_key(adapter, file, entry))
+                .entry(session)
                 .and_modify(|(_, ts)| *ts = (*ts).max(entry.ts_secs))
                 .or_insert((adapter.spec().kind, entry.ts_secs));
         }
@@ -750,21 +751,41 @@ fn add_spending_sessions(
 fn add_scoped_sessions<'a>(
     tally: &mut SpendTally,
     files: impl Iterator<Item = (&'a SpendingFile, &'a FileCacheEntry)>,
+    contested: &FastHashSet<SessionKey<'a>>,
+    session_totals: &mut FastHashMap<SessionKey<'a>, (u64, f64)>,
     now_secs: u64,
     headline_cutoff: u64,
     window_starts: WindowStarts,
 ) {
     let mut threads = FastHashMap::<SessionKey<'_>, u64>::default();
+    let mut deduped_sessions =
+        FastHashMap::<SessionKey<'_>, SidechainDedup<&CachedEntry>>::default();
     for (file, cached_file) in files {
+        let file_key = file_session_key(file.adapter, &file.path);
         for entry in &cached_file.entries {
+            let session = session_key(file.adapter.spec().kind, file_key, entry);
             threads
-                .entry(session_key(file.adapter, &file.path, entry))
+                .entry(session)
                 .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
                 .or_insert(entry.ts_secs);
+            if contested.contains(&session) {
+                deduped_sessions.entry(session).or_default().insert(entry);
+            }
         }
     }
     for youngest in threads.values() {
         bump_sessions(tally, *youngest, now_secs, headline_cutoff, window_starts);
+    }
+    for (session, deduped) in deduped_sessions {
+        if let Some(total) = deduped
+            .into_counted()
+            .into_iter()
+            .filter(|entry| within_widest_window(entry.ts_secs, now_secs))
+            .map(|entry| (entry.ts_secs, entry.cost_usd))
+            .reduce(|(youngest, usd), (ts, cost)| (youngest.max(ts), usd + cost))
+        {
+            session_totals.insert(session, total);
+        }
     }
 }
 
@@ -863,10 +884,15 @@ pub(crate) trait DedupPayload {
     fn entry(&self) -> &CachedEntry;
 }
 
+impl DedupPayload for &CachedEntry {
+    fn entry(&self) -> &CachedEntry {
+        self
+    }
+}
+
 pub(crate) trait CountedPayload: DedupPayload {
     fn login(&self) -> &LoginKey;
     fn kind(&self) -> &'static str;
-    fn path(&self) -> &Path;
     fn origin(&self) -> Option<&Path>;
     fn session_key(&self) -> SessionKey<'_>;
 }
@@ -1007,7 +1033,6 @@ impl SessionKey<'_> {
 pub(crate) struct Counted<'a> {
     login: &'a LoginKey,
     kind: &'static str,
-    path: &'a Path,
     origin: Option<&'a Path>,
     session_key: SessionKey<'a>,
     entry: &'a CachedEntry,
@@ -1027,10 +1052,6 @@ impl CountedPayload for Counted<'_> {
         self.kind
     }
 
-    fn path(&self) -> &Path {
-        self.path
-    }
-
     fn origin(&self) -> Option<&Path> {
         self.origin
     }
@@ -1040,7 +1061,7 @@ impl CountedPayload for Counted<'_> {
     }
 }
 
-/// Exact position of one dedup winner in the file table keyed by the walker's
+/// Exact position of a cached row in the file table keyed by the walker's
 /// cache generation and spending-file signature.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountedLocation {
@@ -1051,6 +1072,63 @@ pub(crate) struct CountedLocation {
 struct LocatedCounted<'a> {
     location: CountedLocation,
     entry: &'a CachedEntry,
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+enum DedupComponent<'a> {
+    Message(&'a str),
+    Provider(&'a str),
+}
+
+pub(super) fn contested_session_locations(
+    files: &[SpendingFile],
+    cache: &SpendingDiskCache,
+) -> Vec<CountedLocation> {
+    let mut owners =
+        FastHashMap::<DedupComponent<'_>, (SessionKey<'_>, CountedLocation)>::default();
+    let mut contested = FastHashMap::default();
+    for (file_index, file) in files.iter().enumerate() {
+        let Some(cached) = cache.files.get(file.path.to_string_lossy().as_ref()) else {
+            continue;
+        };
+        let file_key = file_session_key(file.adapter, &file.path);
+        for (entry_index, entry) in cached.entries.iter().enumerate() {
+            let Some(component) = entry
+                .message_id
+                .as_deref()
+                .map(DedupComponent::Message)
+                .or_else(|| entry.dedup_key.as_deref().map(DedupComponent::Provider))
+            else {
+                continue;
+            };
+            let session = session_key(file.adapter.spec().kind, file_key, entry);
+            let location = CountedLocation {
+                file_index,
+                entry_index,
+            };
+            let (owner_session, owner_location) =
+                owners.entry(component).or_insert((session, location));
+            if owner_location.file_index != file_index || *owner_session != session {
+                contested.entry(*owner_session).or_insert(*owner_location);
+                contested.entry(session).or_insert(location);
+            }
+        }
+    }
+    contested.into_values().collect()
+}
+
+fn contested_session_keys<'a>(
+    files: &'a [SpendingFile],
+    cache: &'a SpendingDiskCache,
+    locations: &[CountedLocation],
+) -> FastHashSet<SessionKey<'a>> {
+    if locations.is_empty() {
+        return FastHashSet::default();
+    }
+    indexed_counted_entries(files, cache, locations)
+        .into_iter()
+        .map(|row| row.session_key)
+        .collect()
 }
 
 impl DedupPayload for LocatedCounted<'_> {
@@ -1075,13 +1153,13 @@ pub(crate) fn dedup_cached_entries<'a>(
         let Some(cached_file) = cache.files.get(&key) else {
             continue;
         };
+        let file_key = file_session_key(adapter, file);
         for entry in &cached_file.entries {
             deduped.insert(Counted {
                 login,
                 kind,
-                path: file,
                 origin: cached_file.origin_path.as_deref(),
-                session_key: session_key(adapter, file, entry),
+                session_key: session_key(kind, file_key, entry),
                 entry,
             });
         }
@@ -1128,6 +1206,7 @@ pub(super) fn aggregate_scoped_locations(
     files: &[SpendingFile],
     cache: &SpendingDiskCache,
     locations: &[CountedLocation],
+    contested: &[CountedLocation],
     scope: &SpendScope,
     headline: HeadlineContext<'_>,
 ) -> CachedScopedSpending {
@@ -1148,12 +1227,19 @@ pub(super) fn aggregate_scoped_locations(
         .map(|file| (file.file, file.cache));
     CachedScopedSpending {
         has_discovered_file,
-        scoped: aggregate_scoped_rollups(counted.iter(), scoped_files, scope, headline),
+        scoped: aggregate_scoped_rollups(
+            counted.iter(),
+            scoped_files,
+            &contested_session_keys(files, cache, contested),
+            scope,
+            headline,
+        ),
     }
 }
 
 struct IndexedFile<'a> {
     file: &'a SpendingFile,
+    session_key: SessionKey<'a>,
     cache: &'a FileCacheEntry,
     selected: bool,
 }
@@ -1170,6 +1256,7 @@ fn indexed_files<'a>(
                 .get(file.path.to_string_lossy().as_ref())
                 .map(|cached| IndexedFile {
                     file,
+                    session_key: file_session_key(file.adapter, &file.path),
                     cache: cached,
                     selected: true,
                 })
@@ -1202,9 +1289,8 @@ fn counted_from_file_table<'a>(
         Some(Counted {
             login: &file.file.login,
             kind: file.file.adapter.spec().kind,
-            path: &file.file.path,
             origin: file.cache.origin_path.as_deref(),
-            session_key: session_key(file.file.adapter, &file.file.path, entry),
+            session_key: session_key(file.file.adapter.spec().kind, file.session_key, entry),
             entry,
         })
     }));
@@ -1388,28 +1474,31 @@ pub(crate) fn within_raw_retain_window(ts_secs: u64, now_secs: u64) -> bool {
     now_secs.saturating_sub(ts_secs) < RAW_RETAIN_SECS
 }
 
-/// The thread a priced entry belongs to. Providers with native thread ids use
-/// those ids; otherwise the adapter's declared [`ThreadKey`] maps transcript
-/// paths to threads. A session-dir provider (Claude) spreads one session across
-/// a main `…/<session_id>/chat.jsonl` plus subagent
-/// `…/<session_id>/subagents/*.jsonl` files, so both fold under the
-/// `<session_id>` directory and one thread counts once; a per-file provider
-/// (Codex, Pi) keys on the file path.
-fn session_key<'a>(
-    adapter: &'static AgentDefinition,
-    path: &'a Path,
+/// The session a priced entry belongs to: its trimmed, non-empty thread id,
+/// else the per-file key, which prefers the adapter's path-derived native id
+/// over its declared [`ThreadKey`] grouping.
+pub(super) fn session_key<'a>(
+    kind: &'static str,
+    file_key: SessionKey<'a>,
     entry: &'a CachedEntry,
 ) -> SessionKey<'a> {
     if let Some(thread_id) = entry.thread_id.as_deref().map(str::trim)
         && !thread_id.is_empty()
     {
-        return SessionKey::Native {
-            kind: adapter.spec().kind,
-            thread_id,
-        };
+        return SessionKey::Native { kind, thread_id };
     }
 
-    SessionKey::File(file_grouping_session_path(adapter, path))
+    file_key
+}
+
+pub(super) fn file_session_key<'a>(adapter: &AgentDefinition, path: &'a Path) -> SessionKey<'a> {
+    match adapter.spending_session_id(path) {
+        Some(thread_id) => SessionKey::Native {
+            kind: adapter.spec().kind,
+            thread_id,
+        },
+        None => SessionKey::File(file_grouping_session_path(adapter, path)),
+    }
 }
 
 pub(crate) fn live_session_keys(
@@ -1428,26 +1517,17 @@ pub(crate) fn live_session_keys(
             .materialize(),
         );
     }
-    keys.push(SessionKey::File(file_grouping_session_path(adapter, transcript_path)).materialize());
+    keys.push(file_session_key(adapter, transcript_path).materialize());
     keys.sort();
     keys.dedup();
     keys
 }
 
 fn file_grouping_session_path<'a>(adapter: &AgentDefinition, path: &'a Path) -> &'a Path {
-    let dir = match adapter.spec().thread_key {
-        ThreadKey::SessionDir => {
-            let parent = path.parent();
-            match parent {
-                Some(p) if p.file_name().and_then(|name| name.to_str()) == Some("subagents") => {
-                    p.parent()
-                }
-                other => other,
-            }
-        }
-        ThreadKey::PerFile => None,
-    };
-    dir.unwrap_or(path)
+    match adapter.spec().thread_key {
+        ThreadKey::SessionDir => path.parent().unwrap_or(path),
+        ThreadKey::PerFile => path,
+    }
 }
 
 pub(super) fn subagent_child_id(path: &Path) -> Option<String> {

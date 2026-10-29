@@ -45,7 +45,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult, local_day_index};
 // v22: bounded daily and weekly model-dollar chart cells.
 // v23: UTC-calendar-month spend per history pool for account monthly caps.
 // v24: local-day store windows and raw hourly model-dollar chart cells.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 24;
+// v25: native session keys count Claude per session, with subagents folded under their parent.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 25;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -59,7 +60,8 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 24;
 /// replace live-session exclusion for exact flush-lag overlays.
 /// v8: the scoped tally carries an independent calendar-day window.
 /// v9: store windows align with history-zone local days, with a 364-day year.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 9;
+/// v10: native session keys count Claude per session, with subagents folded under their parent.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 10;
 
 /// The published provider-spending cache: the aggregated [`Spending`] plus the
 /// stamp the producer's `SPENDING_TTL` gate reads. A wrapper rather than a

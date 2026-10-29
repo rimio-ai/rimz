@@ -911,15 +911,13 @@ pub fn program_names_kind(name: &str, kind: &str) -> bool {
     })
 }
 
-/// How a provider's transcript files map to billing threads (sessions), so the
-/// spending pass counts one thread once however many files it spread across.
+/// Fallback grouping of transcript files into sessions when neither a row nor
+/// its path supplies a native session id.
 #[derive(Clone, Copy, Debug)]
 pub enum ThreadKey {
     /// One transcript file per session — the file path is the thread.
     PerFile,
-    /// One directory per session holding a main JSONL plus `subagents/*.jsonl`
-    /// children — the session directory is the thread, so a subagent file
-    /// folds under its parent session (Claude).
+    /// The transcript's immediate parent directory is the session.
     SessionDir,
 }
 

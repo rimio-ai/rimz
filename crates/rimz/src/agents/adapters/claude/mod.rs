@@ -141,9 +141,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     bin_names: &["claude"],
     bin_identity: None,
     extra_bin_dirs: &[],
-    // A Claude session spreads across `<session_id>/chat.jsonl` plus
-    // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
-    thread_key: ThreadKey::SessionDir,
+    thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         picker: Some(&["claude", "--resume"]),
         headless: Some(&headless::ClaudeHeadless),
@@ -1430,14 +1428,14 @@ impl crate::agents::capabilities::AccountCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
-    fn spending_session_id(&self, path: &Path) -> Option<String> {
+    fn spending_session_id<'p>(&self, path: &'p Path) -> Option<&'p str> {
         let parent = path.parent()?;
         let id = if parent.file_name().is_some_and(|name| name == "subagents") {
             parent.parent()?.file_name()?.to_str()?
         } else {
             path.file_stem()?.to_str()?
         };
-        uuid::Uuid::parse_str(id).ok().map(|_| id.to_owned())
+        uuid::Uuid::parse_str(id).ok().map(|_| id)
     }
 
     fn spending_sources(

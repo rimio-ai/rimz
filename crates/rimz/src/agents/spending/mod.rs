@@ -50,8 +50,8 @@ pub(crate) use aggregate::CountedPayload;
 pub(in crate::agents) use aggregate::should_replace_usage_duplicate;
 use aggregate::{
     CountedLocation, HeadlineContext, aggregate_counted_rollups, aggregate_scoped_locations,
-    dedup_cached_entries, dedup_cached_entry_locations, indexed_counted_entries,
-    spending_files_signature,
+    contested_session_locations, dedup_cached_entries, dedup_cached_entry_locations,
+    indexed_counted_entries, spending_files_signature,
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
@@ -321,6 +321,7 @@ pub struct SpendingWalker {
 struct SpendingMemo {
     key: SpendingMemoKey,
     counted: Box<[CountedLocation]>,
+    contested_sessions: Box<[CountedLocation]>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -515,13 +516,14 @@ impl SpendingWalker {
         }
 
         self.ensure_memo(req.files, &mut stats);
-        let locations = &self.memo.as_ref().expect("memo seeded above").counted;
-        let counted = indexed_counted_entries(req.files, &self.cache, locations);
+        let memo = self.memo.as_ref().expect("memo seeded above");
+        let counted = indexed_counted_entries(req.files, &self.cache, &memo.counted);
         let roles = session_roles::load_history(cache_path, req.now_secs);
         let mut result = aggregate_counted_rollups(
             req.files,
             &self.cache,
             &counted,
+            &memo.contested_sessions,
             req.scope,
             HeadlineContext {
                 user_inputs: req.user_inputs,
@@ -555,6 +557,8 @@ impl SpendingWalker {
             self.memo = Some(SpendingMemo {
                 key,
                 counted: dedup_cached_entry_locations(files, &self.cache).into_boxed_slice(),
+                contested_sessions: contested_session_locations(files, &self.cache)
+                    .into_boxed_slice(),
             });
             stats.dedup_passes = 1;
         }
@@ -577,11 +581,12 @@ impl SpendingWalker {
         let mut stats = WalkStats::default();
         self.sync_from_disk(cache_path, &mut stats);
         self.ensure_memo(files, &mut stats);
-        let locations = &self.memo.as_ref().expect("memo seeded above").counted;
+        let memo = self.memo.as_ref().expect("memo seeded above");
         aggregate_scoped_locations(
             files,
             &self.cache,
-            locations,
+            &memo.counted,
+            &memo.contested_sessions,
             scope,
             HeadlineContext {
                 user_inputs,
@@ -763,6 +768,7 @@ fn aggregate_walk_publish(
         files,
         cache,
         &counted,
+        &contested_session_locations(files, cache),
         scope,
         HeadlineContext {
             user_inputs,
@@ -805,6 +811,7 @@ fn compute_scoped_spending(
         files,
         cache,
         &locations,
+        &contested_session_locations(files, cache),
         scope,
         HeadlineContext {
             user_inputs,

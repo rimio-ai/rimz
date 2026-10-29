@@ -49,8 +49,8 @@ fn publication_accepts_v23_without_hours_but_requires_new_window_versions() {
     assert!(older.chart.hours.is_empty());
     assert_eq!(older.chart.hour, 0);
     assert!(!older.is_current_version());
-    assert_eq!(PROVIDER_SPENDING_VERSION, 24);
-    assert_eq!(WORKSPACE_SPENDING_VERSION, 9);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 25);
+    assert_eq!(WORKSPACE_SPENDING_VERSION, 10);
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
-    assert_eq!(PROVIDER_SPENDING_VERSION, 24);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 25);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();

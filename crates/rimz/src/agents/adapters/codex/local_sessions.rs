@@ -598,6 +598,7 @@ impl CodexDiscoverySnapshot {
             .iter()
             .filter(|candidate| candidate.active)
             .filter_map(|candidate| session_id_from_filename(&candidate.path))
+            .map(str::to_owned)
             .collect::<HashSet<_>>();
         let mut candidates = self.catalog.entries().to_vec();
         candidates.sort_by(|left, right| {
@@ -614,7 +615,7 @@ impl CodexDiscoverySnapshot {
         let mut session_ids_seen = HashSet::new();
         let mut observations = Vec::new();
         for candidate in candidates {
-            let filename_session = session_id_from_filename(&candidate.path);
+            let filename_session = session_id_from_filename(&candidate.path).map(str::to_owned);
             if !candidate.active
                 && filename_session
                     .as_ref()
@@ -807,7 +808,7 @@ fn rollout_session_id(path: &Path, header: &CodexRolloutHeader) -> Option<AgentS
     header
         .session_id
         .clone()
-        .or_else(|| session_id_from_filename(path))
+        .or_else(|| session_id_from_filename(path).map(str::to_owned))
         .map(AgentSessionId::from)
 }
 
@@ -820,10 +821,10 @@ fn timestamp_from_stamp(stamp: &ProviderPathStamp) -> Option<Timestamp> {
     .ok()
 }
 
-pub(super) fn session_id_from_filename(path: &Path) -> Option<String> {
+pub(super) fn session_id_from_filename(path: &Path) -> Option<&str> {
     let stem = path.file_stem()?.to_str()?;
     let suffix = stem.get(stem.len().checked_sub(36)?..)?;
-    Uuid::parse_str(suffix).ok().map(|_| suffix.to_owned())
+    Uuid::parse_str(suffix).ok().map(|_| suffix)
 }
 
 fn file_mtime(path: &Path) -> Option<Timestamp> {

@@ -100,12 +100,12 @@ fn room_spend_slice_matches_trunk_bit_for_bit() {
             ],
         ),
         (
-            "/history/session/chat.jsonl",
+            "/history/projects/project/11111111-1111-4111-8111-111111111111.jsonl",
             Some(worktree),
             vec![grouped(30, 1.6)],
         ),
         (
-            "/history/session/subagents/child.jsonl",
+            "/history/projects/project/11111111-1111-4111-8111-111111111111/subagents/agent-child.jsonl",
             Some(Path::new("/repo/project-worktrees/deleted")),
             vec![grouped(20, 1.7), keyed("sidechain", 70.0, true)],
         ),
@@ -169,6 +169,7 @@ fn room_spend_slice_matches_trunk_bit_for_bit() {
             &files,
             &cache,
             &counted,
+            &contested_session_locations(&files, &cache),
             Some(&scope),
             HeadlineContext {
                 user_inputs: &inputs,
@@ -195,10 +196,11 @@ fn room_spend_slice_matches_trunk_bit_for_bit() {
     month: 402a999999999999 225 150 75 0 0 0 0 0 {} 11
     year: 4030199999999999 255 170 85 0 0 0 0 0 {} 12
     local day: 4021666666666666 165 110 55 0 0 0 0 0 {} 6
-    /history/session: 400a666666666666
+    claude:11111111-1111-4111-8111-111111111111: 400a666666666666
     claude:burst: 400b333333333332
     claude:inside-wins: 3fd999999999999a
     claude:normalized: 3ffccccccccccccd
+    claude:outside-wins: 4056800000000000
     claude:rounding: 3fe3333333333334
     claude:sidechain: 3fe0000000000000
     claude:week: 3ff199999999999a
@@ -212,10 +214,11 @@ fn room_spend_slice_matches_trunk_bit_for_bit() {
     month: 402a999999999999 225 150 75 0 0 0 0 0 {} 11
     year: 4030199999999999 255 170 85 0 0 0 0 0 {} 12
     local day: 4021666666666666 165 110 55 0 0 0 0 0 {} 6
-    /history/session: 400a666666666666
+    claude:11111111-1111-4111-8111-111111111111: 400a666666666666
     claude:burst: 400b333333333332
     claude:inside-wins: 3fd999999999999a
     claude:normalized: 3ffccccccccccccd
+    claude:outside-wins: 4056800000000000
     claude:rounding: 3fe3333333333334
     claude:sidechain: 3fe0000000000000
     claude:week: 3ff199999999999a
@@ -229,10 +232,11 @@ fn room_spend_slice_matches_trunk_bit_for_bit() {
     month: 402a999999999999 225 150 75 0 0 0 0 0 {} 11
     year: 4030199999999999 255 170 85 0 0 0 0 0 {} 12
     local day: 4021666666666666 165 110 55 0 0 0 0 0 {} 6
-    /history/session: 400a666666666666
+    claude:11111111-1111-4111-8111-111111111111: 400a666666666666
     claude:burst: 400b333333333332
     claude:inside-wins: 3fd999999999999a
     claude:normalized: 3ffccccccccccccd
+    claude:outside-wins: 4056800000000000
     claude:rounding: 3fe3333333333334
     claude:sidechain: 3fe0000000000000
     claude:week: 3ff199999999999a

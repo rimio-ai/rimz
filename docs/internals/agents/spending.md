@@ -38,7 +38,7 @@ The spending walk reads the whole transcript and store history of every provider
 
 `day` is independent of the headline, whatever `spend_window` selects. `crates/rimz/src/agents/spending/aggregate.rs::WindowStarts::new` computes all four starts once per fold in the history zone. Week begins at local midnight six days ago, month 29 days ago, and year 363 days ago. A timestamp at the start belongs to that window; a session uses its youngest entry. Windows nest and expire a whole oldest day at history-zone midnight, including across 23-hour and 25-hour days. The 365 × 24-hour bound remains for retention, parsing, and pricing, not year membership.
 
-Each parsed file yields, per entry: a cost, a four-way token split (`input`, `output`, `cache_write`, `cache_read`), a per-name tool-call map where the provider exposes one, a timestamp, and a provider-native thread id when one store holds many sessions. The file also yields one origin path when the provider exposes one. A window folds `cache_write` into its `↘` input, so the `◇` total is folded input plus output, and `cache_read` rides apart. A window's `sessions` count is the distinct threads that ran in it.
+Each parsed file yields, per entry: a cost, a four-way token split (`input`, `output`, `cache_write`, `cache_read`), a per-name tool-call map where the provider exposes one, a timestamp, and a provider-native thread id when one store holds many sessions. The file also yields one origin path when the provider exposes one. A window folds `cache_write` into its `↘` input, so the `◇` total is folded input plus output, and `cache_read` rides apart. A window's `sessions` count is the distinct sessions that ran in it: the row's trimmed, non-empty `thread_id`, else the adapter's native session id read from the path, else its declared `ThreadKey` file grouping. Native ids are namespaced by provider kind. Claude's UUID-named main transcript and its subagent companions share one session; different UUIDs in the same project count separately.
 
 ### Discovery
 
@@ -79,7 +79,7 @@ The seat fold in [`effort.rs`](../../../crates/rimz/src/agents/spending/effort.r
 
 ### What reads the totals
 
-The walk publishes the machine-shared `provider-spending.json`, and every reader takes its figures from there or from the workspace cache derived beside it. Its optional `session_start_secs` records the machine-wide cockpit session start in Unix seconds in every headline mode (`session`, `24h`, and `today`), independently of headline and workspace cutoffs. It is absent when no prompt has opened a current session or an older writer published the cache, and the aggregate version is 24.
+The walk publishes the machine-shared `provider-spending.json`, and every reader takes its figures from there or from the workspace cache derived beside it. Its optional `session_start_secs` records the machine-wide cockpit session start in Unix seconds in every headline mode (`session`, `24h`, and `today`), independently of headline and workspace cutoffs. It is absent when no prompt has opened a current session or an older writer published the cache. The current aggregate versions are listed under [Schema versions](#schema-versions).
 
 | Reader | Reads |
 | --- | --- |
@@ -99,7 +99,7 @@ A provider with no historical tally keeps the full headline template. Its separa
 
 The default session headline opens on a recorded user prompt and stays open while priced activity keeps each gap below five hours (`SESSION_GAP_SECS`). Autonomous activity never opens a burst by itself. Lifecycle hooks record the prompts in the rotating `logs/user-inputs.log.jsonl` ([`user_input.rs`](../../../crates/rimz/src/agents/spending/user_input.rs)), and aggregation reads the current and rotated files.
 
-The headline `$` and the local-day budget figure also count spend the walk has not reached yet. The producer publishes recent per-session cumulative baselines in `workspace-spending.<scope_hash>.json`, and each consumer adds only the positive difference between a live card's cumulative cost and its walked baseline. Cost from before the window never enters, and flushed spend never counts twice. Store windows, headline tokens, and session counts stay walk-derived.
+The headline `$` and the local-day budget figure also count spend the walk has not reached yet. The producer publishes recent per-session cumulative baselines in `workspace-spending.<scope_hash>.json`, using the same session identity as the counts, materialized as `<kind>:<id>` for a native session or the grouped file path otherwise. Each baseline uses that session's own walked rows, deduplicated within that session. The fold reuses in-scope fleet winners unless a session holds a dedup component shared across owners, where an owner is a file plus the row's session and a component is its message id, or its provider dedup key when it has no message id. Only those contested sessions deduplicate their scoped rows again. A fork's copied history therefore contributes to its baseline as well as the source's, while walked totals count the shared history once. Each consumer adds only the positive difference between a live card's cumulative cost and its walked baseline. A Claude card compares against its own UUID's baseline, including subagent spend, never the other sessions in its project folder. Cost from before the window never enters, and flushed spend never counts twice. Store windows, headline tokens, and session counts stay walk-derived.
 
 ## The incremental cache
 
@@ -138,7 +138,7 @@ The cursor carries provider resume state where a parser needs it:
 | Copilot | per-model shutdown baselines and the session-start directory |
 | Pi | the session header directory |
 
-Rows dedup against retry writes within each parsed chunk. Finalized rows stay exact for 8 days (`RAW_RETAIN_SECS`), which covers the seven-local-day window and cross-file retry and sidechain dedup. Older rows compact into per-day, per-model, per-thread rollups out to 365 days.
+Rows dedup against retry writes within each parsed chunk. Finalized rows stay exact for 8 days (`RAW_RETAIN_SECS`), which covers the seven-local-day window and cross-file retry and sidechain dedup. Older rows compact into per-day, per-model, per-thread rollups out to 365 days. An older row whose message id two sessions share (a fork's copied history) stays raw in both files (`crates/rimz/src/agents/spending/cache.rs::retained_raw_message_ids`): a rollup keeps the global dedup winner only, which would drop the copy from the other session's live baseline.
 
 ### Persisting and checkpoints
 
@@ -146,7 +146,7 @@ Dirty cursor state persists on the first walk, after `SPENDING_PERSIST_MIN_INTER
 
 During a publishing walk, `WALK_CHECKPOINT_INTERVAL` (1 second) checkpoints cursor progress when the persist gate is open. It publishes a current-stamped partial aggregate only when the cache changed since the previous checkpoint and the partial lowers no published figure. The figures checked are the 364-local-day dollars of the fleet total, each provider, each login, and the walk's own workspace scope in its current-version sidecar. So the dashboard total climbs during a cold start, a restart resumes from the checkpoint, and a fresh walker whose cursor trails the publication never dips it. A withheld partial leaves `provider-spending.json` and the workspace sidecar untouched, stamp included. Only the finished walk lowers a published figure.
 
-The long-lived walker memo keeps only `(file index, entry index)` locations of dedup winners, keyed by cache generation and signature. Aggregation borrows paths and thread ids from the cache, and allocates session strings only for the published live-baseline and session-key outputs. An append, truncate, compaction, or file-set change rebuilds the locations once.
+The long-lived walker memo keeps `(file index, entry index)` locations of dedup winners and one representative row per contested session, keyed by cache generation and signature. A single pass over cached rows finds contested sessions using borrowed component keys, with no per-row string allocation. Aggregation borrows paths and thread ids from the cache, and allocates session strings only for the published live-baseline and session-key outputs. An append, truncate, compaction, or file-set change rebuilds the locations once.
 
 In memory, rows share model and tool names through one process-wide table and hold provider IDs as boxed strings. Tool counts retain a single `(name, count)` pair inline and use a sorted boxed slice for multiple names. Before inserting a new name, the table drops names no live handle references; its retained set is bounded by the distinct names live at the last insertion plus the new name. Cursor state stays as JSON text decoded on use; the Claude pricing gate decodes only its fingerprint. The `spending.json` bytes and version stay unchanged; agent-context sidecars may compact state whitespace without changing its value.
 
@@ -160,7 +160,7 @@ Three version constants gate schema changes:
 | `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
 | `WORKSPACE_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the workspace tally or its walked baselines change | the workspace sidecar recomputes once from the entry cache |
 
-`PROVIDER_SPENDING_VERSION` is 24, covering local-day windows, the walk hour, and bounded hourly, daily, and weekly model-dollar chart cells. `WORKSPACE_SPENDING_VERSION` is 9 for local-day windows. A v23 provider file without `chart.hours` or `chart.hour` keeps its other values readable but is stale and must be recomputed. Both fields have serde defaults; a missing hour reads as zero.
+`PROVIDER_SPENDING_VERSION` is 25 and `WORKSPACE_SPENDING_VERSION` is 10: counts and live baselines follow the adapter's native session, so Claude counts per UUID with subagents folded under their parent. Both versions retain local-day windows; the provider publication also carries the walk hour and bounded hourly, daily, and weekly model-dollar chart cells. The raw `SPENDING_CACHE_VERSION` stays 28, so deleted transcripts' cached spend survives and no transcript needs re-parsing. A v23 provider file without `chart.hours` or `chart.hour` keeps its other values readable but is stale and must be recomputed. Both fields have serde defaults; a missing hour reads as zero.
 
 Writers refuse a schema downgrade after a cheap leading-version probe. A long-lived build of a lower version therefore cannot blank a newer build's aggregate or force cursor cold walks: a bump costs one recompute, and the higher version holds.
 
@@ -340,7 +340,7 @@ The launch wrapper clears `RIMZ_TEAM` and `RIMZ_AGENT_ROLE` when its identity ha
 
 ### What the publication carries
 
-`provider-spending.json` carries `roles.agents` for solo profiles, `roles.teams` keyed by team then role, and `roles.subagents` by profile. Each leaf is a `RoleTally`: its `SpendTally` fields flattened in place, beside an `effort` object with `day`, `week`, `month`, and `year` windows. Each effort window carries `active_ms`, `from_user`, `from_teammates`, and `to_teammates`, and missing fields default to zero or empty. Native spend sessions count once per placement after deduplication, a Claude parent's companion files included.
+`provider-spending.json` carries `roles.agents` for solo profiles, `roles.teams` keyed by team then role, and `roles.subagents` by profile. Each leaf is a `RoleTally`: its `SpendTally` fields flattened in place, beside an `effort` object with `day`, `week`, `month`, and `year` windows. Each effort window carries `active_ms`, `from_user`, `from_teammates`, and `to_teammates`, and missing fields default to zero or empty. The role join uses the fleet's native session key. Sessions count once per placement after deduplication, a Claude parent's companion files included; role session counts sum to at most the fleet total in each window.
 
 Two stamps say how far back the ledgers reach:
 

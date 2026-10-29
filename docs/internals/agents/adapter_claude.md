@@ -361,7 +361,7 @@ The stamp reads the credentials file, not the token the Claude process sends, an
 
 [`spend.rs`](../../../crates/rimz/src/agents/adapters/claude/spend.rs) parses Claude's full-history spend, read-only and sidebar-safe, and the [`SpendingWalker`](../../../crates/rimz/src/agents/spending/mod.rs) aggregates it into the configured headline, local calendar day, and 7, 30, and 364-local-day windows, including today ([spending.md](./spending.md#cost-history)). The fleet walk reads every `**/*.jsonl` under each config root's `projects/`.
 
-A Claude session spans several files, and the spec's `ThreadKey::SessionDir` makes the session directory the thread. The per-session seat fold resolves the main transcript plus every `subagents/*.jsonl` companion in either layout: `<session_id>.jsonl` beside `<session_id>/subagents/`, or `<session_id>/chat.jsonl` inside it.
+A Claude spend session is keyed by the UUID in its transcript path; a subagent transcript names its parent's UUID. The per-session seat fold resolves the main transcript plus every `subagents/*.jsonl` companion in either layout: `<session_id>.jsonl` beside `<session_id>/subagents/`, or `<session_id>/chat.jsonl` inside it.
 
 Claude replays parent messages into each subagent file, so the walk deduplicates by `(message.id, requestId)` across files. It prefers the main-thread record, then the larger token total, then the record with speed metadata, and suppresses sidechain replay so the selected turn counts once.
 

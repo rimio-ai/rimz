@@ -475,12 +475,12 @@ The latest capture of each bench. Run one group with a name filter, such as `car
 | `hotpath::spending_live_scale_warm_global_refresh` 6k files / 102k entries | 93.5 ms | 50.25 MB alloc/op | 2026-07-20 |
 | `hotpath::spending_live_scale_warm_discovery_only` 6k files | 19.55 ms | 770.9 KB alloc/op | 2026-07-18 |
 | `hotpath::spending_live_scale_warm_discovery_inclusive` 6k files / 102k entries | 140.2 ms | 99.59 MB alloc/op | 2026-07-18 |
-| `hotpath::spending_live_scale_additional_workspace_scope` 6k files / 102k entries, all in scope | 100.1 ms | 33.75 MB alloc/op | 2026-10-29 |
-| `hotpath::spending_live_scale_additional_workspace_partial_scope` 6k files / 102k entries, one-third in scope | 28.72 ms | 15.28 MB alloc/op | 2026-10-29 |
+| `hotpath::spending_live_scale_additional_workspace_scope` 6k files / 102k entries, all in scope | 49.72 ms | 33.94 MB alloc/op | 2026-10-29 |
+| `hotpath::spending_live_scale_additional_workspace_partial_scope` 6k files / 102k entries, one-third in scope | 14.09 ms | 15.47 MB alloc/op | 2026-10-29 |
 
-The 2026-10-29 scope rows quote the second head run of a base/head/head/base check (three samples per bench), on Linux x86-64 with an EPYC 7502P, 58 available CPUs and Rust 1.97.1 under ambient build load. Both benches use `bench_local_refs`; the medians exclude fixture teardown, including the 6,000-file tempdir removal and walker cache/memo cleanup. Both trees use trunk `d602478a2` plus `test(spending): pin the room spend slice before splitting its fold`; head adds `perf(spending): derive a room's spend slice without the fleet fold`.
+The 2026-10-29 scope rows quote the second head run of a base/head/head/base check (three samples per bench), on Linux x86-64 with Rust 1.97.1 under ambient build load. Both benches use `bench_local_refs`; the medians exclude fixture teardown, including the 6,000-file tempdir removal and walker cache/memo cleanup. Base is trunk `ea7bdc3c44f`; head adds `fix(spending): count native sessions instead of project folders`, including the contested-session memo that limits repeat baseline dedup to sessions holding shared rows.
 
-Allocation medians were stable across each build's two runs: all-in-scope used 98.28 MB alloc/op on base versus 33.75 MB on head; one-third-in-scope used 80.35 MB versus 15.28 MB. One-minute load before/after each whole command (including compilation and fixture setup) was 30.56/32.21, 32.21/79.63, 79.63/74.96 and 74.96/39.19 in base/head/head/base order. These loaded timing medians are not an isolated speedup measurement.
+All-in-scope medians in base/head/head/base order were 50.83 / 43.27 / 49.72 / 65.22 ms; one-third-in-scope medians were 15.51 / 14.85 / 14.09 / 16.05 ms. Allocation counts were identical across both builds and both runs: 111,318 all-in-scope and 37,134 one-third-in-scope. Byte requests were 33.75 / 15.28 MB on base and 33.94 / 15.47 MB on head. These loaded timing medians are not an isolated speedup measurement.
 
 The 2026-10-14 capture ran at a load average near 45, where two back-to-back runs of the same build read 6.4 ms and 12.2 ms for one arm, so this table quotes no median from it. The `kimi`, `grok`, and `droid` changed-session refresh benches have no recorded capture.
 

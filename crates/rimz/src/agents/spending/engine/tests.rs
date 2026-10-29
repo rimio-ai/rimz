@@ -506,6 +506,7 @@ fn fresh_publication_derives_other_rooms_without_fleet_folds() {
             &files,
             &raw,
             &counted,
+            &super::super::contested_session_locations(&files, &raw),
             Some(&scope),
             super::super::HeadlineContext {
                 user_inputs: &[],
@@ -524,8 +525,8 @@ fn fresh_publication_derives_other_rooms_without_fleet_folds() {
             read_workspace_spending_cache(&runtime.workspace_spending_path(&scope.hash())),
             expected,
         );
-        assert_eq!(result.provider.version, 24);
-        assert_eq!(result.workspace.version, 9);
+        assert_eq!(result.provider.version, 25);
+        assert_eq!(result.workspace.version, 10);
     }
 }
 
