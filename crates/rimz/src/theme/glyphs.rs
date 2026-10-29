@@ -139,6 +139,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(ChromeSpineCardRight, "▐", None),
     glyph!(ChromeSpineLaneLeft, "▎", None),
     glyph!(ChromeSpineLaneRight, "🮇", None),
+    glyph!(ChromeSpineEntry, "▏", None),
     glyph!(ChromeInfinity, "∞", Some("\u{edfe}")),
     glyph!(ChromeSearch, "/", Some("\u{f002}")),
     glyph!(ChromeFocusAbove, "↑", None),
@@ -332,6 +333,25 @@ pub fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
 mod tests {
     use super::*;
     use crate::config::{ThemeGlyphsConfig, ThemeStyle};
+
+    #[test]
+    fn entry_spine_resolves_in_both_sets_and_accepts_overrides() {
+        let role = GlyphRole::from_namespaced("chrome", "spine_entry");
+        assert!(role.is_some(), "chrome.spine_entry must be configurable");
+        let role = role.unwrap();
+        for set in ["unicode", "nerd_font"] {
+            let mut theme = ThemeConfig {
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            };
+            assert_eq!(GlyphSet::resolve(&theme).glyph(role), "▏");
+            theme.glyphs =
+                toml::from_str(&format!("set = '{set}'\n[{set}.chrome]\nspine_entry = '!'"))
+                    .unwrap();
+            assert_eq!(GlyphSet::resolve(&theme).glyph(role), "!");
+        }
+        assert_eq!(nerd_font_glyph(role), None);
+    }
 
     #[test]
     fn search_role_has_configurable_presets() {
@@ -582,6 +602,7 @@ mod tests {
             GlyphRole::ChromeSpineCardRight,
             GlyphRole::ChromeSpineLaneLeft,
             GlyphRole::ChromeSpineLaneRight,
+            GlyphRole::ChromeSpineEntry,
         ];
 
         for &role in FALLBACK_ROLES {
