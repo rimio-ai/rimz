@@ -69,7 +69,7 @@ pub fn resume_parked(
     );
 }
 
-/// Process-wide work measured at the snapshot and configuration boundaries.
+/// Process-wide work measured at snapshot, configuration, and worktree-marker boundaries.
 #[derive(Default)]
 pub struct WorkCounters {
     pub snapshot_assemblies: std::sync::atomic::AtomicU64,
@@ -77,6 +77,7 @@ pub struct WorkCounters {
     pub rollup_bytes_parsed: std::sync::atomic::AtomicU64,
     pub latest_bytes_parsed: std::sync::atomic::AtomicU64,
     pub machine_config_loads: std::sync::atomic::AtomicU64,
+    pub marker_reads: std::sync::atomic::AtomicU64,
 }
 
 /// Shared across threads; the binary's work log reads these on return from main.

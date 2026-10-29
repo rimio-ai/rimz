@@ -100,6 +100,7 @@ impl WorkLog {
             "rollup_bytes_parsed": WORK_COUNTERS.rollup_bytes_parsed.load(Relaxed),
             "latest_bytes_parsed": WORK_COUNTERS.latest_bytes_parsed.load(Relaxed),
             "machine_config_loads": WORK_COUNTERS.machine_config_loads.load(Relaxed),
+            "marker_reads": WORK_COUNTERS.marker_reads.load(Relaxed),
         });
         let mut line = serde_json::to_vec(&record)?;
         line.push(b'\n');

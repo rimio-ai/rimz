@@ -269,7 +269,7 @@ The cache is `<git common dir>/rimz-landed-memo.json`, outside the checkout and 
 
 `inspect` pairs Git status with the protection set's holders in a `WorktreeState`. `inspect_owned` loads and saves one memo and runs `inspect` over the discovered trees through `utils::parallel::bounded_map` with eight workers, returning them in input order. A tree whose inspection fails gets an unknown status, so it is kept. Listing and sweeping share this projection.
 
-The loop scheduler enumerates trees for each-worktree tasks through `discover_owned_cached` (called from `harness/schedule/fire.rs` and `harness/schedule/when.rs`). It caches the `git worktree list` rows per repository for 60 seconds, invalidated when the common directory's `worktrees/` entry changes, and reads every marker fresh.
+The loop scheduler enumerates trees for each-worktree tasks through `discover_owned_cached` (called from `harness/schedule/fire.rs` and `harness/schedule/when.rs`). It caches the `git worktree list` rows per repository for 60 seconds, invalidated when the common directory's `worktrees/` entry changes, and revalidates every marker by stat on each call.
 
 ### What the sidebar asks
 
@@ -278,7 +278,7 @@ The sidebar's git-stats refresh (`sidebar/refresh/git_stats.rs`) uses the same p
 - Its landed marker is measured against the sidebar's own trunk, never the marker's `base_branch`. Zero commits ahead is landed, and a clean tree with commits ahead goes through `content_landed`. That trunk tries the per-machine `[sidebar] trunk` setting before `main`, `master`, and the `origin/HEAD` target ([sidebar.md → Worktree groups](../sidebar/sidebar.md#worktree-groups)).
 - Its `did_work` marker answers whether the tree has done any work of its own. HEAD equal to the marker's `base_ref` is no work. Otherwise `on_trunk_first_parent` checks whether HEAD sits on the trunk's first-parent chain (scan capped at `LANDED_BASE_SCAN_CAP`). A tree that only tracked the trunk sits there, and a tree carrying its own commits does not.
 
-The sidebar reads markers through `read_marker_from_checkout_metadata`, which follows the checkout's `.git` file directly and forks no Git process.
+The sidebar reads markers through `read_marker_from_checkout_metadata`, which follows the checkout's `.git` file directly on every call and forks no Git process. A process-wide memo shares successful parses across threads, revalidated by the marker's full file stamp (device, inode, size and mtime) on every call. It retains at most 1,024 entries, evicting the oldest first; a changed or evicted marker is read again, while missing files and errors are never cached. This relies on every marker writer using `write_marker`'s temp-then-rename, never an in-place rewrite. The read-modify-write source, `read_marker_for_worktree`, stays uncached.
 
 ## Landing on the comparison branch
 
