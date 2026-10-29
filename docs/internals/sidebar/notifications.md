@@ -138,7 +138,7 @@ The local `rimz remote connect` supervisor alerts on link loss itself, because a
 | Confirmed transport loss | `link_lost` | yes | yes |
 | Recovery | `link_restored` | yes | yes |
 | Probe blackout | `link_lost` | yes | no |
-| Port forward parked on a busy local port | none | yes | no |
+| Port remapped to another local port | none | yes | no |
 
 The supervisor loads `[notifications]` leniently at each alert. None of these events is sent as a `Notify` event, so no renderer sees them and the trace log has no record of them.
 

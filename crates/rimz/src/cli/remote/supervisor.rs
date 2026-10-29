@@ -1,5 +1,7 @@
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
-use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
+};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +38,7 @@ const PROBE_RESPAWN_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTO_FORWARD_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+const AUTO_FORWARD_PORT_PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 
 struct OutageState {
     connect_stage: ConnectStage,
@@ -1491,18 +1494,16 @@ fn emit_local_terminal_notification(
     }
 }
 
-/// The attached room owns the screen, so skipped forwards use terminal notifications.
-fn parked_port_forward_notice(port: u16) -> (String, String) {
+/// The attached room owns the screen, so remaps use terminal notifications.
+fn remapped_port_forward_notice(remote: u16, local: u16, tried: u16) -> (String, String) {
     (
-        "RimZ: port forward skipped".to_owned(),
-        format!(
-            "Local port {port} is already in use. Free it, then stop and restart the server on the host to retry forwarding."
-        ),
+        "RimZ: port remapped".to_owned(),
+        format!("Port {remote} forwarded to localhost:{local} ({tried} is busy here)"),
     )
 }
 
-fn emit_parked_port_forward_notice(port: u16) {
-    let (title, body) = parked_port_forward_notice(port);
+fn emit_remapped_port_forward_notice(remote: u16, local: u16, tried: u16) {
+    let (title, body) = remapped_port_forward_notice(remote, local, tried);
     let prefs = rimz::config::MachineConfig::load_lenient()
         .notifications
         .clone();
@@ -1931,7 +1932,7 @@ fn apply_port_report(
 
 fn reopen_port_forwards(sync: &Mutex<PortSync>, target: &RemoteTarget, control_path: &Path) {
     let actions = match sync.lock() {
-        Ok(mut sync) => sync.reopen_active(),
+        Ok(sync) => sync.reopen_active(),
         Err(poisoned) => poisoned.into_inner().reopen_active(),
     };
     apply_port_actions(sync, actions, target, control_path);
@@ -1945,29 +1946,42 @@ fn apply_port_actions(
 ) {
     for action in actions {
         match action {
-            PortAction::Open(port) => {
-                let listener = match TcpListener::bind(("127.0.0.1", port)) {
-                    Ok(listener) => listener,
-                    Err(error) => {
-                        mark_port_open_failed(sync, port);
-                        tracing::info!(port, %error, "remote port auto-forward parked; local port unavailable");
-                        emit_parked_port_forward_notice(port);
-                        continue;
-                    }
+            PortAction::Open(port) | PortAction::Reopen(port) => {
+                let (tried, local) = {
+                    let mut sync = sync.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let tried = sync.local_port(port).unwrap_or(port);
+                    let local = sync.choose_local_port(port, local_forward_port_available, || {
+                        rimz::remote::web::reserve_forward_port().ok()
+                    });
+                    (tried, local)
                 };
-                drop(listener);
-                match open_spec(target, control_path, port)
+                let Some(local) = local else {
+                    tracing::warn!(port, "remote port auto-forward has no free local port");
+                    continue;
+                };
+                match open_spec(target, control_path, local, port)
                     .run_with_timeout(AUTO_FORWARD_CONTROL_TIMEOUT)
                 {
-                    Ok(_) => tracing::info!(port, "remote port auto-forward opened"),
+                    Ok(_) => {
+                        sync.lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .mark_opened(port);
+                        tracing::info!(port, local, "remote port auto-forward opened");
+                        if local != tried {
+                            emit_remapped_port_forward_notice(port, local, tried);
+                        }
+                    }
                     Err(error) => {
-                        mark_port_open_failed(sync, port);
-                        tracing::warn!(port, %error, "remote port auto-forward open refused");
+                        tracing::warn!(port, local, %error, "remote port auto-forward open refused");
+                        mark_port_open_failed(sync, port, error);
                     }
                 }
             }
-            PortAction::Close(port) => {
-                match cancel_spec(target, control_path, port)
+            PortAction::Close {
+                remote: port,
+                local,
+            } => {
+                match cancel_spec(target, control_path, local, port)
                     .run_with_timeout(AUTO_FORWARD_CONTROL_TIMEOUT)
                 {
                     Ok(_) => tracing::info!(port, "remote port auto-forward closed"),
@@ -1980,10 +1994,40 @@ fn apply_port_actions(
     }
 }
 
-fn mark_port_open_failed(sync: &Mutex<PortSync>, port: u16) {
+fn local_forward_port_available(port: u16) -> bool {
+    let accepts_connection = [
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+    ]
+    .into_iter()
+    .any(|address| {
+        TcpStream::connect_timeout(
+            &SocketAddr::new(address, port),
+            AUTO_FORWARD_PORT_PROBE_TIMEOUT,
+        )
+        .is_ok()
+    });
+    if accepts_connection {
+        return false;
+    }
+    // A concurrent fork can retain the temporary listener until exec. Connect first so
+    // the probe cannot reach its own inherited listener.
+    TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
+}
+
+fn mark_port_open_failed(sync: &Mutex<PortSync>, port: u16, error: rimz::mux::MuxErr) {
+    let message = match &error {
+        rimz::mux::MuxErr::Command { stderr, .. } => stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| line.trim().to_owned()),
+        _ => None,
+    }
+    .unwrap_or_else(|| error.to_string());
     match sync.lock() {
-        Ok(mut sync) => sync.mark_open_failed(port),
-        Err(poisoned) => poisoned.into_inner().mark_open_failed(port),
+        Ok(mut sync) => sync.mark_open_failed(port, message),
+        Err(poisoned) => poisoned.into_inner().mark_open_failed(port, message),
     }
 }
 

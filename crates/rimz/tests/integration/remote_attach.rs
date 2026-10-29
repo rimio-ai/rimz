@@ -1057,6 +1057,7 @@ fn supervised_connect_opens_new_remote_listener_forwards() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let port = available_forward_probe_port();
+    let _busy = TcpListener::bind(("127.0.0.1", port)).expect("hold the remote port busy locally");
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_REMOTE_PROBE_MS", "10")
         .env("RIMZ_TEST_PROBE_PORT", port.to_string())
@@ -1071,17 +1072,27 @@ fn supervised_connect_opens_new_remote_listener_forwards() {
     );
 
     let invocations = shim_invocations(&log);
-    let forwarding = format!("127.0.0.1:{port}:localhost:{port}");
-    assert!(
-        invocations.iter().any(|argv| {
+    let forwards = invocations
+        .iter()
+        .filter(|argv| {
             argv.windows(2)
                 .any(|args| args[0] == "-O" && args[1] == "forward")
-                && argv
-                    .windows(2)
-                    .any(|args| args[0] == "-L" && args[1] == forwarding)
-        }),
-        "forward control call missing from {invocations:?}"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        forwards.len(),
+        1,
+        "a busy local port is remapped, not skipped: {invocations:?}"
     );
+    let forwarding = &forwards[0].windows(2).find(|args| args[0] == "-L").unwrap()[1];
+    let local = forwarding
+        .split(':')
+        .nth(1)
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    assert_ne!(local, port, "the held local port cannot be reused");
+    assert_eq!(forwarding, &format!("127.0.0.1:{local}:localhost:{port}"));
 }
 
 #[test]

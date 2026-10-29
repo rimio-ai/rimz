@@ -69,9 +69,9 @@ On a supervised connection, the host's refusal names both versions and their dif
 
 ### Port forwarding
 
-A supervised terminal connection forwards a remote dev server to the same port on your machine when the server starts listening after you attach. The listener must belong to your remote user, use port 1024 or above, and bind a loopback or wildcard address. The local end binds only `127.0.0.1`, and a local port already in use is skipped. Discovery reads the host's `/proc`, so it works on Linux hosts only. `--no-reconnect` and `--web` connections never forward.
+A supervised terminal connection forwards a remote dev server when the server starts listening after you attach. The listener must belong to your remote user, use port 1024 or above, and bind a loopback or wildcard address. The local end binds only `127.0.0.1`. It uses the same port when free; otherwise it tries nearby higher ports, then an OS-assigned port. A remap sends a terminal notification naming the local port, subject to notification preferences. Discovery reads the host's `/proc`, so it works on Linux hosts only. `--no-reconnect` and `--web` connections never forward.
 
-Two ceilings bound a busy host: discovery keeps the 32 lowest qualifying ports, and at most 16 forwards stay open at once. A port skipped because the local end was busy is retried when the remote listener stops and starts again, not when you reconnect, so free the local port before you restart the remote server. The guide walks through it in [Ports forward themselves](../../guide/remote.md#ports-forward-themselves); limits and timing are in [remote internals](../../internals/remote.md#port-auto-forwarding).
+Two ceilings bound a busy host: discovery keeps the 32 lowest qualifying ports, and at most 16 forwards stay open at once. A remote port keeps its chosen local port for the whole connection, including server restarts, unless that local port becomes busy at reopen. A listener over the forward limit waits for a slot. An SSH refusal is retried only after the remote listener disappears from a report and returns. The guide walks through it in [Ports forward themselves](../../guide/remote.md#ports-forward-themselves); limits and timing are in [remote internals](../../internals/remote.md#port-auto-forwarding).
 
 ### Exit codes
 

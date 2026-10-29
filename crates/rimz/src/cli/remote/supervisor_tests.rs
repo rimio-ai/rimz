@@ -20,12 +20,16 @@ fn stderr_drain_keeps_a_bounded_tail_and_the_final_ssh_line() {
 }
 
 #[test]
-fn parked_port_forward_notice_reaches_terminal_with_retry() {
-    let (title, body) = parked_port_forward_notice(3000);
-    assert_eq!(title, "RimZ: port forward skipped");
+fn remapped_port_forward_notice_reaches_terminal_with_the_local_port() {
+    let (title, body) = remapped_port_forward_notice(3000, 3001, 3000);
+    assert_eq!(title, "RimZ: port remapped");
     assert_eq!(
         body,
-        "Local port 3000 is already in use. Free it, then stop and restart the server on the host to retry forwarding."
+        "Port 3000 forwarded to localhost:3001 (3000 is busy here)"
+    );
+    assert_eq!(
+        remapped_port_forward_notice(3000, 3002, 3001).1,
+        "Port 3000 forwarded to localhost:3002 (3001 is busy here)"
     );
     // Only the gate is asserted here, never the payload: `osc::desktop_payload`
     // drops the OSC under an ambient Zellij (`mux::drops_desktop_osc`), so a
@@ -37,8 +41,31 @@ fn parked_port_forward_notice_reaches_terminal_with_retry() {
     );
     assert!(
         !local_link_terminal_notification_bytes(&title, &body, &prefs, true).is_empty(),
-        "terminal stderr carries the park notice"
+        "terminal stderr carries the remap notice"
     );
+}
+
+#[test]
+fn local_forward_port_probe_detects_ipv6_only_listeners() {
+    for host in ["127.0.0.1", "0.0.0.0", "::1"] {
+        let listener = match TcpListener::bind((host, 0)) {
+            Ok(listener) => listener,
+            Err(error) if host == "::1" => {
+                writeln!(
+                    std::io::stderr(),
+                    "skipping: IPv6 loopback unavailable: {error}"
+                )
+                .unwrap();
+                return;
+            }
+            Err(error) => panic!("bind {host}: {error}"),
+        };
+        let port = listener.local_addr().unwrap().port();
+        assert!(
+            !local_forward_port_available(port),
+            "a listener on {host}:{port} makes the local port busy"
+        );
+    }
 }
 
 #[test]

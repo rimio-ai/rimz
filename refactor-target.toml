@@ -2442,7 +2442,8 @@ surface-budget = 10
 path = "crates/rimz/src/remote"
 # RelayEvent, StreamScreen, RelayScanner and its stream/query methods (+9).
 # PortSync::mark_master_lost separates transport recovery from reattach (+1).
-surface-budget = 186
+# ForwardState and PortSync's pin selection, state readers and open outcome (+5).
+surface-budget = 191
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -4228,6 +4229,11 @@ reason = "Strict readers surface I/O, malformed records and unsupported versions
 kind = "item"
 key = "harness::schedule::backlog::load"
 reason = "The sidebar-safe scheduler backstop and CLI inspection share strict durable backlog reads."
+
+[[verdict]]
+kind = "item"
+key = "remote::forward::ForwardState"
+reason = "PortSync retains held, reopening and not-forwarded outcomes for the supervisor and its forward record."
 
 [[verdict]]
 kind = "item"
