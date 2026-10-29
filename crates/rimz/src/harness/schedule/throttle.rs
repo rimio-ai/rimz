@@ -3,7 +3,7 @@
 //!
 //! A gated run writes a ticket and rechecks the queue until it holds the turn.
 //! The turn passes on when the launch it admitted is reported and the provider
-//! then reports the new agent, or `pace` passes, whichever is first; a later
+//! then reports the new agent, or the ceiling passes, whichever is first; a later
 //! scanner releases it, so the launching process never lingers. Caps and
 //! resource limits are sampled only by the run at the head of the queue, in
 //! the pass that would admit it.
@@ -23,13 +23,15 @@ use crate::config::{MachineConfig, TaskEntry, ThrottleConfig, WorktreeConfig};
 use crate::disk::atomic::AtomicErr;
 use crate::disk::lock::{LockErr, WorkspaceLock};
 use crate::disk::paths::{self, RuntimePaths, StatePaths};
-use crate::ids::{AgentSessionId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, LoginName, WorkspaceId};
 use crate::store::run::RunRecord;
 use crate::utils::size::decimal_bytes;
 use crate::utils::time::format_duration_compact;
 
 const RECHECK: Duration = Duration::from_secs(1);
 const SAMPLE_EVERY_MS: u64 = 5_000;
+const CHECK_REUSE_MS: u64 = 60_000;
+const CHECK_CEILING: Duration = Duration::from_secs(120);
 const NAMED_AGENTS: usize = 2;
 
 /// Why the throttle could not decide or record a turn.
@@ -150,6 +152,14 @@ pub(super) trait Host: Send + Sync {
     fn sleep(&self, duration: Duration);
     fn queue_dir(&self) -> PathBuf;
     fn queue_lock(&self) -> PathBuf;
+    fn check_cache(&self) -> PathBuf;
+    fn check(
+        &self,
+        config: &ThrottleConfig,
+        run: &Run,
+        group: &StartGroup,
+        timeout: Duration,
+    ) -> std::result::Result<super::runner::CheckOutcome, String>;
     fn owner(&self) -> Owner;
     fn owner_is_live(&self, owner: &Owner) -> bool;
     /// Start listening for Ctrl-C, until the returned listener is dropped.
@@ -169,6 +179,50 @@ pub(super) trait Host: Send + Sync {
 pub(super) struct SystemHost;
 
 impl Host for SystemHost {
+    fn check_cache(&self) -> PathBuf {
+        paths::loop_throttle_check_cache()
+    }
+
+    fn check(
+        &self,
+        config: &ThrottleConfig,
+        run: &Run,
+        group: &StartGroup,
+        timeout: Duration,
+    ) -> std::result::Result<super::runner::CheckOutcome, String> {
+        let mut env = crate::workspace::pin_env(&run.workspace, &run.root);
+        env.extend([
+            (super::LOOP_TASK_ENV.to_owned(), run.task.clone()),
+            (
+                crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+                run.checkout.display().to_string(),
+            ),
+            ("RIMZ_START_KIND".to_owned(), group.kind.to_string()),
+            (
+                "RIMZ_START_ACCOUNT".to_owned(),
+                group
+                    .account
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+            ),
+            ("RIMZ_START_AGENTS".to_owned(), group.agents.to_string()),
+            ("RIMZ_START_TASK".to_owned(), run.task.clone()),
+        ]);
+        // check_groups only calls the host when the check is configured.
+        let command = config.check.as_deref().expect("configured capacity check");
+        super::runner::run_command(
+            &run.checkout,
+            command,
+            super::runner::WatchDeadline::CapacityCheck(timeout),
+            super::runner::CheckEcho::Capture,
+            &env,
+            |_, _| {},
+            &mut None,
+        )
+        .map_err(|error| format!("failed to start: {error:#}"))
+    }
+
     fn now_ms(&self) -> u64 {
         crate::utils::time::unix_now_ms()
     }
@@ -291,18 +345,277 @@ impl Drop for Interrupts {
 
 /// The run asking for a turn.
 #[derive(Clone, Debug)]
-pub(super) struct Run {
-    pub(super) task: String,
-    pub(super) root: PathBuf,
-    pub(super) checkout: PathBuf,
+pub(in crate::harness) struct Run {
+    pub(in crate::harness) task: String,
+    pub(in crate::harness) root: PathBuf,
+    pub(in crate::harness) checkout: PathBuf,
     /// Where the launch writes, read for the free-disk floor.
-    pub(super) disk: PathBuf,
-    pub(super) workspace: WorkspaceId,
+    pub(in crate::harness) disk: PathBuf,
+    pub(in crate::harness) workspace: WorkspaceId,
+    /// Distinct provider-kind/account groups of the agents this start opens.
+    pub(in crate::harness) groups: Vec<StartGroup>,
+    /// Absolute UNIX milliseconds, or no bound for blocking admission.
+    pub(in crate::harness) gives_up_ms: Option<u64>,
+}
+
+impl Run {
+    fn kinds(&self) -> Vec<AgentKind> {
+        let mut kinds: Vec<_> = self.groups.iter().map(|group| group.kind.clone()).collect();
+        kinds.sort();
+        kinds.dedup();
+        kinds
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::harness) struct StartGroup {
+    pub(in crate::harness) kind: AgentKind,
+    pub(in crate::harness) account: Option<LoginName>,
+    pub(in crate::harness) agents: usize,
+}
+
+#[derive(Debug)]
+#[expect(
+    dead_code,
+    reason = "loop and workflow callers will consume the one-pass result"
+)]
+pub(in crate::harness) enum Attempt {
+    Open,
+    Turn(Turn),
+    Held(Hold),
+}
+
+/// Try once at the queue's tail. A held start leaves no ticket behind, and no
+/// turn is granted at or past the run's give-up instant.
+#[expect(
+    dead_code,
+    reason = "the loop and workflow callers land after the shared door"
+)]
+pub(in crate::harness) fn try_admit(config: &ThrottleConfig, run: &Run) -> Result<Attempt> {
+    try_admit_in(&(Arc::new(SystemHost) as Arc<dyn Host>), config, run)
+}
+
+fn try_admit_in(host: &Arc<dyn Host>, config: &ThrottleConfig, run: &Run) -> Result<Attempt> {
+    if !gates(config) {
+        return Ok(Attempt::Open);
+    }
+    if let Some(problem) = unreadable(host.as_ref(), config) {
+        return Err(ThrottleError::Unreadable(problem));
+    }
+    let turn = {
+        let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+        let now = host.now_ms();
+        if let Some(hold) = pass(host.as_ref(), config, run, None, now, &mut None)? {
+            return Ok(Attempt::Held(hold));
+        }
+        let path = paths::loop_throttle_ticket_in(&host.queue_dir(), now);
+        let mut ticket = Ticket::new(host.as_ref(), run, now);
+        ticket.state = TicketState::Admitted;
+        write_ticket(&path, &ticket)?;
+        Turn::new(host, path)
+    };
+    match check_groups(host.as_ref(), config, run)? {
+        Some(hold) => Ok(Attempt::Held(hold)),
+        // A check cut at the give-up instant answered nothing, so it grants no turn.
+        None if run.gives_up_ms.is_some_and(|until| host.now_ms() >= until) => {
+            Ok(Attempt::Held(Hold {
+                kind: HoldKind::Capacity,
+                text: "wait deadline reached".to_owned(),
+                kinds: run.kinds(),
+            }))
+        }
+        None => Ok(Attempt::Turn(turn)),
+    }
+}
+
+/// Inspect the same tail without a ticket or reservation, even during its check.
+#[expect(
+    dead_code,
+    reason = "guarded try-once loop fires land after the shared door"
+)]
+pub(in crate::harness) fn look(config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
+    look_in(&SystemHost, config, run)
+}
+
+fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
+    if !gates(config) {
+        return Ok(None);
+    }
+    if let Some(problem) = unreadable(host, config) {
+        return Err(ThrottleError::Unreadable(problem));
+    }
+    {
+        let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+        if let Some(hold) = pass(host, config, run, None, host.now_ms(), &mut None)? {
+            return Ok(Some(hold));
+        }
+    }
+    check_groups(host, config, run)
+}
+
+/// The latest capacity-check errors, read without running a check or taking a turn.
+pub fn check_errors() -> Vec<String> {
+    let config = MachineConfig::load_lenient();
+    check_errors_in(&SystemHost, &config.r#loop.throttle)
+}
+
+fn check_errors_in(host: &dyn Host, config: &ThrottleConfig) -> Vec<String> {
+    if config.check.is_none() {
+        return Vec::new();
+    }
+    read_verdicts(host)
+        .into_iter()
+        .filter(|verdict| verdict.outcome == CheckAnswer::Error)
+        .map(|verdict| verdict.detail)
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CheckAnswer {
+    Room,
+    NoRoom,
+    Error,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Verdict {
+    kind: AgentKind,
+    account: Option<LoginName>,
+    at_ms: u64,
+    outcome: CheckAnswer,
+    detail: String,
+}
+
+fn read_verdicts(host: &dyn Host) -> Vec<Verdict> {
+    std::fs::read(host.check_cache())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
+    if config.check.is_none() {
+        return Ok(None);
+    }
+    let mut held = Hold {
+        kind: HoldKind::Capacity,
+        text: String::new(),
+        kinds: Vec::new(),
+    };
+    for group in &run.groups {
+        let cached = {
+            let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+            let now = host.now_ms();
+            read_verdicts(host).into_iter().find(|verdict| {
+                verdict.kind == group.kind
+                    && verdict.account == group.account
+                    && verdict.outcome != CheckAnswer::Room
+                    && now
+                        .checked_sub(verdict.at_ms)
+                        .is_some_and(|age| age < CHECK_REUSE_MS)
+            })
+        };
+        let verdict = match cached {
+            Some(verdict) => verdict,
+            None => {
+                let at_ms = host.now_ms();
+                let timeout = run.gives_up_ms.map_or(config.check_timeout(), |until| {
+                    config
+                        .check_timeout()
+                        .min(Duration::from_millis(until.saturating_sub(at_ms)))
+                });
+                if timeout.is_zero() {
+                    return Ok(None);
+                }
+                let checked = host.check(config, run, group, timeout);
+                if run.gives_up_ms.is_some_and(|until| host.now_ms() >= until) {
+                    return Ok(None);
+                }
+                let (outcome, detail) = check_answer(checked, timeout);
+                let label = match &group.account {
+                    Some(account) => format!("{}/{account}", group.kind),
+                    None => group.kind.to_string(),
+                };
+                let verdict = Verdict {
+                    kind: group.kind.clone(),
+                    account: group.account.clone(),
+                    at_ms,
+                    outcome,
+                    detail: format!("{label}: {detail}"),
+                };
+                let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+                let mut verdicts = read_verdicts(host);
+                let current = verdicts
+                    .iter_mut()
+                    .find(|current| current.kind == group.kind && current.account == group.account);
+                match current {
+                    Some(current) if current.at_ms <= at_ms => *current = verdict.clone(),
+                    None => verdicts.push(verdict.clone()),
+                    _ => {}
+                }
+                if let Err(error) = crate::disk::atomic::write_temp_then_rename_cache(
+                    &host.check_cache(),
+                    &verdicts,
+                ) {
+                    tracing::warn!(%error, "failed to cache the capacity check");
+                }
+                verdict
+            }
+        };
+        if verdict.outcome == CheckAnswer::Room {
+            continue;
+        }
+        if verdict.outcome == CheckAnswer::Error {
+            held.kind = HoldKind::CheckFailed;
+        }
+        if !held.text.is_empty() {
+            held.text.push_str("; ");
+        }
+        held.text.push_str(&verdict.detail);
+        if !held.kinds.contains(&group.kind) {
+            held.kinds.push(group.kind.clone());
+        }
+    }
+    Ok((!held.kinds.is_empty()).then_some(held))
+}
+
+fn check_answer(
+    checked: std::result::Result<super::runner::CheckOutcome, String>,
+    timeout: Duration,
+) -> (CheckAnswer, String) {
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(error) => return (CheckAnswer::Error, error),
+    };
+    let detail = if checked.timed_out() {
+        format!(
+            "capacity check timed out after {}",
+            format_duration_compact(timeout)
+        )
+    } else if checked.interrupted() {
+        "capacity check interrupted".to_owned()
+    } else {
+        match checked.code() {
+            Some(0) => return (CheckAnswer::Room, "capacity".to_owned()),
+            Some(75) => return (CheckAnswer::NoRoom, "no capacity (exit 75)".to_owned()),
+            Some(code) => format!("capacity check exit {code}"),
+            None => "capacity check terminated by signal".to_owned(),
+        }
+    };
+    let detail = if checked.stderr_line().is_empty() {
+        detail
+    } else {
+        format!("{detail}: {}", checked.stderr_line())
+    };
+    (CheckAnswer::Error, detail)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum HoldKind {
+    Capacity,
+    CheckFailed,
     Queue,
     TaskCap,
     MachineCap,
@@ -313,9 +626,11 @@ enum HoldKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-struct Hold {
+pub(in crate::harness) struct Hold {
     kind: HoldKind,
-    text: String,
+    pub(in crate::harness) text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::harness) kinds: Vec<AgentKind>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -339,11 +654,28 @@ struct Ticket {
     root: PathBuf,
     checkout: PathBuf,
     enqueued_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    kinds: Vec<AgentKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gives_up_ms: Option<u64>,
     #[serde(flatten)]
     state: TicketState,
 }
 
 impl Ticket {
+    fn new(host: &dyn Host, run: &Run, enqueued_ms: u64) -> Self {
+        Self {
+            owner: host.owner(),
+            task: run.task.clone(),
+            root: run.root.clone(),
+            checkout: run.checkout.clone(),
+            enqueued_ms,
+            kinds: run.kinds(),
+            gives_up_ms: run.gives_up_ms,
+            state: TicketState::Waiting { reason: None },
+        }
+    }
+
     fn same_task(&self, other: &Self) -> bool {
         self.task == other.task && self.root == other.root
     }
@@ -369,8 +701,16 @@ impl fmt::Debug for Turn {
 }
 
 impl Turn {
+    fn new(host: &Arc<dyn Host>, ticket: PathBuf) -> Self {
+        Self(Arc::new(TurnInner {
+            host: Arc::clone(host),
+            ticket,
+            reported: AtomicBool::new(false),
+        }))
+    }
+
     /// Stamp the committed launch on the ticket. The turn then passes on once
-    /// the provider reports the agent or `pace` has passed. A second report,
+    /// the provider reports the agent or the ceiling has passed. A second report,
     /// which a verify retry produces, changes nothing.
     pub fn report_launch(&self, workspace: &WorkspaceId, agent: &AgentSessionId) {
         if self.0.reported.swap(true, Ordering::SeqCst) {
@@ -425,14 +765,7 @@ pub(super) enum Admission {
 
 /// Whether any key makes the gate do something.
 fn gates(config: &ThrottleConfig) -> bool {
-    !config.pace().is_zero()
-        || config.max_active.is_some()
-        || config.max_active_per_task.is_some()
-        || Resource::ALL
-            .iter()
-            .any(|resource| resource.limit(config).is_some())
-        || config.min_memory.is_some()
-        || config.min_disk.is_some()
+    !config.pace().is_zero() || config.has_limits()
 }
 
 /// The configured limit this host cannot read, as the fail-fast message.
@@ -465,7 +798,7 @@ pub fn preflight(config: &ThrottleConfig) -> Result<()> {
     }
 }
 
-/// Take a turn for `run`, waiting up to `max-wait`. `on_hold` hears each new
+/// Take a turn for `run`, waiting until its give-up instant. `on_hold` hears each new
 /// blocking reason. A caller already `listening` for Ctrl-C hands its
 /// listener over; without one, the run listens once it is held.
 pub(super) fn admit(
@@ -487,17 +820,15 @@ pub(super) fn admit(
         enqueue(host.as_ref(), run, enqueued_ms)?
     };
     // From here an early return drops the turn, which removes the ticket.
-    let turn = Turn(Arc::new(TurnInner {
-        host: Arc::clone(host),
-        ticket: path.clone(),
-        reported: AtomicBool::new(false),
-    }));
-    let max_wait_ms = duration_ms(config.max_wait());
+    let turn = Turn::new(host, path.clone());
+    let expired = |now| run.gives_up_ms.is_some_and(|until| now >= until);
     let skipped = |reason: &str| {
         Ok(Admission::Skipped {
             reason: format!(
                 "{reason}; held {}",
-                format_duration_compact(config.max_wait())
+                format_duration_compact(Duration::from_millis(
+                    host.now_ms().saturating_sub(enqueued_ms)
+                ))
             ),
         })
     };
@@ -505,7 +836,7 @@ pub(super) fn admit(
     let mut heard: Option<String> = None;
     let mut interrupts = listening;
     loop {
-        let (waited_ms, hold) = {
+        let mut hold = {
             let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
             // A Ctrl-C heard while sleeping or taking the lock wins over both
             // the deadline and an admission.
@@ -514,25 +845,46 @@ pub(super) fn admit(
             }
             // Read after the lock, so time spent waiting for it counts.
             let now = host.now_ms();
-            let waited_ms = now.saturating_sub(enqueued_ms);
             // A held run past its deadline never gets another chance to start.
             if let Some(reason) = &heard
-                && waited_ms >= max_wait_ms
+                && expired(now)
             {
                 return skipped(reason);
             }
-            let hold = pass(host.as_ref(), config, run, &path, now, &mut blocked)?;
-            (waited_ms, hold)
+            pass(host.as_ref(), config, run, Some(&path), now, &mut blocked)?
         };
+        if hold.is_none() {
+            hold = check_groups(host.as_ref(), config, run)?;
+            if let Some(hold) = &hold {
+                let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+                let mut ticket =
+                    read_ticket(&path)?.ok_or_else(|| ThrottleError::Vanished(path.clone()))?;
+                ticket.state = TicketState::Waiting {
+                    reason: Some(hold.clone()),
+                };
+                write_ticket(&path, &ticket)?;
+            }
+        }
+        if interrupts.as_ref().is_some_and(Interrupts::raised) {
+            return Ok(Admission::Interrupted);
+        }
+        // The script and its cache write may have carried this pass past the bound.
+        let now = host.now_ms();
+        if expired(now) {
+            return skipped(
+                hold.as_ref()
+                    .map(|hold| hold.text.as_str())
+                    .or(heard.as_deref())
+                    .unwrap_or("wait deadline reached"),
+            );
+        }
+        let waited_ms = now.saturating_sub(enqueued_ms);
         let Some(hold) = hold else {
             return Ok(Admission::Turn {
                 turn,
                 waited: heard.is_some().then(|| Duration::from_millis(waited_ms)),
             });
         };
-        if waited_ms >= max_wait_ms {
-            return skipped(&hold.text);
-        }
         // Listen before announcing the hold, so a Ctrl-C prompted by it lands.
         if interrupts.is_none() {
             interrupts = Some(host.interrupts().map_err(ThrottleError::Interrupts)?);
@@ -547,17 +899,7 @@ pub(super) fn admit(
 
 fn enqueue(host: &dyn Host, run: &Run, enqueued_ms: u64) -> Result<PathBuf> {
     let path = paths::loop_throttle_ticket_in(&host.queue_dir(), enqueued_ms);
-    write_ticket(
-        &path,
-        &Ticket {
-            owner: host.owner(),
-            task: run.task.clone(),
-            root: run.root.clone(),
-            checkout: run.checkout.clone(),
-            enqueued_ms,
-            state: TicketState::Waiting { reason: None },
-        },
-    )?;
+    write_ticket(&path, &Ticket::new(host, run, enqueued_ms))?;
     Ok(path)
 }
 
@@ -566,22 +908,34 @@ fn duration_ms(duration: Duration) -> u64 {
 }
 
 /// One pass over the queue, under its lock: `None` admits the ticket at
-/// `mine`, and a hold is what it waits on.
+/// `mine`, and a hold is what it waits on. Without `mine`, inspect the tail
+/// without changing it.
 fn pass(
     host: &dyn Host,
     config: &ThrottleConfig,
     run: &Run,
-    mine: &Path,
+    mine: Option<&Path>,
     now: u64,
     blocked: &mut Option<(u64, Hold)>,
 ) -> Result<Option<Hold>> {
-    let queue = sweep(host, Some(config.pace()), now)?;
-    let position = queue
-        .iter()
-        .position(|(path, _)| path == mine)
-        .ok_or_else(|| ThrottleError::Vanished(mine.to_path_buf()))?;
-    let mut ticket = queue[position].1.clone();
-    let hold = match queue_hold(&queue, position) {
+    let ceiling = if config.check.is_some() {
+        config.pace().max(CHECK_CEILING)
+    } else {
+        config.pace()
+    };
+    let queue = sweep(host, Some(ceiling), now)?;
+    let position = match mine {
+        Some(mine) => queue
+            .iter()
+            .position(|(path, _)| path == mine)
+            .ok_or_else(|| ThrottleError::Vanished(mine.to_path_buf()))?,
+        None => queue.len(),
+    };
+    let mut ticket = match mine {
+        Some(_) => queue[position].1.clone(),
+        None => Ticket::new(host, run, now),
+    };
+    let mut hold = match queue_hold(&queue, position, &ticket) {
         Some(hold) => Some(hold),
         None => match blocked {
             Some((at, hold)) if now.saturating_sub(*at) < SAMPLE_EVERY_MS => Some(hold.clone()),
@@ -592,13 +946,20 @@ fn pass(
             }
         },
     };
+    if let Some(hold) = &mut hold
+        && hold.kinds.is_empty()
+    {
+        hold.kinds = run.kinds();
+    }
     let state = match &hold {
         Some(hold) => TicketState::Waiting {
             reason: Some(hold.clone()),
         },
         None => TicketState::Admitted,
     };
-    if ticket.state != state {
+    if let Some(mine) = mine
+        && ticket.state != state
+    {
         ticket.state = state;
         write_ticket(mine, &ticket)?;
     }
@@ -607,8 +968,7 @@ fn pass(
 
 /// What in the queue keeps the ticket at `position` from being the candidate:
 /// a held turn, or a ticket ahead that nothing lets it step over.
-fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize) -> Option<Hold> {
-    let mine = &queue[position].1;
+fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Option<Hold> {
     let turn_held = queue.iter().any(|(_, ticket)| {
         matches!(
             ticket.state,
@@ -629,18 +989,51 @@ fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize) -> Option<Hold> {
         if !matches!(ticket.state, TicketState::Waiting { .. }) {
             return true;
         }
+        if let TicketState::Waiting { reason: Some(hold) } = &ticket.state
+            && matches!(hold.kind, HoldKind::Capacity | HoldKind::CheckFailed)
+            && !hold.kinds.is_empty()
+            && !mine.kinds.is_empty()
+            && mine.kinds.iter().all(|kind| !hold.kinds.contains(kind))
+        {
+            return false;
+        }
         let behind_its_cap = queue[..=index]
             .iter()
             .any(|(_, earlier)| earlier.same_task(ticket) && task_cap(earlier));
         ticket.same_task(mine) || !behind_its_cap
     };
-    let ahead = (0..position).filter(|&index| blocks_me(index)).count();
+    let mut ahead = 0;
+    let mut capacity_only = true;
+    let mut kind = HoldKind::Capacity;
+    let mut kinds = Vec::new();
+    for index in (0..position).filter(|&index| blocks_me(index)) {
+        ahead += 1;
+        match &queue[index].1.state {
+            TicketState::Waiting { reason: Some(hold) }
+                if matches!(hold.kind, HoldKind::Capacity | HoldKind::CheckFailed)
+                    && !hold.kinds.is_empty() =>
+            {
+                if hold.kind == HoldKind::CheckFailed {
+                    kind = HoldKind::CheckFailed;
+                }
+                kinds.extend(hold.kinds.iter().cloned());
+            }
+            _ => capacity_only = false,
+        }
+    }
     if !turn_held && ahead == 0 {
         return None;
     }
     let starts = ahead.max(1);
+    if turn_held || !capacity_only {
+        kind = HoldKind::Queue;
+        kinds.clear();
+    }
+    kinds.sort();
+    kinds.dedup();
     Some(Hold {
-        kind: HoldKind::Queue,
+        kind,
+        kinds,
         text: format!("{starts} start{} ahead", if starts == 1 { "" } else { "s" }),
     })
 }
@@ -765,6 +1158,7 @@ fn cap_hold(
     }
     Some(Hold {
         kind,
+        kinds: Vec::new(),
         text: format!("{label} {count} >= {cap} ({})", names.join(", ")),
     })
 }
@@ -777,6 +1171,7 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
     let store_hold = |text: String| {
         Ok(Some(Hold {
             kind: HoldKind::Store,
+            kinds: Vec::new(),
             text: format!("cannot count active agents: {text}"),
         }))
     };
@@ -837,6 +1232,7 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
         if worst >= f32::from(limit) {
             return Ok(Some(Hold {
                 kind: HoldKind::Pressure,
+                kinds: Vec::new(),
                 text: format!("{} pressure {worst:.0}% >= {limit}%", resource.name()),
             }));
         }
@@ -851,6 +1247,7 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
         if available < floor {
             return Ok(Some(Hold {
                 kind: HoldKind::Memory,
+                kinds: Vec::new(),
                 text: format!(
                     "available memory {} < {}",
                     decimal_bytes(available),
@@ -869,6 +1266,7 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
         if free < floor {
             return Ok(Some(Hold {
                 kind: HoldKind::Disk,
+                kinds: Vec::new(),
                 text: format!(
                     "free disk {} < {} at {}",
                     decimal_bytes(free),
@@ -945,6 +1343,8 @@ pub fn readings(
         disk: disk_at(entry, &config.agents.worktree, checkout.clone()),
         checkout,
         workspace: state.workspace_id,
+        groups: Vec::new(),
+        gives_up_ms: None,
     };
     readings_in(&SystemHost, &config.r#loop.throttle, &run)
 }

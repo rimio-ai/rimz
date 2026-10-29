@@ -1323,6 +1323,7 @@ fn check_polarity_truth_table() {
         terminated: false,
         output: String::new(),
         code,
+        stderr_line: String::new(),
     };
     let passed = outcome(true, false, Some(0));
     let failed = outcome(false, false, Some(1));
@@ -1783,6 +1784,7 @@ fn run_check_captures_output_status_and_timeout() {
     assert_eq!(passed.code, Some(0));
     assert!(passed.output.contains("out"), "stdout is captured");
     assert!(passed.output.contains("err"), "stderr is captured too");
+    assert_eq!(passed.stderr_line(), "err");
 
     let failed = check("printf nope; exit 1", Duration::from_secs(1));
     assert!(!failed.passed);
@@ -2131,6 +2133,21 @@ fn check_capture_bounds_chatty_chunks_before_decoding() {
         assert!(capture.tail.len() <= WAIT_TAIL_CAP);
     }
     assert_eq!(capture.tail, vec![b'c'; WAIT_TAIL_CAP]);
+}
+
+#[test]
+fn capacity_first_stderr_line_truncates_at_a_character_boundary() {
+    let line = format!("{}é rest\n", "x".repeat(1023));
+    let capture = Arc::new(Mutex::new(CheckCapture {
+        file: None,
+        tail: Vec::new(),
+        cap: CHECK_OUTPUT_CAP,
+    }));
+    let first = drain_pipe(Some(std::io::Cursor::new(line.into_bytes())), capture, None)
+        .join()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first, "x".repeat(1023));
 }
 
 #[test]
@@ -3076,6 +3093,8 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
         &host.host(),
         &throttle_config,
         &throttle::Run {
+            groups: Vec::new(),
+            gives_up_ms: None,
             task: "other".to_owned(),
             root: PathBuf::from("/elsewhere"),
             checkout: PathBuf::from("/elsewhere"),
@@ -3184,6 +3203,67 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
 }
 
 #[test]
+fn capacity_runner_checks_the_resolved_groups_once_per_kind_and_account() {
+    let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let results: Vec<_> = [(false, "claude", 1), (true, "claude,claude", 2)]
+        .into_iter()
+        .map(|(stay, agent, count)| {
+            let entry = TaskEntry {
+                agent: Some(agent.into()),
+                prompt: Some("repair".into()),
+                stay,
+                root: dir.path().to_owned(),
+                ..Default::default()
+            };
+            let config: MachineConfig =
+                toml::from_str("[loop.throttle]\ncheck = 'capacity'").unwrap();
+            let host = throttle::tests::FakeHost::new();
+            let mut fire = TaskFire::new(
+                "nightly",
+                LoadedTask::new("nightly", entry, catalog::TaskSource::Config),
+                &catalog,
+                LoopRunMode::Scheduled,
+                false,
+                Timestamp::now(),
+                Arc::new(config),
+                None,
+                CheckEcho::Capture,
+                Instant::now(),
+            )
+            .unwrap();
+            fire.throttle_host = host.host();
+            if stay {
+                assert!(
+                    fire.prepare_resident_scope_gates(dir.path())
+                        .unwrap()
+                        .is_none()
+                );
+            } else {
+                assert!(fire.prepare_scope_gates().unwrap().is_none());
+            }
+            assert!(fire.prepare_throttle().unwrap().is_none());
+            let groups = host.checked_groups();
+            (
+                groups.len(),
+                groups
+                    .first()
+                    .map(|group| (group.kind.as_str().to_owned(), group.agents)),
+                count,
+            )
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            (1, Some(("claude".into(), 1)), 1),
+            (1, Some(("claude".into(), 2)), 2)
+        ]
+    );
+}
+
+#[test]
 fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
     let dir = tempfile::tempdir().unwrap();
     record_room(dir.path()).unwrap();
@@ -3207,6 +3287,8 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
         &host.host(),
         &config.r#loop.throttle,
         &throttle::Run {
+            groups: Vec::new(),
+            gives_up_ms: None,
             task: "other".to_owned(),
             root: PathBuf::from("/elsewhere"),
             checkout: PathBuf::from("/elsewhere"),

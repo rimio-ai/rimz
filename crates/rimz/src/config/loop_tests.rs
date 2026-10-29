@@ -208,6 +208,25 @@ fn throttle_has_limits_excludes_pacing_and_wait_deadlines() {
 }
 
 #[test]
+fn capacity_check_config_parses_and_rejects_empty_commands_and_invalid_timeouts() {
+    let configured: ThrottleConfig =
+        toml::from_str("check = 'capacity'\ncheck-timeout = '2m'").unwrap();
+    assert_eq!(configured.check.as_deref(), Some("capacity"));
+    assert_eq!(configured.check_timeout(), Duration::from_secs(120));
+    assert!(configured.has_limits());
+    let rejected: Vec<_> = [
+        "check = '  '",
+        "check-timeout = '0s'",
+        "check-timeout = '1d'",
+        "check-timeout = 'soon'",
+    ]
+    .into_iter()
+    .map(|text| toml::from_str::<ThrottleConfig>(text).is_err())
+    .collect();
+    assert_eq!(rejected, [true; 4]);
+}
+
+#[test]
 fn watch_descriptions_preserve_prefixes_and_expose_subjects() {
     let cases = [
         (

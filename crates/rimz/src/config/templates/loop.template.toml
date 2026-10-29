@@ -9,11 +9,14 @@
 
 # Loop runs that start an agent take turns across every room on this machine.
 # A start holds the turn until the provider reports the new agent, or for
-# `pace` at most ("0s" turns pacing off); a run still waiting after `max-wait`
-# is skipped. Per task, `throttle = "off"` starts without taking a turn.
+# `pace` at most ("0s" turns pacing off without a check). With a capacity check,
+# the ceiling is at least 2m. A run still waiting after `max-wait` is skipped.
+# Per task, `throttle = "off"` starts without taking a turn.
 # [throttle]
 # pace = "10s"
 # max-wait = "30m"
+## check = "my-capacity-check"         # 0 admits, 75 holds, anything else errors
+# check-timeout = "30s"               # a timeout holds as an error; doctor shows the fix
 ## max-active = 6                      # hold while this many agents are working, in every room
 ## max-active-per-task = 2             # hold while this many of the task's own agents are working
 ## cpu-pressure = 60                   # hold while Linux PSI `some` avg10 or avg60 is at or over this percent

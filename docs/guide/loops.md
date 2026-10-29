@@ -314,22 +314,26 @@ Add records the reset instant on the task, and the receipt shows the window's cu
 
 ## Pace agent starts
 
-A burst of due tasks would otherwise start every agent in the same second, and each new agent loads a model session, a language server, and a build cache at once. RimZ starts them one at a time: every fire that starts an agent takes a turn in one queue for the whole machine, and the turn passes on when the new agent reports in or after ten seconds, whichever comes first. Wakes of running agents, check-only tasks, and fires their check skipped never queue.
+A burst of due tasks would otherwise start every agent in the same second, and each new agent loads a model session, a language server, and a build cache at once. RimZ starts them one at a time: every fire that starts an agent takes a turn in one queue for the whole machine, and the turn passes on when the new agent reports in or after ten seconds, whichever comes first. A configured capacity check raises that ceiling to at least two minutes, giving the provider time to report usage. Wakes of running agents, check-only tasks, and fires their check skipped never queue.
 
 The `[throttle]` table in `loop.toml` tunes it, and can also hold starts back while the machine is busy:
 
 ```toml
 [throttle]
-pace = "10s"              # "0s" turns pacing off
+pace = "10s"              # "0s" turns pacing off without check
 max-wait = "30m"          # a fire held this long is skipped
 max-active = 6            # agents mid-turn, machine-wide
 max-active-per-task = 2   # agents mid-turn that one task started
 cpu-pressure = 60         # percent, Linux pressure-stall
 min-memory = "8GB"
 min-disk = "20GB"
+# check = "my-capacity-check" # optional: 0 admits, 75 holds, anything else errors
+check-timeout = "30s"
 ```
 
 Pressure numbers differ from one machine to the next, and inside a container they may be the host's. Read what `rimz loop show <task>` reports under a normal load before you pick a limit.
+
+Use `check` to ask your own script whether the provider has capacity. It runs in the task's run directory (`dir` or the task root), or the selected checkout for an `each-worktree` fire, with the room pin and `RIMZ_START_KIND`, `RIMZ_START_ACCOUNT` (empty if unresolved), `RIMZ_START_AGENTS`, and `RIMZ_START_TASK`. A task's `worktree` is not created yet, so its check still runs in the task's run directory. `RIMZ_WORKTREE_PATH` names the check's directory. Each distinct kind/account group is checked once, with its agent count. Exit `0` allows the start; `75` means no capacity; any other exit, signal, failure to start, or timeout holds the start as an error. Holds are reused for 60 seconds per kind/account, but permission to start is always checked fresh. The script holds the turn, not the queue lock. Capacity holds for one provider kind let other kinds pass, including past other starts queued behind that hold; a held turn never does. While a check is configured, `rimz doctor` shows the latest check errors and points to `[throttle] check` to fix them.
 
 A held fire shows `held: <reason>` in `rimz loop list` and `rimz loop show`, Ctrl-C ends a held `rimz loop fire` without starting anything, and `show` ends with what the machine reads now beside each limit. A fire still held at `max-wait` records `throttle skipped`, which is never a strike. `--throttle off` on `rimz loop add` exempts one task. Every key, and what counts as an active agent, is in the [loop reference](../reference/cli/loop.md#the-start-throttle).
 

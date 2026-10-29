@@ -732,6 +732,7 @@ impl HookStatus {
 /// and the live clock tasks left without a scheduler.
 #[derive(Debug, Serialize)]
 pub(super) struct LoopTasks {
+    pub(super) throttle_errors: Vec<String>,
     pub(super) tasks: Vec<LoopTaskRow>,
     pub(super) timer: LoopTimer,
     pub(super) unscheduled: Vec<String>,

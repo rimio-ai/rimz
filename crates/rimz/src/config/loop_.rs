@@ -90,6 +90,16 @@ where
 pub struct ThrottleConfig {
     #[serde(
         skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_check"
+    )]
+    pub check: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_max_wait"
+    )]
+    pub check_timeout: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_throttle_pace"
     )]
     pub pace: Option<String>,
@@ -136,6 +146,11 @@ pub struct ThrottleConfig {
 }
 
 impl ThrottleConfig {
+    pub fn check_timeout(&self) -> Duration {
+        throttle_duration(self.check_timeout.as_deref().unwrap_or("30s"))
+            .unwrap_or(Duration::from_secs(30))
+    }
+
     pub const DEFAULT_PACE: &'static str = "10s";
     pub const DEFAULT_MAX_WAIT: &'static str = "30m";
 
@@ -143,9 +158,10 @@ impl ThrottleConfig {
         *self == Self::default()
     }
 
-    /// Whether any admission cap or resource floor is configured, excluding pacing and wait duration.
+    /// Whether a check, cap, or resource limit is configured, excluding pacing and wait duration.
     pub fn has_limits(&self) -> bool {
-        self.max_active.is_some()
+        self.check.is_some()
+            || self.max_active.is_some()
             || self.max_active_per_task.is_some()
             || self.cpu_pressure.is_some()
             || self.io_pressure.is_some()
@@ -154,7 +170,8 @@ impl ThrottleConfig {
             || self.min_disk.is_some()
     }
 
-    /// The longest one start holds the turn; zero turns pacing off.
+    /// The pacing ceiling before the capacity-check floor is applied.
+    /// Zero turns pacing off only without a check.
     pub fn pace(&self) -> Duration {
         throttle_duration(self.pace.as_deref().unwrap_or(Self::DEFAULT_PACE))
             .unwrap_or(Duration::from_secs(10))
@@ -177,6 +194,22 @@ impl ThrottleConfig {
 
 fn throttle_duration(raw: &str) -> crate::utils::time::Result<Duration> {
     parse_duration_units(raw, THROTTLE_UNITS)
+}
+
+fn deserialize_throttle_check<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    if raw
+        .as_deref()
+        .is_some_and(|command| command.trim().is_empty())
+    {
+        return Err(D::Error::custom(
+            "must be a non-empty command; remove the key to disable it",
+        ));
+    }
+    Ok(raw)
 }
 
 fn deserialize_throttle_pace<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
