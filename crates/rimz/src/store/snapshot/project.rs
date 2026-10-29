@@ -899,13 +899,12 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     {
         state.status = AgentStatus::Idle;
     }
-    state.finished_at =
-        matches!(state.status, AgentStatus::Success | AgentStatus::Failed).then(|| {
-            input
-                .prior
-                .and_then(|prior| prior.finished_at)
-                .unwrap_or(input.event.timestamp)
-        });
+    state.finished_at = finish_clock(
+        input.prior,
+        state.status,
+        state.phase,
+        input.event.timestamp,
+    );
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
     let mut carried_usage = input.prior.map(|prior| prior.usage.clone());
@@ -1079,6 +1078,20 @@ fn inherit_launch_identity(
         .clone_from(&predecessor.parent_agent_kind);
 }
 
+/// The instant a row first came to rest on a verdict, kept while it rests there: a
+/// terminal status, or a clean turn end parked on background work, which reads as
+/// success. Any other status clears it.
+fn finish_clock(
+    prior: Option<&AgentState>,
+    status: AgentStatus,
+    phase: lifecycle::TurnPhase,
+    at: Timestamp,
+) -> Option<Timestamp> {
+    let rests_on_verdict = matches!(status, AgentStatus::Success | AgentStatus::Failed)
+        || (status == AgentStatus::Running && phase == lifecycle::TurnPhase::Parked);
+    rests_on_verdict.then(|| prior.and_then(|prior| prior.finished_at).unwrap_or(at))
+}
+
 fn assemble_launch_state(
     kind: &AgentKind,
     event: &EventEnvelope,
@@ -1130,11 +1143,7 @@ fn assemble_launch_state(
         }
     }
     state.status = status;
-    state.finished_at = matches!(status, AgentStatus::Success | AgentStatus::Failed).then(|| {
-        prior
-            .and_then(|prior| prior.finished_at)
-            .unwrap_or(event.timestamp)
-    });
+    state.finished_at = finish_clock(prior, status, phase, event.timestamp);
     state.phase = phase;
     if status == AgentStatus::Running {
         state.turn_started_at = Some(event.timestamp);
