@@ -17,7 +17,7 @@ This page maps Codex onto RimZ's internal types: which hook carries which signal
 | `transcript.rs` | rollout lookup, the tail scan, the local context refresh, and turn-death confirmation |
 | `session_index.rs` | `session_index.jsonl` thread names |
 | `local_sessions.rs` | local session discovery over the rollout stores |
-| `local_sessions/tests.rs`, `local_sessions/tests/pane.rs` | full-scan and per-pane discovery tests, archive moves, date coverage, and filesystem work budgets |
+| `local_sessions/tests.rs`, `local_sessions/tests/pane.rs`, `local_sessions/tests/revisions.rs` | full-scan and per-pane discovery tests, archive moves, date coverage, filesystem work budgets, revision grouping, and the file-name grammar |
 | `process.rs` | Codex CLI and daemon process classifiers |
 | `app_server.rs`, `app_server/wire.rs`, `app_server/transport.rs` | the read-only app-server client, its response models, and the JSON-RPC transport |
 | `app_server/daemon.rs` | the managed remote-control daemon lifecycle |
