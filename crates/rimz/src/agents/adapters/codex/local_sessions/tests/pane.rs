@@ -74,6 +74,93 @@ fn ids(found: &[LocalSessionObservation]) -> Vec<String> {
 }
 
 #[test]
+fn pane_named_paths_match_full_scan_across_revisions_and_archive_moves() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let created = at();
+    let key = key(home);
+    let workspace = key.workspaces[0].clone();
+    session(home, OWNER, 2, created);
+    let initial = session(home, OWNER, 1, created);
+    let revision = initial.with_file_name(format!(
+        "rollout-{}T12-00-00-{OWNER}_66666666-6666-4666-8666-666666666666.jsonl",
+        key.today.yesterday().unwrap()
+    ));
+    fs::rename(initial, &revision).unwrap();
+    let moving = session(home, RECENT, 0, created);
+    let archive = date_path(home, true, 0);
+    write_rollout(
+        &archive,
+        NEXT,
+        workspace.to_str().unwrap(),
+        &created.to_string(),
+        created.as_second() as u64,
+    );
+    fs::copy(&revision, archive.join(revision.file_name().unwrap())).unwrap();
+    let tomorrow = key.today.tomorrow().unwrap();
+    let next_dir = home.join("sessions").join(format!(
+        "{:04}/{:02}/{:02}",
+        tomorrow.year(),
+        tomorrow.month(),
+        tomorrow.day()
+    ));
+    let future_id = "44444444-4444-4444-8444-444444444444";
+    let future = write_rollout(
+        &next_dir,
+        future_id,
+        workspace.to_str().unwrap(),
+        &created.to_string(),
+        created.as_second() as u64,
+    );
+    fs::rename(
+        &future,
+        future.with_file_name(format!("rollout-{tomorrow}T00-00-00-{future_id}.jsonl")),
+    )
+    .unwrap();
+    let abandoned = session(home, "55555555-5555-4555-8555-555555555555", 0, created);
+    fs::write(abandoned, "").unwrap();
+    let paths = |found: Vec<LocalSessionObservation>| {
+        found
+            .into_iter()
+            .map(|row| ((row.workspace, row.session_id), row.transcript_path))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let full = discover_under(home, &[&workspace]);
+    assert_eq!(ids(&full), [OWNER, RECENT, NEXT, future_id]);
+    let names = full
+        .iter()
+        .map(|row| row.session_id.as_str())
+        .collect::<Vec<_>>();
+    let request = demand(&[], &names, None);
+    let full = paths(full);
+    assert_eq!(full[&(workspace.clone(), OWNER.into())], revision);
+    let now = Instant::now();
+    let mut cache = CodexPaneDiscovery::default();
+    assert_eq!(
+        paths(cache.refresh(key.clone(), std::slice::from_ref(&request), now)),
+        full
+    );
+
+    let written = session(home, OWNER, 0, created);
+    let revision = written.with_file_name(format!(
+        "rollout-{}T12-00-00-{OWNER}_77777777-7777-4777-8777-777777777777.jsonl",
+        key.today
+    ));
+    fs::rename(written, &revision).unwrap();
+    let archived = archive.join(moving.file_name().unwrap());
+    fs::rename(moving, &archived).unwrap();
+    let full = discover_under(home, &[&workspace]);
+    assert_eq!(ids(&full), [OWNER, RECENT, NEXT, future_id]);
+    let full = paths(full);
+    assert_eq!(full[&(workspace.clone(), OWNER.into())], revision);
+    assert_eq!(full[&(workspace, RECENT.into())], archived);
+    assert_eq!(
+        paths(cache.refresh(key, &[request], now + Duration::from_secs(31))),
+        full
+    );
+}
+
+#[test]
 fn pane_warm_work_is_independent_of_history_for_settled_and_open_windows() {
     let mut actual = Vec::new();
     let created = at();
@@ -184,6 +271,59 @@ fn pane_window_reopen_keeps_learned_history_until_a_listing_removes_it() {
     let before = testkit::read_counts();
     assert_eq!(ids(&cache.refresh(key, &[reopen], now)), [OWNER, RECENT]);
     assert_eq!(testkit::read_counts().2 - before.2, 1);
+}
+
+#[test]
+fn pane_workspace_changes_keep_the_account_history_warm() {
+    let temp = tempfile::tempdir().unwrap();
+    let created = at();
+    let old = created.checked_sub(jiff::Span::new().hours(1)).unwrap();
+    for (id, workspace, at) in [
+        (OWNER, "/workspace/project", old),
+        (RECENT, "/workspace/other", created),
+        (NEXT, "/workspace/other", old),
+    ] {
+        write_rollout(
+            &date_path(temp.path(), false, 0),
+            id,
+            workspace,
+            &at.to_string(),
+            created.as_second() as u64,
+        );
+    }
+    let env = std::collections::BTreeMap::from([
+        ("HOME".to_owned(), temp.path().display().to_string()),
+        ("CODEX_HOME".to_owned(), temp.path().display().to_string()),
+    ]);
+    let first = demand(&[], &[], Some(created));
+    let mut second = first.clone();
+    second.workspace = PathBuf::from("/workspace/other");
+    assert!(discover_panes(std::slice::from_ref(&first), &env).is_empty());
+    let new_id = "44444444-4444-4444-8444-444444444444";
+    write_rollout(
+        &date_path(temp.path(), false, 0),
+        new_id,
+        second.workspace.to_str().unwrap(),
+        &created.to_string(),
+        created.as_second() as u64,
+    );
+    let before = testkit::read_counts();
+    let found = discover_panes(&[first.clone(), second.clone()], &env);
+    assert_eq!(ids(&found), [RECENT, new_id]);
+    assert!(found.iter().all(|row| row.workspace == second.workspace));
+    assert_eq!(
+        testkit::read_counts().2 - before.2,
+        1,
+        "only the new head is read"
+    );
+    let before = testkit::read_counts();
+    assert!(discover_panes(std::slice::from_ref(&first), &env).is_empty());
+    assert_eq!(testkit::read_counts().2, before.2);
+    assert_eq!(
+        ids(&discover_panes(&[first, second], &env)),
+        [RECENT, new_id]
+    );
+    assert_eq!(testkit::read_counts().2, before.2);
 }
 
 #[test]
