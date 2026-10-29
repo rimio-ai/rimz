@@ -353,7 +353,7 @@ A closed agent's session files stay where its CLI wrote them, so RimZ can reopen
 
 ### Resume one closed session
 
-`rimz agents resume @<ref>` reopens one retained solo root session by handle or session-id prefix:
+`rimz agents resume @<ref>` reopens one retained solo root session by handle or session-id prefix. A [bare session id](#resume-a-lane-by-place) also works after a lane miss:
 
 ```sh
 rimz agents resume @bright-otter
@@ -361,7 +361,7 @@ rimz agents resume @a1b2c3d4 --bg
 rimz agents resume @bright-otter --isolation host --model sonnet
 ```
 
-Resolution checks live agents first, then retained agents under the same channel context. After a scoped miss, a room-wide retained lookup is accepted only when exactly one agent matches, so a stopped agent's unique pet name still works from another lane. Otherwise the live miss and its correction remain the answer. An ambiguity in the requested scope refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --continue`; a child or provider subagent points to `rimz subagents`. `--fresh`, `--from-pr`, and `--worktree` take lane scopes only, not an `@ref`.
+Resolution checks live agents first, then retained agents under the same channel context. After a scoped miss, a room-wide retained lookup is accepted only when exactly one agent matches, so a stopped agent's unique pet name still works from another lane. Otherwise the live miss and its correction remain the answer. An ambiguity in the requested scope refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --continue`; a child or provider subagent points to `rimz subagents`. `--fresh` and `--from-pr` take lane scopes only; `--worktree` is a flag spelling of `SCOPE`. None combines with an `@ref`.
 
 Peers launched by another agent are eligible: a child has a recorded parent, not merely a positive launch depth. Resume preserves the peer's recorded `launch_depth` and `launched_by`, so it does not reset the launch-chain budget. It does not reconnect the peer's `report_to` to its original launcher.
 
@@ -416,7 +416,7 @@ Bare `--resume` opens the provider's own session picker under the room's account
 
 Pickers are never automatically relaunched, even after a startup crash; rerun the command to try again. If the picker exits before any session binds, RimZ exits silently without a resume or relaunch hint. Once a session has bound, its later exit gets the normal resume or relaunch hint.
 
-An exact id already recorded in this room keeps its handle and history, with the same account and lifecycle checks as `rimz agents resume @<handle>`. A kind name does not constrain the saved profile; a separately named solo profile must match it. A kind or profile mismatch refuses and names that handle. Prefix matching is available only through the `agents resume @<ref>` subcommand.
+An exact id already recorded in this room keeps its handle and history, with the same account and lifecycle checks as `rimz agents resume @<handle>`. A kind name does not constrain the saved profile; a separately named solo profile must match it. A kind or profile mismatch refuses and names that handle. Prefix matching is available through `agents resume @<ref>` or a session-shaped bare word after a lane miss, not through the provider's `--resume <ID>` flag.
 
 Otherwise Claude and Codex look only in the room account's provider home, including old and archived Codex sessions. A found session opens in its recorded working directory with a new RimZ handle, the room's login, and the selected solo profile. No session files are copied or linked between accounts. Both recorded and adopted sessions print `resumed <kind>:<handle> (<id>)`.
 
@@ -444,9 +444,11 @@ rimz agents resume --from-pr 69   # the local worktree created from PR 69
 rimz agents resume                # in a worktree: that lane; at the project root: list resumable lanes
 ```
 
-`SCOPE` takes a `#channel`, worktree name, branch, directory name, or path, as `agents list` does. An `@ref` instead selects [one closed session](#resume-one-closed-session). `--from-pr <NUMBER|URL>` finds the worktree by its recorded pull-request provenance, then by the name `pr-<N>`. Resolution is local: no network request, no worktree creation.
+`SCOPE` takes a `#channel`, worktree name, branch, directory name, or path, as `agents list` does. An `@ref` instead selects [one closed session](#resume-one-closed-session). A bare session-shaped word, positional or after `-w`, tries the lane first, then one session. Its shape is lowercase hex in the `8-4-4-4-12` UUID layout, either all 36 characters or a prefix containing at least the first eight hex digits and every hyphen reached. A leading `#` always means a lane. `--fresh` keeps a lane-only lookup. `--from-pr <NUMBER|URL>` finds the worktree by its recorded pull-request provenance, then by the name `pr-<N>`. Resolution is local: no network request, no worktree creation.
 
-Launch overrides apply only to `resume @handle`, not a lane scope, `-w`, `--from-pr`, or bare `resume`. To change a lane's launch settings, use `rimz agents <spec> --continue` or `rimz teams resume`.
+On a lane miss, a recorded session-shaped word resumes exactly as `resume @<id>`, including its refusals and receipt. An unrecorded full id searches the room account's Claude and Codex homes. A match refuses with exit 1, names the kind and home, and prints `rimz agents <kind> --resume <id>` (`--bg` is preserved); nothing is launched. A solo profile of that kind may replace the kind name. Multiple matching kinds each get a command. A session-shaped word found nowhere reports no lane and no session matched, lists up to eight known lanes, and names `@<handle>` or a session-id prefix for one closed session. Full-id misses name the homes searched; prefix misses explain that prefixes match only RimZ's records and a full id also searches provider homes. A non-session-shaped word, or any typed word under `--fresh`, gets a lane miss that lists the lanes and the `@<handle>` spelling without a session lookup.
+
+Launch overrides apply only to `resume @handle` or `resume @<id>`, not a lane scope, a bare session id, `-w`, `--from-pr`, or bare `resume`. To change a lane's launch settings, use `rimz agents <spec> --continue` or `rimz teams resume`.
 
 Members are root sessions: subagent children never come back through resume; their parent relaunches what it still needs. The durable lane listing's `MEMBERS` and `LIVE` counts exclude children.
 
@@ -470,7 +472,9 @@ When RimZ's own records for a lane are gone, Claude and Codex sessions are recov
 
 | Error | Meaning |
 | --- | --- |
-| `no lane '#docs' in this workspace` | The scope matches no lane. |
+| ``no lane '#docs' in this workspace; lanes: #main; resume one closed session with `rimz agents resume @<handle>` `` | The scope matches no lane and is not a session lookup, including under `--fresh`. The lane list is omitted when empty. |
+| ``no lane and no session matched 'aaaaaaaa' in this workspace; lanes: #main; resume one closed session with `rimz agents resume @<handle>` or a session-id prefix; a prefix matches only sessions RimZ recorded; the full id also searches the room account's provider homes`` | Neither a lane nor a recorded session matches this prefix. Full-id misses instead end with `searched provider homes: <kind>: <home>, …`. |
+| ``session `aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee` was found in claude: /home/me/.claude, but RimZ has not recorded it; nothing was launched; run `rimz agents claude --resume aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee`; a profile of the same kind may replace the kind name`` | The full id exists in a provider home but not in this room's records. Choose the kind or a solo profile and run the printed command. |
 | `worktree for '#docs' was removed; recreate it with rimz agents <spec> -w docs` | The lane's checkout is gone. |
 | `PR 69 has no local worktree; start one with rimz agents <spec> --from-pr 69` | No local worktree came from that pull request. |
 | `nothing to resume in '#docs'` | No eligible lane session was found in RimZ's records or bounded provider discovery. To name an older Claude or Codex session directly, use `rimz agents <kind> --resume=<ID>`. |

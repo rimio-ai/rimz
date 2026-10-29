@@ -708,7 +708,8 @@ enum AgentsSubcmd {
     },
     /// Resume a closed agent or a lane's closed agents where they left off.
     Resume {
-        /// Lane: `#channel`, worktree, branch, or directory; `@handle` for one closed session.
+        /// Lane: `#channel`, worktree, branch, or directory;
+        /// `@handle` or a session id for one closed session.
         #[arg(
             value_name = "SCOPE",
             conflicts_with_all = ["from_pr", "worktree"],
@@ -1023,7 +1024,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             }
             if overrides != SessionResumeOverrides::default() {
                 return Err(UsageError::new(
-                    "launch overrides apply to one closed session (@handle); to change a lane's settings use rimz agents <spec> --continue or rimz teams resume".to_owned(),
+                    "launch overrides apply to one closed session (@handle or @<session-id>); to change a lane's settings use rimz agents <spec> --continue or rimz teams resume".to_owned(),
                 ).into());
             }
             return resume_lane(scope.or(worktree), from_pr, bg, fresh, globals);
