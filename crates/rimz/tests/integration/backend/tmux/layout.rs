@@ -923,6 +923,64 @@ fn repair_daemon_view_recreates_missing_runtime_panes_in_one_column() {
 }
 
 #[test]
+fn explicit_repair_reopens_a_closed_daemon_view_without_moving_focus() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-bg-reopen";
+    server.ensure_with_shell(session);
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(120));
+    server.backend.open_sidebar(&sidebar, None).unwrap();
+    let opts = rimz::mux::BackgroundViewOptions {
+        view: rimz::mux::DaemonView {
+            name: "rimzd".to_owned(),
+            content: vec![sleep_host()],
+            hosts: Vec::new(),
+            loop_panel: sleep_host(),
+        },
+        sidebar: sidebar.clone(),
+    };
+    server.backend.open_background_view(&opts).unwrap();
+    server.tmux(&["kill-window", "-t", &format!("{session}:rimzd")]);
+    assert!(
+        !server
+            .window_names(session)
+            .iter()
+            .any(|name| name == "rimzd")
+    );
+    let focused = server.display(session, "#{window_id}");
+    let record: rimz::workspace::record::WorkspaceRecord =
+        serde_json::from_value(serde_json::json!({
+            "layout": 2,
+            "workspace_id": sidebar.workspace_id,
+            "session_name": session,
+            "project_root": sidebar.project_root,
+            "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+    assert_eq!(
+        rimz::daemon_view::reopen_daemon_view(
+            &server.backend,
+            &sidebar,
+            || Some((record.clone(), sidebar.rimz_bin.clone())),
+            &rimz::config::MachineConfig::default(),
+        ),
+        rimz::daemon_view::ReopenOutcome::Reopened,
+        "explicit repair must reopen a wholly closed view",
+    );
+    let panes = server.wait_for_panes(&format!("{session}:rimzd"), 3);
+    assert!(
+        panes.len() >= 3,
+        "sidebar, content and loop must be present: {panes:?}"
+    );
+    assert_eq!(server.display(session, "#{window_id}"), focused);
+    assert_eq!(
+        server.window_names(session).first().map(String::as_str),
+        Some("rimzd")
+    );
+}
+
+#[test]
 fn daemon_shape_repairs_spanning_loop_without_restarting_the_app_server() {
     use rimz::daemon_view::{DaemonShape, RepairOutcome, inspect_daemon_shape, repair_daemon_view};
     use rimz::mux::SplitDirection;

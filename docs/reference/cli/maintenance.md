@@ -10,7 +10,7 @@ These commands inspect, upgrade, repair, clean up, and remove RimZ. Which ones w
 | [`workspace rotate-events`](#rotate-the-event-log) | The current workspace | Archives the event log, prunes old archives | No |
 | [`update`](#update-rimz) | The installed binary | Replaces the binary, then reloads | No |
 | [`reload`](#reload-running-sidebars) | The whole machine | Publishes build targets and retires outdated language-server brokers | No |
-| [`sidebar repair`](#repair-sidebars) | Every live room on the machine | Adds, closes, or replaces sidebar panes | No |
+| [`sidebar repair`](#repair-sidebars) | Every live room on the machine | Adds, closes, or replaces sidebar panes, and reopens a closed `rimzd` tab | No |
 | [`reset`](#reset-a-wedged-room) | The current workspace's room | Tears the room down, archives its records, rebuilds | Yes |
 | [`gc`](#sweep-stale-state) | The current room; `--all` adds the machine | Removes stale state and landed worktrees; `--all` also prunes dead stores | No |
 | [`uninstall`](#uninstall-rimz) | The whole machine | Removes hooks, rooms, state, binaries | Yes |
@@ -212,7 +212,7 @@ The report prints a line per non-zero count:
 | `Restarted the shared web daemon.` | The web daemon was running and restarted. |
 | `No running sidebars to reload.` | No live room, stopped session to sweep, dashboard, or broker retirement report. A second line suggests `rimz start` or `rimz attach`. |
 
-`--repair` runs [`rimz sidebar repair`](#repair-sidebars) after the reload finishes, as a separate step: a repair that cannot run does not undo the reload. How a sidebar hands over to a new build is in [sidebar internals](../../internals/sidebar/sidebar.md#build-promotion).
+`--repair` runs [`rimz sidebar repair`](#repair-sidebars) after the reload finishes, repairing sidebar panes and reopening wholly closed `rimzd` tabs. It is a separate step: a repair that cannot run does not undo the reload. How a sidebar hands over to a new build is in [sidebar internals](../../internals/sidebar/sidebar.md#build-promotion).
 
 ## Repair sidebars
 
@@ -220,13 +220,16 @@ The report prints a line per non-zero count:
 rimz sidebar repair
 ```
 
-`sidebar repair` fixes the sidebar panes themselves, in every live room: it adds a missing sidebar, closes duplicate or unresponsive ones, and restores a sidebar's docking and width. A replacement pane must start and report on the current build before the old one closes. Each view with a successfully added or closed pane leaves a [`sidebar_view_repaired` diagnostic](../../internals/diagnostics.md#event-taxonomy) naming those panes; `rimz doctor` shows it as recovered information. It publishes no build; use [`reload`](#reload-running-sidebars) for that.
+`sidebar repair` fixes the sidebar panes themselves, in every live room: it adds a missing sidebar, closes duplicate or unresponsive ones, and restores a sidebar's docking and width. A replacement pane must start and report on the current build before the old one closes. Each view with a successfully added or closed pane leaves a [`sidebar_view_repaired` diagnostic](../../internals/diagnostics.md#event-taxonomy) naming those panes; `rimz doctor` shows it as recovered information. After sidebar repair it also reopens a wholly closed `rimzd` tab, including in rooms opened by supervised runs. A tab still present is left to automatic daemon-pane repair. It publishes no build; use [`reload`](#reload-running-sidebars) for that.
 
 | Line | Meaning |
 | --- | --- |
 | `Recovered N sidebars in place.` | Sidebars added to a view that had none, or whose only sidebar was unresponsive. |
 | `Closed N duplicate or unresponsive sidebars.` | Extra or dead sidebar panes removed. |
 | `Repaired N sidebars geometry.` | Kept sidebars moved back to the full-height left dock. |
+| `Reopened the rimzd tab in N sessions.` | Wholly closed daemon tabs reopened from their room's recorded build. |
+| ``Deferred reopening the rimzd tab in N sessions (no attached client); attach and re-run `rimz sidebar repair`.`` | A detached Zellij session needs a client before its daemon tab can be reopened; no tab or sidebar was created. |
+| ``Could not reopen the rimzd tab in N sessions; re-run `rimz sidebar repair`.`` | Reopening the daemon tab failed this pass. |
 | `N sidebars still working but not docked.` | Running, but still outside the left dock after repair. |
 | ``N sidebars could not be repaired; attach and re-run `rimz sidebar repair`.`` | The add or repair did not complete this pass. |
 | ``Presence plugin silent or stale in N sessions; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.`` | Plugin health is diagnostic; it does not prevent structural repair. |
@@ -235,7 +238,7 @@ rimz sidebar repair
 | `Sidebar structure is healthy across N sessions.` | Nothing needed repair. |
 | `No running sidebars to repair.` | No live room. |
 
-Exit status is 1 after the full report if any repair failed, was deferred, remained misdocked, or was busy; otherwise it is 0. A silent or stale plugin alone does not fail the command. `rimz reload --repair` returns the repair's status without undoing the completed reload. The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#structural-repair).
+Exit status is 1 after the full report if a sidebar repair or daemon-tab reopen failed or was deferred, a sidebar remained misdocked, or a session was busy; otherwise it is 0. A silent or stale plugin alone does not fail the command. `rimz reload --repair` returns the repair's status without undoing the completed reload. The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#structural-repair).
 
 ## Reset a wedged room
 

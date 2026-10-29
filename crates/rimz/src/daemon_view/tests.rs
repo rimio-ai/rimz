@@ -4,6 +4,144 @@ use crate::config::DaemonConfig;
 use crate::ids::MuxName;
 use std::path::PathBuf;
 
+fn reopen_record(build: &str) -> record::WorkspaceRecord {
+    serde_json::from_value(serde_json::json!({
+        "layout": 2,
+        "workspace_id": "ws_0123456789abcdef01234567",
+        "session_name": "room",
+        "project_root": "/project",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "rimz_build": build,
+    }))
+    .unwrap()
+}
+
+fn reopen_listing(panes: Vec<PaneRef>, authoritative: bool) -> PaneListing {
+    PaneListing {
+        authoritative,
+        panes,
+        views: Vec::new(),
+        observed_at_ms: 0,
+        session_focus: None,
+        client_view: None,
+        client_sample_withheld: false,
+    }
+}
+
+#[test]
+fn explicit_reopen_opens_only_an_authoritatively_closed_view() {
+    use crate::mux::BackgroundViewLaunch;
+    let resolve = || Some((reopen_record("current"), PathBuf::from("/build/rimz")));
+    let prepare =
+        |_: &record::WorkspaceRecord| Some(crate::remote_control::ReadinessSnapshot::disabled());
+    let mut opens = 0;
+    assert_eq!(
+        reopen_daemon_view_with(
+            || Ok(reopen_listing(Vec::new(), true)),
+            resolve,
+            prepare,
+            |_, _, _| {
+                opens += 1;
+                Ok(BackgroundViewLaunch::Launched)
+            },
+        ),
+        ReopenOutcome::Reopened,
+        "explicit repair must reopen a wholly closed view",
+    );
+    assert_eq!(opens, 1);
+    for mut current in [
+        Ok(reopen_listing(vec![pane(None, Some(VIEW_NAME))], true)),
+        Ok(reopen_listing(Vec::new(), false)),
+        Err(crate::mux::MuxErr::NoSessionToAddress),
+    ] {
+        assert_eq!(
+            reopen_daemon_view_with(
+                || std::mem::replace(&mut current, Ok(reopen_listing(Vec::new(), false))),
+                resolve,
+                prepare,
+                |_, _, _| panic!("must not open a present or unknown view"),
+            ),
+            ReopenOutcome::None,
+        );
+    }
+    assert_eq!(
+        reopen_daemon_view_with(
+            || Ok(reopen_listing(Vec::new(), true)),
+            resolve,
+            prepare,
+            |_, _, _| Err(crate::mux::MuxErr::NoSessionToAddress),
+        ),
+        ReopenOutcome::Failed,
+    );
+    assert_eq!(
+        reopen_daemon_view_with(
+            || Ok(reopen_listing(Vec::new(), true)),
+            resolve,
+            prepare,
+            |_, _, _| Ok(BackgroundViewLaunch::AlreadyRunning),
+        ),
+        ReopenOutcome::None,
+    );
+    assert_eq!(
+        reopen_daemon_view_with(
+            || Ok(reopen_listing(Vec::new(), true)),
+            resolve,
+            prepare,
+            |_, _, _| Ok(BackgroundViewLaunch::Deferred),
+        ),
+        ReopenOutcome::Deferred,
+    );
+}
+
+#[test]
+fn explicit_reopen_refreshes_its_record_and_binary_after_readiness() {
+    use std::cell::Cell;
+
+    let ready = Cell::new(false);
+    let mut opened = None;
+    let outcome = reopen_daemon_view_with(
+        || Ok(reopen_listing(Vec::new(), true)),
+        || {
+            let build = if ready.get() { "new" } else { "old" };
+            Some((
+                reopen_record(build),
+                PathBuf::from(format!("/{build}/rimz")),
+            ))
+        },
+        |record| {
+            assert_eq!(record.rimz_build.as_deref(), Some("old"));
+            ready.set(true);
+            Some(crate::remote_control::ReadinessSnapshot::disabled())
+        },
+        |record, binary, _| {
+            opened = Some((record.rimz_build.clone(), binary.to_path_buf()));
+            Ok(crate::mux::BackgroundViewLaunch::Launched)
+        },
+    );
+    assert_eq!(outcome, ReopenOutcome::Reopened);
+    assert_eq!(
+        opened,
+        Some((Some("new".into()), PathBuf::from("/new/rimz")))
+    );
+}
+
+#[test]
+fn explicit_reopen_refuses_inputs_that_become_unavailable_during_readiness() {
+    let ready = std::cell::Cell::new(false);
+    assert_eq!(
+        reopen_daemon_view_with(
+            || Ok(reopen_listing(Vec::new(), true)),
+            || (!ready.get()).then(|| (reopen_record("old"), PathBuf::from("/old/rimz"))),
+            |_| {
+                ready.set(true);
+                Some(crate::remote_control::ReadinessSnapshot::disabled())
+            },
+            |_, _, _| Ok(crate::mux::BackgroundViewLaunch::Launched),
+        ),
+        ReopenOutcome::Failed,
+    );
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn recorded_surplus_pane_is_awake_when_close_runs() {

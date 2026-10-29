@@ -144,7 +144,7 @@ fn birth_saves_the_shell_before_panes_and_live_reentry_keeps_it() {
         &wrapper,
         "#!/bin/sh\n\
          case \" $* \" in\n\
-           *' --layout '*)\n\
+           *' --create-background '*)\n\
              /bin/dd if=\"$RIMZ_TEST_BIRTH_RECORD\" of=\"$RIMZ_TEST_BIRTH_OBSERVED\" 2>/dev/null\n\
              ;;\n\
          esac\n\

@@ -981,8 +981,8 @@ pub struct DaemonView {
 }
 
 /// Options for launching the daemon dashboard into a single dedicated, named
-/// *view* of a session — a tmux window or a Zellij tab — forced to the first
-/// position and out of the user's focus. The view is born `sidebar | content |
+/// *view* of a session — a tmux window or a Zellij tab — out of the user's
+/// focus. tmux puts it first; Zellij late adds append. It is born `sidebar | content |
 /// hosts…`: render on the left, configurable content in the middle (live stats
 /// by default), and managed daemon hosts stacked on the right. Content is always
 /// present; the daemon host column is conditional.
@@ -1003,6 +1003,8 @@ pub enum BackgroundViewLaunch {
     AlreadyRunning,
     /// A fresh view was launched.
     Launched,
+    /// The session needs an attached client before a view can be launched.
+    Deferred,
 }
 
 /// Health verdict for a backend session. [`MuxBackend::probe_session_health`]
@@ -1308,11 +1310,11 @@ pub trait MuxBackend: Send + Sync {
     ) -> Result<SidebarRecovery>;
     /// Launch the daemon dashboard in one dedicated, named background view (tmux
     /// window / Zellij tab) of an existing session, born `sidebar | content |
-    /// hosts…`, forced to the first position, and out of the user's focus.
+    /// hosts…`, and out of the user's focus. tmux puts the window first and
+    /// preserves the active window; a Zellij late add appends without taking focus.
     /// Idempotent: a second call while a view of that name is present launches
-    /// nothing, but still re-asserts its first position and returns focus to the
-    /// working view so a relaunch never strands the user on the daemon view. The
-    /// view never gates correctness — a failure here leaves the room intact.
+    /// nothing. tmux still re-asserts its first position; Zellij leaves it alone.
+    /// The view never gates correctness — a failure here leaves the room intact.
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch>;
     /// Open one user-facing tab/window with a caller-built pane layout. Most
     /// callers include the global sidebar by backend convention: tmux relies on

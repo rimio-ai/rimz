@@ -5,8 +5,9 @@
 //! session): the orchestration lives in [`rimz::reload`]. For each workspace with
 //! a live mux session it publishes durable build intent and nudges the live
 //! supervisors; their record poll makes delivery self-healing. `--repair` then
-//! invokes the independent `rimz sidebar repair` orchestration. Standalone
-//! `rimz stats --refresh` dashboards and stats under non-following supervisors
+//! invokes independent sidebar structural repair and reopens wholly closed
+//! rimzd tabs. Standalone `rimz stats --refresh` dashboards and stats under
+//! non-following supervisors
 //! re-exec in place before room enumeration,
 //! alongside machine-wide retirement of outdated language-server brokers.
 //! Brokers compare against the PATH build and keep serving until their server
@@ -28,7 +29,8 @@ use rimz::reload::{ReloadOutcome, reload_user_sidebars};
 
 #[derive(Debug, Args)]
 pub struct ReloadArgs {
-    /// Repair missing, duplicate, or wedged sidebar panes after the upgrade.
+    /// Repair missing, duplicate, or wedged sidebar panes, and reopen closed
+    /// rimzd tabs, after the upgrade.
     #[arg(long)]
     repair: bool,
 }

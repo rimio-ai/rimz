@@ -101,8 +101,8 @@ enum SidebarSubcmd {
         #[arg(long)]
         session_name: String,
     },
-    /// Repair missing, duplicate, wedged, or mis-docked sidebar panes without
-    /// publishing a new build.
+    /// Repair missing, duplicate, wedged, or mis-docked sidebar panes, and reopen
+    /// a closed rimzd tab, without publishing a new build.
     Repair,
     /// Play scripted scenarios through the sidebar loop, or validate with --check.
     #[cfg(feature = "testkit")]
@@ -637,7 +637,10 @@ fn play(
 /// entry after its independent upgrade transaction.
 pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
     let outcome = rimz::reload::repair_user_sidebars();
-    let mut out = render::out();
+    repair_report(&mut render::out(), &outcome)
+}
+
+fn repair_report(out: &mut impl Write, outcome: &rimz::reload::ReloadOutcome) -> Result<()> {
     let n = |count: usize, noun: &str| {
         let value = if count == 1 {
             format!("1 {noun}")
@@ -675,6 +678,27 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
     }
     if outcome.redocked > 0 {
         writeln!(out, "Repaired {} geometry.", n(outcome.redocked, "sidebar"))?;
+    }
+    if outcome.daemon_reopened > 0 {
+        writeln!(
+            out,
+            "Reopened the rimzd tab in {}.",
+            n(outcome.daemon_reopened, "session"),
+        )?;
+    }
+    if outcome.daemon_reopen_deferred > 0 {
+        writeln!(
+            out,
+            "Deferred reopening the rimzd tab in {} (no attached client); attach and re-run `rimz sidebar repair`.",
+            n(outcome.daemon_reopen_deferred, "session"),
+        )?;
+    }
+    if outcome.daemon_reopen_failed > 0 {
+        writeln!(
+            out,
+            "Could not reopen the rimzd tab in {}; re-run `rimz sidebar repair`.",
+            n(outcome.daemon_reopen_failed, "session"),
+        )?;
     }
     if outcome.reaped > 0 {
         writeln!(
@@ -720,6 +744,9 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
         + outcome.deferred
         + outcome.failed
         + outcome.busy
+        + outcome.daemon_reopened
+        + outcome.daemon_reopen_deferred
+        + outcome.daemon_reopen_failed
         == 0
     {
         writeln!(
@@ -728,7 +755,14 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
             n(outcome.sessions, "session")
         )?;
     }
-    if outcome.failed + outcome.deferred + outcome.misdocked + outcome.busy > 0 {
+    if outcome.failed
+        + outcome.deferred
+        + outcome.misdocked
+        + outcome.busy
+        + outcome.daemon_reopen_deferred
+        + outcome.daemon_reopen_failed
+        > 0
+    {
         out.flush()?;
         bail!("Sidebar repair is incomplete; see the report above.");
     }

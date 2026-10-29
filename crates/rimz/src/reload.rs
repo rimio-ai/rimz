@@ -4,9 +4,10 @@
 //! durable target, restarts running hook drainers, nudges supervisors,
 //! hash-gates Zellij plugin convergence, and reports the bounded convergence
 //! window without changing terminal panes.
-//! `rimz sidebar repair` is the independent structural close/add pass. Standalone
-//! stats dashboards and children of non-following supervisors are signalled
-//! before workspace enumeration. The rimzd processes follow the committed room
+//! `rimz sidebar repair` is the independent structural close/add and daemon-view
+//! reopen pass. Standalone stats dashboards and children of non-following
+//! supervisors are signalled before workspace enumeration. The rimzd processes
+//! follow the committed room
 //! target through the shared record watcher. Outdated language-server brokers
 //! retire against the PATH build,
 //! without interrupting servers or dropping leases, before room enumeration.
@@ -437,6 +438,12 @@ pub struct ReloadOutcome {
     pub misdocked: usize,
     /// Live sessions carrying no sidebar renderer at all.
     pub sidebar_missing: usize,
+    /// Sessions whose wholly closed daemon view was reopened.
+    pub daemon_reopened: usize,
+    /// Sessions whose daemon view reopen awaits an attached client.
+    pub daemon_reopen_deferred: usize,
+    /// Sessions whose daemon view could not be reopened.
+    pub daemon_reopen_failed: usize,
 }
 
 impl ReloadOutcome {
@@ -468,6 +475,9 @@ impl ReloadOutcome {
             redocked,
             misdocked,
             sidebar_missing,
+            daemon_reopened,
+            daemon_reopen_deferred,
+            daemon_reopen_failed,
         } = delta;
         self.sessions += sessions;
         self.presence_dead += presence_dead;
@@ -495,6 +505,9 @@ impl ReloadOutcome {
         self.redocked += redocked;
         self.misdocked += misdocked;
         self.sidebar_missing += sidebar_missing;
+        self.daemon_reopened += daemon_reopened;
+        self.daemon_reopen_deferred += daemon_reopen_deferred;
+        self.daemon_reopen_failed += daemon_reopen_failed;
     }
 }
 
@@ -539,8 +552,8 @@ pub fn reload_user_sidebars() -> Result<ReloadOutcome, StageBuildErr> {
     Ok(outcome)
 }
 
-/// Repair missing, duplicate, wedged, or mis-docked sidebars without
-/// publishing a new build target.
+/// Repair sidebar structure and reopen closed daemon views without publishing
+/// a new build target.
 pub fn repair_user_sidebars() -> ReloadOutcome {
     let (live_targets, _) = live_targets(false);
     let machine_config = MachineConfig::load_lenient();
@@ -833,9 +846,47 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
     outcome = reconcile_repair(&ws.session_name, presence_probe.as_ref(), || {
         crate::sidebar::reconcile_session_sidebars(backend.as_ref(), &opts, Duration::from_secs(60))
     });
+    // The reopen takes the same session lock, so a busy reconcile would only
+    // spend a second full wait on it.
+    if outcome.busy == 0 {
+        reopen_closed_daemon_view(backend.as_ref(), &opts, machine_config, &mut outcome);
+    }
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), *mux, ws);
     crate::harness::auto_gc::sweep_runtime_claims(runtime);
     outcome
+}
+
+fn reopen_closed_daemon_view(
+    backend: &dyn MuxBackend,
+    opts: &SidebarPaneOptions,
+    machine_config: &MachineConfig,
+    outcome: &mut ReloadOutcome,
+) {
+    let resolve = || {
+        let record = StatePaths::for_workspace(opts.workspace_id.clone())
+            .map_err(record::WorkspaceRecordErr::from)
+            .and_then(|state| record::read(&state.workspace_record))
+            .inspect_err(|error| {
+                tracing::warn!(
+                    session = %opts.session_name,
+                    %error,
+                    "daemon reopen record unavailable",
+                );
+            })
+            .ok()?;
+        let rimz_bin = reexec_target_for_workspace(&opts.workspace_id).or_else(|| {
+            tracing::warn!(session = %opts.session_name, "daemon reopen build unavailable");
+            None
+        })?;
+        Some((record, rimz_bin))
+    };
+    match crate::daemon_view::reopen_daemon_view(backend, opts, resolve, machine_config) {
+        crate::daemon_view::ReopenOutcome::Reopened => outcome.daemon_reopened = 1,
+        crate::daemon_view::ReopenOutcome::None => {}
+        crate::daemon_view::ReopenOutcome::Deferred => outcome.daemon_reopen_deferred = 1,
+        crate::daemon_view::ReopenOutcome::Busy => outcome.busy = 1,
+        crate::daemon_view::ReopenOutcome::Failed => outcome.daemon_reopen_failed = 1,
+    }
 }
 
 const RELOAD_PRESENCE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
