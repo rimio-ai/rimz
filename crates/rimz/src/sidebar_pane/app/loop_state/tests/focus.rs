@@ -64,7 +64,7 @@ fn deliver_sampled(
         source: SnapshotSource::Produced,
     });
     assert!(
-        rig.views.lock().unwrap().has_sample(),
+        rig.views.lock().has_sample(),
         "the fold's client sample applied"
     );
 }
@@ -106,7 +106,7 @@ fn zellij_focus_event_advances_selection_before_the_next_client_sample() {
 #[test]
 fn zellij_unattributable_focus_event_keeps_the_sample() {
     let (mut rig, _, p, _) = sampled_focus_rig(MuxName::Zellij);
-    let fold = rig.views.lock().unwrap().fold.clone().unwrap();
+    let fold = rig.views.lock().fold.clone().unwrap();
     let frame = fold.frame.as_ref().unwrap();
     let foreign = zellij("terminal_50");
     let mut panes: Vec<_> = frame
@@ -169,7 +169,7 @@ fn focus_failure_follows_its_source_view_after_rerouting() {
     let own = rig.state.pane.config.own_pane.clone();
     let other = zellij("sidebar_other");
     let sample = |rig: &Rig, swapped| {
-        rig.views.lock().unwrap().reconcile(
+        rig.views.lock().reconcile(
             &[
                 crate::pane::ClientPaneView {
                     client_id: crate::ids::MuxClientId::Zellij(1),
@@ -189,14 +189,13 @@ fn focus_failure_follows_its_source_view_after_rerouting() {
     let source = rig
         .views
         .lock()
-        .unwrap()
         .presentation(&own, rig.state.pane.clock.now(), false)
         .0;
     click_child(&mut rig, &first);
     sample(&rig, true);
     rig.state
         .on_focus_failed(first, "target disappeared".into());
-    let mut views = rig.views.lock().unwrap();
+    let mut views = rig.views.lock();
     let source = views.retained(source).unwrap();
     assert!(
         source.pending_input_focus.is_none(),
@@ -1599,7 +1598,7 @@ fn a_hidden_fold_retires_its_anchor_in_scratch_after_a_shared_read() {
         view.ctx().current.own_view = Some(own_view());
         view.ctx().current.viewed_panes.clear();
     }
-    rig.views.lock().unwrap().reconcile(
+    rig.views.lock().reconcile(
         &[crate::pane::ClientPaneView {
             client_id: crate::ids::MuxClientId::Zellij(0),
             pane_id: own.clone(),
@@ -1612,10 +1611,9 @@ fn a_hidden_fold_retires_its_anchor_in_scratch_after_a_shared_read() {
     let shared = rig
         .views
         .lock()
-        .unwrap()
         .presentation(&own, rig.state.pane.clock.now(), false)
         .0;
-    rig.views.lock().unwrap().reconcile(
+    rig.views.lock().reconcile(
         &[],
         true,
         rig.state.pane.clock.now(),
@@ -1639,12 +1637,7 @@ fn a_hidden_fold_retires_its_anchor_in_scratch_after_a_shared_read() {
         Some(anchor.issued_at_ms)
     );
     assert_eq!(
-        rig.views
-            .lock()
-            .unwrap()
-            .retained(shared)
-            .unwrap()
-            .retired_anchor,
+        rig.views.lock().retained(shared).unwrap().retired_anchor,
         None
     );
 }
@@ -1662,7 +1655,7 @@ fn a_shared_fold_retires_its_anchor_in_that_view() {
         });
         context.current.viewed_panes = vec![zellij("terminal_2")];
     }
-    rig.views.lock().unwrap().reconcile(
+    rig.views.lock().reconcile(
         &[crate::pane::ClientPaneView {
             client_id: crate::ids::MuxClientId::Zellij(0),
             pane_id: own,
@@ -1689,7 +1682,7 @@ fn a_shared_fold_retires_its_anchor_in_that_view() {
     );
     rig.view().ctx().current.viewed_panes.clear();
     rig.state.with_view_for_test(Route::READ, |_, _| {});
-    rig.views.lock().unwrap().reconcile(
+    rig.views.lock().reconcile(
         &[],
         true,
         rig.state.pane.clock.now(),

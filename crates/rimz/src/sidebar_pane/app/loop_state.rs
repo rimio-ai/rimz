@@ -247,6 +247,10 @@ pub(super) struct PaneState {
     painted_at: Instant,
     painted_height: u16,
     paints: u64,
+    #[cfg(feature = "testkit")]
+    bench_painted_revision: Option<u64>,
+    #[cfg(feature = "testkit")]
+    bench_painted_deadline: Option<Instant>,
     paint_reports: Vec<(FocusPush, PushVerdict)>,
     optimistic_watch_until: Option<Instant>,
     pending_focus_repair: Option<PendingFocusRepair>,
@@ -375,7 +379,7 @@ impl LoopState {
 
     pub(in crate::sidebar_pane::app) fn share_views(
         &mut self,
-        views: Arc<Mutex<super::views::Views>>,
+        views: Arc<super::views::ViewsHandle>,
         revision: u64,
     ) {
         self.pane.baseline_seed = self.views.share(views);
@@ -514,11 +518,7 @@ impl LoopState {
     fn parked(&self, now_ms: u64) -> bool {
         let pane = &self.pane.config.own_pane;
         let (sampled, event) = {
-            let views = self
-                .views
-                .registry
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let views = self.views.registry.lock();
             (
                 views.has_sample().then(|| views.parked(pane)),
                 views.attributed_focus_event(pane),
@@ -598,6 +598,10 @@ impl LoopState {
                 painted_at: now,
                 painted_height: 0,
                 paints: 0,
+                #[cfg(feature = "testkit")]
+                bench_painted_revision: None,
+                #[cfg(feature = "testkit")]
+                bench_painted_deadline: None,
                 paint_reports: Vec::new(),
                 optimistic_watch_until: None,
                 pending_focus_repair: None,
@@ -734,6 +738,17 @@ impl LoopState {
     }
 
     #[cfg(feature = "testkit")]
+    pub(super) fn bench_painted(&self) -> Option<(u64, Instant, Option<Instant>)> {
+        self.pane.bench_painted_revision.map(|revision| {
+            (
+                revision,
+                self.pane.painted_at,
+                self.pane.bench_painted_deadline,
+            )
+        })
+    }
+
+    #[cfg(feature = "testkit")]
     pub(super) fn bench_frame_timing(&mut self, paint: bool) -> bool {
         if paint && self.watched() {
             let mut terminal =
@@ -805,11 +820,7 @@ impl LoopState {
 
     fn drain_snapshot(&mut self, allow_defer: bool) {
         let (revision, completed) = {
-            let views = self
-                .views
-                .registry
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let views = self.views.registry.lock();
             let hidden = &mut self.pane.hidden;
             if allow_defer
                 && (hidden.examined_revision != Some(views.revision)
@@ -836,11 +847,7 @@ impl LoopState {
             }
         } else {
             let (pending, revision) = {
-                let views = self
-                    .views
-                    .registry
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let views = self.views.registry.lock();
                 (views.latest.since(self.pane.own.revision), views.revision)
             };
             #[cfg(any(test, feature = "testkit"))]
@@ -944,11 +951,7 @@ impl LoopState {
         if dispatched_here {
             return false;
         }
-        let mut views = self
-            .views
-            .registry
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut views = self.views.registry.lock();
         let Some((state, context)) = views.dispatched(pane) else {
             return false;
         };
@@ -1040,11 +1043,11 @@ impl LoopState {
         // A jump to this pane's tab is viewing evidence: the landing paints a view, never scratch.
         self.pane.optimistic_watch_until = Some(arrived + FOCUS_RESUME_WATCH_WINDOW);
         if let Some(source) = push.source_view {
-            self.views
-                .registry
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .land(source, &self.pane.config.own_pane, self.pane.clock.now());
+            self.views.registry.lock().land(
+                source,
+                &self.pane.config.own_pane,
+                self.pane.clock.now(),
+            );
             self.views.with(&mut self.pane, Route::READ, |_, v| {
                 v.context.live_focus_source = Some(push.anchor.nonce);
             });
@@ -1250,7 +1253,6 @@ impl LoopState {
         self.views
             .registry
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
             .latest
             .since(self.pane.own.revision)
             .iter()
@@ -2082,6 +2084,8 @@ impl LoopState {
     }
 
     fn paint_now(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> Result<()> {
+        #[cfg(feature = "testkit")]
+        let (paints, deadline) = (self.pane.paints, self.pane.next_frame);
         let (paint, interval, nonce) = self.views.with(&mut self.pane, Route::READ, |state, v| {
             frame_clock(
                 now,
@@ -2113,6 +2117,10 @@ impl LoopState {
                 return Ok(());
             }
             self.draw_frame(terminal, now, false)?;
+            #[cfg(feature = "testkit")]
+            if self.pane.paints != paints {
+                self.pane.bench_painted_deadline = (deadline <= now).then_some(deadline);
+            }
             self.pane.dirty = false;
         }
         self.pane.next_frame = next_frame_after(self.pane.next_frame, now, interval);
@@ -2174,6 +2182,11 @@ impl LoopState {
             let output = frame.write(terminal.backend_mut());
             result.and(output)?;
             self.pane.painted_at = self.pane.clock.now();
+            #[cfg(feature = "testkit")]
+            {
+                self.pane.bench_painted_revision = token.map(|(_, revision, _)| revision);
+                self.pane.bench_painted_deadline = None;
+            }
             for (push, verdict) in self.pane.paint_reports.drain(..) {
                 push.finish_painted(verdict, self.pane.painted_at, self.pane.clock.now());
             }
@@ -2246,6 +2259,8 @@ impl LoopState {
     }
 
     fn events(&self) -> MutexGuard<'_, EventStore> {
+        #[cfg(any(test, feature = "testkit"))]
+        host_pass::count(Counter::EventsTake);
         self.views
             .events
             .lock()
@@ -2423,6 +2438,10 @@ impl PaneState {
             painted_at: _,
             painted_height: _,
             paints: _,
+            #[cfg(feature = "testkit")]
+                bench_painted_revision: _,
+            #[cfg(feature = "testkit")]
+                bench_painted_deadline: _,
             paint_reports: _,
             // Paint, animation, and frame scheduling, which a clock-only
             // delivery drives itself.

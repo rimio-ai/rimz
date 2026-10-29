@@ -333,10 +333,16 @@ impl Host {
                     Event::Connection(stream) => {
                         self.connections.fetch_add(1, Ordering::SeqCst);
                         let host = self.clone();
-                        std::thread::spawn(move || {
-                            host.serve_connection(stream);
-                            host.connections.fetch_sub(1, Ordering::SeqCst);
-                        });
+                        if let Err(err) = std::thread::Builder::new()
+                            .name("rimz-attach".into())
+                            .spawn(move || {
+                                host.serve_connection(stream);
+                                host.connections.fetch_sub(1, Ordering::SeqCst);
+                            })
+                        {
+                            self.connections.fetch_sub(1, Ordering::SeqCst);
+                            debug!(error = %err, "sidebar host attachment spawn failed");
+                        }
                     }
                     Event::Reload => requested_reload = true,
                     Event::Wake => {}

@@ -103,12 +103,12 @@ struct Rig {
     terminal: Terminal<PaneBackend>,
     focus_plane: super::super::plane::DataPlane,
     focus_lease: Option<FocusPeers>,
-    views: Arc<Mutex<super::super::views::Views>>,
+    views: Arc<super::super::views::ViewsHandle>,
     synthetic_own: bool,
 }
 
 pub(super) struct RigView<'a> {
-    views: MutexGuard<'a, super::super::views::Views>,
+    views: super::super::views::ViewsGuard<'a>,
     pane: Option<PaneId>,
     now: Instant,
     state: &'a mut ViewState,
@@ -117,7 +117,7 @@ pub(super) struct RigView<'a> {
 
 impl<'a> RigView<'a> {
     pub(super) fn new(
-        views: MutexGuard<'a, super::super::views::Views>,
+        views: super::super::views::ViewsGuard<'a>,
         pane: Option<PaneId>,
         now: Instant,
         state: &'a mut ViewState,
@@ -161,9 +161,9 @@ impl Drop for RigView<'_> {
 }
 
 impl Rig {
-    fn share_views(&mut self, views: Arc<Mutex<super::super::views::Views>>) {
+    fn share_views(&mut self, views: Arc<super::super::views::ViewsHandle>) {
         self.views = views.clone();
-        let revision = views.lock().unwrap().revision;
+        let revision = views.lock().revision;
         self.state.share_views(views, revision);
     }
 
@@ -229,7 +229,7 @@ impl Rig {
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (request_tx, requests) = std::sync::mpsc::channel();
         let completion: Arc<AtomicBool> = Arc::default();
-        let views = Arc::new(Mutex::new(super::super::views::Views::default()));
+        let views = Arc::new(super::super::views::ViewsHandle::default());
         let mut rig = Self {
             state: LoopState::new(
                 clock,
@@ -340,7 +340,7 @@ impl Rig {
                         own_view_is_daemon: false,
                     });
                 }
-                let views = self.views.lock().unwrap();
+                let views = self.views.lock();
                 let sidebars = views
                     .fold
                     .iter()
@@ -378,7 +378,7 @@ impl Rig {
             };
         }
         let completed = update.is_final();
-        let mut views = self.views.lock().unwrap();
+        let mut views = self.views.lock();
         views.publish(update);
         if completed {
             self.completion.store(true, Ordering::Relaxed);
@@ -446,7 +446,7 @@ impl Rig {
     /// Point the plane's latest fold at the sidebar's tab being viewed or not.
     fn set_plane_viewed(&mut self, viewed: bool) {
         let own = self.state.pane.config.own_pane.clone();
-        let mut views = self.views.lock().unwrap();
+        let mut views = self.views.lock();
         let Some(fold) = views.fold.as_mut() else {
             return;
         };

@@ -122,7 +122,7 @@ fn frozen_parked_timing_reads_live_overlays_outside_a_borrow() {
     let mut rig = Rig::with_clock(Some(own.clone()), BodyLens::default(), None, clock.clone());
     settle_width(&mut rig);
     rig.state.pane.dirty = false;
-    rig.views.lock().unwrap().reconcile(
+    rig.views.lock().reconcile(
         &[crate::pane::ClientPaneView {
             client_id: crate::ids::MuxClientId::Tmux("client-1".into()),
             pane_id: own.clone(),
@@ -135,7 +135,6 @@ fn frozen_parked_timing_reads_live_overlays_outside_a_borrow() {
     // Attribute the live overlay as the room recorder does, without pulling or folding it.
     rig.views
         .lock()
-        .unwrap()
         .note_focus_event(std::slice::from_ref(&own), &[], now);
     {
         let pane = &mut rig.state.pane;
@@ -481,7 +480,6 @@ fn frame_timing_cancels_hidden_tab_read_dwell() {
     assert!(
         rig.views
             .lock()
-            .unwrap()
             .retained(view)
             .unwrap()
             .tab_read_dwell_until

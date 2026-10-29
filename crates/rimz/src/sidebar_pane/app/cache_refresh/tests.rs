@@ -42,10 +42,7 @@ fn fold_freshness_excludes_tick_equality() {
 fn fresh_fold_runs_heavy_lanes_without_another_fold_or_request() {
     let data = Mutex::new(HostData::default());
     let retained = fold(Instant::now());
-    publish(
-        &mut data.lock().unwrap().views.lock().unwrap(),
-        retained.clone(),
-    );
+    publish(&mut data.lock().unwrap().views.lock(), retained.clone());
     let (requests, pending) = channel();
     let refreshed = Cell::new(false);
     let maintained = Cell::new(false);
@@ -76,7 +73,7 @@ fn stale_fold_waits_for_the_first_post_request_sample() {
     let data = Arc::new(Mutex::new(HostData::default()));
     let tick = Duration::from_secs(1);
     let old = fold(Instant::now() - tick);
-    publish(&mut data.lock().unwrap().views.lock().unwrap(), old.clone());
+    publish(&mut data.lock().unwrap().views.lock(), old.clone());
     let (requests, pending) = channel::<FetchRequest>();
     let worker_data = data.clone();
     let worker = std::thread::spawn(move || {
@@ -86,7 +83,7 @@ fn stale_fold_waits_for_the_first_post_request_sample() {
         assert_eq!(request.mode(), FetchMode::Normal);
         let first = fold(Instant::now());
         let views = worker_data.lock().unwrap().views.clone();
-        let mut views = views.lock().unwrap();
+        let mut views = views.lock();
         publish(&mut views, old);
         publish(&mut views, first.clone());
         publish(&mut views, fold(Instant::now()));
@@ -113,7 +110,7 @@ fn cold_host_uses_the_workers_first_frameless_fold() {
             return;
         }
         publish(
-            &mut worker_data.lock().unwrap().views.lock().unwrap(),
+            &mut worker_data.lock().unwrap().views.lock(),
             fold(Instant::now()),
         );
     });
@@ -137,7 +134,7 @@ fn failure_skips_heavy_lanes_but_not_maintenance_even_if_success_follows() {
             return;
         }
         let views = worker_data.lock().unwrap().views.clone();
-        let mut views = views.lock().unwrap();
+        let mut views = views.lock();
         views.publish(FetchUpdate::Failed {
             error: "worker failed".into(),
         });
@@ -192,10 +189,7 @@ fn missing_publication_waits_one_tick_and_still_runs_maintenance() {
 #[test]
 fn heavy_lane_panic_does_not_stop_maintenance_or_the_next_pass() {
     let data = Mutex::new(HostData::default());
-    publish(
-        &mut data.lock().unwrap().views.lock().unwrap(),
-        fold(Instant::now()),
-    );
+    publish(&mut data.lock().unwrap().views.lock(), fold(Instant::now()));
     let (requests, _pending) = channel();
     let maintained = Cell::new(0);
     let failed = refresh_pass(

@@ -288,12 +288,7 @@ impl Column {
             snapshot.theme.display.pixel = crate::config::PixelMode::Off;
         }
         reconcile_snapshot(&self.runtime, &mut snapshot);
-        let mut views = self
-            .state
-            .views
-            .registry
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut views = self.state.views.registry.lock();
         views.publish(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
             phase: FetchPhase::Final,

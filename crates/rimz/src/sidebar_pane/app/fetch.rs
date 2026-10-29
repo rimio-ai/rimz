@@ -31,6 +31,11 @@ use super::ServeConfig;
 use super::input::Wakeup;
 use super::timing::tick_for;
 
+#[cfg(feature = "testkit")]
+mod concurrent;
+#[cfg(feature = "testkit")]
+pub use concurrent::{ConcurrentFanout, FanoutThread};
+
 /// Run one produce behind a panic guard. An unwind keeps the renderer alive on its last good frame and degrades health; `panic = "abort"` falls back to host death and supervisor recovery.
 ///
 /// The cursor may be torn and is reset. Producer attempts and accepted inputs remain committed in memory; metrics replace their history only after a completed sample, and projection publication records success only after the atomic write.
@@ -137,7 +142,7 @@ pub(super) struct WorkspaceFold {
 
 #[derive(Default)]
 pub(super) struct HostData {
-    pub(super) views: Arc<Mutex<super::views::Views>>,
+    pub(super) views: Arc<super::views::ViewsHandle>,
     pub(super) inputs: Option<HostInputs>,
 }
 
@@ -491,6 +496,7 @@ pub struct IdleCycleFixture {
     state: StatePaths,
     cursors: Vec<super::views::Cursor>,
     renderers: Vec<super::loop_state::LoopState>,
+    receivers: Vec<Receiver<Wakeup>>,
 }
 
 #[cfg(feature = "testkit")]
@@ -525,8 +531,10 @@ impl IdleCycleFixture {
             ..Default::default()
         }));
         let mut subscriptions = BTreeMap::new();
+        let mut receivers = Vec::new();
         for index in 0..subscribers {
-            let (wake, _) = std::sync::mpsc::sync_channel(1);
+            let (wake, receiver) = std::sync::mpsc::sync_channel(1);
+            receivers.push(receiver);
             let instance_id = SidebarInstanceId::new();
             subscriptions.insert(
                 instance_id.as_str().to_owned(),
@@ -548,6 +556,7 @@ impl IdleCycleFixture {
             state,
             cursors: vec![super::views::Cursor::default(); subscribers],
             renderers: Vec::new(),
+            receivers,
         }
     }
 
@@ -560,28 +569,13 @@ impl IdleCycleFixture {
             .cycle
             .iter()
             .map(|subscriber| {
-                let config = ServeConfig {
-                    room: self.worker.config.clone(),
-                    instance_id: subscriber.instance_id.clone(),
-                    own_pane: subscriber.own_pane.clone(),
-                    tick_seconds: self.worker.config.tick_seconds,
-                    refresh_ms_override: None,
-                };
-                let mut renderer = super::loop_state::LoopState::new(
-                    crate::sidebar_pane::app::clock::LoopClock::wall(),
-                    config,
-                    None,
+                fixture_renderer(
+                    self.worker.config.clone(),
                     self.worker.runtime.clone(),
-                    std::path::PathBuf::new(),
-                    crate::diag::DiagSink::disabled(),
-                    FetchHandle::new(std::sync::mpsc::channel().0, subscriber.completion.clone()),
-                    None,
-                    std::sync::mpsc::sync_channel(1).0,
-                    Default::default(),
-                    None,
-                );
-                renderer.share_views(views.clone(), 0);
-                renderer
+                    subscriber,
+                    views.clone(),
+                    super::clock::LoopClock::wall(),
+                )
             })
             .collect();
         self.cursors.clear();
@@ -683,7 +677,7 @@ impl IdleCycleFixture {
         let mut unchanged = 0;
         let views = self.sink.host_data.lock().expect("host data").views.clone();
         for (cursor, subscriber) in self.cursors.iter_mut().zip(&self.sink.cycle) {
-            let views = views.lock().expect("views");
+            let views = views.lock();
             for update in views.latest.since(cursor.revision) {
                 let update = cursor.replay(
                     update,
@@ -713,6 +707,38 @@ impl IdleCycleFixture {
         }
         unchanged
     }
+}
+
+#[cfg(feature = "testkit")]
+fn fixture_renderer(
+    room: RoomConfig,
+    runtime: RuntimePaths,
+    subscriber: &Subscriber,
+    views: Arc<super::views::ViewsHandle>,
+    clock: super::clock::LoopClock,
+) -> super::loop_state::LoopState {
+    let config = ServeConfig {
+        tick_seconds: room.tick_seconds,
+        room,
+        instance_id: subscriber.instance_id.clone(),
+        own_pane: subscriber.own_pane.clone(),
+        refresh_ms_override: None,
+    };
+    let mut renderer = super::loop_state::LoopState::new(
+        clock,
+        config,
+        None,
+        runtime,
+        std::path::PathBuf::new(),
+        crate::diag::DiagSink::disabled(),
+        FetchHandle::new(std::sync::mpsc::channel().0, subscriber.completion.clone()),
+        None,
+        std::sync::mpsc::sync_channel(1).0,
+        Default::default(),
+        None,
+    );
+    renderer.share_views(views, 0);
+    renderer
 }
 
 impl FetchWorker {
@@ -1264,19 +1290,14 @@ impl Default for FetchWindow {
 impl FetchWindow {
     fn finish(
         &mut self,
-        views: &Mutex<super::views::Views>,
+        views: &super::views::ViewsHandle,
         now: Instant,
     ) -> Option<crate::diag::record::DiagEvent> {
         let interval = now.saturating_duration_since(self.started);
         if interval < Duration::from_secs(60) {
             return None;
         }
-        let counts = std::mem::take(
-            &mut views
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .reductions,
-        );
+        let counts = std::mem::take(&mut views.lock().reductions);
         self.started = now;
         Some(crate::diag::record::DiagEvent::FetchReductionStats {
             interval_ms: interval.as_millis() as u64,
@@ -1313,6 +1334,8 @@ struct ResultSink {
     cycle: Vec<Subscriber>,
     context: Option<Arc<FoldShared>>,
     inputs: Arc<FoldInputs>,
+    #[cfg(feature = "testkit")]
+    publication: Option<Arc<Mutex<(u64, Instant)>>>,
 }
 
 impl ResultSink {
@@ -1323,6 +1346,8 @@ impl ResultSink {
             cycle: Vec::new(),
             context: None,
             inputs: Arc::default(),
+            #[cfg(feature = "testkit")]
+            publication: None,
         };
         sink.begin_cycle();
         sink
@@ -1361,11 +1386,7 @@ impl ResultSink {
             Ok((mut fold, phase, source)) => {
                 // Compare unlocked: panes replay and paint under the views lock, and
                 // this worker is the only writer of the retained fold.
-                let prior = views
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .fold
-                    .clone();
+                let prior = views.lock().fold.clone();
                 if let Some(prior) = prior {
                     let shared = &mut Arc::make_mut(&mut fold).workspace.0;
                     let prior = prior.workspace.snapshot();
@@ -1394,10 +1415,14 @@ impl ResultSink {
                 context: context.clone(),
             };
         }
-        let mut views = views
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut views = views.lock();
+        #[cfg(feature = "testkit")]
+        let published_at = self.publication.as_ref().map(|_| Instant::now());
         views.publish(update);
+        #[cfg(feature = "testkit")]
+        if let (Some(publication), Some(stamp)) = (&self.publication, published_at) {
+            *publication.lock().expect("publication stamp") = (views.revision, stamp);
+        }
         if completed {
             for subscriber in &self.cycle {
                 subscriber.completion.store(true, Ordering::Relaxed);

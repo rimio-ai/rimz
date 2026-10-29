@@ -104,7 +104,7 @@ fn input_advances_the_planes_view_before_the_client_moves_tabs() {
     let plane = super::super::super::plane::DataPlane::detached();
     let (mut source, _) = scroll_rig();
     let own = source.state.pane.config.own_pane.clone();
-    plane.views.lock().unwrap().reconcile(
+    plane.views.lock().reconcile(
         &[ClientPaneView {
             client_id: MuxClientId::Zellij(1),
             pane_id: own.clone(),
@@ -118,7 +118,6 @@ fn input_advances_the_planes_view_before_the_client_moves_tabs() {
     plane
         .views
         .lock()
-        .unwrap()
         .paint(&own, source.state.pane.clock.now())
         .expanded_groups
         .insert(group);
@@ -130,7 +129,6 @@ fn input_advances_the_planes_view_before_the_client_moves_tabs() {
         plane
             .views
             .lock()
-            .unwrap()
             .paint(&own, source.state.pane.clock.now())
             .scroll_offset,
         3,
@@ -271,7 +269,7 @@ impl SharedPanes {
             workspace: crate::sidebar::enrich::WorkspaceSnapshot(self.snapshot.clone()),
             frame: Some(Arc::new(frame)),
         };
-        let mut views = self.plane.views.lock().unwrap();
+        let mut views = self.plane.views.lock();
         views.publish(FetchUpdate::Fold {
             fold: Arc::new(fold),
             phase: FetchPhase::Final,
@@ -381,7 +379,7 @@ fn reattach_after_expiry_reads_siblings_after_dwell_on_both_backends() {
         pair.panes[0].view().ui().selected_pane = Some(selected);
         pair.panes[0].view().ui().selected_index = Some(0);
         pair.sample(&[]);
-        pair.plane.views.lock().unwrap().refresh(pair.clock.now());
+        pair.plane.views.lock().refresh(pair.clock.now());
         pair.clock.advance(
             Duration::from_millis(pair.snapshot.sidebar.afk_after_ms()) + Duration::from_millis(1),
         );
@@ -492,7 +490,7 @@ fn an_expired_hold_keeps_the_last_painted_order_for_the_first_return_frame() {
     pair.input(0);
     let before = pair.view(0);
     pair.sample(&[]);
-    pair.plane.views.lock().unwrap().refresh(pair.clock.now());
+    pair.plane.views.lock().refresh(pair.clock.now());
     pair.clock.advance(Duration::from_secs(31));
     Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows).swap(4, 5);
     pair.sample(&[(1, 1)]);
@@ -620,7 +618,7 @@ fn joined_view_paints_unseated_until_the_new_sidebar_is_listed_on_both_backends(
         .unwrap();
         sample_unlisted_tab(&mut pair, &[(1, 1)]);
         pair.fold(0);
-        let seed = pair.plane.views.lock().unwrap().fold.clone().unwrap();
+        let seed = pair.plane.views.lock().fold.clone().unwrap();
         pair.panes[1].state.seed(&seed);
         let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
         for first_paint in [true, false] {
@@ -672,7 +670,7 @@ fn forked_view_leaves_its_selection_on_an_unlisted_pane() {
         let before = pair.view(0);
         sample_unlisted_tab(&mut pair, &[(1, 0)]);
         pair.fold(0);
-        let seed = pair.plane.views.lock().unwrap().fold.clone().unwrap();
+        let seed = pair.plane.views.lock().fold.clone().unwrap();
         pair.panes[1].state.seed(&seed);
         assert_unseated(&pair.view(1));
         pair.paint(1);
@@ -880,11 +878,11 @@ fn an_unresolved_pane_releases_its_view_when_viewing_evidence_expires() {
     let mut pair = SharedPanes::new(MuxName::Zellij);
     pair.input(1);
     let pane = pair.panes[1].state.pane.config.own_pane.clone();
-    assert!(pair.plane.views.lock().unwrap().peek(&pane).is_some());
+    assert!(pair.plane.views.lock().peek(&pane).is_some());
     pair.clock.advance(Duration::from_secs(3));
     pair.panes[1].state.frame_timing();
     assert!(
-        pair.plane.views.lock().unwrap().peek(&pane).is_none(),
+        pair.plane.views.lock().peek(&pane).is_none(),
         "a hidden pane cannot keep holding an anonymous view"
     );
 }

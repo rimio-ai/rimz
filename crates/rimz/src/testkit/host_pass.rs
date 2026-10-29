@@ -38,6 +38,12 @@ pub enum Counter {
     HeartbeatRenewal,
     HeartbeatFailure,
     ParkRead,
+    /// Acquisitions of the host's shared client views, including poisoned locks.
+    ViewsLock,
+    /// Loads of a newly published views-record generation by an attachment.
+    ViewsRecord,
+    /// Event-store takes at the attachment's three read funnels.
+    EventsTake,
     HostFold,
 }
 

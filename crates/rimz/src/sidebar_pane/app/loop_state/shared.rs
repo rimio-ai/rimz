@@ -1,11 +1,11 @@
 //! `ViewAccess` lends explicit client views to `PaneState` with a pre-lock overlay cut.
 
 use super::super::selection::unseat_selection;
-use super::super::views::{ViewId, Views};
+use super::super::views::{ViewId, ViewsHandle};
 use super::*;
 
 pub(in crate::sidebar_pane::app) struct ViewAccess {
-    pub(in crate::sidebar_pane::app) registry: Arc<Mutex<Views>>,
+    pub(in crate::sidebar_pane::app) registry: Arc<ViewsHandle>,
     pub(in crate::sidebar_pane::app) events: Arc<Mutex<EventStore>>,
     scratch_state: ViewState,
     scratch_context: ViewContext,
@@ -86,7 +86,7 @@ impl ViewAccess {
         own_pane: &PaneId,
         inspect: impl FnOnce(&ViewState, &ViewContext) -> T,
     ) -> T {
-        let views = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        let views = self.registry.lock();
         if let Some((state, context)) = views.peek(own_pane) {
             return inspect(state, context);
         }
@@ -103,12 +103,12 @@ impl ViewAccess {
         pane: &PaneId,
         now: impl FnOnce() -> Instant,
     ) -> (bool, Option<bool>) {
-        let mut views = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut views = self.registry.lock();
         views.refresh(now());
         (views.resolved(pane), views.observed(pane))
     }
 
-    pub(super) fn share(&mut self, views: Arc<Mutex<Views>>) -> Option<PaneId> {
+    pub(super) fn share(&mut self, views: Arc<ViewsHandle>) -> Option<PaneId> {
         self.registry = views;
         self.view_advanced = false;
         self.scratch_state.baseline_pane.take()
@@ -146,6 +146,8 @@ impl ViewAccess {
             let prepared = route.prepared.or(preparation.as_ref());
             let events = prepared.map_or_else(
                 || {
+                    #[cfg(any(test, feature = "testkit"))]
+                    host_pass::count(Counter::EventsTake);
                     self.events
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
@@ -154,7 +156,7 @@ impl ViewAccess {
                 |prepared| prepared.events.clone(),
             );
             let own_pane = &pane.config.own_pane;
-            let mut views = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut views = self.registry.lock();
             let now = pane.clock.now();
             views.refresh(now);
             let resolved = views.resolved(own_pane);
@@ -196,6 +198,8 @@ impl ViewAccess {
                 {
                     pane.fold_preparations += 1;
                 }
+                #[cfg(any(test, feature = "testkit"))]
+                host_pass::count(Counter::EventsTake);
                 let events = self
                     .events
                     .lock()
@@ -319,12 +323,7 @@ impl ViewAccess {
         match target {
             ViewTarget::Scratch => self.scratch_context.retire_anchor(anchor, now()),
             ViewTarget::Shared(id) => {
-                if let Some(context) = self
-                    .registry
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .retained(id)
-                {
+                if let Some(context) = self.registry.lock().retained(id) {
                     context.retire_anchor(anchor, now());
                 }
             }
@@ -332,7 +331,7 @@ impl ViewAccess {
     }
 
     pub(super) fn count_reduction(&self, unchanged: bool) {
-        let mut views = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut views = self.registry.lock();
         if unchanged {
             views.reductions.unchanged += 1;
         } else {
@@ -349,7 +348,7 @@ impl ViewAccess {
 
     #[cfg(test)]
     pub(super) fn rig(&mut self, own_pane: &PaneId, now: Instant) -> super::tests::RigView<'_> {
-        let views = self.registry.lock().unwrap();
+        let views = self.registry.lock();
         let pane = views.peek(own_pane).is_some().then(|| own_pane.clone());
         super::tests::RigView::new(
             views,

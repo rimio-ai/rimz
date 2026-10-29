@@ -56,7 +56,7 @@ pub(super) use self::plane::{DataPlane, RoomEvents};
 pub(super) use self::socket::EventForwarder;
 
 #[cfg(feature = "testkit")]
-pub use fetch::IdleCycleFixture;
+pub use fetch::{ConcurrentFanout, FanoutThread, IdleCycleFixture};
 pub use keymap::NavKeymap;
 #[cfg(feature = "testkit")]
 pub use play::{PlayError, PlayOptions, play};
