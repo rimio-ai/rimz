@@ -77,8 +77,8 @@ use super::AskKind;
 use super::context::AgentContext;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -185,7 +185,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         // The sidebar binds an instance to its pane by cwd before a session
         // binds and renders a wired-but-unprompted pane as an idle agent.
         registers_lazily: true,
-        local_session_discovery: true,
+        local_session_discovery: LocalSessionDiscovery::FullScan,
         daemon_hooked_sessions: true,
         direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,

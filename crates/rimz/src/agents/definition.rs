@@ -1362,9 +1362,9 @@ pub struct Capabilities {
     /// an instance can be present without a stamped session. The sidebar binds
     /// such a session to its pane by cwd.
     pub registers_lazily: bool,
-    /// Discovers live session identity and lifecycle from a provider-owned
-    /// machine-local store, without executable hooks or RimZ store writes.
-    pub local_session_discovery: bool,
+    /// How the room host reads provider-local session observations, without
+    /// executable hooks or RimZ store writes.
+    pub local_session_discovery: LocalSessionDiscovery,
     /// Sessions route hooks through a per-user daemon that outlives any one
     /// conversation, so a new session may succeed another in the same pane
     /// before the reaper clears the stamp.
@@ -1380,6 +1380,20 @@ pub struct Capabilities {
     pub same_pane_session: SamePaneSessionPolicy,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
+}
+
+/// Provider-local session discovery performed by the room host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalSessionDiscovery {
+    /// No provider-local discovery.
+    Unsupported,
+    /// Scan the provider store for admitted workspaces through
+    /// `SessionCapability::discover_local_sessions`.
+    FullScan,
+    /// Read only what live panes can bind through
+    /// `SessionCapability::discover_pane_sessions`. The full scan remains
+    /// available to `rimz agents resume`.
+    PerPane,
 }
 
 /// Pane ownership for root sessions hosted by one live agent process. The

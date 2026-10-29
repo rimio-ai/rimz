@@ -11,7 +11,7 @@ use super::hook_types::HookEventSpec;
 use super::managed_json_hooks::ManagedJsonHookSpec;
 use super::{
     AgentErr, AgentSpec, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, Result, read_optional_file,
+    HookInstallReport, HookUninstallReport, LocalSessionDiscovery, Result, read_optional_file,
 };
 
 pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
@@ -372,7 +372,9 @@ impl ManagedIntegration for ManagedSource {
         definition: &AgentSpec,
         login_env: &BTreeMap<String, String>,
     ) -> Vec<PathBuf> {
-        if definition.capabilities.local_session_discovery || !definition.has_wired_hook_install() {
+        if definition.capabilities.local_session_discovery != LocalSessionDiscovery::Unsupported
+            || !definition.has_wired_hook_install()
+        {
             return Vec::new();
         }
         self.resolved_path(login_env).into_iter().collect()

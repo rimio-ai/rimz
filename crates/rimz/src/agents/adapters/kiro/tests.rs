@@ -429,7 +429,10 @@ fn stop_final_message_is_the_reply_that_closed_the_turn() {
 #[test]
 fn stock_store_transcript_context_and_lifecycle_are_normalized() {
     let definition = KiroAdapter.spec();
-    assert!(definition.capabilities.local_session_discovery);
+    assert_eq!(
+        definition.capabilities.local_session_discovery,
+        LocalSessionDiscovery::FullScan
+    );
     assert!(definition.capabilities.transcript_tail_context);
     assert!(!definition.has_authoritative_account_spend());
 

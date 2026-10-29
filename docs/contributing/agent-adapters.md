@@ -29,7 +29,7 @@ Produce the mapping worksheet from the reference before writing Rust; every late
 - **User capabilities.** Roll those concerns up into the six [`UserCapability`](../../crates/rimz/src/agents/definition.rs) marks the compatibility matrix prints — state, live, history, account, ask, subagents — each *Full*, *Partial* (what lands, and the limit), or *Unsupported*. Answer from the sidebar card rather than the protocol: what a person sees, and when they see it. The rubric is [agent-support.md → The six capabilities](../reference/agent-support.md#the-six-capabilities).
 - **Blocking asks.** Which native events block, each one's [`AskKind`](../../crates/rimz/src/agents/lifecycle.rs), whether the agent draws its own ask UI, and — verified, never assumed — what an empty hook response means for *this* agent: neutral semantics diverge per agent ([adapter.md → Hook stdout is the decision channel](../internals/agents/adapter.md#hook-stdout-is-the-decision-channel)).
 - **Tool vocabularies.** The mutating tool set and its file-editing subset; the editing set drives the `reasoning → acting` phase edge.
-- **Session identity.** Where the session id comes from, standalone vs daemon-routed hooks, lazy registration, the resume command shape, and what `/clear` or `/new` does to identity ([instances.md → Binding a session](../internals/agents/instances.md#binding-a-session)).
+- **Session identity.** Where the session id comes from, standalone vs daemon-routed hooks, lazy registration, the resume command shape, what `/clear` or `/new` does to identity, and the local-session discovery mode: `Unsupported`, `FullScan`, or `PerPane` ([instances.md → Binding a session](../internals/agents/instances.md#binding-a-session)).
 - **Context sources.** Which of the three gauge sources the agent offers: a transcript tail, a rich out-of-band transport, or a gauge stamped onto a RimZ-authored hook wire ([adapter.md → Context sources](../internals/agents/adapter.md#context-sources)).
 - **Account and spend.** The auth surface (OAuth, API key, keyring), where per-turn usage records live, and whether they carry dollars (used verbatim) or tokens (priced through the price book) — the worksheet rows for [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider).
 - **Launch surface.** Argv for the `auto`/`ask`/`yolo`/`plan` permission modes, the compact command, and model/effort flags.
@@ -50,6 +50,8 @@ Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agent
 ## Step 4 — Declare the definition
 
 `AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, both coverage declarations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml): `emblems.rs::tests::every_provider_has_curated_art_distinct_from_fallback` requires it for every built-in, and only plugin kinds render the shared fallback.
+
+Declare `Capabilities::local_session_discovery` as `Unsupported` without a provider-local reader, `FullScan` to scan the admitted workspaces, or `PerPane` to read only what live panes can bind. A `PerPane` adapter implements `SessionCapability::discover_pane_sessions` as well as the full scan used by `rimz agents resume`: read every named session by id, then creation-ordered new files in watched folders since the demand's clock while the pane is unsettled. Prove unchanged metadata cost independent of history size with stat-count tests, and equivalence to the full scan's bound pairs, merged rows and ghost-bind diagnostics through the store demand test. Bind-rejection diagnostics must remain a subset, and equal the full scan's when every pane has a process start and no reserved pane's own launch session was found.
 
 Two coverage declarations sit side by side and answer different questions:
 
@@ -173,7 +175,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 
 - [ ] `docs/externals/agent-adapter/<kind>-reference.md` — upstream protocol reference, pinned to sources
 - [ ] Mapping worksheet: 11 lifecycle signals, 19 concerns, 6 user capabilities, asks, tools, identity, context sources, spend, launch argv
-- [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, every capability trait (empty where unsupported)
+- [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, every capability trait (empty where unsupported), explicit `Unsupported` / `FullScan` / `PerPane` discovery mode with readers and cost/equivalence tests for `PerPane`
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
 - [ ] Curated art for the kind in `crates/rimz/src/agents/emblems.toml`

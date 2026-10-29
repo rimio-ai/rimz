@@ -90,8 +90,8 @@ pub use credits::{
 };
 pub use definition::{
     AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
-    HookCoverage, IntegrationConcern, PermissionMode, PlanLabel, SamePaneSessionPolicy,
-    UserCapability,
+    HookCoverage, IntegrationConcern, LocalSessionDiscovery, PermissionMode, PlanLabel,
+    SamePaneSessionPolicy, UserCapability,
 };
 use definition::{
     CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs, LaunchSpec,

@@ -17,8 +17,8 @@ use serde_json::Value;
 
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
-    SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
+    RemoteControlCapability, SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal};
@@ -63,7 +63,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: false,
-        local_session_discovery: false,
+        local_session_discovery: LocalSessionDiscovery::Unsupported,
         daemon_hooked_sessions: false,
         direct_account_usage: false,
         same_pane_session: SamePaneSessionPolicy::KeepPrimary,

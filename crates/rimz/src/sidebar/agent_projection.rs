@@ -9,7 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::LocalSessionObservation;
+use crate::agents::{LocalSessionDiscovery, LocalSessionObservation};
 use crate::disk::parse_cache::ParseCache;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::AgentKind;
@@ -45,7 +45,9 @@ impl LocalSessionInputs {
             let Some(adapter) = crate::agents::find_definition(kind) else {
                 continue;
             };
-            if !adapter.spec().capabilities.local_session_discovery {
+            if adapter.spec().capabilities.local_session_discovery
+                == LocalSessionDiscovery::Unsupported
+            {
                 continue;
             }
             let Some(workspace) = crate::store::snapshot::pane_worktree_path(pane) else {
@@ -188,6 +190,7 @@ fn probe_adapters() -> WiredAgentProjection {
     for agent in crate::agents::all_definitions() {
         let definition = agent.spec();
         let wired = definition.capabilities.local_session_discovery
+            != LocalSessionDiscovery::Unsupported
             || (definition.has_wired_hook_install() && agent.hooks_installed(&login_env));
         if !wired {
             continue;

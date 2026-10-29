@@ -115,7 +115,7 @@ The human-input bracket is the only native-prompt signal, and three choices keep
 
 ### Sessions
 
-Neither `registers_lazily` nor `local_session_discovery` is set, so a Hermes pane shows the idle row until its first hook arrives ([instances.md](./instances.md#before-a-session-binds)). Hermes fires `on_session_start` after it builds the system prompt, and a resume can continue without firing it again ([reference](../../externals/agent-adapter/hermes-reference.md#event-families)).
+Hermes declares `registers_lazily = false` and `local_session_discovery = Unsupported`, so with hooks installed its pane shows the idle row until its first hook arrives ([instances.md](./instances.md#before-a-session-binds)). Hermes fires `on_session_start` after it builds the system prompt, and a resume can continue without firing it again ([reference](../../externals/agent-adapter/hermes-reference.md#event-families)).
 
 `on_session_reset` (`/new`) produces the same `Registered` signal as a start, under the new `session_id`. It ends nothing: the old root stays, and [same-pane ownership](./instances.md#same-pane-ownership) decides which root owns the card.
 

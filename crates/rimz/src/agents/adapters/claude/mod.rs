@@ -55,8 +55,8 @@ use super::AskKind;
 use super::RemoteControlStatus;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -123,7 +123,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         // recovered by cwd, and a pane with no session, such as the login
         // screen before SessionStart, is idle-synthesized like any wired agent.
         registers_lazily: false,
-        local_session_discovery: true,
+        local_session_discovery: LocalSessionDiscovery::FullScan,
         daemon_hooked_sessions: false,
         direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,

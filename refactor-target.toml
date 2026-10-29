@@ -313,7 +313,13 @@ upward-dependencies = ["address"]
 # WindowStarts exposes shared history-zone window boundaries to the CLI (+1).
 # ResumeProbe and its agents re-export share three-way resume discovery outcomes (+2).
 # SessionStepOutput carries the prepared command and launch notices to the CLI (+1).
-surface-budget = 1174
+# LocalSessionDiscovery and its re-export name the host's discovery policy (+2).
+surface-budget = 1176
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::LocalSessionDiscovery"
+reason = "The host dispatches provider-local discovery by unsupported, full-scan or per-pane policy."
 
 [[verdict]]
 kind = "item"
