@@ -491,7 +491,7 @@ These flags shape a Claude Code launch ([CLI reference](https://code.claude.com/
 | --- | --- |
 | `--resume`, `-r [value]` | resume by session ID, name, or absolute transcript path; bare opens the picker |
 | `--continue`, `-c` | resume the newest conversation in the directory |
-| `--fork-session` | with `--resume` or `--continue`, copy into a new session ID and leave the source untouched; the new session's `SessionStart` reports `source: "fork"` |
+| `--fork-session` | with `--resume` or `--continue`, copy into a new session ID and leave the source untouched; the new session's `SessionStart` reports `source: "fork"`. Read from the installed 2.1.312 binary (`claude --version`): each copied record keeps its `message.id`, `requestId`, `timestamp` and usage, and gets the new `sessionId`, `isSidechain: false` and `forkedFrom: {sessionId, messageUuid}`, so spend dedup by `message.id` reads the fork's copied history as duplicates of the source's |
 | `--session-id <uuid>` | use a specific session ID |
 | `--name`, `-n` | session display name |
 | `--system-prompt`, `--system-prompt-file` | replace the default system prompt. From 2.1.283, both forms can be supplied together, with file text first |
