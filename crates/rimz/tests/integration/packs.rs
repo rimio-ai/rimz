@@ -248,7 +248,15 @@ fn pack_launch_name_conflicts_cross_profile_and_team_trees() {
 
 #[test]
 fn reserved_pack_team_cells_are_item_failures_not_set_failures() {
-    for name in ["claude", "term", "claude-yolo", "claude-fast", "coder-fast"] {
+    // A launch of a kind, a virtual shape, or a profile's fast form is not the team's.
+    for (name, launches) in [
+        ("claude", true),
+        ("term", false),
+        ("claude-yolo", true),
+        ("claude-fast", true),
+        ("other-fast", true),
+        ("coder-fast", false),
+    ] {
         let env = Env::new();
         let source = installed_with_home_profile(&env);
         let team = fs::read_to_string(source.join("crew/teams/pair.md")).unwrap();
@@ -257,6 +265,12 @@ fn reserved_pack_team_cells_are_item_failures_not_set_failures() {
             .args(["agents", "explain", "other"])
             .assert()
             .success();
+        if launches {
+            env.rimz()
+                .args(["agents", "explain", name])
+                .assert()
+                .success();
+        }
         let crew = json(&env, &["packs", "show", "crew", "--json"]);
         let fate = &item(&crew, "teams", name)["fate"];
         assert_eq!(fate["state"], "failed", "{crew}");
