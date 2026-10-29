@@ -25,7 +25,6 @@ fn account_label_titles_use_the_theme_with_or_without_a_panel() {
             &ReportContext {
                 day_cutoff_secs: None,
                 config: &config,
-                agents: None,
                 installed: &BTreeSet::new(),
                 spend_step: &|_| SpendStep::Subscription,
             },
@@ -107,21 +106,21 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             kind: report.account.kind.clone(),
             account: report.account.clone(),
             home: Some(if report.account.name.is_default() {
-                PathBuf::from(format!("/home/u/.{}", report.kind))
+                PathBuf::from(format!("/home/u/.{}", report.account.kind))
             } else {
                 PathBuf::from(format!("/accounts/{}", report.account.name))
             }),
             history: None,
             label: None,
-            machine_default: report.default_for.contains(Scope::NewRooms),
+            machine_default: false,
             problem: None,
             setup_error: None,
             login_command: None,
             status: AccountStatus::Ready,
             entitlement: report.entitlement,
-            active: report.active,
-            default_for: report.default_for.clone(),
-            agents: report.agents,
+            active: false,
+            default_for: Scopes::default(),
+            agents: None,
             windows: report.windows.clone(),
             extra_credits: report.extra_credits.clone(),
             reset_credits: report.reset_credits.clone(),
@@ -142,33 +141,31 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             day_budget: report.day_budget,
             month_budget: report.month_budget,
             installed: report.installed,
-            legacy_spend_step: report.spend_step,
         })
         .collect()
 }
 
-fn mark_standing(reports: &mut [ProviderReport], standing: &AccountStanding) {
+fn mark_standing(reports: &mut [AccountRow], standing: &AccountStanding) {
     for report in reports {
-        let kind = AgentKind::new_unchecked(&report.kind);
-        report.active = standing.active(&kind).as_ref() == Some(&report.account.name);
-        report.default_for = standing.scopes(&kind, &report.account.name);
+        report.active = standing.active(&report.kind).as_ref() == Some(&report.account.name);
+        report.default_for = standing.scopes(&report.kind, &report.account.name);
+        report.machine_default = report.default_for.contains(Scope::NewRooms);
     }
 }
 
 fn write_pretty(
     out: &mut impl std::io::Write,
-    reports: &[ProviderReport],
+    reports: &[AccountRow],
     now: Timestamp,
     time_zone: &TimeZone,
 ) -> std::io::Result<()> {
-    let rows = merged(reports);
     super::write_pretty(
         out,
-        &rows,
+        reports,
         now,
         time_zone,
         &BTreeMap::new(),
-        &multiple_account_kinds(&rows),
+        &multiple_account_kinds(reports),
     )
 }
 
@@ -178,8 +175,8 @@ fn assemble_reports(
     panels: BTreeMap<LoginKey, SidebarProviderPanel>,
     spending: &ProviderSpendingCache,
     filter: Option<&str>,
-) -> Vec<ProviderReport> {
-    super::assemble_reports(
+) -> Vec<AccountRow> {
+    merged(&super::assemble_reports(
         logins,
         accounts,
         panels,
@@ -188,11 +185,10 @@ fn assemble_reports(
         &ReportContext {
             day_cutoff_secs: None,
             config: &MachineConfig::default(),
-            agents: None,
             installed: &rimz::agents::known_kinds().map(str::to_owned).collect(),
             spend_step: &|_| SpendStep::Subscription,
         },
-    )
+    ))
 }
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
@@ -286,7 +282,6 @@ fn undecided_report_keeps_unknown_metering_with_or_without_a_panel() {
     let context = ReportContext {
         day_cutoff_secs: None,
         config: &config,
-        agents: None,
         installed: &BTreeSet::new(),
         spend_step: &|_| SpendStep::Subscription,
     };
@@ -377,7 +372,7 @@ fn lapsed_provider_report_does_not_restore_the_cached_plan() {
     assert!(!text.contains("Claude Pro"));
     insta::assert_snapshot!(text);
 
-    let mut rows = merged(&reports);
+    let mut rows = reports;
     rows[0].installed = false;
     let mut out = anstream::StripStream::new(Vec::new());
     super::write_pretty(
@@ -599,16 +594,19 @@ fn report_assembly_covers_auth_states_raw_accounts_and_filters() {
             .collect::<Vec<_>>(),
         rimz::agents::known_kinds().collect::<Vec<_>>()
     );
-    assert_eq!(reports[0].status, ProviderStatus::LoggedIn);
+    assert_eq!(reports[0].login, Some(ProviderStatus::LoggedIn));
     assert!(reports[0].metered.is_some_and(|metered| metered));
     let copilot = reports
         .iter()
-        .find(|report| report.kind == "copilot")
+        .find(|report| report.kind.as_str() == "copilot")
         .unwrap();
-    assert_eq!(copilot.status, ProviderStatus::Unavailable);
+    assert_eq!(copilot.login, Some(ProviderStatus::Unavailable));
     assert_eq!(copilot.account_id.as_deref(), Some("octocat"));
-    let pi = reports.iter().find(|report| report.kind == "pi").unwrap();
-    assert_eq!(pi.status, ProviderStatus::LoggedIn);
+    let pi = reports
+        .iter()
+        .find(|report| report.kind.as_str() == "pi")
+        .unwrap();
+    assert_eq!(pi.login, Some(ProviderStatus::LoggedIn));
     assert_eq!(pi.plan.as_deref(), Some("openai-oauth"));
     assert_eq!(pi.plan_label.as_deref(), Some("Openai Oauth"));
     assert_eq!(pi.metered, Some(false));
@@ -621,7 +619,7 @@ fn report_assembly_covers_auth_states_raw_accounts_and_filters() {
         Some("pi"),
     );
     assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].kind, "pi");
+    assert_eq!(filtered[0].kind.as_str(), "pi");
     let logged_out = assemble_reports(
         &default_logins(),
         &accounts,
@@ -630,7 +628,7 @@ fn report_assembly_covers_auth_states_raw_accounts_and_filters() {
         Some("codex"),
     );
     assert_eq!(logged_out.len(), 1);
-    assert_eq!(logged_out[0].status, ProviderStatus::LoggedOut);
+    assert_eq!(logged_out[0].login, Some(ProviderStatus::LoggedOut));
 }
 
 fn week(usd: f64) -> SpendTally {
@@ -741,11 +739,11 @@ fn named_accounts_carry_their_own_spend_and_default_never_reads_kind_wide() {
     let mut out = anstream::StripStream::new(Vec::new());
     super::write_pretty(
         &mut out,
-        &merged(&reports),
+        &reports,
         Timestamp::from_second(1).unwrap(),
         &TimeZone::UTC,
         &BTreeMap::from([(AgentKind::new_unchecked("claude"), Deciding::Machine)]),
-        &multiple_account_kinds(&merged(&reports)),
+        &multiple_account_kinds(&reports),
     )
     .unwrap();
     let pretty = String::from_utf8(out.into_inner()).unwrap();
@@ -782,7 +780,7 @@ fn window(minutes: u32, used: u8, resets_in: Option<i64>, now: Timestamp) -> Rat
 }
 
 fn overview(
-    reports: &[ProviderReport],
+    reports: &[AccountRow],
     now: Timestamp,
     deciding: &BTreeMap<String, Deciding>,
     all: bool,
@@ -790,7 +788,7 @@ fn overview(
     let mut out = anstream::StripStream::new(Vec::new());
     write_overview(
         &mut out,
-        &merged(reports),
+        reports,
         now,
         &TimeZone::UTC,
         &deciding
@@ -804,7 +802,7 @@ fn overview(
 }
 
 /// One kind's logged-in accounts, `default` first, each with its panel.
-fn group(kind: &str, rows: Vec<(&str, SidebarProviderPanel)>) -> Vec<ProviderReport> {
+fn group(kind: &str, rows: Vec<(&str, SidebarProviderPanel)>) -> Vec<AccountRow> {
     let kind = AgentKind::new_unchecked(kind);
     let (logins, panels): (Vec<_>, Vec<_>) = rows
         .into_iter()
@@ -1006,12 +1004,12 @@ fn overview_separates_readings_healthy_logins_and_unchecked_providers() {
                 rows[0].version = None;
             }
             "qwen" | "antigravity" => {
-                rows[0].status = ProviderStatus::Unavailable;
+                rows[0].login = Some(ProviderStatus::Unavailable);
                 rows[0].probe_error = Some("account source unavailable".to_owned());
             }
-            "pi" => rows[0].status = ProviderStatus::Unavailable,
+            "pi" => rows[0].login = Some(ProviderStatus::Unavailable),
             "claude" => {
-                rows[0].status = ProviderStatus::Unavailable;
+                rows[0].login = Some(ProviderStatus::Unavailable);
                 rows[0].probed_at = None;
             }
             "droid" => rows[0].installed = false,
@@ -1086,7 +1084,7 @@ fn only_multiple_accounts_contribute_markers_and_the_legend() {
     let mut single = group("copilot", vec![("default", panel("copilot"))]);
     single[0].active = true;
     single[0].windows = vec![window(60, 30, Some(1_800), now)];
-    reports.extend(single.clone());
+    reports.extend(single);
     let deciding = BTreeMap::from([
         ("codex".to_owned(), Deciding::Room),
         ("copilot".to_owned(), Deciding::Machine),
@@ -1098,7 +1096,7 @@ fn only_multiple_accounts_contribute_markers_and_the_legend() {
     );
     assert_eq!(text.matches('●').count(), 2, "{text}");
     let mut out = anstream::StripStream::new(Vec::new());
-    write_pretty(&mut out, &single, now, &TimeZone::UTC).unwrap();
+    write_pretty(&mut out, &reports[2..], now, &TimeZone::UTC).unwrap();
     let text = String::from_utf8(out.into_inner()).unwrap();
     assert!(!text.contains('●') && !text.contains('○'), "{text}");
     assert!(!text.contains("next launch"), "{text}");
@@ -1125,7 +1123,7 @@ fn a_single_login_earns_a_table_for_credits_but_not_for_logged_out_cache() {
             "{text}"
         );
         assert!(!text.contains("Other providers"), "{text}");
-        reports[0].status = ProviderStatus::LoggedOut;
+        reports[0].login = Some(ProviderStatus::LoggedOut);
         let text = overview(&reports, now, &BTreeMap::new(), false);
         assert!(
             !text.contains("NAME") && !text.contains("Other providers"),
@@ -1161,7 +1159,7 @@ fn rounded_zero_heading_spend_has_no_tally_or_pool_members() {
 #[test]
 fn needs_you_orders_structured_repairs_and_keeps_detail_problems() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
-    let row = |kind: &str, name: &str| merged(&group(kind, vec![(name, panel(kind))])).remove(0);
+    let row = |kind: &str, name: &str| group(kind, vec![(name, panel(kind))]).remove(0);
     let mut kimi = row("kimi", "default");
     kimi.read(
         Some(&LoginReading {
@@ -1388,7 +1386,7 @@ fn table_window_cells_show_what_is_left() {
     let mut raw = Vec::new();
     write_overview(
         &mut raw,
-        &merged(&reports),
+        &reports,
         now,
         &TimeZone::UTC,
         &BTreeMap::new(),
@@ -1417,7 +1415,7 @@ fn table_window_cells_show_what_is_left() {
 #[test]
 fn new_rooms_default_is_marked_unless_the_row_is_the_active_one() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
-    let pretty = |reports: &[ProviderReport], now| {
+    let pretty = |reports: &[AccountRow], now| {
         let mut out = anstream::StripStream::new(Vec::new());
         write_pretty(&mut out, reports, now, &TimeZone::UTC).unwrap();
         String::from_utf8(out.into_inner()).unwrap()
@@ -1426,7 +1424,7 @@ fn new_rooms_default_is_marked_unless_the_row_is_the_active_one() {
         "codex",
         vec![("default", panel("codex")), ("team", panel("codex"))],
     );
-    let marks = |reports: &[ProviderReport]| -> Vec<String> {
+    let marks = |reports: &[AccountRow]| -> Vec<String> {
         overview(reports, now, &BTreeMap::new(), false)
             .lines()
             .skip(2)
@@ -1533,7 +1531,7 @@ fn block_reads_a_reset_less_sub_cap_at_its_own_remainder() {
 
 #[test]
 fn unknown_kind_error_lists_registered_providers() {
-    let error = validate_kind(Some("wat")).unwrap_err().to_string();
+    let error = validate_kind("wat").unwrap_err().to_string();
     assert!(error.contains("unknown provider kind `wat`"));
     assert!(error.contains("claude, codex"));
 }
@@ -1593,7 +1591,7 @@ fn logged_out_kind_with_spend_history_still_shows_its_login_fix() {
     spending.spending.by_login.insert(login.key(), week(123.0));
     let reports = assemble_reports(&[login], &accounts, BTreeMap::new(), &spending, None);
     assert_eq!(reports[0].spending.as_ref().unwrap().week.usd, 123.0);
-    let mut rows = merged(&reports);
+    let mut rows = reports;
     rows[0].read(
         Some(&LoginReading {
             status: ProviderStatus::LoggedOut,
@@ -1784,20 +1782,34 @@ fn local_day_spend_uses_the_configured_timezone_and_agents_use_login_not_pool() 
             .ok()
             .map(|day| day.timestamp().as_second().max(0) as u64),
         config: &config,
-        agents: Some(&agents),
         installed: &rimz::agents::known_kinds().map(str::to_owned).collect(),
         spend_step: &|_| SpendStep::Subscription,
     };
     let render = |spending: &ProviderSpendingCache| {
-        serde_json::to_value(super::assemble_reports(
+        let reports = super::assemble_reports(
             &logins,
             &AccountsCache::default(),
             BTreeMap::new(),
             spending,
             None,
             &context,
-        ))
-        .unwrap()
+        );
+        let mut rows = super::rows_at(
+            &config,
+            &AccountStanding::machine_only(&config),
+            Some(&agents),
+            &BTreeMap::new(),
+        );
+        rows.retain(|row| row.kind.as_str() == "claude");
+        for row in &mut rows {
+            row.apply(
+                reports
+                    .iter()
+                    .find(|report| report.account == row.account)
+                    .unwrap(),
+            );
+        }
+        serde_json::to_value(rows).unwrap()
     };
     let json = render(&spending);
     assert_eq!(json[0]["spending"]["today"]["usd"], 12.0);
@@ -1831,18 +1843,17 @@ fn absent_binary_is_hidden_unless_all_lists_its_login_state() {
     let context = ReportContext {
         day_cutoff_secs: None,
         config: &config,
-        agents: None,
         installed: &installed,
         spend_step: &|_| SpendStep::Subscription,
     };
-    let reports = super::assemble_reports(
+    let reports = merged(&super::assemble_reports(
         &logins,
         &accounts,
         BTreeMap::new(),
         &ProviderSpendingCache::default(),
         None,
         &context,
-    );
+    ));
     let text = overview(&reports, now, &BTreeMap::new(), false);
     assert!(text.contains("No provider is set up here"), "{text}");
     assert!(!text.contains("kiro"), "{text}");
@@ -1987,7 +1998,7 @@ fn protocol_fixture(
 }
 
 #[test]
-fn month_budget_survives_account_and_legacy_reports_and_text_detail() {
+fn month_budget_survives_account_json_and_text_detail() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let mut provider = panel("claude");
     provider.month_budget = Some(DailyBudgetView {
@@ -2002,18 +2013,12 @@ fn month_budget_survives_account_and_legacy_reports_and_text_detail() {
         &ProviderSpendingCache::default(),
         Some("claude"),
     );
-    let rows = merged(&reports);
-    let legacy = rows[0].legacy(&AccountStanding::unread(&MachineConfig::default()), false);
-    for json in [
-        serde_json::to_value(&rows[0]).unwrap(),
-        serde_json::to_value(&legacy).unwrap(),
-    ] {
-        assert_eq!(json["day_budget"], serde_json::Value::Null);
-        assert_eq!(
-            json["month_budget"],
-            serde_json::json!({"cap_usd":10.0, "spend_usd":12.0, "parked":true})
-        );
-    }
+    let json = serde_json::to_value(&reports[0]).unwrap();
+    assert_eq!(json["day_budget"], serde_json::Value::Null);
+    assert_eq!(
+        json["month_budget"],
+        serde_json::json!({"cap_usd":10.0, "spend_usd":12.0, "parked":true})
+    );
     let mut out = anstream::StripStream::new(Vec::new());
     write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
     let text = String::from_utf8(out.into_inner()).unwrap();
@@ -2021,7 +2026,7 @@ fn month_budget_survives_account_and_legacy_reports_and_text_detail() {
 }
 
 #[test]
-fn pretty_and_json_reports_are_stable() {
+fn pretty_report_is_stable_and_json_omits_account_keys() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let (accounts, panel, spending) = protocol_fixture(now);
     let reports = assemble_reports(
@@ -2037,17 +2042,9 @@ fn pretty_and_json_reports_are_stable() {
     let pretty = String::from_utf8(out.into_inner()).unwrap();
     insta::assert_snapshot!("provider_report_pretty", pretty);
 
-    let standing = AccountStanding::unread(&machine_using("claude", "other"));
-    let projected: Vec<_> = merged(&reports)
-        .iter()
-        .map(|row| row.legacy(&standing, false))
-        .collect();
-    let json = serde_json::to_string_pretty(&projected).unwrap();
+    let json = serde_json::to_string_pretty(&reports).unwrap();
     assert!(!json.contains("account_key"));
     assert!(!json.contains("must-not-leak"));
-    insta::with_settings!({prepend_module_to_snapshot => false}, {
-        insta::assert_snapshot!("rimz__cli__providers__tests__provider_report_json", json);
-    });
 }
 
 #[test]
@@ -2061,7 +2058,7 @@ fn paid_credit_step_marks_the_extra_cell_and_line_as_paying() {
         &spending,
         Some("claude"),
     );
-    let render = |reports: &[ProviderReport]| {
+    let render = |reports: &[AccountRow]| {
         let mut out = anstream::StripStream::new(Vec::new());
         write_pretty(&mut out, reports, now, &TimeZone::UTC).unwrap();
         let pretty = String::from_utf8(out.into_inner()).unwrap();
@@ -2074,7 +2071,7 @@ fn paid_credit_step_marks_the_extra_cell_and_line_as_paying() {
         "subscription"
     );
 
-    reports[0].spend_step = SpendStep::PaidCredit;
+    reports[0].spend_step = Some(SpendStep::PaidCredit);
     let (table, pretty) = render(&reports);
     assert!(table.contains("  $12.40 used · paying"), "{table}");
     let extra = pretty

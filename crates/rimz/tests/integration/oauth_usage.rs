@@ -351,15 +351,15 @@ fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
         .expect("rimz accounts show claude");
     assert!(
         output.status.success(),
-        "providers stderr: {}",
+        "accounts stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: Value = serde_json::from_slice(&output.stdout).expect("providers json");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("accounts json");
     assert!(
         report[0]["windows"].as_array().is_some_and(|windows| {
             windows.len() == 2 && windows.iter().all(|window| window["used_percentage"] == 0)
         }),
-        "providers reported old-account limits: {report}"
+        "accounts reported old-account limits: {report}"
     );
     assert_eq!(server.join().expect("server request").len(), 1);
 }
@@ -711,16 +711,16 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
     write_fake_claude(&bin_dir);
     let output = env
         .rimz()
-        .args(["providers", "claude", "--json"])
+        .args(["accounts", "show", "claude", "--json"])
         .env("PATH", path_with_front(&bin_dir))
         .bounded_output()
         .expect("read corrected provider usage");
     assert!(
         output.status.success(),
-        "providers stderr: {}",
+        "accounts stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: Value = serde_json::from_slice(&output.stdout).expect("providers json");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("accounts json");
     let weekly = report[0]["windows"]
         .as_array()
         .expect("provider windows")
@@ -729,7 +729,7 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
         .expect("weekly window");
     assert_eq!(
         weekly["used_percentage"], 4,
-        "providers retained session usage: {report}"
+        "accounts retained session usage: {report}"
     );
 }
 

@@ -1,4 +1,4 @@
-//! Unified account readings, compatibility projection, and provider tables.
+//! Unified account readings and provider tables.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,21 +33,13 @@ use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
 
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 
-pub(super) fn list(
-    args: ListArgs,
-    target: Option<&str>,
-    legacy: bool,
-    globals: &GlobalFlags,
-) -> Result<()> {
-    if legacy {
-        validate_kind(target)?;
-    }
+pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) -> Result<()> {
     let (filter, name) = match target {
         Some(target) => {
             let (kind, name) = target
                 .split_once('@')
                 .map_or((target, None), |(kind, name)| (kind, Some(name)));
-            validate_kind(Some(kind))?;
+            validate_kind(kind)?;
             (Some(kind), name.map(str::parse::<LoginName>).transpose()?)
         }
         None => (None, None),
@@ -60,7 +52,7 @@ pub(super) fn list(
     for (_, warning) in config.accounts.label_warnings() {
         writeln!(std::io::stderr().lock(), "rimz: warning: {warning}")?;
     }
-    let (standing, in_room) = match super::super::position_standing(globals, &config) {
+    let (standing, _) = match super::super::position_standing(globals, &config) {
         Ok(standing) => standing,
         Err(error) => {
             writeln!(
@@ -119,7 +111,7 @@ pub(super) fn list(
         })
         .cloned()
         .collect();
-    if !legacy && !stale.is_empty() && !args.refresh {
+    if !stale.is_empty() && !args.refresh {
         accounts = query_provider_accounts(&runtime, &stale, &probe_logins, true);
     }
     spinner.set("Refreshing provider usage");
@@ -222,7 +214,6 @@ pub(super) fn list(
                 .ok()
                 .map(|day| day.timestamp().as_second().max(0) as u64),
             config: &config,
-            agents: agents.as_ref(),
             installed: &installed,
             spend_step: &|key| SpendFacts::read(&runtime, key, now).step(&config.resume, None, now),
         },
@@ -273,14 +264,6 @@ pub(super) fn list(
             .unwrap_or(usize::MAX)
     });
     if args.json {
-        if legacy {
-            let reports: Vec<_> = rows
-                .iter()
-                .filter(|row| reports.iter().any(|report| report.account == row.account))
-                .map(|row| row.legacy(&standing, in_room))
-                .collect();
-            return render::json_pretty(&reports);
-        }
         return render::json_pretty(&rows);
     }
     let deciding = rows
@@ -325,10 +308,7 @@ fn provider_order(
     (configured, Reverse(sessions))
 }
 
-fn validate_kind(kind: Option<&str>) -> Result<()> {
-    let Some(kind) = kind else {
-        return Ok(());
-    };
+fn validate_kind(kind: &str) -> Result<()> {
     let known: Vec<_> = rimz::agents::known_kinds().collect();
     if known.contains(&kind) {
         return Ok(());
@@ -339,18 +319,14 @@ fn validate_kind(kind: Option<&str>) -> Result<()> {
     )
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
 struct ProviderReport {
-    kind: String,
     account: LoginKey,
     pool: LoginKey,
     product_name: String,
     status: ProviderStatus,
     entitlement: Entitlement,
     probed_at: Option<Timestamp>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     probe_error: Option<String>,
-    #[serde(skip)]
     installed: bool,
     plan: Option<String>,
     plan_label: Option<String>,
@@ -366,9 +342,6 @@ struct ProviderReport {
     spending: Option<ProviderSpend>,
     day_budget: Option<DailyBudgetView>,
     month_budget: Option<DailyBudgetView>,
-    agents: Option<usize>,
-    active: bool,
-    default_for: Scopes,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -384,7 +357,6 @@ struct ProviderSpend {
 struct ReportContext<'a> {
     day_cutoff_secs: Option<u64>,
     config: &'a MachineConfig,
-    agents: Option<&'a BTreeMap<LoginKey, usize>>,
     installed: &'a BTreeSet<String>,
     spend_step: &'a dyn Fn(&LoginKey) -> SpendStep,
 }
@@ -435,7 +407,6 @@ fn build_report(
         account.and_then(|account| account.plan.clone())
     };
     ProviderReport {
-        kind: kind.to_owned(),
         account: login.key(),
         pool: login.pool(),
         product_name: panel
@@ -499,11 +470,6 @@ fn build_report(
             }),
         day_budget: panel.and_then(|panel| panel.day_budget),
         month_budget: panel.and_then(|panel| panel.month_budget),
-        agents: context
-            .agents
-            .map(|counts| counts.get(&login.key()).copied().unwrap_or(0)),
-        active: false,
-        default_for: Scopes::default(),
     }
 }
 
@@ -560,8 +526,6 @@ struct AccountRow {
     month_budget: Option<DailyBudgetView>,
     #[serde(skip)]
     installed: bool,
-    #[serde(skip)]
-    legacy_spend_step: SpendStep,
 }
 
 impl AccountRow {
@@ -585,38 +549,6 @@ impl AccountRow {
         self.day_budget = report.day_budget;
         self.month_budget = report.month_budget;
         self.installed = report.installed;
-        self.legacy_spend_step = report.spend_step;
-    }
-
-    fn legacy(&self, standing: &AccountStanding, in_room: bool) -> ProviderReport {
-        ProviderReport {
-            kind: self.kind.to_string(),
-            account: self.account.clone(),
-            status: self.login.unwrap_or(ProviderStatus::Unavailable),
-            entitlement: self.entitlement,
-            metered: self.metered,
-            windows: self.windows.clone(),
-            extra_credits: self.extra_credits.clone(),
-            reset_credits: self.reset_credits.clone(),
-            spend_step: self.legacy_spend_step,
-            agents: self.agents,
-            active: in_room && standing.active(&self.kind).as_ref() == Some(&self.account.name),
-            default_for: standing.scopes(&self.kind, &self.account.name),
-            pool: self.pool.clone(),
-            product_name: self.product_name.clone(),
-            probed_at: self.probed_at,
-            probe_error: self.probe_error.clone(),
-            plan: self.plan.clone(),
-            plan_label: self.plan_label.clone(),
-            account_id: self.account_id.clone(),
-            sub_provider: self.sub_provider.clone(),
-            account_scope: self.account_scope.clone(),
-            version: self.version.clone(),
-            spending: self.spending.clone(),
-            day_budget: self.day_budget,
-            month_budget: self.month_budget,
-            installed: self.installed,
-        }
     }
 
     /// Fold login knowledge into healthy setup; setup problems stand because
@@ -773,7 +705,6 @@ fn account_rows(
             day_budget: None,
             month_budget: None,
             installed: false,
-            legacy_spend_step: SpendStep::Subscription,
         }
     };
     let mut rows: Vec<AccountRow> = catalog

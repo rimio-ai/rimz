@@ -16,7 +16,7 @@ fn accounts(env: &Env, args: &[&str]) -> Output {
 }
 
 #[test]
-fn accounts_and_providers_json_keep_day_and_month_budget_fields_separate() {
+fn accounts_json_keeps_day_and_month_budget_fields_separate() {
     use rimz::agents::spending::{
         ProviderSpendingCache, SpendTally, SpendWindow, utc_month_start_secs,
         write_provider_spending_cache,
@@ -66,18 +66,13 @@ fn accounts_and_providers_json_keep_day_and_month_budget_fields_separate() {
         .by_provider
         .insert("claude".to_owned(), tally);
     write_provider_spending_cache(&env.runtime_paths().shared_provider_spending_path(), &cache);
-    for args in [
-        vec!["accounts", "show", "claude", "--json"],
-        vec!["providers", "claude", "--json"],
-    ] {
-        let output = hermetic(&env, &mut env.rimz()).args(args).output().unwrap();
-        let rows: Value = serde_json::from_str(&succeeded(&output)).unwrap();
-        assert_eq!(rows[0]["day_budget"], Value::Null);
-        assert_eq!(
-            rows[0]["month_budget"],
-            json!({"cap_usd":10.0,"spend_usd":6.0,"parked":false})
-        );
-    }
+    let rows: Value =
+        serde_json::from_str(&succeeded(&accounts(&env, &["show", "claude", "--json"]))).unwrap();
+    assert_eq!(rows[0]["day_budget"], Value::Null);
+    assert_eq!(
+        rows[0]["month_budget"],
+        json!({"cap_usd":10.0,"spend_usd":6.0,"parked":false})
+    );
     let detail = succeeded(&accounts(&env, &["show", "claude"]));
     assert!(detail.contains("$6.00 of $10.00/month"), "{detail}");
 }
@@ -135,15 +130,6 @@ fn unavailable_login_probe_keeps_accounts_stderr_quiet() {
                 && line.contains("claude (login read failed: exited 42)")),
         "{text}"
     );
-    let alias = hermetic(&env, &mut env.rimz())
-        .args(["providers", "--refresh"])
-        .output()
-        .unwrap();
-    assert_eq!(succeeded(&alias), text);
-    assert_eq!(
-        String::from_utf8_lossy(&alias.stderr),
-        "rimz: warning: `rimz providers` is deprecated and goes in the next release; use `rimz accounts` (`rimz accounts show <kind>` for one provider)\n"
-    );
 }
 
 #[test]
@@ -189,13 +175,6 @@ fn bare_accounts_runs_list() {
     );
     assert!(!bare.contains("KIND") && !bare.contains("STATUS"), "{bare}");
     assert_eq!(bare, succeeded(&accounts(&env, &["list"])));
-    let alias = hermetic(&env, &mut env.rimz())
-        .arg("providers")
-        .output()
-        .unwrap();
-    assert_eq!(bare, succeeded(&alias));
-    assert_eq!(String::from_utf8_lossy(&alias.stderr).lines().count(), 1);
-    assert!(String::from_utf8_lossy(&alias.stderr).contains("is deprecated"));
 }
 
 #[test]
@@ -1705,7 +1684,7 @@ fn a_broken_project_config_warns_and_marks_no_account() {
     std::fs::write(project.join("config.toml"), "[accounts").unwrap();
     for args in [
         &["accounts", "list", "--json"][..],
-        &["providers", "--json", "--all"][..],
+        &["accounts", "show", "claude", "--json"][..],
     ] {
         let output = hermetic(&env, &mut env.rimz())
             .args(args)
@@ -1721,11 +1700,6 @@ fn a_broken_project_config_warns_and_marks_no_account() {
             1,
             "{args:?}: {stderr}"
         );
-        assert_eq!(
-            stderr.contains("is deprecated"),
-            args[0] == "providers",
-            "{stderr}"
-        );
         assert!(stderr.contains("config.toml"), "{args:?}: {stderr}");
         let rows = rows.as_array().unwrap();
         assert!(
@@ -1734,10 +1708,7 @@ fn a_broken_project_config_warns_and_marks_no_account() {
         );
         let claude_default = rows
             .iter()
-            .find(|row| {
-                row["kind"] == "claude"
-                    && (row["account"] == "claude@default" || row["account"] == "default")
-            })
+            .find(|row| row["kind"] == "claude" && row["account"] == "claude@default")
             .unwrap_or_else(|| panic!("{args:?}: no claude default row in {rows:?}"));
         assert_eq!(
             claude_default["default_for"],
@@ -2141,24 +2112,8 @@ fn list_probes_a_logged_out_account_again_on_every_run() {
     assert_eq!(work()["status"], "logged_out");
     assert_eq!(probes(), cold + 2, "each cached logout is probed once more");
 
-    let legacy = |refresh| -> Value {
-        let mut command = env.rimz();
-        hermetic(&env, &mut command).args(["providers", "claude", "--json"]);
-        if refresh {
-            command.arg("--refresh");
-        }
-        serde_json::from_str(&succeeded(&command.output().unwrap())).unwrap()
-    };
     let cached = probes();
-    let first = legacy(false);
-    assert_eq!(probes(), cached, "the alias reuses cached logouts");
-    assert_eq!(
-        legacy(false),
-        first,
-        "the legacy projection keeps its timestamps"
-    );
-    assert_eq!(probes(), cached, "a second alias read also keeps the TTL");
-    legacy(true);
+    succeeded(&accounts(&env, &["show", "claude", "--json", "--refresh"]));
     assert_eq!(
         probes(),
         cached + 2,
@@ -2225,18 +2180,6 @@ fn list_reads_the_recorded_login_and_probes_an_ambiguous_record_again() {
         .to_string(),
     )
     .unwrap();
-
-    succeeded(
-        &hermetic(&env, &mut env.rimz())
-            .args(["providers", "claude", "--json"])
-            .output()
-            .unwrap(),
-    );
-    let probed = std::fs::read_to_string(&log).unwrap_or_default();
-    assert!(
-        probed.is_empty(),
-        "the alias keeps cached logout and ambiguous records within the TTL: {probed}"
-    );
 
     let rows: Value =
         serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();

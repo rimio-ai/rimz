@@ -258,7 +258,6 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Lsp(args)) => lsp::run(args, &globals),
         Some(Subcmd::Paths(args)) => paths::run(args, &globals),
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
-        Some(Subcmd::Providers(args)) => accounts::run_alias(args, &globals),
         Some(Subcmd::Logins(args)) => accounts::run(args, &globals),
         Some(Subcmd::Budget(args)) => budget::run(args, &globals),
         Some(Subcmd::ListPets(args)) => list_pets::run(args, &globals),
@@ -711,9 +710,6 @@ enum Subcmd {
     ///
     /// Includes model and agent breakdowns.
     Stats(stats::StatsArgs),
-    /// Query provider account plans, auth, limits, credits, and spend.
-    #[command(hide = true)]
-    Providers(accounts::ProvidersArgs),
     /// List, select, declare, and remove provider accounts.
     ///
     /// A named account is a separate provider home a room launches into.

@@ -40,39 +40,6 @@ struct ListArgs {
     all: bool,
 }
 
-#[derive(Debug, Args)]
-pub(super) struct ProvidersArgs {
-    /// Show only one provider kind.
-    #[arg(value_name = "KIND")]
-    kind: Option<String>,
-    /// Emit the report as JSON instead of human-readable text.
-    #[arg(long)]
-    json: bool,
-    /// Bypass account and usage refresh TTLs.
-    #[arg(long)]
-    refresh: bool,
-    /// Include unhealthy and uninstalled providers in Other providers.
-    #[arg(long)]
-    all: bool,
-}
-
-pub(super) fn run_alias(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
-    writeln!(
-        std::io::stderr().lock(),
-        "rimz: warning: `rimz providers` is deprecated and goes in the next release; use `rimz accounts` (`rimz accounts show <kind>` for one provider)"
-    )?;
-    report::list(
-        ListArgs {
-            json: args.json,
-            refresh: args.refresh,
-            all: args.all,
-        },
-        args.kind.as_deref(),
-        true,
-        globals,
-    )
-}
-
 fn redeem_exit_code(outcome: RedemptionCode) -> i32 {
     match outcome {
         RedemptionCode::Reset => 0,
@@ -175,7 +142,7 @@ pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
             history,
             label,
         } => add(&account_kind(&kind)?, name, home, history, label),
-        AccountsSubcmd::List(args) => report::list(args, None, false, globals),
+        AccountsSubcmd::List(args) => report::list(args, None, globals),
         AccountsSubcmd::Show {
             account,
             json,
@@ -187,7 +154,6 @@ pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
                 all: true,
             },
             Some(&account),
-            false,
             globals,
         ),
         AccountsSubcmd::Redeem {
