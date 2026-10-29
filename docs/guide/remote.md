@@ -87,11 +87,11 @@ The badge shows the worse of its two axes, so a link with a fast round trip and 
 
 ## Ports forward themselves
 
-Attach normally, then start `python3 -m http.server 3000`, `pnpm serve`, or another dev server in a room pane on the host. Within seconds `http://localhost:3000` opens on your local machine, with no second flag and no second SSH command.
+Attach normally, then start `python3 -m http.server 3000`, `pnpm serve`, or another dev server in a room pane on the host. Within seconds `http://localhost:3000` opens on your local machine if that local port is free, with no second flag and no second SSH command. If it is busy, RimZ picks a nearby higher port, or an OS-assigned port when none nearby is free. A terminal notification names the new local port, using the same notification settings as the link alerts.
 
 RimZ forwards a listener when it starts after you attach, belongs to your remote user, uses port 1024 or above, and binds a loopback or wildcard address. The local side binds `127.0.0.1` only, so the forwarded service stays on your machine. Discovery keeps the thirty-two lowest qualifying ports, and at most sixteen forwards stay open at once.
 
-A forward closes shortly after its server stops, reopens with the room after a link recovery, and every forward closes when you detach. A port already busy on your local machine is skipped, and a terminal notification names the port, on the same settings the link notifications obey: free it, then stop and restart the server on the host, because the listener disappearing and coming back is what triggers the retry.
+A forward closes shortly after its server stops, reopens with the room after a link recovery, and every forward closes when you detach. Its chosen local port stays reserved for that remote port throughout the connection, so restarting a server keeps its URL. Only a local port that becomes busy at reopen moves the URL again, with another notification. An SSH refusal, unlike a busy local port, waits for the remote listener to disappear from a report and return before retrying.
 
 `rimz remote connect dev --no-auto-forward` turns forwarding off for one connection, and `rimz remote add dev dev-box:~/code/query-engine --no-auto-forward` saves the switch. Forwarding needs the supervised link, so `--no-reconnect` and `--web` connections never forward, and listener discovery reads the host's `/proc`, so Linux hosts only. Other hosts keep the normal remote connection without automatic forwards.
 
