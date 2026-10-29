@@ -1109,6 +1109,25 @@ mod agent_ref {
     }
 
     #[test]
+    fn bare_session_id_miss_explains_when_no_provider_homes_could_be_searched() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        std::fs::write(
+            fixture.env.rimz_home().join("config.toml"),
+            "[accounts.use\n",
+        )
+        .unwrap();
+        let output = fixture.output(UUID);
+        assert_resume_refusal(
+            &output,
+            &format!(
+                "no lane and no session matched '{UUID}' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>` or a session-id prefix; no provider homes could be searched"
+            ),
+            "searched provider homes",
+        );
+        fixture.assert_no_placement();
+    }
+
+    #[test]
     fn bare_session_prefix_misses_explain_the_recorded_only_lookup() {
         let fixture = Fixture::new(LaunchParams::default(), false, None);
         let output = fixture.output("aaaaaaaa");
@@ -1632,6 +1651,32 @@ mod agent_ref {
                 && stderr.contains("rimz agents forge.coder --continue"),
             "{stderr}"
         );
+    }
+
+    #[test]
+    fn bare_recorded_team_member_keeps_the_agent_reference_refusal() {
+        let fixture = Fixture::new(
+            LaunchParams {
+                team: Some("forge".into()),
+                role: Some("coder".into()),
+                ..Default::default()
+            },
+            false,
+            None,
+        );
+        fixture.record_uuid();
+        let outputs =
+            [format!("@{UUID}"), UUID.to_owned()].map(|reference| fixture.output(&reference));
+        for output in outputs {
+            assert_resume_refusal(
+                &output,
+                "@uuid-fox is a member of team `forge`; reopen it with `rimz agents forge.coder --continue`",
+                "RimZ has not recorded it",
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!stderr.contains("searched provider homes"), "{stderr}");
+        }
+        fixture.assert_no_placement();
     }
 
     #[test]
