@@ -3725,6 +3725,56 @@ fn packs_load_problems_keep_the_faulty_path_and_do_not_hide_healthy_definitions(
 }
 
 #[test]
+fn packs_resolver_errors_name_the_exclusion_fix() {
+    let home = fixture();
+    let source = linked_pack(home.path(), "crew");
+    let cases = [
+        (
+            "agents",
+            "warm",
+            "agent: pi\nkeep-warm:\n  max: 2h\n  while: team.stage!=Done",
+            "a solo definition has no board",
+        ),
+        (
+            "subagents",
+            "kid",
+            "agent: pi\nsubagents: [other]",
+            "which only a direct profile takes",
+        ),
+        ("agents", "boss", "agent: pi\nsubagents: [nobody]", "nobody"),
+    ];
+    for (namespace, name, fields, _) in cases {
+        definition(
+            source.path(),
+            &format!("{namespace}/{name}.md"),
+            fields,
+            "Probe.",
+        );
+    }
+    let root = crate::packs::resolve(home.path()).packs[0].root.clone();
+    let loaded = load_checked(home.path());
+    for (namespace, name, _, reason) in cases {
+        let path = root.join(namespace).join(format!("{name}.md"));
+        let messages: Vec<_> = loaded
+            .errors
+            .iter()
+            .filter(|error| error.path == path)
+            .map(|error| error.message.as_str())
+            .collect();
+        let [message] = messages[..] else {
+            panic!("{name}: {:?}", loaded.errors);
+        };
+        assert!(message.contains(reason), "{message}");
+        assert!(
+            message.ends_with(&format!(
+                "; run `rimz packs exclude crew:{name} --type {namespace}`"
+            )),
+            "{message}"
+        );
+    }
+}
+
+#[test]
 fn yaml_comments_quotes_and_null_tools_are_supported() {
     let root = fixture();
     definition(

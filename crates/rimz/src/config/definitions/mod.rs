@@ -674,6 +674,7 @@ fn load_resolved(
         tiers,
         native_auto_compact,
     };
+    let resolved_from = loaded.errors.len();
     // Children resolve first so an agent's `subagents:` checks against what loaded.
     agent::resolve_namespace(
         agent::Resolver::new(scope, "subagents", [&subagents, &agents], &BTreeSet::new()),
@@ -690,6 +691,16 @@ fn load_resolved(
         agent::Resolver::new(scope, "agents", [&agents, &subagents], &children),
         &mut loaded,
     );
+    // The resolver knows paths, not pack items; team::load appends its own fixes.
+    for error in &mut loaded.errors[resolved_from..] {
+        if let Some(item) = sources
+            .items
+            .iter()
+            .find(|item| item.pack.is_some() && item.path == error.path)
+        {
+            error.message.push_str(&item.exclusion_fix());
+        }
+    }
     team::load(
         scope,
         [&agents, &subagents],

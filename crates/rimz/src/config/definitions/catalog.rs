@@ -28,17 +28,26 @@ impl Item {
 
     pub fn error(&self, message: impl std::fmt::Display) -> DefinitionErr {
         let mut error = DefinitionErr::new(&self.path, message.to_string());
-        if let Some(pack) = &self.pack {
+        if self.pack.is_some() {
             error.cause = DefinitionCause::PackProblem;
-            let target = format!("{pack}:{}", self.name);
-            // YAML can carry NUL, which argv cannot; exclude the type in that case.
-            let target = shlex::try_quote(&target).unwrap_or_else(|_| pack.as_str().into());
-            error.message.push_str(&format!(
-                "; run `rimz packs exclude {target} --type {}`",
-                self.kind.as_str()
-            ));
+            error.message.push_str(&self.exclusion_fix());
         }
         error
+    }
+
+    /// The `; run ...` tail naming the command that excludes this pack item;
+    /// empty for a home item.
+    pub(super) fn exclusion_fix(&self) -> String {
+        let Some(pack) = &self.pack else {
+            return String::new();
+        };
+        let target = format!("{pack}:{}", self.name);
+        // YAML can carry NUL, which argv cannot; exclude the type in that case.
+        let target = shlex::try_quote(&target).unwrap_or_else(|_| pack.as_str().into());
+        format!(
+            "; run `rimz packs exclude {target} --type {}`",
+            self.kind.as_str()
+        )
     }
 
     pub(super) fn namespace(&self) -> &str {
