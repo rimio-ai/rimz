@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use rimz::agents::runtime_control::{self, RuntimeControlLiveness, RuntimeControlReadiness};
-use rimz::config::{ColorDepth, MachineConfig, ThemeMode};
+use rimz::config::{ColorDepth, HistoryRetention, MachineConfig, ThemeMode};
+use rimz::disk::{paths::Class, usage::FolderStorage};
 use rimz::ids::MuxName;
 use rimz::mux::{
     MuxBackend, SessionHealth, binaries,
@@ -19,6 +20,7 @@ use rimz::{RuntimePaths, StatePaths};
 use super::model;
 
 const TOPOLOGY_CONFLICT_FRESH_MS: u64 = 10 * 60 * 1000;
+const UNSWEPT_FOLDER_ENTRY_LIMIT: u64 = 150_000;
 
 pub(super) fn collect_terminal() -> model::Terminal {
     let theme_mode = MachineConfig::load()
@@ -55,8 +57,10 @@ pub(super) fn collect_host() -> model::Host {
     }
 }
 
-pub(super) fn collect_storage() -> model::Storage {
-    let disk_usage = rimz::disk::usage::measure(None);
+pub(super) fn collect_storage(ws: Option<&rimz::ResolvedWorkspace>) -> model::Storage {
+    let paths = ws.and_then(|ws| StatePaths::for_project_root(&ws.project_root).ok());
+    let disk_usage = rimz::disk::usage::measure(paths.as_ref());
+    let retention = crate::cli::machine_config().gc.team_notes_retention;
     model::Storage {
         total_bytes: disk_usage.total_bytes(),
         roots: disk_usage
@@ -69,6 +73,58 @@ pub(super) fn collect_storage() -> model::Storage {
                 present: root.present,
             })
             .collect(),
+        room: disk_usage.room.map(|room| model::StorageRoomView {
+            path: room.path.display().to_string(),
+            present: room.present,
+            entries: room.entries,
+            bytes: room.bytes,
+            folders: room
+                .folders
+                .into_iter()
+                .map(|folder| storage_folder(folder, retention))
+                .collect(),
+        }),
+    }
+}
+
+fn storage_folder(folder: FolderStorage, retention: HistoryRetention) -> model::StorageFolderView {
+    let never_swept = rimz::store::gc::never_swept(folder.class, retention);
+    let path = folder.path.display().to_string();
+    let fix = (never_swept && folder.entries > UNSWEPT_FOLDER_ENTRY_LIMIT).then(|| {
+        let remedy = match folder.class {
+            Class::Shared => "remove by hand what no agent still needs",
+            Class::Cache => {
+                "this cache is rebuildable; `rimz reset` clears it \
+                 but restarts the room with no agents"
+            }
+            Class::TeamNotes => {
+                "set a duration with `rimz config set gc.team_notes_retention 30d`, \
+                 or delete old runs by hand"
+            }
+            // never_swept admits only these three state classes.
+            _ => unreachable!("only unswept state classes need a remedy"),
+        };
+        let largest = folder.largest.as_ref().map_or_else(String::new, |largest| {
+            format!(
+                "; largest subfolder: {path}/{} ({} entries)",
+                largest.name.to_string_lossy(),
+                largest.entries
+            )
+        });
+        format!("inspect {path}{largest}; {remedy}")
+    });
+    model::StorageFolderView {
+        name: folder.class.dir_name(),
+        path,
+        present: folder.present,
+        entries: folder.entries,
+        bytes: folder.bytes,
+        never_swept,
+        largest: folder.largest.map(|largest| model::StorageLargestView {
+            name: largest.name.to_string_lossy().into_owned(),
+            entries: largest.entries,
+        }),
+        fix,
     }
 }
 

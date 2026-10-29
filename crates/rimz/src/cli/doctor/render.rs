@@ -9,8 +9,8 @@ use std::io::{self, Write};
 use jiff::Timestamp;
 
 use crate::cli::render::{
-    Cell, KeyVals, Table, age_label, cell, fmt_bytes, home_relative, home_relative_path,
-    lsp_state_label, paint, palette, status,
+    Cell, KeyVals, Table, age_label, cell, compact_count, fmt_bytes, home_relative,
+    home_relative_path, lsp_state_label, paint, palette, status,
 };
 use rimz::agents::AgentStatus;
 use rimz::daemon_view::DaemonShapeFault;
@@ -2633,6 +2633,63 @@ fn render_storage(
             } else {
                 palette::faint()
             }),
+        ]);
+    }
+    table.render(w)?;
+    let Some(room) = &disk_usage.room else {
+        return writeln!(
+            w,
+            "  {}",
+            paint(
+                palette::muted(),
+                "room: unavailable (no workspace resolved)"
+            )
+        );
+    };
+    let path = home_relative(&room.path);
+    if !room.present {
+        return writeln!(
+            w,
+            "  {}",
+            paint(palette::muted(), &format!("room: {path} (not created)"))
+        );
+    }
+    writeln!(
+        w,
+        "  {}",
+        paint(
+            palette::muted(),
+            &format!(
+                "room: {path}: {} entries, {}",
+                compact_count(room.entries),
+                fmt_bytes(room.bytes)
+            )
+        )
+    )?;
+    let mut table = Table::new(["", "FOLDER", "ENTRIES", "SIZE"]).right(&[2, 3]);
+    for folder in &room.folders {
+        let glyph = match &folder.fix {
+            Some(fix) => counted(
+                tally,
+                Severity::Warning,
+                format!(
+                    "{}/: {} entries; RimZ never sweeps this folder",
+                    folder.name, folder.entries
+                ),
+                fix,
+            ),
+            None => badge(Health::Neutral),
+        };
+        let (entries, size) = if folder.present {
+            (compact_count(folder.entries), fmt_bytes(folder.bytes))
+        } else {
+            ("-".to_owned(), "-".to_owned())
+        };
+        table.row([
+            glyph,
+            cell(format!("{}/", folder.name)),
+            cell(entries).dash(),
+            cell(size).dash(),
         ]);
     }
     table.render(w)

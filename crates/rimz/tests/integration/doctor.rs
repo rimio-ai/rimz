@@ -892,6 +892,20 @@ fn doctor_does_not_create_state_for_an_unopened_project() {
 
         if args.contains(&"--json") {
             let report = doctor_json(&output);
+            let room = &report["disk_usage"]["room"];
+            assert_eq!(room["present"], false, "{room}");
+            assert_eq!(room["entries"], 0, "{room}");
+            assert_eq!(room["bytes"], 0, "{room}");
+            let folders = room["folders"].as_array().expect("ten absent folder rows");
+            assert_eq!(folders.len(), 10, "{room}");
+            assert!(
+                folders.iter().all(|folder| folder["present"] == false
+                    && folder["entries"] == 0
+                    && folder["bytes"] == 0
+                    && folder.get("largest").is_none()
+                    && folder.get("fix").is_none()),
+                "{room}"
+            );
             assert_eq!(report["agents"]["state"], "none");
             assert_eq!(
                 report["messages"]["ready"],
@@ -1508,6 +1522,10 @@ fn doctor_default_json_omits_unmeasured_disk_bytes() {
 #[test]
 fn doctor_audit_json_keeps_measured_disk_bytes() {
     let env = Env::new();
+    env.record(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    std::fs::create_dir_all(paths.room_shared_dir.join("run")).unwrap();
+    std::fs::write(paths.room_shared_dir.join("run/report"), "report").unwrap();
     let report = doctor_json(
         &env.rimz()
             .args(["doctor", "--audit", "--json"])
@@ -1515,9 +1533,82 @@ fn doctor_audit_json_keeps_measured_disk_bytes() {
             .unwrap(),
     );
     assert!(report["disk_usage"]["total_bytes"].is_u64(), "{report}");
+    let room = &report["disk_usage"]["room"];
+    assert_eq!(room["path"], json!(paths.root), "{room}");
+    assert_eq!(room["present"], true, "{room}");
+    assert!(room["entries"].is_u64() && room["bytes"].is_u64(), "{room}");
+    let folders = room["folders"].as_array().expect("room folder breakdown");
+    let names: Vec<_> = folders
+        .iter()
+        .map(|folder| folder["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "log",
+            "records",
+            "audit",
+            "cache",
+            "owned",
+            "tmp",
+            "shared",
+            "team-notes",
+            "out",
+            "locks"
+        ]
+        .map(Some)
+    );
+    assert!(
+        folders.iter().all(|folder| folder["entries"].is_u64()
+            && folder["bytes"].is_u64()
+            && folder["present"].is_boolean()
+            && folder["path"].is_string()
+            && folder.get("fix").is_none()),
+        "{room}"
+    );
+    let never_swept: Vec<_> = folders
+        .iter()
+        .map(|folder| folder["never_swept"].as_bool())
+        .collect();
+    assert_eq!(
+        never_swept,
+        [
+            false, false, false, true, false, false, true, true, false, false
+        ]
+        .map(Some)
+    );
+    assert_eq!(folders[6]["entries"], 2, "{room}");
+    assert_eq!(folders[6]["largest"], json!({"name": "run", "entries": 2}));
     let units = &report["temp_units"]["ready"];
     assert!(units["reclaimable_bytes"].is_u64(), "{units}");
     assert!(units["in_use_bytes"].is_u64(), "{units}");
+
+    write_machine_config(&env, "[gc]\nteam_notes_retention = \"30d\"\n");
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--audit", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        report["disk_usage"]["room"]["folders"][7]["never_swept"],
+        false
+    );
+}
+
+#[test]
+fn doctor_audit_without_workspace_omits_room_breakdown() {
+    let env = Env::new();
+    std::fs::write(env.rimz_home().join("ws"), "not a directory").unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--audit", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert!(report["workspace"].get("unavailable").is_some(), "{report}");
+    assert!(report["disk_usage"].is_object(), "{report}");
+    assert!(report["disk_usage"].get("room").is_none(), "{report}");
 }
 
 #[test]

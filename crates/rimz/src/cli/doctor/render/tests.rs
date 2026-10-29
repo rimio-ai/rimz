@@ -3,8 +3,8 @@ use crate::cli::doctor::model::{
     AccountRow, DaemonTab, HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow,
     LoopTimer, MachineConfigProblem, MachineConfigProblemKind, MessageProblemRow, MuxBinaries,
     MuxLogIssue, OpenCounts, PresenceCommandFailure, PresencePluginRow, PresencePluginStatus,
-    PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps, ZellijCaps,
-    ZellijKittyGraphics,
+    PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageFolderView, StorageRoomView,
+    StorageRootView, TmuxCaps, ZellijCaps, ZellijKittyGraphics,
 };
 use rimz::daemon_view::{DaemonShape, DaemonShapeFault};
 use rimz::ids::MuxName;
@@ -2160,6 +2160,7 @@ fn default_storage_section_offers_audit_without_sizes() {
 #[test]
 fn storage_section_renders_total_and_roots() {
     let disk_usage = Storage {
+        room: None,
         total_bytes: 13_018,
         roots: vec![
             StorageRootView {
@@ -2190,6 +2191,126 @@ fn storage_section_renders_total_and_roots() {
         out.contains("runtime") && out.contains("-") && out.contains("/run/user/1000/rimz"),
         "absent root row:\n{out}"
     );
+}
+
+fn storage_room_fixture(present: bool) -> StorageRoomView {
+    let folders = [
+        "log",
+        "records",
+        "audit",
+        "cache",
+        "owned",
+        "tmp",
+        "shared",
+        "team-notes",
+        "out",
+        "locks",
+    ]
+    .map(|name| StorageFolderView {
+        name,
+        path: format!("/room/{name}"),
+        present,
+        entries: 0,
+        bytes: if present { 1024 } else { 0 },
+        never_swept: matches!(name, "cache" | "shared" | "team-notes"),
+        largest: None,
+        fix: None,
+    });
+    StorageRoomView {
+        path: "/room".into(),
+        present,
+        entries: if present { 10 } else { 0 },
+        bytes: if present { 10_240 } else { 0 },
+        folders: folders.into(),
+    }
+}
+
+#[test]
+fn storage_section_renders_room_folders_and_closing_fixes() {
+    let mut room = storage_room_fixture(true);
+    room.entries = 300_011;
+    for index in [3, 6] {
+        room.folders[index].entries = 150_001;
+        room.folders[index].fix = Some(format!(
+            "inspect /room/{} by hand",
+            room.folders[index].name
+        ));
+    }
+    room.folders[1].present = false;
+    let disk_usage = Storage {
+        total_bytes: room.bytes,
+        roots: Vec::new(),
+        room: Some(room),
+    };
+    let mut tally = Tally::default();
+    let out = strip(|w| render_storage(w, Some(&disk_usage), &mut tally));
+    assert!(
+        out.contains("room: /room") && out.contains("entries"),
+        "{out}"
+    );
+    assert!(out.contains("FOLDER") && out.contains("ENTRIES"), "{out}");
+    let rows: Vec<_> = out
+        .lines()
+        .filter_map(|line| {
+            let cells: Vec<_> = line.split_whitespace().collect();
+            (cells.len() >= 4 && cells[1].ends_with('/')).then_some(cells)
+        })
+        .collect();
+    let names: Vec<_> = rows.iter().map(|row| row[1]).collect();
+    assert_eq!(
+        names,
+        [
+            "log/",
+            "records/",
+            "audit/",
+            "cache/",
+            "owned/",
+            "tmp/",
+            "shared/",
+            "team-notes/",
+            "out/",
+            "locks/"
+        ],
+        "{out}"
+    );
+    assert_eq!(rows[1], ["·", "records/", "-", "-"], "{out}");
+    assert_eq!(rows[6][0], "!", "{out}");
+    assert_eq!(rows[6][2], "150k", "{out}");
+    assert!(!out.contains("by hand"), "{out}");
+    assert_eq!(tally.warns.len(), 2, "{out}");
+    let closing = strip(|w| render_tally(w, &tally));
+    for name in ["cache", "shared"] {
+        assert!(
+            closing.contains(&format!("! STORAGE: {name}/: 150001 entries")),
+            "{closing}"
+        );
+        assert!(
+            closing.contains(&format!("fix: inspect /room/{name} by hand")),
+            "{closing}"
+        );
+    }
+}
+
+#[test]
+fn storage_section_distinguishes_uncreated_room_and_unresolved_workspace() {
+    let cases = [
+        (None, "room: unavailable (no workspace resolved)"),
+        (
+            Some(storage_room_fixture(false)),
+            "room: /room (not created)",
+        ),
+    ];
+    let actual = cases.map(|(room, expected)| {
+        let disk_usage = Storage {
+            total_bytes: 0,
+            roots: Vec::new(),
+            room,
+        };
+        let mut tally = Tally::default();
+        let out = strip(|w| render_storage(w, Some(&disk_usage), &mut tally));
+        out.contains(expected) && !out.contains("FOLDER") && tally.warns.is_empty()
+    });
+    assert_eq!(actual, [true, true]);
 }
 
 #[test]
