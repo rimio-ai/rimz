@@ -38,8 +38,8 @@ pub(crate) use providers::{format_plan_label, sort_windows};
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 use model::cohort_team;
 pub use model::{
-    DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack, PresenceSample,
-    RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
+    CapacityWaitSummary, DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack,
+    PresenceSample, RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
     SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
     SidebarStatusCount, SidebarUnitKey, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
     UnitStatus, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, card_status,
@@ -93,7 +93,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 61;
+pub const SNAPSHOT_VERSION: u32 = 62;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -341,6 +341,9 @@ pub struct SidebarSnapshot {
     /// both producer and consumer read the records; the pure reducer leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parked_workflows: Vec<ParkedWorkflow>,
+    /// Durable condition-loop and workflow capacity waits, projected on every fold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_wait: Option<CapacityWaitSummary>,
 }
 
 impl SidebarSnapshot {
@@ -440,6 +443,7 @@ impl SidebarSnapshot {
             fenced_sessions: Arc::default(),
             resume_outcomes: Some(Arc::default()),
             parked_workflows: Vec::new(),
+            capacity_wait: None,
         }
     }
 

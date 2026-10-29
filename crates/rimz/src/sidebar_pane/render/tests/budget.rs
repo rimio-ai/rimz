@@ -267,6 +267,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         fenced_sessions: Default::default(),
         resume_outcomes: Some(Default::default()),
         parked_workflows: Vec::new(),
+        capacity_wait: None,
     }
 }
 

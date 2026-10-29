@@ -44,7 +44,7 @@ The cockpit and the dashboard hold fixed positions, so the numbers you glance at
 
 ### The cockpit
 
-The top block reads the whole room in four lines:
+The top block reads the whole room in four core lines:
 
 - The first line names the workspace and its path, so a glance confirms which project this room is.
 - The second counts the agent sessions that have run in the configured spend window, with the room's token breakdown pinned right: total, input, output, and cache-read.
@@ -54,6 +54,8 @@ The top block reads the whole room in four lines:
 A row of zeros in the attention buckets means nothing needs you, so you can skip the scan entirely. Every non-zero bucket is a click target that shows matching units in every tab of the room, including all their teammates. Shown cards look and act as without a filter, and selection keys reach every shown card. Picking a filter keeps your selection if that card is still shown. Clearing or replacing the filter in one tab updates them all. `⑃ N` filters to open-PR groups; `u` shows unread cards. When the card that most needs you scrolls out of view, an `↑ N need you` or `↓ N need you` banner counts units with unread questions or failures and points toward that card; click it to reveal the card where it sits, without changing the selection or rearranging the frozen cards. If your filter hides it, the arrow points up and the click scrolls to the top instead. The exact [counting and filtering rules](../interface/sidebar.md#the-make-up-line) explain mixed teams.
 
 When you know which work you want rather than which state needs you, press `Alt+p`, then `/auth` and `Enter` to focus the first matching pane. Search narrows the cards as you type; `↓` or `Ctrl+n` selects another match before `Enter`. For a quick jump without keeping the search, click a matching card while still typing instead. The committed `/ auth` chip stays on its own line above the dashboard in every tab, so `j` and `k` browse the matches and `n` still jumps to a matching card that needs you. A state filter such as `w` narrows those matches further. Clear the search with `Esc`, or press `A` to clear both the search and the state filter. Matching and editing rules are in [Text search](../interface/sidebar.md#text-search).
+
+Parked workflows add rows beneath the spend line. Condition loop fires and loop-started workflow steps waiting for capacity share one more line there: the oldest wait's provider kinds and times, plus a count when several starts are held ([capacity waits](../interface/sidebar.md#waiting-for-capacity)).
 
 Every figure in this block, and how each one is counted, is [Token Insight](./insight.md#per-room-the-cockpit).
 

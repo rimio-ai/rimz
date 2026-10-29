@@ -18,11 +18,11 @@ use crate::forge::pr_state::{PrLink, PrQueueFact, read_pr_state_cache};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::Store;
 use crate::store::snapshot::{
-    HookDrainerOutage, HookDrainerOutageAgent, LazyAgentPairingDiagnostic, LazyAgentPairingResult,
-    RemoteControlBadge, RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
-    SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup,
-    SidebarWorktreeKind, TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState,
-    WorktreeTrunkSync, compute_lazy_agent_pairings,
+    CapacityWaitSummary, HookDrainerOutage, HookDrainerOutageAgent, LazyAgentPairingDiagnostic,
+    LazyAgentPairingResult, RemoteControlBadge, RuntimeReapInputs, SidebarLinkFreshness,
+    SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow,
+    SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreeCi,
+    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
 use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;
@@ -602,13 +602,56 @@ pub fn project_local(
     snapshot
 }
 
-/// The room's parked workflow runs, oldest park first; an unreadable run list
-/// shows none rather than failing the fold.
-fn parked_workflows(state: &StatePaths) -> Vec<crate::store::snapshot::ParkedWorkflow> {
+fn capacity_wait_summary(
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    workflows: &[crate::store::workflow::RunRecord],
+) -> Option<CapacityWaitSummary> {
+    let waits = crate::harness::schedule::launch_ledger::load_live_capacity(state, runtime)
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "loop capacity waits unreadable for the sidebar");
+            Default::default()
+        });
+    let loop_waits = waits
+        .values()
+        .flat_map(BTreeMap::values)
+        .map(|wait| (&wait.kinds, wait.first, wait.gives_up_at));
+    let workflow_waits = workflows
+        .iter()
+        .filter(|record| record.state == crate::store::workflow::RunState::Active)
+        .filter_map(|record| record.wait.as_ref())
+        .filter(|wait| wait.outcome == "capacity")
+        .map(|wait| (&wait.kinds, wait.first, wait.gives_up_at));
+    let mut oldest: Option<CapacityWaitSummary> = None;
+    let mut count = 0;
+    for (kinds, since, gives_up_at) in loop_waits.chain(workflow_waits) {
+        count += 1;
+        if oldest.as_ref().is_none_or(|wait| since < wait.since) {
+            oldest = Some(CapacityWaitSummary {
+                kinds: kinds.clone(),
+                since,
+                gives_up_at,
+                count: 0,
+            });
+        }
+    }
+    oldest.map(|mut wait| {
+        wait.count = count;
+        wait
+    })
+}
+
+/// Project parked runs and durable capacity waits even when no agent has launched.
+fn project_cockpit_waits(
+    snapshot: &mut SidebarSnapshot,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+) {
     let records = crate::store::workflow::list(state).unwrap_or_else(|err| {
         tracing::warn!(error = %err, "workflow runs unreadable for the sidebar");
         Vec::new()
     });
+    snapshot.capacity_wait = capacity_wait_summary(state, runtime, &records);
     let mut parked: Vec<_> = records
         .into_iter()
         .filter(|record| record.state == crate::store::workflow::RunState::Parked)
@@ -626,7 +669,7 @@ fn parked_workflows(state: &StatePaths) -> Vec<crate::store::snapshot::ParkedWor
         })
         .collect();
     parked.sort_by_key(|run| run.since);
-    parked
+    snapshot.parked_workflows = parked;
 }
 
 fn enrich_core(
@@ -731,7 +774,7 @@ fn enrich_core(
         );
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
     }
-    snapshot.parked_workflows = parked_workflows(state);
+    project_cockpit_waits(&mut snapshot, state, runtime);
     let outages = crate::harness::drainer_outage::read(runtime);
     snapshot.hook_drainer_outage = outages.first().map(|first| HookDrainerOutage {
         since: Timestamp::from_millisecond(first.since_ms.min(i64::MAX as u64) as i64)

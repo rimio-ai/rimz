@@ -2898,7 +2898,8 @@ path = "crates/rimz/src/store"
 # AuditRows, its read/lookup surface and marked cohort copies share durable rows (+5).
 # message::cached_messages shares nontransactional queue/history projection reads (+1).
 # agent_context::read_cached_one isolates due-session reads from held projection records (+1).
-surface-budget = 515
+# CapacityWaitSummary carries only the room's oldest durable wait and total count (+1).
+surface-budget = 516
 
 [[verdict]]
 kind = "item"
@@ -5636,6 +5637,11 @@ reason = "Pane binding calls the classifier inside the fold; the re-export survi
 kind = "item"
 key = "store::snapshot::view::model::SidebarPipeline"
 reason = "A pub field of SidebarWorktreeGroup in the published snapshot schema the renderer decodes (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::CapacityWaitSummary"
+reason = "The read-only sidebar fold shares the oldest durable capacity wait and total count with the cockpit renderer."
 
 [[verdict]]
 kind = "item"

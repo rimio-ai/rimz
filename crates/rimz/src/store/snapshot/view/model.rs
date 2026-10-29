@@ -88,6 +88,15 @@ pub fn needs_you(
     })
 }
 
+/// The oldest durable capacity wait and the room's total number of waiting starts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapacityWaitSummary {
+    pub kinds: Vec<crate::ids::AgentKind>,
+    pub since: jiff::Timestamp,
+    pub gives_up_at: Option<jiff::Timestamp>,
+    pub count: usize,
+}
+
 /// One parked workflow run, drawn as an inert cockpit line.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ParkedWorkflow {

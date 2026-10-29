@@ -61,12 +61,12 @@ pub use view::{
     card_status, find_agent, group_live_agents_by_worktree, needs_you,
 };
 pub use view::{
-    DailyBudgetView, PipelinePosition, PrStack, PresenceSample, RedeemForecast, RemoteControlBadge,
-    RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort, SidebarLinkFreshness,
-    SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
-    SidebarSnapshot, SidebarStatusCount, SidebarUnitKey, SidebarWorktreeGroup, SidebarWorktreeKind,
-    StackPr, TruthNotice, UnitStatus, WorktreeCi, WorktreePrQueue, WorktreePrState,
-    WorktreeTrunkSync, lead_unread_row,
+    CapacityWaitSummary, DailyBudgetView, PipelinePosition, PrStack, PresenceSample,
+    RedeemForecast, RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
+    SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount, SidebarUnitKey,
+    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, TruthNotice, UnitStatus, WorktreeCi,
+    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
 pub(crate) use view::{actionable_unread_count, triage_key};
 pub(crate) use view::{format_plan_label, sort_windows};

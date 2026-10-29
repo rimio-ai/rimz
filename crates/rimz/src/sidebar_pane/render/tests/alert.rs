@@ -144,6 +144,66 @@ fn render_hook_drainer_alert_coexists_with_lingering_but_not_active_refresh_aler
 }
 
 #[test]
+fn capacity_waits_share_one_cockpit_line_with_parked_runs() {
+    let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
+    value["parked_workflows"] = serde_json::json!([
+        {
+            "run": "wf_0190b8172c0070008000000000000001", "workflow": "review",
+            "node": "triage", "reason": "asked", "text": null,
+            "checkout": "/repo", "since": fixed_now()
+        }
+    ]);
+    value["capacity_wait"] = serde_json::json!({
+        "kinds": ["claude", "codex"], "since": fixed_now(),
+        "gives_up_at": fixed_now() + Duration::from_secs(3600), "count": 4
+    });
+    let snapshot: SidebarSnapshot = serde_json::from_value(value.clone()).unwrap();
+    let phrase = crate::theme::fmt::capacity_wait(
+        &[
+            crate::ids::AgentKind::new_unchecked("claude"),
+            crate::ids::AgentKind::new_unchecked("codex"),
+        ],
+        fixed_now(),
+        Some(fixed_now() + Duration::from_secs(3600)),
+    );
+    let wide = snapshot_to_screen(&snapshot, 110, 18);
+    let narrow = snapshot_to_screen(&snapshot, 46, 18);
+    value["capacity_wait"]["gives_up_at"] = serde_json::Value::Null;
+    value["capacity_wait"]["count"] = 1.into();
+    let forever = snapshot_to_screen(&serde_json::from_value(value).unwrap(), 110, 18);
+    assert!(
+        wide.contains(&phrase)
+            && wide.contains("· 4 waiting")
+            && wide.contains("review triage asked")
+            && narrow.contains("waiting for capacity")
+            && narrow.contains("4 waiting")
+            && !forever.contains("gives up")
+            && !forever.contains("1 waiting")
+            && forever.contains("waiting for capacity (claude, codex) since"),
+        "capacity waits must share one inert line, keep the count when narrow, and omit a forever deadline:\n{wide}\n{narrow}\n{forever}"
+    );
+    assert_eq!(wide.matches("waiting for capacity").count(), 1);
+    for (name, screen) in [
+        ("capacity_waits_wide", wide),
+        ("capacity_waits_l2", narrow),
+        ("capacity_waits_forever", forever),
+    ] {
+        let since = fixed_now()
+            .to_zoned(jiff::tz::TimeZone::system())
+            .strftime("%H:%M");
+        let until = (fixed_now() + Duration::from_secs(3600))
+            .to_zoned(jiff::tz::TimeZone::system())
+            .strftime("%H:%M");
+        assert_snapshot(
+            name,
+            screen
+                .replace(&since.to_string(), "HH:MM")
+                .replace(&until.to_string(), "HH:MM"),
+        );
+    }
+}
+
+#[test]
 fn parked_workflows_keep_their_age_at_wide_and_l2_widths() {
     let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
     value["parked_workflows"] = serde_json::json!([

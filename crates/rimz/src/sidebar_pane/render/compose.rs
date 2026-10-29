@@ -17,9 +17,9 @@ use super::chrome::{
 use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
     CardWalk, CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext,
-    cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block, fleet_header_lines,
-    fleet_size, fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci,
-    parked_overflow_line, parked_workflow_line, worktree_group_lines_windowed,
+    capacity_wait_line, cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block,
+    fleet_header_lines, fleet_size, fleet_store_lines, fleet_total_lines, open_pr_total,
+    open_pr_worst_ci, parked_overflow_line, parked_workflow_line, worktree_group_lines_windowed,
 };
 use super::theme::{Component, Theme};
 use super::{
@@ -1042,6 +1042,9 @@ pub(super) fn top_lines(
             parked.len() - PARKED_LINES,
             inner,
         ));
+    }
+    if let Some(wait) = &snapshot.capacity_wait {
+        header.push(capacity_wait_line(theme, wait, inner));
     }
     header.push(hairline_rule(theme, inner));
     let header_len = header.len();

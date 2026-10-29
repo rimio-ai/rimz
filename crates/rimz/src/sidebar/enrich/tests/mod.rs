@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 mod agents;
+mod capacity;
 mod cohort;
 mod frame;
 mod git;
