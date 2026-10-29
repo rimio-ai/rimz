@@ -683,6 +683,7 @@ mod latency {
             "rollup_bytes_parsed",
             "latest_bytes_parsed",
             "machine_config_loads",
+            "marker_reads",
         ]
         .into_iter()
         .map(|counter| {

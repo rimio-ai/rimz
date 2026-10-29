@@ -18,6 +18,7 @@ mod store_bytes;
 mod store_fsync;
 #[cfg(target_os = "linux")]
 mod work_log;
+mod worktree_markers;
 
 fn workspace_for_refresh(
     cursor: &mut rimz::sidebar::consumer::RollupCursor,

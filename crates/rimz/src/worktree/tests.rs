@@ -1421,6 +1421,119 @@ fn checkout_metadata_marker_reader_follows_relative_gitdir_file() {
 }
 
 #[test]
+fn checkout_metadata_marker_memo_revalidates_files_and_preserves_errors() {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    use crate::testkit::WORK_COUNTERS;
+
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("wt");
+    let admin = dir.path().join("admin/wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&admin).unwrap();
+    let before = WORK_COUNTERS.marker_reads.load(Relaxed);
+    assert_eq!(read_marker_from_checkout_metadata(&worktree).unwrap(), None);
+    for text in ["not a gitdir", "gitdir: ", "gitdir: ../admin/wt\n"] {
+        std::fs::write(worktree.join(".git"), text).unwrap();
+        assert_eq!(read_marker_from_checkout_metadata(&worktree).unwrap(), None);
+    }
+    let mut counts = vec![WORK_COUNTERS.marker_reads.load(Relaxed) - before];
+    let marker_file = admin.join(MARKER_FILE);
+    let mut marker = WorktreeMarker {
+        version: 1,
+        name: "feature".to_owned(),
+        branch: "feature".to_owned(),
+        base_branch: Some("main".to_owned()),
+        from_pr: None,
+        base_ref: "HEAD".to_owned(),
+        repo_root: dir.path().to_path_buf(),
+        worktree_path: worktree.clone(),
+        created_at: at(20),
+    };
+    crate::disk::atomic::write_temp_then_rename(&marker_file, &marker).unwrap();
+    std::thread::scope(|scope| {
+        let readers: Vec<_> = (0..4)
+            .map(|_| scope.spawn(|| read_marker_from_checkout_metadata(&worktree).unwrap()))
+            .collect();
+        for reader in readers {
+            assert_eq!(reader.join().unwrap(), Some(marker.clone()));
+        }
+    });
+    counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+    for _ in 0..2 {
+        assert_eq!(
+            read_marker_from_checkout_metadata(&worktree).unwrap(),
+            Some(marker.clone())
+        );
+    }
+    counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+
+    let old_file = std::fs::File::open(&marker_file).unwrap();
+    let old_metadata = old_file.metadata().unwrap();
+    marker.from_pr = Some(1234);
+    crate::disk::atomic::write_temp_then_rename(&marker_file, &marker).unwrap();
+    let replacement = std::fs::File::open(&marker_file).unwrap();
+    replacement
+        .set_times(std::fs::FileTimes::new().set_modified(old_metadata.modified().unwrap()))
+        .unwrap();
+    assert_eq!(replacement.metadata().unwrap().len(), old_metadata.len());
+    assert_eq!(
+        read_marker_from_checkout_metadata(&worktree).unwrap(),
+        Some(marker.clone())
+    );
+    counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+    assert_eq!(
+        read_marker_file(&marker_file).unwrap(),
+        Some(marker.clone())
+    );
+    counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+
+    std::fs::remove_file(&marker_file).unwrap();
+    assert_eq!(read_marker_from_checkout_metadata(&worktree).unwrap(), None);
+    counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+    marker.from_pr = Some(5678);
+    crate::disk::atomic::write_temp_then_rename(&marker_file, &marker).unwrap();
+    assert_eq!(
+        read_marker_from_checkout_metadata(&worktree).unwrap(),
+        Some(marker.clone())
+    );
+    counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+
+    std::fs::write(worktree.join(".git"), "gitdir: ../other\n").unwrap();
+    assert_eq!(read_marker_from_checkout_metadata(&worktree).unwrap(), None);
+    std::fs::write(worktree.join(".git"), "gitdir: ../admin/wt\n").unwrap();
+    assert_eq!(
+        read_marker_from_checkout_metadata(&worktree).unwrap(),
+        Some(marker)
+    );
+    counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+
+    crate::disk::atomic::write_temp_then_rename(&marker_file, &"malformed").unwrap();
+    let expected =
+        WorktreeErr::Json(serde_json::from_str::<WorktreeMarker>("\"malformed\"").unwrap_err());
+    for _ in 0..2 {
+        let error = read_marker_from_checkout_metadata(&worktree).unwrap_err();
+        assert!(matches!(error, WorktreeErr::Json(_)), "{error}");
+        assert_eq!(error.to_string(), expected.to_string());
+        counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+    }
+    std::fs::remove_file(&marker_file).unwrap();
+    std::os::unix::fs::symlink(MARKER_FILE, &marker_file).unwrap();
+    let expected = WorktreeErr::Io(std::fs::read_to_string(&marker_file).unwrap_err());
+    for _ in 0..2 {
+        let error = read_marker_from_checkout_metadata(&worktree).unwrap_err();
+        assert!(matches!(error, WorktreeErr::Io(_)), "{error}");
+        assert_eq!(error.to_string(), expected.to_string());
+    }
+    counts.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
+    assert_eq!(
+        counts,
+        [0, 1, 1, 2, 3, 3, 4, 4, 5, 6, 6],
+        "missing, cold threads, warm, replaced, uncached, removed, recreated, gitdir, malformed twice, I/O"
+    );
+}
+
+#[test]
 fn host_discovery_reuses_rows_and_reads_markers_fresh() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_test_repo(dir.path());

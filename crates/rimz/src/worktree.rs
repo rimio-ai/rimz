@@ -5,7 +5,7 @@
 //! removal only ever removes marked worktrees. Removal assessment combines Git
 //! safety with normalized pane and agent occupancy facts, loop-task pins, and team-board pins.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
@@ -1601,7 +1601,7 @@ struct OwnedWorktreeRows {
 static OWNED_WORKTREE_ROWS: LazyLock<Mutex<HashMap<PathBuf, OwnedWorktreeRows>>> =
     LazyLock::new(Mutex::default);
 
-/// Reuse Git enumeration for host polling, while reading ownership markers fresh.
+/// Reuse Git enumeration for host polling, revalidating ownership markers by stat each call.
 pub(crate) fn discover_owned_cached(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {
     discover_owned_cached_at(repo_root, Instant::now())
 }
@@ -1825,13 +1825,49 @@ pub fn classify_checkout<'a>(root: &'a Path, project: &Path) -> CheckoutKind<'a>
     CheckoutKind::Other
 }
 
-/// Read a RimZ marker by following the checkout's `.git` metadata only. This
+const MARKER_PARSE_LIMIT: usize = 1_024;
+
+#[derive(Default)]
+struct MarkerParses {
+    entries: HashMap<PathBuf, (crate::disk::parse_cache::FileStamp, WorktreeMarker)>,
+    order: VecDeque<PathBuf>,
+}
+
+/// Successful parses shared across all readers' threads, oldest out at 1,024 entries.
+/// Sound only because every marker write uses `write_marker`'s temp-then-rename;
+/// future writers must do the same. Read-modify-write callers stay uncached.
+static MARKER_PARSES: LazyLock<Mutex<MarkerParses>> = LazyLock::new(Mutex::default);
+
+/// Read a RimZ marker by following the checkout's `.git` metadata on every call. This
 /// keeps sidebar projection code off the git subprocess path.
 pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<WorktreeMarker>> {
     let Some(marker) = marker_path_from_checkout_metadata(path)? else {
         return Ok(None);
     };
-    read_marker_file(&marker)
+    let mut cache = MARKER_PARSES.lock().unwrap_or_else(PoisonError::into_inner);
+    let stamp = std::fs::metadata(&marker)
+        .ok()
+        .map(|meta| crate::disk::parse_cache::FileStamp::from_metadata(&meta));
+    if let Some(stamp) = stamp
+        && let Some((cached_stamp, value)) = cache.entries.get(&marker)
+        && *cached_stamp == stamp
+    {
+        return Ok(Some(value.clone()));
+    }
+    if cache.entries.remove(&marker).is_some() {
+        cache.order.retain(|path| path != &marker);
+    }
+    let value = read_marker_file(&marker)?;
+    if let (Some(stamp), Some(value)) = (stamp, &value) {
+        if cache.entries.len() == MARKER_PARSE_LIMIT
+            && let Some(oldest) = cache.order.pop_front()
+        {
+            cache.entries.remove(&oldest);
+        }
+        cache.order.push_back(marker.clone());
+        cache.entries.insert(marker, (stamp, value.clone()));
+    }
+    Ok(value)
 }
 
 /// Resolves the checkout holding `cwd`, the nearest ancestor with a `.git` entry. `None` for a primary checkout, a directory outside git, or metadata that cannot be read. Never spawns git.
@@ -1905,7 +1941,13 @@ pub fn lane_lifetimes<'a>(records: impl IntoIterator<Item = &'a AgentState>) -> 
 
 fn read_marker_file(marker: &Path) -> Result<Option<WorktreeMarker>> {
     match std::fs::read_to_string(marker) {
-        Ok(text) => serde_json::from_str(&text).map(Some).map_err(Into::into),
+        Ok(text) => {
+            #[cfg(feature = "testkit")]
+            crate::testkit::WORK_COUNTERS
+                .marker_reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            serde_json::from_str(&text).map(Some).map_err(Into::into)
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.into()),
     }

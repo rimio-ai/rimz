@@ -176,6 +176,7 @@ fn frame_work(
         "fold_row_copies",
         "snapshot_publishes",
         "latest_bytes_parsed",
+        "marker_reads",
     ] {
         assert!(row[field].is_u64(), "{field}: {row}");
     }
