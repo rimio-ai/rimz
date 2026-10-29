@@ -545,7 +545,7 @@ fn resolve_role(
 }
 
 /// The built-in animation for a role, before any `[theme.animations.<role>]`
-/// override. The animated spinners (thinking/working/delegating/resolving) and
+/// override. The animated spinners (thinking/working/delegating) and
 /// the compacting wave keep their Unicode braille/block frame sequences here in
 /// every preset; the single-frame status heads (idle/success/paused/waiting/
 /// failed) draw their one frame from the glyph set's `status` group, so
@@ -581,12 +581,6 @@ fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animati
         AnimationRole::Delegating => (
             seq(&["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"]),
             tone_color(palette.animation_color(AnimationColor::Clay)),
-            AnimationEffect::Static,
-            AnimationSpeed::Fast,
-        ),
-        AnimationRole::Resolving => (
-            seq(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-            tone_color(palette.animation_color(AnimationColor::Meta)),
             AnimationEffect::Static,
             AnimationSpeed::Fast,
         ),
@@ -709,7 +703,6 @@ mod tests {
             AnimationRole::Thinking,
             AnimationRole::Working,
             AnimationRole::Delegating,
-            AnimationRole::Resolving,
             AnimationRole::Compacting,
         ] {
             assert_eq!(
@@ -1088,7 +1081,6 @@ mod tests {
             AnimationRole::Working,
             AnimationRole::Compacting,
             AnimationRole::Delegating,
-            AnimationRole::Resolving,
         ] {
             for frame in animations.role(role).frames() {
                 assert_eq!(

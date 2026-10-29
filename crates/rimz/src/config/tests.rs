@@ -532,6 +532,64 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
 }
 
 #[test]
+fn retired_theme_roles_warn_without_changing_other_settings() {
+    let dir = tempdir().unwrap();
+    let path = write_named(
+        &dir,
+        THEME_FILE,
+        "[theme.animations.resolving]\ncolor = 'meta'\n\
+         [theme.animations.working]\ncolor = 'cool'\n\
+         [theme.glyphs.unicode.status]\nresolving = '⠙'\nworking = 'w'\n\
+         [theme.glyphs.nerd_font.status]\nresolving = '⠙'\nworking = 'n'\n\
+         [theme.glyphs.unicode.makr]\ntotal = ['ignored']\n\
+         [theme.glyphs.unicode.card]\nwait_shell = '❯'\n",
+    );
+    let strict = load_no_fragments(&path);
+    assert!(strict.is_ok(), "unknown theme roles must load: {strict:?}");
+    for config in [strict.unwrap(), load_lenient_no_fragments(&path)] {
+        assert!(config.notices.unreadable_files.is_empty());
+        assert_eq!(
+            config.theme.animations.working.as_ref().unwrap().color,
+            Some(AnimationColor::Cool)
+        );
+        for (set, glyph) in [("unicode", "w"), ("nerd_font", "n")] {
+            assert_eq!(
+                config.theme.glyphs.glyph(set, GlyphRole::StatusWorking),
+                Some(glyph)
+            );
+        }
+        let mut keys: Vec<_> = config
+            .notices
+            .unknown_keys
+            .iter()
+            .map(|notice| {
+                assert_eq!(notice.path, dir.path().join(THEME_FILE));
+                assert_eq!(
+                    notice.to_string(),
+                    format!(
+                        "unknown config key `{}` in {} — ignored; run `rimz setup` to remove it",
+                        notice.key,
+                        notice.path.display()
+                    )
+                );
+                notice.key.as_str()
+            })
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "theme.animations.resolving",
+                "theme.glyphs.nerd_font.status.resolving",
+                "theme.glyphs.unicode.card.wait_shell",
+                "theme.glyphs.unicode.makr",
+                "theme.glyphs.unicode.status.resolving",
+            ]
+        );
+    }
+}
+
+#[test]
 fn stable_read_retries_when_stamp_moves_during_read() {
     let stamp = std::cell::Cell::new(0);
     let reads = std::cell::Cell::new(0);
@@ -1603,11 +1661,6 @@ fn load_from_surfaces_typed_config_errors() {
         (
             "theme.toml",
             "[theme.glyphs.unicode.tokens]\ntotal = \"abc\"\n",
-            ExpectedErr::Parse,
-        ),
-        (
-            "theme.toml",
-            "[theme.glyphs.unicode.makr]\ntotal = \"Σ\"\n",
             ExpectedErr::Parse,
         ),
         (

@@ -27,8 +27,6 @@ pub struct ThemeAnimationsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delegating: Option<AnimationSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolving: Option<AnimationSpec>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub idle: Option<AnimationSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub success: Option<AnimationSpec>,
@@ -54,7 +52,6 @@ impl ThemeAnimationsConfig {
             AnimationRole::Working => self.working.as_ref(),
             AnimationRole::Compacting => self.compacting.as_ref(),
             AnimationRole::Delegating => self.delegating.as_ref(),
-            AnimationRole::Resolving => self.resolving.as_ref(),
             AnimationRole::Idle => self.idle.as_ref(),
             AnimationRole::Success => self.success.as_ref(),
             AnimationRole::Paused => self.paused.as_ref(),
@@ -72,7 +69,6 @@ pub enum AnimationRole {
     Working,
     Compacting,
     Delegating,
-    Resolving,
     Idle,
     Success,
     Paused,
@@ -87,7 +83,6 @@ impl AnimationRole {
         Self::Working,
         Self::Compacting,
         Self::Delegating,
-        Self::Resolving,
         Self::Idle,
         Self::Success,
         Self::Paused,
@@ -104,7 +99,6 @@ impl AnimationRole {
             Self::Working => "working",
             Self::Compacting => "compacting",
             Self::Delegating => "delegating",
-            Self::Resolving => "resolving",
             Self::Idle => "idle",
             Self::Success => "success",
             Self::Paused => "paused",

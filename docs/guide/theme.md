@@ -166,7 +166,7 @@ The `status` group sets head shapes only. Their color, effect, and speed live in
 
 ## Animations
 
-`[theme.animations]` themes the status heads the sidebar paints; [the glyph legend](../interface/sidebar.md#reading-the-glyphs) says what each head means. There are eleven roles: `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `sleeping`, `waiting`, and `failed`, and the template carries a commented block for each.
+`[theme.animations]` themes the status heads the sidebar paints; [the glyph legend](../interface/sidebar.md#reading-the-glyphs) says what each head means. There are ten roles: `thinking`, `working`, `compacting`, `delegating`, `idle`, `success`, `paused`, `sleeping`, `waiting`, and `failed`, and the template carries a commented block for each.
 
 Each role takes four optional fields, and an omitted field keeps the built-in, so a one-line override leaves the rest alone.
 
@@ -184,7 +184,7 @@ effect = "breathe"
 - `effect` is `static` or `breathe`. `breathe` shows in three places: a subagent entry's lead glyph (`thinking`, `working`, and the six resting heads), the current stage of a team's pipeline line (its owner's `working` or resting head), and a busy process row (`working`). An agent card's lead glyph takes [the card's emphasis](#unread-attention) instead, so `breathe` on `compacting` or `delegating` shows nowhere. An explicit `static` also stills the pet motion that role drives, unless you supply multi-frame `frames`.
 - `speed` is `slow`, `normal`, or `fast`, and paces both the frame advance and the effect.
 
-The six resting heads (`idle`, `success`, `paused`, `sleeping`, `waiting`, `failed`) take their shape from [`[theme.glyphs] set`](#glyphs); the five spinners keep their Unicode frames in every preset. The cockpit's `? ! ⏸ ✓` counters show each head's still glyph. A literal blink is just a frame sequence, `frames = [" ", "!"]`.
+The six resting heads (`idle`, `success`, `paused`, `sleeping`, `waiting`, `failed`) take their shape from [`[theme.glyphs] set`](#glyphs); the four spinners keep their Unicode frames in every preset. The cockpit's `? ! ⏸ ✓` counters show each head's still glyph. A literal blink is just a frame sequence, `frames = [" ", "!"]`.
 
 ### Unread attention
 
