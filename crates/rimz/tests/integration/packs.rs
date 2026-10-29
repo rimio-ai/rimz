@@ -723,12 +723,13 @@ fn assert_pack_skill_error_isolated(problem: &str) {
             item(&crew, "skills", "healthy")["fate"]["message"],
             "withheld: skill `coder` in this pack could not be read"
         );
+        let message = crew["problems"][0]["message"].as_str().unwrap();
+        assert!(message.contains("coder/SKILL.md"), "{message}");
         assert!(
-            crew["problems"][0]["message"]
-                .as_str()
-                .unwrap()
-                .contains("coder/SKILL.md")
+            message.ends_with("; run `rimz packs exclude crew:coder --type skills`"),
+            "{message}"
         );
+        assert_eq!(item(&crew, "skills", "coder")["fate"]["message"], message);
     }
     let tools = json(&env, &["packs", "show", "tools", "--json"]);
     assert_eq!(tools["counts"]["skills"], 1);
