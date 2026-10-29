@@ -40,6 +40,8 @@ pub(super) struct CodexRolloutHeader {
 
 /// Read and normalize one rollout header without scanning its body.
 pub(super) fn read_rollout_header(path: &Path) -> Option<CodexRolloutHeader> {
+    #[cfg(any(test, feature = "testkit"))]
+    crate::agents::local_session_cache::testkit::transcript_read();
     let file = File::open(path).ok()?;
     let mut line = Vec::new();
     BufReader::new(file)

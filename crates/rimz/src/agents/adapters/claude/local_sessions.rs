@@ -1,24 +1,25 @@
 //! Claude's machine-local session store mapped into provider-neutral observations.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::BufRead as _;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use jiff::Timestamp;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::spend::claude_config_dirs_from;
+use super::spend::{claude_config_dirs_from, claude_config_roots};
 #[cfg(test)]
 use crate::agents::local_session_cache::ValueRefreshKind;
 use crate::agents::local_session_cache::{
-    IncrementalCatalog, ProviderPathStamp, StableValueCache, StampedPaths,
-    normalized_workspace_inputs,
+    IncrementalCatalog, ProviderPathStamp, StableValueCache, StampedPaths, entry_file_type,
+    full_scan_due, metadata, normalized_workspace_inputs, read_dir,
 };
+use crate::agents::session::PaneSessionDemand;
 use crate::agents::{LocalSessionObservation, LocalSessionProjection, read_transcript_tail};
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -70,11 +71,26 @@ struct ClaudeSessionRecord {
     is_sidechain: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct DiscoveryKey {
     config_dirs: Vec<PathBuf>,
     workspaces: Vec<PathBuf>,
     project_dir_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct PaneDiscoveryKey {
+    config_dirs: Vec<PathBuf>,
+    project_dir_name: Option<String>,
+}
+
+impl From<&DiscoveryKey> for PaneDiscoveryKey {
+    fn from(key: &DiscoveryKey) -> Self {
+        Self {
+            config_dirs: key.config_dirs.clone(),
+            project_dir_name: key.project_dir_name.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -101,6 +117,308 @@ struct DiscoveryWork {
 
 thread_local! {
     static DISCOVERY: RefCell<ClaudeDiscoverySnapshot> = RefCell::new(ClaudeDiscoverySnapshot::default());
+    // Account entries expire after one discovery backstop without use.
+    static PANE_DISCOVERY: RefCell<HashMap<PaneDiscoveryKey, (Instant, ClaudePaneDiscovery)>> =
+        RefCell::new(HashMap::new());
+}
+
+#[derive(Default)]
+struct ClaudePaneDiscovery {
+    key: Option<PaneDiscoveryKey>,
+    catalog: IncrementalCatalog<Vec<(PathBuf, Timestamp)>, CatalogEntry>,
+    // Learned heads survive demand changes until a fresh listing removes them.
+    candidates: StableValueCache<CatalogEntry, PaneCandidate>,
+}
+
+#[derive(Clone)]
+enum PaneCandidate {
+    /// No readable head yet, with the file's modification time when checked.
+    Pending(Option<SystemTime>),
+    Rejected,
+    Found(Box<LocalSessionObservation>),
+}
+
+impl PaneCandidate {
+    fn observation(&self) -> Option<&LocalSessionObservation> {
+        match self {
+            Self::Found(observation) => Some(observation),
+            Self::Pending(_) | Self::Rejected => None,
+        }
+    }
+
+    /// A pending head last written before `since` cannot start a session
+    /// inside the window, so it waits for the next listing.
+    fn pending_since(&self, since: Timestamp) -> bool {
+        match self {
+            Self::Pending(modified) => modified.is_none_or(|modified| {
+                Timestamp::try_from(modified).is_ok_and(|modified| modified >= since)
+            }),
+            Self::Rejected | Self::Found(_) => false,
+        }
+    }
+}
+
+pub(super) fn discover_panes(
+    demand: &[PaneSessionDemand],
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Vec<LocalSessionObservation> {
+    if demand.is_empty() {
+        return Vec::new();
+    }
+    let workspaces = demand
+        .iter()
+        .map(|demand| demand.workspace.as_path())
+        .collect::<Vec<_>>();
+    let key = DiscoveryKey {
+        config_dirs: claude_config_roots(login_env),
+        workspaces: normalized_workspace_inputs(&workspaces),
+        project_dir_name: project_directory_name_override(),
+    };
+    let now = Instant::now();
+    PANE_DISCOVERY.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|_, (last_used, _)| !full_scan_due(Some(*last_used), now));
+        let (last_used, snapshot) = cache
+            .entry(PaneDiscoveryKey::from(&key))
+            .or_insert_with(|| (now, ClaudePaneDiscovery::default()));
+        *last_used = now;
+        snapshot.refresh(key, demand, now)
+    })
+}
+
+impl ClaudePaneDiscovery {
+    fn refresh(
+        &mut self,
+        key: DiscoveryKey,
+        demand: &[PaneSessionDemand],
+        now: Instant,
+    ) -> Vec<LocalSessionObservation> {
+        let account = PaneDiscoveryKey::from(&key);
+        if self.key.as_ref() != Some(&account) {
+            *self = Self::default();
+            self.key = Some(account);
+        }
+        let mut checked = HashMap::new();
+        let mut observations = Vec::new();
+        for demand in demand {
+            for session in demand
+                .panes
+                .iter()
+                .flat_map(|pane| pane.own.iter().chain(&pane.named))
+            {
+                if Uuid::parse_str(session.id.as_str()).is_err() {
+                    continue;
+                }
+                for (config_dir, project) in project_directories(&key, &demand.workspace) {
+                    let entry = CatalogEntry {
+                        config_dir,
+                        workspace: demand.workspace.clone(),
+                        path: project.join(format!("{}.jsonl", session.id)),
+                    };
+                    if let Some(found) = self.check_candidate(&entry, &mut checked) {
+                        observations.push(found);
+                    }
+                }
+            }
+        }
+        let windows = demand
+            .iter()
+            .filter_map(|demand| {
+                demand
+                    .fresh_window(|id| {
+                        observations
+                            .iter()
+                            .any(|row| row.workspace == demand.workspace && &row.session_id == id)
+                    })
+                    .map(|since| (demand.workspace.clone(), since))
+            })
+            .collect::<Vec<_>>();
+        let mut unread = Vec::new();
+        if !windows.is_empty() {
+            let refresh = self.catalog.refresh(windows.clone(), now, |topology| {
+                let mut entries = Vec::new();
+                let mut seen = HashSet::new();
+                let mut listed = HashSet::new();
+                for (workspace, _) in &windows {
+                    for (config_dir, project) in project_directories(&key, workspace) {
+                        if !seen.insert((workspace.clone(), project.clone())) {
+                            continue;
+                        }
+                        topology.record_exact(project.clone());
+                        let Ok(files) = read_dir(&project) else {
+                            continue;
+                        };
+                        listed.insert(project);
+                        entries.extend(files.filter_map(Result::ok).filter_map(|file| {
+                            let path = file.path();
+                            if !entry_file_type(&file).is_ok_and(|kind| kind.is_file())
+                                || path.extension().is_none_or(|ext| ext != "jsonl")
+                                || path
+                                    .file_stem()
+                                    .and_then(|id| id.to_str())
+                                    .is_none_or(|id| Uuid::parse_str(id).is_err())
+                            {
+                                return None;
+                            }
+                            Some(CatalogEntry {
+                                config_dir: config_dir.clone(),
+                                workspace: workspace.clone(),
+                                path,
+                            })
+                        }));
+                    }
+                }
+                let paths = entries
+                    .iter()
+                    .map(|entry| &entry.path)
+                    .collect::<HashSet<_>>();
+                self.candidates.retain(|entry| {
+                    entry.path.parent().is_none_or(|dir| !listed.contains(dir))
+                        || paths.contains(&entry.path)
+                });
+                entries
+            });
+            // Creation is immutable. Learn it once for history, then stat only
+            // the selected window; a pending head is rechecked each pass while
+            // written inside its window, and otherwise when the listing reruns.
+            let due = |entry: &CatalogEntry| match self.candidates.get(entry) {
+                None => true,
+                Some(PaneCandidate::Pending(_)) if refresh.attempted() => true,
+                Some(candidate) => windows.iter().any(|(workspace, since)| {
+                    *workspace == entry.workspace && candidate.pending_since(*since)
+                }),
+            };
+            unread = self
+                .catalog
+                .entries()
+                .iter()
+                .filter(|entry| due(entry))
+                .cloned()
+                .collect();
+        }
+        for entry in &unread {
+            self.check_candidate(entry, &mut checked);
+        }
+        for (workspace, since) in windows {
+            let named = demand
+                .iter()
+                .filter(|demand| demand.workspace == workspace)
+                .flat_map(|demand| &demand.panes)
+                .flat_map(|pane| pane.own.iter().chain(&pane.named))
+                .map(|session| &session.id)
+                .collect::<HashSet<_>>();
+            let mut sessions: HashMap<AgentSessionId, Vec<CatalogEntry>> = HashMap::new();
+            for entry in self
+                .catalog
+                .entries()
+                .iter()
+                .filter(|entry| entry.workspace == workspace)
+            {
+                let Some(row) = self
+                    .candidates
+                    .get(entry)
+                    .and_then(PaneCandidate::observation)
+                else {
+                    continue;
+                };
+                if row.created_at >= since && !named.contains(&row.session_id) {
+                    sessions
+                        .entry(row.session_id.clone())
+                        .or_default()
+                        .push(entry.clone());
+                }
+            }
+            let mut candidates = sessions.into_iter().collect::<Vec<_>>();
+            candidates.sort_by_cached_key(|(id, paths)| {
+                (
+                    std::cmp::Reverse(
+                        paths
+                            .iter()
+                            .filter_map(|entry| {
+                                self.candidates
+                                    .get(entry)
+                                    .and_then(PaneCandidate::observation)
+                            })
+                            .map(|row| row.created_at)
+                            .max(),
+                    ),
+                    id.clone(),
+                )
+            });
+            let mut window = candidates
+                .into_iter()
+                .filter_map(|(_, paths)| {
+                    paths
+                        .iter()
+                        .filter_map(|entry| self.check_candidate(entry, &mut checked))
+                        .filter(|row| row.created_at >= since)
+                        .min_by(observation_cmp)
+                })
+                .take(MAX_DISCOVERED_SESSIONS)
+                .collect::<Vec<_>>();
+            window.sort_by(|left, right| {
+                right
+                    .created_at
+                    .cmp(&left.created_at)
+                    .then_with(|| observation_cmp(left, right))
+            });
+            observations.extend(window);
+        }
+        observations.sort_by(observation_cmp);
+        let mut seen = HashSet::new();
+        observations.retain(|row| seen.insert((row.workspace.clone(), row.session_id.clone())));
+        observations
+    }
+
+    fn check_candidate(
+        &mut self,
+        entry: &CatalogEntry,
+        checked: &mut HashMap<CatalogEntry, Option<LocalSessionObservation>>,
+    ) -> Option<LocalSessionObservation> {
+        checked
+            .entry(entry.clone())
+            .or_insert_with(|| {
+                let dependencies = StampedPaths::exact([entry.path.clone()]);
+                self.candidates
+                    .refresh(entry.clone(), dependencies, false, |dependencies| {
+                        let Some((_, stamp)) = dependencies
+                            .iter()
+                            .next()
+                            .filter(|(_, stamp)| stamp.is_file())
+                        else {
+                            return PaneCandidate::Rejected;
+                        };
+                        let Some(first) = first_session_record(&entry.path) else {
+                            return PaneCandidate::Pending(stamp.modified);
+                        };
+                        observation(entry.path.clone(), &entry.workspace, first)
+                            .map_or(PaneCandidate::Rejected, |row| {
+                                PaneCandidate::Found(Box::new(row))
+                            })
+                    })
+                    .into_current()
+                    .and_then(|candidate| candidate.observation().cloned())
+            })
+            .clone()
+    }
+}
+
+fn project_directories(key: &DiscoveryKey, workspace: &Path) -> Vec<(PathBuf, PathBuf)> {
+    key.config_dirs
+        .iter()
+        .flat_map(|root| {
+            project_directory_names_from(workspace, key.project_dir_name.as_deref())
+                .into_iter()
+                .filter_map(|name| {
+                    let projects = root.join("projects");
+                    let path = projects.join(name);
+                    let normalized = crate::utils::path::normalize_path_lexical(&path);
+                    let projects = crate::utils::path::normalize_path_lexical(&projects);
+                    (normalized.starts_with(&projects) && normalized != projects)
+                        .then(|| (root.clone(), path))
+                })
+        })
+        .collect()
 }
 
 pub(super) fn discover(
@@ -354,6 +672,8 @@ fn observation(
 }
 
 fn first_session_record(path: &Path) -> Option<ClaudeSessionRecord> {
+    #[cfg(any(test, feature = "testkit"))]
+    crate::agents::local_session_cache::testkit::transcript_read();
     let file = fs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
     for line in reader
@@ -381,7 +701,7 @@ fn tail_timestamp(path: &Path) -> Option<Timestamp> {
 }
 
 fn file_mtime(path: &Path) -> Option<Timestamp> {
-    let since_epoch = fs::metadata(path)
+    let since_epoch = metadata(path)
         .ok()?
         .modified()
         .ok()?
@@ -448,413 +768,4 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::Write as _;
-    use std::time::Duration;
-
-    use super::*;
-
-    fn write_session(dir: &Path, id: &str, records: &[&str]) {
-        fs::create_dir_all(dir).unwrap();
-        fs::write(dir.join(format!("{id}.jsonl")), records.join("\n")).unwrap();
-    }
-
-    #[test]
-    fn exact_locator_stays_in_named_home_and_reads_cwd() {
-        use crate::agents::capabilities::SessionCapability as _;
-        use crate::agents::session::LocalSessionLookup;
-        let temp = tempfile::tempdir().unwrap();
-        let id = AgentSessionId::from("22222222-2222-4222-8222-222222222222");
-        let named = temp.path().join("named");
-        let env = std::collections::BTreeMap::from([
-            ("HOME".to_owned(), temp.path().display().to_string()),
-            ("CLAUDE_CONFIG_DIR".to_owned(), named.display().to_string()),
-        ]);
-        let record = r#"{"cwd":"/original/cwd","timestamp":"2025-01-01T00:00:00Z"}"#;
-        write_session(
-            &temp.path().join(".claude/projects/-original-cwd"),
-            &id,
-            &[record],
-        );
-        assert!(matches!(
-            super::super::ClaudeAdapter.locate_session(&id, &env),
-            LocalSessionLookup::NotFound
-        ));
-        for prefix in [
-            String::new(),
-            serde_json::json!({"snapshot": "x".repeat(128 * 1024)}).to_string(),
-            "{}\n".repeat(40),
-        ] {
-            write_session(
-                &named.join("projects/-original-cwd"),
-                &id,
-                &[&prefix, record],
-            );
-            let LocalSessionLookup::Found(found) =
-                super::super::ClaudeAdapter.locate_session(&id, &env)
-            else {
-                panic!("must find the named account's session past leading records");
-            };
-            assert_eq!(found.workspace, Path::new("/original/cwd"));
-            assert_eq!(found.session_id, id);
-            assert!(found.transcript_path.starts_with(&named));
-        }
-        assert!(matches!(
-            super::super::ClaudeAdapter.locate_session(&"../../escape".into(), &env),
-            LocalSessionLookup::NotFound
-        ));
-    }
-
-    #[test]
-    fn named_login_discovers_only_its_own_sessions() {
-        use crate::agents::capabilities::SessionCapability as _;
-
-        let temp = tempfile::tempdir().unwrap();
-        let fixture = fixture_observation();
-        let named_home = temp.path().join("named");
-        let home_env = std::collections::BTreeMap::from([(
-            "HOME".to_owned(),
-            temp.path().to_string_lossy().into_owned(),
-        )]);
-        let named_env = crate::agents::ProviderLogin::named(
-            fixture.kind.clone(),
-            "work".parse().unwrap(),
-            named_home.clone(),
-        )
-        .unwrap()
-        .env(&home_env);
-        let record = serde_json::json!({
-            "timestamp": fixture.created_at.to_string(), "cwd": fixture.workspace,
-        })
-        .to_string();
-        for (home, id) in [
-            (
-                temp.path().join(".claude"),
-                "22222222-2222-4222-8222-222222222222",
-            ),
-            (named_home, fixture.session_id.as_str()),
-        ] {
-            write_session(&home.join("projects/-workspace-project"), id, &[&record]);
-        }
-        let adapter = super::super::ClaudeAdapter;
-        let default = adapter.discover_local_sessions(&[&fixture.workspace], &home_env);
-        assert_eq!(default.len(), 1);
-        assert_ne!(default[0].session_id, fixture.session_id);
-        let named = adapter.discover_local_sessions(&[&fixture.workspace], &named_env);
-        assert_eq!(named.len(), 1);
-        assert_eq!(named[0].session_id, fixture.session_id);
-    }
-
-    #[test]
-    fn conversation_presence_follows_the_workspace_the_resume_would_open() {
-        let temp = tempfile::tempdir().unwrap();
-        let config_dirs = vec![temp.path().to_path_buf()];
-        let workspace = Path::new("/repo/account-change");
-        let id = AgentSessionId::from("06e78f43-ecc1-486b-b50d-3c1f7770a5ae");
-        let project = temp.path().join("projects").join("-repo-account-change");
-
-        assert!(!conversation_present_under(&config_dirs, &id, workspace));
-
-        write_session(&project, id.as_str(), &[r#"{"type":"user"}"#]);
-        assert!(conversation_present_under(&config_dirs, &id, workspace));
-
-        // The same id under another workspace is not this workspace's session.
-        assert!(!conversation_present_under(
-            &config_dirs,
-            &id,
-            Path::new("/repo/other")
-        ));
-
-        // An unwritten session carries an id and an empty file.
-        let unwritten = AgentSessionId::from("11111111-1111-4111-8111-111111111111");
-        write_session(&project, unwritten.as_str(), &[]);
-        assert!(!conversation_present_under(
-            &config_dirs,
-            &unwritten,
-            workspace
-        ));
-    }
-
-    #[test]
-    fn conversation_presence_normalizes_the_workspace_path() {
-        let temp = tempfile::tempdir().unwrap();
-        let config_dirs = vec![temp.path().to_path_buf()];
-        let id = AgentSessionId::from("06e78f43-ecc1-486b-b50d-3c1f7770a5ae");
-        write_session(
-            &temp.path().join("projects").join("-repo-worktrees-lane"),
-            id.as_str(),
-            &[r#"{"type":"user"}"#],
-        );
-        assert!(conversation_present_under(
-            &config_dirs,
-            &id,
-            Path::new("/repo/nested/../worktrees/lane")
-        ));
-    }
-
-    #[test]
-    fn discovers_only_root_sessions_for_the_exact_workspace() {
-        let temp = tempfile::tempdir().unwrap();
-        let workspace = Path::new("/home/marvin/.agents");
-        let project = temp.path().join("projects").join("-home-marvin--agents");
-        write_session(
-            &project,
-            "11111111-1111-4111-8111-111111111111",
-            &[
-                r#"{"type":"mode","mode":"default"}"#,
-                r#"{"type":"permission-mode","mode":"default"}"#,
-                r#"{"type":"bridge-session","sessionId":"11111111-1111-4111-8111-111111111111"}"#,
-                r#"{"type":"file-history-snapshot","snapshot":{}}"#,
-                r#"{"timestamp":"2025-01-01T00:00:00Z","cwd":"/home/marvin/.agents"}"#,
-                r#"{"timestamp":"2025-01-01T00:05:00Z","cwd":"/home/marvin/.agents"}"#,
-            ],
-        );
-        write_session(
-            &project,
-            "22222222-2222-4222-8222-222222222222",
-            &[r#"{"timestamp":"2025-01-02T00:00:00Z","cwd":"/home/marvin/.agents"}"#],
-        );
-        write_session(
-            &project,
-            "33333333-3333-4333-8333-333333333333",
-            &[r#"{"timestamp":"2025-01-03T00:00:00Z","cwd":"/other"}"#],
-        );
-        write_session(
-            &project,
-            "44444444-4444-4444-8444-444444444444",
-            &[
-                r#"{"timestamp":"2025-01-04T00:00:00Z","cwd":"/home/marvin/.agents","isSidechain":true}"#,
-            ],
-        );
-        write_session(&project, "55555555-5555-4555-8555-555555555555", &[]);
-        write_session(
-            &project,
-            "agent-not-a-root-session",
-            &[r#"{"timestamp":"2025-01-05T00:00:00Z","cwd":"/home/marvin/.agents"}"#],
-        );
-
-        let observations = discover_under(temp.path(), workspace);
-
-        assert_eq!(
-            observations
-                .iter()
-                .map(|observation| observation.session_id.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "22222222-2222-4222-8222-222222222222",
-                "11111111-1111-4111-8111-111111111111"
-            ]
-        );
-        assert_eq!(
-            observations[1].last_activity,
-            "2025-01-01T00:05:00Z".parse::<Timestamp>().unwrap()
-        );
-        assert_eq!(
-            observations[1].created_at,
-            "2025-01-01T00:00:00Z".parse::<Timestamp>().unwrap()
-        );
-        assert!(
-            observations
-                .iter()
-                .all(|observation| observation.projection == LocalSessionProjection::IdentityOnly)
-        );
-    }
-
-    #[test]
-    fn cached_discovery_reparses_only_changed_candidates_and_backstops() {
-        let temp = tempfile::tempdir().unwrap();
-        let workspace = PathBuf::from("/workspace/project");
-        let project = temp.path().join("projects").join("-workspace-project");
-        let id = "11111111-1111-4111-8111-111111111111";
-        write_session(
-            &project,
-            id,
-            &[r#"{"timestamp":"2025-01-01T00:00:00Z","cwd":"/workspace/project"}"#],
-        );
-        let key = DiscoveryKey {
-            config_dirs: vec![temp.path().to_path_buf()],
-            workspaces: vec![workspace],
-            project_dir_name: None,
-        };
-        let start = Instant::now();
-        let mut snapshot = ClaudeDiscoverySnapshot::default();
-
-        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
-        assert_eq!(snapshot.work.full_scans, 1);
-        assert_eq!(snapshot.work.candidate_parses, 1);
-        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
-        assert_eq!(snapshot.work.candidate_parses, 1);
-
-        fs::OpenOptions::new()
-            .append(true)
-            .open(project.join(format!("{id}.jsonl")))
-            .unwrap()
-            .write_all(
-                b"\n{\"timestamp\":\"2025-01-01T00:01:00Z\",\"cwd\":\"/workspace/project\"}\n",
-            )
-            .unwrap();
-        assert_eq!(snapshot.refresh(key.clone(), start).len(), 1);
-        assert_eq!(snapshot.work.full_scans, 1);
-        assert_eq!(snapshot.work.candidate_parses, 2);
-
-        assert_eq!(
-            snapshot.refresh(key, start + Duration::from_secs(30)).len(),
-            1
-        );
-        assert_eq!(snapshot.work.full_scans, 2);
-        assert_eq!(snapshot.work.candidate_parses, 3);
-    }
-
-    #[test]
-    fn batched_discovery_retains_the_cap_for_each_workspace() {
-        let temp = tempfile::tempdir().unwrap();
-        let config_dir = temp.path().to_path_buf();
-        let first = PathBuf::from("/workspace/first");
-        let second = PathBuf::from("/workspace/second");
-        let key = DiscoveryKey {
-            config_dirs: vec![config_dir.clone()],
-            workspaces: vec![first.clone(), second.clone()],
-            project_dir_name: None,
-        };
-        let start = Instant::now();
-        let mut snapshot = ClaudeDiscoverySnapshot::default();
-        let mut fixtures = Vec::new();
-
-        for (workspace, count, timestamp) in [(&first, MAX_DISCOVERED_SESSIONS, 2), (&second, 2, 1)]
-        {
-            for index in 0..count {
-                let path = temp.path().join(format!("{}-{index}.jsonl", timestamp));
-                fs::write(&path, []).unwrap();
-                let entry = CatalogEntry {
-                    config_dir: config_dir.clone(),
-                    workspace: workspace.clone(),
-                    path: path.clone(),
-                };
-                let at = Timestamp::from_second(timestamp).unwrap();
-                let observation = LocalSessionObservation {
-                    login: None,
-                    kind: AgentKind::new_unchecked("claude"),
-                    session_id: AgentSessionId::from(format!("{timestamp}-{index}")),
-                    workspace: workspace.clone(),
-                    transcript_path: path,
-                    created_at: at,
-                    fresh_binding_at: Some(at),
-                    first_event_at: Some(at),
-                    last_activity: at,
-                    projection: LocalSessionProjection::IdentityOnly,
-                };
-                fixtures.push((entry, observation));
-            }
-        }
-        snapshot.catalog.refresh(key.clone(), start, |_| {
-            fixtures.iter().map(|(entry, _)| entry.clone()).collect()
-        });
-        for (entry, observation) in fixtures {
-            snapshot.candidates.refresh(
-                entry.clone(),
-                StampedPaths::exact([entry.path.clone()]),
-                false,
-                |_| Some(observation),
-            );
-        }
-
-        let observations = snapshot.refresh(key, start);
-        assert_eq!(observations.len(), MAX_DISCOVERED_SESSIONS + 2);
-        assert_eq!(
-            observations
-                .iter()
-                .filter(|observation| observation.workspace == first)
-                .count(),
-            MAX_DISCOVERED_SESSIONS
-        );
-        assert_eq!(
-            observations
-                .iter()
-                .filter(|observation| observation.workspace == second)
-                .count(),
-            2
-        );
-    }
-
-    #[test]
-    fn project_directory_override_precedes_the_flattened_fallback() {
-        assert_eq!(
-            project_directory_names_from(Path::new("/repo/main"), Some("short-name")),
-            ["short-name", "-repo-main"]
-        );
-        assert_eq!(
-            project_directory_names_from(Path::new("/repo/main"), Some("")),
-            ["-repo-main"]
-        );
-        assert_eq!(
-            project_directory_names_from(Path::new("/repo/main"), Some("-repo-main")),
-            ["-repo-main"]
-        );
-    }
-
-    #[test]
-    fn override_bucket_discovery_keeps_transcript_cwd_authoritative() {
-        let temp = tempfile::tempdir().unwrap();
-        let first = PathBuf::from("/workspace/first");
-        let second = PathBuf::from("/workspace/second");
-        let shared = temp.path().join("projects/shared");
-        write_session(
-            &shared,
-            "11111111-1111-4111-8111-111111111111",
-            &[r#"{"timestamp":"2025-01-01T00:00:00Z","cwd":"/workspace/first"}"#],
-        );
-        write_session(
-            &shared,
-            "22222222-2222-4222-8222-222222222222",
-            &[r#"{"timestamp":"2025-01-02T00:00:00Z","cwd":"/workspace/second"}"#],
-        );
-        let key = DiscoveryKey {
-            config_dirs: vec![temp.path().to_path_buf()],
-            workspaces: vec![first.clone(), second.clone()],
-            project_dir_name: Some("shared".to_owned()),
-        };
-
-        let observations = ClaudeDiscoverySnapshot::default().refresh(key, Instant::now());
-        assert_eq!(observations.len(), 2);
-        assert!(observations.iter().any(|observation| {
-            observation.session_id == "11111111-1111-4111-8111-111111111111"
-                && observation.workspace == first
-        }));
-        assert!(observations.iter().any(|observation| {
-            observation.session_id == "22222222-2222-4222-8222-222222222222"
-                && observation.workspace == second
-        }));
-    }
-
-    #[test]
-    fn conversation_presence_checks_override_and_flattened_buckets() {
-        let temp = tempfile::tempdir().unwrap();
-        let config_dirs = vec![temp.path().to_path_buf()];
-        let workspace = Path::new("/repo/main");
-        let override_id = AgentSessionId::from("11111111-1111-4111-8111-111111111111");
-        let fallback_id = AgentSessionId::from("22222222-2222-4222-8222-222222222222");
-        write_session(
-            &temp.path().join("projects/short-name"),
-            override_id.as_str(),
-            &[r#"{"type":"user"}"#],
-        );
-        write_session(
-            &temp.path().join("projects/-repo-main"),
-            fallback_id.as_str(),
-            &[r#"{"type":"user"}"#],
-        );
-
-        assert!(conversation_present_under_with(
-            &config_dirs,
-            &override_id,
-            workspace,
-            Some("short-name")
-        ));
-        assert!(conversation_present_under_with(
-            &config_dirs,
-            &fallback_id,
-            workspace,
-            Some("short-name")
-        ));
-    }
-}
+mod tests;

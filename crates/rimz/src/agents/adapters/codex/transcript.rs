@@ -2,7 +2,6 @@
 //!
 //! This module locates session JSONL files, reads bounded tails, folds token usage, and enriches context/cost fields without touching the live app-server. Costs use the shared cached price book, so refreshed prices heal post-release models.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{LazyLock, Mutex};
@@ -411,10 +410,13 @@ pub(super) fn find_session_transcript_under(root: &Path, session_id: &str) -> Op
 }
 
 fn newest_session_rollout_in(dir: &Path, session_id: &str) -> Option<PathBuf> {
-    fs::read_dir(dir)
+    crate::agents::local_session_cache::read_dir(dir)
         .ok()?
         .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_file()))
+        .filter(|entry| {
+            crate::agents::local_session_cache::entry_file_type(entry)
+                .is_ok_and(|file_type| file_type.is_file())
+        })
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
             rollout_filename_matches_session(&name, session_id).then_some((name, entry.path()))
@@ -423,7 +425,7 @@ fn newest_session_rollout_in(dir: &Path, session_id: &str) -> Option<PathBuf> {
         .map(|(_, path)| path)
 }
 
-fn rollout_filename_matches_session(name: &str, session_id: &str) -> bool {
+pub(super) fn rollout_filename_matches_session(name: &str, session_id: &str) -> bool {
     let Some(core) = name
         .strip_prefix("rollout-")
         .and_then(|name| name.strip_suffix(".jsonl"))
@@ -443,12 +445,15 @@ fn rollout_filename_matches_session(name: &str, session_id: &str) -> bool {
 }
 
 fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
-    let Ok(read) = fs::read_dir(path) else {
+    let Ok(read) = crate::agents::local_session_cache::read_dir(path) else {
         return Vec::new();
     };
     let mut entries: Vec<PathBuf> = read
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
+        .filter(|entry| {
+            crate::agents::local_session_cache::entry_file_type(entry)
+                .is_ok_and(|kind| kind.is_dir())
+        })
         .map(|e| e.path())
         .collect();
     entries.sort();

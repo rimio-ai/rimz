@@ -17,6 +17,7 @@ This page maps Codex onto RimZ's internal types: which hook carries which signal
 | `transcript.rs` | rollout lookup, the tail scan, the local context refresh, and turn-death confirmation |
 | `session_index.rs` | `session_index.jsonl` thread names |
 | `local_sessions.rs` | local session discovery over the rollout stores |
+| `local_sessions/tests.rs`, `local_sessions/tests/pane.rs` | full-scan and per-pane discovery tests, archive moves, date coverage, and filesystem work budgets |
 | `process.rs` | Codex CLI and daemon process classifiers |
 | `app_server.rs`, `app_server/wire.rs`, `app_server/transport.rs` | the read-only app-server client, its response models, and the JSON-RPC transport |
 | `app_server/daemon.rs` | the managed remote-control daemon lifecycle |
@@ -261,19 +262,23 @@ Every same-instance root carries the [launch identity](./instances.md#launch-ide
 
 ### Local session discovery
 
-[`local_sessions.rs`](../../../crates/rimz/src/agents/adapters/codex/local_sessions.rs) reads the first `session_meta` line of recent rollouts under `$CODEX_HOME`, or `~/.codex`. The room host runs one discovery for all admitted Codex workspaces and publishes the observations, and consumers never enumerate the rollout store ([local session observations](./instances.md#local-session-observations)).
+Codex declares `local_session_discovery = PerPane`. [`local_sessions.rs`](../../../crates/rimz/src/agents/adapters/codex/local_sessions.rs) reads the first `session_meta` line of demanded rollouts under `$CODEX_HOME`, or `~/.codex`. The room host batches admitted Codex workspaces and publishes the observations, and consumers never enumerate the rollout store ([local session observations](./instances.md#local-session-observations)).
 
 | Rule | Value |
 | --- | --- |
-| Active rollouts | `sessions/YYYY/MM/DD/`, the 15 UTC date directories from today back 14 days, newest first |
-| Archived rollouts | flat `archived_sessions/` files whose filename date is within 14 days; an active twin wins |
-| Scan cap | 512 files |
-| Rescan | cold start, topology change, UTC date rollover, or the 30-second backstop; unchanged stamps reuse the cached header |
+| Named rollouts | validated hook path, remembered path, then the bounded newest-16-day-directory resolver and flat archive; a remembered path no hook named is resolved again every 30 seconds and gives way to a newer revision; no age or count cap on a found path |
+| Active window | `sessions/YYYY/MM/DD/`, from the window clock's UTC date minus one through today's UTC date plus one |
+| Archived window | flat `archived_sessions/` files filtered by filename date to the same range; per session the newest revision by filename wins, and an active file wins only over its archived twin of the same name |
+| Window cap | newest 512 sessions by creation per admitted workspace; named sessions do not consume the cap |
+| Rescan | cold start, topology change, window change, UTC date rollover, or the 30-second backstop; unchanged stamps reuse the cached header |
+| Missing named id | retry the bounded resolver at most every 30 seconds; non-UUID ids are never looked up |
 | Admission | header `cwd` exactly equals an admitted workspace |
 | Excluded | Codex's `is_non_root_agent` (a `source` object with any `subagent` or `internal` key), a non-empty `parent_thread_id`, or a trimmed, case-insensitive `thread_source = "subagent"`; `forked_from_id` alone does not exclude |
 | Session id | header `id`, else the filename UUID |
 | Clocks | created at the header timestamp; last activity at the file mtime, never earlier than creation, and at creation when the mtime cannot be read |
 | Projection | `IdentityOnly` |
+
+Codex writes day folders and filenames in local time. Including both adjacent UTC dates covers the writer's local date around midnight. The full scan used by `rimz agents resume` keeps its 512-file bound and today-back-14-days cutoff, adding tomorrow's UTC date too. Named rollouts moving between the active tree and the archive are retried at their computed twin path on the next pass, without a tree walk. Hints outside the account home or naming another id are ignored, including traversal paths. Paths found through the window are remembered for named ids. Warm passes stat only named files, window candidates and watched folders, with no listings or transcript reads. The per-pane cache is keyed by account home. Learned headers survive window closes and workspace changes; they are pruned only when a fresh listing of their folder no longer contains the file, or the account cache expires after 30 seconds unused. The archive listing preserves learned headers outside the current date window too.
 
 The cache never reads the store, so a cwd match alone is not identity proof. The snapshot fold applies the [pane reservation and incarnation-clock rules](./instances.md#local-session-observations), which admit the newest launch owner's own session on its matched live pane without a clock.
 

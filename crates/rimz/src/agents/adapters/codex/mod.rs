@@ -185,7 +185,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         // The sidebar binds an instance to its pane by cwd before a session
         // binds and renders a wired-but-unprompted pane as an idle agent.
         registers_lazily: true,
-        local_session_discovery: LocalSessionDiscovery::FullScan,
+        local_session_discovery: LocalSessionDiscovery::PerPane,
         daemon_hooked_sessions: true,
         direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
@@ -1339,6 +1339,14 @@ impl crate::agents::capabilities::SessionCapability for CodexAdapter {
         login_env: &BTreeMap<String, String>,
     ) -> Vec<super::LocalSessionObservation> {
         local_sessions::discover(workspaces, login_env)
+    }
+
+    fn discover_pane_sessions(
+        &self,
+        demand: &[crate::agents::session::PaneSessionDemand],
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<Vec<super::LocalSessionObservation>> {
+        Some(local_sessions::discover_panes(demand, login_env))
     }
 
     /// `codex resume <id>` resolves the UUID to its rollout file and restores

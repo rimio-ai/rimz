@@ -15,6 +15,7 @@ This page maps Claude Code onto RimZ's internal types: which hook carries which 
 | `subagent_statusline.rs`, `subagent_cost.rs`, `subagents.rs` | child statusline enrichment, child cost cursors, and interrupted-child repair |
 | `local_context.rs` | the session-cumulative token fold |
 | `local_sessions.rs` | local session discovery |
+| `local_sessions/tests.rs`, `local_sessions/tests/pane.rs` | full-scan and per-pane discovery tests, account isolation, and filesystem work budgets |
 | `account.rs`, `oauth_usage.rs` | `claude auth status`, window normalization, the OAuth usage probe, and the account key |
 | `spend.rs`, `managed_pricing.rs` | the full-history spend parser and the managed-settings price overlay |
 | `remote_control.rs`, `remote_consent.rs`, `remote_liveness.rs` | remote-control readiness, consent, and host liveness |
@@ -292,17 +293,17 @@ Esc fires no root lifecycle hook. Claude appends a timestamped `user` entry whos
 
 [`local_sessions.rs`](../../../crates/rimz/src/agents/adapters/claude/local_sessions.rs) turns Claude's project store into identity-only [local session observations](./instances.md#local-session-observations). Hooks stay authoritative for lifecycle state, prompts, waits, asks, compaction, context, and clocks on a session with a durable row.
 
-Discovery reads each config root: a valid `CLAUDE_CONFIG_DIR`, otherwise the XDG Claude directory and `~/.claude`. For each admitted workspace it looks in `projects/<bucket>`. It tries the bucket named by a non-empty `CLAUDE_CODE_PROJECT_DIR_NAME` first, then the absolute workspace path with every non-alphanumeric byte replaced by `-`. Both bucket names are only an index. A candidate is accepted when its first record carrying both `cwd` and `timestamp`, within the first 32 lines and 64 KiB, names the exact workspace, which also rejects collisions on a shared config root.
+Claude declares `local_session_discovery = PerPane`. The room host reads the configured `CLAUDE_CONFIG_DIR` roots, or the XDG Claude directory and `~/.claude` when none are configured. An unavailable configured account stays absent rather than falling back to the native account. For each admitted workspace it looks in `projects/<bucket>`. It tries the bucket named by a non-empty `CLAUDE_CODE_PROJECT_DIR_NAME` first, then the absolute workspace path with every non-alphanumeric byte replaced by `-`. Both bucket names are only an index. A candidate is accepted when its first record carrying both `cwd` and `timestamp`, within the first 32 lines and 64 KiB, names the exact workspace, which also rejects collisions on a shared config root.
 
 | Rule | Value |
 | --- | --- |
-| candidate files | `*.jsonl` whose stem is a UUID; the stem is the `claude --resume` id |
+| candidate files | top-level `*.jsonl` whose stem is a UUID; the stem is the `claude --resume` id |
 | records allowed before the first session record | metadata such as `mode`, `permission-mode`, `bridge-session`, `file-history-snapshot` |
 | first session record | must not set `isSidechain` |
 | activity bound | newest tail-record timestamp, else file mtime |
-| cap | the 512 newest candidates per admitted workspace, so one workspace cannot evict another |
+| cap | named sessions uncapped; the newest 512 window sessions by creation per admitted workspace |
 
-The producer keeps a catalog keyed by the ordered config roots and the normalized workspace batch. A directory topology change rebuilds the catalog, and a changed file re-runs only its head and tail validation. Restatting the known catalog before the newest-512 selection lets an older transcript whose mtime advances re-enter without a recursive walk. Unchanged accepted and rejected heads stay cached until their stamps change or the 30-second backstop expires.
+The room host computes `<config-root>/projects/<bucket>/<id>.jsonl` for every named session. Among duplicates across roots it keeps the newest activity. Finding a pane's own session closes that pane's fresh window. Otherwise the catalog retains top-level sessions created since the demand's clock; directory changes admit new files on the next pass, and a cold cache reconstructs the same window. Warm passes stat only named files, window candidates and watched folders; they list no folders and read no transcripts. The per-pane cache is keyed by account roots and the project-directory override, not the workspace set. Learned heads survive window closes and workspace changes; they are pruned only when a fresh listing of their folder no longer contains the file, or the account cache expires after 30 seconds unused. Rejected heads stay distinct from unfinished heads so a shared bucket's unrelated history adds no warm metadata work. An unfinished head is rechecked every pass only while its file was last written at or after the window clock, and otherwise when a directory change or the backstop reruns the listing, so an abandoned headless file adds none either. A 30-second backstop revalidates the catalog. `rimz agents resume` retains the recursive full scan, its existing invalid-config-root fallback, and its newest-512 activity cap per workspace.
 
 ## Account and balance
 

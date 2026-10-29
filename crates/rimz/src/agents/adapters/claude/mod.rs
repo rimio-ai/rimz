@@ -123,7 +123,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         // recovered by cwd, and a pane with no session, such as the login
         // screen before SessionStart, is idle-synthesized like any wired agent.
         registers_lazily: false,
-        local_session_discovery: LocalSessionDiscovery::FullScan,
+        local_session_discovery: LocalSessionDiscovery::PerPane,
         daemon_hooked_sessions: false,
         direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
@@ -1284,6 +1284,14 @@ impl crate::agents::capabilities::SessionCapability for ClaudeAdapter {
         login_env: &BTreeMap<String, String>,
     ) -> Vec<super::LocalSessionObservation> {
         local_sessions::discover(workspaces, login_env)
+    }
+
+    fn discover_pane_sessions(
+        &self,
+        demand: &[crate::agents::session::PaneSessionDemand],
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<Vec<super::LocalSessionObservation>> {
+        Some(local_sessions::discover_panes(demand, login_env))
     }
 
     fn local_conversation_present(
