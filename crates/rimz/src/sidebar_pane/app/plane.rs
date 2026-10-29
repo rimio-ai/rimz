@@ -294,11 +294,14 @@ impl DataPlane {
     #[cfg(test)]
     pub(super) fn remember(&self, fold: WorkspaceFold) {
         let fold = Arc::new(fold);
-        self.views.lock().publish(FetchUpdate::Fold {
-            fold,
-            phase: super::fetch::FetchPhase::Interim,
-            source: super::fetch::SnapshotSource::Cached,
-        });
+        self.views.lock().publish(
+            FetchUpdate::Fold {
+                fold,
+                phase: super::fetch::FetchPhase::Interim,
+                source: super::fetch::SnapshotSource::Cached,
+            },
+            std::time::Instant::now(),
+        );
     }
 
     #[cfg(test)]
@@ -307,6 +310,15 @@ impl DataPlane {
             .values()
             .map(|subscriber| subscriber.instance_id.clone())
             .collect()
+    }
+
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn record_binding(
+        &self,
+        pane: &crate::ids::PaneId,
+    ) -> (bool, bool) {
+        let record = self.views.read();
+        (record.mapped(pane), record.resolved(pane))
     }
 
     #[cfg(test)]
@@ -337,13 +349,16 @@ impl DataPlane {
                         frame: Some(frame),
                     },
                 };
-                views.publish(FetchUpdate::Fold {
-                    fold: Arc::new(fold),
-                    phase: super::fetch::FetchPhase::Final,
-                    source: super::fetch::SnapshotSource::Produced,
-                });
-                subscriber.completion.store(true, Ordering::Relaxed);
+                views.publish(
+                    FetchUpdate::Fold {
+                        fold: Arc::new(fold),
+                        phase: super::fetch::FetchPhase::Final,
+                        source: super::fetch::SnapshotSource::Produced,
+                    },
+                    std::time::Instant::now(),
+                );
             }
+            subscriber.completion.store(true, Ordering::Release);
             let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
     }
@@ -353,16 +368,17 @@ impl DataPlane {
         let cycle: Vec<_> = lock(&self.subscribers).values().cloned().collect();
         {
             let mut views = self.views.lock();
-            views.publish(FetchUpdate::Fold {
-                fold: Arc::new(fold),
-                phase: super::fetch::FetchPhase::Final,
-                source: super::fetch::SnapshotSource::Produced,
-            });
-            for subscriber in &cycle {
-                subscriber.completion.store(true, Ordering::Relaxed);
-            }
+            views.publish(
+                FetchUpdate::Fold {
+                    fold: Arc::new(fold),
+                    phase: super::fetch::FetchPhase::Final,
+                    source: super::fetch::SnapshotSource::Produced,
+                },
+                std::time::Instant::now(),
+            );
         }
         for subscriber in cycle {
+            subscriber.completion.store(true, Ordering::Release);
             let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
     }

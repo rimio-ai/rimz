@@ -4,6 +4,96 @@ use crate::sidebar_pane::app::clock::LoopClock;
 
 const HOLD: Duration = Duration::from_secs(10);
 
+fn assert_record(handle: &ViewsHandle) {
+    let record = handle.read();
+    let views = handle.lock();
+    assert_eq!(record.revision, views.revision);
+    assert_eq!(record.fold.is_some(), views.fold.is_some());
+    if let (Some(record), Some(locked)) = (&record.fold, &views.fold) {
+        assert!(Arc::ptr_eq(record, locked));
+    }
+    for id in [10, 11, 20, 21, 99] {
+        let pane = pane(id);
+        assert_eq!(
+            record.mapped(&pane),
+            views.panes.contains_key(&pane),
+            "{pane}"
+        );
+        assert_eq!(record.resolved(&pane), views.resolved(&pane), "{pane}");
+        assert_eq!(record.observed(&pane), views.observed(&pane), "{pane}");
+        let outcomes = |latest: &Latest| {
+            latest
+                .unseen(0)
+                .map(|update| {
+                    (
+                        update.is_success(),
+                        update.is_final(),
+                        update
+                            .preview_for(&pane)
+                            .map(|(own, viewed)| (own, viewed.to_vec())),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(outcomes(&record.latest), outcomes(&views.latest));
+    }
+}
+
+#[test]
+fn record_follows_every_views_writer() {
+    let clock = clock();
+    let handle = ViewsHandle::default();
+    assert_record(&handle);
+    let source = handle.lock().presentation(&pane(10), clock.now(), false).0;
+    assert_record(&handle);
+    handle.lock().land(source, &pane(20), clock.now());
+    assert_record(&handle);
+    handle.lock().unpaint(&pane(20), clock.now());
+    assert_record(&handle);
+    sample(&mut handle.lock(), &clock, &[(1, 10)]);
+    assert_record(&handle);
+    sample(&mut handle.lock(), &clock, &[]);
+    assert_record(&handle);
+    clock.advance(HOLD);
+    handle.lock().expire(clock.now(), HOLD);
+    assert_record(&handle);
+}
+
+#[test]
+fn publication_reconciles_before_any_reader_and_records_latest_outcomes() {
+    let clock = clock();
+    let handle = ViewsHandle::default();
+    let mut snapshot = crate::sidebar_pane::app::fixtures::snapshot(
+        &crate::sidebar_pane::app::fixtures::workspace(),
+    );
+    snapshot.viewed_panes = vec![pane(11)];
+    let fold = Arc::new(WorkspaceFold {
+        sampled_at: clock.now(),
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+        frame: Some(Arc::new(frame(&[(1, 11)]))),
+    });
+    handle.lock().publish(
+        FetchUpdate::Fold {
+            fold,
+            phase: super::super::fetch::FetchPhase::Final,
+            source: super::super::fetch::SnapshotSource::Produced,
+        },
+        clock.now(),
+    );
+    assert!(
+        handle.read().resolved(&pane(10)),
+        "publication reconciles membership"
+    );
+    assert_record(&handle);
+    handle.lock().publish(
+        FetchUpdate::Failed {
+            error: "offline".into(),
+        },
+        clock.now(),
+    );
+    assert_record(&handle);
+}
+
 fn clock() -> LoopClock {
     LoopClock::play("2026-06-01T00:00:00Z".parse().unwrap())
 }

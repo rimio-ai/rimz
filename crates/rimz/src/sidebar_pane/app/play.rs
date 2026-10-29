@@ -289,12 +289,16 @@ impl Column {
         }
         reconcile_snapshot(&self.runtime, &mut snapshot);
         let mut views = self.state.views.registry.lock();
-        views.publish(FetchUpdate::Snapshot {
-            snapshot: Box::new(snapshot),
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Produced,
-        });
-        self.completion.store(true, Ordering::Relaxed);
+        views.publish(
+            FetchUpdate::Snapshot {
+                snapshot: Box::new(snapshot),
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Produced,
+            },
+            self.clock.now(),
+        );
+        drop(views);
+        self.completion.store(true, Ordering::Release);
     }
 
     fn advance(&mut self, scenario: &Scenario) -> Result<bool> {

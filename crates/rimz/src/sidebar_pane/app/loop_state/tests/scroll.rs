@@ -270,13 +270,17 @@ impl SharedPanes {
             frame: Some(Arc::new(frame)),
         };
         let mut views = self.plane.views.lock();
-        views.publish(FetchUpdate::Fold {
-            fold: Arc::new(fold),
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Produced,
-        });
+        views.publish(
+            FetchUpdate::Fold {
+                fold: Arc::new(fold),
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Produced,
+            },
+            self.clock.now(),
+        );
+        drop(views);
         for rig in &self.panes {
-            rig.completion.store(true, Ordering::Relaxed);
+            rig.completion.store(true, Ordering::Release);
         }
     }
 

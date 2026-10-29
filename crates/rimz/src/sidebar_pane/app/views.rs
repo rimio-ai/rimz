@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -19,21 +20,50 @@ use crate::store::snapshot::SidebarSnapshot;
 #[derive(Default)]
 pub(super) struct ViewsHandle {
     views: Mutex<Views>,
+    record: Mutex<Arc<ViewsRecord>>,
+    generation: AtomicU64,
 }
 
 impl From<Views> for ViewsHandle {
     fn from(views: Views) -> Self {
         Self {
+            record: Mutex::new(Arc::new(ViewsRecord::new(&views, 0))),
             views: Mutex::new(views),
+            generation: AtomicU64::new(0),
         }
     }
 }
 
 impl ViewsHandle {
+    pub(super) fn read(&self) -> Arc<ViewsRecord> {
+        self.record
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn release(&self, views: &Views) {
+        let previous = self.read();
+        if previous.matches(views) {
+            return;
+        }
+        let generation = previous.generation + 1;
+        let record = Arc::new(ViewsRecord::new(views, generation));
+        *self.record.lock().unwrap_or_else(PoisonError::into_inner) = record;
+        self.generation.store(generation, Ordering::Release);
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
     pub(super) fn lock(&self) -> ViewsGuard<'_> {
         #[cfg(any(test, feature = "testkit"))]
         crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::ViewsLock);
-        ViewsGuard(self.views.lock().unwrap_or_else(PoisonError::into_inner))
+        ViewsGuard {
+            views: self.views.lock().unwrap_or_else(PoisonError::into_inner),
+            handle: self,
+        }
     }
 
     #[cfg(test)]
@@ -44,23 +74,112 @@ impl ViewsHandle {
             Err(std::sync::TryLockError::WouldBlock) => return None,
         };
         crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::ViewsLock);
-        Some(ViewsGuard(views))
+        Some(ViewsGuard {
+            views,
+            handle: self,
+        })
+    }
+
+    /// Leaves the handle as a release descheduled between its two stores does: the record
+    /// one generation ahead of the published generation.
+    #[cfg(test)]
+    pub(super) fn install_ahead_of_generation(&self) {
+        let views = self.views.lock().unwrap_or_else(PoisonError::into_inner);
+        let record = ViewsRecord::new(&views, self.read().generation + 1);
+        *self.record.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(record);
     }
 }
 
-pub(super) struct ViewsGuard<'a>(MutexGuard<'a, Views>);
+#[derive(Default)]
+pub(super) struct ViewsRecord {
+    pub(super) generation: u64,
+    pub(super) revision: u64,
+    pub(super) latest: Latest,
+    fold: Option<Arc<WorkspaceFold>>,
+    mapped_panes: HashSet<PaneId>,
+    resolved_panes: HashSet<PaneId>,
+}
+
+impl ViewsRecord {
+    fn new(views: &Views, generation: u64) -> Self {
+        Self {
+            generation,
+            revision: views.revision,
+            latest: views.latest.clone(),
+            fold: views.fold.clone(),
+            mapped_panes: views.panes.keys().cloned().collect(),
+            resolved_panes: views.resolved_panes().cloned().collect(),
+        }
+    }
+
+    fn matches(&self, views: &Views) -> bool {
+        self.revision == views.revision
+            && self.fold.as_ref().map(Arc::as_ptr) == views.fold.as_ref().map(Arc::as_ptr)
+            && self.mapped_panes.len() == views.panes.len()
+            && views.panes.keys().all(|pane| self.mapped(pane))
+            && views.resolved_panes().all(|pane| self.resolved(pane))
+            && self.resolved_panes.iter().all(|pane| views.resolved(pane))
+    }
+
+    pub(super) fn mapped(&self, pane: &PaneId) -> bool {
+        self.mapped_panes.contains(pane)
+    }
+
+    pub(super) fn resolved(&self, pane: &PaneId) -> bool {
+        self.resolved_panes.contains(pane)
+    }
+
+    pub(super) fn observed(&self, pane: &PaneId) -> Option<bool> {
+        observed(self.fold.as_deref(), pane)
+    }
+}
+
+fn observed(fold: Option<&WorkspaceFold>, pane: &PaneId) -> Option<bool> {
+    let fold = fold?;
+    let tab = fold
+        .frame
+        .as_ref()?
+        .tabs
+        .iter()
+        .find(|tab| tab.panes.iter().any(|candidate| candidate.pane_id == *pane));
+    Some(tab.is_none_or(|tab| {
+        tab.panes.iter().any(|candidate| {
+            fold.workspace
+                .snapshot()
+                .viewed_panes
+                .contains(&candidate.pane_id)
+                && (candidate.pane_id == *pane
+                    || !candidate
+                        .current
+                        .command
+                        .as_deref()
+                        .is_some_and(crate::pane::command_is_sidebar_chrome))
+        })
+    }))
+}
+
+pub(super) struct ViewsGuard<'a> {
+    views: MutexGuard<'a, Views>,
+    handle: &'a ViewsHandle,
+}
+
+impl Drop for ViewsGuard<'_> {
+    fn drop(&mut self) {
+        self.handle.release(&self.views);
+    }
+}
 
 impl Deref for ViewsGuard<'_> {
     type Target = Views;
 
     fn deref(&self) -> &Views {
-        &self.0
+        &self.views
     }
 }
 
 impl DerefMut for ViewsGuard<'_> {
     fn deref_mut(&mut self) -> &mut Views {
-        &mut self.0
+        &mut self.views
     }
 }
 
@@ -96,7 +215,7 @@ pub(super) struct ViewId(u64);
 ///
 /// Views retain content once: success precedes failure, and an interim never
 /// replaces a completion the consumer has not reduced.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Latest {
     completed: Option<(u64, FetchUpdate)>,
     interim: Option<(u64, FetchUpdate)>,
@@ -239,7 +358,7 @@ impl Views {
         receiver
     }
 
-    pub(super) fn publish(&mut self, update: FetchUpdate) {
+    pub(super) fn publish(&mut self, update: FetchUpdate, now: Instant) {
         let content = match &update {
             FetchUpdate::Shared { update, .. } => update.as_ref(),
             update => update,
@@ -256,6 +375,7 @@ impl Views {
         });
         self.revision += 1;
         self.latest.push(self.revision, update);
+        self.refresh(now);
         if let Some(reply) = reply
             && let Some(waiter) = self.fold_waiter.take()
         {
@@ -283,9 +403,14 @@ impl Views {
     }
 
     pub(super) fn resolved(&self, pane: &PaneId) -> bool {
+        self.resolved_panes().any(|resolved| resolved == pane)
+    }
+
+    fn resolved_panes(&self) -> impl Iterator<Item = &PaneId> {
         self.clients
             .values()
-            .any(|client| client.departed.is_none() && client.pane.as_ref() == Some(pane))
+            .filter(|client| client.departed.is_none())
+            .filter_map(|client| client.pane.as_ref())
     }
 
     pub(super) fn has_sample(&self) -> bool {
@@ -333,27 +458,7 @@ impl Views {
 
     /// Whether the latest frame shows `pane`'s tab viewed; a frameless fold observes nothing.
     pub(super) fn observed(&self, pane: &PaneId) -> Option<bool> {
-        let fold = self.fold.as_ref()?;
-        let tab = fold
-            .frame
-            .as_ref()?
-            .tabs
-            .iter()
-            .find(|tab| tab.panes.iter().any(|candidate| candidate.pane_id == *pane));
-        Some(tab.is_none_or(|tab| {
-            tab.panes.iter().any(|candidate| {
-                fold.workspace
-                    .snapshot()
-                    .viewed_panes
-                    .contains(&candidate.pane_id)
-                    && (candidate.pane_id == *pane
-                        || !candidate
-                            .current
-                            .command
-                            .as_deref()
-                            .is_some_and(crate::pane::command_is_sidebar_chrome))
-            })
-        }))
+        observed(self.fold.as_deref(), pane)
     }
 
     #[cfg(test)]

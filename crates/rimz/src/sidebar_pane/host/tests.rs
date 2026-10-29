@@ -24,11 +24,16 @@ impl Room {
     }
 
     fn with_timing(timing: Timing) -> Self {
+        Self::with_mux_timing(MuxName::Zellij, timing)
+    }
+
+    fn with_mux_timing(mux: MuxName, timing: Timing) -> Self {
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let workspace_id: WorkspaceId = workspace();
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        let room = serve_config(&workspace_id).room;
+        let mut room = serve_config(&workspace_id).room;
+        room.mux = mux;
         let plane = DataPlane::detached();
         let socket_path = runtime.sidebar_host_socket_path(room.mux, &room.session_name);
         let host = Host::new(
@@ -712,18 +717,53 @@ fn every_pane_of_a_host_shares_its_one_data_plane() {
 
 #[test]
 fn hidden_attachment_keeps_lifecycle_and_paints_on_viewed_fold() {
-    hidden_reveal(crate::store::snapshot::SidebarPresence::Active, false);
+    hidden_reveal(
+        MuxName::Zellij,
+        crate::store::snapshot::SidebarPresence::Active,
+        false,
+    );
 }
 
 #[test]
 fn detached_attachment_keeps_lifecycle_and_hidden_resize_waits_for_visibility() {
-    hidden_reveal(crate::store::snapshot::SidebarPresence::Detached, true);
+    hidden_reveal(
+        MuxName::Zellij,
+        crate::store::snapshot::SidebarPresence::Detached,
+        true,
+    );
 }
 
-fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_resize: bool) {
-    let room = Room::new();
-    let visible_id = crate::ids::PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let hidden_id = crate::ids::PaneId::from_parts(MuxName::Zellij, "terminal_2");
+#[test]
+fn tmux_hidden_attachment_paints_on_viewed_fold() {
+    hidden_reveal(
+        MuxName::Tmux,
+        crate::store::snapshot::SidebarPresence::Active,
+        false,
+    );
+}
+
+fn hidden_reveal(
+    mux: MuxName,
+    presence: crate::store::snapshot::SidebarPresence,
+    reveal_by_resize: bool,
+) {
+    let room = Room::with_mux_timing(mux, Timing::default());
+    let visible_id = crate::ids::PaneId::from_parts(
+        mux,
+        if mux == MuxName::Tmux {
+            "%101"
+        } else {
+            "terminal_1"
+        },
+    );
+    let hidden_id = crate::ids::PaneId::from_parts(
+        mux,
+        if mux == MuxName::Tmux {
+            "%102"
+        } else {
+            "terminal_2"
+        },
+    );
     let mut visible = Pty::open(40, 20);
     let mut hidden = Pty::open(40, 20);
     let visible_pane = room.attach_as(&visible, Some(visible_id.clone()));
@@ -745,10 +785,17 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
         let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
         for (id, tab) in [(&visible_id, "tab_visible"), (&hidden_id, "tab_hidden")] {
             let mut sidebar = pane(id.raw(), tab, false);
+            sidebar.pane_id = id.clone();
             sidebar.command = Some("rimz-sidebar".into());
             panes.push(sidebar);
             if id == &visible_id || snapshot.own_view.as_ref().unwrap().sibling_count != 0 {
                 let mut sibling = pane(&format!("{}_peer", id.raw()), tab, false);
+                if mux == MuxName::Tmux {
+                    sibling.pane_id = crate::ids::PaneId::from_parts(
+                        mux,
+                        if id == &visible_id { "%201" } else { "%202" },
+                    );
+                }
                 sibling.command = Some("rimz-sidebar".into());
                 panes.push(sibling);
             }
@@ -823,6 +870,7 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
             "uncorroborated hidden resize routes no view"
         );
     }
+    assert_eq!(room.host.plane.record_binding(&hidden_id), (false, false));
     let revealed = Instant::now();
     snapshot.viewed_panes.push(hidden_id.clone());
     publish(&snapshot);

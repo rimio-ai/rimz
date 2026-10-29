@@ -16,11 +16,14 @@ fn fold(sampled_at: Instant) -> Arc<WorkspaceFold> {
 }
 
 fn publish(views: &mut Views, fold: Arc<WorkspaceFold>) {
-    views.publish(FetchUpdate::Fold {
-        fold,
-        phase: FetchPhase::Interim,
-        source: SnapshotSource::Cached,
-    });
+    views.publish(
+        FetchUpdate::Fold {
+            fold,
+            phase: FetchPhase::Interim,
+            source: SnapshotSource::Cached,
+        },
+        Instant::now(),
+    );
 }
 
 #[test]
@@ -135,9 +138,12 @@ fn failure_skips_heavy_lanes_but_not_maintenance_even_if_success_follows() {
         }
         let views = worker_data.lock().unwrap().views.clone();
         let mut views = views.lock();
-        views.publish(FetchUpdate::Failed {
-            error: "worker failed".into(),
-        });
+        views.publish(
+            FetchUpdate::Failed {
+                error: "worker failed".into(),
+            },
+            Instant::now(),
+        );
         publish(&mut views, fold(Instant::now()));
     });
     let refreshed = Cell::new(false);

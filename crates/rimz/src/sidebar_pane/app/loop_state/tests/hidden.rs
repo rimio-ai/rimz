@@ -1,5 +1,284 @@
 use super::*;
 
+fn settled_shared_hidden(mux: MuxName) -> Rig {
+    let own = PaneId::from_parts(
+        mux,
+        if mux == MuxName::Tmux {
+            "%501"
+        } else {
+            "sidebar_hidden"
+        },
+    );
+    let working = PaneId::from_parts(
+        mux,
+        if mux == MuxName::Tmux {
+            "%502"
+        } else {
+            "working_hidden"
+        },
+    );
+    let mut rig = Rig::with_own_pane(own.clone());
+    let mut snapshot = agent_snapshot(&rig.ws);
+    snapshot.own_view = Some(SidebarOwnView {
+        sibling_count: 1,
+        working_pane_ids: vec![working.clone()],
+        own_view_is_daemon: false,
+    });
+    Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[0]
+        .pane
+        .as_mut()
+        .unwrap()
+        .pane_id = working;
+    snapshot.viewed_panes.clear();
+    snapshot.focused_pane = None;
+    rig.fold(snapshot, SnapshotSource::Produced);
+    settle_width(&mut rig);
+    rig.state.frame_timing();
+    assert!(!rig.state.watched());
+    assert!(rig.views.lock().peek(&own).is_none());
+    rig
+}
+
+fn advance_wakeup(rig: &mut Rig, wakeup: Wakeup) -> bool {
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    send.send(wakeup).unwrap();
+    rig.state
+        .advance(&mut WakeupInbox::new(receive), &mut rig.terminal)
+        .unwrap()
+        .0
+}
+
+#[test]
+fn settled_hidden_advances_take_no_views_lock_on_both_backends() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        for cause in 0..4 {
+            let mut rig = settled_shared_hidden(mux);
+            let wakeup = match cause {
+                0 => Wakeup::Tick,
+                1 => {
+                    let mut snapshot = rig.state.views.mirror().clone();
+                    snapshot.display_name = "unread publication".into();
+                    rig.send(FetchUpdate::Snapshot {
+                        snapshot: Box::new(snapshot),
+                        phase: FetchPhase::Final,
+                        source: SnapshotSource::Produced,
+                    });
+                    Wakeup::Snapshot
+                }
+                _ => {
+                    let event = if cause == 2 {
+                        SidebarEvent::FocusChanged {
+                            focused: vec![PaneId::from_parts(
+                                mux,
+                                if mux == MuxName::Tmux {
+                                    "%504"
+                                } else {
+                                    "unrelated"
+                                },
+                            )],
+                            unfocused: vec![],
+                        }
+                    } else {
+                        SidebarEvent::PanesChanged
+                    };
+                    let envelope = SidebarEventEnvelope::new(
+                        rig.ws.clone(),
+                        None,
+                        rig.state.pane.clock.now_ms(),
+                        event,
+                    );
+                    rig.record_event(&envelope);
+                    Wakeup::Event(envelope)
+                }
+            };
+            let counts = host_pass::thread_counters();
+            counts.reset();
+            assert!(!advance_wakeup(&mut rig, wakeup));
+            assert_eq!(counts.get(Counter::ViewsLock), 0, "{mux:?}, cause {cause}");
+            assert!(
+                counts.get(Counter::ViewsRecord) <= 1,
+                "one load per new generation"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_record_installed_ahead_of_its_generation_loads_once() {
+    let mut rig = settled_shared_hidden(MuxName::Zellij);
+    let mut snapshot = rig.state.views.mirror().clone();
+    snapshot.display_name = "unread publication".into();
+    rig.send(FetchUpdate::Snapshot {
+        snapshot: Box::new(snapshot),
+        phase: FetchPhase::Final,
+        source: SnapshotSource::Produced,
+    });
+    rig.views.install_ahead_of_generation();
+    let counts = host_pass::thread_counters();
+    counts.reset();
+    assert!(!advance_wakeup(&mut rig, Wakeup::Snapshot));
+    assert_eq!(counts.get(Counter::ViewsLock), 0);
+    assert_eq!(
+        counts.get(Counter::ViewsRecord),
+        1,
+        "one load per new generation"
+    );
+}
+
+#[test]
+fn settled_hidden_failure_applies_on_scratch_without_a_views_lock() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        let mut rig = settled_shared_hidden(mux);
+        rig.send(FetchUpdate::Failed {
+            error: "offline".into(),
+        });
+        let counts = host_pass::thread_counters();
+        counts.reset();
+        advance_wakeup(&mut rig, Wakeup::Snapshot);
+        assert_eq!(
+            rig.state.inspect_view(|_, view| view.health.failure_streak),
+            1
+        );
+        assert_eq!(counts.get(Counter::ViewsLock), 0);
+    }
+}
+
+#[test]
+fn settled_hidden_reveals_paint_in_the_deciding_pass_on_both_backends() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        for cause in 0..4 {
+            let mut rig = settled_shared_hidden(mux);
+            let own = rig.state.pane.config.own_pane.clone();
+            let record = rig.views.read();
+            assert!(!record.mapped(&own) && !record.resolved(&own));
+            let working = rig
+                .state
+                .views
+                .mirror()
+                .own_view
+                .as_ref()
+                .unwrap()
+                .working_pane_ids[0]
+                .clone();
+            let wakeup = match cause {
+                0 | 1 => {
+                    let mut snapshot = rig.state.views.mirror().clone();
+                    if cause == 0 {
+                        snapshot.viewed_panes = vec![working];
+                    }
+                    let mut fold =
+                        super::super::super::fixtures::fold(snapshot, Some(&own), Vec::new());
+                    if cause == 1 {
+                        let frame = Arc::make_mut(fold.frame.as_mut().unwrap());
+                        frame.client_view_fresh = true;
+                        frame.client_views = vec![crate::pane::ClientPaneView {
+                            client_id: match mux {
+                                MuxName::Zellij => crate::ids::MuxClientId::Zellij(1),
+                                MuxName::Tmux => crate::ids::MuxClientId::Tmux("client".into()),
+                            },
+                            pane_id: own.clone(),
+                        }];
+                    }
+                    rig.send(FetchUpdate::Fold {
+                        fold: Arc::new(fold),
+                        phase: FetchPhase::Final,
+                        source: SnapshotSource::Produced,
+                    });
+                    Wakeup::Snapshot
+                }
+                2 => Wakeup::Event(SidebarEventEnvelope::new(
+                    rig.ws.clone(),
+                    None,
+                    rig.state.pane.clock.now_ms(),
+                    SidebarEvent::FocusChanged {
+                        focused: vec![working],
+                        unfocused: vec![],
+                    },
+                )),
+                _ => Wakeup::Key(KeyAction::Help),
+            };
+            let counts = host_pass::thread_counters();
+            counts.reset();
+            assert!(advance_wakeup(&mut rig, wakeup), "{mux:?}, cause {cause}");
+            assert!(counts.get(Counter::ViewsLock) > 0);
+        }
+    }
+}
+
+#[test]
+fn hidden_optimism_keeps_the_locked_path_on_both_backends() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        let mut rig = settled_shared_hidden(mux);
+        rig.state.pane.optimistic_watch_until =
+            Some(rig.state.pane.clock.now() + Duration::from_secs(1));
+        let counts = host_pass::thread_counters();
+        counts.reset();
+        rig.state.frame_timing();
+        assert!(counts.get(Counter::ViewsLock) > 0);
+    }
+}
+
+#[test]
+fn settled_hidden_focus_push_lands_and_paints_on_both_backends() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        let mut rig = settled_shared_hidden(mux);
+        let target = rig
+            .state
+            .views
+            .mirror()
+            .own_view
+            .as_ref()
+            .unwrap()
+            .working_pane_ids[0]
+            .clone();
+        let source = rig
+            .views
+            .lock()
+            .presentation(
+                &PaneId::from_parts(
+                    mux,
+                    if mux == MuxName::Tmux {
+                        "%503"
+                    } else {
+                        "source"
+                    },
+                ),
+                rig.state.pane.clock.now(),
+                false,
+            )
+            .0;
+        let anchor = crate::mux::focus_anchor::FocusAnchor {
+            nonce: crate::ids::FocusNonce::new(),
+            session_name: "rimz-test".into(),
+            pane_id: target,
+            origin: crate::mux::focus_anchor::FocusOrigin::User,
+            repair_generation: None,
+            issued_at_ms: rig.state.pane.clock.now_ms(),
+            applied_at_ms: None,
+            state: crate::mux::focus_anchor::FocusIntentState::Requested,
+            pre_action: Vec::new(),
+            placement: None,
+            order: None,
+        };
+        let nonce = anchor.nonce;
+        let (mut push, _ack) = focus_push(&mut rig, anchor);
+        push.source_view = Some(source);
+        let paints = rig.state.pane.paints;
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
+        assert!(rig.state.pane.paints > paints);
+        assert!(
+            rig.views
+                .lock()
+                .peek(&rig.state.pane.config.own_pane)
+                .is_some()
+        );
+        assert_eq!(
+            rig.state.inspect_view(|_, view| view.live_focus_source),
+            Some(nonce)
+        );
+    }
+}
+
 impl Rig {
     fn lazy_fold(&mut self, snapshot: SidebarSnapshot, source: SnapshotSource) {
         self.deliver(self.lazy_update(snapshot, source));

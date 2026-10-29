@@ -371,9 +371,7 @@ impl LoopState {
     }
 
     fn observed_watched(&self) -> bool {
-        let (resolved, observed) = self
-            .views
-            .visibility(&self.pane.config.own_pane, || self.pane.clock.now());
+        let (resolved, observed) = self.views.visibility(&self.pane.config.own_pane);
         resolved || observed.unwrap_or_else(|| self.pane.watches_snapshot(self.views.mirror()))
     }
 
@@ -819,8 +817,9 @@ impl LoopState {
     }
 
     fn drain_snapshot(&mut self, allow_defer: bool) {
-        let (revision, completed) = {
-            let views = self.views.registry.lock();
+        let completed = self.pane.fetch.completed();
+        let revision = {
+            let views = self.views.record();
             let hidden = &mut self.pane.hidden;
             if allow_defer
                 && (hidden.examined_revision != Some(views.revision)
@@ -833,7 +832,7 @@ impl LoopState {
                     .filter(|update| hidden.preview(update, &self.pane.config.own_pane))
                     .map(|_| views.revision);
             }
-            (views.revision, self.pane.fetch.completed())
+            views.revision
         };
         let deferred = allow_defer
             && self.pane.hidden.examined_revision == Some(revision)
@@ -847,7 +846,7 @@ impl LoopState {
             }
         } else {
             let (pending, revision) = {
-                let views = self.views.registry.lock();
+                let views = self.views.record();
                 (views.latest.since(self.pane.own.revision), views.revision)
             };
             #[cfg(any(test, feature = "testkit"))]
@@ -1251,8 +1250,7 @@ impl LoopState {
 
     fn pending_preview(&self) -> Option<(Option<SidebarOwnView>, Vec<PaneId>)> {
         self.views
-            .registry
-            .lock()
+            .record()
             .latest
             .since(self.pane.own.revision)
             .iter()
@@ -1973,17 +1971,15 @@ impl LoopState {
             };
             self.pane.fetch.request_if_idle(request);
         }
-        if !self.inspect_view(|ui, _| ui.freeze.is_some()) {
+        if !self.inspect_view(|ui, _| ui.freeze.is_some()) || !self.watched() {
             return;
         }
         let parked = self.parked(self.pane.clock.now_ms());
-        if self.watched()
-            && self.inspect_view(|ui, _| {
-                ui.freeze.as_ref().is_some_and(|hold| {
-                    self.pane.clock.timestamp().as_millisecond() >= hold.deadline_ms(parked)
-                })
+        if self.inspect_view(|ui, _| {
+            ui.freeze.as_ref().is_some_and(|hold| {
+                self.pane.clock.timestamp().as_millisecond() >= hold.deadline_ms(parked)
             })
-        {
+        }) {
             self.pane.fetch.request_if_idle(FetchRequest::default());
         }
     }
