@@ -161,7 +161,7 @@ Every card wears one state, and seven cover the life of a session:
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
 | `☾` | sleeping | resting on a timer, signal, condition, or file watch, including through a child; the description names the wait | nothing yet |
 
-The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on subagents, parked on background work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
+The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on handed-off work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
 A session's life traces one loop through those states:
 
@@ -184,7 +184,7 @@ RimZ also derives states rather than waiting for an agent to report one.
 
 **Failed** also covers two safety nets RimZ raises without a report: a running agent silent past the stall window (30 minutes by default), including any native or [launched child](./subagents.md#deadlines-stopping-and-cleanup), and a running agent that repeats one tool call with identical arguments 20 times, whose description then reads `loop: <tool> ×<count>` until a differing call clears the run. The same stall window covers a launched child given a task whose first turn has not started. A parent quietly waiting on its subagents is exempt from the stall check while a child is still displayed as working. A stalled native child also lifts the parent card's attention because it has no pane of its own. Either net can fire on an agent that is still executing, which is deliberate: silence that long, or a twentieth identical call, usually means something needs a look.
 
-**Sleeping** means a resting agent awaits a timer, signal, condition, or file change, including through a child. Its card wears a static cool-toned moon and a description such as `wakes in 12m`. A [one-shot wait](./loops.md#wake-a-running-agent) for a PID, command, check, unfinished team, or working child instead keeps the card working, as does a listed background shell. A child resting on another wait follows that chain. A settled child's report does not keep work in flight. Sleeping cards rank below running and above idle; the `☾` bucket on the make-up line counts sleeping units, not individual teammates.
+**Sleeping** means a resting agent awaits a timer, signal, condition, or file change, including through a child. Its card wears a static cool-toned moon and a description such as `wakes in 12m`. A [one-shot wait](./loops.md#wake-a-running-agent) for a PID, command, check, unfinished team, or working child instead keeps the card working, as does a listed background shell. After the turn ends, that card shows the waiting head, still counted as working in the cockpit. A child resting on another wait follows that chain. A settled child's report does not keep work in flight. Sleeping cards rank below running and above idle; the `☾` bucket on the make-up line counts sleeping units, not individual teammates.
 
 Working, waiting, failed, paused, and waiting on live subagents all take precedence over sleep, and a standing subscription does not make an agent sleep. You can message a sleeping agent now without canceling its future wait. Its last result can still be unread, but sleeping itself needs no answer and sends no notification.
 
