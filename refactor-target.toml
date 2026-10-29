@@ -321,7 +321,8 @@ upward-dependencies = ["address"]
 # Shared packs::PackItem and ItemFate replace PackSkill and PackSkillFate (-2).
 # SkillInventory carries pack items and problems without SkillChain::pack_skills (-1).
 # SpendingWalker::discover_login_spending_files gives benches isolated account-aware discovery (+1).
-surface-budget = 1194
+# SkillChain::from_resolved keeps definition loads on one pack snapshot (+1).
+surface-budget = 1195
 
 [[verdict]]
 kind = "item"
@@ -347,6 +348,11 @@ reason = "Definition checks, launch views, host links and uninstall share one li
 kind = "item"
 key = "agents::skills::SkillChain::from_home"
 reason = "Explicit-home definition loads and CLI mutations cannot consult ambient pack roots."
+
+[[verdict]]
+kind = "item"
+key = "agents::skills::SkillChain::from_resolved"
+reason = "Config loads build skill roots from the same resolved packs as their definitions."
 
 [[verdict]]
 kind = "item"

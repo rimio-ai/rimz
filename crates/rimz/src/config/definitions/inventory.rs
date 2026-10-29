@@ -69,6 +69,7 @@ impl PackInventory {
             native_auto_compact,
             &resolved,
         );
+        let chain = SkillChain::from_resolved(home, &resolved);
         let mut problems = resolved.problems;
         let mut pack_problems = resolved.pack_problems;
         for (name, errors) in loaded.pack_problems {
@@ -78,7 +79,7 @@ impl PackInventory {
         for item in loaded.pack_items {
             items.entry(item.pack.clone()).or_default().push(item);
         }
-        match SkillChain::from_home(home).inventory(|_| true) {
+        match chain.inventory(|_| true) {
             Ok(inventory) => {
                 for skill in inventory.pack_skills {
                     items.entry(skill.pack.clone()).or_default().push(skill);

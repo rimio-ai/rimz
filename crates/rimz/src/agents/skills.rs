@@ -26,13 +26,17 @@ pub(crate) struct SkillInventory {
 
 impl SkillChain {
     pub fn from_home(home: &Path) -> Self {
+        Self::from_resolved(home, &packs::resolve(home))
+    }
+
+    pub(crate) fn from_resolved(home: &Path, resolved: &packs::ResolvedPacks) -> Self {
         let home = std::path::absolute(home)
             .map(|home| normalize_path_lexical(&home))
             .unwrap_or_else(|_| home.to_owned());
         Self {
             library: crate::disk::paths::skills_library_under(&home),
             packs_dir: crate::disk::paths::packs_dir(&home),
-            packs: packs::resolve(&home).packs,
+            packs: resolved.packs.clone(),
         }
     }
 
