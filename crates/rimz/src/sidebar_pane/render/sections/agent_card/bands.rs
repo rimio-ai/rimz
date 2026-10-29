@@ -4,8 +4,8 @@
 //! finished child is older and folds behind `+K older` — unless no live or recent
 //! row is visible, where the card shows the older rows directly rather than a
 //! lone fold that costs a second click. The collapsed list is a
-//! prefix of the expanded one, and a child that finishes moves from the end of
-//! the live band to the top of the recent band.
+//! prefix of the expanded one, and a child that finishes leaves the live band
+//! for the recent band.
 
 use jiff::Timestamp;
 
@@ -24,7 +24,7 @@ pub(super) struct DelegationBands<'a> {
 }
 
 /// Classify `children` (spawn-ordered by the projection) into bands. A finished
-/// child's `last_activity` is its landed instant.
+/// child's finish instant is `finished_at`, falling back to `last_activity`.
 pub(super) fn delegation_bands(
     children: &[SidebarSubAgent],
     now: Timestamp,
@@ -34,15 +34,18 @@ pub(super) fn delegation_bands(
     let (mut finished, live): (Vec<_>, Vec<_>) =
         children.iter().partition(|child| sub_agent_finished(child));
     finished.sort_by(|a, b| {
-        b.last_activity
-            .cmp(&a.last_activity)
+        b.finished_at
+            .unwrap_or(b.last_activity)
+            .cmp(&a.finished_at.unwrap_or(a.last_activity))
             .then_with(|| a.id.cmp(&b.id))
     });
     let window = i64::try_from(recent_secs).unwrap_or(i64::MAX);
     let recent_len = finished
         .iter()
         .take(max_recent)
-        .take_while(|child| age_secs(child.last_activity, now) < window)
+        .take_while(|child| {
+            age_secs(child.finished_at.unwrap_or(child.last_activity), now) < window
+        })
         .count();
     let older = finished.split_off(recent_len);
     DelegationBands {
@@ -102,6 +105,27 @@ mod tests {
             child("e", AgentStatus::Success, 300, now),
             child("f", AgentStatus::Success, 120, now),
         ]
+    }
+
+    #[test]
+    fn finish_order_and_window_ignore_later_activity() {
+        let now = Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1);
+        let mut wire = serde_json::to_value(child("early", AgentStatus::Success, 0, now)).unwrap();
+        wire["finished_at"] = serde_json::json!(now - SignedDuration::from_secs(1_200));
+        let children = vec![
+            serde_json::from_value(wire).unwrap(),
+            child("later", AgentStatus::Success, 60, now),
+        ];
+        let wide = delegation_bands(&children, now, 3_600, 5);
+        let recent = delegation_bands(&children, now, 900, 5);
+        assert_eq!(
+            (all(&wide), ids(&recent.recent), ids(&recent.older)),
+            (
+                vec!["later".to_owned(), "early".to_owned()],
+                vec!["later".to_owned()],
+                vec!["early".to_owned()],
+            )
+        );
     }
 
     #[test]

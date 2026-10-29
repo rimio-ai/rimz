@@ -899,6 +899,13 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     {
         state.status = AgentStatus::Idle;
     }
+    state.finished_at =
+        matches!(state.status, AgentStatus::Success | AgentStatus::Failed).then(|| {
+            input
+                .prior
+                .and_then(|prior| prior.finished_at)
+                .unwrap_or(input.event.timestamp)
+        });
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
     let mut carried_usage = input.prior.map(|prior| prior.usage.clone());
@@ -1123,6 +1130,11 @@ fn assemble_launch_state(
         }
     }
     state.status = status;
+    state.finished_at = matches!(status, AgentStatus::Success | AgentStatus::Failed).then(|| {
+        prior
+            .and_then(|prior| prior.finished_at)
+            .unwrap_or(event.timestamp)
+    });
     state.phase = phase;
     if status == AgentStatus::Running {
         state.turn_started_at = Some(event.timestamp);

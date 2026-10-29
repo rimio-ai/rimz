@@ -510,6 +510,8 @@ fn full_entry_has_a_stable_projection() {
             sub_agent_count: 1,
             sub_agents: vec![SidebarSubAgent {
                 pane: None,
+                first_prompt: None,
+                finished_at: None,
                 turn_error_label: None,
                 id: "child".to_owned(),
                 kind: rimz::ids::AgentKind::new_unchecked("claude"),

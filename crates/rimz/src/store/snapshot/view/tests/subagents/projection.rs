@@ -570,6 +570,21 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
 }
 
 #[test]
+fn sub_agent_projection_freezes_at_finish_and_carries_the_first_prompt() {
+    let mut child = child_state("root", "child", AgentStatus::Success, 5);
+    child.subagent_started_at = Some(ago(100));
+    child.first_prompt = Some("audit the trust hash".to_owned());
+    let mut wire = serde_json::to_value(child).unwrap();
+    wire["finished_at"] = serde_json::json!(ago(60));
+    let child = serde_json::from_value(wire).unwrap();
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert_eq!(projected.elapsed_secs, Some(40));
+    let wire = serde_json::to_value(projected).unwrap();
+    assert_eq!(wire["finished_at"], serde_json::json!(ago(60)));
+    assert_eq!(wire["first_prompt"], "audit the trust hash");
+}
+
+#[test]
 fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
     let mut parent = agent("claude", "root", AgentStatus::Running, 100);
     parent.turn_started_at = Some(ago(30));

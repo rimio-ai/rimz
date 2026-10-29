@@ -1,6 +1,174 @@
 use super::*;
 
 #[test]
+fn finished_clock_survives_reap_reconciliation_and_ping_but_restarts_with_a_turn() {
+    let mut payload = launch_payload("child", "worker");
+    payload.launch.parent_agent_id = Some("parent".into());
+    payload.launch.launch_depth = Some(1);
+    let mut launch = launch_event("claude", payload);
+    launch.timestamp = epoch();
+    let mut events = vec![launch];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (offset, signal, event_name, prompt, finish) in [
+        (
+            1,
+            json!({"signal": "turn_ended", "errored": false,
+            "parked_on_background": false}),
+            "Stop",
+            None,
+            Some(1),
+        ),
+        (2, json!({"signal": "ended"}), "ReapedDead", None, Some(1)),
+        (
+            3,
+            json!({"signal": "turn_started"}),
+            "Prompt",
+            Some("next"),
+            None,
+        ),
+        (
+            4,
+            json!({"signal": "turn_ended", "errored": false,
+            "parked_on_background": false}),
+            "Stop",
+            None,
+            Some(4),
+        ),
+        (
+            5,
+            json!({"signal": "turn_started"}),
+            "Prompt",
+            Some("Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm."),
+            Some(4),
+        ),
+        (
+            6,
+            json!({"signal": "turn_ended", "errored": false,
+            "parked_on_background": false}),
+            "Stop",
+            None,
+            Some(4),
+        ),
+    ] {
+        events.push(raw_lifecycle_at(
+            "claude",
+            offset,
+            json!({
+                "agent_id": "child", "event_name": event_name, "prompt": prompt,
+                "signal": signal,
+            }),
+        ));
+        let row = reduce_agent_states(&events).remove(0);
+        actual.push(serde_json::to_value(row).unwrap()["finished_at"].clone());
+        expected.push(finish.map(|secs| epoch() + std::time::Duration::from_secs(secs)));
+    }
+    let mut native = Vec::new();
+    for (offset, signal, finish) in [
+        (1, json!({"signal": "subagent_started"}), None),
+        (2, json!({"signal": "subagent_stopped"}), Some(2)),
+        (
+            3,
+            json!({"signal": "subagent_stopped", "errored": true}),
+            Some(2),
+        ),
+    ] {
+        native.push(raw_lifecycle_at(
+            "claude",
+            offset,
+            json!({
+                "agent_id": "child", "parent_agent_id": "parent", "task": "Explore",
+                "event_name": "SubagentReconciled", "total_tokens": offset * 100,
+                "signal": signal,
+            }),
+        ));
+        let row = reduce_agent_states(&native).remove(0);
+        actual.push(serde_json::to_value(row).unwrap()["finished_at"].clone());
+        expected.push(finish.map(|secs| epoch() + std::time::Duration::from_secs(secs)));
+    }
+    assert_eq!(
+        actual,
+        expected
+            .into_iter()
+            .map(|stamp| json!(stamp))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn finished_clock_uses_the_final_status_on_ends_launches_and_state_snapshots() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for event_name in ["SessionEnd", "ReapedDead"] {
+        let events = [
+            raw_lifecycle_at(
+                "claude",
+                1,
+                json!({
+                    "agent_id": "child", "signal": {"signal": "turn_started"},
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                2,
+                json!({
+                    "agent_id": "child", "event_name": event_name,
+                    "signal": {"signal": "ended"},
+                }),
+            ),
+        ];
+        let row = reduce_agent_states(&events).remove(0);
+        assert_eq!(
+            row.status,
+            if event_name == "SessionEnd" {
+                AgentStatus::Failed
+            } else {
+                AgentStatus::Idle
+            }
+        );
+        actual.push(serde_json::to_value(row).unwrap()["finished_at"].clone());
+        expected.push((event_name == "SessionEnd").then_some(events[1].timestamp));
+    }
+    let mut payload = launch_payload("child", "worker");
+    let mut starting = launch_event("claude", payload.clone());
+    starting.timestamp = epoch();
+    payload.state = AgentLaunchState::Failed;
+    let mut launch = launch_event("claude", payload);
+    launch.timestamp = epoch() + std::time::Duration::from_secs(1);
+    let row = reduce_agent_states(&[starting, launch]).remove(0);
+    actual.push(serde_json::to_value(row).unwrap()["finished_at"].clone());
+    expected.push(Some(epoch() + std::time::Duration::from_secs(1)));
+
+    let mut events = vec![raw_lifecycle_at(
+        "opencode",
+        1,
+        json!({
+            "agent_id": "child", "signal": {"signal": "turn_ended", "errored": false,
+                "parked_on_background": false},
+        }),
+    )];
+    for (offset, signal, finish) in [(2, "registered", Some(1)), (3, "turn_started", None)] {
+        events.push(raw_lifecycle_at(
+            "opencode",
+            offset,
+            json!({
+                "agent_id": "child", "state_snapshot": true, "signal": {"signal": signal},
+            }),
+        ));
+        let row = reduce_agent_states(&events).remove(0);
+        actual.push(serde_json::to_value(row).unwrap()["finished_at"].clone());
+        expected.push(finish.map(|secs| epoch() + std::time::Duration::from_secs(secs)));
+    }
+    assert_eq!(
+        actual,
+        expected
+            .into_iter()
+            .map(|stamp| json!(stamp))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn closed_turn_id_reads_the_legacy_key_and_writes_the_new_key() {
     let row = crate::testkit::agent_state("codex", "session", epoch());
     let mut legacy = serde_json::to_value(row).unwrap();

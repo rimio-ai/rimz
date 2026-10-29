@@ -418,7 +418,7 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 | running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort with its optional fast-mode bolt, and `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, replaced from five minutes quiet by a face and quiet age heated toward the configured stall threshold |
 | parked subagent | `⏸︎`, or `!` once it can no longer resume | launch profile or kind · limit label in italics, else description or task | cost, when known | tokens, model, effort with its optional fast-mode bolt, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, counting while parked and frozen once failed |
 | stalled subagent | `!` | launch profile or kind · `silent Nm` | cost, when known | tokens, model, effort with its optional fast-mode bolt, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; quiet age pins right with a face, in alarm at and past the stall threshold |
-| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after frozen runtime when there is no second line | tokens, model, effort with its optional fast-mode bolt, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, frozen at the child's last activity |
+| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after frozen runtime when there is no second line | tokens, model, effort with its optional fast-mode bolt, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, frozen at the child's finish |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
 | command | working spinner | `command · cargo` (program name) | time since armed | full command, with the program path trimmed |
@@ -430,10 +430,10 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 
 Entries list in a fixed order, and opening more of the list only appends rows:
 
-1. Live subagents, including paused children, in the order they started. They are never capped.
-2. Finished subagents, newest first, that finished within `recent_subagent_secs` (900 seconds by default), up to `max_recent_subagents` (5 by default).
+1. Unfinished subagents, including paused and stalled children, in the order they started. They are never capped.
+2. Finished subagents, newest finish first, that finished within `recent_subagent_secs` (900 seconds by default), up to `max_recent_subagents` (5 by default). Closing a pane or reaping a session does not change that finish instant.
 3. Waits: timers by due time, then watches, then background shells, then signals. A wait leaves the list when it fires or its job ends.
-4. `+K older`, which folds every other finished subagent. Click it to append them and focus the parent's live pane. When no subagent is running or recent, opening the section lists the older ones directly.
+4. `+K older`, which folds every other finished subagent. Click it to append them and focus the parent's live pane. When no subagent is unfinished or recent, opening the section lists the older ones directly.
 
 The listed subagents plus `K` equal the count in the line. `K` can exceed the rows it reveals, because a native subagent that was replaced while still running is counted and has no row. The older list folds again when you close the section, send the parent a new prompt, or run `/clear` or `/compact`. Messages from other agents and RimZ's own deliveries leave it open.
 
