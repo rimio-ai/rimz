@@ -353,13 +353,15 @@ A closed agent's session files stay where its CLI wrote them, so RimZ can reopen
 
 ### Resume one closed session
 
-`rimz agents resume @<ref>` reopens one retained solo root session by handle or session-id prefix. A [bare session id](#resume-a-lane-by-place) also works after a lane miss:
+`rimz agents resume @<ref>` reopens one retained solo root session by handle or session-id prefix:
 
 ```sh
 rimz agents resume @bright-otter
 rimz agents resume @a1b2c3d4 --bg
 rimz agents resume @bright-otter --isolation host --model sonnet
 ```
+
+A [bare session id](#resume-a-lane-by-place) also works after a lane miss.
 
 Resolution checks live agents first, then retained agents under the same channel context. After a scoped miss, a room-wide retained lookup is accepted only when exactly one agent matches, so a stopped agent's unique pet name still works from another lane. Otherwise the live miss and its correction remain the answer. An ambiguity in the requested scope refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --continue`; a child or provider subagent points to `rimz subagents`. `--fresh` and `--from-pr` take lane scopes only; `--worktree` is a flag spelling of `SCOPE`. None combines with an `@ref`.
 
