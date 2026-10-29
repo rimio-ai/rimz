@@ -120,7 +120,7 @@ fn hidden_rig() -> Rig {
 fn hidden_drain_counters_measure_retained_outcomes_and_preview_work() {
     let mut rig = hidden_rig();
     let counts = host_pass::thread_counters();
-    rig.state.pane.own.revision = rig.state.views.registry.lock().unwrap().revision;
+    rig.state.pane.own.revision = rig.state.views.registry.lock().revision;
     counts.reset();
     rig.state.on_snapshot();
     assert_eq!(counts.get(Counter::DrainClone), 0);

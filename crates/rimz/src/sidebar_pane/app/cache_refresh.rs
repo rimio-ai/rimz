@@ -33,9 +33,7 @@ fn acquire_fold(
         .views
         .clone();
     let (receiver, requested_at) = {
-        let mut views = views
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut views = views.lock();
         if let Some(fold) = views.fresh_fold(Instant::now(), tick) {
             return Ok(fold);
         }

@@ -803,12 +803,15 @@ impl Room {
                 "frames_sent": sent,
                 "max_send_lag_ms": max_lag.as_secs_f64() * 1000.0,
                 "host_threads": after[&self.host].switches.len(),
+                "host_attach_threads": host.attach_threads,
                 "cpu_ms_per_minute": {"host": host.cpu as f64 * ticks_ms,
+                    "host_attach": host.attach_cpu as f64 * ticks_ms,
                     "serve": serve_sum(|delta| delta.cpu) as f64 * ticks_ms,
                     "tmux_server": deltas[&self.server].cpu as f64 * ticks_ms,
                     "host_reaped_children": host.children as f64 * ticks_ms,
                     "rimz_children": cpu_us as f64 / 1000.0 * per_minute},
                 "wakeups_per_minute": {"host": host.switches as f64 * per_minute,
+                    "host_attach": host.attach_switches as f64 * per_minute,
                     "serve": serve_sum(|delta| delta.switches) as f64 * per_minute},
                 "wakeups_scope": "boundary task deltas; exited tasks are not included",
                 "departed_tasks": {"host": host.departed,
@@ -1141,6 +1144,7 @@ struct Sample {
     syscr: u64,
     rchar: u64,
     switches: BTreeMap<u32, u64>,
+    attach: BTreeMap<u32, (u64, u64)>,
 }
 
 struct Delta {
@@ -1150,6 +1154,9 @@ struct Delta {
     rchar: u64,
     switches: u64,
     departed: u64,
+    attach_threads: usize,
+    attach_cpu: u64,
+    attach_switches: u64,
 }
 
 fn value(text: &str, key: &str) -> u64 {
@@ -1157,6 +1164,13 @@ fn value(text: &str, key: &str) -> u64 {
         .filter_map(|line| line.split_once(':'))
         .find_map(|(name, value)| (name == key).then(|| value.trim().parse().unwrap()))
         .unwrap_or_else(|| panic!("missing /proc field {key}"))
+}
+
+/// A task that exits after its directory is listed reads as ENOENT, or as ESRCH once its
+/// file is open.
+fn task_exited(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
+        || error.raw_os_error() == Some(nix::errno::Errno::ESRCH as i32)
 }
 
 fn subcommand(endpoint: &str, args: &[&str]) -> String {
@@ -1187,6 +1201,7 @@ impl Sample {
             .collect();
         let field = |index: usize| fields[index].parse::<u64>().unwrap();
         let io = fs::read_to_string(format!("/proc/{pid}/io")).unwrap();
+        let mut attach = BTreeMap::new();
         let switches = fs::read_dir(format!("/proc/{pid}/task"))
             .unwrap()
             .filter_map(|entry| {
@@ -1194,14 +1209,32 @@ impl Sample {
                 let tid: u32 = entry.file_name().to_str().unwrap().parse().unwrap();
                 let status = match fs::read_to_string(entry.path().join("status")) {
                     Ok(status) => status,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+                    Err(error) if task_exited(&error) => return None,
                     Err(error) => panic!("read task {tid} status: {error}"),
                 };
-                Some((
-                    tid,
-                    value(&status, "voluntary_ctxt_switches")
-                        + value(&status, "nonvoluntary_ctxt_switches"),
-                ))
+                let switches = value(&status, "voluntary_ctxt_switches")
+                    + value(&status, "nonvoluntary_ctxt_switches");
+                if status
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .any(|(key, value)| key == "Name" && value.trim() == "rimz-attach")
+                {
+                    let stat = match fs::read_to_string(entry.path().join("stat")) {
+                        Ok(stat) => stat,
+                        Err(error) if task_exited(&error) => return None,
+                        Err(error) => panic!("read task {tid} stat: {error}"),
+                    };
+                    let fields: Vec<_> = stat
+                        .rsplit_once(')')
+                        .unwrap()
+                        .1
+                        .split_whitespace()
+                        .collect();
+                    let cpu =
+                        fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap();
+                    attach.insert(tid, (cpu, switches));
+                }
+                Some((tid, switches))
             })
             .collect();
         Self {
@@ -1211,6 +1244,7 @@ impl Sample {
             syscr: value(&io, "syscr"),
             rchar: value(&io, "rchar"),
             switches,
+            attach,
         }
     }
 
@@ -1220,6 +1254,23 @@ impl Sample {
             "room process replaced during measurement"
         );
         Delta {
+            attach_threads: self
+                .attach
+                .keys()
+                .filter(|tid| before.attach.contains_key(tid))
+                .count(),
+            attach_cpu: self
+                .attach
+                .iter()
+                .filter_map(|(tid, (cpu, _))| before.attach.get(tid).map(|(prior, _)| cpu - prior))
+                .sum(),
+            attach_switches: self
+                .attach
+                .iter()
+                .filter_map(|(tid, (_, switches))| {
+                    before.attach.get(tid).map(|(_, prior)| switches - prior)
+                })
+                .sum(),
             cpu: self.cpu - before.cpu,
             children: self.children - before.children,
             syscr: self.syscr - before.syscr,

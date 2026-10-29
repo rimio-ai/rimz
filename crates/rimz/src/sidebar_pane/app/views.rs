@@ -1,8 +1,9 @@
 //! Host-memory client membership and lazy presentation ownership.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
+use std::ops::{Deref, DerefMut};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::fetch::{FetchUpdate, WorkspaceFold};
@@ -14,6 +15,54 @@ use crate::sidebar::frame::PaneFrame;
 use crate::sidebar_pane::render::ViewState;
 #[cfg(test)]
 use crate::store::snapshot::SidebarSnapshot;
+
+#[derive(Default)]
+pub(super) struct ViewsHandle {
+    views: Mutex<Views>,
+}
+
+impl From<Views> for ViewsHandle {
+    fn from(views: Views) -> Self {
+        Self {
+            views: Mutex::new(views),
+        }
+    }
+}
+
+impl ViewsHandle {
+    pub(super) fn lock(&self) -> ViewsGuard<'_> {
+        #[cfg(any(test, feature = "testkit"))]
+        crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::ViewsLock);
+        ViewsGuard(self.views.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    #[cfg(test)]
+    pub(super) fn try_lock(&self) -> Option<ViewsGuard<'_>> {
+        let views = match self.views.try_lock() {
+            Ok(views) => views,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::ViewsLock);
+        Some(ViewsGuard(views))
+    }
+}
+
+pub(super) struct ViewsGuard<'a>(MutexGuard<'a, Views>);
+
+impl Deref for ViewsGuard<'_> {
+    type Target = Views;
+
+    fn deref(&self) -> &Views {
+        &self.0
+    }
+}
+
+impl DerefMut for ViewsGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Views {
+        &mut self.0
+    }
+}
 
 /// The host's only fetch-content store, including replay and reduction baselines.
 #[derive(Default)]

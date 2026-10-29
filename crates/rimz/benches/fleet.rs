@@ -426,6 +426,71 @@ fn idle_client_frame(frame: rimz::sidebar::frame::PaneFrame) -> rimz::sidebar::f
     frame
 }
 
+#[cfg(target_os = "linux")]
+#[divan::bench(sample_count = 1, sample_size = 1, skip_ext_time)]
+fn concurrent_hidden_fanout(bencher: Bencher) {
+    bencher
+        .with_inputs(|| {
+            let (tempdir, paths, runtime) = workspace();
+            let frame = rimz::testkit::fleet::seed_scale_room(
+                &paths,
+                &runtime,
+                rimz::testkit::fleet::ScaleRoom {
+                    agents: 200,
+                    panes: 100,
+                    ended_sessions: 0,
+                    orphan_contexts: 0,
+                },
+            )
+            .expect("scale room");
+            let cycle = rimz::sidebar_pane::app::IdleCycleFixture::new(
+                paths,
+                runtime,
+                idle_client_frame(frame),
+                100,
+            );
+            (tempdir, Some(cycle))
+        })
+        .bench_local_refs(|(_, cycle)| {
+            let report = cycle.take().expect("single sample").run_concurrent(100);
+            let hidden_cpu: u64 = report.hidden.iter().map(|thread| thread.cpu_us).sum();
+            let hidden_locks: u64 = report.hidden.iter().map(|thread| thread.views_locks).sum();
+            let events: u64 = report.hidden.iter().map(|thread| thread.events_takes).sum();
+            let mut latency = report.paint_latency;
+            latency.sort_unstable();
+            let mut lateness = report.paint_lateness;
+            lateness.sort_unstable();
+            let millis = |value: std::time::Duration| value.as_secs_f64() * 1000.0;
+            let publications = report.publications as f64;
+            writeln!(
+                std::io::stderr(),
+                concat!(
+                    "concurrent_hidden_fanout: publications={} ",
+                    "attach_cpu_us_per_publication={:.1} hidden_cpu_us_per_publication={:.1} ",
+                    "watched_cpu_us_per_publication={:.1} paint_ms_p50={:.3} paint_ms_p99={:.3} ",
+                    "paint_ms_max={:.3} paint_late_ms_p50={:.3} paint_late_ms_p99={:.3} ",
+                    "paint_late_ms_max={:.3} reveal_ms={:.3} views_locks_hidden={} ",
+                    "views_locks_total={} events_takes_hidden={}",
+                ),
+                report.publications,
+                (hidden_cpu + report.watched.cpu_us) as f64 / publications,
+                hidden_cpu as f64 / publications,
+                report.watched.cpu_us as f64 / publications,
+                millis(latency[latency.len().div_ceil(2) - 1]),
+                millis(latency[(latency.len() * 99).div_ceil(100) - 1]),
+                millis(*latency.last().unwrap()),
+                millis(lateness[lateness.len().div_ceil(2) - 1]),
+                millis(lateness[(lateness.len() * 99).div_ceil(100) - 1]),
+                millis(*lateness.last().unwrap()),
+                millis(report.reveal_latency),
+                hidden_locks,
+                report.total_views_locks,
+                events,
+            )
+            .expect("concurrent fanout figures");
+        });
+}
+
 fn bench_idle_cycle(bencher: Bencher, orphans: usize, apply: bool) {
     let mut counts = (0, 0);
     let mut durations = Vec::new();

@@ -283,7 +283,6 @@ fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views
             .unwrap()
             .views
             .lock()
-            .unwrap()
             .peek(&PaneId::from_parts(MuxName::Zellij, "sidebar_1"))
             .is_some_and(|(state, _)| state.help_visible),
         "the fixture must carry the client's presentation, not independent pane copies"
@@ -394,8 +393,8 @@ fn fetch_window_records_reductions_once_per_window() {
     let mut co_viewer = consumer(config, fixture.runtime.clone(), reader);
     co_viewer.on_snapshot();
     let views = cycles.sink.host_data.lock().unwrap().views.clone();
-    assert_eq!(views.lock().unwrap().reductions.content, 2);
-    assert_eq!(views.lock().unwrap().reductions.unchanged, 0);
+    assert_eq!(views.lock().reductions.content, 2);
+    assert_eq!(views.lock().reductions.unchanged, 0);
     cycles.run_cycle();
     assert!(
         !diag.log_path().unwrap().exists(),
@@ -472,7 +471,6 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
             .unwrap()
             .views
             .lock()
-            .unwrap()
             .fold
             .clone()
             .unwrap();
@@ -520,7 +518,7 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
 
 fn consumer(config: ServeConfig, runtime: RuntimePaths, reader: Replay) -> LoopState {
     {
-        let mut views = reader.views.lock().unwrap();
+        let mut views = reader.views.lock();
         if views.peek(&config.own_pane).is_none() {
             let (_, entry) = views.presentation(&config.own_pane, Instant::now(), false);
             // These fixtures start independent consumers, not carried client views.
@@ -966,7 +964,7 @@ fn unread_write_back_copies_only_the_changed_group() {
 }
 
 struct Replay {
-    views: Arc<Mutex<super::super::views::Views>>,
+    views: Arc<super::super::views::ViewsHandle>,
     cursor: Mutex<super::super::views::Cursor>,
     completion: Arc<AtomicBool>,
     own_pane: PaneId,
@@ -984,7 +982,7 @@ impl Replay {
 
     /// Every outcome the cursor has not seen yet, oldest first.
     fn take_unseen(&self) -> Vec<FetchUpdate> {
-        let views = self.views.lock().unwrap();
+        let views = self.views.lock();
         let mut cursor = self.cursor.lock().unwrap();
         let updates = views
             .latest
@@ -1073,7 +1071,7 @@ fn run_cycle(
     host_data: Arc<Mutex<HostData>>,
 ) -> Vec<FetchUpdate> {
     let (mut sink, reader) = single_sink(host_data, wake_channel().0);
-    reader.cursor.lock().unwrap().revision = reader.views.lock().unwrap().revision;
+    reader.cursor.lock().unwrap().revision = reader.views.lock().revision;
     worker.run_cycle(state, request, &mut sink);
     reader
         .take_unseen()
@@ -1170,7 +1168,6 @@ fn refresh_override_stamps_folded_snapshot() {
             .unwrap()
             .views
             .lock()
-            .unwrap()
             .fold
             .as_ref()
             .unwrap()
@@ -1269,7 +1266,6 @@ fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
             .unwrap()
             .views
             .lock()
-            .unwrap()
             .fold
             .as_ref()
             .unwrap()
@@ -1739,7 +1735,7 @@ fn retained_fold_is_stamped_before_its_first_input_read() {
     }));
     fixture.run_with(FetchRequest::default(), &mut worker);
     let views = fixture.host_data.lock().unwrap().views.clone();
-    let sampled_at = views.lock().unwrap().fold.as_ref().unwrap().sampled_at;
+    let sampled_at = views.lock().fold.as_ref().unwrap().sampled_at;
     assert!(
         sampled_at <= read_at.lock().unwrap().unwrap(),
         "a publication must include the time spent reading its inputs"
@@ -1763,7 +1759,7 @@ fn publication_and_completion_precede_the_narrowing_probe() {
     worker.session_listed = |_, _| {
         let sent = UPDATES.with_borrow(|updates| {
             let reader = updates.as_ref().unwrap();
-            let views = reader.views.lock().unwrap();
+            let views = reader.views.lock();
             views.revision == 1
                 && reader.completion.load(Ordering::Relaxed)
                 && views
@@ -2020,7 +2016,6 @@ fn host_start_fast_fold_uses_publications_before_the_first_produce() {
             .unwrap()
             .views
             .lock()
-            .unwrap()
             .fold
             .as_ref()
             .unwrap()
@@ -2047,7 +2042,7 @@ fn a_delivered_fold_is_already_the_hosts_latest_fold() {
             wakes.recv_timeout(Duration::from_secs(1)).unwrap(),
             Wakeup::Snapshot
         );
-        let views = reader.views.lock().unwrap();
+        let views = reader.views.lock();
         assert_eq!(views.revision, index as u64 + 1);
         let latest = views
             .latest
@@ -2100,7 +2095,6 @@ fn fast_fold_replaces_the_retained_seed_and_failure_preserves_it() {
             .unwrap()
             .views
             .lock()
-            .unwrap()
             .fold
             .as_ref()
             .unwrap()
@@ -2127,7 +2121,6 @@ fn fast_fold_replaces_the_retained_seed_and_failure_preserves_it() {
             .unwrap()
             .views
             .lock()
-            .unwrap()
             .fold
             .as_ref()
             .unwrap()
@@ -2143,7 +2136,6 @@ fn fast_fold_replaces_the_retained_seed_and_failure_preserves_it() {
             .unwrap()
             .views
             .lock()
-            .unwrap()
             .fold
             .as_ref()
             .unwrap()
@@ -2309,7 +2301,6 @@ fn a_failed_final_is_not_replaced_by_its_projected_interim() {
     assert_eq!(
         views
             .lock()
-            .unwrap()
             .peek(&PaneId::from_parts(MuxName::Zellij, "sidebar_0"))
             .unwrap()
             .1
@@ -2375,7 +2366,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     );
     let views = cycles.sink.host_data.lock().unwrap().views.clone();
     let before = {
-        let guard = views.lock().unwrap();
+        let guard = views.lock();
         let counts = &guard.reductions;
         (counts.content, counts.unchanged)
     };
@@ -2386,7 +2377,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
         cycles.renderers[hidden].pane.projections, 1,
         "hidden equal folds never project"
     );
-    let guard = views.lock().unwrap();
+    let guard = views.lock();
     let counts = &guard.reductions;
     assert_eq!(
         (counts.content - before.0) + (counts.unchanged - before.1),
@@ -2456,7 +2447,7 @@ fn one_cycle_shares_rosters_and_cards_across_renderers() {
     let first = first_rx.first_unseen().unwrap();
     let second = second_rx.first_unseen().unwrap();
     let host = fixture.host_data.lock().unwrap();
-    let views = host.views.lock().unwrap();
+    let views = host.views.lock();
     let remembered = views.fold.as_ref().unwrap().workspace.snapshot();
     assert!(remembered.rows().any(|row| row.is_agent()));
     for projected in [snapshot(&first), snapshot(&second)] {
@@ -2511,7 +2502,6 @@ fn a_lagging_cursor_replays_only_the_latest_room_fold() {
         stalled_rx
             .views
             .lock()
-            .unwrap()
             .latest
             .since(stalled_rx.cursor.lock().unwrap().revision)
             .len(),
@@ -3330,14 +3320,7 @@ fn a_full_wake_channel_does_not_block_failure_publication_or_peer_completion() {
         .expect("the publication returns with one inbox full");
     assert!(other_rx.completion.load(Ordering::Relaxed));
     assert!(matches!(
-        other_rx
-            .views
-            .lock()
-            .unwrap()
-            .latest
-            .since(0)
-            .pop()
-            .unwrap(),
+        other_rx.views.lock().latest.since(0).pop().unwrap(),
         FetchUpdate::Failed { .. }
     ));
 }

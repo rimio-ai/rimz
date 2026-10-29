@@ -1,10 +1,10 @@
-use super::super::super::views::Views;
+use super::super::super::views::{Views, ViewsHandle};
 use super::*;
 use crate::ids::{FocusNonce, MuxClientId};
 use crate::pane::ClientPaneView;
 use std::io::Write;
 
-fn shared_rig(views: Arc<Mutex<Views>>, index: usize, rows: usize) -> Rig {
+fn shared_rig(views: Arc<ViewsHandle>, index: usize, rows: usize) -> Rig {
     let own = PaneId::from_parts(MuxName::Zellij, format!("sidebar_{index}"));
     let mut rig = Rig::with_own_pane(own.clone());
     let mut snapshot = agent_snapshot(&rig.ws);
@@ -47,7 +47,7 @@ fn shared_rig(views: Arc<Mutex<Views>>, index: usize, rows: usize) -> Rig {
     rig
 }
 
-fn views() -> Arc<Mutex<Views>> {
+fn views() -> Arc<ViewsHandle> {
     let mut views = Views::default();
     views.reconcile(
         &(0..2)
@@ -60,11 +60,11 @@ fn views() -> Arc<Mutex<Views>> {
         Instant::now(),
         Duration::from_secs(60),
     );
-    Arc::new(Mutex::new(views))
+    Arc::new(views.into())
 }
 
 fn publish(rig: &mut Rig, update: FetchUpdate) {
-    let mut views = rig.views.lock().unwrap();
+    let mut views = rig.views.lock();
     let completed = update.is_final();
     views.publish(update);
     if completed {
@@ -85,7 +85,7 @@ fn a_shared_borrow_resets_scratch_presentation_and_mirrors_current() {
         v.state.selected_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
         v.context.tab_read_dwell_until = Some(dwell);
     });
-    rig.views.lock().unwrap().reconcile(
+    rig.views.lock().reconcile(
         &[ClientPaneView {
             client_id: MuxClientId::Zellij(0),
             pane_id: own,
@@ -99,7 +99,7 @@ fn a_shared_borrow_resets_scratch_presentation_and_mirrors_current() {
         v.context.current.now += Duration::from_secs(1);
         v.context.current.clone()
     });
-    rig.views.lock().unwrap().reconcile(
+    rig.views.lock().reconcile(
         &[],
         true,
         rig.state.pane.clock.now(),
@@ -153,7 +153,7 @@ fn outside_decisions_read_the_routed_view_not_scratch() {
         rig.state.frame_timing(),
         (false, Duration::from_millis(200))
     );
-    views.lock().unwrap().reconcile(
+    views.lock().reconcile(
         &[
             ClientPaneView {
                 client_id: MuxClientId::Zellij(0),
@@ -275,7 +275,7 @@ fn composition_uses_the_arriving_views_gate_notice() {
     // Every view folds the same frameless update; the arriving one has since released its hold.
     assert!(other.state.inspect_view(|_, view| view.gate.rule.is_some()));
     other.view().ctx().gate = GateState::default();
-    views.lock().unwrap().reconcile(
+    views.lock().reconcile(
         &[
             ClientPaneView {
                 client_id: MuxClientId::Zellij(0),
@@ -350,7 +350,7 @@ fn blocked_terminal_output_leaves_other_views_free_to_paint() {
                 .unwrap();
         });
         waiting.recv_timeout(Duration::from_secs(10)).unwrap();
-        let available = views.try_lock().is_ok();
+        let available = views.try_lock().is_some();
         if !available {
             release.send(()).unwrap();
         }

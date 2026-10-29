@@ -25,7 +25,7 @@ use super::input::Wakeup;
 use super::{RoomConfig, ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
 
 pub(in crate::sidebar_pane) struct DataPlane {
-    pub(super) views: Arc<Mutex<super::views::Views>>,
+    pub(super) views: Arc<super::views::ViewsHandle>,
     pub(super) events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
     pub(super) caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
     pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
@@ -45,7 +45,7 @@ type Lanes = Box<dyn FnOnce() + Send>;
 #[derive(Clone)]
 pub(in crate::sidebar_pane) struct RoomEvents {
     runtime: RuntimePaths,
-    views: Arc<Mutex<super::views::Views>>,
+    views: Arc<super::views::ViewsHandle>,
     events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
     subscribers: Subscribers,
     requests: Sender<FetchRequest>,
@@ -54,7 +54,7 @@ pub(in crate::sidebar_pane) struct RoomEvents {
 impl RoomEvents {
     pub(super) fn new(
         runtime: &RuntimePaths,
-        views: Arc<Mutex<super::views::Views>>,
+        views: Arc<super::views::ViewsHandle>,
         events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
         subscribers: Subscribers,
         requests: Sender<FetchRequest>,
@@ -70,7 +70,9 @@ impl RoomEvents {
 
     pub(super) fn record(&self, envelope: &SidebarEventEnvelope, received_at_ms: u64) {
         if let SidebarEvent::FocusChanged { focused, unfocused } = &envelope.event {
-            lock(&self.views).note_focus_event(focused, unfocused, envelope.sent_at_ms);
+            self.views
+                .lock()
+                .note_focus_event(focused, unfocused, envelope.sent_at_ms);
         }
         if envelope.event.is_overlay() {
             lock(&self.events).append(envelope.event.clone(), envelope.sent_at_ms, received_at_ms);
@@ -245,7 +247,7 @@ impl DataPlane {
     ) -> Subscription {
         let completion = Arc::new(AtomicBool::new(false));
         let (seed, revision) = {
-            let views = lock(&self.views);
+            let views = self.views.lock();
             (views.fold.clone(), views.revision)
         };
         let subscriber = Subscriber {
@@ -264,7 +266,21 @@ impl DataPlane {
         subscribers.insert(config.instance_id.as_str().to_owned(), subscriber);
         drop(subscribers);
         if let Some(start) = lock(&self.lanes).take() {
-            start();
+            // Room workers inherit their creator's Linux comm. Keep their CPU out of the
+            // attachment samples by starting them from a separately named thread.
+            let mut pending = Some(start);
+            std::thread::scope(|scope| {
+                let _ = std::thread::Builder::new()
+                    .name("rimz-plane".into())
+                    .spawn_scoped(scope, || {
+                        if let Some(start) = pending.take() {
+                            start();
+                        }
+                    });
+            });
+            if let Some(start) = pending {
+                start();
+            }
         }
         Subscription {
             fetch: FetchHandle::new(self.request_tx.clone(), completion),
@@ -278,7 +294,7 @@ impl DataPlane {
     #[cfg(test)]
     pub(super) fn remember(&self, fold: WorkspaceFold) {
         let fold = Arc::new(fold);
-        lock(&self.views).publish(FetchUpdate::Fold {
+        self.views.lock().publish(FetchUpdate::Fold {
             fold,
             phase: super::fetch::FetchPhase::Interim,
             source: super::fetch::SnapshotSource::Cached,
@@ -311,7 +327,7 @@ impl DataPlane {
         let subscriber = lock(&self.subscribers).get(instance_id.as_str()).cloned();
         if let Some(subscriber) = subscriber {
             {
-                let mut views = lock(&self.views);
+                let mut views = self.views.lock();
                 let frame = views.fold.as_ref().and_then(|fold| fold.frame.clone());
                 let fold = match frame {
                     None => super::fixtures::fold(snapshot, Some(&subscriber.own_pane), Vec::new()),
@@ -336,7 +352,7 @@ impl DataPlane {
     pub(super) fn publish_fold(&self, fold: WorkspaceFold) {
         let cycle: Vec<_> = lock(&self.subscribers).values().cloned().collect();
         {
-            let mut views = lock(&self.views);
+            let mut views = self.views.lock();
             views.publish(FetchUpdate::Fold {
                 fold: Arc::new(fold),
                 phase: super::fetch::FetchPhase::Final,

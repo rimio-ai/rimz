@@ -11,6 +11,8 @@ pub(super) struct LoopClock {
     base: Instant,
     epoch: Timestamp,
     offset_ms: Option<Arc<AtomicU64>>,
+    #[cfg(feature = "testkit")]
+    suppress_effects: bool,
     #[cfg(test)]
     pub(super) focus_calls: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
@@ -23,10 +25,20 @@ impl LoopClock {
             base: Instant::now(),
             epoch: Timestamp::now(),
             offset_ms: None,
+            #[cfg(feature = "testkit")]
+            suppress_effects: false,
             #[cfg(test)]
             focus_calls: Arc::default(),
             #[cfg(test)]
             skip_focus: false,
+        }
+    }
+
+    #[cfg(feature = "testkit")]
+    pub(super) fn fixture_wall() -> Self {
+        Self {
+            suppress_effects: true,
+            ..Self::wall()
         }
     }
 
@@ -92,6 +104,10 @@ impl LoopClock {
     }
 
     pub(super) fn effects_enabled(&self) -> bool {
+        #[cfg(feature = "testkit")]
+        if self.suppress_effects {
+            return false;
+        }
         self.offset_ms.is_none()
     }
 

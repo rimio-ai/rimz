@@ -6,7 +6,7 @@ use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
 use crate::sidebar_pane::app::view_state::ViewContext;
-use crate::sidebar_pane::app::views::Views;
+use crate::sidebar_pane::app::views::ViewsHandle;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::store::snapshot::{AgentCard, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
@@ -347,7 +347,7 @@ fn force_tab_dwell_elapsed(harness: &mut ApplyHarness) {
 struct ApplyHarness {
     state: LoopState,
     completion: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    views: std::sync::Arc<std::sync::Mutex<Views>>,
+    views: std::sync::Arc<ViewsHandle>,
     own: PaneId,
 }
 
@@ -434,7 +434,7 @@ impl ApplyHarness {
             outcome => outcome,
         };
         {
-            let mut views = self.views.lock().unwrap();
+            let mut views = self.views.lock();
             views.publish(outcome.clone());
             self.completion
                 .store(outcome.is_final(), std::sync::atomic::Ordering::Relaxed);
@@ -451,7 +451,7 @@ impl ApplyHarness {
     /// The view this pane's next painted fold borrows, routed and made as that borrow would.
     fn routed_view<T>(&mut self, access: impl FnOnce(&mut ViewState, &mut ViewContext) -> T) -> T {
         let now = std::time::Instant::now();
-        let mut views = self.views.lock().unwrap();
+        let mut views = self.views.lock();
         let (_, entry) = views.presentation(&self.own, now, false);
         let context = entry
             .context

@@ -142,7 +142,7 @@ fn room_event_recording_stamps_one_overlay_and_attributes_focus_without_lanes() 
 
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(workspace(), dir.path()).unwrap();
-    let views = Arc::new(Mutex::new(super::super::views::Views::default()));
+    let views = Arc::new(super::super::views::ViewsHandle::default());
     let events = Arc::new(Mutex::new(EventStore::default()));
     let ingress = RoomEvents::new(
         &runtime,
@@ -169,14 +169,14 @@ fn room_event_recording_stamps_one_overlay_and_attributes_focus_without_lanes() 
         expected,
         "record the ingress receive stamp once"
     );
-    assert_eq!(lock(&views).attributed_focus_event(&pane), Some(42));
+    assert_eq!(views.lock().attributed_focus_event(&pane), Some(42));
 
     ingress.record(
         &SidebarEventEnvelope::new(workspace(), None, 43, SidebarEvent::PanesChanged),
         101,
     );
     assert_eq!(*lock(&events), expected, "nudges record nothing");
-    assert_eq!(lock(&views).attributed_focus_event(&pane), Some(42));
+    assert_eq!(views.lock().attributed_focus_event(&pane), Some(42));
 }
 
 #[test]
@@ -185,6 +185,74 @@ fn a_cold_plane_has_no_seed() {
     let config = serve_config(&workspace());
     let subscription = plane.subscribe(&config, std::sync::mpsc::sync_channel(64).0);
     assert!(subscription.seed.is_none());
+}
+
+#[cfg(target_os = "linux")]
+fn task_names() -> Vec<String> {
+    std::fs::read_dir("/proc/self/task")
+        .unwrap()
+        .filter_map(|task| {
+            match std::fs::read_to_string(task.unwrap().path().join("comm")) {
+                Ok(name) => Some(name),
+                // A task that exits after the listing reads as ENOENT or ESRCH.
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(nix::errno::Errno::ESRCH as i32) =>
+                {
+                    None
+                }
+                Err(error) => panic!("read task comm: {error}"),
+            }
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn room_lanes_do_not_inherit_the_attachment_thread_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(workspace(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let config = serve_config(&workspace());
+    let plane = DataPlane::start(&config.room, &runtime, &crate::diag::DiagSink::disabled());
+    let names = std::thread::Builder::new()
+        .name("rimz-attach".into())
+        .spawn(move || {
+            let _subscription = plane.subscribe(&config, std::sync::mpsc::sync_channel(64).0);
+            // The listing walks tasks by position, so a task that exits during it (the joined
+            // spawner) can shift a live lane past the cursor. Scan again until every lane shows.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let names = task_names();
+                let lanes = names
+                    .iter()
+                    .filter(|name| name.trim() == "rimz-plane")
+                    .count();
+                if lanes >= 3 || std::time::Instant::now() >= deadline {
+                    break names;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| name.trim() == "rimz-attach")
+            .count(),
+        1,
+        "task names while the attachment and room lanes were running: {names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .filter(|name| name.trim() == "rimz-plane")
+            .count()
+            >= 3,
+        "fetch, cache refresh and transcript watch must be running: {names:?}"
+    );
 }
 
 #[test]
@@ -210,7 +278,9 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
         "seed"
     );
     assert!(
-        lock(&plane.views)
+        plane
+            .views
+            .lock()
             .latest
             .since(subscription.revision)
             .is_empty()
@@ -230,7 +300,9 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
     let mut newer = remembered;
     newer.display_name = "correction".into();
     plane.publish_snapshot(&config.instance_id, newer);
-    let update = lock(&plane.views)
+    let update = plane
+        .views
+        .lock()
         .latest
         .since(subscription.revision)
         .pop()
