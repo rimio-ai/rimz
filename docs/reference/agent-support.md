@@ -231,9 +231,9 @@ Under `agents.isolation = "scoped"` (Linux), RimZ binds each agent's config home
 
 ## Launch flags
 
-RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, and `fast` warn and launch without that setting; Hermes refuses effort outside its supported level list, and invalid auto-compact counts still refuse. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. Headless loop and workflow judges also check the resolved binary before spawning; an unreadable version passes without a verdict.
+RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, and `fast` warn and launch without that setting; Hermes refuses effort outside its supported level list, OpenCode refuses effort outside the chosen model's live variants, and invalid auto-compact counts still refuse. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. Headless loop and workflow judges also check the resolved binary before spawning; an unreadable version passes without a verdict.
 
-OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup/install, and doctor refuse an older readable version with `opencode upgrade --major`; an unreadable version passes without a verdict. From 2.0.13, RimZ-launched sessions start with the native session tab strip off: RimZ sets `tabs.mode = "off"` over whatever `cli.json` or an exported `OPENCODE_CLI_CONFIG_CONTENT` sets and keeps every other setting. Older releases keep their tabs, and OpenCode started by hand is unchanged. Fork is unsupported. Model selection uses a checked [session step](../internals/agents/adapter_opencode.md), verified on OpenCode 2.1.4. Plan adds no arguments; select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
+OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup/install, and doctor refuse an older readable version with `opencode upgrade --major`; an unreadable version passes without a verdict. From 2.0.13, RimZ-launched sessions start with the native session tab strip off: RimZ sets `tabs.mode = "off"` over whatever `cli.json` or an exported `OPENCODE_CLI_CONFIG_CONTENT` sets and keeps every other setting. Older releases keep their tabs, and OpenCode started by hand is unchanged. Fork is unsupported. Model and effort selection uses a checked [session step](../internals/agents/adapter_opencode.md#model-selection), verified on OpenCode 2.2.0. Plan adds no arguments; select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
 
 Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `npm install -g @qwen-code/qwen-code@latest`; an unreadable version passes without a verdict. It also refuses disabled hooks, naming the source and fix: `disableAllHooks`, `tools.executionSandbox`, `--safe-mode`, `--bare`, or truthy `QWEN_CODE_SAFE_MODE` or `QWEN_CODE_SIMPLE`. Execution-sandbox policy must be removed by its operator, or Qwen must run outside RimZ. Refresh existing Qwen hooks with `rimz hooks install` to adopt the seconds-based timeout before launching.
 
@@ -318,14 +318,14 @@ OMP Plan uses the same conservative approval flags as Ask, not native plan mode.
 
 ### Model and effort
 
-`--model` and `--effort` on `rimz agents`, and the `model` and `effort` profile fields, render as below. OpenCode checks the requested model against its configured catalog before launching. Other model values pass through to the agent; effort levels are whatever the agent's CLI accepts.
+`--model` and `--effort` on `rimz agents`, and the `model` and `effort` profile fields, render as below. OpenCode [picks a model and checks its effort variant](../internals/agents/adapter_opencode.md#model-selection) against the configured catalog before launching; a missing model warns and launches without effort. Other model values pass through to the agent; effort levels are whatever the agent's CLI accepts, except Hermes checks its level list.
 
 | Agent | Model | Effort |
 | --- | --- | --- |
 | Claude Code | `--model <model>` | `--effort <level>` |
 | Codex | `--model <model>` | `-c model_reasoning_effort=<level>` |
 | Pi | `--model <model>` | `--thinking <level>` |
-| OpenCode | session step, checked | skipped with a warning |
+| OpenCode | session step, checked | session-step variant, checked against the chosen model |
 | Antigravity | `--model <model>` | `--effort <level>` |
 | Copilot | `--model <model>` | `--reasoning-effort <level>` |
 | Droid | refused | skipped with a warning |

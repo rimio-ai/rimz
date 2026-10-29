@@ -2,7 +2,7 @@
 
 use super::*;
 use base64::Engine as _;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::io::{BufRead, Read};
 use std::process::{Child, Command, Stdio};
@@ -15,10 +15,16 @@ use url::Url;
 
 type CheckResult<T> = std::result::Result<T, CheckErr>;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct Model {
     #[serde(rename = "providerID")]
     provider_id: String,
+    id: String,
+    variants: Vec<Variant>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct Variant {
     id: String,
 }
 
@@ -26,6 +32,8 @@ struct Model {
 enum CheckErr {
     #[error("{0}")]
     Name(String),
+    #[error("{0}")]
+    Effort(String),
     /// OpenCode's own message for an HTTP error no OpenCode version explains, such as a
     /// vanished session.
     #[error("{0}")]
@@ -45,8 +53,8 @@ enum CheckErr {
 impl CheckErr {
     fn refusal(self, model: &str) -> SessionStepRefusal {
         let mut reason = self.to_string();
-        if !matches!(self, Self::Name(_) | Self::Answer(_)) {
-            reason.push_str("; model selection is verified on OpenCode 2.1.4");
+        if !matches!(self, Self::Name(_) | Self::Effort(_) | Self::Answer(_)) {
+            reason.push_str("; model selection is verified on OpenCode 2.2.0");
             if let Some(fix) = OpencodeAdapter.version_upgrade_fix() {
                 reason.push_str(&format!("; {fix}"));
             }
@@ -61,18 +69,18 @@ impl CheckErr {
 
 pub(super) fn run(
     request: &SessionStepRequest<'_>,
-) -> std::result::Result<Vec<String>, SessionStepRefusal> {
+) -> std::result::Result<SessionStepOutput, SessionStepRefusal> {
     run_with_timeout(request, Duration::from_secs(30))
 }
 
 fn run_with_timeout(
     request: &SessionStepRequest<'_>,
     timeout: Duration,
-) -> std::result::Result<Vec<String>, SessionStepRefusal> {
+) -> std::result::Result<SessionStepOutput, SessionStepRefusal> {
     prepare(request, Instant::now() + timeout).map_err(|err| err.refusal(request.model))
 }
 
-fn prepare(request: &SessionStepRequest<'_>, deadline: Instant) -> CheckResult<Vec<String>> {
+fn prepare(request: &SessionStepRequest<'_>, deadline: Instant) -> CheckResult<SessionStepOutput> {
     let Some((program, args)) = request.provider_argv.split_first() else {
         return Err(CheckErr::Helper("provider argv is empty".into()));
     };
@@ -109,7 +117,30 @@ fn prepare(request: &SessionStepRequest<'_>, deadline: Instant) -> CheckResult<V
         data: Vec<Model>,
     }
     let catalog: Catalog = serde_json::from_slice(&bytes)?;
-    let model = match_model(request.model, &catalog.data)?;
+    let (model, notices) = match_model(request.model, &catalog.data)?;
+    if let Some(effort) = request.effort
+        && !model.variants.iter().any(|variant| variant.id == effort)
+    {
+        let full = format!("{}/{}", model.provider_id, model.id);
+        let reason = if model.variants.is_empty() {
+            format!("{full} offers no effort levels; remove effort")
+        } else {
+            let levels: Vec<_> = model
+                .variants
+                .iter()
+                .map(|variant| variant.id.as_str())
+                .collect();
+            format!(
+                "{full} offers no effort {effort}; set effort to one of: {}",
+                levels.join(", ")
+            )
+        };
+        return Err(CheckErr::Effort(reason));
+    }
+    let mut model = json!({"providerID":model.provider_id, "id":model.id});
+    if let Some(effort) = request.effort {
+        model["variant"] = json!(effort);
+    }
     let session = request.session.cloned().unwrap_or_else(mint_session_id);
     let (url, body) = if request.session.is_some() {
         let mut url = origin;
@@ -141,7 +172,7 @@ fn prepare(request: &SessionStepRequest<'_>, deadline: Instant) -> CheckResult<V
         argv.extend(["--session".into(), session.to_string()]);
     }
     argv.extend_from_slice(args);
-    Ok(argv)
+    Ok(SessionStepOutput { argv, notices })
 }
 
 fn remaining(deadline: Instant) -> CheckResult<Duration> {
@@ -182,56 +213,62 @@ fn status_error(
     }
 }
 
-fn match_model(name: &str, models: &[Model]) -> CheckResult<Model> {
-    let full_names: Vec<_> = models
+fn match_model(name: &str, models: &[Model]) -> CheckResult<(Model, Vec<String>)> {
+    if name.contains('#') {
+        return Err(CheckErr::Name(
+            "a model name takes no #variant suffix; set the level as effort".into(),
+        ));
+    }
+    let mut candidates: Vec<_> = models
         .iter()
-        .map(|model| format!("{}/{}", model.provider_id, model.id))
+        .map(|model| (format!("{}/{}", model.provider_id, model.id), model))
         .collect();
-    if !name.contains('#') {
-        if let Some(index) = full_names.iter().position(|full| full == name) {
-            return Ok(models[index].clone());
-        }
-        // A name with `/` names its provider, as OpenCode's own model references do.
-        let bare: Vec<_> = models
-            .iter()
-            .filter(|model| !name.contains('/') && model.id == name)
-            .collect();
-        if let [model] = bare.as_slice() {
-            return Ok((*model).clone());
-        }
-        if !bare.is_empty() {
-            let alternatives: Vec<_> = bare
-                .iter()
-                .map(|model| format!("{}/{}", model.provider_id, model.id))
-                .collect();
-            return Err(CheckErr::Name(format!(
-                "ambiguous model: {}; name one as provider/model",
+    candidates.sort_by(|(left, _), (right, _)| left.cmp(right));
+    if let Some((_, model)) = candidates.iter().find(|(full, _)| full == name) {
+        return Ok(((*model).clone(), Vec::new()));
+    }
+    let exact: Vec<_> = candidates
+        .iter()
+        .filter(|(_, model)| model.id == name)
+        .collect();
+    if let Some((full, model)) = exact.first() {
+        let notices = if exact.len() > 1 {
+            let alternatives: Vec<_> = exact.iter().map(|(full, _)| full.as_str()).collect();
+            vec![format!(
+                "OpenCode model {name} matched {} ({}); using {full}, the first `opencode models` lists; write the full name for another",
+                exact.len(),
                 alternatives.join(", ")
-            )));
-        }
+            )]
+        } else if name.contains('/') {
+            vec![format!(
+                "OpenCode model {name} is not a configured provider/model; using {full}, which offers {name} as a model id; write the full name for another"
+            )]
+        } else {
+            Vec::new()
+        };
+        return Ok(((*model).clone(), notices));
     }
     let nearest = crate::utils::suggest::nearest_names(
         name,
-        full_names
+        candidates
             .iter()
-            .zip(models)
             .flat_map(|(full, model)| [full.as_str(), model.id.as_str()]),
     );
-    let suggestions: Vec<_> = full_names
-        .iter()
-        .zip(models)
-        .filter(|(full, model)| {
-            nearest.contains(&full.as_str()) || nearest.contains(&model.id.as_str())
-        })
-        .map(|(full, _)| full.as_str())
-        .take(3)
-        .collect();
-    let fix = if suggestions.is_empty() || name.contains('#') {
-        "run `opencode models` to list configured models".into()
-    } else {
-        format!("did you mean {}?", suggestions.join(", "))
-    };
-    Err(CheckErr::Name(format!("unknown model; {fix}")))
+    if let Some(nearest) = nearest.first()
+        && let Some((full, model)) = candidates
+            .iter()
+            .find(|(full, model)| full.as_str() == *nearest || model.id == *nearest)
+    {
+        return Ok((
+            (*model).clone(),
+            vec![format!(
+                "OpenCode model {name} is not offered; using {full}, the nearest name `opencode models` lists; write the full name for another"
+            )],
+        ));
+    }
+    Err(CheckErr::Name(
+        "unknown model; run `opencode models` to list configured models".into(),
+    ))
 }
 
 fn helper_env(inherited: &BTreeMap<String, String>) -> BTreeMap<String, String> {

@@ -169,9 +169,7 @@ fn unsupported_effort_override_warns_and_leaves_no_launch_stamp() {
         effort: Some("high".into()),
         ..Default::default()
     };
-    for kind in [
-        "amp", "kimi", "cursor", "droid", "qwen", "minimax", "opencode",
-    ] {
+    for kind in ["amp", "kimi", "cursor", "droid", "qwen", "minimax"] {
         let mut layout = LayoutSpec::single(preset_cell(kind, &[], None, None));
         let warnings = finalize(&mut layout, &preset, &[]).expect("unsupported effort launches");
         assert_eq!(
@@ -187,6 +185,43 @@ fn unsupported_effort_override_warns_and_leaves_no_launch_stamp() {
             cell.args
                 .iter()
                 .all(|arg| !arg.contains("effort") && arg != "high")
+        );
+    }
+}
+
+#[test]
+fn opencode_effort_needs_a_final_model_and_is_recorded_only_when_applicable() {
+    for (profile_model, cli_model) in [
+        (None, None),
+        (Some("opus"), None),
+        (None, Some("provider/model")),
+    ] {
+        let mut layout =
+            LayoutSpec::single(preset_cell("opencode", &[], profile_model, Some("high")));
+        let warnings = finalize(
+            &mut layout,
+            &crate::agents::LaunchPreset {
+                model: cli_model.map(str::to_owned),
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
+        let has_model = profile_model.or(cli_model).is_some();
+        let expected = if has_model {
+            Vec::new()
+        } else {
+            vec!["warning: `opencode-coder` effort high needs a model on opencode; launching without it; set `model:` or pass --model".to_owned()]
+        };
+        assert_eq!(
+            warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            expected
+        );
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.launch.effort.as_deref(), has_model.then_some("high"));
+        assert_eq!(
+            cell.launch.record.as_ref().unwrap().effort,
+            cell.launch.effort
         );
     }
 }

@@ -312,7 +312,8 @@ upward-dependencies = ["address"]
 # cached_provider_spending shares stamped provider parses with host projections (+1).
 # WindowStarts exposes shared history-zone window boundaries to the CLI (+1).
 # ResumeProbe and its agents re-export share three-way resume discovery outcomes (+2).
-surface-budget = 1173
+# SessionStepOutput carries the prepared command and launch notices to the CLI (+1).
+surface-budget = 1174
 
 [[verdict]]
 kind = "item"
@@ -333,6 +334,11 @@ reason = "Account enrichment and harness configuration share a provider-neutral 
 kind = "item"
 key = "agents::capabilities::SessionStepRequest"
 reason = "The hidden CLI passes the final provider view and model to adapter-owned session preparation."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::SessionStepOutput"
+reason = "The session step returns argv and notices; only the CLI prints and records them."
 
 [[verdict]]
 kind = "item"

@@ -3330,14 +3330,21 @@ fn explain_kind_override_uses_only_the_final_kinds_defaults() {
             "description: Reviewer\nagent: claude\ntools: [Read]\neffort: high",
             "Review the code.",
         );
+        let warning = if kind == "opencode" {
+            "warning: `reviewer` effort high needs a model on opencode; launching without it; \
+             set `model:` or pass --model"
+                .to_owned()
+        } else {
+            format!(
+                "warning: `reviewer` effort high is unsupported on {kind}; launching without it"
+            )
+        };
         let output = env
             .rimz()
             .args(["agents", "explain", "reviewer", "--agent", kind, "--json"])
             .assert()
             .success()
-            .stderr(contains(format!(
-                "warning: `reviewer` effort high is unsupported on {kind}; launching without it"
-            )))
+            .stderr(contains(warning))
             .get_output()
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -3352,11 +3359,7 @@ fn explain_kind_override_uses_only_the_final_kinds_defaults() {
             "{report}"
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(
-            stderr.matches("effort high is unsupported").count(),
-            1,
-            "{stderr}"
-        );
+        assert_eq!(stderr.matches("effort high").count(), 1, "{stderr}");
     }
 }
 

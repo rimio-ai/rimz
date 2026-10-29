@@ -143,11 +143,15 @@ impl std::fmt::Display for PermissionMode {
     }
 }
 
-/// A launch setting omitted because the final provider has no switch for it.
+/// A launch setting omitted because the final provider cannot apply it to this launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkippedPresetField {
     AutoCompact(String),
     Effort(String),
+    /// Effort on a model session-step kind launched without a model.
+    EffortNeedsModel(String),
+    /// Effort on a model session-step kind resumed without a model switch.
+    EffortNeedsModelSwitch(String),
     /// The provider's fast alternative, when it has one.
     Fast {
         alternative: Option<&'static str>,
@@ -294,7 +298,7 @@ impl LaunchSpec {
 
     /// Whether a field is applied through argv or the adapter's session step.
     pub fn supports_preset(self, field: PresetField) -> bool {
-        (field == PresetField::Model && self.model_session_step)
+        (matches!(field, PresetField::Model | PresetField::Effort) && self.model_session_step)
             || self.preset_arg_matcher(field).is_some()
     }
 

@@ -361,7 +361,7 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
     fn session_step(
         &self,
         request: &SessionStepRequest<'_>,
-    ) -> Option<std::result::Result<Vec<String>, SessionStepRefusal>> {
+    ) -> Option<std::result::Result<SessionStepOutput, SessionStepRefusal>> {
         Some(session_step::run(request))
     }
 

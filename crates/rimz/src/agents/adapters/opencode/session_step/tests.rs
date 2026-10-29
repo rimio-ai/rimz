@@ -2,16 +2,20 @@ use super::*;
 
 fn models() -> Vec<Model> {
     serde_json::from_value(json!([
-        {"providerID":"opencode-go", "id":"deepseek-v4.1-flash"},
-        {"providerID":"one", "id":"gpt-5"},
-        {"providerID":"two", "id":"gpt-5"},
-        {"providerID":"one", "id":"nested/model"}
+        {"providerID":"opencode", "id":"deepseek-v4.1-flash", "variants":[]},
+        {"providerID":"opencode-go", "id":"deepseek-v4.1-flash", "variants":[]},
+        {"providerID":"two", "id":"gpt-5", "variants":[]},
+        {"providerID":"one", "id":"gpt-5", "variants":[]},
+        {"providerID":"one", "id":"hy3", "variants":[]},
+        {"providerID":"one", "id":"kimi-k3", "variants":[]},
+        {"providerID":"one", "id":"glm-5.3", "variants":[]},
+        {"providerID":"one", "id":"nested/model", "variants":[]}
     ]))
     .unwrap()
 }
 
 #[test]
-fn model_matching_is_exact_or_a_unique_bare_id() {
+fn model_matching_prefers_full_names_then_first_ids_then_nearest_names() {
     for (name, provider, id) in [
         (
             "opencode-go/deepseek-v4.1-flash",
@@ -20,35 +24,61 @@ fn model_matching_is_exact_or_a_unique_bare_id() {
         ),
         ("deepseek-v4.1-flash", "opencode-go", "deepseek-v4.1-flash"),
         ("one/nested/model", "one", "nested/model"),
+        ("nested/model", "one", "nested/model"),
+        ("hy3", "one", "hy3"),
+        ("gpt-5", "one", "gpt-5"),
+        ("gpt-4", "one", "gpt-5"),
+        ("deepseek-v41-flash", "opencode-go", "deepseek-v4.1-flash"),
+        (
+            "opencode-go/deepseek-4-1-flash",
+            "opencode-go",
+            "deepseek-v4.1-flash",
+        ),
     ] {
         let found = match_model(name, &models());
         assert!(found.is_ok(), "{name} must match: {found:?}");
-        let found = found.unwrap();
+        let (found, notices) = found.unwrap();
         assert_eq!(
             (found.provider_id.as_str(), found.id.as_str()),
             (provider, id)
         );
+        if ["opencode-go/deepseek-v4.1-flash", "one/nested/model", "hy3"].contains(&name) {
+            assert!(notices.is_empty(), "{name}: {notices:?}");
+        }
     }
+    assert_eq!(
+        match_model("nested/model", &models()).unwrap().1,
+        [
+            "OpenCode model nested/model is not a configured provider/model; using one/nested/model, which offers nested/model as a model id; write the full name for another"
+        ]
+    );
+    let mut shared = models();
+    shared.extend(
+        serde_json::from_value::<Vec<Model>>(
+            json!([{"providerID":"two", "id":"nested/model", "variants":[]}]),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        match_model("nested/model", &shared).unwrap().1,
+        [
+            "OpenCode model nested/model matched 2 (one/nested/model, two/nested/model); using one/nested/model, the first `opencode models` lists; write the full name for another"
+        ]
+    );
+    let tied: Vec<Model> = serde_json::from_value(json!([
+        {"providerID":"z", "id":"model-a", "variants":[]},
+        {"providerID":"a", "id":"model-b", "variants":[]}
+    ]))
+    .unwrap();
+    assert_eq!(match_model("model-c", &tied).unwrap().0.provider_id, "a");
 }
 
 #[test]
 fn model_refusals_name_the_cause_and_the_correction() {
     for (name, reason) in [
         (
-            "gpt-5",
-            "ambiguous model: one/gpt-5, two/gpt-5; name one as provider/model",
-        ),
-        (
-            "deepseek-4-1-flash",
-            "unknown model; did you mean opencode-go/deepseek-v4.1-flash?",
-        ),
-        (
-            "opencode-go/deepseek-4-1-flash",
-            "unknown model; did you mean opencode-go/deepseek-v4.1-flash?",
-        ),
-        (
-            "nested/model",
-            "unknown model; did you mean one/nested/model?",
+            "opus",
+            "unknown model; run `opencode models` to list configured models",
         ),
         (
             "unrelated",
@@ -56,7 +86,7 @@ fn model_refusals_name_the_cause_and_the_correction() {
         ),
         (
             "one/gpt-5#high",
-            "unknown model; run `opencode models` to list configured models",
+            "a model name takes no #variant suffix; set the level as effort",
         ),
     ] {
         let refusal = match_model(name, &models())
@@ -68,14 +98,13 @@ fn model_refusals_name_the_cause_and_the_correction() {
             format!("OpenCode model check refused {name:?}: {reason}")
         );
         assert!(!refusal.contains("verified on"));
-        assert_eq!(refusal.contains("ambiguous"), name == "gpt-5");
     }
 }
 
 #[test]
 fn http_refusals_quote_opencode_and_keep_the_version_note_for_the_model_list() {
     let note = format!(
-        "; model selection is verified on OpenCode 2.1.4; {}",
+        "; model selection is verified on OpenCode 2.2.0; {}",
         OpencodeAdapter.version_upgrade_fix().unwrap()
     );
     let response = |status: u16, body: &str| {
@@ -201,6 +230,7 @@ fn deadline_kills_and_reaps_the_helper_group() {
         &SessionStepRequest {
             session: None,
             model: "one/model",
+            effort: None,
             provider_argv: &argv,
             cwd: root.path(),
             env: &env,

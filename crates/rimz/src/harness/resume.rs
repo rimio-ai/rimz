@@ -3254,13 +3254,26 @@ fn restore_resume_cell(
         cell.launch.tier = None;
     }
     let mut warnings = Vec::new();
+    let mut preset = preset.clone();
+    if is_resume
+        && !cell.resume_model_override
+        && let Some(adapter) = find_definition(cell.kind.as_str())
+        && adapter.spec().launch.model_session_step
+        && let Some(effort) = preset.effort.take().filter(|effort| !effort.is_empty())
+    {
+        warnings.push(crate::harness::plan::LaunchFinalizeWarning::SkippedField {
+            profile: profile.unwrap_or(cell.kind.as_str()).to_owned(),
+            agent: adapter.spec().kind,
+            field: crate::agents::definition::SkippedPresetField::EffortNeedsModelSwitch(effort),
+        });
+    }
     crate::harness::plan::finalize_agent_cell(
         cell,
         crate::harness::plan::LaunchFinalizeOptions {
             agent_base: None,
             permission_mode: mode.map(crate::harness::plan::PermissionModeChoice::Explicit),
             isolation: None,
-            preset,
+            preset: &preset,
             passthrough: &[],
             budget: None,
             max_turns: None,

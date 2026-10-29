@@ -72,6 +72,7 @@ fn session_steps_follow_launch_and_explicit_resume_models_only() {
     ] {
         let mut invocation = request(kind, action_with_args(action, vec![]));
         invocation.identity.params.model = model.map(str::to_owned);
+        invocation.identity.params.effort = Some("high".into());
         invocation.identity.resume_model_override = override_model;
         if let ExecAction::Launch { prompt: text, .. } = &mut invocation.action {
             *text = prompt.map(str::to_owned);
@@ -114,6 +115,8 @@ fn session_steps_follow_launch_and_explicit_resume_models_only() {
             "opencode",
             "--model",
             "provider/model",
+            "--effort",
+            "high",
         ];
         if action == "resume" {
             expected.extend(["--session", "session"]);
@@ -146,13 +149,27 @@ fn plain_opencode_resume_clears_the_model_but_keeps_its_launch_record() {
     for explicit in [false, true] {
         let mut invocation = host_request("opencode", action_with_args("resume", vec![]));
         invocation.identity.params.model = Some("provider/model".into());
+        invocation.identity.params.effort = Some("high".into());
         invocation.identity.params.record = Some(Box::new(crate::agents::LaunchRecord {
             model: Some("provider/model".into()),
+            effort: Some("high".into()),
             ..Default::default()
         }));
         invocation.identity.resume_model_override = explicit;
         let prepared = prepare(&invocation, None, &machine, None, &|| Ok(Vec::new()));
         let (plan, _) = prepared.outcome.unwrap();
+        assert_eq!(
+            plan.request
+                .identity
+                .params
+                .record
+                .as_ref()
+                .unwrap()
+                .effort
+                .as_deref(),
+            Some("high")
+        );
+        assert!(prepared.model_warnings.is_empty());
         assert_eq!(plan.request.identity.params.model.is_some(), explicit);
         assert_eq!(
             plan.request
