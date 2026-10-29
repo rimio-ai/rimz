@@ -47,7 +47,7 @@ fn leader_turn_requires_a_closed_turn_and_accepts_equal_stamps() {
         row.turn_ended_at = ended;
         let _guard = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
         actual.push(
-            leader_turn(&store, &row, &run, &session)
+            leader_turn(&store, &row, &run, &session, None)
                 .unwrap()
                 .map(|turn| turn.at_rest),
         );
@@ -68,10 +68,13 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
         "compacting",
         "own ingress",
         "other ingress",
+        "waking ingress",
+        "waking and later ingress",
     ] {
         let (dir, store, mut agent) = fixture();
         let run = WorkflowRunId::new();
         let mut session = RunId::new();
+        let mut woken_by = None;
         if matches!(cause, "own run" | "other run") {
             let mut record = crate::store::run::RunRecord::new(
                 store.paths().workspace_id.clone(),
@@ -134,7 +137,10 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
         if cause == "compacting" {
             agent.compacting_since = Some(Timestamp::now());
         }
-        if matches!(cause, "own ingress" | "other ingress") {
+        if matches!(
+            cause,
+            "own ingress" | "other ingress" | "waking ingress" | "waking and later ingress"
+        ) {
             let frame = HookIngress {
                 boot_id: None,
                 schema_version: "1".into(),
@@ -147,21 +153,30 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
                 hook_pid: std::process::id(),
                 env: [(
                     "RIMZ_WORKFLOW_RUN".into(),
-                    if cause == "own ingress" {
-                        run.to_string()
-                    } else {
+                    if cause == "other ingress" {
                         WorkflowRunId::new().to_string()
+                    } else {
+                        run.to_string()
                     },
                 )]
                 .into(),
             };
             let guard = SharedAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
             ingress::append(store.paths(), &frame, &guard).unwrap();
+            if matches!(cause, "waking ingress" | "waking and later ingress") {
+                woken_by = Some(frame.event_id.clone());
+            }
+            if cause == "waking and later ingress" {
+                let mut later = frame.clone();
+                later.event_id = crate::ids::EventId::new();
+                later.event = Some("UserPromptSubmit".into());
+                ingress::append(store.paths(), &later, &guard).unwrap();
+            }
         }
         let _guard = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
         actual.push((
             cause,
-            leader_turn(&store, &agent, &run, &session)
+            leader_turn(&store, &agent, &run, &session, woken_by.as_ref())
                 .unwrap()
                 .map(|turn| turn.at_rest),
         ));
@@ -178,6 +193,8 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
             ("compacting", Some(false)),
             ("own ingress", Some(false)),
             ("other ingress", Some(true)),
+            ("waking ingress", Some(true)),
+            ("waking and later ingress", Some(false)),
         ]
     );
 }

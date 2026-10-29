@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use rimz::agents::{AgentState, AskDelivery, AskKind, ProviderCapacity, TurnErrorClass};
 use rimz::harness::schedule::takeover::{self, Takeover};
 use rimz::harness::workflow::{self, WorkflowErr};
+use rimz::ids::EventId;
 use rimz::launcher::{self, LaunchOutcome, Preparation};
 use rimz::store::run::{ReportTo, RunLifecycle, RunRecord};
 use rimz::store::snapshot::SidebarSnapshot;
@@ -18,11 +19,20 @@ use crate::cli::{GlobalFlags, agents_cmd, ctx::Ctx, supervised};
 pub(super) struct Host<'a> {
     state: &'a rimz::StatePaths,
     globals: &'a GlobalFlags,
+    woken_by: Option<EventId>,
 }
 
 impl<'a> Host<'a> {
-    pub(super) fn new(state: &'a rimz::StatePaths, globals: &'a GlobalFlags) -> Self {
-        Self { state, globals }
+    pub(super) fn new(
+        state: &'a rimz::StatePaths,
+        globals: &'a GlobalFlags,
+        woken_by: Option<EventId>,
+    ) -> Self {
+        Self {
+            state,
+            globals,
+            woken_by,
+        }
     }
 
     fn ctx(&self) -> Result<Ctx> {
@@ -304,8 +314,13 @@ impl workflow::AttemptHost for Host<'_> {
             if matches!(observation, workflow::Observation::LeaderTurn)
                 && let Some(workflow) = &run.workflow
             {
-                observed.turn =
-                    workflow::leader_turn(&ctx.store, root, &workflow.run, &run.run_id)?;
+                observed.turn = workflow::leader_turn(
+                    &ctx.store,
+                    root,
+                    &workflow.run,
+                    &run.run_id,
+                    self.woken_by.as_ref(),
+                )?;
             }
             Ok(observed)
         })()

@@ -140,7 +140,7 @@ fn advance_arguments_address_a_run_or_a_room_signal_without_shell_parsing() {
     .into_iter()
     .map(Into::into)
     .collect();
-    assert_eq!(advance_args(root, Some(&id), None), expected);
+    assert_eq!(advance_args(root, Some(&id), None, None), expected);
     let signal = crate::harness::schedule::signal::Signal {
         name: "pr.ready".parse().unwrap(),
         payload: serde_json::from_value(serde_json::json!({
@@ -160,7 +160,7 @@ fn advance_arguments_address_a_run_or_a_room_signal_without_shell_parsing() {
     .into_iter()
     .map(Into::into)
     .collect();
-    let args = advance_args(root, None, Some(&signal));
+    let args = advance_args(root, None, Some(&signal), None);
     assert_eq!(args[..5], expected);
     assert_eq!(
         serde_json::from_str::<crate::harness::schedule::signal::Signal>(args[5].to_str().unwrap())

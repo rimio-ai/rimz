@@ -270,7 +270,7 @@ fn workflow_advance_command(
     project_root: &Path,
     id: &crate::ids::WorkflowRunId,
 ) -> (OsString, Vec<OsString>) {
-    let args = crate::harness::workflow::advance_args(project_root, Some(id), None);
+    let args = crate::harness::workflow::advance_args(project_root, Some(id), None, None);
     loop_run_command(host, exe, &args, &format!("workflow {id}"))
 }
 

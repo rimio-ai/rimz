@@ -742,6 +742,7 @@ fn workflow_wake_args(project_root: &Path, signal: &Signal) -> Option<Vec<std::f
         project_root,
         None,
         Some(signal),
+        None,
     ))
 }
 

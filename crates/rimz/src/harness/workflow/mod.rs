@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::Store;
 use crate::agents::{AgentState, WorkflowAttemptRef};
 use crate::harness::schedule::takeover::OpenTurn;
-use crate::ids::{RunId, WorkflowRunId};
+use crate::ids::{EventId, RunId, WorkflowRunId};
 use crate::store::StoreErr;
 use crate::store::run::RunStatus;
 use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited, TurnEnd};
@@ -55,6 +55,7 @@ pub fn advance_args(
     project_root: &Path,
     id: Option<&crate::ids::WorkflowRunId>,
     wake_signal: Option<&crate::harness::schedule::signal::Signal>,
+    woken_by: Option<&EventId>,
 ) -> Vec<std::ffi::OsString> {
     let mut args = vec![
         "--root".into(),
@@ -68,6 +69,9 @@ pub fn advance_args(
     if let Some(signal) = wake_signal {
         let signal = serde_json::json!(crate::store::event::SignalEventPayload::from(signal));
         args.extend(["--wake-signal".into(), signal.to_string().into()]);
+    }
+    if let Some(event) = woken_by {
+        args.extend(["--woken-by".into(), event.to_string().into()]);
     }
     args
 }
@@ -116,11 +120,13 @@ pub struct LeaderTurn {
 }
 
 /// Read the leader's closed turn and current eligibility while holding the workspace lock.
+/// The advance's waking frame has committed, so only other pending frames can defer rest.
 pub fn leader_turn(
     store: &Store,
     leader: &AgentState,
     run: &WorkflowRunId,
     session: &RunId,
+    woken_by: Option<&EventId>,
 ) -> Result<Option<LeaderTurn>, StoreErr> {
     let Some((started_at, ended_at)) = leader.turn_started_at.zip(leader.turn_ended_at) else {
         return Ok(None);
@@ -152,10 +158,11 @@ pub fn leader_turn(
     let cursor = crate::store::ingress::read_cursor(store.paths())?;
     let (pending, _) = crate::store::ingress::read_from_offset(store.paths(), cursor.applied)?;
     turn.at_rest = !pending.iter().any(|(frame, _)| {
-        frame
-            .env
-            .get("RIMZ_WORKFLOW_RUN")
-            .is_some_and(|id| id == run.as_str())
+        Some(&frame.event_id) != woken_by
+            && frame
+                .env
+                .get("RIMZ_WORKFLOW_RUN")
+                .is_some_and(|id| id == run.as_str())
     });
     Ok(Some(turn))
 }

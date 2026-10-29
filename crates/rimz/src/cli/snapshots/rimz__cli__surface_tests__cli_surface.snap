@@ -3671,6 +3671,7 @@ rimz workflow advance [hidden]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --wake-signal <WAKE_SIGNAL>  [action=set takes=1..=1]
+    --woken-by <WOKEN_BY>  [action=set takes=1..=1 hidden]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz workflow cancel
