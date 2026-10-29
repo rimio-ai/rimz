@@ -3,6 +3,19 @@ use std::os::unix::fs::PermissionsExt;
 use super::*;
 
 #[test]
+fn gate_listener_does_not_inherit_the_room_pin() {
+    let spec = gate_spec(
+        Path::new("/opt/rimz/bin/rimz"),
+        "127.0.0.1:8200".parse().unwrap(),
+        "127.0.0.1:8201".parse().unwrap(),
+        &[],
+        &WebAuth::Basic,
+        &[],
+    );
+    assert!(spec.env_remove.contains(crate::workspace::ENV_WORKSPACE_ID));
+}
+
+#[test]
 fn pixel_daemon_filter_requires_current_protocol_records() {
     // An inherited RIMZ_HOME can hold a live daemon's records; never clobber them.
     if [DAEMON_FILE, SHARE_DAEMON_FILE]

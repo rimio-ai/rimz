@@ -63,6 +63,15 @@ impl LinkProbe {
     }
 }
 
+/// Scope of a host's listener report; unknown scopes retain the legacy baseline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortsScope {
+    Room,
+    #[serde(other)]
+    Unknown,
+}
+
 /// One remote-to-local ack line.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkAck {
@@ -70,6 +79,8 @@ pub struct LinkAck {
     pub seq: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ports: Option<Vec<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports_scope: Option<PortsScope>,
 }
 
 impl LinkAck {
@@ -78,6 +89,7 @@ impl LinkAck {
             v: LINK_SCHEMA_VERSION.to_owned(),
             seq,
             ports: None,
+            ports_scope: None,
         }
     }
 
@@ -86,6 +98,7 @@ impl LinkAck {
             v: LINK_SCHEMA_VERSION.to_owned(),
             seq,
             ports: Some(ports),
+            ports_scope: Some(PortsScope::Room),
         }
     }
 
@@ -1006,6 +1019,23 @@ mod tests {
     }
 
     #[test]
+    fn unknown_port_scope_keeps_the_legacy_baseline() {
+        let ack: LinkAck = serde_json::from_str(
+            r#"{"v":"rimz.link.v1","seq":42,"ports":[3000],"ports_scope":"future"}"#,
+        )
+        .unwrap();
+        let mut sync = super::super::forward::PortSync::default();
+        assert!(
+            sync.observe(ack.ports.as_ref().unwrap(), ack.ports_scope)
+                .is_empty()
+        );
+        assert_eq!(
+            sync.observe(&[3000, 4000], ack.ports_scope),
+            [super::super::forward::PortAction::Open(4000)]
+        );
+    }
+
+    #[test]
     fn link_protocol_serializes_and_builds_control_specs() {
         let probe = LinkProbe::new(
             42,
@@ -1023,6 +1053,12 @@ mod tests {
 
         let ack = LinkAck::new(42);
         let ack_text = serde_json::to_string(&ack).unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&ack_text)
+                .unwrap()
+                .get("ports_scope")
+                .is_none()
+        );
         let parsed_ack = serde_json::from_str::<LinkAck>(&ack_text).unwrap();
         assert!(parsed_ack.version_ok());
         assert_eq!(parsed_ack.ports, None);
@@ -1034,6 +1070,7 @@ mod tests {
         );
 
         let ack = LinkAck::with_ports(43, vec![3000, 8080]);
+        assert_eq!(serde_json::to_value(&ack).unwrap()["ports_scope"], "room");
         assert_eq!(
             serde_json::from_str::<LinkAck>(&serde_json::to_string(&ack).unwrap()).unwrap(),
             ack

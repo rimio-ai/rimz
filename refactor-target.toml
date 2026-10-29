@@ -2367,7 +2367,18 @@ upward-dependencies = [
 # git_command_uncounted lets host status set trace2 without double-counting bounded spawns (+1).
 # with_read_memo shares proc evidence within each candidate or metrics pass (+1).
 # launched_script_command lets the resume walk read a JS launcher's argv as its script's (+1).
-surface-budget = 147
+# socket_inodes and socket_inodes_for_env share Linux fd ownership with remote discovery (+2).
+surface-budget = 149
+
+[[verdict]]
+kind = "item"
+key = "proc::socket_inodes"
+reason = "Antigravity and remote discovery share the bounded Linux socket-fd reader."
+
+[[verdict]]
+kind = "item"
+key = "proc::socket_inodes_for_env"
+reason = "Remote discovery resolves newly seen listener inodes in one same-uid process sweep."
 
 [[verdict]]
 kind = "item"
@@ -2443,7 +2454,9 @@ path = "crates/rimz/src/remote"
 # RelayEvent, StreamScreen, RelayScanner and its stream/query methods (+9).
 # PortSync::mark_master_lost separates transport recovery from reattach (+1).
 # ForwardState and PortSync's pin selection, state readers and open outcome (+5).
-surface-budget = 191
+# Listener, its inode field, candidate_listeners and LinkAck.ports_scope scope discovery (+4).
+# PortsScope types the listener-report scope with an unknown-value fallback (+1).
+surface-budget = 196
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -4234,6 +4247,21 @@ reason = "The sidebar-safe scheduler backstop and CLI inspection share strict du
 kind = "item"
 key = "remote::forward::ForwardState"
 reason = "PortSync retains held, reopening and not-forwarded outcomes for the supervisor and its forward record."
+
+[[verdict]]
+kind = "item"
+key = "remote::forward::Listener"
+reason = "The ingest driver resolves socket ownership before the pure room filter applies the report cap."
+
+[[verdict]]
+kind = "item"
+key = "remote::forward::candidate_listeners"
+reason = "The ingest driver resolves socket ownership only for listeners that pass the pure procfs filters."
+
+[[verdict]]
+kind = "item"
+key = "remote::link::PortsScope"
+reason = "The ack and port synchronizer share a typed listener scope that tolerates newer peers."
 
 [[verdict]]
 kind = "item"

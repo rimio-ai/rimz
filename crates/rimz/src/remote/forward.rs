@@ -6,25 +6,41 @@ use std::path::Path;
 
 use crate::mux::CommandSpec;
 
-use super::RemoteTarget;
+use super::{RemoteTarget, link::PortsScope};
 
 const MAX_CANDIDATE_PORTS: usize = 32;
 const MAX_ACTIVE_FORWARDS: usize = 16;
 const CLOSE_MISSING_REPORTS: u8 = 3;
 const LOCAL_PORT_SCAN: u16 = 16;
 
-/// Parse the room user's loopback and wildcard listeners from Linux procfs.
-pub fn candidate_ports(tcp: &str, tcp6: &str, own_uid: u32) -> Vec<u16> {
+/// A qualifying procfs listener awaiting its room-ownership verdict.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Listener {
+    port: u16,
+    pub inode: u64,
+}
+
+/// Parse same-uid loopback and wildcard listeners, before resolving room ownership.
+pub fn candidate_listeners(tcp: &str, tcp6: &str, own_uid: u32) -> Vec<Listener> {
     tcp.lines()
         .chain(tcp6.lines())
-        .filter_map(|line| candidate_port(line, own_uid))
+        .filter_map(|line| candidate_listener(line, own_uid))
+        .collect()
+}
+
+/// Select the room's ports after resolving candidate socket ownership.
+pub fn candidate_ports(listeners: &[Listener], room_inodes: &BTreeSet<u64>) -> Vec<u16> {
+    listeners
+        .iter()
+        .filter(|listener| room_inodes.contains(&listener.inode))
+        .map(|listener| listener.port)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .take(MAX_CANDIDATE_PORTS)
         .collect()
 }
 
-fn candidate_port(line: &str, own_uid: u32) -> Option<u16> {
+fn candidate_listener(line: &str, own_uid: u32) -> Option<Listener> {
     let mut columns = line.split_whitespace();
     columns.next()?;
     let local = columns.next()?;
@@ -32,9 +48,10 @@ fn candidate_port(line: &str, own_uid: u32) -> Option<u16> {
     if columns.next()? != "0A" || columns.nth(3)?.parse::<u32>().ok()? != own_uid {
         return None;
     }
+    let inode = columns.nth(1)?.parse().ok()?;
     let (address, port) = local.split_once(':')?;
     let port = u16::from_str_radix(port, 16).ok()?;
-    (port >= 1024 && loopback_or_wildcard(address)).then_some(port)
+    (port >= 1024 && loopback_or_wildcard(address)).then_some(Listener { port, inode })
 }
 
 fn loopback_or_wildcard(address: &str) -> bool {
@@ -129,12 +146,16 @@ pub struct PortSync {
 }
 
 impl PortSync {
-    pub fn observe(&mut self, report: &[u16]) -> Vec<PortAction> {
+    pub fn observe(&mut self, report: &[u16], ports_scope: Option<PortsScope>) -> Vec<PortAction> {
         let report = report.iter().copied().collect::<BTreeSet<_>>();
-        let Some(baseline) = &self.baseline else {
+        if ports_scope != Some(PortsScope::Room) && self.baseline.is_none() {
             self.baseline = Some(report);
             return Vec::new();
-        };
+        }
+        let baseline = self
+            .baseline
+            .as_ref()
+            .filter(|_| ports_scope != Some(PortsScope::Room));
 
         let mut actions = Vec::new();
         self.forwards.retain(|remote, forward| {
@@ -165,7 +186,10 @@ impl PortSync {
             .values()
             .filter(|forward| forward.state.occupies_slot())
             .count();
-        for remote in report.difference(baseline) {
+        for remote in report
+            .iter()
+            .filter(|remote| baseline.is_none_or(|baseline| !baseline.contains(*remote)))
+        {
             let forward = self.forwards.entry(*remote).or_insert(ListenerForward {
                 missing: 0,
                 state: ForwardState::Limit,
@@ -333,7 +357,11 @@ mod tests {
         ]
         .join("\n");
 
-        assert_eq!(candidate_ports(&tcp, &tcp6, 1000), [3000, 3001, 8080, 9000]);
+        let listeners = candidate_listeners(&tcp, &tcp6, 1000);
+        assert_eq!(
+            candidate_ports(&listeners, &BTreeSet::from([1])),
+            [3000, 3001, 8080, 9000]
+        );
     }
 
     #[test]
@@ -344,7 +372,7 @@ mod tests {
             .chain(std::iter::once(row("00000000:0400", "0A", 1000)))
             .collect::<Vec<_>>()
             .join("\n");
-        let ports = candidate_ports(&tcp, "", 1000);
+        let ports = candidate_ports(&candidate_listeners(&tcp, "", 1000), &BTreeSet::from([1]));
 
         assert_eq!(ports.len(), MAX_CANDIDATE_PORTS);
         assert_eq!(ports[0], 1024);
@@ -352,27 +380,90 @@ mod tests {
     }
 
     #[test]
+    fn proc_parser_keeps_socket_inodes_and_rejects_missing_or_invalid_ones() {
+        let tcp = [
+            "0: 0100007F:0BB8 00000000:0000 0A 0:0 00:0 0 1000 0 12345",
+            "1: 00000000:0BB8 00000000:0000 0A 0:0 00:0 0 1000 0 67890",
+            "2: 0100007F:0BB9 00000000:0000 0A 0:0 00:0 0 1000 0",
+            "3: 0100007F:0BBA 00000000:0000 0A 0:0 00:0 0 1000 0 invalid",
+        ]
+        .join("\n");
+        assert_eq!(
+            candidate_listeners(&tcp, "", 1000),
+            [
+                Listener {
+                    port: 3000,
+                    inode: 12345
+                },
+                Listener {
+                    port: 3000,
+                    inode: 67890
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn room_filter_runs_before_deduplication_and_the_report_cap() {
+        let listeners = (1024..1104)
+            .rev()
+            .map(|port| Listener {
+                port,
+                inode: u64::from(port),
+            })
+            .chain([Listener {
+                port: 1064,
+                inode: 99999,
+            }])
+            .collect::<Vec<_>>();
+        let room_inodes = (1064..1104).chain([99999]).collect();
+        assert_eq!(
+            candidate_ports(&listeners, &room_inodes),
+            (1064..1096).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn room_scoped_first_report_opens_existing_listeners() {
+        let mut sync = PortSync::default();
+        assert_eq!(
+            sync.observe(&[3000], Some(PortsScope::Room)),
+            [PortAction::Open(3000)]
+        );
+    }
+
+    #[test]
+    fn room_scope_does_not_inherit_the_legacy_baseline() {
+        let mut sync = PortSync::default();
+        assert!(sync.observe(&[3000], None).is_empty());
+        assert_eq!(
+            sync.observe(&[3000], Some(PortsScope::Room)),
+            [PortAction::Open(3000)]
+        );
+    }
+
+    #[test]
     fn port_sync_baselines_debounces_parks_and_reoffers() {
         let mut sync = PortSync::default();
-        assert!(sync.observe(&[1500]).is_empty());
-        assert_eq!(sync.observe(&[1500, 3000]), [PortAction::Open(3000)]);
+        assert!(sync.observe(&[1500], None).is_empty());
+        assert_eq!(sync.observe(&[1500, 3000], None), [PortAction::Open(3000)]);
         assert_eq!(sync.choose_local_port(3000, |_| true, || None), Some(3000));
         sync.mark_opened(3000);
         assert!(
             sync.reopen_active().is_empty(),
             "held forwards stay untouched"
         );
-        assert!(sync.observe(&[1500]).is_empty());
-        assert!(sync.observe(&[1500]).is_empty());
+        assert!(sync.observe(&[1500], None).is_empty());
+        assert!(sync.observe(&[1500], None).is_empty());
         assert_eq!(
-            sync.observe(&[1500]),
+            sync.observe(&[1500], None),
             [PortAction::Close {
                 remote: 3000,
                 local: 3000
             }]
         );
 
-        assert_eq!(sync.observe(&[1500, 4000]), [PortAction::Open(4000)]);
+        assert_eq!(sync.observe(&[1500, 4000], None), [PortAction::Open(4000)]);
         sync.mark_open_failed(4000, "administratively prohibited".to_owned());
         assert_eq!(
             sync.state(4000),
@@ -380,17 +471,17 @@ mod tests {
                 error: "administratively prohibited".to_owned()
             })
         );
-        assert!(sync.observe(&[1500, 4000]).is_empty());
-        assert!(sync.observe(&[1500]).is_empty());
-        assert_eq!(sync.observe(&[1500, 4000]), [PortAction::Open(4000)]);
+        assert!(sync.observe(&[1500, 4000], None).is_empty());
+        assert!(sync.observe(&[1500], None).is_empty());
+        assert_eq!(sync.observe(&[1500, 4000], None), [PortAction::Open(4000)]);
     }
 
     #[test]
     fn port_sync_caps_active_forwards() {
         let mut sync = PortSync::default();
-        sync.observe(&[]);
+        sync.observe(&[], None);
         let report = (2000..2020).collect::<Vec<_>>();
-        let actions = sync.observe(&report);
+        let actions = sync.observe(&report, None);
 
         assert_eq!(actions.len(), MAX_ACTIVE_FORWARDS);
         assert_eq!(actions.first(), Some(&PortAction::Open(2000)));
@@ -399,10 +490,10 @@ mod tests {
         sync.choose_local_port(2000, |_| true, || None);
         sync.mark_opened(2000);
         let report = (2001..2020).collect::<Vec<_>>();
-        assert!(sync.observe(&report).is_empty());
-        assert!(sync.observe(&report).is_empty());
+        assert!(sync.observe(&report, None).is_empty());
+        assert!(sync.observe(&report, None).is_empty());
         assert_eq!(
-            sync.observe(&report),
+            sync.observe(&report, None),
             [
                 PortAction::Close {
                     remote: 2000,
@@ -416,9 +507,9 @@ mod tests {
     #[test]
     fn port_sync_reopens_only_after_the_master_is_lost() {
         let mut sync = PortSync::default();
-        sync.observe(&[]);
+        sync.observe(&[], None);
         assert_eq!(
-            sync.observe(&[3000, 4000]),
+            sync.observe(&[3000, 4000], None),
             [PortAction::Open(3000), PortAction::Open(4000)]
         );
         sync.choose_local_port(3000, |port| port != 3000, || None);
@@ -438,10 +529,10 @@ mod tests {
             sync.reopen_active().is_empty(),
             "a replacement opens each forward once"
         );
-        assert!(sync.observe(&[]).is_empty());
-        assert!(sync.observe(&[]).is_empty());
+        assert!(sync.observe(&[], None).is_empty());
+        assert!(sync.observe(&[], None).is_empty());
         assert_eq!(
-            sync.observe(&[]),
+            sync.observe(&[], None),
             [
                 PortAction::Close {
                     remote: 3000,
@@ -478,17 +569,17 @@ mod tests {
     #[test]
     fn local_port_pins_survive_close_and_reserve_the_port_for_the_listener() {
         let mut sync = PortSync::default();
-        sync.observe(&[]);
-        sync.observe(&[3000]);
+        sync.observe(&[], None);
+        sync.observe(&[3000], None);
         assert_eq!(
             sync.choose_local_port(3000, |port| port != 3000, || None),
             Some(3001)
         );
         sync.mark_opened(3000);
-        sync.observe(&[]);
-        sync.observe(&[]);
+        sync.observe(&[], None);
+        sync.observe(&[], None);
         assert_eq!(
-            sync.observe(&[]),
+            sync.observe(&[], None),
             [PortAction::Close {
                 remote: 3000,
                 local: 3001
@@ -499,14 +590,14 @@ mod tests {
             Some(3001),
             "a closed listener keeps its pin"
         );
-        sync.observe(&[3001]);
+        sync.observe(&[3001], None);
         assert_eq!(
             sync.choose_local_port(3001, |_| true, || None),
             Some(3002),
             "another remote never takes a dormant pin"
         );
         sync.mark_opened(3001);
-        assert_eq!(sync.observe(&[3000, 3001]), [PortAction::Open(3000)]);
+        assert_eq!(sync.observe(&[3000, 3001], None), [PortAction::Open(3000)]);
         assert_eq!(
             sync.choose_local_port(3000, |_| true, || None),
             Some(3001),
@@ -573,11 +664,11 @@ mod tests {
     #[test]
     fn local_port_exhaustion_is_visible_and_retried_on_the_next_report() {
         let mut sync = PortSync::default();
-        sync.observe(&[]);
-        sync.observe(&[3000]);
+        sync.observe(&[], None);
+        sync.observe(&[3000], None);
         assert_eq!(sync.choose_local_port(3000, |_| false, || None), None);
         assert_eq!(sync.state(3000), Some(&ForwardState::NoLocalPort));
-        assert_eq!(sync.observe(&[3000]), [PortAction::Open(3000)]);
+        assert_eq!(sync.observe(&[3000], None), [PortAction::Open(3000)]);
     }
 
     #[test]
@@ -608,8 +699,8 @@ mod tests {
     #[test]
     fn master_reopen_keeps_its_origin_when_local_port_allocation_is_retried() {
         let mut sync = PortSync::default();
-        sync.observe(&[]);
-        sync.observe(&[3000]);
+        sync.observe(&[], None);
+        sync.observe(&[3000], None);
         sync.choose_local_port(3000, |_| true, || None);
         sync.mark_opened(3000);
         sync.mark_master_lost();
@@ -617,7 +708,7 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(sync.choose_local_port(3000, |_| false, || None), None);
             assert_eq!(
-                sync.observe(&[3000]),
+                sync.observe(&[3000], None),
                 [PortAction::Reopen(3000)],
                 "an allocation retry must remain master recovery, not a new report open"
             );

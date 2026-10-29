@@ -333,9 +333,9 @@ The local side writes one JSON line every two seconds (`LINK_PROBE_INTERVAL`), p
 
 ### Protocol
 
-All three shapes carry the schema version `rimz.link.v1`. `LinkProbe` carries `seq`, `sent_at_ms`, and the stats settled before this line, so the remote file always holds a complete window. `LinkAck` carries `seq` and an optional `ports` array. `LinkStatsFile` carries the remote `received_at_ms`, the SSH client identity (`SSH_CONNECTION`), and the latest stats.
+All three shapes carry the schema version `rimz.link.v1`. `LinkProbe` carries `seq`, `sent_at_ms`, and the stats settled before this line, so the remote file always holds a complete window. `LinkAck` carries `seq`, an optional `ports` array, and `ports_scope: "room"` whenever that array comes from room-scoped discovery. An ack without `ports` omits `ports_scope` too. `LinkStatsFile` carries the remote `received_at_ms`, the SSH client identity (`SSH_CONNECTION`), and the latest stats.
 
-The `ports` field is optional so both skew directions keep working: a remote that never sends it pairs with a local that reads it, and a local that does not read it ignores it. A probe whose version the remote rejects makes `ingest` exit `2`. The local probe loop treats exit `2` or `127` as terminal and stops probing for that session without touching the room.
+The `ports` and `ports_scope` fields are optional so both skew directions keep working: an older remote can omit them, and an older local ignores unknown fields. A scope-less port report or an unknown scope retains the legacy first-report baseline; a room-scoped report forwards listeners already present at attach. A probe whose version the remote rejects makes `ingest` exit `2`. The local probe loop treats exit `2` or `127` as terminal and stops probing for that session without touching the room.
 
 ### Measurement
 
@@ -409,14 +409,16 @@ The remote sidebar owns degraded-but-alive links. They surface through the foote
 
 ## Port auto-forwarding
 
-A dev server started in a room pane after attach becomes reachable on a local loopback port, with no second SSH command. Discovery rides the probe ack, so the feature needs the supervised link and is off under `--no-reconnect` and `--web`.
+A dev server started in a room pane, before or after attach, becomes reachable on a local loopback port, with no second SSH command. Discovery rides the probe ack, so the feature needs the supervised link and is off under `--no-reconnect` and `--web`.
 
-On the host, `ingest` samples `/proc/net/tcp` and `/proc/net/tcp6` at most every five seconds and attaches the latest `ports` array to each ack. `candidate_ports` keeps a listener in state `0A`, owned by the room user's uid, on port 1024 or above, and bound to a loopback or wildcard address. It reports at most 32 ports, sorted and deduplicated. A host without those procfs files sends no `ports` field, and the connection is otherwise unaffected.
+On the host, `ingest` samples `/proc/net/tcp` and `/proc/net/tcp6` at most every five seconds. `crates/rimz/src/remote/forward.rs::candidate_listeners` parses the socket inode and keeps listeners in state `0A`, owned by the room user's uid, on port 1024 or above, and bound to a loopback or wildcard address. For previously unseen inodes, `crates/rimz/src/proc/mod.rs::socket_inodes_for_env` walks same-uid processes once per sweep, reads their socket fds (at most 4096 per process), and checks `RIMZ_WORKSPACE_ID` in their environments. Any owner with this room's pin qualifies; another room's pin, no pin, and unreadable or unresolved owners do not. Positive and negative verdicts stay cached until the inode leaves the candidate tables. `candidate_ports` filters by those verdicts before deduplicating, sorting, and taking at most 32 ports. Each ack repeats that array with `ports_scope: "room"`. Non-Linux hosts, or unreadable procfs tables, send neither field; the connection is otherwise unaffected.
+
+Agent CLIs' own room-started listeners qualify too, including OpenCode's loopback server and Antigravity's local API. No agent-specific or ephemeral-port exclusion applies. A server that strips its inherited environment cannot qualify. RimZ's ttyd daemons, web gate, and temporary stock-index ttyd start through `without_ttyd_launch_context`, which removes the room pin. A gate started by an older RimZ keeps its inherited pin until `rimz web restart`.
 
 Locally, `PortSync` diffs the reports:
 
-- The first report of the connection becomes a permanent baseline and opens nothing, so services running at attach are never forwarded.
-- A port absent from the baseline is opened, up to 16 active forwards.
+- A room-scoped report opens its ports immediately, including the first report, up to 16 active forwards.
+- Only a scope-less report from a legacy host takes a permanent first-report baseline and opens ports absent from that baseline. A room-scoped report never inherits the legacy baseline.
 - A port missing from three consecutive reports is closed.
 - An open that `ssh -O forward` refuses is held until that listener disappears from a report and later returns. Its state keeps the SSH error line. Listeners over the cap wait for a slot in port order; a failed local-port allocation is retried on the next report.
 
@@ -424,7 +426,7 @@ Each remote port pins a local port for the whole connection, even while its list
 
 Only a successful remap raises a local terminal notification, respecting notification preferences and running no handlers. Its title is `RimZ: port remapped` and its body is `Port {remote} forwarded to localhost:{local} ({tried} is busy here)`, where `tried` is the pin or remote port tried first. A same-port open, a refusal, and the cap send none. The forward is `ssh -O forward -L 127.0.0.1:<local>:localhost:<remote>` on the live master with a two-second timeout, and `ssh -O cancel` with the identical pair closes it, so the local side never listens on a public address.
 
-The baseline and active set live for the whole `rimz remote connect`, across probe-stream and transport replacements. Each active forward is held on the current master or lost. Immediately before transport recovery replaces the master, `supervise_remote` marks its forwards lost. The next attach session's probe thread reopens only those lost forwards before reports resume (`reopen_port_forwards`). A `Reattach` keeps the healthy master and its held forwards untouched: no local bind check, new forward request, or notice. They remain tracked and close when their listeners disappear. The master's exit tears every forward down at detach. Restarting `rimz remote connect` takes a new baseline.
+The legacy baseline and active set live for the whole `rimz remote connect`, across probe-stream and transport replacements. Each active forward is held on the current master or lost. Immediately before transport recovery replaces the master, `supervise_remote` marks its forwards lost. The next attach session's probe thread reopens only those lost forwards before reports resume (`reopen_port_forwards`). A `Reattach` keeps the healthy master and its held forwards untouched: no local bind check, new forward request, or notice. They remain tracked and close when their listeners disappear. The master's exit tears every forward down at detach. Restarting `rimz remote connect` takes a new legacy baseline, when the host sends scope-less reports.
 
 ## Web tunnels
 
@@ -468,7 +470,7 @@ The table lists the module's test overrides. Every other duration is fixed, so a
 | `RIMZ_REMOTE_DIAL_MS` | Reachability cadence. `0` disables endpoint discovery, every TCP dial, the internet checkpoint, and fingerprint resets. |
 | `RIMZ_REMOTE_TUN` | Forces a TUN interface name for route classification. |
 | `RIMZ_REMOTE_INTERNET_PROBE` | Replaces the internet checkpoint with an HTTP or HTTPS URL that must return `204`. Empty or `0` disables the row. |
-| `RIMZ_PORTS_SWEEP_MS`, `RIMZ_PROC_NET_DIR` | Remote listener sampling cadence and the procfs root. |
+| `RIMZ_PORTS_SWEEP_MS`, `RIMZ_PROC_ROOT` | Remote listener sampling cadence and the procfs root containing `net/tcp`, `net/tcp6`, `<pid>/fd/*`, and `<pid>/environ`. |
 
 ## Invariants worth preserving
 

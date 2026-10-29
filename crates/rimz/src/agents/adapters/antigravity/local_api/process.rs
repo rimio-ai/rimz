@@ -21,8 +21,6 @@ use super::{Candidate, LocalApiError, LoopbackEndpoint};
 const MAX_CANDIDATES: usize = 4;
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 const MAX_ENDPOINTS_PER_PROCESS: usize = 12;
-#[cfg(target_os = "linux")]
-const MAX_FDS: usize = 4096;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const MAX_PROC_NET_BYTES: u64 = 1024 * 1024;
 
@@ -169,7 +167,7 @@ fn listening_endpoints(
 #[cfg(target_os = "linux")]
 fn proc_listening_endpoints(proc_root: &Path, pid: u32) -> Vec<LoopbackEndpoint> {
     let process_root = proc_root.join(pid.to_string());
-    let inodes = socket_inodes(&process_root.join("fd"));
+    let inodes = crate::proc::socket_inodes(&process_root.join("fd"));
     if inodes.is_empty() {
         return Vec::new();
     }
@@ -187,19 +185,6 @@ fn proc_listening_endpoints(proc_root: &Path, pid: u32) -> Vec<LoopbackEndpoint>
 }
 
 #[cfg(target_os = "linux")]
-fn socket_inodes(fd_dir: &Path) -> BTreeSet<String> {
-    let Ok(entries) = std::fs::read_dir(fd_dir) else {
-        return BTreeSet::new();
-    };
-    entries
-        .flatten()
-        .take(MAX_FDS)
-        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
-        .filter_map(|target| socket_inode(target.as_os_str().to_string_lossy().as_ref()))
-        .collect()
-}
-
-#[cfg(target_os = "linux")]
 fn read_limited(path: &Path) -> Option<String> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
@@ -213,24 +198,20 @@ fn read_limited(path: &Path) -> Option<String> {
 }
 
 #[cfg(any(target_os = "linux", test))]
-pub(in crate::agents::adapters::antigravity) fn socket_inode(target: &str) -> Option<String> {
-    target
-        .strip_prefix("socket:[")?
-        .strip_suffix(']')
-        .filter(|inode| !inode.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-#[cfg(any(target_os = "linux", test))]
 pub(in crate::agents::adapters::antigravity) fn parse_proc_net(
     table: &str,
-    socket_inodes: &BTreeSet<String>,
+    socket_inodes: &BTreeSet<u64>,
     ipv6: bool,
 ) -> Vec<LoopbackEndpoint> {
     let mut endpoints = BTreeSet::new();
     for line in table.lines() {
         let columns = line.split_whitespace().collect::<Vec<_>>();
-        if columns.len() <= 9 || columns[3] != "0A" || !socket_inodes.contains(columns[9]) {
+        if columns.len() <= 9
+            || columns[3] != "0A"
+            || !columns[9]
+                .parse::<u64>()
+                .is_ok_and(|inode| socket_inodes.contains(&inode))
+        {
             continue;
         }
         let Some((address, port)) = columns[1].rsplit_once(':') else {

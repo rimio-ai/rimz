@@ -939,35 +939,64 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
     let env = Env::new();
     env.record(&env.project_root);
     let dir = env.project_root.to_string_lossy().into_owned();
-    let proc_net = env.project_root.join("proc-net");
+    let proc_root = env.project_root.join("proc");
+    let proc_net = proc_root.join("net");
     std::fs::create_dir_all(&proc_net).expect("create proc net fixture");
     let uid = nix::unistd::getuid().as_raw();
-    let row = |local: &str, state: &str, row_uid: u32| {
+    let workspace_id = rimz::ids::WorkspaceId::from_project_root(&env.project_root).to_string();
+    for (pid, inodes, pin) in [
+        (101, vec![11, 16], Some(workspace_id.as_str())),
+        (102, vec![12, 16], Some("another-room")),
+        (103, vec![13], Some("")),
+        (104, vec![14], None),
+    ] {
+        let process = proc_root.join(pid.to_string());
+        std::fs::create_dir_all(process.join("fd")).expect("create owner fds");
+        for inode in inodes {
+            std::os::unix::fs::symlink(
+                format!("socket:[{inode}]"),
+                process.join("fd").join(inode.to_string()),
+            )
+            .expect("socket fd");
+        }
+        if let Some(pin) = pin {
+            std::fs::write(
+                process.join("environ"),
+                format!("PATH=/bin\0RIMZ_WORKSPACE_ID={pin}\0"),
+            )
+            .expect("owner environment");
+        }
+    }
+    let row = |local: &str, state: &str, row_uid: u32, inode: u64| {
         format!(
-            "0: {local} 00000000:0000 {state} 00000000:00000000 00:00000000 00000000 {row_uid} 0 1"
+            "0: {local} 00000000:0000 {state} 00000000:00000000 00:00000000 00000000 {row_uid} 0 {inode}"
         )
     };
     std::fs::write(
         proc_net.join("tcp"),
         [
-            row("0100007F:0BB8", "0A", uid),
-            row("0100007F:0050", "0A", uid),
-            row("0100007F:0FA0", "0A", uid.saturating_add(1)),
-            row("0200000A:1388", "0A", uid),
+            row("0100007F:0BB8", "0A", uid, 11),
+            row("0100007F:0FA0", "0A", uid, 12),
+            row("0100007F:1388", "0A", uid, 13),
+            row("0100007F:1770", "0A", uid, 14),
+            row("0100007F:1B58", "0A", uid, 15),
+            row("0100007F:0050", "0A", uid, 11),
+            row("0100007F:2328", "0A", uid.saturating_add(1), 11),
+            row("0200000A:2710", "0A", uid, 11),
         ]
         .join("\n"),
     )
     .expect("write tcp fixture");
     std::fs::write(
         proc_net.join("tcp6"),
-        row("00000000000000000000000000000000:1F90", "0A", uid),
+        row("00000000000000000000000000000000:1F90", "0A", uid, 16),
     )
     .expect("write tcp6 fixture");
     let mut child = env
         .rimz()
         .args(["remote", "link-stats", "ingest", "--dir", &dir])
         .env("SSH_CONNECTION", "client-port server-port")
-        .env("RIMZ_PROC_NET_DIR", &proc_net)
+        .env("RIMZ_PROC_ROOT", &proc_root)
         .env("RIMZ_PORTS_SWEEP_MS", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -994,6 +1023,39 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
     assert_eq!(ack["v"], "rimz.link.v1");
     assert_eq!(ack["seq"], 7);
     assert_eq!(ack["ports"], serde_json::json!([3000, 8080]));
+    assert_eq!(ack["ports_scope"], "room");
+
+    std::fs::write(proc_root.join("101/environ"), b"PATH=/bin\0").unwrap();
+    std::fs::write(
+        proc_root.join("102/environ"),
+        format!("RIMZ_WORKSPACE_ID={workspace_id}\0"),
+    )
+    .unwrap();
+    for expected in [vec![3000, 8080], vec![8080], vec![4000, 8080]] {
+        writeln!(stdin, "{probe}").expect("write next probe");
+        let mut line = String::new();
+        stdout.read_line(&mut line).expect("read next ack");
+        let ack: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            ack["ports"],
+            serde_json::json!(expected),
+            "inode verdicts live only while listed"
+        );
+        assert_eq!(ack["ports_scope"], "room");
+        std::fs::write(
+            proc_net.join("tcp"),
+            if expected.contains(&3000) {
+                String::new()
+            } else {
+                [
+                    row("0100007F:0BB8", "0A", uid, 11),
+                    row("0100007F:0FA0", "0A", uid, 12),
+                ]
+                .join("\n")
+            },
+        )
+        .unwrap();
+    }
 
     let runtime = env.runtime_paths();
     let path = rimz::remote::link::stats_path(&runtime);
@@ -1093,6 +1155,32 @@ fn supervised_connect_opens_new_remote_listener_forwards() {
         .unwrap();
     assert_ne!(local, port, "the held local port cannot be reused");
     assert_eq!(forwarding, &format!("127.0.0.1:{local}:localhost:{port}"));
+}
+
+#[test]
+fn supervised_connect_forwards_a_room_scoped_first_report() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let port = available_forward_probe_port();
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_REMOTE_PROBE_MS", "10")
+        .env("RIMZ_TEST_PROBE_PORT", port.to_string())
+        .env("RIMZ_TEST_PROBE_PORTS_SCOPE", "room")
+        .env("RIMZ_TEST_PROBE_SILENT_AFTER_ACKS", "1")
+        .env("RIMZ_TEST_WAIT_FOR_PROBE_MS", "500")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "500")
+        .bounded_output()
+        .expect("run room-scoped auto-forward connect");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        tunnel_forward_ports(&log),
+        [port],
+        "the first room report is not a baseline"
+    );
 }
 
 #[test]
@@ -2397,6 +2485,7 @@ fn established_link_drop_reconnects_and_notifies_once() {
         .env("RIMZ_TEST_SSH_SLEEP_MS", "500")
         .env("RIMZ_REMOTE_PROBE_MS", "10")
         .env("RIMZ_TEST_PROBE_PORT", port.to_string())
+        .env("RIMZ_TEST_PROBE_PORTS_SCOPE", "room")
         .env("RIMZ_TEST_WAIT_FOR_PROBE_MS", "500")
         .env("RIMZ_REMOTE_GATETIME_MS", "20")
         .env("RIMZ_NOTIFY_TEST_LOG", &notify_log)
@@ -2619,6 +2708,7 @@ fn established_mux_disconnect_reconnects() {
         .env("RIMZ_TEST_SSH_SLEEP_MS", "500")
         .env("RIMZ_REMOTE_PROBE_MS", "10")
         .env("RIMZ_TEST_PROBE_PORT", port.to_string())
+        .env("RIMZ_TEST_PROBE_PORTS_SCOPE", "room")
         .env("RIMZ_TEST_WAIT_FOR_PROBE_MS", "500")
         .env("RIMZ_REMOTE_GATETIME_MS", "20")
         .bounded_output()
