@@ -128,6 +128,8 @@ fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
     (0..count)
         .map(|idx| SidebarSubAgent {
             pane: None,
+            first_prompt: None,
+            finished_at: None,
             turn_error_label: None,
             id: format!("sub-{idx}"),
             kind: crate::ids::AgentKind::new_unchecked("claude"),

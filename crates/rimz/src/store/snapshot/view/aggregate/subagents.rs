@@ -327,7 +327,7 @@ fn project_sub_agent(
         {
             now
         } else {
-            child.last_activity
+            child.finished_at.unwrap_or(child.last_activity)
         };
         until.duration_since(started).as_secs().max(0)
     });
@@ -348,6 +348,7 @@ fn project_sub_agent(
         phase,
         turn_error_label,
         task: child.task.clone(),
+        first_prompt: child.first_prompt.clone(),
         profile: child.profile.clone(),
         model: child.model.clone(),
         fast: child.is_launched_child() && child.fast_mode(),
@@ -362,6 +363,7 @@ fn project_sub_agent(
         cost_usd: child_cost_usd(child),
         elapsed_secs,
         started_at,
+        finished_at: child.finished_at,
         last_activity: child.last_activity,
         registered_at: child.registered_at,
     }

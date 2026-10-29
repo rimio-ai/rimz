@@ -500,6 +500,8 @@ fn provider_child_attention_matches_declared_status_count() {
         .sub_agents
         .push(SidebarSubAgent {
             pane: None,
+            first_prompt: None,
+            finished_at: None,
             turn_error_label: None,
             id: "child".to_owned(),
             kind: crate::ids::AgentKind::new_unchecked("claude"),

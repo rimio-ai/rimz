@@ -22,6 +22,8 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
     let now = super::fixed_now();
     SidebarSubAgent {
         pane: None,
+        first_prompt: None,
+        finished_at: None,
         turn_error_label: None,
         id: format!("{parent}-sub-{index}"),
         kind: crate::ids::AgentKind::new_unchecked("claude"),

@@ -2263,6 +2263,8 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
     });
     SidebarSubAgent {
         pane: None,
+        first_prompt: None,
+        finished_at: None,
         turn_error_label: None,
         id: spec.id.to_owned(),
         kind: crate::ids::AgentKind::new_unchecked(spec.kind),

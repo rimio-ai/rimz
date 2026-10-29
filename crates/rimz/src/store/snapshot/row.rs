@@ -876,6 +876,8 @@ pub struct SidebarSubAgent {
     pub turn_error_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_prompt: Option<String>,
     /// The `[subagents.profiles]` profile a pane-backed child launched as;
     /// absent for provider-native children and bare-kind launches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -908,6 +910,8 @@ pub struct SidebarSubAgent {
     pub elapsed_secs: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<Timestamp>,
     pub last_activity: Timestamp,
     /// The child's registration instant, copied from `AgentState.registered_at`.
     /// This is the spawn-order sort key: present from first observation and

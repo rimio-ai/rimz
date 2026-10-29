@@ -828,6 +828,9 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_at: Option<Timestamp>,
     pub status: AgentStatus,
+    /// Entry into the current success/failed stretch, stable across terminal updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<Timestamp>,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
     /// [`TurnPhase::Idle`] outside `Running` — the machine normalizes it, so
@@ -1252,6 +1255,7 @@ impl AgentState {
             ended_at: None,
             resumed_at: None,
             status,
+            finished_at: None,
             phase: match status {
                 AgentStatus::Running => TurnPhase::Reasoning,
                 _ => TurnPhase::Idle,

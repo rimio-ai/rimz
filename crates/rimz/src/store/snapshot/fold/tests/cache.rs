@@ -30,7 +30,7 @@ fn rollup_rows_keep_the_plain_row_wire_bytes() {
         saw_session_rebirth: false,
     };
     let plain = PlainRollup {
-        version: 47,
+        version: ROLLUP_CACHE_VERSION,
         extent: cache.extent,
         file_id: cache.file_id,
         raw_agents: cache.raw_agents.iter().map(Borrow::borrow).collect(),
