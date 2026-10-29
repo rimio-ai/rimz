@@ -1019,6 +1019,99 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     assert!(empty["recorded_since_secs"].is_null());
 }
 
+#[test]
+fn codex_revision_spend_joins_the_threads_role_and_counts_one_session() {
+    use super::super::session_roles::{self, SessionRoleRecord};
+    let thread = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let paths = [
+        PathBuf::from(format!("/x/rollout-2025-06-15T00-00-00-{thread}.jsonl")),
+        PathBuf::from(format!(
+            "/x/rollout-2025-06-15T01-00-00-{thread}_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl"
+        )),
+    ];
+    let files = paths
+        .iter()
+        .map(|path| spending_file(codex_adapter(), path.clone()))
+        .collect::<Vec<_>>();
+    let cache = SpendingDiskCache {
+        files: paths
+            .iter()
+            .zip([1.0, 2.0])
+            .map(|(path, cost)| {
+                cached_file(
+                    path,
+                    vec![CachedEntry {
+                        thread_id: None,
+                        ..cached_entry(NOW_SECS, cost, "")
+                    }],
+                )
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    for (role, pointer) in [
+        (
+            serde_json::json!({"role":"agent", "profile":"solo"}),
+            "/agents/solo",
+        ),
+        (
+            serde_json::json!({
+                "role":"agent", "profile":"coder",
+                "seat":{"team":"forge", "role":"coder"}
+            }),
+            "/teams/forge/coder",
+        ),
+        (
+            serde_json::json!({"role":"subagent", "profile":"fast"}),
+            "/subagents/fast",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = crate::disk::paths::RuntimePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        session_roles::record(
+            &runtime,
+            &SessionRoleRecord {
+                kind: crate::ids::AgentKind::new_unchecked("codex"),
+                session: thread.into(),
+                role: serde_json::from_value(role).unwrap(),
+                at: Timestamp::from_second(NOW_SECS as i64).unwrap(),
+            },
+        )
+        .unwrap();
+        let roles = session_roles::load(&runtime.shared_spending_cursor_path(), NOW_SECS);
+        let result = aggregate_counted_rollups(
+            &files,
+            &cache,
+            &counted,
+            &contested_session_locations(&files, &cache),
+            None,
+            HeadlineContext {
+                user_inputs: &[],
+                now_secs: NOW_SECS,
+                spec: &HeadlineSpec {
+                    mode: SpendWindowMode::Trailing24h,
+                    timezone: Some("UTC".into()),
+                },
+            },
+            Some(&roles),
+        );
+        let published = serde_json::to_value(&result.roles).unwrap();
+        let tally = published.pointer(pointer).unwrap();
+        for window in ["today", "day", "week", "month", "year"] {
+            assert_eq!(tally[window]["usd"], 3.0, "{pointer}: {window}");
+            assert_eq!(tally[window]["sessions"], 1, "{pointer}: {window}");
+        }
+        assert_eq!(result.spending.total.week.usd, 3.0);
+        assert_eq!(result.spending.by_provider["codex"].week.usd, 3.0);
+        assert_eq!(result.spending.by_login[&files[0].login].week.usd, 3.0);
+    }
+}
+
 fn user_input(second: u64, kind: &str, origin: Option<&Path>) -> user_input::UserInputRecord {
     user_input::UserInputRecord {
         at: Timestamp::from_second(i64::try_from(second).expect("timestamp fits i64"))

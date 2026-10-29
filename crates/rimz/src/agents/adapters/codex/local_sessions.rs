@@ -10,7 +10,9 @@ use jiff::{Timestamp, civil::Date};
 use uuid::Uuid;
 
 use super::rollout::{CodexRolloutHeader, read_rollout_header};
-use super::transcript::{find_session_transcript_under, rollout_filename_matches_session};
+use super::transcript::{
+    find_session_transcript_under, rollout_filename_matches_session, rollout_filename_session_id,
+};
 use crate::agents::capabilities::LaunchCapability;
 #[cfg(test)]
 use crate::agents::local_session_cache::ValueRefreshKind;
@@ -585,20 +587,21 @@ impl CodexDiscoverySnapshot {
     }
 
     /// Walk the ordered candidates, preferring an active rollout over its
-    /// archived twin and stopping at the examination bound, and fold each
-    /// distinct session's header into one observation.
+    /// archived twin of the same name and stopping at the examination bound.
+    /// Group revisions by the filename's thread id before reading headers;
+    /// the header's session id remains authoritative for each observation.
     fn fold_candidates(
         &mut self,
         key: &DiscoveryKey,
         forced: bool,
     ) -> Vec<LocalSessionObservation> {
-        let active_session_ids = self
+        let active_filenames = self
             .catalog
             .entries()
             .iter()
             .filter(|candidate| candidate.active)
-            .filter_map(|candidate| session_id_from_filename(&candidate.path))
-            .map(str::to_owned)
+            .filter_map(|candidate| candidate.path.file_name())
+            .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
         let mut candidates = self.catalog.entries().to_vec();
         candidates.sort_by(|left, right| {
@@ -617,9 +620,10 @@ impl CodexDiscoverySnapshot {
         for candidate in candidates {
             let filename_session = session_id_from_filename(&candidate.path).map(str::to_owned);
             if !candidate.active
-                && filename_session
-                    .as_ref()
-                    .is_some_and(|session_id| active_session_ids.contains(session_id))
+                && candidate
+                    .path
+                    .file_name()
+                    .is_some_and(|name| active_filenames.contains(name))
             {
                 continue;
             }
@@ -822,9 +826,8 @@ fn timestamp_from_stamp(stamp: &ProviderPathStamp) -> Option<Timestamp> {
 }
 
 pub(super) fn session_id_from_filename(path: &Path) -> Option<&str> {
-    let stem = path.file_stem()?.to_str()?;
-    let suffix = stem.get(stem.len().checked_sub(36)?..)?;
-    Uuid::parse_str(suffix).ok().map(|_| suffix)
+    let session_id = rollout_filename_session_id(path.file_name()?.to_str()?)?;
+    Uuid::parse_str(session_id).ok().map(|_| session_id)
 }
 
 fn file_mtime(path: &Path) -> Option<Timestamp> {

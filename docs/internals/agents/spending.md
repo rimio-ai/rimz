@@ -340,7 +340,7 @@ The launch wrapper clears `RIMZ_TEAM` and `RIMZ_AGENT_ROLE` when its identity ha
 
 ### What the publication carries
 
-`provider-spending.json` carries `roles.agents` for solo profiles, `roles.teams` keyed by team then role, and `roles.subagents` by profile. Each leaf is a `RoleTally`: its `SpendTally` fields flattened in place, beside an `effort` object with `day`, `week`, `month`, and `year` windows. Each effort window carries `active_ms`, `from_user`, `from_teammates`, and `to_teammates`, and missing fields default to zero or empty. The role join uses the fleet's native session key. Sessions count once per placement after deduplication, a Claude parent's companion files included; role session counts sum to at most the fleet total in each window.
+`provider-spending.json` carries `roles.agents` for solo profiles, `roles.teams` keyed by team then role, and `roles.subagents` by profile. Each leaf is a `RoleTally`: its `SpendTally` fields flattened in place, beside an `effort` object with `day`, `week`, `month`, and `year` windows. Each effort window carries `active_ms`, `from_user`, `from_teammates`, and `to_teammates`, and missing fields default to zero or empty. The role join uses the fleet's native session key. Sessions count once per placement after deduplication, a Claude parent's companion files and a Codex thread's revision files included; role session counts sum to at most the fleet total in each window.
 
 Two stamps say how far back the ledgers reach:
 

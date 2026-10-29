@@ -1,4 +1,5 @@
 mod pane;
+mod revisions;
 
 use std::fs::FileTimes;
 use std::io::Write as _;

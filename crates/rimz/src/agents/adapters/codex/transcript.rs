@@ -426,22 +426,23 @@ fn newest_session_rollout_in(dir: &Path, session_id: &str) -> Option<PathBuf> {
 }
 
 pub(super) fn rollout_filename_matches_session(name: &str, session_id: &str) -> bool {
-    let Some(core) = name
+    rollout_filename_session_id(name) == Some(session_id)
+}
+
+pub(super) fn rollout_filename_session_id(name: &str) -> Option<&str> {
+    let core = name
         .strip_prefix("rollout-")
-        .and_then(|name| name.strip_suffix(".jsonl"))
-    else {
-        return false;
-    };
-    let Some(ids) = core.get(20..) else {
-        return false;
-    };
+        .and_then(|name| name.strip_suffix(".jsonl"))?;
     if core.as_bytes().get(19) != Some(&b'-') {
-        return false;
+        return None;
     }
-    let Some(suffix) = ids.strip_prefix(session_id) else {
-        return false;
+    let ids = core.get(20..)?;
+    let session_id = match ids.split_once('_') {
+        Some((session_id, rollout_id)) if !rollout_id.is_empty() => session_id,
+        Some(_) => return None,
+        None => ids,
     };
-    suffix.is_empty() || suffix.strip_prefix('_').is_some_and(|id| !id.is_empty())
+    (!session_id.is_empty()).then_some(session_id)
 }
 
 fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
