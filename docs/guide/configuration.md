@@ -530,7 +530,7 @@ cwd = "/var/log"
 
 The reserved token `"stats"` expands to that built-in command. Its range and reload keys work normally, but the hint omits quit and `q` and `Ctrl-C` are ignored. Any other `command` is split into words and run directly, with no shell, so pipes and globs do not work. `cwd` is optional: absent runs from the worktree root, an absolute path is used as written, and a relative path is joined onto the worktree root.
 
-Edits reach a running room unevenly. A changed `command` or `cwd` reloads when you save `config.toml`. A newly added entry gets its pane within about thirty seconds, or at the next `rimz start`. A removed entry's pane stays open, showing live stats, until the room restarts. A pane whose command is empty or unparseable is skipped, and if every configured pane is skipped, RimZ falls back to the built-in stats pane.
+Edits reach a running room unevenly. A changed `command` or `cwd` reloads when you save `config.toml`. Each configured command also restarts when `rimz reload` moves the room onto a different build. A newly added entry gets its pane within about thirty seconds, or at the next `rimz start`. A removed entry's pane stays open, showing live stats, until the room restarts. A pane whose command is empty or unparseable is skipped, and if every configured pane is skipped, RimZ falls back to the built-in stats pane.
 
 ### Off-box error reporting
 

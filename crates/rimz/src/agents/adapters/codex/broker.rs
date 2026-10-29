@@ -31,6 +31,9 @@
 //!   retries; a wedged child times out (the client falls back). The child reads
 //!   JSON-RPC on stdin, so when this process dies its stdin pipe closes and the
 //!   child exits — no orphan.
+//! - **Build handoff**: the caller's stop callback ends acceptance. Queued clients
+//!   fail after taking the child lock; an in-flight request finishes before the
+//!   broker kills and reaps its app-server and removes its socket.
 //! - **Socket**: bound on a per-session path derived from the workspace id
 //!   ([`crate::disk::paths::RuntimePaths::codex_app_server_socket_path`]); a
 //!   stale file is unlinked first, and a [`SocketGuard`] removes it on a graceful
@@ -38,8 +41,10 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
+use std::os::fd::AsFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -100,6 +105,7 @@ struct ChildIo {
     transport: FramedTransport,
     init_result: Value,
     auth_stamp: Option<u64>,
+    stopping: Arc<AtomicBool>,
 }
 
 impl ChildIo {
@@ -110,7 +116,9 @@ impl ChildIo {
         login_env: &BTreeMap<String, String>,
     ) -> Result<(), AppServerErr> {
         self.transport.stop_child();
-        *self = spawn_and_handshake(&self.program, key, login_env)?;
+        let mut next = spawn_and_handshake(&self.program, key, login_env)?;
+        next.stopping = Arc::clone(&self.stopping);
+        *self = next;
         Ok(())
     }
 }
@@ -135,6 +143,7 @@ fn spawn_and_handshake(
         transport,
         init_result,
         auth_stamp,
+        stopping: Arc::new(AtomicBool::new(false)),
     })
 }
 
@@ -173,6 +182,9 @@ fn serve_request(
     params: Value,
 ) -> Result<Served, AppServerErr> {
     let mut io = lock(shared);
+    if io.stopping.load(Ordering::SeqCst) {
+        return Err(AppServerErr::Closed);
+    }
     let resolved = match resolve_login() {
         Ok(login) => Some((login.key(), login.env(&crate::agents::ambient_env()))),
         Err(error) => {
@@ -254,7 +266,10 @@ fn handle_client(
                 // A notification. The child is already initialized; forward
                 // anything else best-effort (read-only clients send none).
                 if method != "initialized" {
-                    let _ = lock(&shared).transport.notify_frame(&request);
+                    let mut io = lock(&shared);
+                    if !io.stopping.load(Ordering::SeqCst) {
+                        let _ = io.transport.notify_frame(&request);
+                    }
                 }
             }
             Some(id) => {
@@ -287,7 +302,7 @@ pub(in crate::agents) fn installed_bin() -> Option<PathBuf> {
 }
 
 /// Run the broker: bring up the warm child, bind the per-session socket, and
-/// serve clients until the pane closes. Returns `Ok(())` and exits cleanly when
+/// serve clients until the pane closes or `should_stop` fires. Returns `Ok(())` when
 /// `codex` is unavailable so the pane closes and enrichment cold-spawns instead.
 pub(in crate::agents) fn serve(
     info: BrokerInfo<'_>,
@@ -295,6 +310,7 @@ pub(in crate::agents) fn serve(
     + Send
     + Sync
     + 'static,
+    mut should_stop: impl FnMut() -> bool,
 ) -> std::io::Result<()> {
     let socket_path = info.socket_path;
     let login = resolve_login().map_err(std::io::Error::other)?;
@@ -320,6 +336,7 @@ pub(in crate::agents) fn serve(
         let _ = std::fs::remove_file(socket_path);
     }
     let listener = UnixListener::bind(socket_path)?;
+    listener.set_nonblocking(true)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -335,18 +352,37 @@ pub(in crate::agents) fn serve(
     let _ = stdout.flush();
     drop(stdout);
 
+    let stopping = Arc::clone(&child.stopping);
     let shared = Arc::new(Mutex::new(child));
     let resolve_login = Arc::new(resolve_login);
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    while !should_stop() {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // BSD-derived systems hand the accepted socket the listener's
+                // non-blocking flag, and `handle_client` reads blocking.
+                if let Err(error) = stream.set_nonblocking(false) {
+                    tracing::warn!(%error, "broker client socket setup failed");
+                    continue;
+                }
                 let shared = Arc::clone(&shared);
                 let resolve_login = Arc::clone(&resolve_login);
                 std::thread::spawn(move || handle_client(stream, shared, resolve_login));
             }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                use nix::poll::{PollFd, PollFlags, poll};
+
+                let mut ready = [PollFd::new(listener.as_fd(), PollFlags::POLLIN)];
+                match poll(&mut ready, 100_u16) {
+                    Ok(_) | Err(nix::errno::Errno::EINTR) => {}
+                    Err(error) => tracing::warn!(%error, "broker listener poll failed"),
+                }
+            }
             Err(err) => tracing::warn!(error = %err, "broker accept failed"),
         }
     }
+    drop(listener);
+    stopping.store(true, Ordering::SeqCst);
+    lock(&shared).transport.stop_child();
     Ok(())
 }
 

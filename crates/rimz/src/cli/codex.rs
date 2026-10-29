@@ -79,8 +79,22 @@ fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()
             &rimz::ids::AgentKind::new_unchecked("codex"),
         )
     };
-    let runtime = runtime_paths_for(workspace_id)?;
+    let runtime = runtime_paths_for(workspace_id.clone())?;
     let socket = runtime.codex_app_server_socket_path();
-    runtime_control::serve_broker(session_name, &socket, resolve_login)
-        .context("running codex app-server broker")
+    let mut follower = rimz::reload::RoomBuildFollower::new(&workspace_id);
+    loop {
+        let mut target = None;
+        runtime_control::serve_broker(session_name, &socket, resolve_login.clone(), || {
+            target = follower.poll_if_due(std::time::Instant::now());
+            target.is_some()
+        })
+        .context("running codex app-server broker")?;
+        if target.is_none() {
+            return Ok(());
+        }
+        if let Some(target) = follower.recheck() {
+            let error = rimz::reload::exec_current_args(&target);
+            tracing::warn!(%error, "codex broker exec failed; restarting current broker");
+        }
+    }
 }

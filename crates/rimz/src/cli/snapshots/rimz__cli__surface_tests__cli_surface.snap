@@ -946,6 +946,7 @@ rimz daemon content [hidden]
     --root <ROOT>  [action=set takes=1..=1 global]
     --slot <SLOT>  [action=set takes=1..=1 required]
     --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1]
     --worktree-root <WORKTREE_ROOT>  [action=set takes=1..=1 required]
     --zellij  [action=set-true takes=0..=0 global]
 
@@ -954,6 +955,18 @@ rimz daemon help
 rimz daemon help content [hidden]
 
 rimz daemon help help
+
+rimz daemon help host [hidden]
+
+rimz daemon host [hidden]
+    <command>  [action=append takes=1..=inf required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
+    --zellij  [action=set-true takes=0..=0 global]
 
 rimz doctor
     --audit  [action=set-true takes=0..=0]
@@ -1169,6 +1182,8 @@ rimz help coverage
 rimz help daemon [hidden]
 
 rimz help daemon content [hidden]
+
+rimz help daemon host [hidden]
 
 rimz help doctor
 

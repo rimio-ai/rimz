@@ -178,7 +178,7 @@ A history with no usage and no profile activity paints the wordmark while it fit
 | `r` / `R` | reload the binary in place |
 | `q`, `Ctrl-C` | quit, unless `--hold` is set |
 
-Reload re-execs `reload::current_reexec_target()` with the original arguments. The `r` key returns the reload outcome directly. `SIGUSR1` sets a flag that the cycle reads and clears, which is how `rimz reload` restarts running dashboards, and registering that handler replaces `SIGUSR1`'s default terminate disposition. When no re-exec target resolves, the dashboard keeps running.
+Reload re-execs `reload::current_reexec_target()` with the original arguments through `reload::exec_current_args`. The `r` key returns the reload outcome directly. `SIGUSR1` sets a flag that the cycle reads and clears, and registering that handler replaces `SIGUSR1`'s default terminate disposition. `rimz reload` signals standalone dashboards and stats children of non-following content supervisors. A following content supervisor instead stops its stats child, execs the room's recorded build, and starts stats fresh from that image ([rimzd.md](./rimzd.md#following-the-room-build)). When no re-exec target resolves, the dashboard keeps running.
 
 The final hint is `←/→ range · t/w/m/y jump · r reload · q quit`. `--hold` is a hidden flag that requires `--refresh` and exists for the daemon view: the hint omits `q quit`, `q` and `Ctrl-C` become no-ops, and closing the pane still ends the process. `daemon_content::stats_argv` is exactly `rimz stats --refresh --hold`. How `[daemon]` panes replace it, and how a pane-count change reaches a running room, are in [rimzd.md](./rimzd.md#the-content-supervisor).
 

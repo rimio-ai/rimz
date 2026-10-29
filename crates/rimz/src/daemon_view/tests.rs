@@ -158,7 +158,9 @@ fn effective_view_keeps_a_healthy_host_when_its_sibling_account_fails() {
         false,
     );
     assert!(
-        view.hosts.iter().any(|host| host.argv[0] == "claude"),
+        view.hosts
+            .iter()
+            .any(|host| host_marker(host) == Some(ManagedPaneMarker::ClaudeRemoteControl)),
         "a failed codex account must not close the healthy Claude host"
     );
     assert!(
@@ -239,13 +241,46 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     );
     let claude = spec(ready(), false);
     assert_eq!(claude.hosts.len(), 1);
-    assert_eq!(claude.hosts[0].argv, claude_argv);
+    let mut wrapped = vec![
+        "/usr/bin/rimz".to_owned(),
+        "daemon".to_owned(),
+        "host".to_owned(),
+        "--workspace-id".to_owned(),
+        workspace_id.to_string(),
+        "--".to_owned(),
+    ];
+    wrapped.extend(claude_argv.clone());
+    assert_eq!(claude.hosts[0].argv, wrapped);
     assert_eq!(claude.hosts[0].cwd, project_root);
 
     let pair = spec(ready(), true);
     assert_eq!(pair.hosts.len(), 2);
     assert!(pair.hosts[0].argv.iter().any(|arg| arg == "app-server"));
-    assert_eq!(pair.hosts[1].argv[0], "claude");
+    assert_eq!(pair.hosts[1].argv, wrapped);
+}
+
+#[test]
+fn content_supervisors_carry_the_workspace_identity() {
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+    let view = daemon_view_spec(DaemonViewSpecParams {
+        claude_host_argv: None,
+        daemon: &DaemonConfig::default(),
+        rimz_bin: Path::new("/usr/bin/rimz"),
+        workspace_id: &workspace_id,
+        session_name: "rimz-demo",
+        project_root: Path::new("/proj"),
+        worktree_root: Path::new("/proj/wt"),
+        codex_present: false,
+    });
+    for pane in view.content {
+        assert!(
+            pane.argv
+                .windows(2)
+                .any(|args| args == ["--workspace-id", workspace_id.as_str()]),
+            "content supervisor lacks its workspace: {:?}",
+            pane.argv
+        );
+    }
 }
 
 #[test]
@@ -269,7 +304,8 @@ fn daemon_view_spec_keeps_content_and_loop_panel_without_hosts() {
         vec![content_supervisor_pane(
             0,
             Path::new("/usr/bin/rimz"),
-            Path::new("/proj/wt")
+            Path::new("/proj/wt"),
+            &workspace_id,
         )]
     );
     assert_eq!(
@@ -526,6 +562,41 @@ fn claude_host_presence_requires_the_managed_pane_marker() {
     assert!(!claude_host_present(&[user_session]));
 }
 
+#[test]
+fn wrapped_and_unwrapped_claude_hosts_keep_their_markers() {
+    let commands = [
+        "claude remote-control --spawn worktree",
+        "rimz daemon host --workspace-id ws_0123456789abcdef01234567 -- env CLAUDE_CONFIG_DIR=/account claude remote-control --spawn worktree",
+        "/home/app-server/.rimz/builds/current/rimz daemon host --workspace-id ws_0123456789abcdef01234567 -- claude remote-control --spawn worktree",
+        "/home/loop/.rimz/builds/current/rimz daemon host --workspace-id ws_0123456789abcdef01234567 -- claude remote-control --spawn worktree",
+    ];
+    let markers: Vec<_> = commands
+        .iter()
+        .map(|command| {
+            (
+                command_marker(command),
+                command_matches_marker(command, &ManagedPaneMarker::ClaudeRemoteControl),
+                command_matches_marker(command, &ManagedPaneMarker::CodexAppServer),
+                command_matches_marker(command, &ManagedPaneMarker::LoopPanel),
+                claude_host_present(&[spawned_pane(command, Some(VIEW_NAME))]),
+            )
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        vec![
+            (
+                Some(ManagedPaneMarker::ClaudeRemoteControl),
+                true,
+                false,
+                false,
+                true
+            );
+            commands.len()
+        ],
+    );
+}
+
 fn healthy_daemon_frame(now_ms: u64, mux: MuxName) -> crate::sidebar::frame::PaneFrame {
     let mut panes = vec![
         spawned_pane_with_id("%2", "rimz daemon content --slot 0", Some(VIEW_NAME)),
@@ -638,7 +709,7 @@ fn a_waived_claude_host_gets_no_host_pane_though_machine_config_enables_it() {
         view_for(&record)
             .hosts
             .iter()
-            .any(|host| host.argv[0] == "claude")
+            .any(|host| host_marker(host) == Some(ManagedPaneMarker::ClaudeRemoteControl))
     );
     record.remote_control_off = BTreeSet::from([crate::ids::AgentKind::new_unchecked("claude")]);
     assert!(view_for(&record).hosts.is_empty());

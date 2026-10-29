@@ -6533,6 +6533,99 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn loop_watch_follows_room_build() {
+    watch_build_move(false);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn loop_watch_follows_room_build_while_held() {
+    watch_build_move(true);
+}
+
+#[cfg(target_os = "linux")]
+fn watch_build_move(hold: bool) {
+    use crate::common::builds::{RoomBuilds, executable};
+
+    let env = Env::new();
+    let builds = RoomBuilds::new(&env);
+    seed_loop_watch_room(&env);
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(&builds.first);
+    env.pin_pty_command(&mut command);
+    command.args(["loop", "watch"]);
+    if hold {
+        command.arg("--hold");
+    }
+    command.cwd(env.project_root.as_os_str());
+    command.env("TERM", "xterm-256color");
+    command.env("RIMZ_TEST_SIDEBAR_RECORD_POLL_MS", "50");
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let pid = child.process_id().unwrap();
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
+    let (repaint_tx, repaint_rx) = std::sync::mpsc::sync_channel(1);
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut buffer = [0; 4096];
+        let mut terminal = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 0);
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            output.extend_from_slice(&buffer[..count]);
+            terminal.process(&buffer[..count]);
+            let frame = terminal.screen().contents();
+            if frame.contains("no loop tasks; add one with `rimz loop add …`") {
+                let _ = startup_tx.try_send(());
+            }
+            if frame.contains("after-build-move") && frame.contains("never fired") {
+                let _ = repaint_tx.try_send(());
+            }
+        }
+        output
+    });
+    let startup = startup_rx.recv_timeout(Duration::from_secs(15));
+    builds.record(&env, &builds.second);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while executable(pid) != builds.second && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let moved = executable(pid) == builds.second;
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.after-build-move]\nroot = {:?}\ncheck = 'true'\nevery = '15m'\n",
+            env.project_root
+        ),
+    );
+    let repainted = repaint_rx.recv_timeout(Duration::from_secs(15));
+    let exited = child.try_wait().unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(pair.master);
+    let output = String::from_utf8_lossy(&reader_thread.join().unwrap()).into_owned();
+    assert!(startup.is_ok(), "loop panel never painted: {output}");
+    assert!(
+        moved,
+        "loop panel did not exec the recorded build: {output}"
+    );
+    assert!(
+        repainted.is_ok() && exited.is_none(),
+        "loop panel did not repaint: {output}"
+    );
+}
+
+#[test]
 fn loop_wait_workflow_pins_and_delivers_to_live_session() {
     let env = Env::new();
     env.record(&env.project_root);

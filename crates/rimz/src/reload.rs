@@ -4,10 +4,11 @@
 //! durable target, restarts running hook drainers, nudges supervisors,
 //! hash-gates Zellij plugin convergence, and reports the bounded convergence
 //! window without changing terminal panes.
-//! `rimz sidebar repair` is the independent structural close/add pass. Held
-//! `rimz stats --refresh` dashboards are signalled to re-exec in place before
-//! workspace enumeration, so standalone dashboards reload even when no rooms
-//! exist. Outdated language-server brokers retire against the PATH build,
+//! `rimz sidebar repair` is the independent structural close/add pass. Standalone
+//! stats dashboards and children of non-following supervisors are signalled
+//! before workspace enumeration. The rimzd processes follow the committed room
+//! target through the shared record watcher. Outdated language-server brokers
+//! retire against the PATH build,
 //! without interrupting servers or dropping leases, before room enumeration.
 //! A workspace whose session is gone has its stale runtime files and
 //! leftover daemons swept. Every step is best-effort: a hiccup on one workspace
@@ -19,7 +20,7 @@ use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::diag::record::DiagEvent;
@@ -44,6 +45,166 @@ use crate::workspace::{self, KnownWorkspace, record};
 pub(crate) struct StagedBuild {
     pub path: PathBuf,
     pub build: String,
+}
+
+const RECORD_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RecordChange {
+    Verified(StagedBuild),
+    Unavailable,
+}
+
+#[derive(Debug)]
+pub(crate) struct RecordWatch {
+    workspace_id: crate::ids::WorkspaceId,
+    pub(crate) record_path: PathBuf,
+    last_seen_mtime: Option<SystemTime>,
+    next_poll: Instant,
+}
+
+impl RecordWatch {
+    pub(crate) fn new(workspace_id: &crate::ids::WorkspaceId) -> Self {
+        let record_path = StatePaths::for_workspace(workspace_id.clone())
+            .map(|paths| paths.workspace_record)
+            .unwrap_or_default();
+        let last_seen_mtime = record_mtime(&record_path);
+        Self {
+            workspace_id: workspace_id.clone(),
+            record_path,
+            last_seen_mtime,
+            next_poll: Instant::now() + record_poll_interval(),
+        }
+    }
+
+    pub(crate) fn poll_if_due(&mut self, now: Instant) -> Option<RecordChange> {
+        if now < self.next_poll {
+            return None;
+        }
+        self.next_poll = now + record_poll_interval();
+        self.poll_now()
+    }
+
+    pub(crate) fn poll_now(&mut self) -> Option<RecordChange> {
+        let mtime = record_mtime(&self.record_path);
+        if mtime == self.last_seen_mtime {
+            return None;
+        }
+        let target = recorded_reexec_target(&self.workspace_id);
+        let change = record_change(self.last_seen_mtime, mtime, target);
+        self.last_seen_mtime = mtime;
+        change
+    }
+}
+
+fn record_change(
+    prior_mtime: Option<SystemTime>,
+    mtime: Option<SystemTime>,
+    target: WorkspaceReexecTarget,
+) -> Option<RecordChange> {
+    if mtime == prior_mtime {
+        return None;
+    }
+    Some(match target {
+        WorkspaceReexecTarget::Verified(target) => RecordChange::Verified(target),
+        WorkspaceReexecTarget::Absent | WorkspaceReexecTarget::Invalid => RecordChange::Unavailable,
+    })
+}
+
+fn record_mtime(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
+fn record_generation<T>(
+    mut mtime: impl FnMut() -> Option<SystemTime>,
+    mut read: impl FnMut() -> T,
+) -> (Option<SystemTime>, T) {
+    loop {
+        let before = mtime();
+        let value = read();
+        if mtime() == before {
+            return (before, value);
+        }
+    }
+}
+
+pub(crate) fn record_poll_interval() -> Duration {
+    #[cfg(feature = "testkit")]
+    if let Some(interval) = std::env::var("RIMZ_TEST_SIDEBAR_RECORD_POLL_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+    {
+        return Duration::from_millis(interval);
+    }
+    RECORD_POLL_INTERVAL
+}
+
+/// Follow verified room-build changes after startup, never an initial mismatch.
+pub struct RoomBuildFollower {
+    watch: RecordWatch,
+    running_build: Option<&'static str>,
+    last_verified_build: Option<String>,
+}
+
+impl RoomBuildFollower {
+    pub fn new(workspace_id: &crate::ids::WorkspaceId) -> Self {
+        let mut watch = RecordWatch::new(workspace_id);
+        let (mtime, target) = record_generation(
+            || record_mtime(&watch.record_path),
+            || recorded_reexec_target(workspace_id),
+        );
+        watch.last_seen_mtime = mtime;
+        let last_verified_build = match target {
+            WorkspaceReexecTarget::Verified(target) => Some(target.build),
+            _ => None,
+        };
+        Self {
+            watch,
+            running_build: crate::build_id::current(),
+            last_verified_build,
+        }
+    }
+
+    pub fn poll_if_due(&mut self, now: Instant) -> Option<PathBuf> {
+        let RecordChange::Verified(target) = self.watch.poll_if_due(now)? else {
+            return None;
+        };
+        let previous = self.last_verified_build.replace(target.build.clone());
+        if previous.as_deref() == Some(target.build.as_str()) {
+            return None;
+        }
+        let running = self.running_build?;
+        (target.build != running).then_some(target.path)
+    }
+
+    pub fn next_poll(&self) -> Instant {
+        self.watch.next_poll
+    }
+
+    /// Re-read intent after stopping a child or restoring the terminal. Call only
+    /// after a poll yielded a target: shutdown work may outlast another build move.
+    pub fn recheck(&mut self) -> Option<PathBuf> {
+        self.watch.last_seen_mtime = record_mtime(&self.watch.record_path);
+        let running = self.running_build?;
+        match recorded_reexec_target(&self.watch.workspace_id) {
+            WorkspaceReexecTarget::Verified(target) => {
+                self.last_verified_build = Some(target.build.clone());
+                (target.build != running).then_some(target.path)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Replace this image while preserving its original OS-string arguments.
+pub fn exec_current_args(target: &Path) -> io::Error {
+    use std::os::unix::process::CommandExt;
+
+    std::process::Command::new(target)
+        .args(std::env::args_os().skip(1))
+        .exec()
 }
 
 const STAGED_BUILD_GC_GRACE: Duration = Duration::from_secs(60);
@@ -1094,501 +1255,4 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
 mod reap_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reexec_target_resolves_the_replacement_after_an_install() {
-        let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("rimz");
-        std::fs::write(&real, b"x").unwrap();
-        let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
-        assert!(!deleted.is_file(), "the annotated path must not exist");
-        assert_eq!(resolve_reexec_target(deleted), Some(real.clone()));
-        assert_eq!(resolve_reexec_target(real.clone()), Some(real));
-    }
-
-    #[test]
-    fn reexec_target_is_none_when_nothing_exists_on_disk() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("rimz");
-        let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
-        assert_eq!(resolve_reexec_target(deleted), None);
-        assert_eq!(resolve_reexec_target(missing), None);
-    }
-
-    fn staging_elf(note_offset: usize) -> Vec<u8> {
-        let mut image = vec![0_u8; note_offset.max(1 << 20) + 24];
-        image[..6].copy_from_slice(b"\x7fELF\x02\x01");
-        image[0x20..0x28].copy_from_slice(&64_u64.to_le_bytes());
-        image[0x36..0x38].copy_from_slice(&56_u16.to_le_bytes());
-        image[0x38..0x3a].copy_from_slice(&1_u16.to_le_bytes());
-        image[64..68].copy_from_slice(&4_u32.to_le_bytes());
-        image[72..80].copy_from_slice(&(note_offset as u64).to_le_bytes());
-        image[96..104].copy_from_slice(&24_u64.to_le_bytes());
-        image[note_offset..note_offset + 4].copy_from_slice(&4_u32.to_le_bytes());
-        image[note_offset + 4..note_offset + 8].copy_from_slice(&8_u32.to_le_bytes());
-        image[note_offset + 8..note_offset + 12].copy_from_slice(&3_u32.to_le_bytes());
-        image[note_offset + 12..note_offset + 24].copy_from_slice(b"GNU\0build-id");
-        image
-    }
-
-    #[test]
-    fn staging_copies_and_verifies_file_identity() {
-        for note_offset in [0x100, (1 << 20) + 0x100] {
-            let dir = tempfile::tempdir().unwrap();
-            let source = dir.path().join("source-rimz");
-            let image = staging_elf(note_offset);
-            fs::write(&source, &image).unwrap();
-            #[cfg(unix)]
-            fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
-            let expected = crate::build_id::of_file(&source).unwrap();
-
-            let staged = stage_build_under(&source, dir.path()).unwrap();
-
-            assert_eq!(staged.build, expected);
-            assert_eq!(
-                staged.path,
-                dir.path().join("builds").join(&expected).join("rimz")
-            );
-            assert_eq!(
-                crate::build_id::of_file(&staged.path).unwrap(),
-                staged.build
-            );
-            assert_eq!(fs::read(&staged.path).unwrap(), image);
-            assert_eq!(
-                fs::read_dir(staged.path.parent().unwrap()).unwrap().count(),
-                1
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                let metadata = fs::metadata(&staged.path).unwrap();
-                assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
-                assert_ne!(metadata.ino(), fs::metadata(&source).unwrap().ino());
-            }
-        }
-    }
-
-    #[test]
-    fn staging_reuses_header_identity_without_reading_sparse_image() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source-rimz");
-        fs::write(&source, staging_elf(0x100)).unwrap();
-        let first = stage_build_under(&source, dir.path()).unwrap();
-        let before = fs::metadata(&first.path).unwrap();
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&source)
-            .unwrap()
-            .set_len(1 << 40)
-            .unwrap();
-        #[cfg(unix)]
-        fs::set_permissions(&first.path, fs::Permissions::from_mode(0o644)).unwrap();
-
-        let reused = stage_build_under(&source, dir.path());
-
-        assert!(
-            reused.is_ok(),
-            "a header-identical sparse image must reuse: {reused:?}"
-        );
-        assert_eq!(reused.unwrap(), first);
-        let after = fs::metadata(&first.path).unwrap();
-        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
-        assert_eq!(before.len(), after.len());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            assert_eq!(before.ino(), after.ino());
-            assert_eq!(after.permissions().mode() & 0o777, 0o755);
-        }
-    }
-
-    #[test]
-    fn staging_is_idempotent_and_executable() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source-rimz");
-        std::fs::write(&source, b"one immutable build").unwrap();
-
-        let first = stage_build_under(&source, dir.path()).unwrap();
-        let second = stage_build_under(&source, dir.path()).unwrap();
-
-        assert_eq!(first, second);
-        assert_eq!(std::fs::read(&first.path).unwrap(), b"one immutable build");
-        assert_eq!(crate::build_id::of_file(&first.path).unwrap(), first.build);
-        #[cfg(unix)]
-        assert_eq!(
-            std::fs::metadata(&first.path).unwrap().permissions().mode() & 0o777,
-            0o755
-        );
-    }
-
-    #[test]
-    fn staging_sweeps_only_unreferenced_builds() {
-        let dir = tempfile::tempdir().unwrap();
-        let first_source = dir.path().join("first");
-        let second_source = dir.path().join("second");
-        std::fs::write(&first_source, b"first build").unwrap();
-        std::fs::write(&second_source, b"second build").unwrap();
-        let first = stage_build_under(&first_source, dir.path()).unwrap();
-
-        let project = dir.path().join("project");
-        std::fs::create_dir_all(&project).unwrap();
-        let workspace = crate::workspace::WorkspaceResolver::resolve(&project, None).unwrap();
-        let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
-        let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
-        let mut record = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
-        record.rimz_bin = Some(first.path.clone());
-        record.rimz_build = Some(first.build.clone());
-        record::write(&paths, &record).unwrap();
-        let known = KnownWorkspace {
-            dir_name: paths.dir_name.clone(),
-            workspace_id: workspace.workspace_id.clone(),
-            project_root: workspace.project_root.clone(),
-            session_name: workspace.session_name.clone(),
-            root_class: workspace.root_class,
-            rimz_bin: record.rimz_bin.clone(),
-            updated_at: record.updated_at,
-        };
-
-        let unreferenced = crate::disk::paths::builds_dir_under(dir.path()).join("unused");
-        std::fs::create_dir_all(&unreferenced).unwrap();
-        std::fs::write(unreferenced.join("rimz"), b"unused").unwrap();
-        std::fs::File::open(&unreferenced)
-            .unwrap()
-            .set_modified(
-                std::time::SystemTime::now() - STAGED_BUILD_GC_GRACE - Duration::from_secs(1),
-            )
-            .unwrap();
-        let second = stage_build_under(&second_source, dir.path()).unwrap();
-        let room_bin = record_live_room_bin_at(&known, &second, &paths, &runtime).unwrap();
-
-        assert!(
-            first.path.is_file(),
-            "previously recorded build remains staged"
-        );
-        assert!(second.path.is_file(), "new build remains staged");
-        assert!(!unreferenced.exists(), "unreferenced build is swept");
-        assert_eq!(std::fs::read(room_bin).unwrap(), b"second build");
-        let updated = record::read(&paths.workspace_record).unwrap();
-        assert_eq!(updated.rimz_bin.as_deref(), Some(second.path.as_path()));
-        assert_eq!(updated.rimz_build.as_deref(), Some(second.build.as_str()));
-    }
-
-    #[test]
-    fn staging_sweeps_builds_only_referenced_by_legacy_rooms() {
-        let home = tempfile::tempdir().unwrap();
-        let project = home.path().join("project");
-        std::fs::create_dir_all(&project).unwrap();
-        let workspace = crate::workspace::WorkspaceResolver::resolve(&project, None).unwrap();
-        let paths = StatePaths::under(workspace.workspace_id.clone(), home.path()).unwrap();
-        let mut record = record::WorkspaceRecord::from_resolved(&workspace);
-        record.layout = 1;
-        record.rimz_build = Some("legacy".to_owned());
-        std::fs::create_dir_all(&paths.root).unwrap();
-        std::fs::write(
-            &paths.workspace_record,
-            serde_json::to_vec(&record).unwrap(),
-        )
-        .unwrap();
-        let builds = crate::disk::paths::builds_dir_under(home.path());
-        let legacy = builds.join("legacy");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::File::open(&legacy)
-            .unwrap()
-            .set_modified(
-                std::time::SystemTime::now() - STAGED_BUILD_GC_GRACE - Duration::from_secs(1),
-            )
-            .unwrap();
-        sweep_unreferenced_builds(home.path(), &builds, "new");
-        assert!(!legacy.exists());
-    }
-
-    #[test]
-    fn recorded_target_requires_the_recorded_digest() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rimz");
-        std::fs::write(&path, b"verified build").unwrap();
-        let build = crate::build_id::of_file(&path).unwrap();
-
-        assert_eq!(
-            resolve_recorded_target(Some(path.clone()), Some(build.clone())),
-            WorkspaceReexecTarget::Verified(StagedBuild {
-                path: path.clone(),
-                build,
-            })
-        );
-        assert_eq!(
-            resolve_recorded_target(Some(path.clone()), Some("wrong".to_owned())),
-            WorkspaceReexecTarget::Invalid
-        );
-        assert_eq!(
-            resolve_recorded_target(Some(path), None),
-            WorkspaceReexecTarget::Absent
-        );
-        assert_eq!(
-            resolve_recorded_target(None, Some("orphan".to_owned())),
-            WorkspaceReexecTarget::Invalid
-        );
-    }
-
-    #[test]
-    fn born_recently_holds_inside_the_grace_and_for_clock_fuzz() {
-        let now = jiff::Timestamp::from_second(1_000_000).unwrap();
-        let grace = crate::sidebar::FRESH_PANE_GRACE;
-        let at = |secs_ago: i64| jiff::Timestamp::from_second(1_000_000 - secs_ago).unwrap();
-        assert!(crate::sidebar::born_recently(at(0), now, grace));
-        assert!(crate::sidebar::born_recently(
-            at(i64::try_from(grace.as_secs()).unwrap()),
-            now,
-            grace
-        ));
-        assert!(
-            !crate::sidebar::born_recently(
-                at(i64::try_from(grace.as_secs()).unwrap() + 1),
-                now,
-                grace,
-            ),
-            "one second past the grace is old",
-        );
-        assert!(
-            crate::sidebar::born_recently(at(-3), now, grace),
-            "a start after `now` is a just-spawned process under clock fuzz",
-        );
-    }
-
-    #[test]
-    fn live_session_claim_is_once_per_mux_session() {
-        let mut seen = HashSet::new();
-        assert!(claim_live_session(
-            &mut seen,
-            MuxName::Zellij,
-            "rimz-query-engine"
-        ));
-        assert!(!claim_live_session(
-            &mut seen,
-            MuxName::Zellij,
-            "rimz-query-engine"
-        ));
-        assert!(
-            claim_live_session(&mut seen, MuxName::Tmux, "rimz-query-engine"),
-            "the same name on a different mux is a different live session",
-        );
-    }
-
-    #[test]
-    fn reload_outcome_merge_sums_every_field() {
-        let mut base = ReloadOutcome {
-            sessions: 1,
-            presence_dead: 2,
-            busy: 4,
-            plugin_current: 3,
-            plugin_upgraded: 4,
-            plugin_reconciled: 18,
-            already_current: 5,
-            reexeced: 6,
-            unconverged: 7,
-            unverified: 8,
-            recovered: 9,
-            closed: 10,
-            reaped: 11,
-            dead_swept: 12,
-            stats_reloaded: 13,
-            brokers_retired: 1,
-            brokers_marked: 2,
-            brokers_kept: 3,
-            brokers_unchecked: 4,
-            drainers_restarted: 2,
-            drainers_stop_failed: 3,
-            failed: 14,
-            deferred: 15,
-            redocked: 16,
-            misdocked: 17,
-            sidebar_missing: 36,
-        };
-        base.merge(ReloadOutcome {
-            sessions: 18,
-            presence_dead: 19,
-            busy: 5,
-            plugin_current: 20,
-            plugin_upgraded: 21,
-            plugin_reconciled: 35,
-            already_current: 22,
-            reexeced: 23,
-            unconverged: 24,
-            unverified: 25,
-            recovered: 26,
-            closed: 27,
-            reaped: 28,
-            dead_swept: 29,
-            stats_reloaded: 30,
-            brokers_retired: 5,
-            brokers_marked: 6,
-            brokers_kept: 7,
-            brokers_unchecked: 8,
-            drainers_restarted: 4,
-            drainers_stop_failed: 5,
-            failed: 31,
-            deferred: 32,
-            redocked: 33,
-            misdocked: 34,
-            sidebar_missing: 37,
-        });
-
-        assert_eq!(
-            base,
-            ReloadOutcome {
-                sessions: 19,
-                presence_dead: 21,
-                busy: 9,
-                plugin_current: 23,
-                plugin_upgraded: 25,
-                plugin_reconciled: 53,
-                already_current: 27,
-                reexeced: 29,
-                unconverged: 31,
-                unverified: 33,
-                recovered: 35,
-                closed: 37,
-                reaped: 39,
-                dead_swept: 41,
-                stats_reloaded: 43,
-                brokers_retired: 6,
-                brokers_marked: 8,
-                brokers_kept: 10,
-                brokers_unchecked: 12,
-                drainers_restarted: 6,
-                drainers_stop_failed: 8,
-                failed: 45,
-                deferred: 47,
-                redocked: 49,
-                misdocked: 51,
-                sidebar_missing: 73,
-            }
-        );
-    }
-
-    #[test]
-    fn presence_health_never_gates_structural_repair() {
-        use crate::mux::zellij::PresenceProbe;
-        for presence in [
-            PresenceProbe::Silent,
-            PresenceProbe::Stale {
-                ghost_panes: vec![],
-                produced_at_ms: 200,
-                observed_at_ms: 100,
-                writer: None,
-            },
-            PresenceProbe::Current,
-        ] {
-            let calls = std::cell::Cell::new(0);
-            let outcome = reconcile_repair("room", Some(&presence), || {
-                calls.set(calls.get() + 1);
-                Ok(Some(crate::mux::SidebarRecovery {
-                    recovered: 2,
-                    ..Default::default()
-                }))
-            });
-            assert_eq!(calls.get(), 1, "{presence:?} must still reconcile");
-            assert_eq!(outcome.recovered, 2);
-            assert_eq!(
-                outcome.presence_dead,
-                usize::from(presence != PresenceProbe::Current)
-            );
-        }
-    }
-
-    #[test]
-    fn repair_counts_lock_contention_separately_from_failure() {
-        let busy = reconcile_repair("room", None, || Ok(None));
-        assert_eq!(busy.busy, 1);
-        assert_eq!(busy.failed, 0);
-        let failed = reconcile_repair("room", None, || {
-            Err(crate::mux::MuxErr::SessionNotFound {
-                session: "room".to_owned(),
-            }
-            .into())
-        });
-        assert_eq!(failed.busy, 0);
-        assert_eq!(failed.failed, 1);
-    }
-
-    fn heartbeat(raw: &str, build: Option<&str>) -> SidebarHeartbeat {
-        let pane = PaneId::from_parts(MuxName::Tmux, raw);
-        let mut hb = SidebarHeartbeat::new(
-            crate::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-            crate::SidebarInstanceId::new(),
-            MuxName::Tmux,
-            "rimz-test",
-            std::path::PathBuf::from(format!("/tmp/{raw}.sock")),
-            Some(pane),
-        );
-        hb.build = build.map(str::to_owned);
-        hb
-    }
-
-    #[test]
-    fn build_partition_marks_missing_or_stale_builds_as_awaiting() {
-        let heartbeats = vec![
-            heartbeat("%1", Some("current")),
-            heartbeat("%2", Some("old")),
-            heartbeat("%3", None),
-        ];
-
-        assert_eq!(current_located_count(&heartbeats, "current"), 1);
-        let awaiting = awaiting_panes(&heartbeats, "current");
-        assert!(!awaiting.contains(&PaneId::from_parts(MuxName::Tmux, "%1")));
-        assert!(awaiting.contains(&PaneId::from_parts(MuxName::Tmux, "%2")));
-        assert!(awaiting.contains(&PaneId::from_parts(MuxName::Tmux, "%3")));
-    }
-
-    #[test]
-    fn current_located_count_deduplicates_pane_claims() {
-        let heartbeats = vec![
-            heartbeat("%1", Some("current")),
-            heartbeat("%1", Some("current")),
-        ];
-
-        assert_eq!(current_located_count(&heartbeats, "current"), 1);
-    }
-
-    #[test]
-    fn convergence_wait_settles_when_awaiting_pane_flips_current() {
-        let awaiting = [PaneId::from_parts(MuxName::Tmux, "%1")].into();
-        let mut reads = 0;
-
-        let heartbeats = wait_for_convergence_with(
-            &awaiting,
-            "current",
-            Duration::from_secs(1),
-            Duration::ZERO,
-            || {
-                reads += 1;
-                if reads == 1 {
-                    vec![heartbeat("%1", Some("old"))]
-                } else {
-                    vec![heartbeat("%1", Some("current"))]
-                }
-            },
-        );
-
-        assert_eq!(reads, 2);
-        assert_eq!(
-            current_build_claims(&heartbeats, "current"),
-            [PaneId::from_parts(MuxName::Tmux, "%1")].into(),
-        );
-    }
-
-    #[test]
-    fn convergence_wait_returns_latest_heartbeat_on_timeout() {
-        let awaiting = [PaneId::from_parts(MuxName::Tmux, "%1")].into();
-
-        let heartbeats =
-            wait_for_convergence_with(&awaiting, "current", Duration::ZERO, Duration::ZERO, || {
-                vec![heartbeat("%1", Some("old"))]
-            });
-
-        assert_eq!(heartbeats.len(), 1);
-        assert_eq!(heartbeats[0].build.as_deref(), Some("old"));
-    }
-}
+mod tests;

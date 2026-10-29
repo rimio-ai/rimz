@@ -21,6 +21,7 @@ mod reload;
 
 use crate::RuntimePaths;
 use crate::diag::focus_trace::{FocusTraceEvent, PushDelivery};
+use crate::reload::{RecordChange, RecordWatch};
 use crate::sidebar_pane::app::{
     Attachment, AttachmentExit, CloseHandle, DataPlane, PaneBackend, RoomConfig, RoomEvents,
     ServeConfig, SidebarAppErr, Wakeup, decode_wakeup,
@@ -29,7 +30,6 @@ use crate::sidebar_pane::attach::{
     self, Control, ControlLine, Hello, PROTOCOL, REJECT_BUILD, REJECT_CAPACITY, REJECT_PROTOCOL,
     Reply,
 };
-use crate::sidebar_pane::supervise::{RecordChange, RecordWatch};
 use crate::wakeup::events::{RELOAD_CONTROL_WORD, SidebarEvent};
 
 /// How long a host with no pane attached stays up for the next one.

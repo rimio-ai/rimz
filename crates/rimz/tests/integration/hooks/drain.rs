@@ -283,51 +283,14 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
     use std::os::unix::net::UnixListener;
 
     let env = Env::new();
-    env.record(&env.project_root);
-    let store = env.store();
-    let workspace = env.resolve_workspace(&env.project_root);
-    let binary = env.rimz_bin();
-    let binaries = tempfile::tempdir_in(binary.parent().unwrap()).unwrap();
-    let first = binaries.path().join("first-rimz");
-    // Build B is written where reload stages it, so staging reuses it: a clone of a
+    // Build B sits where reload stages it, so staging reuses it: a clone of a
     // just-written binary waits on the filesystem inside reload's window.
-    let builds = env.rimz_home().join("builds");
-    std::fs::create_dir_all(&builds).unwrap();
-    let patched = builds.join("second-rimz");
-    std::fs::hard_link(binary, &first).unwrap();
-    let note = env.project_root.join("build-id.note");
-    let dump = Command::new("objcopy")
-        .args([
-            "--only-section=.note.gnu.build-id",
-            "--output-target=binary",
-        ])
-        .arg(&first)
-        .arg(&note)
-        .output()
-        .unwrap();
-    assert!(dump.status.success(), "{dump:?}");
-    let mut bytes = std::fs::read(&note).unwrap();
-    assert_eq!(&bytes[12..16], b"GNU\0");
-    bytes[16] ^= 0x80;
-    std::fs::write(&note, bytes).unwrap();
-    let patch = Command::new("objcopy")
-        .arg("--update-section")
-        .arg(format!(".note.gnu.build-id={}", note.display()))
-        .arg(&first)
-        .arg(&patched)
-        .output()
-        .unwrap();
-    assert!(patch.status.success(), "{patch:?}");
-    let first_id = rimz::build_id::of_file(&first).unwrap();
-    let second_id = rimz::build_id::of_file(&patched).unwrap();
-    assert_ne!(first_id, second_id);
-    let second = builds.join(&second_id).join("rimz");
-    std::fs::create_dir(builds.join(&second_id)).unwrap();
-    std::fs::rename(&patched, &second).unwrap();
-    let staged = std::fs::metadata(&second).unwrap();
-    store
-        .record_room_bin(&workspace, first, first_id.clone())
-        .unwrap();
+    let builds = crate::common::builds::RoomBuilds::new(&env);
+    let store = env.store();
+    let first_id = rimz::build_id::of_file(&builds.first).unwrap();
+    let second = &builds.second;
+    let second_id = rimz::build_id::of_file(second).unwrap();
+    let staged = std::fs::metadata(second).unwrap();
 
     let mut hook = env.hook_command("claude");
     hook.env_remove("RIMZ_BIN");
@@ -357,7 +320,7 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
     // The spawn lock holds its stop request until a frame is in flight.
     let spawning =
         WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
-    let mut reload = reload_command(&env, &second).spawn().unwrap();
+    let mut reload = reload_command(&env, second).spawn().unwrap();
     wait_for_readiness(
         &store,
         Some(&mut reload),

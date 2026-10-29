@@ -1204,8 +1204,10 @@ fn supervise_child(
     };
     #[cfg(not(unix))]
     let cleanup_signals = Vec::new();
-    rimz::child_process::register_signal_wake(cleanup_signals, wake_tx)
-        .context("registering cleanup signal wakeups")?;
+    rimz::child_process::register_signal_wake(cleanup_signals, move |_| {
+        let _ = wake_tx.send(());
+    })
+    .context("registering cleanup signal wakeups")?;
     #[cfg(unix)]
     {
         drop(signal_mask);

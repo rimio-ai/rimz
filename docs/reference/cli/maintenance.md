@@ -175,12 +175,15 @@ rimz reload [--repair]
 - publishes the invoking build as the target of every live room, so each room's sidebars restart onto it in place;
 - stops each live room's running hook drainer after its current frame, then nudges a replacement on the recorded build; a room with no running drainer starts none;
 - upgrades a room's Zellij presence plugin when its build or configuration differs, and leaves a current one alone;
-- restarts held `rimz stats --refresh` dashboards on the new build;
+- moves the `rimzd` loop panel, Codex broker, content supervisors and their configured commands onto the room's new build in place, and restarts the Claude remote-control host (an open phone session drops);
+- restarts standalone `rimz stats --refresh` dashboards and stats children of older, non-following content supervisors;
 - retires outdated language-server brokers without interrupting running servers or attached editors;
 - reaps sidebar processes whose pane is gone, and sweeps leftover processes and runtime files from stopped sessions;
 - restarts the shared [web](./web.md) daemon if it is running. A stopped daemon stays stopped, and a failed restart prints a warning without failing the reload.
 
-It never starts a stopped session, creates or closes a pane, or touches an agent process. If the new build fails to start, each sidebar keeps running on its old build.
+It never starts a stopped session, creates or closes a pane, or touches an agent wrapper, loop run, or `rimz wait`. If the new build fails to start, the sidebar and following rimzd processes keep running on their old build. A content slot restarts its configured command, even when that command is not RimZ.
+
+The rimzd processes follow a verified build change in the room record, normally within about one second; an unchanged build restarts nothing. Panes launched before this support do not follow: after upgrading, close the `rimzd` tab and run `rimz sidebar repair` once to recreate them.
 
 A drainer that cannot stop within the bounded wait keeps its old build until it goes idle or a later reload succeeds. Reload reports it and continues with the other surfaces and rooms. Pending hooks stay queued across a restart.
 
@@ -197,7 +200,7 @@ The report prints a line per non-zero count:
 | `N sidebars still converging; their supervisors will retry from the recorded build automatically.` | These sidebars did not confirm within the report window. They keep retrying on their own; no repair is needed. |
 | `N sidebars could not be build-verified.` | RimZ could not read which build these sidebars run. |
 | `Upgraded N presence plugins.`, `Reconciled N presence plugins.`, `N presence plugins already current.` | The Zellij presence plugin in each room. |
-| `Reloaded N stats dashboards.` | Held dashboards restarted. |
+| `Reloaded N stats dashboards.` | Standalone dashboards and stats children of non-following supervisors signalled to restart; stats inside a following content slot restart with that slot and are not counted. |
 | `Restarted N hook drainers onto the current build.` | Running drainers stopped at a frame boundary; their successors use the room's recorded build. |
 | `N hook drainers did not stop in time; they keep their old build until they go idle or the next reload.` | Stops that failed; reload continued. |
 | `Retired N outdated language-server brokers. The next query in each checkout starts a fresh one.` | Dormant outdated brokers retired with their leases kept. |

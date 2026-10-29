@@ -1,17 +1,20 @@
 //! `rimz reload` — publish the invoking build and let every running
-//! sidebar and hook drainer converge onto it without changing panes.
+//! sidebar, rimzd process and hook drainer converge onto it without changing panes.
 //!
 //! User-scoped and cwd-independent (it runs from anywhere, even outside a rimz
 //! session): the orchestration lives in [`rimz::reload`]. For each workspace with
 //! a live mux session it publishes durable build intent and nudges the live
 //! supervisors; their record poll makes delivery self-healing. `--repair` then
-//! invokes the independent `rimz sidebar repair` orchestration. Held
-//! `rimz stats --refresh` dashboards re-exec in place before room enumeration,
+//! invokes the independent `rimz sidebar repair` orchestration. Standalone
+//! `rimz stats --refresh` dashboards and stats under non-following supervisors
+//! re-exec in place before room enumeration,
 //! alongside machine-wide retirement of outdated language-server brokers.
 //! Brokers compare against the PATH build and keep serving until their server
 //! stops; their leases survive for lazy revival. Workspaces whose session is
 //! gone have their leftovers swept. An online shared web daemon restarts onto
 //! the new build.
+//! Rimzd processes poll the committed record instead: their children restart
+//! only after the build moves, and a Claude host restart drops phone sessions.
 //! Every step is best-effort and run-once.
 
 use std::io::Write;
