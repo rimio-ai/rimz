@@ -28,6 +28,7 @@ mod prune;
 mod temp_sweep;
 mod tmp;
 
+pub use classes::never_swept;
 pub use tmp::{TmpHold, TmpUnit, tmp_inventory};
 
 pub(crate) fn collect_runtime_claims(runtime: &paths::RuntimePaths) -> Result<()> {

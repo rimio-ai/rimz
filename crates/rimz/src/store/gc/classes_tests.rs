@@ -3,6 +3,87 @@ use std::fs;
 use std::time::{Duration, SystemTime};
 
 #[test]
+fn never_swept_tracks_state_classes_and_team_notes_retention() {
+    let classes = Class::STATE.into_iter().chain(Class::RUNTIME);
+    let actual: Vec<_> = classes
+        .map(|class| {
+            (
+                class,
+                never_swept(class, HistoryRetention::Forever),
+                never_swept(
+                    class,
+                    HistoryRetention::Duration(Duration::from_secs(86_400)),
+                ),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            (Class::Log, false, false),
+            (Class::Records, false, false),
+            (Class::Audit, false, false),
+            (Class::Cache, true, true),
+            (Class::Owned, false, false),
+            (Class::Tmp, false, false),
+            (Class::Shared, true, true),
+            (Class::TeamNotes, true, false),
+            (Class::Out, false, false),
+            (Class::Locks, false, false),
+            (Class::Sock, false, false),
+            (Class::Live, false, false),
+            (Class::Lanes, false, false),
+            (Class::Snapshots, false, false),
+        ]
+    );
+}
+
+#[test]
+fn never_swept_classes_keep_stale_entries_under_default_sweep() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        crate::WorkspaceId::from_project_root(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    paths.ensure_dirs().unwrap();
+    let classes: Vec<_> = Class::STATE
+        .into_iter()
+        .filter(|class| never_swept(*class, HistoryRetention::Forever))
+        .collect();
+    assert_eq!(classes, [Class::Cache, Class::Shared, Class::TeamNotes]);
+    let old = SystemTime::now() - Duration::from_secs(365 * 86_400);
+    let files: Vec<_> = classes
+        .into_iter()
+        .map(|class| {
+            let dir = class.path_under(&paths.root).join("stale-run");
+            fs::create_dir_all(&dir).unwrap();
+            let file = dir.join("keep");
+            fs::write(&file, "keep").unwrap();
+            for path in [&file, &dir] {
+                fs::File::open(path).unwrap().set_modified(old).unwrap();
+            }
+            file
+        })
+        .collect();
+    collect_state(
+        &paths,
+        GcPolicy {
+            older_than: retention::DEFAULT_OLDER_THAN,
+            tmp_grace: retention::DEFAULT_TMP_GRACE,
+            transcript_retention: HistoryRetention::Forever,
+            team_notes_retention: HistoryRetention::Forever,
+        },
+        false,
+        &|_| Ok(false),
+        &|_| temp_owner,
+    )
+    .unwrap();
+    let survivors: Vec<_> = files.iter().map(|file| file.exists()).collect();
+    assert_eq!(survivors, [true, true, true], "{files:?}");
+}
+
+#[test]
 fn team_notes_walk_ignores_disappeared_entries() {
     let temp = tempfile::tempdir().unwrap();
     assert!(

@@ -127,7 +127,7 @@ pub(crate) fn check_workspace_layout(root: &Path) -> Result<bool> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Class {
+pub enum Class {
     Log,
     Records,
     Audit,
@@ -159,7 +159,7 @@ impl Class {
     ];
     pub(crate) const RUNTIME: [Self; 4] = [Self::Sock, Self::Live, Self::Lanes, Self::Snapshots];
 
-    pub(crate) const fn dir_name(self) -> &'static str {
+    pub const fn dir_name(self) -> &'static str {
         match self {
             Self::Log => "log",
             Self::Records => "records",

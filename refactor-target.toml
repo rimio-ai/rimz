@@ -3355,7 +3355,33 @@ allowed-dependencies = [
 # OrphanEmptyTree reports orphan empty-dir retention alongside pruned workspaces (+1).
 # FailedWorkspace reports dead-workspace removal failures without aborting GC (+1).
 # GcPolicy and tmp_inventory expose the independent temp-unit policy and owner-set inventory (+2).
-surface-budget = 21
+# never_swept shares the class sweep's retention classification with doctor (+1).
+surface-budget = 22
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::Class"
+reason = "Doctor carries typed lifetime classes across the library boundary without constructing room paths."
+
+[[verdict]]
+kind = "item"
+key = "disk::usage::RoomStorage"
+reason = "Doctor reads room totals from the existing home walk, including root identity files."
+
+[[verdict]]
+kind = "item"
+key = "disk::usage::FolderStorage"
+reason = "Doctor presents each state class's entries and bytes without another filesystem walk."
+
+[[verdict]]
+kind = "item"
+key = "disk::usage::LargestDirectory"
+reason = "Doctor names the largest direct child directory in an unswept-folder fix."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::classes::never_swept"
+reason = "The sweep owns which classes doctor can warn about under the configured retention."
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"

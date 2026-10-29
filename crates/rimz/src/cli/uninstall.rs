@@ -75,7 +75,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     };
     ensure_not_in_rimz_room(&workspaces)?;
 
-    let disk_usage = rimz::disk::usage::measure();
+    let disk_usage = rimz::disk::usage::measure(None);
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
     let (logins, accounts_err) = super::hooks::provider_home_logins();

@@ -42,39 +42,74 @@ pub fn disk_space(path: &Path) -> std::io::Result<DiskSpace> {
 
 /// Best-effort recursive size for a path without following symlinks.
 pub(crate) fn dir_size(path: &Path) -> u64 {
-    dir_size_inner(path, &mut HashSet::new(), &fs::Metadata::len)
+    dir_size_inner(
+        path,
+        &mut HashSet::new(),
+        &fs::Metadata::len,
+        &mut |_, _, _| {},
+    )
+    .bytes
 }
 
 /// Best-effort allocated size, counting hardlinked files once and not following symlinks.
 pub(crate) fn dir_allocated_size(path: &Path) -> u64 {
-    dir_size_inner(path, &mut HashSet::new(), &|meta| {
-        meta.blocks().saturating_mul(512)
-    })
+    dir_size_inner(
+        path,
+        &mut HashSet::new(),
+        &|meta| meta.blocks().saturating_mul(512),
+        &mut |_, _, _| {},
+    )
+    .bytes
+}
+
+#[derive(Debug, Default)]
+struct TreeUsage {
+    entries: u64,
+    bytes: u64,
 }
 
 fn dir_size_inner(
     path: &Path,
     seen_files: &mut HashSet<FileIdentity>,
     size: &impl Fn(&fs::Metadata) -> u64,
-) -> u64 {
-    let meta = match fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(_) => return 0,
+    visit: &mut impl FnMut(&Path, &fs::Metadata, &TreeUsage),
+) -> TreeUsage {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => walk_entry(path, &meta, seen_files, size, visit),
+        Err(_) => TreeUsage::default(),
+    }
+}
+
+fn walk_entry(
+    path: &Path,
+    meta: &fs::Metadata,
+    seen_files: &mut HashSet<FileIdentity>,
+    size: &impl Fn(&fs::Metadata) -> u64,
+    visit: &mut impl FnMut(&Path, &fs::Metadata, &TreeUsage),
+) -> TreeUsage {
+    let mut usage = TreeUsage {
+        entries: 0,
+        bytes: if file_identity(meta).is_some_and(|identity| !seen_files.insert(identity)) {
+            0
+        } else {
+            size(meta)
+        },
     };
-    if file_identity(&meta).is_some_and(|identity| !seen_files.insert(identity)) {
-        return 0;
+    if meta.is_dir()
+        && !meta.file_type().is_symlink()
+        && let Ok(entries) = fs::read_dir(path)
+    {
+        for entry in entries.flatten() {
+            let child = dir_size_inner(&entry.path(), seen_files, size, visit);
+            usage.entries = usage
+                .entries
+                .saturating_add(1)
+                .saturating_add(child.entries);
+            usage.bytes = usage.bytes.saturating_add(child.bytes);
+        }
     }
-    let mut bytes = size(&meta);
-    if !meta.is_dir() || meta.file_type().is_symlink() {
-        return bytes;
-    }
-    let Ok(entries) = fs::read_dir(path) else {
-        return bytes;
-    };
-    for entry in entries.flatten() {
-        bytes = bytes.saturating_add(dir_size_inner(&entry.path(), seen_files, size));
-    }
-    bytes
+    visit(path, meta, &usage);
+    usage
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -122,6 +157,76 @@ pub struct StorageRoot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeStorage {
     pub roots: Vec<StorageRoot>,
+    pub room: Option<RoomStorage>,
+}
+
+/// Room totals, including root identity files, attributed during the home walk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomStorage {
+    pub path: PathBuf,
+    pub present: bool,
+    pub entries: u64,
+    pub bytes: u64,
+    pub folders: Vec<FolderStorage>,
+}
+
+impl RoomStorage {
+    fn record(&mut self, path: &Path, meta: &fs::Metadata, usage: &TreeUsage) {
+        if path == self.path {
+            self.present = true;
+            self.entries = usage.entries;
+            self.bytes = usage.bytes;
+            return;
+        }
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        if parent == self.path {
+            if let Some(folder) = self.folders.iter_mut().find(|folder| folder.path == path) {
+                folder.present = true;
+                folder.entries = usage.entries;
+                folder.bytes = usage.bytes;
+            }
+            return;
+        }
+        if !meta.is_dir() || parent.parent() != Some(self.path.as_path()) {
+            return;
+        }
+        let Some(folder) = self.folders.iter_mut().find(|folder| folder.path == parent) else {
+            return;
+        };
+        let Some(name) = path.file_name() else {
+            return;
+        };
+        let entries = usage.entries.saturating_add(1);
+        if folder.largest.as_ref().is_none_or(|largest| {
+            entries > largest.entries
+                || (entries == largest.entries && name < largest.name.as_os_str())
+        }) {
+            folder.largest = Some(LargestDirectory {
+                name: name.to_owned(),
+                entries,
+            });
+        }
+    }
+}
+
+/// Entries exclude the folder; apparent bytes include it and deduplicate files home-wide.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FolderStorage {
+    pub class: paths::Class,
+    pub path: PathBuf,
+    pub present: bool,
+    pub entries: u64,
+    pub bytes: u64,
+    pub largest: Option<LargestDirectory>,
+}
+
+/// A direct child directory, counted with its own name and every name below it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LargestDirectory {
+    pub name: std::ffi::OsString,
+    pub entries: u64,
 }
 
 impl RuntimeStorage {
@@ -132,25 +237,62 @@ impl RuntimeStorage {
     }
 }
 
-pub fn measure() -> RuntimeStorage {
-    measure_under(&[
-        (StorageKind::Home, paths::rimz_home()),
-        (StorageKind::Runtime, paths::runtime_rimz_root()),
-    ])
+pub fn measure(room: Option<&paths::StatePaths>) -> RuntimeStorage {
+    measure_under(
+        &[
+            (StorageKind::Home, paths::rimz_home()),
+            (StorageKind::Runtime, paths::runtime_rimz_root()),
+        ],
+        room,
+    )
 }
 
-fn measure_under(roots: &[(StorageKind, PathBuf)]) -> RuntimeStorage {
-    RuntimeStorage {
-        roots: roots
-            .iter()
-            .map(|(kind, path)| StorageRoot {
-                kind: *kind,
-                path: path.clone(),
-                present: path.exists(),
-                bytes: dir_size(path),
+fn measure_under(
+    roots: &[(StorageKind, PathBuf)],
+    room: Option<&paths::StatePaths>,
+) -> RuntimeStorage {
+    let mut room = room.map(|room| RoomStorage {
+        path: room.root.clone(),
+        present: false,
+        entries: 0,
+        bytes: 0,
+        folders: paths::Class::STATE
+            .into_iter()
+            .map(|class| FolderStorage {
+                class,
+                path: class.path_under(&room.root),
+                present: false,
+                entries: 0,
+                bytes: 0,
+                largest: None,
             })
             .collect(),
-    }
+    });
+    let roots = roots
+        .iter()
+        .map(|(kind, path)| StorageRoot {
+            kind: *kind,
+            path: path.clone(),
+            present: path.exists(),
+            bytes: measure_root(path, &mut |path, meta, usage| {
+                if *kind == StorageKind::Home
+                    && let Some(room) = &mut room
+                {
+                    room.record(path, meta, usage);
+                }
+            }),
+        })
+        .collect();
+    RuntimeStorage { roots, room }
+}
+
+/// Walks a storage root, following the root itself when it is a symlink (a `~/.rimz` linked
+/// into a dotfiles checkout) so its entries keep the configured path; links below stay unfollowed.
+fn measure_root(path: &Path, visit: &mut impl FnMut(&Path, &fs::Metadata, &TreeUsage)) -> u64 {
+    let Ok(meta) = fs::metadata(path) else {
+        return 0;
+    };
+    walk_entry(path, &meta, &mut HashSet::new(), &fs::Metadata::len, visit).bytes
 }
 
 #[cfg(test)]
@@ -291,10 +433,13 @@ mod tests {
         fs::create_dir_all(&state).unwrap();
         fs::write(state.join("store.json"), b"{}").unwrap();
 
-        let disk_usage = measure_under(&[
-            (StorageKind::Home, state.clone()),
-            (StorageKind::Runtime, runtime.clone()),
-        ]);
+        let disk_usage = measure_under(
+            &[
+                (StorageKind::Home, state.clone()),
+                (StorageKind::Runtime, runtime.clone()),
+            ],
+            None,
+        );
 
         assert_eq!(disk_usage.roots[0].kind, StorageKind::Home);
         assert_eq!(disk_usage.roots[0].path, state);
@@ -304,6 +449,7 @@ mod tests {
         assert_eq!(disk_usage.roots[1].path, runtime);
         assert!(!disk_usage.roots[1].present);
         assert_eq!(disk_usage.roots[1].bytes, 0);
+        assert!(disk_usage.room.is_none());
         assert_eq!(
             disk_usage.total_bytes(),
             disk_usage
@@ -311,5 +457,172 @@ mod tests {
                 .iter()
                 .fold(0_u64, |total, root| total.saturating_add(root.bytes))
         );
+    }
+
+    #[test]
+    fn measure_room_counts_folders_and_root_strays_inside_home_totals() {
+        let temp = tempdir().unwrap();
+        let paths = paths::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        let shared = &paths.room_shared_dir;
+        fs::create_dir_all(shared.join("run/nested")).unwrap();
+        fs::write(shared.join("run/nested/file"), "payload").unwrap();
+        fs::write(shared.join("flat"), "flat").unwrap();
+        fs::create_dir_all(&paths.cache_dir).unwrap();
+        for name in ["a", "b", "c"] {
+            fs::create_dir(paths.cache_dir.join(name)).unwrap();
+        }
+        fs::write(&paths.workspace_record, "identity").unwrap();
+
+        let usage = measure_under(&[(StorageKind::Home, temp.path().to_owned())], Some(&paths));
+        let room = usage.room.unwrap();
+        let actual: Vec<_> = room
+            .folders
+            .iter()
+            .map(|folder| (folder.class, folder.present, folder.entries, folder.bytes))
+            .collect();
+        let expected: Vec<_> = paths::Class::STATE
+            .into_iter()
+            .map(|class| {
+                let entries = match class {
+                    paths::Class::Shared => 4,
+                    paths::Class::Cache => 3,
+                    _ => 0,
+                };
+                let path = class.path_under(&paths.root);
+                (class, path.exists(), entries, dir_size(&path))
+            })
+            .collect();
+        assert_eq!(actual, expected);
+        assert!(room.present);
+        assert_eq!(room.path, paths.root);
+        assert_eq!(room.entries, 10);
+        assert_eq!(room.bytes, dir_size(&paths.root));
+        assert_eq!(usage.roots[0].bytes, dir_size(temp.path()));
+        assert_eq!(
+            room.folders[6].largest,
+            Some(LargestDirectory {
+                name: "run".into(),
+                entries: 3,
+            })
+        );
+        assert!(room.folders[0].largest.is_none());
+
+        let missing = paths::StatePaths::under(
+            crate::WorkspaceId::from_project_root(&temp.path().join("missing")),
+            temp.path(),
+        )
+        .unwrap();
+        let room = measure_under(
+            &[(StorageKind::Home, temp.path().to_owned())],
+            Some(&missing),
+        )
+        .room
+        .unwrap();
+        assert!(!room.present);
+        assert_eq!((room.entries, room.bytes), (0, 0));
+        assert_eq!(room.folders.len(), 10);
+        assert!(room.folders.iter().all(|folder| !folder.present
+            && folder.entries == 0
+            && folder.bytes == 0
+            && folder.largest.is_none()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn measure_room_counts_hardlink_names_without_following_symlinks() {
+        let temp = tempdir().unwrap();
+        let paths = paths::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        fs::create_dir_all(&paths.room_shared_dir).unwrap();
+        fs::create_dir_all(&paths.cache_dir).unwrap();
+        let source = paths.room_shared_dir.join("source");
+        fs::write(&source, [0; 16_384]).unwrap();
+        fs::hard_link(&source, paths.room_shared_dir.join("alias")).unwrap();
+        fs::hard_link(&source, paths.cache_dir.join("alias")).unwrap();
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("file"), [0; 32_768]).unwrap();
+        let link = paths.room_shared_dir.join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let usage = measure_under(&[(StorageKind::Home, temp.path().to_owned())], Some(&paths));
+        let room = usage.room.unwrap();
+        assert_eq!(room.folders[6].entries, 3);
+        assert_eq!(room.folders[3].entries, 1);
+        assert!(room.folders[6].largest.is_none());
+        let expected: u64 = [
+            &paths.root,
+            &paths.room_shared_dir,
+            &paths.cache_dir,
+            &source,
+            &link,
+        ]
+        .into_iter()
+        .map(|path| fs::symlink_metadata(path).unwrap().len())
+        .sum();
+        assert_eq!(room.bytes, expected);
+        assert_eq!(room.entries, 6);
+        assert_eq!(usage.roots[0].bytes, dir_size(temp.path()));
+        assert_eq!(
+            room.folders[3].bytes + room.folders[6].bytes,
+            expected - fs::metadata(&paths.root).unwrap().len()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn measure_follows_a_symlinked_home_root_only() {
+        let temp = tempdir().unwrap();
+        let real = temp.path().join("dotfiles-home");
+        fs::create_dir(&real).unwrap();
+        let home = temp.path().join("home");
+        std::os::unix::fs::symlink(&real, &home).unwrap();
+        let paths =
+            paths::StatePaths::under(crate::WorkspaceId::from_project_root(temp.path()), &home)
+                .unwrap();
+        fs::create_dir_all(paths.room_shared_dir.join("run")).unwrap();
+        fs::write(paths.room_shared_dir.join("run/report"), "report").unwrap();
+
+        let usage = measure_under(&[(StorageKind::Home, home.clone())], Some(&paths));
+        let room = usage.room.unwrap();
+        assert!(room.present);
+        assert_eq!(room.folders[6].entries, 2);
+        assert_eq!(usage.roots[0].bytes, dir_size(&real));
+        assert_eq!(dir_size(&home), fs::symlink_metadata(&home).unwrap().len());
+    }
+
+    #[test]
+    fn measure_room_largest_directory_breaks_ties_by_name_and_ignores_files() {
+        let temp = tempdir().unwrap();
+        let paths = paths::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        for name in ["z", "a"] {
+            fs::create_dir_all(paths.room_shared_dir.join(name)).unwrap();
+        }
+        fs::write(paths.room_shared_dir.join("large-file"), [0; 16_384]).unwrap();
+        fs::create_dir_all(&paths.cache_dir).unwrap();
+        fs::write(paths.cache_dir.join("flat"), "flat").unwrap();
+
+        let room = measure_under(&[(StorageKind::Home, temp.path().to_owned())], Some(&paths))
+            .room
+            .unwrap();
+        assert_eq!(
+            room.folders[6].largest,
+            Some(LargestDirectory {
+                name: "a".into(),
+                entries: 1,
+            })
+        );
+        assert!(room.folders[3].largest.is_none());
     }
 }
