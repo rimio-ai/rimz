@@ -170,10 +170,10 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
         .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
         .output()
         .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
+        output.status.success() && stdout.contains("test result: ok. 1 passed;"),
+        "the child must run exactly this test:\n{stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
