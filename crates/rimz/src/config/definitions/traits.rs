@@ -1,11 +1,15 @@
 //! Trait fragments substituted into definition crafts.
 
+use std::collections::BTreeMap;
 use std::path::Path;
+
+use crate::packs::ClaimResolution;
 
 use super::{DefinitionErr, SkillCatalog};
 
 pub(super) fn render(
     home: &Path,
+    paths: &BTreeMap<String, ClaimResolution>,
     source: &Path,
     body: &str,
     names: &[String],
@@ -30,8 +34,23 @@ pub(super) fn render(
                 format!("invalid trait name '{name}'"),
             ));
         }
-        let path = home.join("traits").join(format!("{name}.md"));
-        let text = catalog.read_text(&path).map_err(|error| {
+        let claim = paths.get(name).ok_or_else(|| {
+            DefinitionErr::new(
+                source,
+                format!(
+                    "cannot read trait '{}': no such trait",
+                    home.join("traits").join(format!("{name}.md")).display()
+                ),
+            )
+        })?;
+        let path = match claim {
+            ClaimResolution::Home(path) => path,
+            ClaimResolution::Pack(claim) => &claim.path,
+            ClaimResolution::Conflict { message, .. } => {
+                return Err(DefinitionErr::new(source, message));
+            }
+        };
+        let text = catalog.read_text(path).map_err(|error| {
             DefinitionErr::new(
                 source,
                 format!("cannot read trait '{}': {error}", path.display()),

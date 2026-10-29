@@ -6,6 +6,172 @@ use crate::ids::MuxName;
 use std::num::NonZeroU16;
 use tempfile::tempdir;
 
+mod pack_failures {
+    use super::*;
+
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        for (path, text) in [
+            ("home/agents/pi.md", "---\ndescription: Base\n---\nBase."),
+            (
+                "home/agents/good.md",
+                "---\ndescription: Good\nagent: pi\n---\nGood.",
+            ),
+            (
+                "source/rimz-packs.toml",
+                "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = 'crew'\n\
+                 [[pack]]\nname = 'tools'\ndescription = 'Tools'\npath = 'tools'\n",
+            ),
+        ] {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        for pack in ["crew", "tools"] {
+            std::fs::create_dir_all(dir.path().join("source").join(pack)).unwrap();
+        }
+        crate::packs::install(&dir.path().join("home"), &dir.path().join("source")).unwrap();
+        dir
+    }
+
+    fn launch(dir: &tempfile::TempDir) -> effective::LaunchAgents {
+        let home = dir.path().join("home");
+        let (machine, _) = MachineConfig::load_from_with_agent_spec_sources(
+            &home.join("config.toml"),
+            &home,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(!machine.notices.definition_errors.is_empty());
+        effective::load_with_roots(&machine, dir.path(), &home).unwrap()
+    }
+
+    fn healthy(launch: &effective::LaunchAgents) {
+        assert!(launch.profiles.0.contains_key("good"));
+        let result = launch.block_set_failure();
+        assert!(
+            result.is_ok(),
+            "healthy profile blocked by set failure: {result:?}"
+        );
+        assert!(launch.block_failed_reference(Some("good"), None).is_ok());
+    }
+
+    #[test]
+    fn missing_manifest_does_not_poison_the_launch_set() {
+        let dir = fixture();
+        std::fs::remove_file(dir.path().join("source/rimz-packs.toml")).unwrap();
+        healthy(&launch(&dir));
+    }
+
+    #[test]
+    fn skill_conflict_does_not_poison_the_launch_set() {
+        let dir = fixture();
+        for pack in ["crew", "tools"] {
+            let root = dir.path().join("source").join(pack).join("skills/shared");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("SKILL.md"), "Shared.").unwrap();
+        }
+        healthy(&launch(&dir));
+    }
+
+    #[test]
+    fn pack_tree_error_does_not_poison_the_launch_set() {
+        let dir = fixture();
+        std::fs::write(dir.path().join("source/crew/agents"), "not a directory").unwrap();
+        healthy(&launch(&dir));
+    }
+
+    #[test]
+    fn home_tree_error_still_refuses_the_launch_set() {
+        let dir = fixture();
+        std::fs::write(dir.path().join("home/subagents"), "not a directory").unwrap();
+        assert!(launch(&dir).block_set_failure().is_err());
+    }
+
+    #[test]
+    fn failed_qualified_parent_is_owned_by_its_dependent() {
+        let dir = fixture();
+        let root = dir.path().join("source/crew/agents");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("good.md"),
+            "---\ndescription: Broken parent\nagent: missing\n---\n",
+        )
+        .unwrap();
+        for name in ["dependent", "dependent2"] {
+            std::fs::write(
+                dir.path().join(format!("home/agents/{name}.md")),
+                "---\ndescription: Dependent\nagent: crew:good\n---\n",
+            )
+            .unwrap();
+        }
+        let launch = launch(&dir);
+        healthy(&launch);
+        for name in ["dependent", "dependent2"] {
+            let failure = launch.block_failed_reference(Some(name), None).unwrap_err();
+            assert!(
+                failure
+                    .to_string()
+                    .contains("follows unknown profile 'missing'"),
+                "{name}: {failure}"
+            );
+        }
+    }
+
+    #[test]
+    fn trait_conflict_does_not_claim_a_launch_name() {
+        let dir = fixture();
+        for pack in ["crew", "tools"] {
+            let root = dir.path().join("source").join(pack).join("traits");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("amp.md"), "Trait.").unwrap();
+        }
+        std::fs::write(
+            dir.path().join("home/agents/consumer.md"),
+            "---\ndescription: Consumer\nagent: pi\ntraits: [amp]\n---\n${traits}",
+        )
+        .unwrap();
+        let launch = launch(&dir);
+        let result = launch.block_failed_reference(Some("amp"), None);
+        assert!(result.is_ok(), "trait claimed a launch name: {result:?}");
+        healthy(&launch);
+        assert!(
+            launch
+                .block_failed_reference(Some("consumer"), None)
+                .unwrap_err()
+                .to_string()
+                .contains("pack conflict")
+        );
+    }
+
+    #[test]
+    fn trait_conflict_named_like_a_healthy_profile_does_not_poison_the_set() {
+        let dir = fixture();
+        for pack in ["crew", "tools"] {
+            let root = dir.path().join("source").join(pack).join("traits");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("good.md"), "Trait.").unwrap();
+        }
+        healthy(&launch(&dir));
+    }
+
+    #[test]
+    fn kind_base_family_exclusion_keeps_the_conflict_fix() {
+        let dir = fixture();
+        for pack in ["crew", "tools"] {
+            let root = dir.path().join("source").join(pack).join("agents");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("codex.md"), "---\ndescription: Base\n---\nBase.").unwrap();
+        }
+        let launch = launch(&dir);
+        healthy(&launch);
+        let renders = launch.profiles.0["pi"].definition_renders.as_ref().unwrap();
+        let exclusion = &renders.exclusions["codex"];
+        assert!(exclusion.contains("pack conflict"), "{exclusion}");
+        assert!(exclusion.contains("rimz packs exclude crew:codex --type agents"));
+    }
+}
+
 #[test]
 fn broken_machine_files_reports_independent_semantic_errors() {
     let dir = tempdir().unwrap();
@@ -2311,6 +2477,53 @@ fn definition_stamp_tracks_definitions_traits_and_skill_files() {
     )
     .unwrap();
     assert_ne!(skill_added, ConfigStamp::from_inputs(&path, dir.path()));
+
+    let source = tempdir().unwrap();
+    let manifest = "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\n";
+    std::fs::write(source.path().join("rimz-packs.toml"), manifest).unwrap();
+    crate::packs::install(dir.path(), source.path()).unwrap();
+    let mut stamp = ConfigStamp::from_inputs(&path, dir.path());
+    let mut changes = Vec::new();
+    for (file, text) in [
+        (
+            "agents/packed.md",
+            Some("---\ndescription: Pack\nagent: pi\n---\n"),
+        ),
+        (
+            "agents/packed.md",
+            Some("---\ndescription: Edited live\nagent: pi\n---\n"),
+        ),
+        (
+            "rimz-packs.toml",
+            Some("[[pack]]\nname = 'crew'\ndescription = 'Edited crew'\npath = '.'\n"),
+        ),
+        (
+            "skills/packed/SKILL.md",
+            Some("---\ndescription: Pack skill\n---\nSkill."),
+        ),
+        (
+            "skills/packed/SKILL.md",
+            Some("---\ndescription: Changed skill\n---\nChanged."),
+        ),
+        ("agents/packed.md", None),
+    ] {
+        let target = source.path().join(file);
+        if let Some(text) = text {
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, text).unwrap();
+        } else {
+            std::fs::remove_file(target).unwrap();
+        }
+        let next = ConfigStamp::from_inputs(&path, dir.path());
+        changes.push(stamp != next);
+        stamp = next;
+    }
+    let record = dir.path().join("packs/installed.json");
+    let mut text = std::fs::read_to_string(&record).unwrap();
+    text.push('\n');
+    std::fs::write(record, text).unwrap();
+    changes.push(stamp != ConfigStamp::from_inputs(&path, dir.path()));
+    assert_eq!(changes, [true; 7]);
 }
 
 #[test]

@@ -1,6 +1,9 @@
 //! Machine-tier Markdown definitions, resolved into the existing profile schema.
+//! Errors without a `failed` owner refuse every launch; pack-scoped diagnostics use
+//! `DefinitionCause::PackProblem` to retain reporting without failing the definition set.
 
 mod agent;
+mod catalog;
 pub(crate) mod frontmatter;
 mod team;
 mod traits;
@@ -14,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
+use crate::packs::ClaimResolution;
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
 /// A user-shell launch that can reach a provider's hook-trust prompt.
@@ -145,6 +149,30 @@ pub struct LoadedDefinitions {
     pub errors: Vec<DefinitionErr>,
     pub failed: BTreeMap<String, BTreeSet<PathBuf>>,
     pub rows: Vec<DefinitionRow>,
+    pub pack_items: Vec<PackDefinition>,
+    pub warnings: Vec<crate::packs::Problem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PackDefinitionFate {
+    Loads,
+    Overridden(PathBuf),
+    Excluded,
+    ExcludedType,
+    Conflict {
+        claims: Vec<crate::packs::PackClaim>,
+        message: String,
+    },
+    Failed(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct PackDefinition {
+    pub pack: crate::packs::PackName,
+    pub kind: crate::packs::ItemType,
+    pub name: String,
+    pub path: PathBuf,
+    pub fate: PackDefinitionFate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -165,6 +193,8 @@ pub enum DefinitionCause {
     },
     /// A parent, kind base, allowed subagent, or team role's agent failed to load.
     DependsOnFailed { name: String },
+    /// A pack-scoped diagnostic that does not refuse unrelated launches.
+    PackProblem,
     /// The message describes a failure that has no more specific grouping.
     Invalid,
 }
@@ -183,10 +213,10 @@ fn missing_kind_base(home: &Path, kind: &str) -> String {
 
 /// The tail of every refusal for a definition whose kind base exists but failed to load,
 /// so the user fixes that file rather than creating it again.
-fn failed_kind_base(home: &Path, kind: &str) -> String {
+fn failed_kind_base(path: &Path) -> String {
     format!(
         "whose kind base {} failed to load; fix that file",
-        home.join("agents").join(format!("{kind}.md")).display()
+        path.display()
     )
 }
 
@@ -232,6 +262,7 @@ pub struct DefinitionRow {
     pub signals: Vec<super::TeamSignalBinding>,
 }
 
+#[derive(Clone)]
 struct Definition {
     path: PathBuf,
     body: String,
@@ -242,11 +273,38 @@ struct Definition {
 struct Namespace {
     definitions: BTreeMap<String, Definition>,
     failed: BTreeSet<String>,
+    problems: BTreeMap<String, DefinitionErr>,
+    packs: BTreeSet<String>,
+}
+
+impl Namespace {
+    fn lookup(&self, name: &str, source: &Path) -> Result<Option<&Definition>, DefinitionErr> {
+        if let Some(error) = self.problems.get(name) {
+            return Err(DefinitionErr::new(source, &error.message).with_cause(error.cause.clone()));
+        }
+        if let Some(definition) = self.definitions.get(name) {
+            return Ok(Some(definition));
+        }
+        if let Some((pack, item)) = name.split_once(':') {
+            let message = if self.packs.contains(pack) {
+                format!(
+                    "pack '{pack}' does not ship '{item}' in this namespace; run `rimz packs show {pack}`"
+                )
+            } else {
+                format!(
+                    "unknown pack '{pack}'; installed packs: {}; run `rimz packs list`",
+                    self.packs.iter().cloned().collect::<Vec<_>>().join(", ")
+                )
+            };
+            return Err(DefinitionErr::new(source, message));
+        }
+        Ok(None)
+    }
 }
 
 /// Markdown files under `home` that are not definitions: contributor notes in
-/// every namespace, and the inspection copy of the built-in consensus RimZ
-/// publishes into `teams/`.
+/// definition trees, and the inspection copy of the built-in consensus RimZ
+/// publishes into `teams/`. Trait names do not reserve contributor-note names.
 fn reserved(home: &Path, path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
@@ -264,13 +322,17 @@ fn files(home: &Path, namespace: &str) -> Result<Vec<PathBuf>, DefinitionErr> {
     };
     let mut paths = Vec::new();
     for entry in entries {
-        let path = entry
-            .map_err(|error| DefinitionErr::new(directory, error.to_string()))?
-            .path();
-        if path.is_file()
-            && path.extension().is_some_and(|extension| extension == "md")
-            && !reserved(home, &path)
+        let entry = entry.map_err(|error| DefinitionErr::new(directory, error.to_string()))?;
+        let path = entry.path();
+        if !path.extension().is_some_and(|extension| extension == "md")
+            || (namespace != "traits" && reserved(home, &path))
         {
+            continue;
+        }
+        let file_type = entry
+            .file_type()
+            .map_err(|error| DefinitionErr::new(&path, error.to_string()))?;
+        if file_type.is_file() || file_type.is_symlink() {
             paths.push(path);
         }
     }
@@ -293,7 +355,8 @@ pub(super) fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
 struct LoadScope<'a> {
     home: &'a Path,
     bases: &'a BTreeSet<String>,
-    failed_bases: &'a BTreeSet<PathBuf>,
+    failed_bases: &'a BTreeMap<String, DefinitionErr>,
+    traits: &'a BTreeMap<String, ClaimResolution>,
     skills: &'a SkillCatalog<'a>,
     tiers: &'a super::tiers::TierConfig,
     native_auto_compact: Option<u64>,
@@ -317,44 +380,115 @@ pub fn load(
 ) -> LoadedDefinitions {
     let catalog = SkillCatalog::new(skills, agents_home);
     let mut loaded = LoadedDefinitions::default();
+    let packs = crate::packs::resolve(agents_home);
+    loaded.warnings.clone_from(&packs.warnings);
+    loaded.errors.extend(packs.problems.iter().map(|problem| {
+        DefinitionErr::new(&problem.path, &problem.message).with_cause(DefinitionCause::PackProblem)
+    }));
+    let sources = catalog::Catalog::new(agents_home, &packs, &catalog, &mut loaded);
     if let Ok(inventory) = catalog.chain.inventory(|_| true) {
         for conflict in inventory.conflicts.values() {
-            loaded.errors.push(DefinitionErr::new(
-                &conflict.path,
-                format!(
-                    "{}; a provider-root skill of this name still wins for that provider",
-                    conflict.message,
-                ),
-            ));
+            loaded.errors.push(
+                DefinitionErr::new(
+                    &conflict.path,
+                    format!(
+                        "{}; a provider-root skill of this name still wins for that provider",
+                        conflict.message,
+                    ),
+                )
+                .with_cause(DefinitionCause::PackProblem),
+            );
         }
     }
-    let mut agents = Namespace::default();
-    let mut subagents = Namespace::default();
+    let installed: BTreeSet<_> = packs
+        .record
+        .sources
+        .iter()
+        .flat_map(|source| &source.packs)
+        .map(|pack| pack.name.to_string())
+        .collect();
+    let mut agents = Namespace {
+        packs: installed.clone(),
+        ..Namespace::default()
+    };
+    let mut subagents = Namespace {
+        packs: installed,
+        ..Namespace::default()
+    };
+    for (name, claim) in &sources.claims["definitions"] {
+        if let ClaimResolution::Conflict { claims, message } = claim {
+            let error = DefinitionErr::new(&claims[0].path, message)
+                .with_cause(DefinitionCause::DependsOnFailed { name: name.clone() });
+            for tree in [&mut agents, &mut subagents] {
+                tree.failed.insert(name.clone());
+                tree.problems.insert(name.clone(), error.clone());
+            }
+        }
+    }
     let mut bases = BTreeSet::new();
-    let mut failed_bases = BTreeSet::new();
+    let mut failed_bases = BTreeMap::new();
+    for (name, claim) in &sources.claims["bases"] {
+        if let ClaimResolution::Conflict { claims, message } = claim {
+            failed_bases.insert(
+                name.clone(),
+                DefinitionErr::new(&claims[0].path, message)
+                    .with_cause(DefinitionCause::DependsOnFailed { name: name.clone() }),
+            );
+        }
+    }
     let mut names: BTreeMap<String, PathBuf> = BTreeMap::new();
     for (namespace, tree) in [("agents", &mut agents), ("subagents", &mut subagents)] {
-        let paths = match files(agents_home, namespace) {
-            Ok(paths) => paths,
-            Err(error) => {
-                loaded.errors.push(error);
-                continue;
-            }
-        };
-        for path in paths {
+        for item in sources
+            .items
+            .iter()
+            .filter(|item| item.kind.as_str() == namespace)
+        {
+            let path = &item.path;
             let stem = path
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            let mut name = stem.clone();
+            let name = &item.name;
             let kind_base = crate::agents::find_definition(&stem).filter(|_| namespace == "agents");
+            if kind_base.is_some() && !item.selected() {
+                continue;
+            }
+            let qualified = item.pack.as_ref().map(|pack| format!("{pack}:{name}"));
+            if item.excluded() {
+                if let Some(key) = qualified {
+                    let pack = item
+                        .pack
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    let target = if matches!(item.fate, Some(PackDefinitionFate::ExcludedType)) {
+                        format!("{pack} --type {namespace}")
+                    } else {
+                        format!("{pack}:{name} --type {namespace}")
+                    };
+                    tree.problems.insert(
+                        key,
+                        DefinitionErr::new(
+                            path,
+                            format!("pack item is excluded; run `rimz packs include {target}`"),
+                        ),
+                    );
+                }
+                continue;
+            }
+            let keys: Vec<_> = item
+                .selected()
+                .then(|| name.clone())
+                .into_iter()
+                .chain(qualified)
+                .collect();
             let result = (|| {
                 if let Some(definition) = kind_base
                     && !definition.spec().launch.takes_system_prompt()
                 {
                     return Err(DefinitionErr::new(
-                        &path,
+                        path,
                         format!(
                             "{stem} takes no system prompt, so this kind base can never reach a \
                              launch; delete {}",
@@ -362,15 +496,16 @@ pub fn load(
                         ),
                     ));
                 }
-                let text = std::fs::read_to_string(&path)
-                    .map_err(|error| DefinitionErr::new(&path, error.to_string()))?;
-                let (yaml, body) = frontmatter::split(&path, &text)?;
+                let text = catalog
+                    .read_text(path)
+                    .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+                let (yaml, body) = frontmatter::split(path, &text)?;
                 if kind_base.is_some() {
-                    let fm: BaseFrontmatter = frontmatter::parse(&path, yaml)?;
-                    let description = frontmatter::description(&path, fm.description.as_deref())?;
+                    let fm: BaseFrontmatter = frontmatter::parse(path, yaml)?;
+                    let description = frontmatter::description(path, fm.description.as_deref())?;
                     if body.trim().is_empty() {
                         return Err(DefinitionErr::new(
-                            &path,
+                            path,
                             format!(
                                 "kind base has no prompt body — write the system prompt every \
                                  {stem} definition starts from below the frontmatter"
@@ -384,68 +519,83 @@ pub fn load(
                         text: body.trim().to_owned(),
                     });
                     bases.insert(stem.clone());
-                    loaded.insert("agents", &stem, &path, profile.clone());
-                    loaded.insert("subagents", &stem, &path, profile);
+                    loaded.insert("agents", &stem, path, profile.clone());
+                    loaded.insert("subagents", &stem, path, profile);
                     return Ok(());
                 }
-                #[derive(serde::Deserialize)]
-                struct Name {
-                    name: Option<String>,
-                }
-                if let Ok(fm) = serde_saphyr::from_str::<Name>(yaml) {
-                    name = fm.name.unwrap_or_else(|| stem.clone());
-                }
-                if !is_safe_name(&name) {
+                if !is_safe_name(name) {
                     return Err(DefinitionErr::new(
-                        &path,
+                        path,
                         format!("has unsafe definition name {name:?}"),
                     ));
                 }
-                if crate::agents::find_definition(&name).is_some() {
+                if crate::agents::find_definition(name).is_some() {
                     return Err(DefinitionErr::new(
-                        &path,
+                        path,
                         "takes the name of an agent kind; rename it",
                     ));
                 }
-                if let Some(previous) = names.get(&name) {
-                    tree.failed.insert(name.clone());
-                    loaded
-                        .failed
-                        .entry(name.clone())
-                        .or_default()
-                        .insert(previous.clone());
-                    return Err(DefinitionErr::new(
-                        &path,
-                        format!(
-                            "definition '{name}' is declared by both {} and {}",
-                            previous.display(),
-                            path.display()
-                        ),
-                    ));
+                for key in &keys {
+                    if let Some(previous) = names.get(key) {
+                        tree.failed.insert(key.clone());
+                        loaded
+                            .failed
+                            .entry(key.clone())
+                            .or_default()
+                            .insert(previous.clone());
+                        return Err(DefinitionErr::new(
+                            path,
+                            format!(
+                                "definition '{name}' is declared by both {} and {}",
+                                previous.display(),
+                                path.display()
+                            ),
+                        ));
+                    }
+                    names.insert(key.clone(), path.clone());
                 }
-                names.insert(name.clone(), path.clone());
-                let fm: AgentFrontmatter = frontmatter::parse(&path, yaml)?;
-                frontmatter::description(&path, fm.description.as_deref())?;
-                if let Some(tools) = &fm.tools {
+                let fm: AgentFrontmatter = frontmatter::parse(path, yaml)?;
+                frontmatter::description(path, fm.description.as_deref())?;
+                if item.selected()
+                    && let Some(tools) = &fm.tools
+                {
                     loaded.tools.insert(name.clone(), tools.clone());
                 }
-                tree.definitions.insert(
-                    name.clone(),
-                    Definition {
-                        path: path.clone(),
-                        body: body.trim().to_owned(),
-                        frontmatter: fm,
-                    },
-                );
+                let definition = Definition {
+                    path: path.clone(),
+                    body: body.trim().to_owned(),
+                    frontmatter: fm,
+                };
+                for key in &keys {
+                    tree.definitions.insert(key.clone(), definition.clone());
+                }
                 Ok(())
             })();
             if let Err(error) = result {
                 if kind_base.is_some() {
-                    failed_bases.insert(path.clone());
+                    failed_bases.insert(name.clone(), error.clone());
                 }
-                loaded.failed.entry(name.clone()).or_default().insert(path);
-                tree.failed.insert(name);
-                loaded.errors.push(error);
+                for key in keys {
+                    tree.failed.insert(key.clone());
+                    if key.contains(':') {
+                        tree.problems.insert(
+                            key.clone(),
+                            DefinitionErr::new(
+                                path,
+                                format!("follows `{key}`, which failed to load: {error}"),
+                            )
+                            .with_cause(DefinitionCause::DependsOnFailed { name: key }),
+                        );
+                    }
+                }
+                if item.selected() {
+                    loaded
+                        .failed
+                        .entry(name.clone())
+                        .or_default()
+                        .insert(path.clone());
+                    loaded.errors.push(error);
+                }
             }
         }
     }
@@ -459,8 +609,13 @@ pub fn load(
     for kind in families {
         if let Some(profile) = loaded.agent_profiles.0.get(kind) {
             renders.insert(kind.to_owned(), profile.clone());
-        } else if failed_bases.contains(&agents_home.join("agents").join(format!("{kind}.md"))) {
-            exclusions.insert(kind.to_owned(), failed_kind_base(agents_home, kind));
+        } else if let Some(error) = failed_bases.get(kind) {
+            let message = if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
+                error.message.clone()
+            } else {
+                failed_kind_base(&error.path)
+            };
+            exclusions.insert(kind.to_owned(), message);
         } else {
             exclusions.insert(kind.to_owned(), missing_kind_base(agents_home, kind));
         }
@@ -489,6 +644,7 @@ pub fn load(
         home: agents_home,
         bases: &bases,
         failed_bases: &failed_bases,
+        traits: &sources.claims["traits"],
         skills: &catalog,
         tiers,
         native_auto_compact,
@@ -509,12 +665,19 @@ pub fn load(
         agent::Resolver::new(scope, "agents", [&agents, &subagents], &children),
         &mut loaded,
     );
-    team::load(scope, [&agents, &subagents], &children, &mut loaded);
+    team::load(
+        scope,
+        [&agents, &subagents],
+        &children,
+        &sources,
+        &mut loaded,
+    );
     loaded.failed.retain(|name, _| {
         !loaded.agent_profiles.0.contains_key(name)
             && !loaded.subagent_profiles.0.contains_key(name)
             && !loaded.teams.0.contains_key(name)
     });
+    loaded.pack_items = sources.pack_items(&loaded, &catalog);
     loaded
 }
 

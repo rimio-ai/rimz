@@ -444,6 +444,81 @@ fn agents_validate_refuses_what_launch_refuses() {
 }
 
 #[test]
+fn agents_validate_loads_live_pack_definitions_and_warns_for_unknown_manifest_keys() {
+    let env = Env::new();
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(
+        source.path().join("rimz-packs.toml"),
+        "future = true\n[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\n",
+    )
+    .unwrap();
+    std::fs::create_dir(source.path().join("agents")).unwrap();
+    std::fs::write(
+        source.path().join("agents/pi.md"),
+        "---\ndescription: Pi base\n---\nBase.",
+    )
+    .unwrap();
+    let definition = source.path().join("agents/packed.md");
+    std::fs::write(
+        &definition,
+        "---\ndescription: Pack worker\nagent: pi\n---\n",
+    )
+    .unwrap();
+    rimz::packs::install(&env.rimz_home(), source.path()).unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "validate", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["name"] == "packed"),
+        "{json}"
+    );
+    assert!(json["errors"].as_array().unwrap().is_empty(), "{json}");
+    assert!(
+        json["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["message"].as_str().unwrap().contains("future")),
+        "{json}"
+    );
+    std::fs::write(
+        &definition,
+        "---\ndescription: Edited pack worker\nagent: pi\n---\n",
+    )
+    .unwrap();
+    env.rimz()
+        .args(["agents", "profiles"])
+        .assert()
+        .success()
+        .stdout(contains("Edited pack worker"));
+}
+
+#[test]
+fn agents_validate_reports_pack_load_problems_as_definition_errors() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.rimz_home().join("packs")).unwrap();
+    std::fs::write(
+        env.rimz_home().join("packs/installed.json"),
+        "{\"version\":2}",
+    )
+    .unwrap();
+    env.rimz()
+        .args(["agents", "validate"])
+        .assert()
+        .failure()
+        .stdout(contains("packs/installed.json").and(contains("newer RimZ")))
+        .stderr(contains("definition error"));
+}
+
+#[test]
 fn agents_validate_and_explain_refuse_a_non_prompt_kind_base_until_deleted() {
     let env = Env::new();
     let base = env.rimz_home().join("agents/amp.md");

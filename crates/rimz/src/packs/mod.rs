@@ -395,6 +395,7 @@ pub struct ResolvedPacks {
     pub record: Record,
     pub packs: Vec<ResolvedPack>,
     pub problems: Vec<Problem>,
+    pub warnings: Vec<Problem>,
 }
 
 /// Read recorded packs in order, retaining problems while omitting unusable packs.
@@ -414,6 +415,7 @@ fn resolve_dir(root: &Path) -> ResolvedPacks {
     };
     let mut packs = Vec::new();
     let mut problems = Vec::new();
+    let mut warnings = Vec::new();
     for source in &record.sources {
         let entry = root.join(&source.entry);
         let manifest = match read_manifest(&entry) {
@@ -424,7 +426,7 @@ fn resolve_dir(root: &Path) -> ResolvedPacks {
             }
         };
         let mut roots = manifest_roots(&entry, &manifest);
-        problems.extend(manifest.warnings);
+        warnings.extend(manifest.warnings);
         for installed in &source.packs {
             let Some(pack) = manifest
                 .packs
@@ -463,6 +465,7 @@ fn resolve_dir(root: &Path) -> ResolvedPacks {
         record,
         packs,
         problems,
+        warnings,
     }
 }
 

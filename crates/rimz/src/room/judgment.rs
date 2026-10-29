@@ -78,6 +78,9 @@ pub(super) fn judge(
     for key in &machine.notices.unknown_keys {
         warn(key.key.clone(), key.to_string());
     }
+    for warning in &machine.notices.definition_warnings {
+        warn(warning.path.display().to_string(), warning.to_string());
+    }
     for message in &machine.notices.host_isolation_fallback {
         warn(
             "agents.isolation".into(),
@@ -255,6 +258,7 @@ fn definition_summary(
     let mut missing = BTreeMap::<_, (BTreeSet<_>, BTreeSet<_>)>::new();
     let mut dependent = BTreeSet::new();
     let mut invalid = BTreeSet::new();
+    let mut pack_problems = BTreeSet::new();
     for error in errors {
         match &error.cause {
             DefinitionCause::MissingSkill { skill, roots } => {
@@ -267,6 +271,13 @@ fn definition_summary(
             }
             DefinitionCause::Invalid => {
                 invalid.insert(error.path.as_path());
+            }
+            DefinitionCause::PackProblem => {
+                pack_problems.insert(format!(
+                    "pack problem at {}: {}; unrelated launches remain available",
+                    home_relative_path_to(home, &error.path),
+                    error.message
+                ));
             }
         }
     }
@@ -295,6 +306,7 @@ fn definition_summary(
     if !lines.is_empty() {
         lines.push("launches that select them are refused until the files are fixed; `rimz agents validate` lists every error".to_owned());
     }
+    lines.extend(pack_problems);
     lines
 }
 

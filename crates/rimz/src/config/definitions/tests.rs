@@ -1872,7 +1872,20 @@ fn missing_trees_and_documentation_are_not_definitions() {
         }
     }
     assert!(clean(root.path()).rows.is_empty());
-    assert_eq!(source_paths(root.path()).len(), 4);
+    let mut expected: Vec<_> = [
+        "agents",
+        "subagents",
+        "teams",
+        "traits",
+        "traits/AGENTS.md",
+        "traits/CLAUDE.md",
+        "traits/README.md",
+    ]
+    .into_iter()
+    .map(|path| root.path().join(path))
+    .collect();
+    expected.sort();
+    assert_eq!(source_paths(root.path()), expected);
 }
 
 #[test]
@@ -2610,9 +2623,16 @@ fn traits_deduplicate_and_preserve_unrelated_placeholders() {
     write(root.path(), "traits/one.md", " One.\n");
     write(root.path(), "traits/two.md", "Two.");
     let source = root.path().join("agents/probe.md");
+    let sources = catalog::Catalog::new(
+        root.path(),
+        &crate::packs::ResolvedPacks::default(),
+        &catalog,
+        &mut LoadedDefinitions::default(),
+    );
     let render = |body, names: &[&str]| {
         traits::render(
             root.path(),
+            &sources.claims["traits"],
             &source,
             body,
             &names
@@ -3111,6 +3131,561 @@ fn skill_checks_resolve_pack_skills_and_report_conflicts_not_missing() {
             .message
             .contains("provider-root skill of this name still wins")
     }));
+}
+
+fn linked_pack(home: &Path, name: &str) -> tempfile::TempDir {
+    let source = tempfile::tempdir().unwrap();
+    write(
+        source.path(),
+        "rimz-packs.toml",
+        &format!("[[pack]]\nname = '{name}'\ndescription = 'Crew'\npath = '.'\n"),
+    );
+    crate::packs::install(home, source.path()).unwrap();
+    source
+}
+
+#[test]
+fn packs_bind_seats_parents_traits_bases_and_children_through_the_merged_chain() {
+    let home = tempfile::tempdir().unwrap();
+    let pack = linked_pack(home.path(), "crew");
+    write(
+        pack.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\n---\nPack base.",
+    );
+    write(pack.path(), "traits/shared.md", "Pack trait.");
+    definition(
+        pack.path(),
+        "subagents/helper.md",
+        "agent: claude\ntools: []",
+        "Helper.",
+    );
+    definition(
+        pack.path(),
+        "agents/parent.md",
+        "agent: claude\ntools: [Bash]\ntraits: [shared]",
+        "Parent ${traits}",
+    );
+    definition(
+        pack.path(),
+        "agents/worker.md",
+        "agent: parent\nsubagents: [helper]",
+        "Worker.",
+    );
+    team_definition(pack.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let packed = load_checked(home.path());
+    assert!(
+        packed.agent_profiles.0.contains_key("probe.lead"),
+        "{:?}",
+        packed.errors
+    );
+    assert_eq!(
+        texts(&packed.agent_profiles.0["worker"]),
+        ["Parent Pack trait.", "Worker."]
+    );
+    assert_eq!(
+        packed.agent_profiles.0["worker"].subagents.as_deref(),
+        Some(["helper".to_owned()].as_slice())
+    );
+    assert!(
+        packed
+            .sources
+            .team("probe")
+            .unwrap()
+            .starts_with(home.path().join("packs"))
+    );
+    write(home.path(), "traits/shared.md", "Home trait.");
+    write(
+        home.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\n---\nHome base.",
+    );
+    definition(
+        home.path(),
+        "agents/parent.md",
+        "agent: claude\ntools: [Read]\ntraits: [shared]",
+        "Home ${traits}",
+    );
+    let merged = clean(home.path());
+    assert_eq!(
+        texts(&merged.agent_profiles.0["worker"]),
+        ["Home Home trait.", "Worker."]
+    );
+    assert_eq!(
+        tool_args(&merged, "probe.lead"),
+        tool_args(&merged, "worker")
+    );
+    definition(
+        home.path(),
+        "agents/worker.md",
+        "agent: claude\ntools: []",
+        "Home worker.",
+    );
+    let overridden = clean(home.path());
+    assert_eq!(
+        texts(&overridden.agent_profiles.0["probe.lead"]),
+        ["Home worker."]
+    );
+    assert!(
+        clean(tempfile::tempdir().unwrap().path())
+            .pack_items
+            .is_empty()
+    );
+}
+
+#[test]
+fn packs_claim_each_namespace_even_when_the_home_file_is_broken() {
+    use crate::packs::ItemType;
+    let cases = [
+        ("agents", "worker", ItemType::Agents),
+        ("subagents", "worker", ItemType::Subagents),
+        ("teams", "probe", ItemType::Teams),
+        ("traits", "shared", ItemType::Traits),
+        ("agents", "claude", ItemType::Agents),
+    ];
+    let results: Vec<_> = cases
+        .iter()
+        .map(|(tree, name, kind)| {
+            let home = tempfile::tempdir().unwrap();
+            let pack = linked_pack(home.path(), "crew");
+            let file = format!("{tree}/{name}.md");
+            write(
+                pack.path(),
+                &file,
+                "---\ndescription: Pack\nagent: claude\ntools: []\n---\nPack.",
+            );
+            // Cross-tree claims share the agent/subagent namespace.
+            let home_tree = if *tree == "subagents" { "agents" } else { tree };
+            let home_file = format!("{home_tree}/{name}.md");
+            write(home.path(), &home_file, "broken home file");
+            let loaded = load_checked(home.path());
+            loaded.pack_items.iter().any(|item| {
+                item.kind == *kind
+                    && item.name == *name
+                    && item.fate == PackDefinitionFate::Overridden(home.path().join(&home_file))
+            }) && !loaded
+                .errors
+                .iter()
+                .any(|error| error.path.starts_with(home.path().join("packs")))
+        })
+        .collect();
+    assert_eq!(results, vec![true; cases.len()]);
+}
+
+#[test]
+fn packs_conflicts_name_every_source_and_resolve_by_exclusion_or_home_claim() {
+    use crate::packs::{ExclusionTarget, ItemKey, ItemType};
+    let cases = [
+        ("agents", "worker", ItemType::Agents, "agent: worker", ""),
+        (
+            "subagents",
+            "helper",
+            ItemType::Subagents,
+            "agent: claude\ntools: []\nsubagents: [helper]",
+            "",
+        ),
+        (
+            "teams",
+            "probe",
+            ItemType::Teams,
+            "agent: claude\ntools: []",
+            "",
+        ),
+        (
+            "traits",
+            "shared",
+            ItemType::Traits,
+            "agent: claude\ntools: []\ntraits: [shared]",
+            "${traits}",
+        ),
+        (
+            "agents",
+            "claude",
+            ItemType::Agents,
+            "agent: claude\ntools: []",
+            "",
+        ),
+    ];
+    let results: Vec<_> = cases
+        .iter()
+        .map(|(tree, name, kind, fields, body)| {
+            let home = fixture();
+            if *name == "claude" {
+                std::fs::remove_file(home.path().join("agents/claude.md")).unwrap();
+            }
+            definition(home.path(), "agents/consumer.md", fields, body);
+            let one = linked_pack(home.path(), "one");
+            let two = linked_pack(home.path(), "two");
+            let file = format!("{tree}/{name}.md");
+            for source in [&one, &two] {
+                if *tree == "teams" {
+                    team_definition(
+                        source.path(),
+                        TEAM_STAGES,
+                        &TEAM_ROLES.replace("worker", "consumer"),
+                        "Pipeline.",
+                    );
+                } else if *tree == "traits" {
+                    write(source.path(), &file, "Trait.");
+                } else if *name == "claude" {
+                    write(source.path(), &file, "---\ndescription: Base\n---\nBase.");
+                } else {
+                    definition(source.path(), &file, "agent: claude\ntools: []", "");
+                }
+            }
+            let loaded = load_checked(home.path());
+            let conflict = loaded.errors.iter().any(|error| {
+                [
+                    "pack conflict",
+                    "one",
+                    "two",
+                    &file,
+                    "rimz packs exclude one:",
+                    "rimz packs exclude two:",
+                    "file of your own",
+                ]
+                .iter()
+                .all(|fragment| error.message.contains(fragment))
+            });
+            let dependent = *tree == "teams"
+                || loaded.errors.iter().any(|error| {
+                    error.path.ends_with("agents/consumer.md")
+                        && error.message.contains("pack conflict")
+                });
+            crate::packs::exclude(
+                home.path(),
+                &"two".parse().unwrap(),
+                &ExclusionTarget::Item(ItemKey {
+                    kind: *kind,
+                    name: name.to_string(),
+                }),
+            )
+            .unwrap();
+            let resolved = load_checked(home.path());
+            let exclusion = !resolved
+                .errors
+                .iter()
+                .any(|error| error.message.contains("pack conflict"));
+            crate::packs::include(
+                home.path(),
+                &"two".parse().unwrap(),
+                &ExclusionTarget::Item(ItemKey {
+                    kind: *kind,
+                    name: name.to_string(),
+                }),
+            )
+            .unwrap();
+            std::fs::copy(one.path().join(&file), home.path().join(&file))
+                .or_else(|_| {
+                    std::fs::create_dir_all(home.path().join(tree))?;
+                    std::fs::copy(one.path().join(&file), home.path().join(&file))
+                })
+                .unwrap();
+            let home_wins = !load_checked(home.path())
+                .errors
+                .iter()
+                .any(|error| error.message.contains("pack conflict"));
+            (conflict, dependent, exclusion, home_wins)
+        })
+        .collect();
+    assert_eq!(results, vec![(true, true, true, true); cases.len()]);
+}
+
+#[test]
+fn packs_qualified_parents_inherit_shadowed_and_conflicted_definitions_without_profiles() {
+    let home = fixture();
+    let one = linked_pack(home.path(), "one");
+    let two = linked_pack(home.path(), "two");
+    write(home.path(), "traits/shared.md", "Home trait.");
+    definition(
+        home.path(),
+        "agents/ancestor.md",
+        "agent: claude\ntools: [Read]\nmodel: opus",
+        "Ancestor.",
+    );
+    for source in [&one, &two] {
+        definition(
+            source.path(),
+            "agents/worker.md",
+            "agent: ancestor\ntools: [Bash, Skill]\ntraits: [shared]\nskills: []\nsubagents: [general]",
+            "Pack ${traits}",
+        );
+    }
+    definition(
+        home.path(),
+        "agents/worker.md",
+        "agent: one:worker\ntools: [Skill]\nsubagents: null",
+        "Home worker.",
+    );
+    definition(
+        home.path(),
+        "agents/conflicted.md",
+        "agent: two:worker",
+        "Conflicted.",
+    );
+    team_definition(home.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let loaded = clean(home.path());
+    assert_eq!(
+        texts(&loaded.agent_profiles.0["worker"]),
+        ["Ancestor.", "Pack Home trait.", "Home worker."]
+    );
+    assert_eq!(loaded.agent_profiles.0["worker"].subagents, Some(vec![]));
+    assert_eq!(
+        loaded.agent_profiles.0["worker"].description.as_deref(),
+        Some("Probe.")
+    );
+    assert_eq!(
+        tool_args(&loaded, "probe.lead"),
+        tool_args(&loaded, "worker")
+    );
+    assert!(
+        !loaded
+            .agent_profiles
+            .0
+            .keys()
+            .chain(loaded.subagent_profiles.0.keys())
+            .any(|name| name.contains(':'))
+    );
+    std::fs::remove_file(home.path().join("agents/worker.md")).unwrap();
+    let conflicted = load_checked(home.path());
+    assert!(!conflicted.agent_profiles.0.contains_key("worker"));
+    assert!(
+        conflicted.agent_profiles.0.contains_key("conflicted"),
+        "{:?}",
+        conflicted.errors
+    );
+}
+
+#[test]
+fn packs_qualified_refusals_distinguish_unknown_missing_excluded_failed_and_cycles() {
+    use crate::packs::{ExclusionTarget, ItemKey, ItemType};
+    let home = fixture();
+    let pack = linked_pack(home.path(), "crew");
+    definition(pack.path(), "agents/excluded.md", "agent: pi", "");
+    definition(pack.path(), "agents/failed.md", "agent: missing", "");
+    definition(pack.path(), "agents/cycle.md", "agent: probe", "");
+    definition(pack.path(), "agents/effort.md", "agent: pi\neffort: +1", "");
+    crate::packs::exclude(
+        home.path(),
+        &"crew".parse().unwrap(),
+        &ExclusionTarget::Item(ItemKey {
+            kind: ItemType::Agents,
+            name: "excluded".into(),
+        }),
+    )
+    .unwrap();
+    let cases = [
+        (
+            "unknown:worker",
+            vec!["unknown pack", "crew", "rimz packs list"],
+        ),
+        ("crew:missing", vec!["does not ship", "missing"]),
+        (
+            "crew:excluded",
+            vec!["excluded", "rimz packs include crew:excluded --type agents"],
+        ),
+        ("crew:failed", vec!["failed to load"]),
+        ("crew:cycle", vec!["follows itself", "crew:cycle", "probe"]),
+        ("crew:effort", vec!["relative", "absolute effort"]),
+    ];
+    let results: Vec<_> = cases
+        .iter()
+        .map(|(parent, fragments)| {
+            definition(
+                home.path(),
+                "agents/probe.md",
+                &format!("agent: {parent}"),
+                "",
+            );
+            let loaded = load_checked(home.path());
+            let messages = loaded
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            (
+                fragments.iter().all(|fragment| messages.contains(fragment)),
+                messages,
+            )
+        })
+        .collect();
+    assert_eq!(
+        results.iter().map(|(valid, _)| *valid).collect::<Vec<_>>(),
+        vec![true; cases.len()],
+        "{results:#?}"
+    );
+}
+
+#[test]
+fn dangling_home_definition_claims_its_name_before_pack_fallback() {
+    let home = fixture();
+    let pack = linked_pack(home.path(), "crew");
+    definition(pack.path(), "agents/worker.md", "agent: pi", "Pack worker.");
+    let path = home.path().join("agents/worker.md");
+    std::os::unix::fs::symlink("missing.md", &path).unwrap();
+    let loaded = load_checked(home.path());
+    assert!(!loaded.agent_profiles.0.contains_key("worker"));
+    assert!(loaded.failed["worker"].contains(&path));
+    assert!(loaded.errors.iter().any(|error| error.path == path));
+    assert!(source_paths(home.path()).contains(&path));
+}
+
+#[test]
+fn traits_keep_contributor_note_names_in_home_and_pack_tiers() {
+    let home = fixture();
+    let pack = linked_pack(home.path(), "crew");
+    for (root, name) in [
+        (home.path(), "README"),
+        (pack.path(), "AGENTS"),
+        (pack.path(), "CLAUDE"),
+    ] {
+        write(root, &format!("traits/{name}.md"), name);
+    }
+    definition(
+        home.path(),
+        "agents/worker.md",
+        "agent: pi\ntraits: [README, AGENTS, CLAUDE]",
+        "${traits}",
+    );
+    let loaded = load_checked(home.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert_eq!(
+        texts(&loaded.agent_profiles.0["worker"]),
+        ["README\n\nAGENTS\n\nCLAUDE"]
+    );
+}
+
+#[test]
+fn packs_failed_bases_name_the_supplied_file_and_item_fates_are_complete() {
+    use crate::packs::{ExclusionTarget, ItemType};
+    let home = tempfile::tempdir().unwrap();
+    let pack = linked_pack(home.path(), "crew");
+    write(
+        pack.path(),
+        "agents/claude.md",
+        "---\ndescription: Empty base\n---\n",
+    );
+    definition(
+        pack.path(),
+        "agents/worker.md",
+        "agent: claude\ntools: []",
+        "",
+    );
+    write(pack.path(), "traits/shared.md", "Trait.");
+    definition(pack.path(), "subagents/helper.md", "agent: pi", "");
+    crate::packs::exclude(
+        home.path(),
+        &"crew".parse().unwrap(),
+        &ExclusionTarget::Type(ItemType::Subagents),
+    )
+    .unwrap();
+    let loaded = load_checked(home.path());
+    assert!(
+        loaded
+            .errors
+            .iter()
+            .any(|error| error.path.ends_with("agents/worker.md")
+                && error.message.contains("kind base")
+                && error.message.contains("packs/")
+                && error.message.contains("failed to load")
+                && !error.message.contains("missing")),
+        "{:?}",
+        loaded.errors
+    );
+    assert_eq!(loaded.pack_items.len(), 4);
+    for (name, expected) in [
+        ("worker", "failed"),
+        ("claude", "failed"),
+        ("shared", "loads"),
+        ("helper", "type"),
+    ] {
+        let fate = &loaded
+            .pack_items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap()
+            .fate;
+        assert!(
+            matches!(
+                (expected, fate),
+                ("failed", PackDefinitionFate::Failed(_))
+                    | ("loads", PackDefinitionFate::Loads)
+                    | ("type", PackDefinitionFate::ExcludedType)
+            ),
+            "{name}: {fate:?}"
+        );
+    }
+}
+
+#[test]
+fn packs_unreadable_traits_have_failed_fates() {
+    let home = fixture();
+    let pack = linked_pack(home.path(), "crew");
+    write(pack.path(), "traits/broken.md", "Trait.");
+    std::fs::write(pack.path().join("traits/broken.md"), [0xff]).unwrap();
+    definition(
+        home.path(),
+        "agents/worker.md",
+        "agent: claude\ntools: []\ntraits: [broken]",
+        "${traits}",
+    );
+    let loaded = load_checked(home.path());
+    assert!(
+        loaded
+            .errors
+            .iter()
+            .any(|error| error.path.ends_with("agents/worker.md")
+                && error.message.contains("cannot read trait"))
+    );
+    assert!(
+        matches!(&loaded.pack_items.iter().find(|item| item.name == "broken").unwrap().fate, PackDefinitionFate::Failed(message) if message.contains("UTF-8"))
+    );
+}
+
+#[test]
+fn packs_load_problems_keep_the_faulty_path_and_do_not_hide_healthy_definitions() {
+    let home = fixture();
+    let broken = linked_pack(home.path(), "broken");
+    let healthy = linked_pack(home.path(), "healthy");
+    definition(healthy.path(), "agents/worker.md", "agent: pi", "");
+    let broken_root = crate::packs::resolve(home.path()).packs[0].root.clone();
+    let manifest = "[[pack]]\nname = 'broken'\ndescription = 'Broken'\npath = '.'\n";
+    let cases = [
+        (None, "rimz-packs.toml"),
+        (Some("bad toml ["), "rimz-packs.toml"),
+        (
+            Some("[[pack]]\nname = 'renamed'\ndescription = 'Other'\npath = '.'"),
+            "rimz-packs.toml",
+        ),
+        (
+            Some("[[pack]]\nname = 'broken'\ndescription = 'Broken'\npath = 'missing'"),
+            "missing",
+        ),
+    ];
+    let results: Vec<_> = cases
+        .into_iter()
+        .map(|(text, file)| {
+            write(broken.path(), "rimz-packs.toml", manifest);
+            if let Some(text) = text {
+                write(broken.path(), "rimz-packs.toml", text);
+            } else {
+                std::fs::remove_file(broken.path().join("rimz-packs.toml")).unwrap();
+            }
+            let loaded = load_checked(home.path());
+            loaded.agent_profiles.0.contains_key("worker")
+                && loaded
+                    .errors
+                    .iter()
+                    .any(|error| error.path == broken_root.join(file))
+        })
+        .collect();
+    assert_eq!(results, [true; 4]);
+    write(home.path(), "packs/installed.json", "{\"version\":2}");
+    let loaded = load_checked(home.path());
+    assert!(loaded.errors.iter().any(|error| error.path
+        == home.path().join("packs/installed.json")
+        && error.message.contains("newer RimZ")));
 }
 
 #[test]

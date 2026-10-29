@@ -90,6 +90,23 @@ fn manifest_reads_all_fields_and_reports_unknown_keys() {
 }
 
 #[test]
+fn resolve_separates_manifest_warnings_from_pack_problems() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = source(temp.path(), "source", &[("crew", ".")]);
+    let home = temp.path().join("home");
+    seed(&home, &[(&source, "linked", &["crew"])]);
+    write(
+        &source.join("rimz-packs.toml"),
+        "future = true\n[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\n",
+    );
+    let resolved = resolve(&home);
+    assert!(resolved.problems.is_empty(), "{resolved:?}");
+    assert_eq!(resolved.warnings.len(), 1);
+    assert!(resolved.warnings[0].message.contains("future"));
+    assert_eq!(resolved.packs.len(), 1);
+}
+
+#[test]
 fn manifest_refusals_name_the_path_and_field() {
     let temp = tempfile::tempdir().unwrap();
     let source = source(temp.path(), "source", &[("crew", ".")]);
