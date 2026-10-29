@@ -7139,6 +7139,12 @@ fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
 fn loop_project_trust_controls_visibility_execution_and_precedence() {
     let env = Env::new();
     env.record(&env.project_root);
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Tmux,
+        "rimz-test",
+        "sidebar",
+    );
     write_loop_config(
         &env,
         &format!(
@@ -7245,6 +7251,12 @@ fn project_task_enablement_is_scoped_by_project_root() {
 fn trusted_project_task_edits_repin_trust() {
     let env = Env::new();
     env.record(&env.project_root);
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Tmux,
+        "rimz-test",
+        "sidebar",
+    );
     write_project_config(&env, "[tasks.first]\ncheck = \"true\"\nevery = \"15m\"\n");
     grant_project_trust(&env);
     let dismissal = env
