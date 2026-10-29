@@ -310,6 +310,7 @@ mod agent_ref {
 
     const SESSION: &str = "saved-session";
     const NAME: &str = "bright-otter";
+    const UUID: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
     struct Fixture {
         env: Env,
@@ -377,7 +378,7 @@ mod agent_ref {
                         agent_name_explicit: true,
                         launch: LaunchParams {
                             profile: Some("worker".into()),
-                            channel: Some("saved".into()),
+                            channel: launch.channel.clone().or_else(|| Some("saved".into())),
                             mode: Some(PermissionMode::Auto),
                             isolation: Some(rimz::config::Isolation::Host),
                             record: Some(rimz::agents::LaunchRecord::replay_or_new(
@@ -498,6 +499,51 @@ mod agent_ref {
             let request = super::decode_exec_request(&argv);
             assert_eq!(request.kind.as_str(), self.kind);
             request
+        }
+
+        fn record_uuid(&self) {
+            let store = self.env.store();
+            let workspace = self.env.resolve_workspace(&self.env.project_root);
+            let mut launch = store
+                .read_events()
+                .unwrap()
+                .into_iter()
+                .find_map(|event| match event.kind() {
+                    rimz::store::event::EventKind::AgentLaunch(payload) => Some(payload),
+                    _ => None,
+                })
+                .unwrap();
+            launch.agent_id = UUID.into();
+            launch.launch_id = Some("uuid-launch".into());
+            launch.agent_name = "uuid-fox".into();
+            launch.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+            store
+                .append_event(&EventEnvelope::agent_launched(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    &AgentKind::new_unchecked("claude"),
+                    launch,
+                ))
+                .unwrap();
+            let mut ended =
+                AgentLifecycleObservation::new(Some(UUID.into()), LifecycleSignal::Ended);
+            ended.transcript_path = Some(self.transcript.display().to_string());
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id,
+                    &workspace.session_name,
+                    "claude",
+                    "SessionEnd",
+                    &ended,
+                ))
+                .unwrap();
+        }
+
+        #[track_caller]
+        fn assert_no_placement(&self) {
+            let trace = self.trace();
+            assert!(!trace.contains("layout-json\t"), "{trace}");
+            assert!(!trace.contains("action\tnew-tab"), "{trace}");
         }
 
         fn attach_and_end(
@@ -835,14 +881,29 @@ mod agent_ref {
     #[test]
     fn lane_resume_refuses_launch_overrides_as_usage_without_placing_a_pane() {
         let fixture = Fixture::new(LaunchParams::default(), false, None);
-        for scope in [
+        let outputs = [
             vec![],
             vec!["#saved"],
             vec!["-w", "saved"],
             vec!["--from-pr", "12"],
-        ] {
+            vec![UUID],
+        ]
+        .map(|scope| {
             let args = [vec!["resume"], scope, vec!["--yolo"]].concat();
-            let output = fixture.command_args(&args).bounded_output().unwrap();
+            fixture.command_args(&args).bounded_output().unwrap()
+        });
+        assert_eq!(
+            outputs.each_ref().map(|output| {
+                std::str::from_utf8(&output.stderr)
+                    .unwrap()
+                    .lines()
+                    .find_map(|line| line.strip_prefix("error: "))
+            }),
+            [Some(
+                "launch overrides apply to one closed session (@handle or @<session-id>); to change a lane's settings use rimz agents <spec> --continue or rimz teams resume"
+            ); 5]
+        );
+        for output in outputs {
             assert_eq!(output.status.code(), Some(2));
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
@@ -851,8 +912,243 @@ mod agent_ref {
                     && stderr.contains("rimz teams resume"),
                 "{stderr}"
             );
-            assert!(!fixture.trace().contains("action\tnew-tab"));
+            assert!(!stderr.contains("no lane"), "{stderr}");
+            fixture.assert_no_placement();
         }
+    }
+
+    #[track_caller]
+    fn assert_resume_refusal(output: &Output, reason: &str, wrong_cause: &str) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert_eq!(
+            stderr.lines().find_map(|line| line.strip_prefix("error: ")),
+            Some(reason),
+            "{stderr}"
+        );
+        assert!(!stderr.contains(wrong_cause), "{stderr}");
+    }
+
+    #[track_caller]
+    fn assert_unrecorded_session_refusal(kinds: &[&str], bg: bool) {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        for kind in kinds {
+            let (directory, entry) = match *kind {
+                "claude" => (
+                    ".claude/projects/native",
+                    serde_json::json!({
+                        "type": "user",
+                        "sessionId": UUID,
+                        "cwd": fixture.cwd,
+                        "timestamp": "2025-01-01T00:00:00Z",
+                        "message": {"role": "user", "content": "hello"}
+                    }),
+                ),
+                "codex" => (
+                    ".codex/archived_sessions",
+                    serde_json::json!({
+                        "type": "session_meta",
+                        "timestamp": "2025-01-01T00:00:00Z",
+                        "payload": {"id": UUID, "cwd": fixture.cwd}
+                    }),
+                ),
+                _ => unreachable!(),
+            };
+            let directory = fixture.env.home_root.join(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("{UUID}.jsonl")),
+                format!("{entry}\n"),
+            )
+            .unwrap();
+        }
+        let mut command = fixture.command(UUID);
+        if bg {
+            command.arg("--bg");
+        }
+        let output = command.bounded_output().unwrap();
+        let homes = kinds
+            .iter()
+            .map(|kind| {
+                format!(
+                    "{kind}: {}",
+                    fixture.env.home_root.join(format!(".{kind}")).display()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let commands = kinds
+            .iter()
+            .map(|kind| {
+                format!(
+                    "`rimz agents {kind} --resume {UUID}{}`",
+                    if bg { " --bg" } else { "" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" or ");
+        assert_resume_refusal(
+            &output,
+            &format!(
+                "session `{UUID}` was found in {homes}, but RimZ has not recorded it; nothing was launched; run {commands}; a profile of the same kind may replace the kind name"
+            ),
+            "no lane",
+        );
+        fixture.assert_no_placement();
+        let agents = fixture
+            .env
+            .store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents;
+        assert_eq!(agents.len(), 1, "{agents:?}");
+        assert_eq!(agents[0].agent_id, SESSION, "{agents:?}");
+    }
+
+    #[test]
+    fn bare_unrecorded_claude_session_prints_command_without_launching() {
+        assert_unrecorded_session_refusal(&["claude"], false);
+    }
+
+    #[test]
+    fn background_bare_unrecorded_session_preserves_bg_in_the_command() {
+        assert_unrecorded_session_refusal(&["claude"], true);
+    }
+
+    #[test]
+    fn bare_unrecorded_codex_session_prints_command_without_launching() {
+        assert_unrecorded_session_refusal(&["codex"], false);
+    }
+
+    #[test]
+    fn bare_unrecorded_session_in_several_homes_lists_each_command() {
+        assert_unrecorded_session_refusal(&["claude", "codex"], true);
+    }
+
+    #[test]
+    fn bare_recorded_id_and_prefix_restore_the_recorded_session() {
+        let attempts = [
+            vec![UUID],
+            vec!["aaaaaaaa"],
+            vec!["-w", UUID],
+            vec![UUID, "--bg"],
+        ]
+        .map(|scope| {
+            let fixture = Fixture::new(LaunchParams::default(), false, None);
+            fixture.record_uuid();
+            let args = [vec!["resume"], scope].concat();
+            let output = fixture.command_args(&args).bounded_output().unwrap();
+            (fixture, output)
+        });
+        assert_eq!(
+            attempts.each_ref().map(|(_, output)| (
+                output.status.success(),
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            )),
+            std::array::from_fn::<_, 4, _>(|_| (
+                true,
+                format!("resumed claude:uuid-fox ({UUID})\n")
+            )),
+            "{:?}",
+            attempts
+                .each_ref()
+                .map(|(_, output)| String::from_utf8_lossy(&output.stderr))
+        );
+        for (fixture, _) in attempts {
+            let request = fixture.request();
+            assert!(
+                matches!(&request.action, ExecAction::Resume { session_id, .. } if session_id == UUID)
+            );
+            assert_eq!(request.identity.name.as_deref(), Some("uuid-fox"));
+            assert_eq!(request.identity.params.channel.as_deref(), Some("saved"));
+            assert_eq!(request.identity.params.profile.as_deref(), Some("worker"));
+            assert_eq!(request.identity.params.mode, Some(PermissionMode::Auto));
+            assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
+            assert!(request.close_pane_on_exit);
+        }
+    }
+
+    #[test]
+    fn session_shaped_lane_wins_over_a_recorded_session_prefix() {
+        let fixture = Fixture::new(
+            LaunchParams {
+                channel: Some("aaaaaaaa".into()),
+                ..Default::default()
+            },
+            false,
+            None,
+        );
+        fixture.record_uuid();
+        let output = fixture.output("aaaaaaaa");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "resuming 2 agents in 'aaaaaaaa'\n"
+        );
+    }
+
+    #[test]
+    fn bare_session_id_misses_name_lanes_and_the_homes_searched() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture.output(UUID);
+        let home = &fixture.env.home_root;
+        assert_resume_refusal(
+            &output,
+            &format!(
+                "no lane and no session matched '{UUID}' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>` or a session-id prefix; searched provider homes: claude: {}, codex: {}",
+                home.join(".claude").display(),
+                home.join(".codex").display()
+            ),
+            "RimZ has not recorded it",
+        );
+        fixture.assert_no_placement();
+    }
+
+    #[test]
+    fn bare_session_prefix_misses_explain_the_recorded_only_lookup() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture.output("aaaaaaaa");
+        assert_resume_refusal(
+            &output,
+            "no lane and no session matched 'aaaaaaaa' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>` or a session-id prefix; a prefix matches only sessions RimZ recorded; the full id also searches the room account's provider homes",
+            "searched provider homes",
+        );
+        fixture.assert_no_placement();
+    }
+
+    #[test]
+    fn non_session_lane_misses_list_lanes_and_the_agent_spelling() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture.output("nope");
+        assert_resume_refusal(
+            &output,
+            "no lane 'nope' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>`",
+            "no session matched",
+        );
+        fixture.assert_no_placement();
+    }
+
+    #[test]
+    fn fresh_with_a_recorded_bare_id_keeps_a_lane_only_lookup() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        fixture.record_uuid();
+        let output = fixture
+            .command(UUID)
+            .arg("--fresh")
+            .bounded_output()
+            .unwrap();
+        assert_resume_refusal(
+            &output,
+            &format!(
+                "no lane '{UUID}' in this workspace; lanes: #saved; resume one closed session with `rimz agents resume @<handle>`"
+            ),
+            "no session matched",
+        );
+        fixture.assert_no_placement();
     }
 
     #[test]

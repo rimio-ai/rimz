@@ -373,7 +373,6 @@ pub(super) fn refuse_unknown_lane(
     workspace: &rimz::ResolvedWorkspace,
     scope: &str,
 ) -> Result<()> {
-    const SHOWN_LANES: usize = 8;
     let audit = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?
@@ -385,17 +384,22 @@ pub(super) fn refuse_unknown_lane(
         return Ok(());
     };
     let lane = format!("#{}", scope.trim_start_matches('#'));
+    bail!(
+        "no lane '{lane}' in this workspace{}",
+        known_lanes_suffix(&lanes)
+    )
+}
+
+pub(super) fn known_lanes_suffix(lanes: &[String]) -> String {
+    const SHOWN_LANES: usize = 8;
     if lanes.is_empty() {
-        bail!("no lane '{lane}' in this workspace");
+        return String::new();
     }
     let mut shown = lanes.iter().take(SHOWN_LANES).cloned().collect::<Vec<_>>();
     if lanes.len() > SHOWN_LANES {
         shown.push("…".to_owned());
     }
-    bail!(
-        "no lane '{lane}' in this workspace; lanes: {}",
-        shown.join(", ")
-    )
+    format!("; lanes: {}", shown.join(", "))
 }
 
 pub(super) fn list_channel_filter(

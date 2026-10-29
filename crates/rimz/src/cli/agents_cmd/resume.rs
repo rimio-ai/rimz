@@ -122,10 +122,7 @@ pub(super) fn resume_provider(
             bail!(
                 "no {} session `{session_id}` found in {}; check the exact id and room account, or use --continue",
                 cell.kind,
-                home.as_deref().map_or_else(
-                    || "an unresolved provider home".to_owned(),
-                    |home| home.display().to_string()
-                )
+                provider_home_label(home.as_deref())
             );
         }
         rimz::agents::session::LocalSessionLookup::Unsupported => {
@@ -471,7 +468,8 @@ pub(super) fn resume_lane(
         from_pr.map(|target| target.number),
         workspace.worktree_root == workspace.project_root,
     );
-    let action = plan_lane_resume(
+    let scoped = matches!(selector, LaneResumeSelector::Scope(_));
+    let action = match plan_lane_resume(
         LaneResumeRequest {
             selector,
             fresh,
@@ -504,7 +502,34 @@ pub(super) fn resume_lane(
                 message: error.to_string(),
             })
         },
-    )?;
+    ) {
+        Ok(action) => action,
+        Err(LaneResumeError::Unknown { scope }) if scoped => {
+            let lanes = rimz::harness::resume::check_lane_scope(
+                &scope,
+                &projection.agents,
+                &worktrees,
+                &workspace.project_root,
+            )
+            .err()
+            .unwrap_or_default();
+            let lanes = super::list::known_lanes_suffix(&lanes);
+            if fresh || !session_id_shaped(&scope) {
+                bail!(
+                    "no lane '{scope}' in this workspace{lanes}; resume one closed session with `rimz agents resume @<handle>`"
+                );
+            }
+            return resume_session_on_lane_miss(
+                &scope,
+                bg,
+                globals,
+                &machine_config.accounts,
+                &logins,
+                &lanes,
+            );
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     let cwd = match &action {
         LaneResumeAction::SplitClosed { cwd, .. } | LaneResumeAction::RestoreClosed { cwd, .. } => {
@@ -778,6 +803,90 @@ fn discover_lane_sessions(
         .collect()
 }
 
+fn resume_session_on_lane_miss(
+    scope: &str,
+    bg: bool,
+    globals: &GlobalFlags,
+    accounts: &rimz::config::AccountsConfig,
+    logins: &rimz::agents::RoomAccounts,
+    lanes: &str,
+) -> Result<()> {
+    match resume_agent(
+        &format!("@{scope}"),
+        bg,
+        super::SessionResumeOverrides::default(),
+        globals,
+    ) {
+        Ok(()) => return Ok(()),
+        Err(error) if crate::cli::resolution_missed(&error) => {}
+        Err(error) => return Err(error),
+    }
+    let miss = format!(
+        "no lane and no session matched '{scope}' in this workspace{lanes}; resume one closed session with `rimz agents resume @<handle>` or a session-id prefix"
+    );
+    if scope.len() < 36 {
+        bail!(
+            "{miss}; a prefix matches only sessions RimZ recorded; the full id also searches the room account's provider homes"
+        );
+    }
+    let ambient = rimz::agents::ambient_env();
+    let session_id = scope.into();
+    let mut found = Vec::new();
+    let mut searched = Vec::new();
+    let mut commands = Vec::new();
+    for adapter in rimz::agents::all_definitions() {
+        let kind = rimz::ids::AgentKind::new_unchecked(adapter.spec().kind);
+        let Ok(login) = logins.login(&kind, accounts) else {
+            continue;
+        };
+        let located = match login.locate_session(adapter, &session_id, &ambient) {
+            rimz::agents::session::LocalSessionLookup::Found(_) => true,
+            rimz::agents::session::LocalSessionLookup::NotFound => false,
+            rimz::agents::session::LocalSessionLookup::Unsupported => continue,
+        };
+        let home = format!(
+            "{kind}: {}",
+            provider_home_label(adapter.config_home(&login.env(&ambient)).as_deref())
+        );
+        if !located {
+            searched.push(home);
+            continue;
+        }
+        found.push(home);
+        let mut argv = vec!["rimz", "agents", kind.as_str(), "--resume", scope];
+        if bg {
+            argv.push("--bg");
+        }
+        commands.push(format!("`{}`", crate::cli::usage::shell_command(argv)));
+    }
+    if !found.is_empty() {
+        bail!(
+            "session `{scope}` was found in {}, but RimZ has not recorded it; nothing was launched; run {}; a profile of the same kind may replace the kind name",
+            found.join(", "),
+            commands.join(" or ")
+        );
+    }
+    if searched.is_empty() {
+        bail!("{miss}; no provider homes could be searched");
+    }
+    bail!("{miss}; searched provider homes: {}", searched.join(", "))
+}
+
+fn provider_home_label(home: Option<&Path>) -> String {
+    home.map_or_else(
+        || "an unresolved provider home".to_owned(),
+        |home| home.display().to_string(),
+    )
+}
+
+fn session_id_shaped(scope: &str) -> bool {
+    (8..=36).contains(&scope.len())
+        && scope.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => matches!(byte, b'0'..=b'9' | b'a'..=b'f'),
+        })
+}
+
 fn report_resume_skips(skips: &[ResumeSkip]) -> Result<()> {
     let mut out = std::io::stderr().lock();
     for skip in skips {
@@ -848,6 +957,28 @@ fn render_lane_list(out: &mut impl Write, mut lanes: Vec<LaneSummary>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_id_shape_accepts_only_lowercase_uuid_prefixes_of_at_least_eight_digits() {
+        let cases = [
+            ("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", true),
+            ("aaaaaaaa", true),
+            ("aaaaaaaa-", true),
+            ("aaaaaaaa-bbbb-4ccc-8ddd", true),
+            ("aaaaaaa", false),
+            ("AAAAAAAA-bbbb-4ccc-8ddd-eeeeeeeeeeee", false),
+            ("aaaaaaaabbbb4ccc8dddeeeeeeeeeeee", false),
+            ("{aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee}", false),
+            ("urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", false),
+            ("#aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", false),
+            ("saved-session", false),
+            ("aaaaaaa-abbbb-4ccc-8ddd-eeeeeeeeeeee", false),
+        ];
+        assert_eq!(
+            cases.map(|(scope, _)| (scope, session_id_shaped(scope))),
+            cases
+        );
+    }
 
     #[test]
     fn recorded_resume_allows_peers_but_refuses_children() {
