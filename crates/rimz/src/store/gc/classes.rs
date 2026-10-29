@@ -8,6 +8,25 @@ use crate::config::HistoryRetention;
 use crate::disk::paths::Class;
 use crate::disk::retention;
 
+/// Whether a state class has no sweep under the supplied team-notes retention.
+pub fn never_swept(class: Class, team_notes_retention: HistoryRetention) -> bool {
+    match class {
+        Class::Cache | Class::Shared => true,
+        Class::TeamNotes => team_notes_retention == HistoryRetention::Forever,
+        Class::Log
+        | Class::Records
+        | Class::Audit
+        | Class::Owned
+        | Class::Tmp
+        | Class::Out
+        | Class::Locks
+        | Class::Sock
+        | Class::Live
+        | Class::Lanes
+        | Class::Snapshots => false,
+    }
+}
+
 pub(super) fn collect_state<Owner: Fn(&crate::agents::AgentState) -> Option<String>>(
     paths: &crate::StatePaths,
     policy: GcPolicy,
@@ -79,7 +98,12 @@ pub(super) fn collect_state<Owner: Fn(&crate::agents::AgentState) -> Option<Stri
                 |report| report.sidecar_files_removed += 1,
                 &mut report,
             ),
-            _ => Ok(()),
+            Class::Cache
+            | Class::Shared
+            | Class::Sock
+            | Class::Live
+            | Class::Lanes
+            | Class::Snapshots => Ok(()),
         };
         if let Err(err) = result {
             tracing::warn!(workspace = %paths.dir_name, class = class.dir_name(), error = %err, "class gc stopped at unreadable state");
