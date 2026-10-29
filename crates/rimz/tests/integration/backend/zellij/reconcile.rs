@@ -181,13 +181,14 @@ fn repair_cli_with_a_silent_plugin_adds_from_live_panes_and_exits_zero() {
     insta::assert_snapshot!(stdout, @r###"
     Presence plugin silent or stale in 1 session; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.
     Recovered 1 sidebar in place.
+    Reopened the rimzd tab in 1 session.
     "###);
     let snapshot = expect_list_panes(fixture.room.path(), fixture.room.name());
     assert_eq!(
         snapshot
             .panes
             .iter()
-            .filter(|pane| pane.is_sidebar())
+            .filter(|pane| pane.is_sidebar() && pane.tab_name.as_deref() == Some("work"))
             .count(),
         1
     );
@@ -229,7 +230,7 @@ fn repair_cli_docks_a_sidebar_beside_a_lone_work_pane() {
     let sidebars: Vec<_> = after
         .panes
         .iter()
-        .filter(|pane| pane.is_sidebar())
+        .filter(|pane| pane.is_sidebar() && pane.tab_id == work.tab_id)
         .collect();
     assert_eq!(sidebars.len(), 1, "{after:#?}");
     let sidebar = sidebars[0];
@@ -337,7 +338,7 @@ fn repair_cli_docks_a_sidebar_when_a_lone_work_pane_has_floats_shown() {
     let sidebars: Vec<_> = after
         .panes
         .iter()
-        .filter(|pane| pane.is_sidebar())
+        .filter(|pane| pane.is_sidebar() && pane.tab_id == work.tab_id)
         .collect();
     assert_eq!(sidebars.len(), 1, "{after:#?}");
     let sidebar = sidebars[0];
@@ -345,11 +346,11 @@ fn repair_cli_docks_a_sidebar_when_a_lone_work_pane_has_floats_shown() {
     assert_eq!(sidebar.pane_y, 0, "{sidebar:?}");
     assert_eq!(sidebar.pane_rows, 50, "{sidebar:?}");
     assert!((sidebar.pane_columns as i64 - 60).abs() <= 5, "{sidebar:?}");
-    // The stub serves a sidebar from one process, so a second one is the
+    // Each listed sidebar has one stub process. Any extra process is the
     // anchored split's unplaced pane, which the fallback must have reaped.
     assert_eq!(
         serve_processes_for(fixture.room.name()).expect("scan sidebar serve processes"),
-        1,
+        after.panes.iter().filter(|pane| pane.is_sidebar()).count(),
         "the unplaced anchored sidebar's serve process was reaped",
     );
     let work_after = after
@@ -381,11 +382,17 @@ fn repair_cli_defers_a_detached_add_and_exits_one() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Deferred 1 sidebar repair"), "{stdout}");
     assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let snapshot = expect_list_panes(fixture.room.path(), fixture.room.name());
+    assert!(
+        !stdout.contains("Could not reopen") && !stdout.contains("orphaned sidebar"),
+        "{stdout}\n{}\n{snapshot:#?}",
+        String::from_utf8_lossy(&output.stderr),
+    );
     insta::assert_snapshot!(stdout, @r###"
     Presence plugin silent or stale in 1 session; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.
+    Deferred reopening the rimzd tab in 1 session (no attached client); attach and re-run `rimz sidebar repair`.
     Deferred 1 sidebar repair (no attached client); attach and re-run `rimz sidebar repair`.
     "###);
-    let snapshot = expect_list_panes(fixture.room.path(), fixture.room.name());
     assert_eq!(
         snapshot.panes.iter().filter(|pane| !pane.is_plugin).count(),
         1,
@@ -464,11 +471,17 @@ tab name="missing" split_direction="horizontal" {
         expect_list_panes(fixture.room.path(), fixture.room.name())
     );
     let after = expect_list_panes(fixture.room.path(), fixture.room.name());
-    assert_eq!(after.tab_ids().len(), 2, "{after:?}");
+    let work_tabs: BTreeSet<_> = after
+        .panes
+        .iter()
+        .filter(|pane| pane.tab_name.as_deref() != Some(rimz::pane::VIEW_NAME))
+        .map(|pane| pane.tab_id)
+        .collect();
+    assert_eq!(work_tabs.len(), 2, "{after:?}");
     let sidebars: Vec<_> = after
         .panes
         .iter()
-        .filter(|pane| pane.is_sidebar())
+        .filter(|pane| pane.is_sidebar() && pane.tab_name.as_deref() != Some(rimz::pane::VIEW_NAME))
         .collect();
     assert_eq!(sidebars.len(), 2, "{after:?}");
     assert!(

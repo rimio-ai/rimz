@@ -357,6 +357,9 @@ fn reload_outcome_merge_sums_every_field() {
         redocked: 16,
         misdocked: 17,
         sidebar_missing: 36,
+        daemon_reopened: 2,
+        daemon_reopen_deferred: 1,
+        daemon_reopen_failed: 3,
     };
     base.merge(ReloadOutcome {
         sessions: 18,
@@ -385,6 +388,9 @@ fn reload_outcome_merge_sums_every_field() {
         redocked: 33,
         misdocked: 34,
         sidebar_missing: 37,
+        daemon_reopened: 4,
+        daemon_reopen_deferred: 3,
+        daemon_reopen_failed: 5,
     });
 
     assert_eq!(
@@ -416,6 +422,9 @@ fn reload_outcome_merge_sums_every_field() {
             redocked: 49,
             misdocked: 51,
             sidebar_missing: 73,
+            daemon_reopened: 6,
+            daemon_reopen_deferred: 4,
+            daemon_reopen_failed: 8,
         }
     );
 }

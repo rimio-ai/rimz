@@ -59,6 +59,108 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
     }
 }
 
+#[test]
+fn open_background_view_defers_when_the_session_is_detached() {
+    require_zellij!();
+    let room = LiveZellijSession::new("bgdefer");
+    let cwd = TempDir::new().unwrap();
+    room.create_plain_background(cwd.path(), "120");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = background_view_opts(room.name(), &stub);
+    let before = PaneSnapshot::expect(room.path(), room.name());
+    let launch = room.backend().open_background_view(&opts);
+    assert!(
+        matches!(launch, Ok(rimz::mux::BackgroundViewLaunch::Deferred)),
+        "{launch:?}",
+    );
+    let after = PaneSnapshot::expect(room.path(), room.name());
+    assert_eq!(after.tab_ids(), before.tab_ids(), "{after:?}");
+    let output = room
+        .command()
+        .args(["--session", room.name(), "action", "list-tabs", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let tabs: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(tabs.len(), 1, "no partial tab was created: {tabs:?}");
+    assert_eq!(
+        after.panes.iter().filter(|pane| !pane.is_plugin).count(),
+        1,
+        "{after:?}",
+    );
+}
+
+#[test]
+fn explicit_repair_reopens_a_closed_daemon_view_without_moving_focus() {
+    require_zellij!();
+    let room = LiveZellijSession::new("bgreopen");
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().unwrap();
+    room.create_plain_background(cwd.path(), "120");
+    let client = AttachedClient::attach(&room, 120, 40);
+    let backend = ZellijBackend::with_runtime_dir(room.path());
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = background_view_opts(&name, &stub);
+    backend.open_background_view(&opts).unwrap();
+    wait_for_tab_pane_count(room.path(), &name, "rimzd", 4);
+    let tab = PaneSnapshot::expect(room.path(), &name)
+        .panes
+        .into_iter()
+        .find(|pane| pane.tab_name.as_deref() == Some("rimzd"))
+        .unwrap()
+        .tab_id;
+    let output = room
+        .command()
+        .args([
+            "--session",
+            &name,
+            "action",
+            "close-tab-by-id",
+            &tab.to_string(),
+        ])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    poll_until(
+        Duration::from_secs(10),
+        || list_panes(room.path(), &name),
+        |snapshot| !snapshot.panes.iter().any(|pane| pane.tab_id == tab),
+        "closed daemon tab",
+    );
+    open_new_tab(room.path(), &name);
+    let snapshot = PaneSnapshot::expect(room.path(), &name);
+    let source_tab = *snapshot.tab_ids().last().unwrap();
+    let source = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.tab_id == source_tab && pane.is_live_terminal())
+        .unwrap()
+        .pane_ref(&name)
+        .pane_id;
+    client.wait_until_focused(&source, "non-leading source tab before reopen");
+    let record: rimz::workspace::record::WorkspaceRecord =
+        serde_json::from_value(serde_json::json!({
+            "layout": 2,
+            "workspace_id": opts.sidebar.workspace_id,
+            "session_name": name,
+            "project_root": opts.sidebar.project_root,
+            "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+    assert_eq!(
+        rimz::daemon_view::reopen_daemon_view(
+            &backend,
+            &opts.sidebar,
+            || Some((record.clone(), opts.sidebar.rimz_bin.clone())),
+            &rimz::config::MachineConfig::default(),
+        ),
+        rimz::daemon_view::ReopenOutcome::Reopened,
+        "explicit repair must reopen a wholly closed view",
+    );
+    wait_for_tab_pane_count(room.path(), &name, "rimzd", 3);
+    assert_eq!(client.view().viewed_panes, vec![source]);
+}
+
 /// `open_background_view` opens a dedicated, named tab born `sidebar | content |
 /// runtime`, and is idempotent on that tab name: a second call launches nothing.
 #[test]

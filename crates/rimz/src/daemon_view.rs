@@ -32,6 +32,124 @@ const REPAIR_LIST_TIMEOUT: Duration = Duration::from_secs(3);
 const SETTLE_ATTEMPTS: usize = 5;
 const SETTLE_POLL: Duration = Duration::from_millis(100);
 
+/// Result of explicitly reopening a wholly closed daemon view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReopenOutcome {
+    Reopened,
+    Deferred,
+    None,
+    Busy,
+    Failed,
+}
+
+/// Reopen a closed view under the sidebar reconcile lock, preserving a present view.
+pub fn reopen_daemon_view(
+    backend: &dyn MuxBackend,
+    sidebar: &crate::mux::SidebarPaneOptions,
+    resolve: impl FnMut() -> Option<(record::WorkspaceRecord, PathBuf)>,
+    machine: &crate::config::MachineConfig,
+) -> ReopenOutcome {
+    let lock = sidebar
+        .runtime
+        .sidebar_reconcile_lock(backend.name(), &sidebar.session_name);
+    let _guard = match crate::disk::lock::WorkspaceLock::acquire_with_timeout(
+        &lock,
+        Duration::from_secs(60),
+    ) {
+        Ok(guard) => guard,
+        Err(crate::disk::lock::LockErr::Timeout { .. }) => return ReopenOutcome::Busy,
+        Err(error) => {
+            tracing::warn!(session = %sidebar.session_name, %error, "daemon reopen lock failed");
+            return ReopenOutcome::Failed;
+        }
+    };
+    reopen_daemon_view_with(
+        || list_daemon_panes(backend, &sidebar.session_name, &sidebar.workspace_id),
+        resolve,
+        |record| {
+            let state = StatePaths::for_workspace(sidebar.workspace_id.clone())
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        session = %sidebar.session_name,
+                        %error,
+                        "daemon reopen paths unavailable",
+                    );
+                })
+                .ok()?;
+            let envs =
+                crate::remote_control::HostLoginEnvs::for_room(&state.workspace_record, machine);
+            Some(daemon_readiness(record, machine, &envs))
+        },
+        |record, rimz_bin, readiness| {
+            let mut launch_sidebar = sidebar.clone();
+            launch_sidebar.rimz_bin = rimz_bin.to_path_buf();
+            let opts = crate::mux::BackgroundViewOptions {
+                view: effective_daemon_view(
+                    &sidebar.workspace_id,
+                    &sidebar.session_name,
+                    record,
+                    machine,
+                    rimz_bin,
+                    readiness,
+                    crate::agents::runtime_control::installed_broker_bin().is_some(),
+                ),
+                sidebar: launch_sidebar,
+            };
+            backend.open_background_view(&opts).inspect_err(|error| {
+                tracing::warn!(
+                    session = %sidebar.session_name,
+                    %error,
+                    "daemon view reopen failed",
+                );
+            })
+        },
+    )
+}
+
+fn daemon_view_closed(listing: crate::mux::Result<PaneListing>) -> bool {
+    listing.is_ok_and(|listing| {
+        listing.authoritative
+            && !listing
+                .panes
+                .iter()
+                .any(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
+    })
+}
+
+fn reopen_daemon_view_with(
+    mut list: impl FnMut() -> crate::mux::Result<PaneListing>,
+    mut resolve: impl FnMut() -> Option<(record::WorkspaceRecord, PathBuf)>,
+    prepare: impl FnOnce(&record::WorkspaceRecord) -> Option<crate::remote_control::ReadinessSnapshot>,
+    open: impl FnOnce(
+        &record::WorkspaceRecord,
+        &Path,
+        &crate::remote_control::ReadinessSnapshot,
+    ) -> crate::mux::Result<crate::mux::BackgroundViewLaunch>,
+) -> ReopenOutcome {
+    if !daemon_view_closed(list()) {
+        return ReopenOutcome::None;
+    }
+    let Some((record, _)) = resolve() else {
+        return ReopenOutcome::Failed;
+    };
+    let Some(readiness) = prepare(&record) else {
+        return ReopenOutcome::Failed;
+    };
+    // Readiness can block. Refresh absence and launch inputs after it finishes.
+    if !daemon_view_closed(list()) {
+        return ReopenOutcome::None;
+    }
+    let Some((record, rimz_bin)) = resolve() else {
+        return ReopenOutcome::Failed;
+    };
+    match open(&record, &rimz_bin, &readiness) {
+        Ok(crate::mux::BackgroundViewLaunch::Launched) => ReopenOutcome::Reopened,
+        Ok(crate::mux::BackgroundViewLaunch::AlreadyRunning) => ReopenOutcome::None,
+        Ok(crate::mux::BackgroundViewLaunch::Deferred) => ReopenOutcome::Deferred,
+        Err(_) => ReopenOutcome::Failed,
+    }
+}
+
 /// Shape of the managed content and runtime columns in a daemon view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DaemonShape {
@@ -1135,7 +1253,6 @@ impl DaemonRepairTracker {
             }
         };
         let machine = crate::config::MachineConfig::load_lenient();
-        let remote_control = crate::remote_control::room_config(&machine.remote_control, &record);
         let resolved = ResolvedDaemonInputs::read(&record, &state.workspace_record, &machine);
         let workspace_id = self.workspace_id.clone();
         let session_name = self.session_name.clone();
@@ -1144,20 +1261,7 @@ impl DaemonRepairTracker {
             frame,
             crate::utils::time::unix_now_ms(),
             || {
-                // Repair keeps an enabled host serving, so it refills the host's
-                // own preconditions before judging it. Probing first would read a
-                // precondition this pass is able to restore, and tear down a
-                // working host over a gap that outlives nothing but this tick.
-                let readiness = match &resolved.host_envs {
-                    Ok(envs) => {
-                        crate::remote_control::prepare_hosts(&remote_control, envs);
-                        crate::remote_control::ReadinessSnapshot::probe(&remote_control, envs, Some(&record.project_root))
-                    }
-                    Err(err) => {
-                        tracing::warn!(workspace = %workspace_id, error = %err, "daemon host accounts unavailable");
-                        crate::remote_control::ReadinessSnapshot::disabled()
-                    }
-                };
+                let readiness = daemon_readiness(&record, &machine, &resolved.host_envs);
                 Some(effective_daemon_view(
                     &workspace_id,
                     &session_name,
@@ -1208,6 +1312,33 @@ impl DaemonRepairTracker {
         self.repair_pending = repair(view) == RepairOutcome::Retry;
         self.last_pass_pane_ids = pane_ids;
     }
+}
+
+fn daemon_readiness(
+    record: &record::WorkspaceRecord,
+    machine: &crate::config::MachineConfig,
+    host_envs: &Result<crate::remote_control::HostLoginEnvs, crate::agents::RoomLoginErr>,
+) -> crate::remote_control::ReadinessSnapshot {
+    let envs = match host_envs {
+        Ok(envs) => envs,
+        Err(error) => {
+            tracing::warn!(
+                workspace = %record.workspace_id,
+                %error,
+                "daemon host accounts unavailable",
+            );
+            return crate::remote_control::ReadinessSnapshot::disabled();
+        }
+    };
+    let remote_control = crate::remote_control::room_config(&machine.remote_control, record);
+    // Repair refills host preconditions before judging them, so a restorable
+    // gap does not tear down a working host for the duration of one tick.
+    crate::remote_control::prepare_hosts(&remote_control, envs);
+    crate::remote_control::ReadinessSnapshot::probe(
+        &remote_control,
+        envs,
+        Some(&record.project_root),
+    )
 }
 
 pub(crate) fn ensure_daemon_view_with_readiness(

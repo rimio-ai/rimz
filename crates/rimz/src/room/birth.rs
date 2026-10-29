@@ -490,6 +490,10 @@ impl RoomContext {
                     &options.view,
                 );
             }
+            Ok(BackgroundViewLaunch::Deferred) => tracing::debug!(
+                session = %self.workspace.session_name,
+                "daemon view deferred; no attached client",
+            ),
             Err(crate::mux::MuxErr::SessionNotFound { session }) => tracing::debug!(
                 session = %session,
                 "daemon view deferred; session not addressable yet (pre-attach gate will rebirth it)",

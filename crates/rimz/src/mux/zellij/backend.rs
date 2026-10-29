@@ -1703,6 +1703,14 @@ impl MuxBackend for ZellijBackend {
         if self.session_has_named_tab(session, &opts.view.name)? {
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
+        // Without an attached client, a late tab's layout panes never materialize.
+        if !self.session_has_attached_client(session) {
+            return Ok(BackgroundViewLaunch::Deferred);
+        }
+        let no_focus = self.supports_no_focus();
+        let restore = (!no_focus)
+            .then(|| self.focus_restore_target(session, Some(&opts.sidebar.workspace_id)))
+            .flatten();
         // Late add: the session was born without the daemon tab (e.g. a host
         // became available after first start) and now carries one or more working
         // tabs. Zellij can't move a tab to the front, so this appended tab does
@@ -1713,27 +1721,35 @@ impl MuxBackend for ZellijBackend {
         // the named tab is confirmed. Each pane carries its own `cwd`, so no
         // tab-level `--cwd` is needed.
         let layout = TempLayoutFile::new(render_background_view_layout(opts)?)?;
-        let args = [
+        let mut args = vec![
             "new-tab".to_owned(),
             "--layout".to_owned(),
             layout.path().to_string_lossy().into_owned(),
             "--name".to_owned(),
             opts.view.name.clone(),
         ];
+        if no_focus {
+            args.push("--no-focus".to_owned());
+        }
         let tab_id = self.run_new_tab_confirmed(session, &args, &opts.view.name)?;
         let runtime = self.runtime_paths_for_workspace(opts.sidebar.workspace_id.clone())?;
         self.record_new_tab(&runtime, session, tab_id, &opts.view.name)?;
         drop(layout);
-        // `new-tab` focuses the tab it creates. Return focus to the leading tab so
-        // the imminent `attach` lands on a working pane, not this freshly-added
-        // daemon tab. Best-effort: a focus hiccup never sinks a launch.
-        if let Err(err) = self.go_to_lead_tab(session) {
-            tracing::warn!(
-                session = %session,
-                tags.operation = "zellij.focus_tab",
-                error = &err as &dyn std::error::Error,
-                "could not return focus off the freshly-added daemon tab",
-            );
+        if !no_focus {
+            let result = match &restore {
+                Some(restore) => {
+                    self.restore_attached_client_focus(session, &opts.sidebar.workspace_id, restore)
+                }
+                None => self.go_to_lead_tab(session),
+            };
+            if let Err(err) = result {
+                tracing::warn!(
+                    session = %session,
+                    tags.operation = "zellij.focus_tab",
+                    error = &err as &dyn std::error::Error,
+                    "could not return focus off the freshly-added daemon tab",
+                );
+            }
         }
         Ok(BackgroundViewLaunch::Launched)
     }

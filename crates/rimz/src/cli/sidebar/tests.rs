@@ -298,3 +298,78 @@ fn focus_repair_writer_argv_parses_structured_record() {
     ])
     .expect("focus repair writer argv must parse");
 }
+
+#[test]
+fn repair_reports_reopened_tabs_without_a_healthy_line() {
+    for (count, noun) in [(1, "session"), (2, "sessions")] {
+        let mut out = Vec::new();
+        super::repair_report(
+            &mut out,
+            &rimz::reload::ReloadOutcome {
+                sessions: count,
+                daemon_reopened: count,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let report = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert!(
+            report.contains(&format!("Reopened the rimzd tab in {count} {noun}.")),
+            "{report}"
+        );
+        assert!(!report.contains("healthy"), "{report}");
+    }
+}
+
+#[test]
+fn repair_reports_deferred_reopens_separately_and_returns_failure() {
+    for (count, noun) in [(1, "session"), (2, "sessions")] {
+        let mut out = Vec::new();
+        let result = super::repair_report(
+            &mut out,
+            &rimz::reload::ReloadOutcome {
+                sessions: count,
+                daemon_reopen_deferred: count,
+                ..Default::default()
+            },
+        );
+        let report = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert!(
+            report.contains(&format!(
+                "Deferred reopening the rimzd tab in {count} {noun} (no attached client); attach and re-run `rimz sidebar repair`."
+            )),
+            "{report}",
+        );
+        assert!(
+            !report.contains("sidebar repair (no attached client)"),
+            "{report}"
+        );
+        assert!(!report.contains("healthy"), "{report}");
+        assert!(result.is_err(), "a deferred reopen must exit with failure");
+    }
+}
+
+#[test]
+fn repair_reports_failed_reopens_and_returns_failure() {
+    let mut out = Vec::new();
+    let result = super::repair_report(
+        &mut out,
+        &rimz::reload::ReloadOutcome {
+            sessions: 2,
+            daemon_reopen_failed: 2,
+            ..Default::default()
+        },
+    );
+    let report = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(
+        report.contains(
+            "Could not reopen the rimzd tab in 2 sessions; re-run `rimz sidebar repair`."
+        ),
+        "{report}",
+    );
+    assert!(!report.contains("healthy"), "{report}");
+    assert!(
+        result.is_err(),
+        "an incomplete reopen must exit with failure"
+    );
+}

@@ -996,7 +996,18 @@ upward-dependencies = [
     "sidebar::timing",
 ]
 # DaemonShape, DaemonShapeFault, and inspect_daemon_shape share the read-only judge with doctor (+3).
-surface-budget = 13
+# reopen_daemon_view and ReopenOutcome serve explicit closed-view repair (+2).
+surface-budget = 15
+
+[[verdict]]
+kind = "item"
+key = "daemon_view::reopen_daemon_view"
+reason = "Explicit sidebar repair reopens only a wholly closed view through its domain owner."
+
+[[verdict]]
+kind = "item"
+key = "daemon_view::ReopenOutcome"
+reason = "Reload repair accounts for reopened, deferred, unchanged, busy and failed views without mux policy."
 
 [[module]]
 path = "crates/rimz/src/diag"
@@ -2443,7 +2454,8 @@ reason = "The drainer publishes boot-safe claims, applications, skips and drops 
 [[module]]
 path = "crates/rimz/src/reload.rs"
 # RecordWatch/RecordChange and their cadence move from the sidebar; RoomBuildFollower and exec_current_args serve every rimzd process (+12).
-surface-budget = 22
+# ReloadOutcome reports reopened daemon views and failed reopens (+2).
+surface-budget = 24
 
 [[verdict]]
 kind = "item"
