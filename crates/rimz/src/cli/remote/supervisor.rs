@@ -394,6 +394,12 @@ pub(super) fn supervise_remote(
                 }
             }
         };
+        if let Some(sync) = port_sync.as_ref() {
+            match sync.lock() {
+                Ok(mut sync) => sync.mark_master_lost(),
+                Err(poisoned) => poisoned.into_inner().mark_master_lost(),
+            }
+        }
         if !supervisor.recover(retry_cause)? {
             return Ok(());
         }
@@ -1925,7 +1931,7 @@ fn apply_port_report(
 
 fn reopen_port_forwards(sync: &Mutex<PortSync>, target: &RemoteTarget, control_path: &Path) {
     let actions = match sync.lock() {
-        Ok(sync) => sync.reopen_active(),
+        Ok(mut sync) => sync.reopen_active(),
         Err(poisoned) => poisoned.into_inner().reopen_active(),
     };
     apply_port_actions(sync, actions, target, control_path);
