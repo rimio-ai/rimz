@@ -53,9 +53,9 @@ builds           /home/me/.rimz/builds
 | `team notes` | Archived team runs, each holding its manifest, board, and scratch files. A checkout's `.rimz/team` link points to its current run. |
 | `runtime root` | `$XDG_RUNTIME_DIR/rimz`, else `/tmp/rimz-<uid>/rimz`. `~/.rimz/run` links here once a room is born; RimZ itself never reads through the link. The tmux server RimZ rooms run on has its socket here, at `<runtime root>/tmux/server`, which is the `-S` argument for reaching a room's server by hand. |
 | `handoffs` | Reserved for agent hand-off notes. |
-| `accounts` | Provider homes RimZ placed for named accounts, `accounts/<kind>/<name>/`: credentials and transcripts that nothing regenerates and no RimZ command removes. |
+| `accounts` | Provider homes RimZ placed for named accounts, `accounts/<kind>/<name>/`, and shared role, effort, and closed-day spend history under `.history/`. No RimZ command removes this tree. |
 | `logs`, `loops`, `web`, `builds` | Machine-wide directories: append-only logs, loop overlays, web daemon records, and reload staging. |
-| `cache`, `providers cache` | Everything RimZ can rebuild: downloaded assets and the presence plugin under `cache/`, and the provider caches (accounts, rate limits, credits, spend, pricing) under `cache/providers/`. Safe to delete; the cost is a cold provider dashboard and one full spending walk. |
+| `cache`, `providers cache` | Downloaded assets and the presence plugin under `cache/`, and provider caches (accounts, rate limits, credits, spend, pricing) under `cache/providers/`. Deleting them costs a cold provider dashboard and one full spending walk, and loses account budget choices and park state plus auto-redeem stamps and rate memos. Recorded spend history stays under `accounts/.history/`. |
 
 ## JSON
 

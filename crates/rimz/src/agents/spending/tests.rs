@@ -78,6 +78,7 @@ fn compute_spending_with_origins_and_scope(
         &mut RefreshCallbacks {
             on_jobs_scheduled: &mut on_jobs_scheduled,
             tick: &mut tick,
+            before_compact: &mut |_, _, _| {},
         },
     );
     let counted = dedup_cached_entries(files, cache).into_counted();
@@ -93,7 +94,7 @@ fn compute_spending_with_origins_and_scope(
             now_secs,
             spec,
         },
-        None,
+        Default::default(),
     );
     if let Some(scope) = scope.filter(|scope| !scope.is_empty()) {
         let scoped = compute_scoped_spending(files, cache, &user_inputs, scope, now_secs, spec);
@@ -132,7 +133,7 @@ fn aggregate_spending_with_user_inputs(
             now_secs,
             spec,
         },
-        None,
+        Default::default(),
     )
     .spending
 }
@@ -179,7 +180,10 @@ fn compute_daily_spend(
                 ..Default::default()
             },
         },
-        Some(&Default::default()),
+        HistoryContext {
+            roles: Some(&Default::default()),
+            ..Default::default()
+        },
     )
     .days
 }
@@ -202,7 +206,10 @@ fn compute_model_breakdown(
             now_secs,
             spec: &HeadlineSpec::default(),
         },
-        Some(&Default::default()),
+        HistoryContext {
+            roles: Some(&Default::default()),
+            ..Default::default()
+        },
     )
     .models
     .into_iter()
@@ -246,7 +253,7 @@ pub(super) fn compute_scoped_spending_checked(
             now_secs,
             spec,
         },
-        None,
+        Default::default(),
     )
     .workspace;
     assert_eq!(format!("{scoped:?}"), format!("{walked:?}"));
@@ -572,6 +579,7 @@ fn sample_spending() -> Spending {
 
 mod aggregation;
 mod cache_wire;
+mod closed_days;
 mod compaction;
 mod discovery;
 mod published_cache;

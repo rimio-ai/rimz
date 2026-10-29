@@ -832,6 +832,8 @@ To show that the provider's model received RimZ's text, ask a question that only
 
 Use the [real-provider venue](#check-against-a-real-provider-login), not a held sandbox room. Keep the real `HOME` and account login, but isolate RimZ's state and runtime. Resolve the worktree's build directory rather than assuming `target/debug`:
 
+The provider-cache copy below carries neither role and effort ledgers nor recorded closed-day spend; those live in `accounts/.history/`. For a history comparison, bind provider homes read-only beneath the isolated accounts root and point their provider-home environment overrides there; copy `.history/` alongside them so relative account identities still match.
+
 ```sh
 cargo build -p rimz --bin rimz
 export LIVE_SOURCE="$PWD" LIVE_ROOT="$(mktemp -d /tmp/w4XXXXXX)"

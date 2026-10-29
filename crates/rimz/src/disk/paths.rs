@@ -4,10 +4,10 @@
 //! (`$RIMZ_HOME`, else `~/.rimz`): config files at the top, the agent library
 //! (`agents/ subagents/ teams/ traits/ skills/`, relocated by
 //! `$RIMZ_AGENTS_HOME`), trust grants under `trust/`, workspace state under
-//! `ws/<name>/`, the provider homes under `accounts/`, and the machine-wide
-//! `logs/`, `loops/`, `web/`, `builds/`, and `cache/` dirs (provider caches
-//! under `cache/providers/`). Runtime paths stay on tmpfs under
-//! `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, falling back to
+//! `ws/<name>/`, provider homes and shared spending history under `accounts/`,
+//! and the machine-wide `logs/`, `loops/`, `web/`, `builds/`, and `cache/`
+//! dirs (provider caches under `cache/providers/`). Runtime paths stay on
+//! tmpfs under `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, falling back to
 //! `/tmp/rimz-<uid>/rimz/ws/<name>/` at mode `0700` per
 //! `docs/internals/store.md`; shared election locks live under
 //! `$XDG_RUNTIME_DIR/rimz/shared/`.
@@ -1680,8 +1680,8 @@ fn unit_test_rimz_home() -> PathBuf {
 }
 
 /// Provider homes RimZ placed for named accounts, `<home>/accounts/<kind>/<name>`.
-/// They carry provider credentials and history that nothing can regenerate,
-/// so no RimZ command removes this tree.
+/// Also holds shared role, effort, and closed-day spend records under `.history/`.
+/// These cannot be regenerated, so no RimZ command removes this tree.
 pub fn accounts_dir() -> PathBuf {
     rimz_home().join("accounts")
 }
@@ -1697,8 +1697,8 @@ pub fn account_lock(kind: &crate::ids::AgentKind) -> PathBuf {
 /// Account-global provider caches, `<home>/cache/providers`: probe memos,
 /// rate limits, credits, the spend cursor and aggregate, and the pricing
 /// book, which rebuild from the providers' own files. The account budget
-/// and auto-redeem ledgers beside them hold choices nothing rebuilds;
-/// yearly session-role segments hold non-rebuildable spending provenance.
+/// and auto-redeem ledgers beside them hold choices nothing rebuilds.
+/// Durable spending history lives separately under [`accounts_dir`].
 pub fn providers_cache_dir() -> PathBuf {
     cache_dir().join("providers")
 }
@@ -1744,7 +1744,8 @@ pub fn builds_dir() -> PathBuf {
 
 /// RimZ's own regenerable artifacts: pet assets, ttyd binaries and fonts, the
 /// materialized Zellij presence plugin, and the provider caches under
-/// [`providers_cache_dir`]. Safe to delete at any time.
+/// [`providers_cache_dir`]. Deletion also loses account budget choices and park
+/// state, and auto-redeem stamps and rate memos, but keeps recorded spend history.
 pub fn cache_dir() -> PathBuf {
     rimz_home().join("cache")
 }

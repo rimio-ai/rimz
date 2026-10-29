@@ -166,6 +166,8 @@ fn checkpoint_publication_includes_effort_without_spend() {
         scope_hash: None,
         spec: &spec,
         progress: &mut progress,
+        accounts: Vec::new(),
+        closed_days: Default::default(),
     };
     observer.on_interval(&Default::default());
     let roles = serde_json::to_value(
@@ -219,6 +221,82 @@ fn empty_fleet_publication_includes_effort_and_maintains_old_segments() {
             SessionEffortEvent::Totals { from_user: 1, .. }
         ),
         "the producer must maintain effort segments even with no spend files"
+    );
+}
+
+#[test]
+fn empty_fleet_and_checkpoint_publications_include_closed_days() {
+    use crate::agents::{ProviderLogin, spending::WalkObserver};
+    use crate::ids::AgentKind;
+    let (_dir, runtime, now_secs) = effort_fixture();
+    let home = runtime
+        .shared_spending_cursor_path()
+        .parent()
+        .unwrap()
+        .join("claude");
+    std::fs::create_dir_all(home.join("projects")).unwrap();
+    let mut walker = SpendingWalker::new();
+    walker.discovery.discover(
+        std::iter::once((
+            ProviderLogin::default_for(AgentKind::new_unchecked("claude")),
+            crate::agents::definition_by_kind("claude").unwrap(),
+            BTreeMap::from([(
+                "CLAUDE_CONFIG_DIR".into(),
+                home.to_string_lossy().into_owned(),
+            )]),
+        )),
+        now_secs,
+    );
+    let at = Timestamp::from_second(now_secs as i64 - 20 * 86_400).unwrap();
+    let path = runtime
+        .spending_history
+        .spend(at.to_zoned(jiff::tz::TimeZone::UTC).year());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        serde_json::json!({
+            "kind": "claude", "account": home, "day": at.to_zoned(jiff::tz::TimeZone::UTC).date(),
+            "rows": [{"session": {"native": "effort-only"}, "ts": at.as_second(), "usd": 2.0}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let request = service_request(&runtime, None, &HeadlineSpec::default());
+    let context = super::request_context(&request, true);
+    let result = super::walk_fleet_spending_files(
+        &mut walker,
+        &runtime,
+        &context,
+        true,
+        &mut |_| {},
+        &[],
+        now_secs,
+    );
+    assert_eq!(result.provider.spending.total.month.usd, 2.0);
+    assert_eq!(result.provider.roles.subagents["fast"].tally.month.usd, 2.0);
+    let provider_path = runtime.shared_provider_spending_path();
+    write_provider_spending_cache(&provider_path, &ProviderSpendingCache::default());
+    let mut observer = super::PublishingWalkObserver {
+        runtime: &runtime,
+        provider_path: provider_path.clone(),
+        files: &[],
+        user_inputs: &[],
+        now_secs,
+        scope: None,
+        scope_hash: None,
+        spec: &HeadlineSpec::default(),
+        progress: &mut |_| {},
+        accounts: walker.discovery.history_accounts.clone(),
+        closed_days: Default::default(),
+    };
+    observer.on_interval(&Default::default());
+    assert_eq!(
+        read_provider_spending_cache(&provider_path)
+            .spending
+            .total
+            .month
+            .usd,
+        2.0
     );
 }
 
@@ -565,7 +643,7 @@ fn fresh_publication_derives_other_rooms_without_fleet_folds() {
                 now_secs,
                 spec: &spec,
             },
-            None,
+            Default::default(),
         );
         let expected = crate::agents::spending::WorkspaceSpendingCache::from_scoped(
             &scope.hash(),
@@ -907,6 +985,8 @@ fn publishing_walk_observer_checkpoints_workspace_live_baselines() {
         scope_hash: Some(scope_hash.clone()),
         spec: &spec,
         progress: &mut progress,
+        accounts: Vec::new(),
+        closed_days: Default::default(),
     };
 
     crate::agents::spending::WalkObserver::on_interval(&mut observer, &raw);
@@ -1608,6 +1688,8 @@ fn checkpoint_one_claude_ten_codex(runtime: &RuntimePaths, project: &std::path::
         scope_hash: Some(scope.hash()),
         spec: &spec,
         progress: &mut progress,
+        accounts: Vec::new(),
+        closed_days: Default::default(),
     };
     crate::agents::spending::WalkObserver::on_interval(&mut observer, &raw);
 }

@@ -176,7 +176,7 @@ fn room_spend_slice_matches_trunk_bit_for_bit() {
                 now_secs: NOW_SECS,
                 spec: &spec,
             },
-            None,
+            Default::default(),
         )
         .workspace;
         let slice = compute_scoped_spending(&files, &cache, &inputs, &scope, NOW_SECS, &spec);

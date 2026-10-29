@@ -262,6 +262,12 @@ pub(crate) struct HeadlineContext<'a> {
     pub(crate) spec: &'a HeadlineSpec,
 }
 
+#[derive(Default)]
+pub(super) struct HistoryContext<'a> {
+    pub(super) roles: Option<&'a super::session_roles::RoleIndex>,
+    pub(super) spend: Option<&'a super::closed_days::SpendIndex>,
+}
+
 pub(crate) fn aggregate_counted_rollups(
     files: &[SpendingFile],
     cache: &SpendingDiskCache,
@@ -269,7 +275,7 @@ pub(crate) fn aggregate_counted_rollups(
     contested: &[CountedLocation],
     workspace: Option<&SpendScope>,
     headline: HeadlineContext<'_>,
-    history_roles: Option<&super::session_roles::RoleIndex>,
+    history: HistoryContext<'_>,
 ) -> SpendingWalkResult {
     #[cfg(feature = "testkit")]
     crate::testkit::WORK_COUNTERS
@@ -281,6 +287,10 @@ pub(crate) fn aggregate_counted_rollups(
         now_secs,
         spec,
     } = headline;
+    let HistoryContext {
+        roles: history_roles,
+        spend: recorded,
+    } = history;
     let workspace = workspace.filter(|scope| !scope.is_empty());
     let cutoffs = CountedCutoffs::from_events(counted, user_inputs, now_secs, spec);
     let mut spending = Spending::default();
@@ -317,9 +327,22 @@ pub(crate) fn aggregate_counted_rollups(
             zone.to_datetime(now).hour()
         });
     let window_starts = WindowStarts::new(now_secs, &timezone);
+    let fleet_rows = counted
+        .iter()
+        .filter(|row| {
+            recorded.is_none_or(|index| !index.replaces(row.login(), row.entry().ts_secs))
+        })
+        .map(borrowed_counted)
+        .chain(
+            recorded
+                .into_iter()
+                .flat_map(|index| &index.rows)
+                .filter(|row| within_widest_window(row.entry().ts_secs, now_secs))
+                .map(borrowed_counted),
+        );
     let day_boundaries = if history_roles.is_some() {
-        let first = counted.iter().map(|row| row.entry().ts_secs).min();
-        let last = counted.iter().map(|row| row.entry().ts_secs).max();
+        let first = fleet_rows.clone().map(|row| row.entry.ts_secs).min();
+        let last = fleet_rows.clone().map(|row| row.entry.ts_secs).max();
         first
             .zip(last)
             .map(|(first, last)| local_day_boundaries(first, last, zone.clone()))
@@ -328,9 +351,9 @@ pub(crate) fn aggregate_counted_rollups(
         Vec::new()
     };
 
-    for counted in counted {
-        let provider = counted.kind();
-        let entry = counted.entry();
+    for counted in fleet_rows {
+        let provider = counted.kind;
+        let entry = counted.entry;
         accum(
             &mut spending.total,
             entry,
@@ -363,7 +386,7 @@ pub(crate) fn aggregate_counted_rollups(
             login_day_sessions
                 .entry(counted.login().clone())
                 .or_default()
-                .insert(counted.session_key());
+                .insert(counted.session_key);
             provider_day
                 .entry(provider.to_owned())
                 .or_default()
@@ -371,7 +394,7 @@ pub(crate) fn aggregate_counted_rollups(
             provider_day_sessions
                 .entry(provider.to_owned())
                 .or_default()
-                .insert(counted.session_key());
+                .insert(counted.session_key);
         }
         if entry.ts_secs >= month_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
             login_month
@@ -381,7 +404,7 @@ pub(crate) fn aggregate_counted_rollups(
             login_month_sessions
                 .entry(counted.login().clone())
                 .or_default()
-                .insert(counted.session_key());
+                .insert(counted.session_key);
         }
         if history_roles.is_some() {
             let index =
@@ -435,7 +458,7 @@ pub(crate) fn aggregate_counted_rollups(
                 producer.add(entry.cost_usd, entry);
             }
             if let Some(index) = joined_roles {
-                let session = counted.session_key();
+                let session = counted.session_key;
                 let SessionKey::Native { thread_id, .. } = session else {
                     continue;
                 };
@@ -468,6 +491,7 @@ pub(crate) fn aggregate_counted_rollups(
         now_secs,
         cutoffs.total,
         window_starts,
+        recorded,
     );
     for ((placement, _), youngest) in role_sessions {
         bump_sessions(
@@ -688,6 +712,7 @@ fn add_spending_sessions(
     now_secs: u64,
     headline_cutoff: u64,
     window_starts: WindowStarts,
+    recorded: Option<&super::closed_days::SpendIndex>,
 ) {
     let mut threads = FastHashMap::<SessionKey<'_>, (&'static str, u64)>::with_capacity_and_hasher(
         files.len(),
@@ -707,6 +732,9 @@ fn add_spending_sessions(
         };
         let file_key = file_session_key(adapter, file);
         for entry in &cached_file.entries {
+            if recorded.is_some_and(|index| index.replaces(login, entry.ts_secs)) {
+                continue;
+            }
             let session = session_key(adapter.spec().kind, file_key, entry);
             login_threads
                 .entry((login.clone(), session))
@@ -717,6 +745,24 @@ fn add_spending_sessions(
                 .and_modify(|(_, ts)| *ts = (*ts).max(entry.ts_secs))
                 .or_insert((adapter.spec().kind, entry.ts_secs));
         }
+    }
+    for row in recorded
+        .into_iter()
+        .flat_map(|index| index.rows.iter().chain(&index.sessions))
+    {
+        let ts = row.entry().ts_secs;
+        if !within_widest_window(ts, now_secs) {
+            continue;
+        }
+        let session = row.session_key();
+        login_threads
+            .entry((row.login().clone(), session))
+            .and_modify(|youngest| *youngest = (*youngest).max(ts))
+            .or_insert(ts);
+        threads
+            .entry(session)
+            .and_modify(|(_, youngest)| *youngest = (*youngest).max(ts))
+            .or_insert((row.kind(), ts));
     }
     for (provider, youngest) in threads.values() {
         bump_sessions(
@@ -1036,6 +1082,16 @@ pub(crate) struct Counted<'a> {
     origin: Option<&'a Path>,
     session_key: SessionKey<'a>,
     entry: &'a CachedEntry,
+}
+
+fn borrowed_counted(row: &impl CountedPayload) -> Counted<'_> {
+    Counted {
+        login: row.login(),
+        kind: row.kind(),
+        origin: row.origin(),
+        session_key: row.session_key(),
+        entry: row.entry(),
+    }
 }
 
 impl DedupPayload for Counted<'_> {

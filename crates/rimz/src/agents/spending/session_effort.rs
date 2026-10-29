@@ -538,7 +538,10 @@ mod tests {
                     timezone: Some("UTC".into()),
                     ..Default::default()
                 },
-                &index,
+                super::super::HistoryContext {
+                    roles: Some(&index),
+                    ..Default::default()
+                },
             )
             .roles
         };

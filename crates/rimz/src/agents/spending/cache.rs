@@ -602,10 +602,9 @@ pub(crate) fn compact_spending_cache(
     files: &[SpendingFile],
     now_secs: u64,
 ) -> bool {
-    let retained_message_ids = retained_raw_message_ids(cache, files, now_secs);
+    let retained_ids = retained_raw_ids(cache, files, now_secs);
     let mut rolled_by_file = BTreeMap::<String, BTreeMap<RollupKey, CachedEntry>>::new();
-    for source in old_counted_entries_for_compaction(cache, files, now_secs, &retained_message_ids)
-    {
+    for source in old_counted_entries_for_compaction(cache, files, now_secs, &retained_ids) {
         if within_widest_window(source.entry.ts_secs, now_secs) {
             merge_rollup(
                 rolled_by_file.entry(source.file_key).or_default(),
@@ -630,7 +629,7 @@ pub(crate) fn compact_spending_cache(
                 } else {
                     changed = true;
                 }
-            } else if raw_entry_ready_for_compaction(&entry, now_secs, &retained_message_ids) {
+            } else if raw_entry_ready_for_compaction(&entry, now_secs, &retained_ids) {
                 changed = true;
             } else {
                 retained.push(entry);
@@ -661,12 +660,40 @@ pub(crate) fn compact_spending_cache(
     changed
 }
 
-fn retained_raw_message_ids(
+#[derive(Default)]
+struct RetainedRawIds {
+    message_ids: BTreeSet<Box<str>>,
+    provider_keys: BTreeSet<Box<str>>,
+}
+
+fn retained_raw_ids(
     cache: &SpendingDiskCache,
     files: &[SpendingFile],
     now_secs: u64,
-) -> BTreeSet<Box<str>> {
-    let mut message_ids = BTreeSet::new();
+) -> RetainedRawIds {
+    let mut retained = RetainedRawIds::default();
+    let present = files
+        .iter()
+        .map(|file| file.path.as_path())
+        .collect::<HashSet<_>>();
+    for (path, file) in &cache.files {
+        if present.contains(Path::new(path)) {
+            continue;
+        }
+        // Absent cursor rows still participate in closed-day recording. Keep a
+        // present copy raw until both can be deduplicated by their original identity.
+        for entry in file
+            .entries
+            .iter()
+            .filter(|entry| !entry.rolled && within_widest_window(entry.ts_secs, now_secs))
+        {
+            if let Some(message_id) = &entry.message_id {
+                retained.message_ids.insert(message_id.clone());
+            } else if let Some(provider_key) = &entry.dedup_key {
+                retained.provider_keys.insert(provider_key.clone());
+            }
+        }
+    }
     let mut old_message_sessions = HashMap::<&str, SessionKey<'_>>::new();
     for SpendingFile {
         adapter,
@@ -684,7 +711,7 @@ fn retained_raw_message_ids(
                 continue;
             };
             if within_raw_retain_window(entry.ts_secs, now_secs) {
-                message_ids.insert(message_id.into());
+                retained.message_ids.insert(message_id.into());
                 continue;
             }
             // A row two sessions share (a fork's copied history) stays raw in both: a
@@ -692,24 +719,28 @@ fn retained_raw_message_ids(
             // live baseline.
             let session = session_key(adapter.spec().kind, file_session, entry);
             if *old_message_sessions.entry(message_id).or_insert(session) != session {
-                message_ids.insert(message_id.into());
+                retained.message_ids.insert(message_id.into());
             }
         }
     }
-    message_ids
+    retained
 }
 
 fn raw_entry_ready_for_compaction(
     entry: &CachedEntry,
     now_secs: u64,
-    retained_message_ids: &BTreeSet<Box<str>>,
+    retained: &RetainedRawIds,
 ) -> bool {
-    !entry.rolled
-        && !within_raw_retain_window(entry.ts_secs, now_secs)
-        && entry
-            .message_id
-            .as_ref()
-            .is_none_or(|message_id| !retained_message_ids.contains(message_id))
+    if entry.rolled || within_raw_retain_window(entry.ts_secs, now_secs) {
+        return false;
+    }
+    if let Some(message_id) = &entry.message_id {
+        return !retained.message_ids.contains(message_id);
+    }
+    entry
+        .dedup_key
+        .as_ref()
+        .is_none_or(|key| !retained.provider_keys.contains(key))
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -745,7 +776,7 @@ fn old_counted_entries_for_compaction(
     cache: &SpendingDiskCache,
     files: &[SpendingFile],
     now_secs: u64,
-    retained_message_ids: &BTreeSet<Box<str>>,
+    retained: &RetainedRawIds,
 ) -> Vec<CompactionSourceEntry> {
     let mut deduped = SidechainDedup::default();
     for SpendingFile { path: file, .. } in files {
@@ -756,7 +787,7 @@ fn old_counted_entries_for_compaction(
         for entry in cached_file
             .entries
             .iter()
-            .filter(|entry| raw_entry_ready_for_compaction(entry, now_secs, retained_message_ids))
+            .filter(|entry| raw_entry_ready_for_compaction(entry, now_secs, retained))
         {
             deduped.insert(CompactionSourceEntry {
                 file_key: file_key.clone(),
