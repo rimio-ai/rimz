@@ -10,7 +10,16 @@ use serde::{Deserialize, Serialize};
 use crate::disk::{atomic, lock::WorkspaceLock, paths};
 use crate::utils::path::normalize_path_lexical;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "The next commit connects the install transaction."
+    )
+)]
+mod git;
 mod layout;
+mod source;
 
 #[cfg(test)]
 mod tests;
@@ -608,6 +617,15 @@ pub fn resolve_claims(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallSource {
     Linked(PathBuf),
+    Git(GitSource),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitSource {
+    pub source: String,
+    pub url: String,
+    pub pack: Option<PackName>,
+    pub reference: Option<String>,
 }
 
 impl FromStr for InstallSource {
@@ -621,9 +639,7 @@ impl FromStr for InstallSource {
         {
             return Ok(Self::Linked(PathBuf::from(value)));
         }
-        Err(PackErr::NotPath {
-            argument: value.to_owned(),
-        })
+        source::parse(value).map(Self::Git)
     }
 }
 
@@ -633,8 +649,15 @@ pub enum PackErr {
     Invalid(#[from] Problem),
     #[error("invalid pack name {name:?}; use only letters, digits, '_' or '-'")]
     InvalidName { name: String },
-    #[error("{argument:?} is not a local path; use '.', '..', '~', '/', './', '../' or '~/'")]
+    #[error(
+        "invalid pack source {argument:?}; use a local path ./path \
+         (or '.', '..', '~', '/', '../', '~/'), crew[/pack][@ref], skills[/pack][@ref], \
+         github:owner/repo[/pack][@ref], \
+         or a Git URL[@ref]"
+    )]
     NotPath { argument: String },
+    #[error("Git source {source_url}: {message}")]
+    Git { source_url: String, message: String },
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,

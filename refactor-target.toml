@@ -1219,12 +1219,23 @@ reason = "Pack readers and writers derive the machine-owned directory from their
 
 [[module]]
 path = "crates/rimz/src/packs"
-allowed-dependencies = ["disk", "utils"]
+allowed-dependencies = ["disk", "proc", "utils"]
 # The pack format, record, resolver, claims, and linked mutations share one domain API.
 # PackItem, ItemFate and its problem accessor unify definition and skill inventories (+3).
 # Manifest, PackManifest and Manifest::read stay private until a consumer needs them (-3).
 # Remove the unused resolve_in launch-environment accessor (-1).
-surface-budget = 33
+# GitSource and its reinstall spelling share normalized Git identity with the CLI (+2).
+surface-budget = 35
+
+[[verdict]]
+kind = "item"
+key = "packs::GitSource"
+reason = "Pack install arguments carry normalized Git identity, transport URL, selection and an optional pin."
+
+[[verdict]]
+kind = "item"
+key = "packs::GitSource::spelling"
+reason = "Summaries, listings and ref errors use one shortest reinstall source spelling."
 
 [[verdict]]
 kind = "item"
