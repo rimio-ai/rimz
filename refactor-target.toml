@@ -209,7 +209,7 @@ upward-dependencies = ["address"]
 # ProviderLogin::local_sessions discovers a provider home and stamps each observation with its account (+1).
 # The idle-stop request body is shared by the store record and the agent rollup (+2).
 # 970: `PendingIdleStop`, the projected idle stop with its due time, and its `label`, the one wording shared by `agents show` and the card.
-# `RateLimitWindow::remaining_percentage` is the one displayed remainder the sidebar bar and `rimz providers` read (+1).
+# `RateLimitWindow::remaining_percentage` is the one displayed remainder the sidebar bar and `rimz accounts` read (+1).
 # `DaemonSessions` is the three-state answer the account-link gate reads from `runtime_control_writes_history` (+1).
 # AgentState::rowless_status gives `agents` and `subagents list` one status for a child with no row (+1).
 # TurnErrorClass::words names a labelless turn error for `subagents list` and the parent's park notice (+1).
@@ -731,7 +731,7 @@ path = "crates/rimz/src/cli"
 # Launch cwd and prompt-file resolution share the caller tmp reversal (+1).
 # `main` maps the scenes' shared usage error to exit 2 (+1).
 # The `accounts use` line is built once for both commands' switch hints (+1).
-# The position's standing and its in-room check serve providers and accounts list (+1).
+# The position's standing and its in-room check serve accounts list and accounts redeem (+1).
 # Ctx shares cached channel provenance with create-on-miss through launcher context.
 # Explicit child statuses reach main through the shared exit-code error.
 # anchor_caller_workspace shares agent-started placement across launch paths (+1).
@@ -3065,7 +3065,7 @@ path = "crates/rimz/src/theme"
 upward-dependencies = ["agents"]
 # Wait prompts and CLI reports share the byte-size formatter.
 # The reset-credit expiry label sits beside the reset countdown.
-# `Palette::budget_tone` is the one zone-to-tone mapping the sidebar bar and `rimz providers` read (+1).
+# `Palette::budget_tone` is the one zone-to-tone mapping the sidebar bar and `rimz accounts` read (+1).
 # `Palette::pace_tone` shares the burn-rate bands across the sidebar and CLI (+1).
 # `fmt::dollars_left` gives provider credit rows one floored money vocabulary (+1).
 # fmt::dollars_estimate gives selected cache lines a two-significant-figure money vocabulary (+1).

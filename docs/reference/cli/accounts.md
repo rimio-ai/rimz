@@ -314,8 +314,6 @@ Window fields are omitted when unknown:
 
 Compared with the previous `accounts list --json`, rows now cover every kind, `windows` includes all scopes, and provider plan, identity, pool, freshness, spending, and day/month budget fields are added. `status` remains launch health and `login` remains auth state.
 
-The hidden, deprecated `rimz providers [KIND]` alias remains for one release and writes a warning to stderr. Its human stdout matches `accounts` or `accounts show KIND`; its `--json` preserves the [legacy report](./providers.md#json-output), including auth `status` and `active:false` outside a room.
-
 ## `redeem`
 
 ```sh
