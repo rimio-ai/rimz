@@ -40,7 +40,11 @@ use model::DoctorReport;
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Widen every section to every row it has (every agent session, loop task, language server, and message failure), and measure disk use for STORAGE and TEMP UNITS by walking every file under the RimZ home: the bug-report flag, as in rimz doctor --audit --no-log-text --output <file>. The audit can take minutes; an agent runs it under rimz wait --run.
+    /// Widen every section to every row it has (every agent session, loop task, language server,
+    /// and message failure), and measure disk use for STORAGE and TEMP UNITS by walking the RimZ
+    /// home. STORAGE adds per-folder room entries and warns above 150,000 in unswept folders.
+    /// The bug-report flag, as in rimz doctor --audit --no-log-text --output <file>.
+    /// The audit can take minutes; an agent runs it under rimz wait --run.
     #[arg(long)]
     audit: bool,
     /// Emit machine-readable JSON instead of the human report.
@@ -114,7 +118,9 @@ fn collect_report(
         let remote_control = progress.spawn(scope, "remote control", || {
             runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path()))
         });
-        let disk_usage = progress.spawn(scope, "storage", || audit.then(runtime::collect_storage));
+        let disk_usage = progress.spawn(scope, "storage", || {
+            audit.then(|| runtime::collect_storage(ws))
+        });
         let temp_units = progress.spawn(scope, "temp units", || runtime::collect_temp_units(audit));
         let protocols = progress.spawn(scope, "protocols", || ws.map(protocol::collect_protocols));
         let trust = progress.spawn(scope, "trust", || ws.map(agents::collect_trust));

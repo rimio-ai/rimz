@@ -798,6 +798,8 @@ pub(super) struct RemoteAgent {
 pub(super) struct Storage {
     pub(super) total_bytes: u64,
     pub(super) roots: Vec<StorageRootView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) room: Option<StorageRoomView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -806,6 +808,35 @@ pub(super) struct StorageRootView {
     pub(super) path: String,
     pub(super) bytes: u64,
     pub(super) present: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct StorageRoomView {
+    pub(super) path: String,
+    pub(super) present: bool,
+    pub(super) entries: u64,
+    pub(super) bytes: u64,
+    pub(super) folders: Vec<StorageFolderView>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct StorageFolderView {
+    pub(super) name: &'static str,
+    pub(super) path: String,
+    pub(super) present: bool,
+    pub(super) entries: u64,
+    pub(super) bytes: u64,
+    pub(super) never_swept: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) largest: Option<StorageLargestView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fix: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct StorageLargestView {
+    pub(super) name: String,
+    pub(super) entries: u64,
 }
 
 #[derive(Debug, Serialize)]

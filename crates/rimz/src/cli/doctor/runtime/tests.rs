@@ -7,6 +7,96 @@ use rimz::diag::record::{
 use rimz::ids::LinkTier;
 
 #[test]
+fn storage_folders_warn_only_above_limit_without_a_sweep() {
+    use rimz::config::HistoryRetention::{Duration, Forever};
+    use rimz::disk::paths::Class;
+
+    let cases = [
+        (Class::Shared, 150_001, Forever, (true, true)),
+        (Class::Shared, 150_000, Forever, (true, false)),
+        (Class::Shared, 0, Forever, (true, false)),
+        (Class::Cache, 150_001, Forever, (true, true)),
+        (Class::TeamNotes, 150_001, Forever, (true, true)),
+        (
+            Class::TeamNotes,
+            150_001,
+            Duration(std::time::Duration::from_secs(86_400)),
+            (false, false),
+        ),
+        (Class::Log, 1_000_000, Forever, (false, false)),
+        (Class::Records, 1_000_000, Forever, (false, false)),
+        (Class::Audit, 1_000_000, Forever, (false, false)),
+        (Class::Owned, 1_000_000, Forever, (false, false)),
+        (Class::Tmp, 1_000_000, Forever, (false, false)),
+        (Class::Out, 1_000_000, Forever, (false, false)),
+        (Class::Locks, 1_000_000, Forever, (false, false)),
+    ];
+    let actual = cases.map(|(class, entries, retention, _)| {
+        let row = storage_folder(measured_storage_folder(class, entries, None), retention);
+        (row.never_swept, row.fix.is_some())
+    });
+    assert_eq!(actual, cases.map(|(_, _, _, expected)| expected));
+}
+
+#[test]
+fn storage_fixes_name_the_folder_largest_child_and_class_remedy() {
+    use rimz::config::HistoryRetention::Forever;
+    use rimz::disk::paths::Class;
+    use rimz::disk::usage::LargestDirectory;
+
+    let cases = [
+        (Class::Shared, "remove by hand"),
+        (
+            Class::Cache,
+            "`rimz reset` clears it but restarts the room with no agents",
+        ),
+        (
+            Class::TeamNotes,
+            "rimz config set gc.team_notes_retention 30d",
+        ),
+    ];
+    let actual = cases.map(|(class, remedy)| {
+        [false, true].map(|with_largest| {
+            let largest = with_largest.then(|| LargestDirectory {
+                name: "runaway".into(),
+                entries: 150_001,
+            });
+            let folder = measured_storage_folder(class, 150_002, largest);
+            let path = folder.path.display().to_string();
+            let row = storage_folder(folder, Forever);
+            let json = serde_json::to_value(&row).unwrap();
+            let Some(fix) = row.fix else { return false };
+            fix.contains(&path)
+                && fix.contains(remedy)
+                && if with_largest {
+                    fix.contains(&format!("{path}/runaway"))
+                        && fix.contains("150001")
+                        && json["largest"]
+                            == serde_json::json!({"name": "runaway", "entries": 150_001})
+                } else {
+                    !fix.contains("largest") && json.get("largest").is_none()
+                }
+        })
+    });
+    assert_eq!(actual, [[true; 2]; 3]);
+}
+
+fn measured_storage_folder(
+    class: rimz::disk::paths::Class,
+    entries: u64,
+    largest: Option<rimz::disk::usage::LargestDirectory>,
+) -> rimz::disk::usage::FolderStorage {
+    rimz::disk::usage::FolderStorage {
+        class,
+        path: PathBuf::from(format!("/room/{}", class.dir_name())),
+        present: true,
+        entries,
+        bytes: 1024,
+        largest,
+    }
+}
+
+#[test]
 fn hook_drainer_diagnostics_contain_short_gaps_and_investigate_even_recovered_outages() {
     let cases = [
         (
