@@ -314,7 +314,8 @@ upward-dependencies = ["address"]
 # ResumeProbe and its agents re-export share three-way resume discovery outcomes (+2).
 # SessionStepOutput carries the prepared command and launch notices to the CLI (+1).
 # LocalSessionDiscovery and its re-export name the host's discovery policy (+2).
-surface-budget = 1176
+# PaneSessionDemand, PaneSessionNeed, NamedSession, fresh_window and the capability/login seam (+6).
+surface-budget = 1182
 
 [[verdict]]
 kind = "item"
@@ -2922,7 +2923,8 @@ path = "crates/rimz/src/store"
 # message::cached_messages shares nontransactional queue/history projection reads (+1).
 # agent_context::read_cached_one isolates due-session reads from held projection records (+1).
 # CapacityWaitSummary carries only the room's oldest durable wait and total count (+1).
-surface-budget = 516
+# SidebarSnapshot::pane_session_demands shares the ladder's discovery request with the producer (+1).
+surface-budget = 517
 
 [[verdict]]
 kind = "item"
@@ -6702,6 +6704,21 @@ reason = "Single-session restore passes replayed posture through the cohort's sh
 kind = "item"
 key = "agents::session::LocalSessionLookup"
 reason = "Provider-session resume distinguishes an unsupported locator, an absent id, and a session found in the room account."
+
+[[verdict]]
+kind = "item"
+key = "agents::session::PaneSessionDemand"
+reason = "The store describes the sessions and freshness window live panes in one workspace can bind."
+
+[[verdict]]
+kind = "item"
+key = "agents::session::PaneSessionNeed"
+reason = "Adapters settle a pane by its own session before opening its discovery window."
+
+[[verdict]]
+kind = "item"
+key = "agents::session::NamedSession"
+reason = "Per-pane discovery names durable and resumed ids with account-validated transcript hints."
 
 [[verdict]]
 kind = "item"

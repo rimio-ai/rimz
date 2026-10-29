@@ -98,6 +98,248 @@ fn local_session_tokenizing_is_bounded_per_simple_pane_and_kind() {
 }
 
 #[test]
+fn pane_demand_preserves_full_scan_bindings_and_merged_rows() {
+    for kind in ["claude", "codex"] {
+        for scenario in [
+            "stamped",
+            "fenced",
+            "co-resident",
+            "resume",
+            "launched-child",
+            "reserved-missing",
+            "provisional",
+            "absent-pane",
+            "several-panes",
+            "registered-only",
+            "no-clock",
+        ] {
+            assert_demand_equivalence(kind, scenario);
+        }
+    }
+}
+
+fn assert_demand_equivalence(kind: &str, scenario: &str) {
+    let observed = |id, created| {
+        let mut observation = identity_observation(kind, id, 1);
+        observation.created_at = ago(created);
+        observation.fresh_binding_at = Some(ago(created));
+        observation
+    };
+    let mut panes = vec![pane("%1", kind, "/repo/tmp/../main")];
+    panes[0].pane_process_start = Some(ago(100));
+    let mut observations = vec![observed("history", 1000)];
+    let mut agents = Vec::new();
+    let mut expected_own = Vec::new();
+    let mut expected_named = Vec::new();
+    match scenario {
+        "stamped" | "fenced" => {
+            agents.push(agent(kind, "owned", AgentStatus::Idle, 1).in_pane("%1"));
+            observations.push(observed("owned", 1000));
+            expected_own.push("owned");
+        }
+        "co-resident" => {
+            let mut old = agent(kind, "old", AgentStatus::Idle, 1).in_pane("%1");
+            old.launch_id = Some(AgentSessionId::from("launch_old"));
+            old.registered_at = Some(ago(600));
+            let mut owner = agent(kind, "owned", AgentStatus::Running, 1).in_pane("%1");
+            owner.launch_id = Some(AgentSessionId::from("launch_owned"));
+            owner.registered_at = Some(ago(30));
+            agents.extend([old, owner]);
+            observations.extend([observed("old", 600), observed("owned", 20)]);
+            expected_own.push("owned");
+            expected_named.push("old");
+        }
+        "resume" => {
+            panes[0].resumed_session_id = Some(AgentSessionId::from("resumed"));
+            observations.push(observed("resumed", 1000));
+            expected_named.push("resumed");
+        }
+        "launched-child" => {
+            let mut child = agent(kind, "owned", AgentStatus::Running, 1).in_pane("%1");
+            child.launch_id = Some(AgentSessionId::from("launch_child"));
+            child.parent_agent_id = Some(AgentSessionId::from("parent"));
+            child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            child.launch_depth = Some(2);
+            child.registered_at = Some(ago(30));
+            agents.push(child);
+            observations.extend([observed("owned", 1000), observed("other", 20)]);
+            expected_own.push("owned");
+        }
+        "reserved-missing" => {
+            let mut owner = agent(kind, "missing", AgentStatus::Idle, 1).in_pane("%1");
+            owner.launch_id = Some(AgentSessionId::from("launch_missing"));
+            owner.registered_at = Some(ago(30));
+            agents.push(owner);
+            observations.push(observed("other", 60));
+            expected_own.push("missing");
+        }
+        "provisional" | "registered-only" => {
+            let mut launch = agent(kind, "launch_new", AgentStatus::Idle, 1).in_pane("%1");
+            launch.registered_at = Some(ago(30));
+            agents.push(launch);
+            observations.push(observed("new", 20));
+            if scenario == "registered-only" {
+                panes[0].pane_process_start = None;
+            }
+        }
+        "absent-pane" => {
+            agents.push(agent(kind, "absent", AgentStatus::Idle, 1).in_pane("%9"));
+            observations.extend([observed("absent", 1000), observed("new", 20)]);
+        }
+        "several-panes" => {
+            let mut newer = pane("%2", kind, "/repo/main");
+            newer.pane_process_start = Some(ago(30));
+            panes.push(newer);
+            observations.extend([observed("older", 60), observed("newer", 30)]);
+        }
+        "no-clock" => {
+            panes[0].pane_process_start = None;
+            observations.push(observed("other", 20));
+        }
+        _ => panic!("unknown fixture {scenario}"),
+    }
+    for agent in &mut agents {
+        agent.transcript_path = Some(format!("/hooks/{}.jsonl", agent.agent_id));
+    }
+    let mut snapshot = room(agents);
+    if scenario == "fenced" {
+        std::sync::Arc::make_mut(&mut snapshot.fenced_sessions).insert((
+            AgentKind::new_unchecked(kind),
+            AgentSessionId::from("owned"),
+        ));
+    }
+    let admitted_count = panes.len();
+    let other_kind = if kind == "claude" { "codex" } else { "claude" };
+    for mut foreign in [
+        pane("%7", other_kind, "/repo/main"),
+        pane("%8", kind, "/elsewhere"),
+    ] {
+        foreign.pane_process_start = Some(ago(50));
+        panes.push(foreign);
+    }
+    let demands = snapshot.pane_session_demands(
+        &panes,
+        &AgentKind::new_unchecked(kind),
+        &[PathBuf::from("/repo/main")],
+    );
+    let filtered = observations
+        .iter()
+        .filter(|observation| {
+            demands.iter().any(|demand| {
+                if observation.workspace != demand.workspace {
+                    return false;
+                }
+                let named = demand.panes.iter().any(|pane| {
+                    pane.own
+                        .iter()
+                        .chain(&pane.named)
+                        .any(|named| named.id == observation.session_id)
+                });
+                let window = demand.fresh_window(|id| {
+                    observations
+                        .iter()
+                        .any(|observed| &observed.session_id == id)
+                });
+                named
+                    || window
+                        .zip(observation.fresh_binding_at)
+                        .is_some_and(|(since, at)| at >= since)
+            })
+        })
+        .cloned()
+        .collect();
+    let (limited, limited_diag) = snapshot
+        .clone()
+        .with_local_sessions_and_diagnostics(&panes, filtered);
+    let (full, full_diag) = snapshot.with_local_sessions_and_diagnostics(&panes, observations);
+    let pairs = |snapshot: &SidebarSnapshot| {
+        snapshot
+            .agents
+            .iter()
+            .map(|agent| {
+                (
+                    agent.kind.clone(),
+                    agent.agent_id.clone(),
+                    agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        pairs(&limited),
+        pairs(&full),
+        "{kind}/{scenario} bound pairs"
+    );
+    assert_eq!(
+        serde_json::to_value(&limited.agents).unwrap(),
+        serde_json::to_value(&full.agents).unwrap(),
+        "{kind}/{scenario} merged rows"
+    );
+    let ghosts = |diagnostics: Vec<DiagEvent>| {
+        diagnostics
+            .into_iter()
+            .filter(|event| matches!(event, DiagEvent::GhostSessionBind { .. }))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ghosts(limited_diag.clone()),
+        ghosts(full_diag.clone()),
+        "{kind}/{scenario}"
+    );
+    let rejected = |diagnostics: Vec<DiagEvent>| {
+        diagnostics
+            .into_iter()
+            .filter(|event| matches!(event, DiagEvent::LocalSessionBindRejected { .. }))
+            .collect::<Vec<_>>()
+    };
+    let limited_rejections = rejected(limited_diag);
+    let full_rejections = rejected(full_diag);
+    assert!(
+        limited_rejections
+            .iter()
+            .all(|event| full_rejections.contains(event)),
+        "{kind}/{scenario}"
+    );
+    if !matches!(
+        scenario,
+        "launched-child" | "co-resident" | "registered-only" | "no-clock"
+    ) {
+        assert_eq!(limited_rejections, full_rejections, "{kind}/{scenario}");
+    }
+    assert_eq!(demands.len(), 1, "{kind}/{scenario} workspace demand");
+    let demand = &demands[0];
+    assert_eq!(demand.workspace, PathBuf::from("/repo/main"));
+    assert_eq!(demand.panes.len(), admitted_count);
+    let ids = |sessions: &[crate::agents::session::NamedSession]| {
+        sessions
+            .iter()
+            .map(|session| session.id.as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&demand.panes[0].own), expected_own, "{kind}/{scenario}");
+    assert_eq!(
+        ids(&demand.panes[0].named),
+        expected_named,
+        "{kind}/{scenario}"
+    );
+    for session in demand.panes[0].own.iter().chain(&demand.panes[0].named) {
+        assert_eq!(
+            session.transcript_path,
+            (scenario != "resume").then(|| PathBuf::from(format!("/hooks/{}.jsonl", session.id)))
+        );
+    }
+    let expected_since = match scenario {
+        "resume" | "no-clock" => None,
+        "registered-only" => Some(ago(30)),
+        _ => Some(ago(100)),
+    };
+    assert_eq!(
+        demand.panes[0].fresh_since, expected_since,
+        "{kind}/{scenario}"
+    );
+}
+
+#[test]
 fn stamped_sessions_take_the_first_matching_unused_pane_in_frame_order() {
     for count in [1, 2] {
         let panes = [

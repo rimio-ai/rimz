@@ -7,6 +7,7 @@
 //! and what its defaults mean is
 //! [docs/internals/agents/adapter.md](../../../../docs/internals/agents/adapter.md).
 
+use super::session::PaneSessionDemand;
 use super::*;
 use crate::ids::AgentSessionId;
 use std::collections::BTreeMap;
@@ -808,6 +809,16 @@ pub trait SessionCapability: CoreCapability {
         _login_env: &BTreeMap<String, String>,
     ) -> Vec<LocalSessionObservation> {
         Vec::new()
+    }
+
+    /// Discover only the named sessions and unsettled windows live panes can
+    /// bind. `None` means this adapter has no per-pane discovery.
+    fn discover_pane_sessions(
+        &self,
+        _demand: &[PaneSessionDemand],
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<Vec<LocalSessionObservation>> {
+        None
     }
 
     /// Report whether the provider's machine-local store still holds the

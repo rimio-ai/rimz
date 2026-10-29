@@ -192,6 +192,23 @@ impl ProviderLogin {
         observations
     }
 
+    /// Sessions live panes can bind in this login's home, each carrying this account.
+    pub fn pane_sessions(
+        &self,
+        adapter: &super::AgentDefinition,
+        demand: &[super::session::PaneSessionDemand],
+        ambient: &BTreeMap<String, String>,
+    ) -> Vec<super::LocalSessionObservation> {
+        let login = (!self.is_default()).then(|| self.name.clone());
+        let mut observations = adapter
+            .discover_pane_sessions(demand, &self.env(ambient))
+            .unwrap_or_default();
+        for observation in &mut observations {
+            observation.login.clone_from(&login);
+        }
+        observations
+    }
+
     /// Locate an exact session in this account's home and stamp its login.
     pub fn locate_session(
         &self,
