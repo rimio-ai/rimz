@@ -236,6 +236,20 @@ impl Step {
             _ => None,
         }
     }
+
+    pub(super) fn edges(&self) -> BTreeMap<&'static str, (&str, bool)> {
+        [
+            ("then", self.then.as_deref(), None),
+            ("asked", self.on.asked.as_deref(), None),
+            ("cap", self.on.cap.as_deref(), Some("@user")),
+            ("capacity", self.on.capacity.as_deref(), Some("@failed")),
+        ]
+        .into_iter()
+        .filter_map(|(outcome, target, default)| {
+            Some((outcome, (target.or(default)?, target.is_some())))
+        })
+        .collect()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
