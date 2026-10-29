@@ -66,6 +66,56 @@ fn ids(found: &[LocalSessionObservation]) -> Vec<String> {
 }
 
 #[test]
+fn pane_named_paths_match_full_scan_across_config_root_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    let created = Timestamp::now()
+        .checked_sub(jiff::Span::new().hours(2))
+        .unwrap();
+    let active = created.checked_add(jiff::Span::new().hours(1)).unwrap();
+    let owner = session(&first, OWNER, &created.to_string(), &active.to_string());
+    session(&second, OWNER, &created.to_string(), &created.to_string());
+    session(&first, RECENT, &created.to_string(), &created.to_string());
+    session(&second, NEXT, &created.to_string(), &created.to_string());
+    write_session(
+        &first.join("projects/-workspace-project"),
+        "44444444-4444-4444-8444-444444444444",
+        &[],
+    );
+    let key = key(&[first, second.clone()]);
+    let workspace = key.workspaces[0].clone();
+    let paths = |found: Vec<LocalSessionObservation>| {
+        found
+            .into_iter()
+            .map(|row| ((row.workspace, row.session_id), row.transcript_path))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let now = Instant::now();
+    let full = ClaudeDiscoverySnapshot::default().refresh(key.clone(), now);
+    assert_eq!(ids(&full), [OWNER, RECENT, NEXT]);
+    let names = full
+        .iter()
+        .map(|row| row.session_id.as_str())
+        .collect::<Vec<_>>();
+    let request = demand(&[], &names, None);
+    let full = paths(full);
+    assert_eq!(full[&(workspace.clone(), OWNER.into())], owner);
+    let mut cache = ClaudePaneDiscovery::default();
+    assert_eq!(
+        paths(cache.refresh(key.clone(), std::slice::from_ref(&request), now)),
+        full
+    );
+
+    let newer = active.checked_add(jiff::Span::new().minutes(1)).unwrap();
+    let revision = session(&second, OWNER, &created.to_string(), &newer.to_string());
+    let after_backstop = now + Duration::from_secs(31);
+    let full = paths(ClaudeDiscoverySnapshot::default().refresh(key.clone(), after_backstop));
+    assert_eq!(full[&(workspace, OWNER.into())], revision);
+    assert_eq!(paths(cache.refresh(key, &[request], after_backstop)), full);
+}
+
+#[test]
 fn pane_warm_work_is_independent_of_history_for_settled_and_open_windows() {
     let mut actual = Vec::new();
     for history in [50, 500] {
