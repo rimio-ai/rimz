@@ -23,6 +23,7 @@ layers = [
     "proc",
     "child_process",
     "config",
+    "packs",
     "trust",
     "theme",
 ],
@@ -1120,7 +1121,176 @@ allowed-dependencies = [
 # StatePaths::legacy_snapshots_dir contains the retired checkpoint layout (+1).
 # KeyedParseCache, its two readers, and testkit parse-cache counters (+5).
 # forward_records_dir owns machine-local supervisor record paths (+1).
-surface-budget = 297
+# packs_dir shares the explicit-home pack root (+1).
+surface-budget = 298
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::packs_dir"
+reason = "Pack readers and writers derive the machine-owned directory from their explicit agents home."
+
+[[module]]
+path = "crates/rimz/src/packs"
+allowed-dependencies = ["disk", "utils"]
+# The pack format, record, resolver, claims, and linked mutations share one domain API.
+# Manifest, PackManifest and Manifest::read stay private until a consumer needs them (-3).
+# Remove the unused resolve_in launch-environment accessor (-1).
+surface-budget = 30
+
+[[verdict]]
+kind = "item"
+key = "packs"
+reason = "Layer-2 pack ownership is shared by config, skill consumers, and CLI workflows without upward imports."
+
+[[verdict]]
+kind = "item"
+key = "packs::PackName"
+reason = "Manifest, record, and CLI boundaries share one validated pack-name grammar."
+
+[[verdict]]
+kind = "item"
+key = "packs::PackName::as_str"
+reason = "Definition and skill scanners use validated pack identity in qualified keys."
+
+[[verdict]]
+kind = "item"
+key = "packs::ItemType"
+reason = "Definitions, skills, and the CLI share the record's five exclusion namespaces."
+
+[[verdict]]
+kind = "item"
+key = "packs::ItemType::as_str"
+reason = "CLI receipts and exclusion fixes share the serialized namespace spellings."
+
+[[verdict]]
+kind = "item"
+key = "packs::ItemKey"
+reason = "Typed item exclusions distinguish matching stems in different trees."
+
+[[verdict]]
+kind = "item"
+key = "packs::Exclusions"
+reason = "Readers and mutations share whole-type and per-item exclusion state."
+
+[[verdict]]
+kind = "item"
+key = "packs::Exclusions::contains"
+reason = "Both scanners ask the same whole-type-or-item exclusion predicate."
+
+[[verdict]]
+kind = "item"
+key = "packs::ExclusionTarget"
+reason = "CLI-resolved targets reach record mutations without rescanning item trees."
+
+[[verdict]]
+kind = "item"
+key = "packs::InstalledPack"
+reason = "The durable record retains pack identity and exclusions even when a live manifest breaks."
+
+[[verdict]]
+kind = "item"
+key = "packs::InstalledSource"
+reason = "Pack listing and later source workflows share the versioned source record."
+
+[[verdict]]
+kind = "item"
+key = "packs::Record"
+reason = "Config and CLI readers inspect installed identity without mutating or ambient root lookup."
+
+[[verdict]]
+kind = "item"
+key = "packs::Record::read"
+reason = "The integration suite inspects durable exclusions and source identity after CLI mutations."
+
+[[verdict]]
+kind = "item"
+key = "packs::Problem"
+reason = "Config notices and CLI receipts preserve the faulty file and actionable pack problem."
+
+[[verdict]]
+kind = "item"
+key = "packs::ResolvedPack"
+reason = "Definition and skill readers share lexical entry roots and live pack metadata."
+
+[[verdict]]
+kind = "item"
+key = "packs::ResolvedPacks"
+reason = "Readers retain usable packs, installed identity, and problems together."
+
+[[verdict]]
+kind = "item"
+key = "packs::resolve"
+reason = "Definition and skill loaders resolve exactly the agents home their caller supplied."
+
+[[verdict]]
+kind = "item"
+key = "packs::PackClaim"
+reason = "Definition and skill scanners supply namespace claims without pack-domain disk scans."
+
+[[verdict]]
+kind = "item"
+key = "packs::ClaimResolution"
+reason = "Both loaders share home precedence, sole-pack winners, and diagnosed conflicts."
+
+[[verdict]]
+kind = "item"
+key = "packs::resolve_claims"
+reason = "One pure resolver owns the precedence rule and actionable conflict wording."
+
+[[verdict]]
+kind = "item"
+key = "packs::InstallSource"
+reason = "The CLI and later Git workflow extend one install-argument parser."
+
+[[verdict]]
+kind = "item"
+key = "packs::PackErr"
+reason = "CLI handlers render typed mutation refusals rather than inspecting printed messages."
+
+[[verdict]]
+kind = "item"
+key = "packs::Result"
+reason = "Pack mutation methods share the domain's typed error boundary."
+
+[[verdict]]
+kind = "item"
+key = "packs::InstallStatus"
+reason = "Receipts distinguish first install, registry refresh or link repair, and no change."
+
+[[verdict]]
+kind = "item"
+key = "packs::InstallOutcome"
+reason = "Install returns names, source-entry identity, refresh changes, and warnings for presentation."
+
+[[verdict]]
+kind = "item"
+key = "packs::install"
+reason = "The library owns locked, durable linked installs and manifest refreshes."
+
+[[verdict]]
+kind = "item"
+key = "packs::RemoveOutcome"
+reason = "Removal receipts distinguish dropping one pack from removing its last source entry."
+
+[[verdict]]
+kind = "item"
+key = "packs::remove"
+reason = "The library commits removal before unlinking the entry and never touches a linked checkout."
+
+[[verdict]]
+kind = "item"
+key = "packs::ExclusionOutcome"
+reason = "CLI receipts distinguish applied exclusions from idempotent include and exclude no-ops."
+
+[[verdict]]
+kind = "item"
+key = "packs::exclude"
+reason = "Exact exclusion targets mutate only the durable record under its lock."
+
+[[verdict]]
+kind = "item"
+key = "packs::include"
+reason = "Exact inclusion targets enforce whole-type exclusions before changing the durable record."
 
 [[verdict]]
 kind = "item"
@@ -1727,7 +1897,8 @@ surface-budget = 9
 path = "crates/rimz/src/lib.rs"
 # The lowest-layer blocker vocabulary is shared with the CLI (+1).
 # The library launcher owns checkout creation (+1).
-surface-budget = 72
+# The packs module shares linked sources below config and skill consumers (+1).
+surface-budget = 73
 
 [[module]]
 path = "crates/rimz/src/launcher"

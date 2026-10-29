@@ -1896,6 +1896,11 @@ pub(crate) fn skills_library_in(env: &BTreeMap<String, String>) -> Option<PathBu
     agents_home_in(env).map(|root| root.join(SKILLS_SUBDIR))
 }
 
+/// Installed pack entries and their record under an explicit agent library root.
+pub fn packs_dir(agents_home: &Path) -> PathBuf {
+    agents_home.join("packs")
+}
+
 /// Read an environment variable as a path, treating an empty value as unset.
 pub fn env_path(key: &str) -> Option<PathBuf> {
     env::var_os(key)
