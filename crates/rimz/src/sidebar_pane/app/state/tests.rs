@@ -435,10 +435,10 @@ impl ApplyHarness {
         };
         {
             let mut views = self.views.lock();
-            views.publish(outcome.clone());
-            self.completion
-                .store(outcome.is_final(), std::sync::atomic::Ordering::Relaxed);
+            views.publish(outcome.clone(), std::time::Instant::now());
         }
+        self.completion
+            .store(outcome.is_final(), std::sync::atomic::Ordering::Release);
         self.state.apply_latest_snapshot(outcome)
     }
 

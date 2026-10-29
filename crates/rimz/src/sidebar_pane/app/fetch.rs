@@ -1371,7 +1371,7 @@ impl ResultSink {
         self.cycle.first().map(|eldest| eldest.own_pane.clone())
     }
 
-    /// Publish content and completion atomically, then wake the frozen cycle members.
+    /// Publish content and its views record, then completion, then wake the frozen cycle members.
     fn publish(
         &mut self,
         outcome: Result<(Arc<WorkspaceFold>, FetchPhase, SnapshotSource), String>,
@@ -1418,17 +1418,17 @@ impl ResultSink {
         let mut views = views.lock();
         #[cfg(feature = "testkit")]
         let published_at = self.publication.as_ref().map(|_| Instant::now());
-        views.publish(update);
+        views.publish(update, Instant::now());
         #[cfg(feature = "testkit")]
         if let (Some(publication), Some(stamp)) = (&self.publication, published_at) {
             *publication.lock().expect("publication stamp") = (views.revision, stamp);
         }
+        drop(views);
         if completed {
             for subscriber in &self.cycle {
-                subscriber.completion.store(true, Ordering::Relaxed);
+                subscriber.completion.store(true, Ordering::Release);
             }
         }
-        drop(views);
         for subscriber in &self.cycle {
             let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
@@ -1600,7 +1600,7 @@ impl FetchHandle {
     /// Whether a cycle this pane belonged to completed since the last call;
     /// clears the awaiting latch when true.
     pub(super) fn completed(&mut self) -> bool {
-        let completed = self.completion.swap(false, Ordering::Relaxed);
+        let completed = self.completion.swap(false, Ordering::Acquire);
         if completed {
             self.awaiting = false;
         }

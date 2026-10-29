@@ -23,6 +23,7 @@ pub struct ConcurrentFanout {
     pub watched: FanoutThread,
     pub publisher_views_locks: u64,
     pub total_views_locks: u64,
+    pub generations: u64,
     pub paint_latency: Vec<Duration>,
     pub paint_lateness: Vec<Duration>,
     pub reveal_latency: Duration,
@@ -241,6 +242,7 @@ impl IdleCycleFixture {
                     let before = own.get(Counter::ViewsLock);
                     barrier.wait();
                     let total = host_pass::TOTAL.get(Counter::ViewsLock);
+                    let generation = views.generation();
                     barrier.wait();
                     let mut latency = Vec::new();
                     let mut lateness = Vec::new();
@@ -275,6 +277,7 @@ impl IdleCycleFixture {
                         }
                     }
                     let total_views_locks = host_pass::TOTAL.get(Counter::ViewsLock) - total;
+                    let generations = views.generation() - generation;
                     let publisher_views_locks = own.get(Counter::ViewsLock) - before;
                     {
                         let mut data = fixture.sink.host_data.lock().unwrap();
@@ -297,6 +300,7 @@ impl IdleCycleFixture {
                         watched: watched_counts.unwrap(),
                         publisher_views_locks,
                         total_views_locks,
+                        generations,
                         paint_latency: latency,
                         paint_lateness: lateness,
                         reveal_latency,

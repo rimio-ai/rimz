@@ -1,8 +1,9 @@
 //! `ViewAccess` lends explicit client views to `PaneState` with a pre-lock overlay cut.
 
 use super::super::selection::unseat_selection;
-use super::super::views::{ViewId, ViewsHandle};
+use super::super::views::{ViewId, ViewsHandle, ViewsRecord};
 use super::*;
+use std::cell::{Ref, RefCell};
 
 pub(in crate::sidebar_pane::app) struct ViewAccess {
     pub(in crate::sidebar_pane::app) registry: Arc<ViewsHandle>,
@@ -11,6 +12,7 @@ pub(in crate::sidebar_pane::app) struct ViewAccess {
     scratch_context: ViewContext,
     was_resolved: bool,
     view_advanced: bool,
+    cached: RefCell<Arc<ViewsRecord>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,8 +73,10 @@ impl<'a> Route<'a> {
 
 impl ViewAccess {
     pub(super) fn new(scratch_state: ViewState, scratch_context: ViewContext) -> Self {
+        let registry = Arc::<ViewsHandle>::default();
         Self {
-            registry: Arc::default(),
+            cached: RefCell::new(registry.read()),
+            registry,
             events: Arc::default(),
             scratch_state,
             scratch_context,
@@ -81,11 +85,25 @@ impl ViewAccess {
         }
     }
 
+    pub(super) fn record(&self) -> Ref<'_, ViewsRecord> {
+        // A release installs its record before it stores the generation, so a cached record
+        // ahead of the published generation is already the newest.
+        if self.registry.generation() > self.cached.borrow().generation {
+            self.cached.replace(self.registry.read());
+            #[cfg(any(test, feature = "testkit"))]
+            host_pass::count(Counter::ViewsRecord);
+        }
+        Ref::map(self.cached.borrow(), Arc::as_ref)
+    }
+
     pub(super) fn inspect<T>(
         &self,
         own_pane: &PaneId,
         inspect: impl FnOnce(&ViewState, &ViewContext) -> T,
     ) -> T {
+        if !self.record().mapped(own_pane) {
+            return inspect(&self.scratch_state, &self.scratch_context);
+        }
         let views = self.registry.lock();
         if let Some((state, context)) = views.peek(own_pane) {
             return inspect(state, context);
@@ -98,17 +116,13 @@ impl ViewAccess {
         &self.scratch_context.current
     }
 
-    pub(super) fn visibility(
-        &self,
-        pane: &PaneId,
-        now: impl FnOnce() -> Instant,
-    ) -> (bool, Option<bool>) {
-        let mut views = self.registry.lock();
-        views.refresh(now());
-        (views.resolved(pane), views.observed(pane))
+    pub(super) fn visibility(&self, pane: &PaneId) -> (bool, Option<bool>) {
+        let record = self.record();
+        (record.resolved(pane), record.observed(pane))
     }
 
     pub(super) fn share(&mut self, views: Arc<ViewsHandle>) -> Option<PaneId> {
+        self.cached = RefCell::new(views.read());
         self.registry = views;
         self.view_advanced = false;
         self.scratch_state.baseline_pane.take()
@@ -156,9 +170,30 @@ impl ViewAccess {
                 |prepared| prepared.events.clone(),
             );
             let own_pane = &pane.config.own_pane;
+            let record = self.record();
+            let now = pane.clock.now();
+            let resolved = record.resolved(own_pane);
+            let observed = record.observed(own_pane);
+            let departing = self.was_resolved && !resolved && !route.input;
+            let visible = (!departing
+                && pane.optimistic_watch_until.is_some_and(|until| now < until))
+                || observed.unwrap_or_else(|| {
+                    prepared
+                        .and_then(|prepared| prepared.visible)
+                        .unwrap_or_else(|| pane.watches_snapshot(self.mirror()))
+                });
+            if !route.input && !record.mapped(own_pane) && !resolved && !visible {
+                drop(record);
+                if departing {
+                    pane.optimistic_watch_until = None;
+                }
+                self.was_resolved = false;
+                self.view_advanced |= route.advancing;
+                return advance(pane, &mut self.scratch(events, resolved, observed));
+            }
+            drop(record);
             let mut views = self.registry.lock();
             let now = pane.clock.now();
-            views.refresh(now);
             let resolved = views.resolved(own_pane);
             if self.was_resolved && !resolved && !route.input {
                 pane.optimistic_watch_until = None;

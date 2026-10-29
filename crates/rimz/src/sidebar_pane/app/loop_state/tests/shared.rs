@@ -66,9 +66,10 @@ fn views() -> Arc<ViewsHandle> {
 fn publish(rig: &mut Rig, update: FetchUpdate) {
     let mut views = rig.views.lock();
     let completed = update.is_final();
-    views.publish(update);
+    views.publish(update, rig.state.pane.clock.now());
+    drop(views);
     if completed {
-        rig.completion.store(true, Ordering::Relaxed);
+        rig.completion.store(true, Ordering::Release);
     }
 }
 

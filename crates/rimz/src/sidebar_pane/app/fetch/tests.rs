@@ -362,6 +362,89 @@ fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
 }
 
 #[test]
+fn concurrent_settled_hidden_threads_never_acquire_views() {
+    let fixture = FetchFixture::new();
+    let frame = crate::testkit::fleet::seed_scale_room(
+        &fixture.state,
+        &fixture.runtime,
+        crate::testkit::fleet::ScaleRoom {
+            agents: 2,
+            panes: 101,
+            ended_sessions: 0,
+            orphan_contexts: 0,
+        },
+    )
+    .unwrap();
+    let mut panes = frame.to_pane_refs();
+    let mut sidebars = Vec::new();
+    for (index, pane) in panes.iter_mut().enumerate() {
+        pane.view_id = Some(format!("tab_{index}"));
+        let mut sidebar = pane.clone();
+        sidebar.pane_id = PaneId::from_parts(MuxName::Zellij, format!("sidebar_{index}"));
+        sidebar.command = Some("rimz-sidebar".into());
+        sidebars.push(sidebar);
+    }
+    let viewed = sidebars[0].pane_id.clone();
+    panes.extend(sidebars);
+    let mut frame =
+        crate::sidebar::frame::assemble_frame(panes, frame.produced_at_ms, frame.session_name);
+    frame.viewed_panes = vec![viewed.clone()];
+    frame.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        pane_id: viewed,
+    }];
+    let report = IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 101)
+        .run_concurrent(5);
+    assert_eq!(report.hidden.len(), 100);
+    for thread in &report.hidden {
+        assert!(
+            thread.backstops >= 1,
+            "every hidden consumer timed out after settling"
+        );
+        assert_eq!(thread.publication_wakes, 5);
+        assert_eq!(thread.views_locks, 0);
+        assert!(thread.record_loads <= report.generations);
+    }
+    assert_eq!(
+        report.total_views_locks,
+        report.watched.views_locks + report.publisher_views_locks
+    );
+    assert_eq!(report.watched.publication_wakes, 5);
+    assert_eq!(report.paint_latency.len(), 5);
+    assert!(report.watched.paints >= 5);
+}
+
+#[test]
+fn completion_latch_never_precedes_its_published_record() {
+    let fixture = FetchFixture::new();
+    let (wake, _events) = wake_channel();
+    let (mut sink, reader) = single_sink(fixture.host_data.clone(), wake);
+    let views = reader.views.clone();
+    let mut handle = FetchHandle::new(std::sync::mpsc::channel().0, reader.completion.clone());
+    let (ack, acknowledged) = std::sync::mpsc::channel();
+    std::thread::scope(move |scope| {
+        scope.spawn(move || {
+            for _ in 1..=64 {
+                sink.publish(Err("failed publication still completes".into()));
+                acknowledged.recv_timeout(Duration::from_secs(15)).unwrap();
+            }
+        });
+        for revision in 1..=64 {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while !handle.completed() {
+                assert!(Instant::now() < deadline, "publication completes");
+                std::thread::yield_now();
+            }
+            assert!(
+                views.read().revision >= revision,
+                "latch includes revision {revision}"
+            );
+            ack.send(()).unwrap();
+        }
+    });
+}
+
+#[test]
 fn fetch_window_records_reductions_once_per_window() {
     let fixture = FetchFixture::new();
     let diag = crate::diag::DiagSink::under(

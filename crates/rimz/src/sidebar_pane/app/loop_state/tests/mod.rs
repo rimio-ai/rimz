@@ -379,9 +379,10 @@ impl Rig {
         }
         let completed = update.is_final();
         let mut views = self.views.lock();
-        views.publish(update);
+        views.publish(update, self.state.pane.clock.now());
+        drop(views);
         if completed {
-            self.completion.store(true, Ordering::Relaxed);
+            self.completion.store(true, Ordering::Release);
         }
     }
 
@@ -443,18 +444,22 @@ impl Rig {
         self.set_plane_viewed(true);
     }
 
-    /// Point the plane's latest fold at the sidebar's tab being viewed or not.
+    /// Publish the sidebar's tab being viewed or not without completing a fetch.
     fn set_plane_viewed(&mut self, viewed: bool) {
         let own = self.state.pane.config.own_pane.clone();
-        let mut views = self.views.lock();
-        let Some(fold) = views.fold.as_mut() else {
+        let Some(mut fold) = self.views.lock().fold.clone() else {
             return;
         };
-        let viewed_panes = &mut Arc::make_mut(fold).workspace.0.viewed_panes;
+        let viewed_panes = &mut Arc::make_mut(&mut fold).workspace.0.viewed_panes;
         viewed_panes.clear();
         if viewed {
             viewed_panes.push(own);
         }
+        self.send(FetchUpdate::Fold {
+            fold,
+            phase: FetchPhase::Interim,
+            source: SnapshotSource::Cached,
+        });
     }
 
     fn set_pulled(&mut self, snapshot: &SidebarSnapshot) {
