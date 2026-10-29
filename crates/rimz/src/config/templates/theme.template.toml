@@ -111,11 +111,6 @@
 ## color = "clay"
 ## effect = "static"
 ## speed = "fast"
-## [theme.animations.resolving]
-## frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-## color = "meta"
-## effect = "static"
-## speed = "fast"
 ## [theme.animations.idle]
 ## frames = "○"
 ## color = "good"
@@ -156,7 +151,6 @@
 ## working = "⢿"
 ## thinking = "⠁"
 ## delegating = "⢄"
-## resolving = "⠙"
 ## compacting = "▇"
 ## tool_repeat = "⟲"
 
@@ -291,7 +285,6 @@
 ## working = "⢿"
 ## thinking = "⠁"
 ## delegating = "⢄"
-## resolving = "⠙"
 ## compacting = "▇"
 ## tool_repeat = "󰑓"
 

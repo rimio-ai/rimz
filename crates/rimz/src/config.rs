@@ -1467,6 +1467,10 @@ where
     parse_toml_collecting::<T>(path, text).map(|parsed| parsed.unknown_keys)
 }
 
+/// Parses `text` as `T` and collects every key `T` leaves unread, as a dotted path, for the
+/// unknown-key notice. A hand-written `Deserialize` that meets a key it does not know consumes
+/// the value as `serde::de::IgnoredAny`, so the key is reported here; returning an error instead
+/// fails the whole file on a strict load and drops it to defaults on a lenient one.
 fn parse_toml_collecting<'de, T>(path: &Path, text: &'de str) -> Result<Parsed<T>>
 where
     T: Deserialize<'de>,

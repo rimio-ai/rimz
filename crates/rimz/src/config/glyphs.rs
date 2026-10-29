@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
+use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -56,7 +58,6 @@ glyph_roles! {
         StatusWorking => "working",
         StatusThinking => "thinking",
         StatusDelegating => "delegating",
-        StatusResolving => "resolving",
         StatusCompacting => "compacting",
         ToolRepeat => "tool_repeat",
     }
@@ -233,28 +234,71 @@ impl<'de> Deserialize<'de> for GlyphOverrides {
     where
         D: Deserializer<'de>,
     {
-        let raw = BTreeMap::<String, BTreeMap<String, String>>::deserialize(deserializer)?;
-        let mut overrides = BTreeMap::new();
-        for (namespace, values) in raw {
-            if !GlyphRole::NAMESPACES.contains(&namespace.as_str()) {
-                return Err(serde::de::Error::unknown_field(
-                    &namespace,
-                    GlyphRole::NAMESPACES,
-                ));
+        struct OverridesVisitor;
+
+        impl<'de> Visitor<'de> for OverridesVisitor {
+            type Value = GlyphOverrides;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a map")
             }
-            for (name, value) in values {
-                let Some(role) = GlyphRole::from_namespaced(&namespace, &name) else {
-                    return Err(serde::de::Error::custom(format!(
-                        "unknown sidebar glyph role `{namespace}.{name}`"
-                    )));
-                };
-                validate_glyph_cells(&value).map_err(|err| {
-                    serde::de::Error::custom(format!("sidebar glyph `{namespace}.{name}` {err}"))
-                })?;
-                overrides.insert(role, value);
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                let mut overrides = BTreeMap::new();
+                while let Some(namespace) = map.next_key::<String>()? {
+                    if !GlyphRole::NAMESPACES.contains(&namespace.as_str()) {
+                        map.next_value::<IgnoredAny>()?;
+                        continue;
+                    }
+                    map.next_value_seed(NamespaceVisitor {
+                        namespace: &namespace,
+                        overrides: &mut overrides,
+                    })?;
+                }
+                Ok(GlyphOverrides(overrides))
             }
         }
-        Ok(Self(overrides))
+
+        struct NamespaceVisitor<'a> {
+            namespace: &'a str,
+            overrides: &'a mut BTreeMap<GlyphRole, String>,
+        }
+
+        impl<'de> DeserializeSeed<'de> for NamespaceVisitor<'_> {
+            type Value = ();
+
+            fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+                deserializer.deserialize_map(self)
+            }
+        }
+
+        impl<'de> Visitor<'de> for NamespaceVisitor<'_> {
+            type Value = ();
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a map")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<(), M::Error> {
+                while let Some(name) = map.next_key::<String>()? {
+                    let Some(role) = GlyphRole::from_namespaced(self.namespace, &name) else {
+                        map.next_value::<IgnoredAny>()?;
+                        continue;
+                    };
+                    let value = map.next_value::<String>()?;
+                    validate_glyph_cells(&value).map_err(|err| {
+                        serde::de::Error::custom(format!(
+                            "sidebar glyph `{}.{name}` {err}",
+                            self.namespace
+                        ))
+                    })?;
+                    self.overrides.insert(role, value);
+                }
+                Ok(())
+            }
+        }
+
+        deserializer.deserialize_map(OverridesVisitor)
     }
 }
 
@@ -405,23 +449,28 @@ mod tests {
 
     #[test]
     fn validates_known_roles_and_one_cell_values() {
-        let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.card]\nwait_shell = \"❯\"\n")
-            .expect_err("removed role")
-            .to_string();
-        assert!(err.contains("unknown sidebar glyph role `card.wait_shell`"));
+        for unknown in [
+            "[unicode.card]\nwait_shell = '❯'\n",
+            "[unicode.tokens]\nnope = 42\n",
+            "[unicode.makr]\ntotal = 'Σ'\n",
+            "[unicode]\nmakr = false\n",
+        ] {
+            let config: ThemeGlyphsConfig =
+                toml::from_str(&format!("{unknown}[unicode.status]\nworking = 'w'\n"))
+                    .expect("unknown glyph names are ignored");
+            assert_eq!(config.unicode.0.len(), 1);
+            assert_eq!(config.glyph("unicode", GlyphRole::StatusWorking), Some("w"));
+        }
 
         toml::from_str::<ThemeGlyphsConfig>("[unicode.value]\nseam = \"|\"\n")
             .expect("seam override");
 
-        let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.tokens]\nnope = \"x\"\n")
-            .expect_err("unknown role")
-            .to_string();
-        assert!(err.contains("unknown sidebar glyph role `tokens.nope`"));
-
-        let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.makr]\ntotal = \"Σ\"\n")
-            .expect_err("unknown namespace")
-            .to_string();
-        assert!(err.contains("unknown field `makr`"));
+        for invalid in [
+            "[unicode.tokens]\ntotal = 42\n",
+            "[unicode]\ntokens = false\n",
+        ] {
+            assert!(toml::from_str::<ThemeGlyphsConfig>(invalid).is_err());
+        }
 
         let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.tokens]\ntotal = \"abc\"\n")
             .expect_err("over-wide glyph")

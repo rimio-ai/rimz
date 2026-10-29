@@ -626,11 +626,6 @@ fn animations_cycle_and_wrap() {
         role_glyph(&theme, AnimationRole::Thinking, thinking.len() as u64),
         thinking[0]
     );
-    let resolving = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    assert_eq!(
-        role_glyph(&theme, AnimationRole::Resolving, resolving.len() as u64),
-        resolving[0]
-    );
     let compacting = ["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"];
     assert_eq!(
         role_glyph(&theme, AnimationRole::Compacting, compacting.len() as u64),
