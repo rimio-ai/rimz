@@ -2410,6 +2410,7 @@ fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
             },
         );
     }
+    crate::common::write_claude_conversation(&env, &env.project_root, "resume-session");
     let workspace = env.resolve_workspace(&env.project_root);
     let shim = crate::common::write_env_dump_shim(&env, "claude");
     run_success(

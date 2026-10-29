@@ -4477,7 +4477,7 @@ reason = "Settings and launch argv, consent seeding, and bridge-pointer liveness
 [[verdict]]
 kind = "item"
 key = "agents::adapters::claude::spend::claude_config_dirs_from"
-reason = "Claude's config home (ClaudeAdapter::config_home, first CLAUDE_CONFIG_DIR entry), .claude.json base (remote_consent::config_base, $HOME) and transcript data roots (every entry, ~ expansion, XDG and ~/.claude fallback filtered to projects/, pinned by 607727c81) are three rules, not one resolver (pass 27a)."
+reason = "Claude's config home (ClaudeAdapter::config_home, first CLAUDE_CONFIG_DIR entry), .claude.json base (remote_consent::config_base, $HOME) and transcript data roots (claude_config_roots filtered to projects/: every non-empty entry with ~ expansion, else XDG and ~/.claude; never the native roots past a configured entry) are three rules, not one resolver (pass 27a)."
 
 [[verdict]]
 kind = "item"

@@ -263,6 +263,25 @@ pub fn trust_claude_project(env: &Env, root: &std::path::Path) {
     std::fs::write(path, serde_json::to_vec(&config).unwrap()).expect("write Claude trust");
 }
 
+pub(crate) fn write_claude_conversation(env: &Env, root: &std::path::Path, session_id: &str) {
+    let bucket: String = root
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() {
+                char::from(*byte)
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let project = env.home_root.join(".claude/projects").join(bucket);
+    std::fs::create_dir_all(&project).expect("create Claude project directory");
+    std::fs::write(project.join(format!("{session_id}.jsonl")), "{}\n")
+        .expect("write Claude conversation");
+}
+
 pub fn write_definition(
     env: &Env,
     namespace: &str,

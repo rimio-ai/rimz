@@ -97,6 +97,79 @@ fn named_login_discovers_only_its_own_sessions() {
 }
 
 #[test]
+fn named_login_with_an_empty_home_discovers_no_sessions() {
+    use crate::agents::capabilities::SessionCapability as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = fixture_observation();
+    let named_home = temp.path().join("named");
+    fs::create_dir(&named_home).unwrap();
+    let home_env = std::collections::BTreeMap::from([(
+        "HOME".to_owned(),
+        temp.path().to_string_lossy().into_owned(),
+    )]);
+    let named_env = crate::agents::ProviderLogin::named(
+        fixture.kind.clone(),
+        "work".parse().unwrap(),
+        named_home,
+    )
+    .unwrap()
+    .env(&home_env);
+    let record = serde_json::json!({
+        "timestamp": fixture.created_at.to_string(), "cwd": fixture.workspace,
+    })
+    .to_string();
+    write_session(
+        &temp.path().join(".claude/projects/-workspace-project"),
+        fixture.session_id.as_str(),
+        &[&record],
+    );
+    let adapter = super::super::ClaudeAdapter;
+    assert_eq!(
+        adapter
+            .discover_local_sessions(&[&fixture.workspace], &home_env)
+            .len(),
+        1
+    );
+    assert!(
+        adapter
+            .discover_local_sessions(&[&fixture.workspace], &named_env)
+            .is_empty()
+    );
+}
+
+#[test]
+fn conversation_presence_never_reads_past_the_named_home() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = fixture_observation();
+    let named_home = temp.path().join("named");
+    let home_env = std::collections::BTreeMap::from([(
+        "HOME".to_owned(),
+        temp.path().to_string_lossy().into_owned(),
+    )]);
+    let named_env = crate::agents::ProviderLogin::named(
+        fixture.kind.clone(),
+        "work".parse().unwrap(),
+        named_home.clone(),
+    )
+    .unwrap()
+    .env(&home_env);
+    write_session(
+        &temp.path().join(".claude/projects/-workspace-project"),
+        fixture.session_id.as_str(),
+        &[r#"{"type":"user"}"#],
+    );
+    assert_eq!(
+        conversation_present(&fixture.session_id, &fixture.workspace, &home_env),
+        Some(true)
+    );
+    let missing = conversation_present(&fixture.session_id, &fixture.workspace, &named_env);
+    fs::create_dir(&named_home).unwrap();
+    let empty = conversation_present(&fixture.session_id, &fixture.workspace, &named_env);
+    assert_eq!([missing, empty], [None, Some(false)]);
+}
+
+#[test]
 fn conversation_presence_follows_the_workspace_the_resume_would_open() {
     let temp = tempfile::tempdir().unwrap();
     let config_dirs = vec![temp.path().to_path_buf()];

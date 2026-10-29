@@ -179,6 +179,37 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_named_home_never_reads_the_native_pointer() {
+        let temp = tempfile::tempdir().unwrap();
+        let named_home = temp.path().join("named");
+        std::fs::create_dir(&named_home).unwrap();
+        let home_env = std::collections::BTreeMap::from([(
+            "HOME".to_owned(),
+            temp.path().to_string_lossy().into_owned(),
+        )]);
+        let named_env = crate::agents::ProviderLogin::named(
+            crate::ids::AgentKind::new_unchecked("claude"),
+            "work".parse().unwrap(),
+            named_home,
+        )
+        .unwrap()
+        .env(&home_env);
+        let project = temp.path().join(".claude/projects/-workspace-project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join(POINTER_FILE), r#"{"pid":42,"procStart":"1"}"#).unwrap();
+        let is_live = |pid, start: Option<&str>| pid == 42 && start == Some("1");
+        let workspace = Path::new("/workspace/project");
+        assert_eq!(
+            probe_with(workspace, &home_env, is_live),
+            RuntimeControlLiveness::Up
+        );
+        assert_eq!(
+            probe_with(workspace, &named_env, is_live),
+            RuntimeControlLiveness::Unknown
+        );
+    }
+
+    #[test]
     fn pointer_paths_follow_override_then_flattened_bucket_order() {
         let config = PathBuf::from("/config");
         let paths = pointer_paths_under(&[config], Path::new("/repo/main"), |_| {
