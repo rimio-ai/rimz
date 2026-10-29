@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::agent_activity::AgentActivity;
 #[cfg(test)]
 use crate::agents::ProviderCapacity;
+use crate::agents::session::{NamedSession, PaneSessionDemand, PaneSessionNeed};
 use crate::agents::{
     AgentState, AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     ParkDemotion, TurnPhase,
@@ -27,6 +28,35 @@ mod projection;
 pub(crate) use projection::row_identity_violations;
 
 impl SidebarSnapshot {
+    /// Build provider-local discovery demands for one kind's admitted workspaces.
+    pub(crate) fn pane_session_demands(
+        &self,
+        panes: &[PaneRef],
+        kind: &AgentKind,
+        workspaces: &[PathBuf],
+    ) -> Vec<PaneSessionDemand> {
+        let bindings = PaneBindingIndex::new(&self.agents);
+        let kinds = BTreeSet::from([kind]);
+        let facts: Vec<_> = panes
+            .iter()
+            .map(|pane| LocalPaneFacts::new(pane, &kinds))
+            .collect();
+        workspaces
+            .iter()
+            .map(|workspace| PaneSessionDemand {
+                workspace: workspace.clone(),
+                panes: panes
+                    .iter()
+                    .zip(&facts)
+                    .filter(|(_, facts)| {
+                        facts.kinds.contains(kind) && facts.workspace.as_ref() == Some(workspace)
+                    })
+                    .map(|(pane, facts)| facts.session_need(pane, kind, &bindings))
+                    .collect(),
+            })
+            .collect()
+    }
+
     /// Merge provider-owned local sessions only after strict one-to-one binding
     /// to the current pane incarnation. These agents are transient snapshot
     /// rows: the durable rollup and event log remain untouched.
@@ -67,16 +97,7 @@ impl SidebarSnapshot {
             .collect();
         let pane_facts: Vec<_> = panes
             .iter()
-            .map(|pane| LocalPaneFacts {
-                kinds: kinds
-                    .iter()
-                    .filter(|kind| pane_may_host_kind(pane, kind.as_str()))
-                    .map(|kind| (*kind).clone())
-                    .collect(),
-                workspace: crate::store::snapshot::process::pane_worktree_path(pane).map(
-                    |workspace| crate::utils::path::normalize_path_lexical(Path::new(workspace)),
-                ),
-            })
+            .map(|pane| LocalPaneFacts::new(pane, &kinds))
             .collect();
         let mut session_panes = LocalSessionPaneIndex::new(panes, &pane_facts, &binding_index);
         let live_panes: HashSet<_> = panes.iter().map(|pane| &pane.pane_id).collect();
@@ -462,7 +483,8 @@ fn fresh_pane_allows_bind(
     observation: &LocalSessionObservation,
     fresh_binding_at: jiff::Timestamp,
 ) -> Result<(), LocalSessionBindRejectReason> {
-    let launch_owner = binding_index.latest_launch_agent(pane, &observation.kind);
+    let launch = LocalPaneLaunch::new(binding_index, pane, &observation.kind);
+    let launch_owner = launch.owner;
     // The owner's stamp already matched this pane incarnation, and a fork's
     // rollout can predate its own registration hook.
     if launch_owner.is_some_and(|owner| owner.agent_id == observation.session_id) {
@@ -477,10 +499,8 @@ fn fresh_pane_allows_bind(
     // The strongest known lower bound wins. A durable launch can postdate a
     // shell-root process start, while a provider-process start can postdate an
     // older retained launch stamp.
-    let clock = pane
-        .pane_process_start
-        .into_iter()
-        .chain(launch_owner.and_then(|owner| owner.registered_at))
+    let clock = launch
+        .clock_inputs()
         .max()
         .ok_or(LocalSessionBindRejectReason::NoEvidence)?;
     if clock > fresh_binding_at || observation.last_activity < clock {
@@ -503,6 +523,26 @@ fn ghost_session_bind(
             agent_session_id: observation.session_id.clone(),
             pane_id: pane.pane_id.clone(),
         })
+}
+
+struct LocalPaneLaunch<'a> {
+    owner: Option<&'a AgentState>,
+    process_start: Option<jiff::Timestamp>,
+}
+
+impl<'a> LocalPaneLaunch<'a> {
+    fn new(bindings: &PaneBindingIndex<'a>, pane: &PaneRef, kind: &AgentKind) -> Self {
+        Self {
+            owner: bindings.latest_launch_agent(pane, kind),
+            process_start: pane.pane_process_start,
+        }
+    }
+
+    fn clock_inputs(&self) -> impl Iterator<Item = jiff::Timestamp> {
+        self.process_start
+            .into_iter()
+            .chain(self.owner.and_then(|owner| owner.registered_at))
+    }
 }
 
 struct LocalPaneFacts {
@@ -529,9 +569,7 @@ impl LocalSessionPaneIndex {
             let key = |kind: &AgentKind, session: &AgentSessionId| {
                 (kind.clone(), session.clone(), workspace.clone())
             };
-            if let Some(owner) = bindings.stamped_agent(pane)
-                && facts.kinds.contains(&owner.kind)
-            {
+            if let Some(owner) = facts.stamped_owner(pane, bindings) {
                 index
                     .stamped
                     .entry(key(&owner.kind, &owner.agent_id))
@@ -547,13 +585,11 @@ impl LocalSessionPaneIndex {
                         .push_back(pane_index);
                 }
             }
-            for agent in bindings.stamped_agents(pane) {
-                if facts.kinds.contains(&agent.kind) {
-                    index
-                        .co_resident
-                        .entry(key(&agent.kind, &agent.agent_id))
-                        .or_insert(pane_index);
-                }
+            for agent in facts.stamped_roots(pane, bindings) {
+                index
+                    .co_resident
+                    .entry(key(&agent.kind, &agent.agent_id))
+                    .or_insert(pane_index);
             }
         }
         index
@@ -576,6 +612,95 @@ fn take_unused_pane<'a>(
 }
 
 impl LocalPaneFacts {
+    fn new(pane: &PaneRef, kinds: &BTreeSet<&AgentKind>) -> Self {
+        Self {
+            kinds: kinds
+                .iter()
+                .filter(|kind| pane_may_host_kind(pane, kind.as_str()))
+                .map(|kind| (*kind).clone())
+                .collect(),
+            workspace: crate::store::snapshot::process::pane_worktree_path(pane)
+                .map(|workspace| crate::utils::path::normalize_path_lexical(Path::new(workspace))),
+        }
+    }
+
+    fn stamped_owner<'a>(
+        &self,
+        pane: &PaneRef,
+        bindings: &PaneBindingIndex<'a>,
+    ) -> Option<&'a AgentState> {
+        bindings
+            .stamped_agent(pane)
+            .filter(|owner| self.kinds.contains(&owner.kind))
+    }
+
+    fn stamped_roots<'a, 'b>(
+        &'b self,
+        pane: &'b PaneRef,
+        bindings: &'b PaneBindingIndex<'a>,
+    ) -> impl Iterator<Item = &'a AgentState> + 'b {
+        bindings
+            .stamped_agents(pane)
+            .filter(move |agent| self.kinds.contains(&agent.kind))
+    }
+
+    fn session_need(
+        &self,
+        pane: &PaneRef,
+        kind: &AgentKind,
+        bindings: &PaneBindingIndex<'_>,
+    ) -> PaneSessionNeed {
+        let launch = LocalPaneLaunch::new(bindings, pane, kind);
+        let named_session = |agent: &AgentState| NamedSession {
+            id: agent.agent_id.clone(),
+            transcript_path: agent.transcript_path.as_ref().map(PathBuf::from),
+        };
+        let mut own = self
+            .stamped_owner(pane, bindings)
+            .filter(|agent| !agent.agent_id.is_provisional())
+            .map(named_session)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if let Some(owner) = launch
+            .owner
+            .filter(|agent| !agent.agent_id.is_provisional())
+            && !own.iter().any(|session| session.id == owner.agent_id)
+        {
+            own.push(named_session(owner));
+        }
+        let mut named = self
+            .stamped_roots(pane, bindings)
+            .filter(|agent| !agent.agent_id.is_provisional())
+            .filter(|agent| !own.iter().any(|session| session.id == agent.agent_id))
+            .map(named_session)
+            .collect::<Vec<_>>();
+        if let Some(id) = pane
+            .resumed_session_id
+            .as_ref()
+            .filter(|id| !id.is_provisional())
+            && !own.iter().chain(&named).any(|session| session.id == *id)
+        {
+            let transcript_path = bindings
+                .root_index(kind, id)
+                .and_then(|index| bindings.agent(index))
+                .and_then(|agent| agent.transcript_path.as_ref())
+                .map(PathBuf::from);
+            named.push(NamedSession {
+                id: id.clone(),
+                transcript_path,
+            });
+        }
+        PaneSessionNeed {
+            own,
+            named,
+            fresh_since: if pane.resumed_session_id.is_none() {
+                launch.clock_inputs().next()
+            } else {
+                None
+            },
+        }
+    }
+
     fn matches(&self, observation: &LocalSessionObservation) -> bool {
         self.kinds.contains(&observation.kind)
             && self.workspace.as_ref() == Some(&observation.workspace)

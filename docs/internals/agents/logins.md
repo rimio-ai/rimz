@@ -80,7 +80,7 @@ The durable stamp is the login of the agent's latest process. Each launch path s
 
 The wrapper's `agent.attached` carries the process login and moves the stamp to it. A session resumed under another account of its pool is then billed, parked, and preflighted as that account.
 
-A session discovered in a provider home has no durable row until a hook or an attach creates one. Its [local session observation](./instances.md#local-session-observations) carries the account it was discovered under (`ProviderLogin::local_sessions`), and the transient row a snapshot seeds for it takes that account. Restart and the in-use set then read it as the room's account, never as `default`. A prior row the observation binds to keeps its own stamp.
+A session discovered in a provider home has no durable row until a hook or an attach creates one. Its [local session observation](./instances.md#local-session-observations) carries the account it was discovered under (`ProviderLogin::local_sessions` for a full scan, `ProviderLogin::pane_sessions` for a per-pane read), and the transient row a snapshot seeds for it takes that account. Restart and the in-use set then read it as the room's account, never as `default`. A prior row the observation binds to keeps its own stamp.
 
 ## The account-link reconciler
 

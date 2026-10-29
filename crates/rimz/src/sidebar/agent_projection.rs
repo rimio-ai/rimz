@@ -9,11 +9,14 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::session::PaneSessionDemand;
 use crate::agents::{LocalSessionDiscovery, LocalSessionObservation};
+use crate::config::MachineConfig;
 use crate::disk::parse_cache::ParseCache;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::AgentKind;
 use crate::pane::PaneRef;
+use crate::store::snapshot::SidebarSnapshot;
 
 /// Agent kinds admitted for sessionless idle synthesis and their launch-model
 /// fallbacks, in adapter display order.
@@ -69,19 +72,55 @@ impl LocalSessionInputs {
         }
     }
 
+    pub(super) fn pane_demands(
+        &self,
+        snapshot: &SidebarSnapshot,
+        panes: &[PaneRef],
+    ) -> BTreeMap<AgentKind, Vec<PaneSessionDemand>> {
+        self.by_kind
+            .iter()
+            .filter_map(|(kind, workspaces)| {
+                let adapter = crate::agents::find_definition(kind.as_str())?;
+                if adapter.spec().capabilities.local_session_discovery
+                    != LocalSessionDiscovery::PerPane
+                {
+                    return None;
+                }
+                Some((
+                    kind.clone(),
+                    snapshot.pane_session_demands(panes, kind, workspaces),
+                ))
+            })
+            .collect()
+    }
+
     /// Sessions in the room's own account homes; a kind whose account cannot
     /// be resolved discovers nothing rather than another account's sessions.
-    fn discover(&self, state: &StatePaths) -> Vec<LocalSessionObservation> {
-        let machine = crate::config::MachineConfig::load_lenient();
-        let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, None, &machine);
+    fn discover(
+        &self,
+        state: &StatePaths,
+        pane_demands: &BTreeMap<AgentKind, Vec<PaneSessionDemand>>,
+        machine: &MachineConfig,
+    ) -> Vec<LocalSessionObservation> {
+        let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, None, machine);
         let ambient = crate::agents::ambient_env();
         self.discover_with(|kind, workspaces| {
             let Some(login) = logins.default_login(kind.as_str()) else {
                 return Vec::new();
             };
-            crate::agents::find_definition(kind.as_str())
-                .map(|adapter| login.local_sessions(adapter, workspaces, &ambient))
-                .unwrap_or_default()
+            let Some(adapter) = crate::agents::find_definition(kind.as_str()) else {
+                return Vec::new();
+            };
+            match adapter.spec().capabilities.local_session_discovery {
+                LocalSessionDiscovery::Unsupported => Vec::new(),
+                LocalSessionDiscovery::FullScan => {
+                    login.local_sessions(adapter, workspaces, &ambient)
+                }
+                LocalSessionDiscovery::PerPane => pane_demands
+                    .get(kind)
+                    .map(|demand| login.pane_sessions(adapter, demand, &ambient))
+                    .unwrap_or_default(),
+            }
         })
     }
 
@@ -273,10 +312,11 @@ thread_local! {
 pub(super) fn probe(
     state: &StatePaths,
     session_name: &str,
-    panes: &[PaneRef],
+    inputs: LocalSessionInputs,
+    pane_demands: &BTreeMap<AgentKind, Vec<PaneSessionDemand>>,
+    machine: &MachineConfig,
 ) -> AgentProjectionPublication {
-    let inputs = LocalSessionInputs::from_panes(panes);
-    let observations = inputs.discover(state);
+    let observations = inputs.discover(state, pane_demands, machine);
     AgentProjectionPublication {
         session_name: session_name.to_owned(),
         wiring: probe_current(),

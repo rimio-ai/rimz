@@ -221,7 +221,16 @@ pub(crate) fn produce_workspace_snapshot(
     retained.frame = frame;
     let snapshot = rollup_snapshot(state, cursor)?;
     let panes = snapshot.card_admitted_live_panes(retained.frame.to_pane_refs(), None);
-    let projection = crate::sidebar::agent_projection::probe(state, &opts.session_name, &panes);
+    let config = crate::config::MachineConfig::load_lenient();
+    let session_inputs = LocalSessionInputs::from_panes(&panes);
+    let pane_demands = session_inputs.pane_demands(&snapshot, &panes);
+    let projection = crate::sidebar::agent_projection::probe(
+        state,
+        &opts.session_name,
+        session_inputs,
+        &pane_demands,
+        &config,
+    );
     crate::sidebar::agent_projection::publish_if_changed(runtime, &projection, last_projection);
     retained.projection = Arc::new(projection);
     let store = Store::open_existing(state.clone(), runtime.clone());
@@ -239,7 +248,7 @@ pub(crate) fn produce_workspace_snapshot(
         FoldOpts {
             producing: true,
             fresh_roots: roots,
-            config: Some(crate::config::MachineConfig::load_lenient()),
+            config: Some(config),
             lanes: None,
             agent_projection,
         },
@@ -509,8 +518,15 @@ fn enrich_with_refresh(
     let agent_projection = match frame.as_ref() {
         Some(frame) => {
             let panes = snapshot.card_admitted_live_panes(frame.to_pane_refs(), None);
-            let publication =
-                crate::sidebar::agent_projection::probe(state, &frame.session_name, &panes);
+            let session_inputs = LocalSessionInputs::from_panes(&panes);
+            let pane_demands = session_inputs.pane_demands(&snapshot, &panes);
+            let publication = crate::sidebar::agent_projection::probe(
+                state,
+                &frame.session_name,
+                session_inputs,
+                &pane_demands,
+                &config,
+            );
             crate::sidebar::agent_projection::project_published(
                 &publication,
                 &LocalSessionInputs::from_panes(&panes),

@@ -543,6 +543,20 @@ fn session_step_declarations_have_an_implementation() {
 }
 
 #[test]
+fn per_pane_discovery_declarations_have_an_implementation() {
+    let env = Default::default();
+    for definition in BUILTINS {
+        assert_eq!(
+            definition.spec().capabilities.local_session_discovery
+                == LocalSessionDiscovery::PerPane,
+            definition.discover_pane_sessions(&[], &env).is_some(),
+            "{}",
+            definition.spec().kind
+        );
+    }
+}
+
+#[test]
 fn preset_matchers_find_split_joined_and_config_key_occurrences() {
     let flags = PresetArgMatcher::Flag(vec!["--model".to_owned(), "-m".to_owned()]);
     let argv = strings(&[
