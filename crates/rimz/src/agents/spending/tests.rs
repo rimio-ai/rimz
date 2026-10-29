@@ -94,6 +94,10 @@ fn compute_spending_with_origins_and_scope(
         },
         None,
     );
+    if let Some(scope) = scope.filter(|scope| !scope.is_empty()) {
+        let scoped = compute_scoped_spending(files, cache, &user_inputs, scope, now_secs, spec);
+        assert_eq!(format!("{:?}", aggregate.workspace), format!("{scoped:?}"));
+    }
     (aggregate.spending, aggregate.workspace.tally)
 }
 
@@ -211,7 +215,37 @@ fn compute_scoped_tally(
 ) -> SpendTally {
     let counted = dedup_cached_entries(files, cache).into_counted();
     let user_inputs = user_inputs_from_counted(&counted);
-    compute_scoped_spending(files, cache, &user_inputs, scope, now_secs, spec).tally
+    compute_scoped_spending_checked(files, cache, &user_inputs, scope, now_secs, spec).tally
+}
+
+pub(super) fn compute_scoped_spending_checked(
+    files: &[SpendingFile],
+    cache: &SpendingDiskCache,
+    user_inputs: &[user_input::UserInputRecord],
+    scope: &SpendScope,
+    now_secs: u64,
+    spec: &HeadlineSpec,
+) -> ScopedSpending {
+    let scoped = compute_scoped_spending(files, cache, user_inputs, scope, now_secs, spec);
+    if scope.is_empty() {
+        return scoped;
+    }
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    let walked = aggregate_counted_rollups(
+        files,
+        cache,
+        &counted,
+        Some(scope),
+        HeadlineContext {
+            user_inputs,
+            now_secs,
+            spec,
+        },
+        None,
+    )
+    .workspace;
+    assert_eq!(format!("{scoped:?}"), format!("{walked:?}"));
+    scoped
 }
 
 macro_rules! walk_spending {

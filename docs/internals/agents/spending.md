@@ -189,7 +189,7 @@ The first host-eligible long-lived client (a sidebar cache refresher or a held s
 
 One service thread admits connections and answers fresh-publication requests without touching the walker. A stale request atomically claims the walker until its reply is written, and passes through a single-slot channel to one lifetime walker thread. A second stale request gets an immediate busy reply and serves the durable publications, so the caller's refresh tick never queues. Every publishing refresh still takes the runtime `spending.lock`, which keeps mixed builds and the one-shot fallback safe.
 
-The full walk runs at most once per namespace per `SPENDING_TTL` (15 seconds). Crossing midnight in the published history zone expires the publication at once, timeout grace included. Between walks, readers serve `provider-spending.json`, and each caller falls back in its own way:
+The full walk runs at most once per namespace per `SPENDING_TTL` (15 seconds). Within that TTL, each other room's missing or stale sidecar comes from a scope-only fold over the warm walker's fleet-wide dedup memo, with no fleet aggregation. Crossing midnight in the published history zone expires the publication at once, timeout grace included. Between walks, readers serve `provider-spending.json`, and each caller falls back in its own way:
 
 | Caller | Fallback |
 | --- | --- |
@@ -200,7 +200,7 @@ The full walk runs at most once per namespace per `SPENDING_TTL` (15 seconds). C
 
 With an unnamed system zone, history uses UTC while the account-day maps and the `spend_window = "today"` headline use system midnight (`crates/rimz/src/agents/spending/aggregate.rs::uniform_headline_cutoff`). TTL and timeout-grace hits can retain those system-zone figures for up to 15 or 90 seconds after system midnight. Budget and accounts readers discard account-day maps whose cutoff is not today's midnight. No reader discards the headline, so the provider dashboard's today rows can show the previous day's total during that window.
 
-A live sidebar owns freshening. A room missing its workspace cache on the service path derives `workspace-spending.<scope_hash>.json` from the shared entry cache without taking the walk lock ([performance.md](../performance.md#per-enrichment-cadences)).
+When the provider publication is fresh, a room with a missing or stale workspace cache on the service path joins the `spending.lock` election before deriving `workspace-spending.<scope_hash>.json` from the shared entry cache. It publishes only when it wins; a timeout derivation is served unpublished ([performance.md](../performance.md#per-enrichment-cadences)).
 
 ## Token pricing
 
