@@ -15,6 +15,7 @@ pub(super) struct ForwardPublisher {
     sync: PortSync,
     record: ForwardRecord,
     file: Option<ForwardFile>,
+    publication_warned: bool,
 }
 
 impl ForwardPublisher {
@@ -36,10 +37,19 @@ impl ForwardPublisher {
                 None
             }
         };
+        let publication_warned = file.is_none();
         Self {
             sync: PortSync::default(),
             record,
             file,
+            publication_warned,
+        }
+    }
+
+    pub(super) fn retry_publish(&mut self) {
+        if self.file.is_none() {
+            self.record.at_ms = unix_now_ms();
+            self.file = ForwardFile::new(&self.record).ok();
         }
     }
 
@@ -64,7 +74,10 @@ impl ForwardPublisher {
             if let Some(file) = &self.file
                 && let Err(error) = write_temp_then_rename_cache(&file.path, &self.record)
             {
-                tracing::warn!(%error, "publishing remote forward record failed");
+                if !self.publication_warned {
+                    tracing::warn!(%error, "publishing remote forward record failed");
+                    self.publication_warned = true;
+                }
                 self.file = None;
             }
         }

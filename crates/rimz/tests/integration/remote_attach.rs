@@ -2656,9 +2656,13 @@ fn control_socket_preparation_failure_is_narrated_before_retry() {
     std::fs::create_dir_all(blocker.parent().expect("runtime parent")).expect("create runtime");
     std::fs::write(&blocker, "not a directory").expect("block control directory");
     let mut child = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "3000")
         .stderr(std::fs::File::create(&stderr_path).expect("capture stderr"))
         .spawn()
         .expect("spawn remote connect");
+    let path = env
+        .runtime_root
+        .join(format!("rimz/link/forwards/{}.json", child.id()));
     let deadline = Instant::now() + COMMAND_TIMEOUT;
     loop {
         let stderr = std::fs::read_to_string(&stderr_path).expect("read stderr");
@@ -2674,6 +2678,9 @@ fn control_socket_preparation_failure_is_narrated_before_retry() {
     }
     assert_eq!(master_invocation_count(&log), 0);
     std::fs::remove_file(&blocker).expect("unblock control directory");
+    wait_for_main_invocations(&mut child, &log, 1, COMMAND_TIMEOUT);
+    let record = std::fs::read(&path).expect("the recovered connection publishes its record");
+    let published: serde_json::Value = serde_json::from_slice(&record).unwrap();
     let deadline = Instant::now() + COMMAND_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll retry") {
@@ -2688,6 +2695,16 @@ fn control_socket_preparation_failure_is_narrated_before_retry() {
     };
     assert!(status.success());
     assert_eq!(master_invocation_count(&log), 1);
+    assert_eq!(published["pid"], child.id(), "{published}");
+    assert!(!path.exists() && !path.with_extension("lock").exists());
+    let stderr = std::fs::read_to_string(&stderr_path).expect("read stderr");
+    assert_eq!(
+        stderr
+            .matches("publishing remote forward record failed")
+            .count(),
+        1,
+        "publication warns only once across the retry: {stderr}"
+    );
 }
 
 #[test]
