@@ -439,6 +439,8 @@ The `fleet::publish` module measures shared publication at (51 agents, 24 panes,
 
 `fleet::idle_cycle_hidden_fanout` places each of 57 subscribers over 50 agents in its own tab, with explicit client membership, and watches and paints one of them. It waits two seconds, past the renderers' one-second data tick, before timing. Every measured cycle changes row content, delivers a real retained worker fold, and steps each renderer's frame timing twice. The 56 hidden panes retain content until reveal without reducing a view, and the watched pane applies every change.
 
+`crates/rimz/benches/fleet.rs::concurrent_hidden_fanout` runs 100 attachment loops on real threads over 200 agents, with one watched pane and 99 hidden. After warming through hidden backstop ticks, a publisher runs 100 content cycles, resting for the worker's 250 ms fold floor after each cycle. Its stderr line reports attachment CPU per publication, split into hidden and watched threads, publication-to-paint p50/p99/max, and lateness beyond the later of publication and the scheduled frame deadline. CPU and lock/take counts include backstops and one final non-revealing room nudge, but exclude the publisher and the subsequent reveal. `reveal_ms` measures publication to the newly revealed pane's first paint. This bench has no timing ceiling; the allocation ceiling above belongs to the sequential fixture.
+
 `hotpath::carryover_fold_cold` parses the durable carryover inside timing. `hotpath::carryover_fold_rebirth_warm` primes a rebirth cursor and appends one `Registered` frame outside timing, then measures the delta fold. Their legacy full-text fixture rows are 4,800 bytes at p50, about 13,200 at p90, and 35,900 at maximum, and the 3,300-row and 13,200-row files are 32,943,350 and 131,784,597 bytes. Cold allocation includes transient raw-file text and decoding, not only the retained projection; production rotations now write already-trimmed ended rows. `hotpath::carryover_fold_cold_trimmed` folds the same history cold in that trimmed shape (`crates/rimz/src/testkit/mod.rs::fleet::seed_trimmed_carryover`), so it times the steady state, while `carryover_fold_cold` times the first cold fold after an upgrade. To measure a CLI read's peak RSS on these fixtures, follow [profiling.md → Peak RSS of a CLI read](./profiling.md#peak-rss-of-a-cli-read).
 
 #### Reference figures
@@ -456,7 +458,8 @@ The latest capture of each bench. Run one group with a name filter, such as `car
 | `fleet::publish::scale_with_orphans` 0 / 3,000 orphans | not quoted | 37,996 requests, 3,724,484 bytes requested, both arms | 2026-10-14 |
 | `fleet::idle_cycle` 0 / 3,000 orphans | 12.25 / 10.77 ms | 51,200 requests, 6,483,552 bytes requested, both arms | 2026-10-14; medians 2026-10-12 |
 | `fleet::idle_cycle_worker` 0 / 3,000 orphans | not quoted | 51,103 requests, 6,476,496 bytes requested, both arms | 2026-10-14 |
-| `fleet::idle_cycle_hidden_fanout` | 2.402 ms | 25,315 requests, 2,956,692 bytes requested | 2026-10-21 |
+| `fleet::idle_cycle_hidden_fanout` | 5.328 ms | 29,973 requests, 3,467,780 bytes requested | 2026-10-29 |
+| `fleet::concurrent_hidden_fanout` 200 agents / 100 panes | 1.750 ms publication-to-paint | not quoted | 2026-10-29 |
 | `hotpath::fuse_owned_no_overlay` 40 agents | 74.7 µs | 819 B alloc/op | not recorded |
 | `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows | 56.9 / 79.8 µs | 655.6 / 655.6 KB alloc/op | 2026-09-14 |
 | `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows | 2.24 / 2.99 µs | 0 / 0 B alloc/op | 2026-09-14 |
@@ -482,6 +485,23 @@ Allocation medians were stable across each build's two runs: all-in-scope used 9
 The 2026-10-14 capture ran at a load average near 45, where two back-to-back runs of the same build read 6.4 ms and 12.2 ms for one arm, so this table quotes no median from it. The `kimi`, `grok`, and `droid` changed-session refresh benches have no recorded capture.
 
 At fixed room size and across both room sizes, local publication allocates about 3.68 KB per subscriber: groups, rows, and history do not multiply with subscribers. Local configuration, worktree roots, and pane metadata stay owned per pane, and a real exclusion still pays for a detached group vector and the changed collections, as `exclude_agent` shows.
+
+##### Concurrent hidden attachment fanout
+
+On 2026-10-29, baseline A (`test(sidebar): instrument concurrent attachment fanout`) and head (`perf(sidebar): keep settled hidden passes off the views lock`) were measured on trunk `bc6bf69254e`. Both ran their own same-tree fleet bench, A in a temporary detached worktree, serially sharing a target directory. Order was A1, H1, H2, A2, each running `cargo xtask perf --bench fleet -- idle_cycle_hidden_fanout` then `cargo xtask perf --bench fleet -- concurrent_hidden_fanout`. The Linux x86-64 EPYC 7502P host had 58 available logical CPUs, uncontrolled ambient load and no induced load.
+
+At 100 panes (one watched, 99 hidden), each concurrent run measured 100 content publications. Paint triples are nearest-rank p50 / p99 / max in milliseconds, from publication to the watched paint. Reported `paint_late_ms_*` equals `paint_ms_*` in all four runs. Reveal is publication to the newly revealed pane's first paint, outside the counting window.
+
+| Run | Paint ms | Reveal ms | Attachment CPU µs/publication, hidden / watched / total |
+| --- | --- | ---: | --- |
+| A1 | 3.606 / 4.849 / 4.851 | 5.638 | 6,347.4 / 1,855.2 / 8,202.7 |
+| H1 | 1.772 / 4.130 / 5.736 | 3.795 | 3,357.2 / 1,884.0 / 5,241.2 |
+| H2 | 1.750 / 4.159 / 4.547 | 2.881 | 3,413.3 / 1,853.3 / 5,266.6 |
+| A2 | 3.716 / 4.795 / 4.848 | 6.481 | 6,459.6 / 1,905.5 / 8,365.1 |
+
+Both A runs took 141,075 hidden views locks and 143,199 total views locks; both head runs took zero and 1,407 respectively. Hidden EventStore takes stayed at 30,294 per window. Head's aggregate hidden CPU remains about 1.8 times the watched thread's, not small beside it. These counts do not isolate EventStore time from other remaining work; generation-based EventStore/JumpHost publication remains an unmeasured follow-up, not part of this change.
+
+The recorded paint medians, p99s and reveal times were lower in both head runs, but the H1 maximum was higher. Ambient load was uncontrolled, so these are observations, not an attributed wall-time speedup or a live-provider latency guarantee. The sequential fixture stayed below its 38,000-request ceiling: 29,967 requests at the merge base and at A, and 29,973 at head. Its median ms in the same order were 5.175 / 8.254 / 5.328 / 5.323, so this capture shows no consistent sequential timing improvement.
 
 #### Per-frame drainer latency under build load
 
@@ -926,6 +946,25 @@ Finally, the prestarted hosts' `work` rows cover their whole lifetime, including
 | 200 / 80 | 311.8 | 649 | 0 | 6.054 | 42.247 | 1 |
 
 These host figures establish no regression ceiling: they include scheduling and ambient process-population effects, independent cadences and a deliberately incomplete provider workload. The fixed-fixture counter gates remain the deterministic ratchets.
+
+###### Settled hidden attachment comparison
+
+On 2026-10-29, the 200/20 and 200/80 yardstick ran at A (`test(sidebar): instrument concurrent attachment fanout`) then head (`perf(sidebar): keep settled hidden passes off the views lock`), both based on trunk `bc6bf69254e`. Each used its same-tree release testkit CLI and bench; CLI build IDs were `ac3a80608978` and `756e826a7311`. Host, fixture and 120 s idle/busy windows were as above, on the EPYC host described in the [concurrent capture](#concurrent-hidden-attachment-fanout). The commands were the release build above followed by `RIMZ_SCALE_ROOMS=200x20,200x80 RIMZ_XTASK_TIMEOUT=180m cargo xtask perf --bench hotpath -- host_scale --ignored`, serially under `rimz wait --run`.
+
+CPU is ms/minute; wakeups are task context switches/minute, not delivered notifications. Attachment tasks are the `rimz-attach` loops and input readers, two per pane, included in the host totals.
+
+| Agents / sidebars | Phase | Tree | Attachment tasks | CPU, host / attachment | Wakeups, host / attachment | Fetch cycles/min |
+| --- | --- | --- | ---: | --- | --- | ---: |
+| 200 / 20 | idle | A | 40 | 6,505 / 1,985 | 49,102.5 / 14,802.5 | 58.0 |
+| 200 / 20 | idle | head | 40 | 7,070 / 1,835 | 38,509.0 / 4,184.5 | 58.3 |
+| 200 / 20 | busy | A | 40 | 9,140 / 2,290 | 64,364.5 / 28,588.0 | 90.0 |
+| 200 / 20 | busy | head | 40 | 8,935 / 2,080 | 43,448.0 / 6,905.5 | 89.9 |
+| 200 / 80 | idle | A | 160 | 9,565 / 3,455 | 109,807.9 / 75,205.5 | 57.6 |
+| 200 / 80 | idle | head | 160 | 8,750 / 2,635 | 56,567.5 / 17,139.0 | 57.3 |
+| 200 / 80 | busy | A | 160 | 13,275 / 5,010 | 186,226.4 / 150,644.4 | 89.5 |
+| 200 / 80 | busy | head | 160 | 11,350 / 3,050 | 63,058.5 / 25,474.5 | 85.8 |
+
+No boundary task departed. Every busy window sent 240 frames; the largest send lag was 5.459 ms. Idle fetch diagnostics cover about 60 s of each 120 s window. Attachment CPU and context switches were lower in all four head windows, but whole-host idle CPU at 200/20 was higher. These single host runs do not isolate the cause of each difference; the concurrent fixture supplies the per-publication CPU and lock counts.
 
 ## Making a performance change
 
