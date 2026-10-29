@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::{PendingWait, PendingWaitTrigger};
+use crate::sidebar_pane::render::EntryCursor;
 use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph};
 use crate::sidebar_pane::render::theme::Component;
 
@@ -536,13 +537,17 @@ fn focused_child_snapshot() -> SidebarSnapshot {
 
 #[test]
 fn selected_parent_marks_both_focused_child_entry_lines() {
-    let snapshot = focused_child_snapshot();
+    let mut snapshot = focused_child_snapshot();
+    let cursor = EntryCursor::SubAgent(snapshot.focused_pane.take().unwrap());
     for color in [false, true] {
         let theme = Theme::fixed(color);
-        let lines = group_lines(&snapshot, &theme, 0);
+        let rolls = CostRolls::default();
+        let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+        ctx.entry_cursor = Some(&cursor);
+        let lines = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
         let marked = lines
             .iter()
-            .filter(|line| line.to_string().contains("  ▌ "))
+            .filter(|line| line.to_string().contains("  ▏ "))
             .collect::<Vec<_>>();
         assert_eq!(marked.len(), 2);
         for line in marked {
@@ -551,10 +556,11 @@ fn selected_parent_marks_both_focused_child_entry_lines() {
                 .iter()
                 .skip(1)
                 .find(|span| {
-                    span.content == theme.glyph(crate::config::GlyphRole::ChromeSpineCardLeft)
+                    span.content == theme.glyph(crate::config::GlyphRole::ChromeSpineEntry)
                 })
                 .unwrap();
             assert_eq!(marker.style.fg, theme.selection().fg);
+            assert!(!marker.style.add_modifier.contains(Modifier::BOLD));
         }
     }
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -562,6 +568,7 @@ fn selected_parent_marks_both_focused_child_entry_lines() {
         None,
         &ViewState {
             selected_index: Some(0),
+            entry_cursor: Some(cursor),
             ..Default::default()
         },
         &UiState::default(),
@@ -571,12 +578,12 @@ fn selected_parent_marks_both_focused_child_entry_lines() {
     assert!(
         rendered
             .lines()
-            .any(|line| line.starts_with("▌  ▌ ⠁ explorer"))
+            .any(|line| line.starts_with("▌  ▏ ⠁ explorer"))
     );
     assert!(
         rendered
             .lines()
-            .any(|line| line.starts_with("▌  ▌   Haiku"))
+            .any(|line| line.starts_with("▌  ▏   Haiku"))
     );
     assert!(
         rendered
@@ -593,14 +600,53 @@ fn unselected_parent_does_not_mark_the_focused_child_entry() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &ViewState::default(),
+        &ViewState {
+            entry_cursor: snapshot.focused_pane.clone().map(EntryCursor::SubAgent),
+            ..Default::default()
+        },
         &UiState::default(),
         54,
         24,
     );
     assert!(rendered.lines().any(|line| line.contains("explorer")));
-    assert!(!rendered.contains("  ▌ "));
+    assert!(!rendered.contains("  ▏ "));
     assert_snapshot("focused_child_unselected", rendered);
+}
+
+#[test]
+fn older_entry_marks_the_cursor_in_the_same_light_selection_tone() {
+    let mut snapshot = focused_child_snapshot();
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
+    card.sub_agents[1].status = AgentStatus::Success;
+    card.sub_agents[1].last_activity = snapshot.now - Duration::from_secs(3_600);
+    let theme = Theme::fixed(false);
+    let frame = compose_lines(
+        &snapshot,
+        None,
+        &ViewState {
+            selected_index: Some(0),
+            entry_cursor: Some(EntryCursor::Older),
+            ..Default::default()
+        },
+        &UiState::default(),
+        &theme,
+        54,
+        24,
+    );
+    let line = frame
+        .lines
+        .iter()
+        .find(|line| line.to_string().contains("+1 older"))
+        .unwrap();
+    let marker = line.spans.iter().find(|span| span.content == "▏");
+    assert!(marker.is_some(), "the older stop carries the entry cursor");
+    let style = marker.unwrap().style;
+    assert_eq!(style.fg, theme.selection().fg);
+    assert!(!style.add_modifier.contains(Modifier::BOLD));
 }
 
 #[test]

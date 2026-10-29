@@ -5,7 +5,6 @@ use std::sync::Arc;
 use jiff::Timestamp;
 
 use crate::config::{CardDensityMode, ContextMeterConfig};
-use crate::ids::PaneId;
 use crate::store::snapshot::SidebarWorktreeGroup;
 
 use super::sections::{CardExpansion, RowCtx};
@@ -42,7 +41,6 @@ struct HeightInputs {
     stalled_after_secs: u32,
     card_density: CardDensityMode,
     stale_after_secs: u64,
-    focused_pane: Option<PaneId>,
     recent_subagent_secs: u64,
     max_recent_subagents: usize,
 }
@@ -64,7 +62,7 @@ impl CardHeights {
             stalled_after_secs,
             card_density,
             stale_after_secs,
-            focused_pane,
+            entry_cursor: _, // Content-only; the mark replaces indent cells.
             recent_subagent_secs,
             max_recent_subagents,
             // These resolve into CardKey, not the epoch.
@@ -86,7 +84,6 @@ impl CardHeights {
             stalled_after_secs,
             card_density,
             stale_after_secs,
-            focused_pane: focused_pane.cloned(),
             recent_subagent_secs,
             max_recent_subagents,
         };

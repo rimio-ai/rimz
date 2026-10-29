@@ -547,7 +547,7 @@ fn test_row_ctx<'a>(
         stale_after_secs: snapshot.theme.display.stale_after_secs,
         selected_index: Some(selected_index),
         held_expansions: const { &std::collections::BTreeSet::new() },
-        focused_pane: snapshot.focused_pane.as_ref(),
+        entry_cursor: None,
         animation_phase,
         money_phase: animation_phase,
         cost_rolls,

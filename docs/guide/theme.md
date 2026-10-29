@@ -118,7 +118,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `muted` | chrome: labels, ages, subordinate values |
 | `faint` | faintest chrome: bar tracks, `·` separators, dotted dividers |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
-| `selection` | the selected card's bright `▌` spine and the dim `▎` lane bracket |
+| `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |
 
 Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot or costly" everywhere. The [expired context meter](./sidebar.md) and its age clock wear a fixed greyed red, `alarm` blended halfway to `muted`, not another tunable slot.

@@ -249,6 +249,7 @@ fn child_focus_rig() -> (Rig, PaneId, [PaneId; 2]) {
 }
 
 fn click_child(rig: &mut Rig, child: &PaneId) {
+    rig.state.pane.click_guard = None;
     let (column, row) = rig
         .state
         .pane
@@ -261,6 +262,137 @@ fn click_child(rig: &mut Rig, child: &PaneId) {
         .apply_input([Wakeup::MouseClick { column, row }], &mut rig.terminal)
         .unwrap();
     assert_eq!(applied.effects, vec![InputEffect::Focus(child.clone())]);
+}
+
+#[test]
+fn failed_child_jump_restores_the_cursor_derived_from_the_original_child_focus() {
+    let (mut rig, _, [original, target]) = child_focus_rig();
+    let mut snapshot = rig.state.views.mirror().clone();
+    snapshot.focused_pane = Some(original.clone());
+    rig.fold(snapshot, SnapshotSource::Produced);
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    click_child(&mut rig, &target);
+    rig.state
+        .on_wakeup(
+            &mut rig.terminal,
+            Wakeup::FocusFailed {
+                pane: target,
+                error: "target disappeared".to_owned(),
+            },
+        )
+        .unwrap();
+    let entered = rig
+        .state
+        .apply_input([Wakeup::Key(KeyAction::Enter)], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(entered.effects, vec![InputEffect::Focus(original)]);
+}
+
+fn tall_child_focus_rig() -> (Rig, Vec<PaneId>) {
+    let (mut rig, _, [first, _]) = child_focus_rig();
+    let mut snapshot = rig.state.views.mirror().clone();
+    snapshot.focused_pane = Some(first.clone());
+    let parent_id = snapshot.row_owning_pane(&first).unwrap().id.clone();
+    let row = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )
+    .iter_mut()
+    .find(|row| row.id == parent_id)
+    .unwrap();
+    let card = row.as_agent_mut().unwrap();
+    let mut child = card.sub_agents[0].clone();
+    child.model = Some("Haiku".to_owned());
+    let panes: Vec<_> = (21..41)
+        .map(|id| zellij(&format!("terminal_{id}")))
+        .collect();
+    card.sub_agents = panes
+        .iter()
+        .enumerate()
+        .map(|(index, pane)| {
+            let mut child = child.clone();
+            child.id = format!("child-{index}");
+            child.pane = Some(pane.clone());
+            child
+        })
+        .collect();
+    card.sub_agent_count = panes.len() as u32;
+    rig.fold(snapshot, SnapshotSource::Produced);
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    click_child(&mut rig, &first);
+    (rig, panes)
+}
+
+#[test]
+fn keyboard_entry_steps_redraw_and_reveal_both_lines_inside_a_tall_card() {
+    let (mut rig, panes) = tall_child_focus_rig();
+    for pane in panes.iter().skip(1) {
+        let offset = rig.view().ui().scroll_offset;
+        let applied = rig
+            .state
+            .apply_input([Wakeup::Key(KeyAction::Down)], &mut rig.terminal)
+            .unwrap();
+        assert!(
+            applied.redraw,
+            "an entry step redraws even though the card is unchanged"
+        );
+        assert!(applied.effects.is_empty(), "a step never focuses");
+        let visible = rig
+            .state
+            .pane
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::SubAgentPane(pane.clone()));
+        assert!(visible.is_some(), "stepped entry {pane} must be visible");
+        let (column, line) = visible.unwrap();
+        assert_eq!(
+            rig.state.pane.ui.interactions.target_at(column, line + 1),
+            Some(render::HitTarget::SubAgentPane(pane.clone()))
+        );
+        let next = rig.view().ui().scroll_offset;
+        assert!(
+            next.saturating_sub(offset) <= 2,
+            "minimal reveal: {offset} -> {next}"
+        );
+    }
+}
+
+#[test]
+fn raw_entry_steps_reveal_both_lines_despite_an_authoritative_offset() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    for code in [KeyCode::Char('j'), KeyCode::Down] {
+        let (mut rig, panes) = tall_child_focus_rig();
+        for pane in panes.iter().skip(1) {
+            rig.view().ui().offset_authoritative = true;
+            let applied = rig
+                .state
+                .apply_input(
+                    [Wakeup::Press {
+                        code,
+                        mods: KeyModifiers::NONE,
+                    }],
+                    &mut rig.terminal,
+                )
+                .unwrap();
+            assert!(applied.redraw);
+            let target = render::HitTarget::SubAgentPane(pane.clone());
+            let visible = rig.state.pane.ui.interactions.line_for_target(&target);
+            assert!(
+                visible.is_some(),
+                "{code:?}: stepped entry {pane} must show"
+            );
+            let (column, line) = visible.unwrap();
+            assert_eq!(
+                rig.state.pane.ui.interactions.target_at(column, line + 1),
+                Some(target),
+                "{code:?}: both entry lines must show"
+            );
+        }
+    }
 }
 
 #[test]

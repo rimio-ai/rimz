@@ -112,6 +112,145 @@ fn search_draft_seats_the_first_match_without_a_baseline() {
     assert_eq!(ui.selected_pane, None);
 }
 
+#[test]
+fn stepping_back_uses_the_entries_in_the_effective_held_frame() {
+    for repaint in [false, true] {
+        let mut snapshot = delegation_snapshot();
+        let child: PaneId = "zellij:terminal_child".parse().unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        card.sub_agents.truncate(1);
+        card.sub_agent_count = 1;
+        card.sub_agents[0].pane = Some(child.clone());
+        let mut view = ViewState::default();
+        let mut ui = UiState::default();
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        view.freeze = Some(render::LayoutFreeze {
+            frozen: crate::sidebar_pane::app::layout_freeze::capture_order(&snapshot, &view),
+            armed_ms: snapshot.now.as_millisecond(),
+        });
+        paint(&mut view, &mut ui, &snapshot, 64);
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        if repaint {
+            paint(&mut view, &mut ui, &snapshot, 64);
+        }
+        handle_key(KeyAction::Up, &mut view, &mut ui, &snapshot);
+        assert_eq!(
+            handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot),
+            InputOutcome::focus(child),
+            "repaint={repaint}"
+        );
+    }
+}
+
+#[test]
+fn card_level_motions_and_search_clear_an_entry_even_without_a_card_move() {
+    let snapshot = delegation_snapshot();
+    let mut retained = Vec::new();
+    for action in [
+        KeyAction::WorktreeUp,
+        KeyAction::WorktreeDown,
+        KeyAction::Top,
+        KeyAction::Bottom,
+        KeyAction::PageUp,
+        KeyAction::PageDown,
+        KeyAction::ScreenTop,
+        KeyAction::ScreenBottom,
+        KeyAction::Digit(1),
+        KeyAction::InboxNext,
+        KeyAction::InboxPrev,
+        KeyAction::Search,
+    ] {
+        let mut view = ViewState::default();
+        let mut ui = UiState::default();
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        view.entry_cursor = Some(render::EntryCursor::Older);
+        handle_key(action, &mut view, &mut ui, &snapshot);
+        retained.push(view.entry_cursor.is_some());
+    }
+    assert_eq!(retained, vec![false; 12]);
+}
+
+#[test]
+fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for cause in ["prompt", "fresh", "filter", "cap"] {
+        let mut snapshot = delegation_snapshot();
+        let parent = pane_of(&snapshot, 0);
+        let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+        let child: PaneId = "zellij:terminal_old_child".parse().unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        card.sub_agents[1].pane = Some(child.clone());
+        let mut view = ViewState::default();
+        view.delegation_history
+            .insert(row_id, card.user_turn_started_at);
+        let mut ui = UiState::default();
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+        expected.push(InputOutcome::focus(child));
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        match cause {
+            "prompt" => {
+                card.user_turn_started_at = Some(snapshot.now + std::time::Duration::from_secs(1))
+            }
+            "fresh" => {
+                let children = std::mem::take(&mut card.sub_agents);
+                *card = crate::store::snapshot::AgentCard {
+                    sub_agents: children,
+                    sub_agent_count: 2,
+                    ..Default::default()
+                };
+            }
+            "cap" => card.status = crate::agents::AgentStatus::Idle,
+            _ => view.make_up_filter.query = Some("no-such-card".to_owned()),
+        }
+        if cause == "cap" {
+            snapshot.focused_pane = None;
+            let rows = std::sync::Arc::make_mut(
+                &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+            );
+            rows[0].unread = false;
+            let parent = rows[0].clone();
+            let prefix = (0..6)
+                .map(|index| {
+                    let mut row = parent.clone();
+                    row.id = format!("idle-{index}");
+                    row.pane.as_mut().unwrap().pane_id =
+                        format!("zellij:terminal_idle_{index}").parse().unwrap();
+                    let card = row.as_agent_mut().unwrap();
+                    card.sub_agents.clear();
+                    card.sub_agent_count = 0;
+                    row
+                })
+                .collect::<Vec<_>>();
+            rows.splice(0..0, prefix);
+        }
+        reconcile_selection(&mut view, &snapshot, None);
+        paint(&mut view, &mut ui, &snapshot, 64);
+        actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+        expected.push(if matches!(cause, "filter" | "cap") {
+            InputOutcome::default()
+        } else {
+            InputOutcome::focus(parent)
+        });
+    }
+    assert_eq!(actual, expected);
+}
+
 fn delegation_snapshot() -> SidebarSnapshot {
     let mut snapshot = clickable_block_snapshot(&workspace());
     let now = snapshot.now;
@@ -139,6 +278,229 @@ fn delegation_snapshot() -> SidebarSnapshot {
     })
     .collect();
     snapshot
+}
+
+#[test]
+fn j_and_k_walk_live_children_but_skip_paneless_entries() {
+    let mut snapshot = delegation_snapshot();
+    let child: PaneId = "zellij:terminal_child".parse().unwrap();
+    let now = snapshot.now;
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
+    card.sub_agents[0].pane = Some(child.clone());
+    card.sub_agents[0].status = crate::agents::AgentStatus::Success;
+    card.sub_agents[1].last_activity = now;
+    card.sub_agents[1].provider_native = true;
+    let mut closed = card.sub_agents[1].clone();
+    closed.id = "closed-child".to_owned();
+    closed.provider_native = false;
+    card.sub_agents.push(closed);
+    card.sub_agent_count = 3;
+    let parent = pane_of(&snapshot, 0);
+    let next = pane_of(&snapshot, 1);
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let mut view = ViewState {
+        delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+        ..Default::default()
+    };
+    let mut ui = UiState::default();
+    let mut actual = Vec::new();
+    for action in [
+        KeyAction::Down,
+        KeyAction::Down,
+        KeyAction::Down,
+        KeyAction::Up,
+        KeyAction::Up,
+    ] {
+        let step = handle_key(action, &mut view, &mut ui, &snapshot);
+        assert!(step.effects.is_empty(), "stepping never focuses");
+        actual.push((
+            view.selected_index,
+            handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot),
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            (Some(0), InputOutcome::focus(parent.clone())),
+            (Some(0), InputOutcome::focus(child.clone())),
+            (Some(1), InputOutcome::focus(next)),
+            (Some(0), InputOutcome::focus(child)),
+            (Some(0), InputOutcome::focus(parent)),
+        ]
+    );
+}
+
+#[test]
+fn older_entry_enter_matches_its_click() {
+    let snapshot = delegation_snapshot();
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let mut keyboard = ViewState::default();
+    let mut ui = UiState::default();
+    handle_key(KeyAction::Down, &mut keyboard, &mut ui, &snapshot);
+    let mut mouse = keyboard.clone();
+    paint(&mut mouse, &mut ui, &snapshot, 64);
+    remember_roster(&mut mouse, &mut ui, &snapshot);
+    let (column, line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleDelegationHistory(row_id.clone()))
+        .unwrap();
+    let clicked = handle_mouse_click(column, line, &mut mouse, &mut ui, &snapshot);
+    handle_key(
+        KeyAction::Down,
+        &mut keyboard,
+        &mut UiState::default(),
+        &snapshot,
+    );
+    let entered = handle_key(
+        KeyAction::Enter,
+        &mut keyboard,
+        &mut UiState::default(),
+        &snapshot,
+    );
+    assert_eq!(
+        (
+            entered,
+            &keyboard.delegation_history,
+            keyboard.selected_pane
+        ),
+        (clicked, &mouse.delegation_history, mouse.selected_pane)
+    );
+}
+
+#[test]
+fn card_motions_leave_the_entry_and_m_marks_its_parent() {
+    let mut snapshot = delegation_snapshot();
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    let row_id = rows[0].id.clone();
+    rows[0].unread = false;
+    let card = rows[0].as_agent_mut().unwrap();
+    card.sub_agents.truncate(1);
+    card.sub_agent_count = 1;
+    let child: PaneId = "zellij:terminal_child".parse().unwrap();
+    card.sub_agents[0].pane = Some(child.clone());
+    let parent = pane_of(&snapshot, 0);
+    let mut actual = Vec::new();
+    let mut marks = Vec::new();
+    for action in [
+        KeyAction::Top,
+        KeyAction::WorktreeUp,
+        KeyAction::WorktreeDown,
+        KeyAction::Digit(1),
+        KeyAction::InboxNext,
+        KeyAction::InboxPrev,
+    ] {
+        let mut view = ViewState::default();
+        let mut ui = UiState::default();
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+        marks.push(handle_key(KeyAction::MarkToggle, &mut view, &mut ui, &snapshot).effects);
+        handle_key(action, &mut view, &mut ui, &snapshot);
+        actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+    }
+    assert_eq!(
+        (actual, marks),
+        (
+            (0..6)
+                .flat_map(|_| [
+                    InputOutcome::focus(child.clone()),
+                    InputOutcome::focus(parent.clone())
+                ])
+                .collect::<Vec<_>>(),
+            vec![vec![InputEffect::MarkUnread(row_id)]; 6]
+        )
+    );
+}
+
+#[test]
+fn child_focus_moves_the_cursor_but_sidebar_focus_and_unchanged_focus_hold_a_key_step() {
+    let mut snapshot = delegation_snapshot();
+    let parent = pane_of(&snapshot, 0);
+    let children: [PaneId; 2] = [
+        "zellij:terminal_child1".parse().unwrap(),
+        "zellij:terminal_child2".parse().unwrap(),
+    ];
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
+    for (child, pane) in card.sub_agents.iter_mut().zip(&children) {
+        child.pane = Some(pane.clone());
+        child.status = crate::agents::AgentStatus::Running;
+    }
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    let mut actual = Vec::new();
+    snapshot.focused_pane = Some(children[0].clone());
+    reconcile_selection(&mut view, &snapshot, Some(parent.clone()));
+    actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+    snapshot.focused_pane = Some("zellij:terminal_sidebar".parse().unwrap());
+    reconcile_selection(&mut view, &snapshot, None);
+    actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+    snapshot.focused_pane = Some(children[0].clone());
+    handle_key(KeyAction::Up, &mut view, &mut ui, &snapshot);
+    reconcile_selection(&mut view, &snapshot, Some(parent.clone()));
+    actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+    snapshot.focused_pane = Some("zellij:terminal_sidebar".parse().unwrap());
+    reconcile_selection(&mut view, &snapshot, None);
+    actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+    snapshot.focused_pane = Some(children[1].clone());
+    reconcile_selection(&mut view, &snapshot, Some(parent.clone()));
+    actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+    snapshot.focused_pane = Some(parent.clone());
+    reconcile_selection(&mut view, &snapshot, Some(parent.clone()));
+    actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+    assert_eq!(
+        actual,
+        [
+            InputOutcome::focus(children[0].clone()),
+            InputOutcome::focus(children[0].clone()),
+            InputOutcome::focus(parent.clone()),
+            InputOutcome::focus(parent.clone()),
+            InputOutcome::focus(children[1].clone()),
+            InputOutcome::focus(parent)
+        ]
+    );
+}
+
+#[test]
+fn losing_the_entry_pane_or_closing_its_section_returns_to_the_parent() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for close_pane in [true, false] {
+        let mut snapshot = delegation_snapshot();
+        let child: PaneId = "zellij:terminal_child".parse().unwrap();
+        let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents[0]
+            .pane = Some(child.clone());
+        let parent = pane_of(&snapshot, 0);
+        let mut view = ViewState::default();
+        let mut ui = UiState::default();
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+        if close_pane {
+            snapshot.remove_pane_rows(&child);
+        } else {
+            view.delegation_overrides.insert(row_id, false);
+        }
+        reconcile_selection(&mut view, &snapshot, None);
+        actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
+        expected.extend([InputOutcome::focus(child), InputOutcome::focus(parent)]);
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -192,6 +554,10 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
             assert_eq!(ui.selected_pane, Some(parent.clone()));
             assert_eq!(ui.selected_index, Some(0));
             assert_eq!(ui.browse.as_ref().map(|browse| &browse.pane), Some(&parent));
+            assert_eq!(
+                ui.entry_cursor,
+                Some(render::EntryCursor::SubAgent(child.clone()))
+            );
         }
     }
     assert_eq!(
@@ -201,6 +567,7 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
             effects: vec![InputEffect::Focus(parent.clone())]
         }
     );
+    assert_eq!(ui.entry_cursor, None);
     let card = std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]

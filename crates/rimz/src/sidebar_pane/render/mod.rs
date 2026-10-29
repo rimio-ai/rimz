@@ -45,7 +45,7 @@ use self::interaction::RenderedBlock;
 pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion, HitTarget};
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
-pub(in crate::sidebar_pane) use self::ui_state::{Alert, UiState, ViewState};
+pub(in crate::sidebar_pane) use self::ui_state::{Alert, EntryCursor, UiState, ViewState};
 pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, LayoutFreeze,
 };
@@ -297,6 +297,7 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     ui.delegation_overrides.retain(|id, _| agent(id).is_some());
     ui.delegation_history
         .retain(|id, turn| agent(id).is_some_and(|agent| agent.user_turn_started_at == *turn));
+    ui.validate_entry_cursor(snapshot);
 }
 
 fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &ViewState) -> Option<&'a SidebarRow> {

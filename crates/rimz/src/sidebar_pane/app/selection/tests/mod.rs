@@ -140,8 +140,12 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     assert_eq!(ui.selected_index, Some(0));
     assert_eq!(
         handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot),
-        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_11"))
+        InputOutcome {
+            redraw: true,
+            ..InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_11"))
+        }
     );
+    assert!(ui.entry_cursor.is_none());
 }
 
 /// A browse pick of `pane`, begun while the derived baseline was `baseline`.

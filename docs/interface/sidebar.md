@@ -176,6 +176,8 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `⑃ N` | open pull requests on the agents' branches, stacked pull requests included |
 | `↑ 2 need you` / `↓ 2 need you` | the card that most needs you is above / below the view |
 | `▌` ... `▐` | the selected card's left and right spines |
+| `▏` inside an entry's indent | the selected child entry or `+K older`; held when the sidebar takes focus |
+| muted subagent headline | no live child pane: a click goes to the parent; error labels keep their italic emphasis |
 | `▎` ... `🮇` | the selection lane: every row of the group that holds the selection |
 | `┄` | the dotted seal on the selected group's header |
 | `┄ external ┄` | the group for panes outside the project |
@@ -409,7 +411,9 @@ A card with waits uses the same entry layout:
 
 Selecting a card opens the section. Clicking the line opens or closes it and focuses the card's own live pane, even when one of its child panes is focused. The open or closed choice outranks selection and `card_density` while the client view is retained, and follows the client view between tabs. Select an idle or done card first to reach the line unless it is already open, held, or under `expanded` density. In `compact` density, select the card first.
 
-Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. A current waiting child counts its parent in the cockpit's `?` bucket without changing the parent's displayed status or lead glyph. When the parent's attention comes from a waiting launched child, `n`/`N`/`Space` focuses the first such child's live pane in entry order; with no such pane it focuses the parent. The parent's own waiting or failed status takes precedence. While a child's pane is focused, the parent card carries the selection band and both lines of that child's entry show `▌` in the indent beside the lead icon. The mark disappears when you browse to another card; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
+Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. A current waiting child counts its parent in the cockpit's `?` bucket without changing the parent's displayed status or lead glyph. When the parent's attention comes from a waiting launched child, `n`/`N`/`Space` focuses the first such child's live pane in entry order; with no such pane it focuses the parent. The parent's own waiting or failed status takes precedence. Focusing a child selects its parent card and puts the entry cursor on that child when its entry is open. The light `▏` in the indent marks that cursor on both entry lines, or on `+K older`; it stays when `Alt+p` focuses the sidebar. The parent keeps its selection band, and moving to the parent card or another card removes the entry mark; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
+
+With the sidebar focused, `j`/`k` and the arrows walk each card, then its entries with live panes and the `+K older` line. Waits and pane-less entries are skipped. `Enter`/`l` focuses a child, or opens `+K older` and focuses the parent, returning the cursor to the card. Worktree, end, page, screen-edge, digit, needs-you and search motions remain card-level and clear the entry cursor; `m` still marks the parent.
 
 Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. A subagent's type word wears its own provider's brand color at the soft weight of a calm card's handle, even when it runs on a different provider from its parent; wait type words keep the body tone. Without a headline, the separator disappears too. A subagent's headline uses its description, else task, else first usable prompt, skipping each when it repeats the type. An ordinary headline without a live pane is muted, matching the entry's click back to the parent. A launched child's displayed error label replaces that headline in body-tone italics, for both paused and failed states. Detail sits on an indented second line; model names stay muted. A launched child in fast mode adds a still, bold amber bolt one space after its effort, or after its model when it has no effort, in every state. Without a model, there is no bolt. The model column reserves no bolt cells, so a non-fast sibling has no blank bolt slot and effort columns remain aligned. Compactions follow the bolt and drop before it as the line narrows. The bolt drops whole if it cannot fit before the clock, without shortening the model or effort. Provider-native children never show a bolt.
 
@@ -842,27 +846,27 @@ An active `Sidebar degraded` alert hides the hook-drainer line; after refresh re
 `?` opens the overlay over the bottom right of the cards. Any key the sidebar reads closes it and is consumed, and so does focus leaving the sidebar. While typing a search, `?` enters a character instead. The overlay lists your configured movement keys, so it differs from this frame after a rebind.
 
 ```
-╭ help ─────────────────────────────────╮
-│ keys                                  │
-│   /   search          esc   clear     │
-│ ↕ j/k rows          ↕ J/K   worktrees │
-│ ↕ g/G ends          ↕ ^f/^b page      │
-│ ↕ H/L screen        ⏎ l     focus     │
-│ ⏎ 1-9 direct        ␣ n/N   needs-you │
-│ ✉ m   read/unread   ✉ M     read all  │
-│ ↔ ←/→ account tabs  ⟳ r     reload    │
-│ ✕ x   dismiss       ↕ a/d   width     │
-│                                       │
-│ filter                                │
-│ ? q   waiting       ! e     attention │
-│ ⏸︎ p   paused        ✓ s     done      │
-│ ⢿ w   working       ○ o     idle      │
-│ ☾ z   sleeping                        │
-│ ● u   unread        ≡ A     all       │
-│                                       │
-│ ▐ alt p sidebar                       │
-│   alt g zoom                          │
-╰────────── any key to close ───────────╯
+╭ help ───────────────────────────────────╮
+│ keys                                    │
+│   /   search           esc   clear      │
+│ ↕ j/k cards/entries  ↕ J/K   worktrees  │
+│ ↕ g/G ends           ↕ ^f/^b page       │
+│ ↕ H/L screen         ⏎ l     focus/open │
+│ ⏎ 1-9 direct         ␣ n/N   needs-you  │
+│ ✉ m   read/unread    ✉ M     read all   │
+│ ↔ ←/→ account tabs   ⟳ r     reload     │
+│ ✕ x   dismiss        ↕ a/d   width      │
+│                                         │
+│ filter                                  │
+│ ? q   waiting        ! e     attention  │
+│ ⏸︎ p   paused         ✓ s     done       │
+│ ⢿ w   working        ○ o     idle       │
+│ ☾ z   sleeping                          │
+│ ● u   unread         ≡ A     all        │
+│                                         │
+│ ▐ alt p sidebar                         │
+│   alt g zoom                            │
+╰─────────── any key to close ────────────╯
 ```
 
 ## Keys and mouse
@@ -871,12 +875,12 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 
 | key | action |
 |-----|--------|
-| `j` / `k`, `↓` / `↑` | select the next or previous row, without changing focus; with no selection, select the first visible row |
+| `j` / `k`, `↓` / `↑` | walk cards, their open live-pane entries and `+K older`, without changing focus; skip waits and pane-less entries; with no selection, select the first card |
 | `J` / `K` | select the first row of the next or previous worktree |
 | `g` / `G` | select the first or last row |
 | `Ctrl+f` / `Ctrl+b`, `PageDown` / `PageUp` | move a page; under tmux's default prefix `Ctrl+b` never arrives, so use `PageUp` |
 | `H` / `L` | select the first or last row on screen |
-| `Enter`, `l` | focus the selected row's pane |
+| `Enter`, `l` | focus the selected card or child; on `+K older`, open history and focus the parent, returning the cursor to the card |
 | `1` to `9` | focus the pane of the Nth row, counted from the top of the list |
 | `n`, `Space` | jump to the next card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first; attention lifted by a waiting launched child targets its live pane, first in entry order, otherwise the parent's pane |
 | `N` | the same walk, backward |

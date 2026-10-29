@@ -16,7 +16,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::HitTarget;
 use crate::sidebar_pane::render::fmt::{
     activity_short, age_secs, compact_count, dollars2, elapsed_label, pct_label,
 };
@@ -30,6 +29,7 @@ use crate::sidebar_pane::render::labels::{
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
+use crate::sidebar_pane::render::{EntryCursor, HitTarget};
 
 mod bands;
 mod description;
@@ -102,9 +102,7 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
     let Some(agent) = row.as_agent() else {
         return false;
     };
-    let status = row.status().unwrap_or(AgentStatus::Idle);
-    let stage = CardStage::resolve(row, density, expansion, stale_after_secs, now);
-    template(stage, status, density, expansion).contains(&CardSlot::DelegationEntries)
+    delegation_entries_drawn(row, density, expansion, stale_after_secs, now)
         && (agent
             .sub_agents
             .iter()
@@ -112,6 +110,87 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
             || !agent.background_shells.is_empty()
             || waits::visible_waits(&agent.pending_waits)
                 .any(|wait| waits::is_live_watch(&wait.trigger)))
+}
+
+fn delegation_entries_drawn(
+    row: &SidebarRow,
+    density: CardDensityMode,
+    expansion: CardExpansion,
+    stale_after_secs: u64,
+    now: jiff::Timestamp,
+) -> bool {
+    let status = row.status().unwrap_or(AgentStatus::Idle);
+    let stage = CardStage::resolve(row, density, expansion, stale_after_secs, now);
+    template(stage, status, density, expansion).contains(&CardSlot::DelegationEntries)
+}
+
+struct DelegationEntries<'a> {
+    shown: Vec<&'a SidebarSubAgent>,
+    older: Vec<&'a SidebarSubAgent>,
+    folded: usize,
+}
+
+fn delegation_entries(
+    agent: &AgentCard,
+    expanded: CardExpansion,
+    now: jiff::Timestamp,
+    recent_secs: u64,
+    max_recent: usize,
+) -> DelegationEntries<'_> {
+    let bands = bands::delegation_bands(&agent.sub_agents, now, recent_secs, max_recent);
+    let mut shown = bands.live;
+    shown.extend(bands.recent);
+    // With no live or recent row to fold behind, a fold only costs a second click.
+    let show_older = expanded.history || shown.is_empty();
+    // The header counts lifetime children, including reaped children with no row to reveal.
+    let folded = if show_older {
+        0
+    } else {
+        usize::try_from(agent.sub_agent_count)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(shown.len())
+    };
+    DelegationEntries {
+        shown,
+        older: if show_older { bands.older } else { Vec::new() },
+        folded,
+    }
+}
+
+pub(in crate::sidebar_pane::render) fn delegation_entry_stops(
+    row: &SidebarRow,
+    expanded: CardExpansion,
+    display: &crate::config::DisplayConfig,
+    now: jiff::Timestamp,
+) -> Vec<EntryCursor> {
+    let Some(agent) = row.as_agent().filter(|_| {
+        delegation_entries_drawn(
+            row,
+            display.card_density,
+            expanded,
+            display.stale_after_secs,
+            now,
+        )
+    }) else {
+        return Vec::new();
+    };
+    let entries = delegation_entries(
+        agent,
+        expanded,
+        now,
+        display.recent_subagent_secs,
+        display.max_recent_subagents,
+    );
+    let mut stops: Vec<_> = entries
+        .shown
+        .iter()
+        .chain(&entries.older)
+        .filter_map(|child| child.pane.clone().map(EntryCursor::SubAgent))
+        .collect();
+    if entries.folded > 0 {
+        stops.push(EntryCursor::Older);
+    }
+    stops
 }
 
 pub(super) fn row_lines(
@@ -220,18 +299,17 @@ pub(super) fn row_lines(
                     }));
                 }
                 CardSlot::DelegationEntries => {
-                    let bands = bands::delegation_bands(
-                        &agent.sub_agents,
+                    let entries = delegation_entries(
+                        agent,
+                        expanded,
                         ctx.now,
                         ctx.recent_subagent_secs,
                         ctx.max_recent_subagents,
                     );
-                    let mut shown = bands.live;
-                    shown.extend(bands.recent);
                     inner.extend(sub_agent_entry_lines(
                         ctx,
                         &agent.sub_agents,
-                        &shown,
+                        &entries.shown,
                         selected,
                     ));
                     inner.extend(
@@ -246,26 +324,23 @@ pub(super) fn row_lines(
                     );
                     // Older rows go last, after the waits, so opening the
                     // history only appends below what was already on screen.
-                    // With no live or recent row to fold behind, the fold would
-                    // only cost a second click, so older rows show directly.
-                    let show_older = expanded.history || shown.is_empty();
-                    if show_older {
-                        inner.extend(sub_agent_entry_lines(
-                            ctx,
-                            &agent.sub_agents,
-                            &bands.older,
-                            selected,
+                    inner.extend(sub_agent_entry_lines(
+                        ctx,
+                        &agent.sub_agents,
+                        &entries.older,
+                        selected,
+                    ));
+                    if entries.folded > 0 {
+                        let mut spans = entry_indent(
+                            ctx.theme,
+                            selected && ctx.entry_cursor == Some(&EntryCursor::Older),
+                        );
+                        spans.push(Span::styled(
+                            format!("+{} older", entries.folded),
+                            ctx.theme.muted(),
                         ));
-                    }
-                    // The header counts lifetime children, so the rows plus the
-                    // tail add up to it; reaped children count here but have no
-                    // row to reveal.
-                    let folded = usize::try_from(agent.sub_agent_count)
-                        .unwrap_or(usize::MAX)
-                        .saturating_sub(shown.len());
-                    if !show_older && folded > 0 {
                         inner.push(CardLine {
-                            line: Line::styled(format!("    +{folded} older"), ctx.theme.muted()),
+                            line: Line::from(spans),
                             target: Some(HitTarget::ToggleDelegationHistory(row.id.clone())),
                         });
                     }
@@ -388,10 +463,10 @@ fn sub_agent_entry_lines(
         .unwrap_or(0);
     for sub in rows {
         let focused = selected
-            && sub
-                .pane
-                .as_ref()
-                .is_some_and(|pane| ctx.focused_pane == Some(pane));
+            && matches!(
+                ctx.entry_cursor,
+                Some(EntryCursor::SubAgent(pane)) if sub.pane.as_ref() == Some(pane)
+            );
         // The leading cell is the agent-row vocabulary verbatim: a running
         // child thinks (reasoning) or fills (acting) in the live clay, a
         // finished one holds its static `✓`/`!` verdict — one head grammar
@@ -468,8 +543,8 @@ fn entry_indent(theme: &Theme, focused: bool) -> Vec<Span<'static>> {
     vec![
         Span::raw("  "),
         Span::styled(
-            theme.glyph(GlyphRole::ChromeSpineCardLeft).to_owned(),
-            theme.selection(),
+            theme.glyph(GlyphRole::ChromeSpineEntry).to_owned(),
+            theme.styled(Component::EntrySpine, Modifier::empty()),
         ),
         Span::raw(" "),
     ]

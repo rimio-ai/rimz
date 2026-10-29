@@ -20,27 +20,27 @@ expression: screen
 ▎⣾ codex                                                                       🮇
 ▎  task-2                                                                      🮇
 ▎  ▢ ──────────────────────────────────────────────────────────────    0%      🮇
-                                       ╭ help ─────────────────────────────────╮
- ⑂ beta                                │ keys                                  │
- ⣾ codex                               │   /   search          esc   clear     │
-   task-3                              │ ↕ j/k rows          ↕ J/K   worktrees │
-   ▢ ──────────────────────────────────│ ↕ g/G ends          ↕ ^f/^b page      │
- ⣾ codex                               │ ↕ H/L screen        ⏎ l     focus     │
-   task-4                              │ ⏎ 1-9 direct        ␣ n/N   needs-you │
-   ▢ ──────────────────────────────────│ ✉ m   read/unread   ✉ M     read all  │
- ⣾ codex                               │ ↔ ←/→ account tabs  ⟳ r     reload    │
-   task-5                              │ ✕ x   dismiss       ↕ a/d   width     │
-   ▢ ──────────────────────────────────│                                       │
-                                       │ filter                                │
-                                       │ ? q   waiting       ! e     attention │
-                                       │ ⏸︎ p   paused        ✓ s     done      │
-                                       │ ⢿ w   working       ○ o     idle      │
-                                       │ ☾ z   sleeping                        │
-                                       │ ● u   unread        ≡ A     all       │
-                                       │                                       │
-                                       │ ▐ alt p sidebar                       │
-                                       │   alt g zoom                          │
-                                       ╰────────── any key to close ───────────╯
+                                     ╭ help ───────────────────────────────────╮
+ ⑂ beta                              │ keys                                    │
+ ⣾ codex                             │   /   search           esc   clear      │
+   task-3                            │ ↕ j/k cards/entries  ↕ J/K   worktrees  │
+   ▢ ────────────────────────────────│ ↕ g/G ends           ↕ ^f/^b page       │
+ ⣾ codex                             │ ↕ H/L screen         ⏎ l     focus/open │
+   task-4                            │ ⏎ 1-9 direct         ␣ n/N   needs-you  │
+   ▢ ────────────────────────────────│ ✉ m   read/unread    ✉ M     read all   │
+ ⣾ codex                             │ ↔ ←/→ account tabs   ⟳ r     reload     │
+   task-5                            │ ✕ x   dismiss        ↕ a/d   width      │
+   ▢ ────────────────────────────────│                                         │
+                                     │ filter                                  │
+                                     │ ? q   waiting        ! e     attention  │
+                                     │ ⏸︎ p   paused         ✓ s     done       │
+                                     │ ⢿ w   working        ○ o     idle       │
+                                     │ ☾ z   sleeping                          │
+                                     │ ● u   unread         ≡ A     all        │
+                                     │                                         │
+                                     │ ▐ alt p sidebar                         │
+                                     │   alt g zoom                            │
+                                     ╰─────────── any key to close ────────────╯
  ──────────────────────────────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00

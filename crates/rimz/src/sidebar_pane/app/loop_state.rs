@@ -2697,6 +2697,7 @@ impl PaneState {
                     )
                 });
             let previous_selection = v.state.selected_pane.clone();
+            let previous_entry = v.state.entry_cursor.clone();
             let previous_row = v
                 .state
                 .selected_index
@@ -2720,13 +2721,14 @@ impl PaneState {
                 .selected_index
                 .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
                 .map(|row| row.id.clone());
-            if selected_row != previous_row {
+            let entry_changed = v.state.entry_cursor != previous_entry;
+            if selected_row != previous_row || entry_changed {
                 v.context.pending_input_focus = None;
                 v.state.own_input_reveal = true;
                 v.context.focus_marker = None;
                 v.state.focus_marker_ready = false;
             }
-            if v.state.selected_pane != previous_selection {
+            if v.state.selected_pane != previous_selection || entry_changed {
                 v.context.focus_rollback = None;
             }
             for effect in &applied.effects {
@@ -2742,6 +2744,7 @@ impl PaneState {
                     v.context.focus_rollback = owner.map(|row| FocusRollback {
                         target: pane.clone(),
                         baseline: v.state.baseline_pane.clone(),
+                        entry_focus: v.state.entry_focus.clone(),
                         label: row.display_name().to_owned(),
                     });
                     self.arm_clicked_row(v, pane, now);
