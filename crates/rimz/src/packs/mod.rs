@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::disk::{atomic, lock::WorkspaceLock, paths};
 use crate::utils::path::normalize_path_lexical;
 
+mod layout;
+
 #[cfg(test)]
 mod tests;
 
@@ -57,6 +59,10 @@ fn safe_name(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn is_commit(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -161,9 +167,13 @@ pub struct InstalledPack {
 pub struct InstalledSource {
     pub entry: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub linked: bool,
     #[serde(rename = "ref")]
     pub reference: Option<String>,
+    #[serde(default)]
+    pub pinned: bool,
     pub commit: Option<String>,
     pub packs: Vec<InstalledPack>,
 }
@@ -699,6 +709,7 @@ pub fn install(agents_home: &Path, source: &Path) -> Result<InstallOutcome> {
     let root = paths::packs_dir(agents_home);
     let _guard = WorkspaceLock::acquire(&root.join("installed.lock"))?;
     let mut record = read_record(&root)?;
+    layout::maintain(&root, &record)?;
     let manifest = Manifest::read(&source_path)?;
     let existing = record
         .sources
@@ -749,8 +760,10 @@ pub fn install(agents_home: &Path, source: &Path) -> Result<InstallOutcome> {
     let next = InstalledSource {
         entry: entry.clone(),
         source: source_text.to_owned(),
+        url: None,
         linked: true,
         reference: None,
+        pinned: false,
         commit: None,
         packs,
     };
@@ -859,6 +872,9 @@ pub fn remove(agents_home: &Path, name: &PackName) -> Result<RemoveOutcome> {
     let root = paths::packs_dir(agents_home);
     let _guard = WorkspaceLock::acquire(&root.join("installed.lock"))?;
     let mut record = read_record(&root)?;
+    let mut cleanup_warning = layout::maintain(&root, &record)
+        .err()
+        .map(|error| problem(&root, format!("pack maintenance failed: {error}")));
     let index = source_index(&record, name)?;
     let source = &mut record.sources[index];
     source.packs.retain(|pack| pack.name != *name);
@@ -868,27 +884,27 @@ pub fn remove(agents_home: &Path, name: &PackName) -> Result<RemoveOutcome> {
         .is_empty()
         .then(|| record.sources.remove(index));
     write_record(&root, &record)?;
-    let mut cleanup_warning = None;
     let removed_entry = if let Some(source) = removed {
         let path = root.join(source.entry);
-        let result = if source.linked {
-            fs::remove_file(&path)
-        } else {
-            fs::remove_dir_all(&path)
-        };
+        let result = fs::remove_file(&path);
         match result {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(()) => Some(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(path),
             Err(error) => {
-                cleanup_warning = Some(problem(
+                let cleanup = problem(
                     &path,
                     format!(
                         "entry cleanup failed: {error}; this unrecorded entry is ignored by loaders and replaced by the next install of this source"
                     ),
-                ));
+                );
+                if let Some(warning) = &mut cleanup_warning {
+                    warning.message.push_str(&format!("; {cleanup}"));
+                } else {
+                    cleanup_warning = Some(cleanup);
+                }
+                None
             }
         }
-        cleanup_warning.is_none().then_some(path)
     } else {
         None
     };
@@ -951,6 +967,7 @@ fn change_exclusion(
     let root = paths::packs_dir(agents_home);
     let _guard = WorkspaceLock::acquire(&root.join("installed.lock"))?;
     let mut record = read_record(&root)?;
+    layout::maintain(&root, &record)?;
     let index = source_index(&record, name)?;
     // source_index found this pack in this source, and the record's names are unique.
     let pack = record.sources[index]

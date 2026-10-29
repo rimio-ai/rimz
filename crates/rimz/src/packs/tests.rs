@@ -1,4 +1,5 @@
 use super::*;
+mod layout;
 use std::fs;
 use std::os::unix::fs::symlink;
 
@@ -36,8 +37,10 @@ fn seed(home: &Path, sources: &[(&Path, &str, &[&str])]) -> Record {
                 InstalledSource {
                     entry: (*entry).to_owned(),
                     source: source.to_str().unwrap().to_owned(),
+                    url: None,
                     linked: true,
                     reference: None,
+                    pinned: false,
                     commit: None,
                     packs: packs
                         .iter()
