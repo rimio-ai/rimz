@@ -37,7 +37,7 @@ The snapshot, `crates/rimz/pricing/litellm-pricing.json`, is generated and gitig
 
 Two cases need an edit, both in `crates/rimz/src/agents/pricing/`:
 
-- **Fast mode.** When the model has a fast or priority tier and neither source publishes its multiplier, add the ratio to `fast-multiplier-overrides.json`: `exact` for one id, `normalized_prefix` for a family with dated or namespaced variants. An entry stops applying once upstream publishes the value ([Rates the sources leave unpublished](../internals/agents/spending.md#rates-the-sources-leave-unpublished)).
+- **Fast mode.** When the model has a fast or priority tier and neither source publishes its list-price multiplier, add the ratio to `fast-multiplier-overrides.json`: `exact` for one id, `normalized_prefix` for a family with dated or namespaced variants. An entry stops applying once upstream publishes the value ([Rates the sources leave unpublished](../internals/agents/spending.md#rates-the-sources-leave-unpublished)). Cached pricing rows mask a new override until the next weekly refresh. Codex plan-burn multipliers live in the Codex adapter, not in this file.
 - **Long-context tier.** When the model bills a higher rate past a request-size threshold, add it to `LONG_CONTEXT_CANARIES` in `source.rs`, so `pricing-refresh --check` fails if a later projection drops the tier. Adding a model without such a tier makes that check fail for a false reason.
 
 ## What stays as it is

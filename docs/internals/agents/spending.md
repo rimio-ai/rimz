@@ -289,16 +289,16 @@ The unknown-model chase rides the same producer walk and has no timer of its own
 
 ### Computing token-priced cost
 
-`Pricing::cost_of` prices one request's `TokenSplit`. The history parsers, Codex's resumable live rollout fold, and Cursor's generation-id turn pricing call it. Antigravity calls it for its replace-style current-context estimate, which stays outside live spend. Copilot and Qwen statuslines expose only session-cumulative totals with no request boundaries, so `Pricing::session_cost` estimates them at linear base rates and never guesses long-context tiers from a sum.
+`Pricing::cost_of` prices one request's `TokenSplit` at list rates. The history parsers other than Codex's, Codex headless judges, and Cursor's generation-id turn pricing call it. Antigravity calls it for its replace-style current-context estimate, which stays outside live spend. `Pricing::cost_of_with_rates` takes neutral `PricingRates`: `List` reuses that formula unchanged; `Base` clears every long-context tier and replaces the Fast multiplier before reusing the same formula. Only Codex rollout pricing supplies base rates, for the [per-request plan-burn basis](./adapter_codex.md#cost); its resumable live fold uses that same parser. Copilot and Qwen statuslines expose only session-cumulative totals with no request boundaries, so `Pricing::session_cost` estimates them at linear base rates and never guesses long-context tiers from a sum.
 
-Long-context tiers follow the publisher's semantics, and the book keeps both:
+List-price long-context tiers follow the publisher's semantics, and the book keeps both:
 
 | Tier shape | Source | Rule |
 | --- | --- | --- |
 | marginal | LiteLLM `*_above_200k_tokens` rows | input, output, 5-minute cache creation, 1-hour cache creation, and cache read each switch rate after the first 200,000 tokens in that class |
 | request-selected | OpenAI long-context rows | when the request's total input exceeds the model's threshold (272,000 for the covered GPT flagship families), every input, cached-input, and output token in that request uses the long-context rate |
 
-The 5-minute cache-creation slice bills at the cache-create rate, and the 1-hour slice at twice the input rate, long-context tiers included. A fast or priority turn multiplies the finished cost by the model's fast multiplier. Claude marks a fast turn with `usage.speed`, and Codex with the priority `service_tier` of the latest `thread_settings_applied` ([adapter_codex.md](./adapter_codex.md#cost)).
+The 5-minute cache-creation slice bills at the cache-create rate, and the 1-hour slice at its explicit rate or, absent one, twice the input rate, long-context tiers included for list pricing. A fast or priority turn on list rates multiplies the finished cost by the model's fast multiplier. Claude marks a fast turn with `usage.speed`, and Codex with the priority `service_tier` of the latest `thread_settings_applied` ([adapter_codex.md](./adapter_codex.md#cost)).
 
 Two providers feed the split differently. Codex passes uncached input and output. It bills cached input at the cache-read rate when `cache_read_explicit` is set and at the input rate otherwise, so a model without a published discount does not discount cached tokens ([adapter_codex.md](./adapter_codex.md#cost)). Claude splits `message.usage.cache_creation` into 5-minute and 1-hour creation when present, and treats flat `cache_creation_input_tokens` as 5-minute creation otherwise. Managed contracted rates apply when deployed ([adapter_claude.md](./adapter_claude.md)).
 

@@ -15,8 +15,8 @@ use crate::agents::transcript_fs::{
 };
 
 use super::super::rollout::{
-    CodexModelMetadata, CodexRawUsage, CodexTimestamp, RolloutKind, RolloutRecord, decode_line,
-    normalize_timestamp,
+    CodexModelMetadata, CodexRateLimits, CodexRawUsage, CodexTimestamp, RolloutKind, RolloutRecord,
+    decode_line, normalize_timestamp,
 };
 
 // ── Public output type ────────────────────────────────────────────────────────
@@ -49,8 +49,10 @@ pub(super) struct CodexTokenEvent {
     pub(super) tool_calls: BTreeMap<String, u32>,
     pub(super) timing: Option<ResponseTiming>,
     /// The latest `thread_settings_applied` before this event asked for
-    /// priority serving, so the turn bills at the model's fast multiplier.
+    /// priority serving; the event's basis supplies the Fast multiplier.
     pub(super) fast: bool,
+    /// Plan burn or list price, read from this event's own `rate_limits`.
+    pub(super) basis: super::CodexPricingBasis,
 }
 
 // ── Typed structs — headless format ──────────────────────────────────────────
@@ -472,7 +474,15 @@ fn visit_session_entry(
     let Some(raw) = raw_usage else { return };
     let parsed_model = token_count.model().map(ToOwned::to_owned);
     let timing = pending_timing.filter(|timing| timing.output == raw.output_tokens);
-    push_usage(raw, ts, parsed_model, timing, state, out);
+    push_usage(
+        raw,
+        ts,
+        parsed_model,
+        timing,
+        token_count.rate_limits(),
+        state,
+        out,
+    );
 }
 
 fn visit_headless_entry(
@@ -485,7 +495,7 @@ fn visit_headless_entry(
         return;
     };
     let ts = headless_timestamp(entry).unwrap_or_else(|| fallback_timestamp.to_string());
-    push_usage(raw, ts, headless_model(entry), None, state, out);
+    push_usage(raw, ts, headless_model(entry), None, None, state, out);
 }
 
 /// Emit one non-zero usage entry under the event's model: its own hint, else
@@ -495,6 +505,7 @@ fn push_usage(
     timestamp: String,
     parsed_model: Option<String>,
     timing: Option<ResponseTiming>,
+    rate_limits: Option<&CodexRateLimits<'_>>,
     state: &mut CodexSpendState,
     out: &mut Vec<CodexTokenEvent>,
 ) {
@@ -517,6 +528,7 @@ fn push_usage(
         tool_calls: std::mem::take(&mut state.pending_tool_calls),
         timing,
         fast: state.fast.unwrap_or(false),
+        basis: super::CodexPricingBasis::from_snapshot(rate_limits),
     });
 }
 
