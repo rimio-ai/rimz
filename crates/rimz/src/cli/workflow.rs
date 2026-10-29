@@ -136,6 +136,7 @@ fn definitions() -> rimz::config::definitions::LoadedDefinitions {
         &paths::agents_home(),
         SkillCheck::Skip,
         &machine.agents.commands,
+        &rimz::config::MachineConfig::config_path(),
         &machine.tiers,
         machine.harness.auto_compact,
     )

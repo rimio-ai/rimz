@@ -321,6 +321,8 @@ fn routine_rimz_settings_union_and_idempotence() {
             "pane capture",
             "loop show",
             "loop logs",
+            "packs list",
+            "packs show",
             "lsp def",
             "lsp refs",
             "lsp hover",

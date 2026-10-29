@@ -5,6 +5,7 @@
 mod agent;
 mod catalog;
 pub(crate) mod frontmatter;
+pub mod inventory;
 mod team;
 mod traits;
 
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
-use crate::packs::ClaimResolution;
+use crate::packs::{ClaimResolution, ItemFate, PackItem, PackName, Problem, ResolvedPacks};
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
 /// A user-shell launch that can reach a provider's hook-trust prompt.
@@ -149,30 +150,9 @@ pub struct LoadedDefinitions {
     pub errors: Vec<DefinitionErr>,
     pub failed: BTreeMap<String, BTreeSet<PathBuf>>,
     pub rows: Vec<DefinitionRow>,
-    pub pack_items: Vec<PackDefinition>,
+    pub pack_items: Vec<PackItem>,
     pub warnings: Vec<crate::packs::Problem>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PackDefinitionFate {
-    Loads,
-    Overridden(PathBuf),
-    Excluded,
-    ExcludedType,
-    Conflict {
-        claims: Vec<crate::packs::PackClaim>,
-        message: String,
-    },
-    Failed(String),
-}
-
-#[derive(Clone, Debug)]
-pub struct PackDefinition {
-    pub pack: crate::packs::PackName,
-    pub kind: crate::packs::ItemType,
-    pub name: String,
-    pub path: PathBuf,
-    pub fate: PackDefinitionFate,
+    pack_problems: BTreeMap<PackName, Vec<Problem>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -304,7 +284,7 @@ impl Namespace {
 
 /// Markdown files under `home` that are not definitions: contributor notes in
 /// definition trees, and the inspection copy of the built-in consensus RimZ
-/// publishes into `teams/`. Trait names do not reserve contributor-note names.
+/// publishes into `teams/`. Home traits alone admit contributor-note names.
 fn reserved(home: &Path, path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
@@ -375,29 +355,61 @@ pub fn load(
     agents_home: &Path,
     skills: SkillCheck<'_>,
     commands: &CommandsConfig,
+    config_path: &Path,
     tiers: &super::tiers::TierConfig,
     native_auto_compact: Option<u64>,
 ) -> LoadedDefinitions {
+    load_resolved(
+        agents_home,
+        skills,
+        commands,
+        config_path,
+        tiers,
+        native_auto_compact,
+        &crate::packs::resolve(agents_home),
+    )
+}
+
+fn load_resolved(
+    agents_home: &Path,
+    skills: SkillCheck<'_>,
+    commands: &CommandsConfig,
+    config_path: &Path,
+    tiers: &super::tiers::TierConfig,
+    native_auto_compact: Option<u64>,
+    packs: &ResolvedPacks,
+) -> LoadedDefinitions {
     let catalog = SkillCatalog::new(skills, agents_home);
     let mut loaded = LoadedDefinitions::default();
-    let packs = crate::packs::resolve(agents_home);
     loaded.warnings.clone_from(&packs.warnings);
     loaded.errors.extend(packs.problems.iter().map(|problem| {
         DefinitionErr::new(&problem.path, &problem.message).with_cause(DefinitionCause::PackProblem)
     }));
-    let sources = catalog::Catalog::new(agents_home, &packs, &catalog, &mut loaded);
+    let sources = catalog::Catalog::new(
+        agents_home,
+        packs,
+        commands,
+        config_path,
+        &catalog,
+        &mut loaded,
+    );
     if let Ok(inventory) = catalog.chain.inventory(|_| true) {
-        for conflict in inventory.conflicts.values() {
+        for problem in inventory
+            .conflicts
+            .values()
+            .chain(inventory.pack_problems.values().flatten())
+        {
             loaded.errors.push(
-                DefinitionErr::new(
-                    &conflict.path,
-                    format!(
-                        "{}; a provider-root skill of this name still wins for that provider",
-                        conflict.message,
-                    ),
-                )
-                .with_cause(DefinitionCause::PackProblem),
+                DefinitionErr::new(&problem.path, &problem.message)
+                    .with_cause(DefinitionCause::PackProblem),
             );
+        }
+        for (pack, problems) in inventory.pack_problems {
+            loaded
+                .pack_problems
+                .entry(pack)
+                .or_default()
+                .extend(problems);
         }
     }
     let installed: BTreeSet<_> = packs
@@ -462,7 +474,7 @@ pub fn load(
                         .as_ref()
                         .map(ToString::to_string)
                         .unwrap_or_default();
-                    let target = if matches!(item.fate, Some(PackDefinitionFate::ExcludedType)) {
+                    let target = if matches!(item.fate, Some(ItemFate::ExcludedType)) {
                         format!("{pack} --type {namespace}")
                     } else {
                         format!("{pack}:{name} --type {namespace}")
@@ -535,6 +547,14 @@ pub fn load(
                         "takes the name of an agent kind; rename it",
                     ));
                 }
+                if item.pack.is_some() {
+                    crate::harness::spec::validate_config(
+                        &ProfilesConfig(BTreeMap::from([(name.clone(), agent::empty_profile(""))])),
+                        &CommandsConfig::default(),
+                        &super::AgentsConfig::default().teams,
+                    )
+                    .map_err(|error| item.error(error))?;
+                }
                 for key in &keys {
                     if let Some(previous) = names.get(key) {
                         tree.failed.insert(key.clone());
@@ -572,6 +592,11 @@ pub fn load(
                 Ok(())
             })();
             if let Err(error) = result {
+                let error = if item.pack.is_some() && error.cause != DefinitionCause::PackProblem {
+                    item.error(error.message)
+                } else {
+                    error
+                };
                 if kind_base.is_some() {
                     failed_bases.insert(name.clone(), error.clone());
                 }
@@ -670,13 +695,41 @@ pub fn load(
         [&agents, &subagents],
         &children,
         &sources,
+        commands,
         &mut loaded,
     );
-    loaded.failed.retain(|name, _| {
+    loaded.failed.retain(|name, paths| {
+        if crate::agents::find_definition(name).is_some()
+            && paths.iter().all(|path| {
+                sources.items.iter().any(|item| {
+                    item.pack.is_some() && item.path == *path && item.namespace() != "bases"
+                })
+            })
+        {
+            for error in loaded
+                .errors
+                .iter_mut()
+                .filter(|error| paths.contains(&error.path))
+            {
+                error.cause = DefinitionCause::PackProblem;
+            }
+            return false;
+        }
         !loaded.agent_profiles.0.contains_key(name)
             && !loaded.subagent_profiles.0.contains_key(name)
             && !loaded.teams.0.contains_key(name)
     });
+    let owned: BTreeSet<_> = loaded.failed.values().flatten().collect();
+    for error in &mut loaded.errors {
+        if !owned.contains(&error.path)
+            && sources
+                .items
+                .iter()
+                .any(|item| item.pack.is_some() && item.path == error.path)
+        {
+            error.cause = DefinitionCause::PackProblem;
+        }
+    }
     loaded.pack_items = sources.pack_items(&loaded, &catalog);
     loaded
 }

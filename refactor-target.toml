@@ -318,7 +318,9 @@ upward-dependencies = ["address"]
 # PaneSessionDemand, PaneSessionNeed, NamedSession, fresh_window and the capability/login seam (+6).
 # SkillChain, its six shared readers, SkillInventory, PackSkill and PackSkillFate share pack skills (+10).
 # ProviderHomeLogin and provider_home_logins, with facade exports, share native/account homes (+4).
-surface-budget = 1196
+# Shared packs::PackItem and ItemFate replace PackSkill and PackSkillFate (-2).
+# SkillInventory carries pack items and problems without SkillChain::pack_skills (-1).
+surface-budget = 1193
 
 [[verdict]]
 kind = "item"
@@ -357,11 +359,6 @@ reason = "Validation, stamps and missing-skill diagnostics name the same ordered
 
 [[verdict]]
 kind = "item"
-key = "agents::skills::SkillChain::pack_skills"
-reason = "The packs CLI needs every shipped skill's fate, including excluded and conflicting items."
-
-[[verdict]]
-kind = "item"
 key = "agents::skills::SkillChain::owned_link"
 reason = "Scoped discovery and host discovery both skip lexical RimZ-owned provider links."
 
@@ -374,16 +371,6 @@ reason = "Scoped views and definition loading consume the same pack claims as ho
 kind = "item"
 key = "agents::skills::SkillInventory"
 reason = "Definition checks and scoped views retain conflicts separately from absent skill names."
-
-[[verdict]]
-kind = "item"
-key = "agents::skills::PackSkill"
-reason = "The packs CLI lists skill origins and their resolved library-versus-pack fate."
-
-[[verdict]]
-kind = "item"
-key = "agents::skills::PackSkillFate"
-reason = "The packs CLI distinguishes loaded, overridden, excluded and conflicting skill items."
 
 [[verdict]]
 kind = "item"
@@ -950,17 +937,28 @@ upward-dependencies = [
 # AccountsConfig::with_lenient replaces the earlier reader without cloning account declarations.
 # MachineConfig::load_time_zone_lenient shares the core-only lifecycle time zone (+1).
 # PackDefinition and PackDefinitionFate expose every shipped definition's loading fate (+2).
-surface-budget = 232
+# inventory, PackInventory, PackView, ItemMatchErr and four methods replace the two pack types (+6 net).
+surface-budget = 238
 
 [[verdict]]
 kind = "item"
-key = "config::definitions::PackDefinition"
-reason = "Pack show and exclusion matching consume the loader's complete definition inventory."
+key = "config::definitions::inventory"
+reason = "Pack inventory and exclusion matching live with the merged definition and skill loaders."
 
 [[verdict]]
 kind = "item"
-key = "config::definitions::PackDefinitionFate"
-reason = "Pack show distinguishes loaded, shadowed, excluded, conflicting, and failed definitions."
+key = "config::definitions::inventory::PackInventory"
+reason = "The CLI consumes installed facts, attributed problems, counts, and conflicts from the library."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::inventory::PackView"
+reason = "One installed-pack inventory row owns item fates, exclusions and typed item selection."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::inventory::ItemMatchErr"
+reason = "The CLI maps missing and ambiguous item outcomes to their distinct exit codes."
 
 [[verdict]]
 kind = "item"
@@ -1213,9 +1211,25 @@ reason = "Pack readers and writers derive the machine-owned directory from their
 path = "crates/rimz/src/packs"
 allowed-dependencies = ["disk", "utils"]
 # The pack format, record, resolver, claims, and linked mutations share one domain API.
+# PackItem, ItemFate and its problem accessor unify definition and skill inventories (+3).
 # Manifest, PackManifest and Manifest::read stay private until a consumer needs them (-3).
 # Remove the unused resolve_in launch-environment accessor (-1).
-surface-budget = 30
+surface-budget = 33
+
+[[verdict]]
+kind = "item"
+key = "packs::PackItem"
+reason = "Skill and definition loaders return the same serializable pack item row."
+
+[[verdict]]
+kind = "item"
+key = "packs::ItemFate"
+reason = "Skill discovery, definition loading and the CLI share one fate schema."
+
+[[verdict]]
+kind = "item"
+key = "packs::ItemFate::problem"
+reason = "The definition inventory attributes failed and conflicting item messages without reclassifying fates."
 
 [[verdict]]
 kind = "item"
@@ -1761,7 +1775,13 @@ path = "crates/rimz/src/harness"
 # Observation limits leader-turn reads to workflow decisions that consume them (+1).
 # CapacityRecord, CapacityWaits and load_capacity share read-only waits; removing the hold notice offsets one (+2 net).
 # load_live_capacity filters capacity waits against the planner's current condition clocks (+1).
-surface-budget = 1024
+# spec::validate_team shares per-item team validation with pack loading (+1).
+surface-budget = 1025
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::validate_team"
+reason = "Pack teams use the same name, preparation and layout checks before joining the namespace."
 
 [[verdict]]
 kind = "item"

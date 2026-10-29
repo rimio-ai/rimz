@@ -147,6 +147,7 @@ fn team_source_survives_an_unrelated_broken_definition() {
         root.path(),
         rimz::config::definitions::SkillCheck::Skip,
         &rimz::config::CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &rimz::config::tiers::TierConfig::default(),
         Some(272_000),
     );

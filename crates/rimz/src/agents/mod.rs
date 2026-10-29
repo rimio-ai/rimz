@@ -178,6 +178,8 @@ const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
     "rimz pane capture",
     "rimz loop show",
     "rimz loop logs",
+    "rimz packs list",
+    "rimz packs show",
     "rimz lsp def",
     "rimz lsp refs",
     "rimz lsp hover",

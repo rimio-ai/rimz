@@ -530,6 +530,7 @@ fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
             &home,
             crate::config::definitions::SkillCheck::Skip,
             &crate::config::CommandsConfig::default(),
+            &path,
             tiers,
             Some(272_000),
         )
@@ -542,7 +543,7 @@ fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
     );
     std::fs::write(&path, "[tiers]\nsenior = ['fable']\nprincipal = []").unwrap();
     let config: crate::config::MachineConfig =
-        toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let rebound = load(&config.tiers);
     let model = "opus";
     let stamp = tier_stamp(model);

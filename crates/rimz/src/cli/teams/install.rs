@@ -445,6 +445,7 @@ mod tests {
                     machine_isolation: rimz::config::Isolation::Scoped,
                 },
                 &rimz::config::CommandsConfig::default(),
+                &root.path().join("config.toml"),
                 &rimz::config::tiers::TierConfig::default(),
                 Some(272_000),
             );

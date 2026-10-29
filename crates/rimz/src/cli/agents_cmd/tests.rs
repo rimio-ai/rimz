@@ -1502,6 +1502,7 @@ mod launch_options {
             root.path(),
             rimz::config::definitions::SkillCheck::Skip,
             &machine.agents.commands,
+            &root.path().join("config.toml"),
             &machine.tiers,
             machine.harness.auto_compact,
         );

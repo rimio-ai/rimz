@@ -91,6 +91,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         root.path(),
         crate::config::definitions::SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &machine.tiers,
         machine.harness.auto_compact,
     );
@@ -415,6 +416,7 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
         root.path(),
         crate::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
+        &root.path().join("config.toml"),
         &machine.tiers,
         machine.harness.auto_compact,
     );
@@ -606,6 +608,7 @@ fn pi_model_routing_does_not_require_the_models_native_family_render() {
         config.path(),
         crate::config::definitions::SkillCheck::Skip,
         &CommandsConfig::default(),
+        &config.path().join("config.toml"),
         &machine.tiers,
         machine.harness.auto_compact,
     );
@@ -660,6 +663,7 @@ fn fast_suffix_routes_the_base_definition() {
         root.path(),
         crate::config::definitions::SkillCheck::Skip,
         &CommandsConfig::default(),
+        &root.path().join("config.toml"),
         &machine.tiers,
         machine.harness.auto_compact,
     );
@@ -712,6 +716,7 @@ fn team_cli_models_route_each_markdown_role() {
         root.path(),
         crate::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
+        &root.path().join("config.toml"),
         &machine.tiers,
         machine.harness.auto_compact,
     );

@@ -824,6 +824,7 @@ impl MachineConfig {
             agents_home,
             check,
             &self.agents.commands,
+            config_path,
             &self.tiers,
             self.harness.auto_compact,
         );
