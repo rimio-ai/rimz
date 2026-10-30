@@ -880,9 +880,12 @@ impl Room {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .filter(|record| {
+                // A window counts only when it starts and ends inside the phase, so
+                // cycles from the phase before never inflate this phase's rate.
                 let ended = record["at_ms"].as_i64().unwrap();
-                ended >= started_ms
-                    && ended < ended_ms
+                let interval = record["event"]["interval_ms"].as_i64().unwrap();
+                ended - interval >= started_ms
+                    && ended <= ended_ms
                     && record["event"]["kind"] == "fetch_cycle_stats"
             })
             .collect();
@@ -905,7 +908,7 @@ impl Room {
         }
         let mut result = json!({"covered_seconds": seconds, "phase_seconds": phase_seconds,
             "partial_coverage": partial,
-            "scope": "diagnostic intervals ending in window; can cross phase boundary"});
+            "scope": "diagnostic intervals wholly inside the phase"});
         for name in [
             "cycles",
             "fold_ms",
