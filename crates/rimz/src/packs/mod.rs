@@ -18,6 +18,8 @@ pub mod transaction;
 #[cfg(test)]
 mod tests;
 
+const RUNNING_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct PackName(String);
@@ -181,6 +183,18 @@ pub struct InstalledSource {
     pub packs: Vec<InstalledPack>,
 }
 
+impl InstalledSource {
+    pub fn spelling(&self) -> String {
+        GitSource {
+            source: self.source.clone(),
+            url: self.url.clone().unwrap_or_else(|| self.source.clone()),
+            pack: self.packs.first().map(|pack| pack.name.clone()),
+            reference: None,
+        }
+        .spelling()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub version: u32,
@@ -260,6 +274,8 @@ struct PackManifest {
     #[serde(default)]
     requires: Vec<String>,
     rimz: Option<String>,
+    #[serde(skip)]
+    rimz_requirement: Option<semver::VersionReq>,
 }
 
 #[derive(Clone, Debug)]
@@ -351,15 +367,20 @@ fn read_manifest(source: &Path) -> std::result::Result<Manifest, Problem> {
             ));
             false
         });
-        if pack
-            .rimz
-            .as_ref()
-            .is_some_and(|rimz| rimz.trim().is_empty())
-        {
-            return Err(invalid(format!(
-                "pack {} rimz must not be empty",
-                pack.name
-            )));
+        if let Some(rimz) = &pack.rimz {
+            match semver::VersionReq::parse(rimz) {
+                Ok(requirement) => pack.rimz_requirement = Some(requirement),
+                Err(error) => {
+                    warnings.push(problem(
+                        &path,
+                        format!(
+                            "pack {} ignores malformed rimz requirement {rimz:?}: {error}",
+                            pack.name
+                        ),
+                    ));
+                    pack.rimz = None;
+                }
+            }
         }
     }
     Ok(Manifest {
@@ -477,6 +498,8 @@ fn resolve_record(
     record: Record,
     overrides: &BTreeMap<String, PathBuf>,
 ) -> ResolvedPacks {
+    // Cargo validates the package version as SemVer.
+    let version = semver::Version::parse(RUNNING_VERSION).expect("valid Cargo package version");
     let mut packs = Vec::new();
     let mut problems = Vec::new();
     let mut warnings = Vec::new();
@@ -533,6 +556,32 @@ fn resolve_record(
                 // Each manifest entry was checked above; names are unique.
                 None => unreachable!("manifest pack has a checked root"),
             };
+            if let (Some(rimz), Some(requirement)) = (&pack.rimz, &pack.rimz_requirement)
+                && !requirement.matches(&version)
+            {
+                let remedy = if source.linked {
+                    format!("update the linked checkout at {}", source.source)
+                } else if source.pinned {
+                    let spelling = source.spelling();
+                    // shlex refuses only a NUL byte, which a hand-edited record can carry.
+                    let command = shlex::try_join(["rimz", "packs", "install", &spelling])
+                        .unwrap_or_else(|_| format!("rimz packs install {spelling}"));
+                    format!(
+                        "pinned at {}; follow updates again with `{command}`",
+                        source.reference.as_deref().unwrap_or("<unknown>")
+                    )
+                } else {
+                    format!("run `rimz packs update {}`", pack.name)
+                };
+                warnings.push(problem(
+                    &entry.join("rimz-packs.toml"),
+                    format!(
+                        "pack {} requires RimZ {rimz}, but the running version is {version}; \
+                         the pack still loads; {remedy}",
+                        pack.name
+                    ),
+                ));
+            }
             packs.push(ResolvedPack {
                 name: pack.name.clone(),
                 description: pack.description.clone(),

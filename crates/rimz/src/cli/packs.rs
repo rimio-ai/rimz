@@ -345,13 +345,7 @@ fn update_source(
         return Ok(());
     }
     if source.pinned {
-        let spelling = GitSource {
-            source: source.source.clone(),
-            url: source.url.clone().unwrap_or_else(|| source.source.clone()),
-            pack: source.packs.first().map(|pack| pack.name.clone()),
-            reference: None,
-        }
-        .spelling();
+        let spelling = source.spelling();
         writeln!(
             out,
             "Skipped {names}: pinned at {}; follow updates again with `{}`.",

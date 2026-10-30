@@ -132,6 +132,92 @@ fn start_warns_and_records_an_uninstalled_mux_default() {
 }
 
 #[test]
+fn start_records_an_unsupported_pack_version_and_keeps_its_profiles() {
+    let env = Env::new();
+    let source = env.home_root.join("version-pack");
+    std::fs::create_dir_all(source.join("agents")).unwrap();
+    std::fs::write(
+        source.join("rimz-packs.toml"),
+        "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\nrimz = '<0.0.1'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("agents/claude.md"),
+        "---\ndescription: Base\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("agents/coder.md"),
+        "---\ndescription: Pack version coder\nagent: claude\ntools: [Read]\n---\nCode.",
+    )
+    .unwrap();
+    rimz::packs::install(&env.agents_home(), &source).unwrap();
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("a pack version warning must permit birth"),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{output:?}");
+    let packs = rimz::packs::resolve(&env.agents_home());
+    let manifest = env
+        .agents_home()
+        .join("packs")
+        .join(&packs.packs[0].entry)
+        .join("rimz-packs.toml");
+    assert_skipped(&env, &stderr, &manifest.display().to_string(), "<0.0.1");
+    assert!(
+        stderr.contains(&format!(
+            "update the linked checkout at {}",
+            source.display()
+        )),
+        "{stderr}"
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.state_path_for(&env.project_root).workspace_record).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["skipped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["setting"] == manifest.display().to_string())
+            .count(),
+        1,
+        "{record:?}"
+    );
+    let profiles = env
+        .rimz()
+        .args(["agents", "profiles"])
+        .bounded_output()
+        .unwrap();
+    assert!(profiles.status.success(), "{profiles:?}");
+    assert!(
+        String::from_utf8_lossy(&profiles.stdout).contains("Pack version coder"),
+        "{profiles:?}"
+    );
+    let validate = env
+        .rimz()
+        .args(["agents", "validate"])
+        .bounded_output()
+        .unwrap();
+    assert!(validate.status.success(), "{validate:?}");
+    let listed = env
+        .rimz()
+        .args(["packs", "list", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(listed.status.success(), "{listed:?}");
+    let listed: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert!(
+        listed["warnings"].to_string().contains("<0.0.1"),
+        "{listed}"
+    );
+}
+
+#[test]
 fn birth_saves_the_shell_before_panes_and_live_reentry_keeps_it() {
     let env = Env::new();
     write_machine_config(&env, "[agents]\nshell = 'bash'\n");

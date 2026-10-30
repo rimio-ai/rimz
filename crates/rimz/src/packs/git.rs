@@ -108,11 +108,10 @@ impl Client {
     }
 
     pub(super) fn resolve(&self, cwd: &Path, source: &GitSource) -> Result<Revision> {
-        let requested = source.reference.clone().or_else(|| {
-            source
-                .official()
-                .map(|_| format!("v{}", env!("CARGO_PKG_VERSION")))
-        });
+        let requested = source
+            .reference
+            .clone()
+            .or_else(|| source.official().map(|_| format!("v{RUNNING_VERSION}")));
         let tag = requested
             .as_ref()
             .map(|reference| format!("refs/tags/{reference}"));
