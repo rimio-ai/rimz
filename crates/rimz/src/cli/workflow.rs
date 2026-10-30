@@ -26,31 +26,50 @@ pub(super) struct WorkflowArgs {
 enum Command {
     /// Start a workflow in the current checkout or an existing owned worktree.
     Run {
+        /// Workflow name under `~/.rimz/workflows/`, or a directory inside it.
+        #[arg(value_name = "NAME|DIR")]
         name: PathBuf,
-        #[arg(short = 'w', long)]
+        /// Run in this existing RimZ-owned worktree instead of the current checkout; never creates
+        /// one. A project-scoped workflow runs at the project root regardless.
+        #[arg(short = 'w', long, value_name = "WORKTREE")]
         worktree: Option<String>,
-        #[arg(long, allow_hyphen_values = true)]
+        /// Text appended to every agent step's prompt for this run, and exposed as `prompt` in
+        /// `context.json`.
+        #[arg(long, allow_hyphen_values = true, value_name = "TEXT")]
         prompt: Option<String>,
     },
     /// List active and parked workflow runs across rooms.
     List {
+        /// Print the active and parked runs as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Show a run's work directory, current position, and history.
     Show {
+        /// Run id (`wf_...`), as `workflow run` or `workflow list` prints it.
+        #[arg(value_name = "RUN")]
         id: WorkflowRunId,
+        /// Print the work directory, run record, and history as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Cancel a run and interrupt its live script.
-    Cancel { id: WorkflowRunId },
+    Cancel {
+        /// Run id to cancel.
+        #[arg(value_name = "RUN")]
+        id: WorkflowRunId,
+    },
     /// Re-enter a parked node or extend a run's bounds.
     Resume {
+        /// Run id to resume or extend.
+        #[arg(value_name = "RUN")]
         id: WorkflowRunId,
-        #[arg(long)]
+        /// Re-enter this node instead of the parked one. Parked runs only.
+        #[arg(long, value_name = "NODE")]
         at: Option<String>,
-        #[arg(long)]
+        /// Grant this run more bounds: `visits=+N` or `deadline=<WHEN>`. Repeatable; an active run
+        /// accepts it alone.
+        #[arg(long, value_name = "GRANT")]
         extend: Vec<String>,
     },
     #[command(hide = true)]
@@ -68,7 +87,11 @@ enum Command {
     },
     /// Validate one workflow directory, or every machine workflow.
     Validate {
+        /// Workflow directory to check. Without it, checks every workflow under
+        /// `~/.rimz/workflows/`.
+        #[arg(value_name = "DIR")]
         dir: Option<PathBuf>,
+        /// Print rows, warnings, and errors as JSON.
         #[arg(long)]
         json: bool,
     },
