@@ -23,6 +23,55 @@ pub enum AgentSeat {
     },
 }
 
+impl AgentSeat {
+    pub fn from_identity(
+        profile: Option<&str>,
+        team: Option<&str>,
+        role: Option<&str>,
+        kind: &str,
+    ) -> Self {
+        match team {
+            Some(team) => Self::Team {
+                team: team.to_owned(),
+                role: role.or(profile).unwrap_or(kind).to_owned(),
+            },
+            None => Self::Solo,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SubagentOwner {
+    Team { team: String, role: String },
+    Solo { profile: String },
+}
+
+pub fn resolve_owner(
+    agents: &[crate::agents::AgentState],
+    launch_id: &AgentSessionId,
+) -> Option<SubagentOwner> {
+    let child = agents.iter().find(|agent| agent.answers_to(launch_id))?;
+    let parent = agents.iter().find(|parent| child.parent_is(parent))?;
+    Some(
+        match AgentSeat::from_identity(
+            parent.profile.as_deref(),
+            parent.team.as_deref(),
+            parent.role.as_deref(),
+            parent.kind.as_str(),
+        ) {
+            AgentSeat::Team { team, role } => SubagentOwner::Team { team, role },
+            AgentSeat::Solo => SubagentOwner::Solo {
+                profile: parent
+                    .profile
+                    .as_deref()
+                    .unwrap_or(parent.kind.as_str())
+                    .to_owned(),
+            },
+        },
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum SessionRole {
@@ -34,6 +83,8 @@ pub enum SessionRole {
     },
     Subagent {
         profile: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<SubagentOwner>,
     },
 }
 
@@ -65,7 +116,7 @@ impl SessionRole {
                     profile: profile.as_deref().unwrap_or(provider),
                 }
             }
-            Self::Subagent { profile } => Placement::Subagent { profile },
+            Self::Subagent { profile, .. } => Placement::Subagent { profile },
         }
     }
 }
@@ -341,10 +392,115 @@ mod tests {
             serde_json::json!({"role":"agent", "profile":"plain-profile", "seat":{"team":"forge", "role":"coder"}}),
             serde_json::json!({"role":"agent", "profile":"forge.coder"}),
             serde_json::json!({"role":"subagent", "profile":"fast"}),
+            serde_json::json!({
+                "role":"subagent", "profile":"fast",
+                "owner":{"team":"forge", "role":"coder"},
+            }),
+            serde_json::json!({
+                "role":"subagent", "profile":"fast", "owner":{"profile":"solo.dotted"},
+            }),
         ] {
             let role: SessionRole = serde_json::from_value(row.clone()).unwrap();
             assert_eq!(serde_json::to_value(role).unwrap(), row);
         }
+        let role: SessionRole = serde_json::from_value(serde_json::json!({
+            "role":"subagent", "profile":"fast", "future":true,
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(role).unwrap(),
+            serde_json::json!({
+                "role":"subagent", "profile":"fast",
+            })
+        );
+    }
+
+    #[test]
+    fn owner_resolves_the_parent_seat_through_launch_identities() {
+        use crate::agents::{AgentState, AgentStatus};
+        use serde_json::json;
+
+        let at = "2026-06-01T00:00:00Z".parse().unwrap();
+        let parent = AgentState::seed(
+            AgentKind::new_unchecked("codex"),
+            "parent-session".into(),
+            AgentStatus::Running,
+            at,
+        );
+        let mut child = AgentState::seed(
+            AgentKind::new_unchecked("claude"),
+            "child-session".into(),
+            AgentStatus::Running,
+            at,
+        );
+        child.launch_id = Some("child-launch".into());
+        child.parent_agent_id = Some("parent-launch".into());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        let mut actual = Vec::new();
+        for (team, role, profile, expected) in [
+            (
+                Some("forge"),
+                Some("coder"),
+                Some("plain"),
+                json!({"team":"forge", "role":"coder"}),
+            ),
+            (
+                Some("forge"),
+                None,
+                Some("plain"),
+                json!({"team":"forge", "role":"plain"}),
+            ),
+            (
+                Some("forge"),
+                None,
+                None,
+                json!({"team":"forge", "role":"codex"}),
+            ),
+            (
+                None,
+                None,
+                Some("solo.dotted"),
+                json!({"profile":"solo.dotted"}),
+            ),
+            (None, None, None, json!({"profile":"codex"})),
+        ] {
+            let mut parent = parent.clone();
+            parent.prior_launch_ids.push("parent-launch".into());
+            parent.team = team.map(Into::into);
+            parent.role = role.map(Into::into);
+            parent.profile = profile.map(Into::into);
+            actual.push((
+                serde_json::to_value(resolve_owner(
+                    &[child.clone(), parent],
+                    &"child-launch".into(),
+                ))
+                .unwrap(),
+                expected,
+            ));
+        }
+        for rows in [
+            vec![parent.clone()],
+            vec![child.clone()],
+            vec![
+                AgentState {
+                    parent_agent_id: None,
+                    ..child
+                },
+                parent,
+            ],
+        ] {
+            actual.push((
+                serde_json::to_value(resolve_owner(&rows, &"child-launch".into())).unwrap(),
+                json!(null),
+            ));
+        }
+        assert_eq!(
+            actual.iter().map(|(actual, _)| actual).collect::<Vec<_>>(),
+            actual
+                .iter()
+                .map(|(_, expected)| expected)
+                .collect::<Vec<_>>()
+        );
     }
 
     fn load(paths: &RuntimePaths, at: Timestamp) -> RoleMap {
@@ -377,6 +533,7 @@ mod tests {
     fn child() -> SessionRole {
         SessionRole::Subagent {
             profile: "fast".into(),
+            owner: None,
         }
     }
 

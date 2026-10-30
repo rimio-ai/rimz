@@ -771,6 +771,117 @@ fn lifecycle_records_pane_roles_for_roots_and_native_children() {
 }
 
 #[test]
+fn lifecycle_records_subagent_owners_for_the_pane_and_native_children() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::harness::launch::{ENV_AGENT_ID, ENV_RUN_ID};
+    use serde_json::json;
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (subagent, parent_exists, team) in [
+        (true, true, Some("forge")),
+        (true, true, None),
+        (true, false, None),
+        (false, true, Some("forge")),
+    ] {
+        let (_dir, store) = hooks_test_store();
+        let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+        let mut run = rimz::store::run::RunRecord::new(
+            store.paths().workspace_id.clone(),
+            adapter.spec().kind_id(),
+            rimz::agents::PermissionMode::Auto,
+            "work".into(),
+            "/tmp/hooks-test".into(),
+        );
+        run.subagent = subagent;
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        for (session, kind) in [("owner-launch", "codex"), ("pane-launch", "claude")] {
+            if session == "owner-launch" && !parent_exists {
+                continue;
+            }
+            let mut observation =
+                AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
+            if session == "owner-launch" {
+                observation.launch.profile = Some("planner".into());
+                observation.launch.team = team.map(Into::into);
+                observation.launch.role = Some("coder".into());
+            } else {
+                observation.launch.parent_agent_id = Some("owner-launch".into());
+                observation.launch.parent_agent_kind =
+                    Some(rimz::ids::AgentKind::new_unchecked("codex"));
+            }
+            store
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: "hooks-test",
+                    agent_kind: rimz::ids::AgentKind::new_unchecked(kind),
+                    event_name: "seed",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        }
+        for (event, payload) in [
+            ("SessionStart", json!({"session_id":"pane-launch"})),
+            (
+                "SubagentStart",
+                json!({"session_id":"pane-launch", "agent_id":"native-child"}),
+            ),
+        ] {
+            let frame = rimz::store::ingress::HookIngress {
+                boot_id: None,
+                schema_version: "1".into(),
+                event_id: rimz::EventId::new(),
+                ts: jiff::Timestamp::now(),
+                source: adapter.spec().kind_id(),
+                event: Some(event.into()),
+                payload: payload.to_string(),
+                cwd: "/tmp/hooks-test".into(),
+                hook_pid: std::process::id(),
+                env: std::collections::BTreeMap::from([
+                    (ENV_RUN_ID.into(), run.run_id.to_string()),
+                    (ENV_AGENT_ID.into(), "pane-launch".into()),
+                ]),
+            };
+            with_frame_env(&frame, FrameAttempt::First, || {
+                let mut decoded = adapter.decode_hook(event, &payload).unwrap();
+                handle_lifecycle_hook(
+                    &hooks_test_workspace(Some("main")),
+                    &store,
+                    adapter,
+                    &mut decoded,
+                    &payload,
+                    rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                    &hooks_test_globals(),
+                )
+                .unwrap();
+            });
+        }
+        let path = store.runtime_paths().spending_history.roles(
+            jiff::Timestamp::now()
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .year(),
+        );
+        let records = std::fs::read_to_string(path).unwrap();
+        for line in records.lines() {
+            let row: serde_json::Value = serde_json::from_str(line).unwrap();
+            actual.push((row["session"].clone(), row["owner"].clone()));
+            expected.push((
+                row["session"].clone(),
+                if !subagent || !parent_exists {
+                    json!(null)
+                } else if let Some(team) = team {
+                    json!({"team":team, "role":"coder"})
+                } else {
+                    json!({"profile":"planner"})
+                },
+            ));
+        }
+        assert_eq!(records.lines().count(), 2);
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
     let (_dir, store) = hooks_test_store();
     let home = store.paths().root.join("home");

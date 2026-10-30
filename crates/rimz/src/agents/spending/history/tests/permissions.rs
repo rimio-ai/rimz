@@ -77,6 +77,7 @@ fn append_and_migration_repair_a_racing_directory_group() {
             at: "2026-06-01T12:00:00Z".parse().unwrap(),
             role: SessionRole::Subagent {
                 profile: "shared".into(),
+                owner: None,
             },
         },
     );

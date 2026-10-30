@@ -178,6 +178,7 @@ fn closed_days_recover_absent_files_and_survive_cursor_loss_across_homes() {
             at: "2026-06-10T12:00:00Z".parse().unwrap(),
             role: session_roles::SessionRole::Subagent {
                 profile: "reviewer".into(),
+                owner: None,
             },
         },
     )
@@ -631,6 +632,7 @@ fn closed_days_keep_sessions_whose_copied_turns_all_lose_dedup() {
                 at: "2026-06-10T12:00:00Z".parse().unwrap(),
                 role: session_roles::SessionRole::Subagent {
                     profile: profile.into(),
+                    owner: None,
                 },
             },
         )

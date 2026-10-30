@@ -463,6 +463,7 @@ mod tests {
                     at: now,
                     role: SessionRole::Subagent {
                         profile: session.into(),
+                        owner: None,
                     },
                 },
             )
