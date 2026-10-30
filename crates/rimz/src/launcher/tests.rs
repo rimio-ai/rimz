@@ -3,6 +3,169 @@ use crate::agents::AgentStatus;
 use crate::harness::run::SupervisedRunRequest;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::writer::AgentLaunchScope;
+
+#[test]
+fn explicit_account_keeps_the_tier_provider_and_stamps_every_agent_cell() {
+    use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
+
+    let root = tempfile::tempdir().unwrap();
+    let state = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    let mut machine = crate::config::MachineConfig {
+        accounts: toml::from_str(&format!(
+            "[use]\nclaude = 'rimio'\n[claude.rimio]\nhome = {:?}\n",
+            root.path().join("claude-rimio"),
+        ))
+        .unwrap(),
+        ..Default::default()
+    };
+    let mut profile: crate::config::Profile =
+        toml::from_str("agent = 'claude'\nmodel = 'sonnet'\n").unwrap();
+    profile.model_tier = Some(TierProvenance {
+        tier: ModelTier::Junior,
+        fell_back: false,
+    });
+    profile.definition_renders = Some(DefinitionRenders {
+        preference: TierPreference {
+            model: Some("sonnet".into()),
+            family: Some("claude".into()),
+        },
+        renders: [
+            (
+                "claude".into(),
+                toml::from_str("agent = 'claude'\nmodel = 'sonnet'\n").unwrap(),
+            ),
+            (
+                "codex".into(),
+                toml::from_str("agent = 'codex'\nmodel = 'sol'\n").unwrap(),
+            ),
+        ]
+        .into(),
+        exclusions: Default::default(),
+        effort: None,
+    });
+    machine.agents.profiles.0.insert("worker".into(), profile);
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_accounts_path(),
+        &crate::agents::account::AccountsCache {
+            logins: [(
+                "claude@rimio".parse().unwrap(),
+                crate::agents::account::ProviderRecord {
+                    consecutive_failures: 0,
+                    version_probed_at_ms: None,
+                    inputs_stamp: None,
+                    profile: None,
+                    probe_error: None,
+                    login: Some(crate::agents::account::RecordedLogin::LoggedOut),
+                    probed_at_ms: 1,
+                    ok: true,
+                    account: None,
+                },
+            )]
+            .into(),
+        },
+    )
+    .unwrap();
+    let effective = crate::config::effective::load(&machine, root.path()).unwrap();
+    for (login, kind, model) in [(None, "codex", "sol"), (Some("rimio"), "claude", "sonnet")] {
+        let overrides = LaunchOverrides {
+            login: login.map(|name| name.parse().unwrap()),
+            ..Default::default()
+        };
+        let finalized = resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            crate::config::effective::ProfileScope::Agents,
+            Some("worker,worker+term"),
+            None,
+            &overrides,
+            None,
+            None,
+            None,
+            false,
+            Some((&runtime, &state)),
+        )
+        .unwrap();
+        let cells = finalized.resolved.layout.agent_cells().collect::<Vec<_>>();
+        assert_eq!(cells.len(), 2);
+        for cell in cells {
+            assert_eq!(cell.kind.as_str(), kind, "account {login:?}");
+            assert_eq!(cell.launch.model.as_deref(), Some(model));
+            assert_eq!(cell.launch.login, overrides.login);
+        }
+    }
+}
+
+#[test]
+fn explicit_account_refuses_mixed_providers_but_stamps_one_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let effective = crate::config::effective::load(&machine, root.path()).unwrap();
+    let overrides = LaunchOverrides {
+        login: Some("rimio".parse().unwrap()),
+        ..Default::default()
+    };
+    let resolve = |spec| {
+        resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            crate::config::effective::ProfileScope::Agents,
+            Some(spec),
+            None,
+            &overrides,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+    };
+    let reason = resolve("claude,codex+term").unwrap_err().to_string();
+    assert_eq!(
+        reason,
+        concat!(
+            "--account names one provider's account, but this layout launches claude, codex; ",
+            "launch each provider's cells separately, or switch the room with `rimz accounts use`"
+        )
+    );
+    let finalized = resolve("claude,claude+term").unwrap();
+    let cells = finalized.resolved.layout.agent_cells().collect::<Vec<_>>();
+    assert_eq!(cells.len(), 2);
+    assert!(
+        cells
+            .iter()
+            .all(|cell| cell.launch.login == overrides.login)
+    );
+}
+
+#[test]
+fn explicit_account_refuses_both_cohort_resume_entrances() {
+    let overrides = LaunchOverrides {
+        login: Some("rimio".parse().unwrap()),
+        ..Default::default()
+    };
+    let refusals = [ResumeEntrance::Flag, ResumeEntrance::Reconcile].map(|entrance| {
+        validate_resume_inputs(&overrides, entrance)
+            .err()
+            .map(|error| error.to_string())
+    });
+    assert_eq!(
+        refusals,
+        [
+            Some("resume reopens sessions on the room's account; rerun without --account".into()),
+            Some(
+                concat!(
+                    "resume reopens sessions on the room's account; rerun without --account, ",
+                    "or choose fresh instead of resume"
+                )
+                .into()
+            ),
+        ]
+    );
+}
+
 #[test]
 fn held_checkout_guidance_names_the_board_command() {
     let hold = crate::harness::resume::TeamHold {

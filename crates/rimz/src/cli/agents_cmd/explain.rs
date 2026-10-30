@@ -187,7 +187,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             Some(&workspace.project_root),
             &machine,
         )?;
-        let login = rimz::store::writer::LaunchLogin::RoomDefault.resolve(
+        let login = rimz::store::writer::LaunchLogin::from(cell.launch.login.clone()).resolve(
             &cell.kind,
             &accounts,
             &machine.accounts,
@@ -636,6 +636,9 @@ fn applied_overrides(
 ) -> Vec<String> {
     let mut flags = Vec::new();
     let overrides = &args.overrides;
+    if let Some(account) = &overrides.account {
+        flags.push(format!("--account {account}"));
+    }
     if let Some(tier) = overrides.tier {
         flags.push(format!(
             "--tier {tier} → {kind} {} ({})",
@@ -1001,6 +1004,8 @@ mod tests {
         let args = ParserArgs::try_parse_from([
             "explain",
             "forge.coder",
+            "--account",
+            "rimio",
             "--model",
             "opus",
             "--yolo",
@@ -1013,7 +1018,7 @@ mod tests {
         assert!(args.json);
         assert_eq!(
             applied_overrides(&args, &["--foo".to_owned()], "claude", Some("opus"), None),
-            ["--model opus", "--yolo", "-- --foo"]
+            ["--account rimio", "--model opus", "--yolo", "-- --foo"]
         );
         let error = ParserArgs::try_parse_from(["explain", "coder", "--json", "--prompt"])
             .err()

@@ -83,6 +83,7 @@ pub struct CohortRequest {
 
 #[derive(Clone, Debug, Default)]
 pub struct LaunchOverrides {
+    pub login: Option<crate::ids::LoginName>,
     pub mode: Option<PermissionMode>,
     pub tier: Option<crate::config::tiers::ModelTier>,
     pub agent: Option<String>,
@@ -1048,6 +1049,15 @@ enum ResumeScope {
 }
 
 pub fn validate_resume_inputs(overrides: &LaunchOverrides, entrance: ResumeEntrance) -> Result<()> {
+    if overrides.login.is_some() {
+        let alternative = match entrance {
+            ResumeEntrance::Flag => "",
+            ResumeEntrance::Reconcile => ", or choose fresh instead of resume",
+        };
+        bail!(
+            "resume reopens sessions on the room's account; rerun without --account{alternative}"
+        );
+    }
     let (input, message) = if overrides.preset.system_prompt_file.is_some() {
         (
             "--system-prompt-file",

@@ -963,10 +963,8 @@ pub fn plan_supervised_launch(
         request.model.as_deref(),
         request.agent.as_deref(),
         |kind, model| {
-            // A loop's explicit account pin binds its provider too, even after its scope gates.
-            if request.loop_task.is_some()
-                && matches!(request.login, crate::store::writer::LaunchLogin::Pinned(_))
-            {
+            // An explicit account pin binds the provider too, without availability fallback.
+            if matches!(request.login, crate::store::writer::LaunchLogin::Pinned(_)) {
                 None
             } else {
                 availability.unavailable(kind, model)

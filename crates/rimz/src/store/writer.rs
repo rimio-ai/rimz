@@ -76,7 +76,8 @@ pub enum AgentLaunchName {
 pub enum LaunchLogin {
     /// Resolve the room default under the launch batch's workspace lock.
     RoomDefault,
-    /// Preserve a session's or launching parent's exact account.
+    /// Preserve a session's or launching parent's exact account, or one launch's
+    /// explicit account.
     Pinned(crate::ids::LoginName),
 }
 

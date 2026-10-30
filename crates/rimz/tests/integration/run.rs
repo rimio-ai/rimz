@@ -2473,6 +2473,211 @@ fn supervised_codex_without_project_trust_refuses_before_launch() {
 }
 
 #[cfg(unix)]
+fn named_launch_account_fixture() -> (Env, Command) {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let agent_bin = write_failing_agent_shim(&env, "claude", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    for name in ["work", "rimio"] {
+        let home = env.home_root.join(name);
+        let added = env
+            .rimz()
+            .args(["accounts", "add", "claude", name, "--home"])
+            .arg(&home)
+            .env("PATH", path_with_front(&agent_bin))
+            .env("SHELL", &shell)
+            .bounded_output()
+            .unwrap();
+        assert!(
+            added.status.success(),
+            "{}",
+            String::from_utf8_lossy(&added.stderr)
+        );
+        std::fs::copy(
+            env.home_root.join(".claude.json"),
+            home.join(".claude.json"),
+        )
+        .unwrap();
+    }
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.record(&env.project_root);
+    env.store()
+        .switch_room_login(
+            &workspace,
+            &AgentKind::new_unchecked("claude"),
+            &"work".parse().unwrap(),
+        )
+        .unwrap();
+    seed_live_zellij_room(&env.runtime_paths(), &workspace.session_name, Vec::new());
+    let mut command = env.rimz();
+    command
+        .args(["--mux", "zellij", "agents"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("SHELL", shell)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("launch.log"))
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+        .env("RIMZ_TEST_ZELLIJ_TOPOLOGY_PANES", "[]")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        );
+    (env, command)
+}
+
+#[cfg(unix)]
+#[test]
+fn supervised_launch_account_overrides_the_room_without_changing_its_pins() {
+    let (env, mut command) = named_launch_account_fixture();
+    let store = env.store();
+    let before = rimz::workspace::record::read(&store.paths().workspace_record).unwrap();
+    let output = command
+        .args([
+            "-p",
+            "claude",
+            "x",
+            "--account",
+            "rimio",
+            "--name",
+            "one-shot",
+            "--isolation",
+            "host",
+            "--new-tab",
+        ])
+        .env(
+            "RIMZ_TEST_ZELLIJ_COMPLETE_RUN_AT_OPEN",
+            env.workspace_id.as_str(),
+        )
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "completed at pane open\n"
+    );
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
+    let agent = projection
+        .agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("one-shot"))
+        .expect("run's launched agent");
+    assert_eq!(agent.login.as_ref().unwrap().as_str(), "rimio");
+    let mut after = rimz::workspace::record::read(&store.paths().workspace_record).unwrap();
+    // Room entry refreshes this timestamp even without a launch account override.
+    after.updated_at = before.updated_at;
+    assert_eq!(after, before);
+}
+
+#[cfg(unix)]
+#[test]
+fn unknown_launch_account_refuses_before_panes_or_records() {
+    for supervised in [false, true] {
+        let (env, mut command) = named_launch_account_fixture();
+        command.args(["claude", "x", "--account", "nope", "--isolation", "host"]);
+        if supervised {
+            command.arg("-p");
+        }
+        let output = command.bounded_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("unknown claude account `nope`; configured: default, rimio, work; run `rimz accounts add claude nope`"),
+            "{stderr}"
+        );
+        assert!(env.store().snapshot().unwrap().agents.is_empty());
+        assert!(
+            rimz::harness::run::list(env.store().paths())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!env.home_root.join("launch.log").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unknown_supervised_launch_account_leaves_no_worktree() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let (env, mut command) = named_launch_account_fixture();
+    crate::common::git::init_repo(&env.project_root);
+    let output = command
+        .args(["-p", "claude", "x", "-w", "feat", "--account", "nope"])
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("unknown claude account `nope`; configured: default, rimio, work; run `rimz accounts add claude nope`"),
+        "{stderr}"
+    );
+    assert!(!env.home_root.join("project-worktrees/feat").exists());
+    assert!(env.store().snapshot().unwrap().agents.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn explain_launch_account_previews_the_pin() {
+    for json in [false, true] {
+        let (env, mut command) = named_launch_account_fixture();
+        command.args([
+            "explain",
+            "claude",
+            "--account",
+            "rimio",
+            "--isolation",
+            "host",
+        ]);
+        if json {
+            command.arg("--json");
+        }
+        let output = command.bounded_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if json {
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["account"], "claude@rimio");
+        } else {
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                text.lines()
+                    .any(|line| line.split_whitespace().collect::<Vec<_>>()
+                        == ["account:", "claude@rimio"]),
+                "{text}"
+            );
+        }
+        assert!(env.store().snapshot().unwrap().agents.is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn explain_unknown_launch_account_refuses() {
+    let (env, mut command) = named_launch_account_fixture();
+    let output = command
+        .args(["explain", "claude", "--account", "nope"])
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("unknown claude account `nope`; configured: default, rimio, work; run `rimz accounts add claude nope`"),
+        "{stderr}"
+    );
+    assert!(env.store().snapshot().unwrap().agents.is_empty());
+}
+
+#[cfg(unix)]
 #[test]
 fn supervised_launch_refuses_its_own_unusable_named_account() {
     if crate::common::git::git_missing() {

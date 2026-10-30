@@ -265,6 +265,9 @@ impl CohortLaunchArgs {
 
 #[derive(Clone, Debug, Default, PartialEq, Args)]
 pub(crate) struct LaunchOverrideArgs {
+    /// Use this provider's account for one fresh launch; relaunches use the room's account.
+    #[arg(long, value_name = "NAME")]
+    pub(crate) account: Option<rimz::ids::LoginName>,
     /// Let the agent ask before tool use where supported.
     #[arg(long, conflicts_with = "yolo")]
     pub(crate) ask: bool,
@@ -378,7 +381,7 @@ pub(crate) struct AgentLaunchArgs {
         value_parser = clap::builder::NonEmptyStringValueParser::new(),
         conflicts_with_all = [
             "continue_cohort", "prompt", "channel", "from_pr", "description", "budget",
-            "worktree", "fresh", "detach", "cwd", "name", "print",
+            "worktree", "fresh", "detach", "cwd", "name", "print", "account",
             "system_prompt_file", "append_system_prompt_files", "passthrough"
         ]
     )]
@@ -1258,6 +1261,7 @@ fn into_supervised_request(
     request.agent =
         rimz::harness::plan::normalized_preset_value(args.launch.overrides.agent.as_deref());
     request.fast = args.launch.overrides.fast_override();
+    request.login = args.launch.overrides.account.into();
     request.model = args.launch.overrides.model;
     request.tier = args.launch.overrides.tier;
     request.isolation = args.launch.overrides.isolation;

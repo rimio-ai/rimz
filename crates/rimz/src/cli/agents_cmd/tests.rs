@@ -22,6 +22,60 @@ struct AgentsHarness {
 }
 
 #[test]
+fn fresh_launch_account_pins_supervised_runs() {
+    for verb in [false, true] {
+        let mut argv = vec!["agents"];
+        if verb {
+            argv.push("launch");
+        }
+        argv.extend(["-p", "claude", "x", "--account", "rimio"]);
+        let parsed = AgentsHarness::try_parse_from(&argv);
+        assert!(parsed.is_ok(), "{argv:?}: {parsed:?}");
+        let mut args = parsed.unwrap().args;
+        if let Some(AgentsSubcmd::Launch(launch)) = args.command.take() {
+            args.launch = *launch;
+        }
+        let (request, _) = into_supervised_request(args).unwrap();
+        assert_eq!(
+            request.login,
+            rimz::store::writer::LaunchLogin::Pinned("rimio".parse().unwrap())
+        );
+        assert!(request.loop_task.is_none());
+    }
+}
+
+#[test]
+fn launch_account_conflicts_with_provider_resume() {
+    for resume in ["--resume", "--resume=session-id"] {
+        let error =
+            AgentsHarness::try_parse_from(["agents", "claude", "--account", "rimio", resume])
+                .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+}
+
+#[test]
+fn launch_account_rejects_a_qualified_name() {
+    let error = AgentsHarness::try_parse_from(["agents", "claude", "--account", "claude@rimio"])
+        .unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    assert!(error.to_string().contains("invalid account name"));
+}
+
+#[test]
+fn cohort_resume_refuses_a_launch_account() {
+    let parsed =
+        AgentsHarness::try_parse_from(["agents", "claude", "--continue", "--account", "rimio"]);
+    assert!(parsed.is_ok(), "{parsed:?}");
+    let args = parsed.unwrap().args;
+    let error = validate_resume_inputs(&args.launch, ResumeEntrance::Flag).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "resume reopens sessions on the room's account; rerun without --account"
+    );
+}
+
+#[test]
 fn provider_resume_consumes_id_instead_of_prompt() {
     for verb in [false, true] {
         for suffix in [

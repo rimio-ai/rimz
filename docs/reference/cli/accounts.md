@@ -27,7 +27,7 @@ An optional `label` on `[accounts.<kind>.<name>]` replaces the name only in the 
 
 An invalid string label warns at room start and in `accounts list` and `show`; the dashboard uses the account name instead, without changing the account's usability. Set a valid label with `rimz accounts add <kind> <name> --label <TEXT>`, or remove it with `--label ''`. A non-string value is a TOML type error, like a non-string `history`.
 
-Single-token account selections use `KIND@NAME`. `start --account` and `reset --account` also accept `KIND=NAME` as a compatibility alias. Mutation verbs keep their separate `KIND NAME` arguments; `show` takes `KIND[@NAME]`. `loop add --account` takes a bare name because the task supplies its provider.
+Single-token account selections use `KIND@NAME`. `start --account` and `reset --account` also accept `KIND=NAME` as a compatibility alias. Mutation verbs keep their separate `KIND NAME` arguments; `show` takes `KIND[@NAME]`. `loop add --account` takes a bare name because the task supplies its provider, and `agents --account` takes one because the launch resolves its provider first.
 
 Every named account has a home directory, and RimZ checks each home when it reads the machine config:
 
