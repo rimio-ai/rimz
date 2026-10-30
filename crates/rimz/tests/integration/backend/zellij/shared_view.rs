@@ -37,6 +37,85 @@ fn bottom_view(client: &mut AttachedClient) -> SidebarView {
 }
 
 #[test]
+fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
+    require_zellij!();
+    let room = LiveZellijSession::new("hidden-mirror");
+    std::fs::write(room.path().join(".zshrc"), "").unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let binary = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let mut opts = sidebar_opts(room.name(), cwd.path(), binary, 160);
+    opts.workspace_id = WorkspaceId::from_project_root(cwd.path());
+    publish_room_bin(room.path(), &opts);
+    opts.runtime = rimz::RuntimePaths::under(opts.workspace_id.clone(), room.path()).unwrap();
+    room.backend().open_sidebar(&opts, None).unwrap();
+    wait_for_pane_count(room.path(), room.name(), 2);
+    let mut client = AttachedClient::attach(&room, 160, 32);
+    let before_tabs = PaneSnapshot::expect(room.path(), room.name()).tab_ids();
+    room.backend()
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: "agents".to_owned(),
+            panes: agent_layout(),
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar: opts.clone(),
+        })
+        .unwrap();
+    let snapshot = PaneSnapshot::expect(room.path(), room.name());
+    let home = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.is_sidebar() && before_tabs.contains(&pane.tab_id))
+        .unwrap()
+        .pane_ref(room.name())
+        .pane_id;
+    let hidden = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.is_sidebar() && !before_tabs.contains(&pane.tab_id))
+        .unwrap()
+        .pane_ref(room.name())
+        .pane_id;
+    client.go_to_tab(1);
+    client.press_alt_until('h', &home, "home sidebar before the card appears");
+    wait_frame(
+        &opts.runtime,
+        |frame| frame.viewed_panes == [home.clone()],
+        "only the home sidebar is viewed before the card appears",
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    let agents: Vec<_> = snapshot
+        .panes
+        .iter()
+        .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+        .take(1)
+        .map(|pane| pane.pane_ref(room.name()))
+        .collect();
+    assert_eq!(agents.len(), 1);
+    let state = rimz::StatePaths::for_project_root_under(cwd.path(), room.path()).unwrap();
+    seed_agents(&state, &agents);
+    wait_screen(
+        || client.screen(),
+        |screen| screen.contains("view-card-00"),
+        "the watched sidebar shows the new card",
+    );
+    let captured = wait_screen(
+        || {
+            room.backend()
+                .capture_pane(&hidden, room.name(), None, false)
+                .unwrap()
+                .raw_text
+        },
+        |screen| screen.contains("view-card-00"),
+        "the hidden sidebar's native grid contains the new card before any switch",
+    );
+    assert!(captured.contains("view-card-00"));
+    assert_eq!(client.view().clients.len(), 1);
+    assert_eq!(client.view().clients[0].pane_id, home);
+}
+
+#[test]
 fn two_clients_split_join_and_carry_the_sidebar_view() {
     require_zellij!();
     let room = LiveZellijSession::new("shared-view");

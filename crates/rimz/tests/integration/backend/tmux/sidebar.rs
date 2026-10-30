@@ -8,6 +8,118 @@ use crate::backend::shared_view::{
 };
 
 #[test]
+fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
+    require_tmux!();
+    let env = Env::new();
+    env.record(&env.project_root);
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let session = "hidden-mirror";
+    server
+        .backend
+        .ensure_session(&session_opts(
+            session,
+            env.workspace_id.clone(),
+            &env.project_root,
+            &env.project_root,
+            Some((160, 32)),
+        ))
+        .unwrap();
+    for (name, value) in [
+        ("RIMZ_HOME", env.rimz_home()),
+        ("XDG_RUNTIME_DIR", env.runtime_root.clone()),
+        ("XDG_CONFIG_HOME", env.config_root()),
+        ("HOME", env.home_root.clone()),
+        ("RIMZ_BIN", env.rimz_bin().to_path_buf()),
+    ] {
+        server.tmux(&[
+            "set-environment",
+            "-t",
+            session,
+            name,
+            value.to_str().unwrap(),
+        ]);
+    }
+    let opts = SidebarPaneOptions {
+        runtime: env.runtime_paths(),
+        workspace_id: env.workspace_id.clone(),
+        project_root: env.project_root.clone(),
+        cwd: env.project_root.clone(),
+        ..sidebar_opts(
+            server._tempdir.path(),
+            session,
+            env.rimz_bin().to_owned(),
+            Some(160),
+        )
+    };
+    server.backend.open_sidebar(&opts, None).unwrap();
+    let home = wait_for_sidebar_pane(&server, session, None);
+    let before_windows: BTreeSet<_> = list_session_panes(&server, session)
+        .into_iter()
+        .filter_map(|pane| pane.view_id)
+        .collect();
+    server
+        .backend
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: "agents".to_owned(),
+            panes: agent_layout(),
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar: opts,
+        })
+        .unwrap();
+    let panes = list_session_panes(&server, session);
+    let hidden = panes
+        .iter()
+        .find(|pane| {
+            pane.command.as_deref() == Some("rimz-sidebar")
+                && pane
+                    .view_id
+                    .as_ref()
+                    .is_some_and(|id| !before_windows.contains(id))
+        })
+        .unwrap()
+        .pane_id
+        .clone();
+    let client = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
+    server.tmux(&["select-pane", "-t", home.raw()]);
+    wait_frame(
+        &env.runtime_paths(),
+        |frame| frame.viewed_panes == [home.clone()],
+        "only the home sidebar is viewed before the card appears",
+    );
+    thread::sleep(Duration::from_secs(3));
+    let agents: Vec<_> = list_session_panes(&server, session)
+        .into_iter()
+        .filter(|pane| pane.command.as_deref() != Some("rimz-sidebar"))
+        .take(1)
+        .collect();
+    assert_eq!(agents.len(), 1);
+    seed_agents(&env.state_path_for(&env.project_root), &agents);
+    wait_screen(
+        || client.screen(),
+        |screen| screen.contains("view-card-00"),
+        "the watched sidebar shows the new card",
+    );
+    let captured = capture_pane_until(
+        &server.backend,
+        &hidden,
+        "view-card-00",
+        Duration::from_secs(10),
+    );
+    assert!(
+        captured.contains("view-card-00"),
+        "the hidden sidebar's native grid must contain the new card before any switch:\n{captured}"
+    );
+    wait_frame(
+        &env.runtime_paths(),
+        |frame| frame.viewed_panes == [home.clone()],
+        "the client stayed on the home window throughout the hidden capture",
+    );
+}
+
+#[test]
 fn two_clients_share_the_sidebar_view_through_detach() {
     require_tmux!();
     let env = Env::new();
