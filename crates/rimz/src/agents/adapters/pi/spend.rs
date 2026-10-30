@@ -44,7 +44,7 @@ use crate::agents::spending::{
 
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
-    deserialize_optional_string_lossy, deserialize_optional_u64_lossy, read_transcript_lines,
+    deserialize_optional_string_lossy, deserialize_optional_u64_lossy, try_read_transcript_lines,
 };
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
@@ -208,11 +208,15 @@ pub(super) fn pi_config_dir_from(configured: Option<&str>, home: Option<&Path>) 
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let mut state: PiSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
-    let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
-        return SpendParse {
-            origin: state.cwd.clone(),
-            ..SpendParse::stalled(resume)
-        };
+    let (content, next_offset) = match try_read_transcript_lines(path, from_offset) {
+        Ok(Some(read)) => read,
+        read => {
+            return SpendParse {
+                origin: state.cwd.clone(),
+                read_error: read.err().map(|error| error.kind()),
+                ..SpendParse::stalled(resume)
+            };
+        }
     };
     let content = String::from_utf8_lossy(&content);
     let mut out = Vec::new();
@@ -323,6 +327,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         cursor: SpendCursor::with_state(next_offset, &state),
         unknown_models,
         update: SpendUpdate::Extend,
+        read_error: None,
     }
 }
 

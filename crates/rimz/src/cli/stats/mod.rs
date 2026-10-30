@@ -74,6 +74,15 @@ const TAGLINE: &str = "The control room for your coding agents";
 
 #[derive(Debug, Args)]
 pub struct StatsArgs {
+    /// Rebuild saved UTC spend days from the transcripts currently on disk.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "json", "refresh", "assists", "agents", "teams", "subagents", "dollars", "window",
+            "limit", "all"
+        ]
+    )]
+    rebuild: bool,
     /// Scale the heatmap by dollars spent instead of tokens used.
     #[arg(long)]
     pub dollars: bool,
@@ -272,6 +281,9 @@ impl Window {
 }
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
+    if args.rebuild {
+        return rebuild::run();
+    }
     if args.assists {
         let assists = AssistStats::from_records(
             "all retained",
@@ -318,6 +330,7 @@ mod fmt;
 mod hold;
 mod json;
 mod panel;
+mod rebuild;
 
 use assists::{AssistStats, render_full};
 use hold::{load_cold_stats_with_spinner, run_refresh, should_animate_cold_stats};

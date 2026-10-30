@@ -20,8 +20,15 @@ struct KimiSpendState {
 
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);
-    let Some((records, next)) = wire::read_records(path, from) else {
-        return SpendParse::stalled(resume);
+    let (records, next) = match wire::try_read_records(path, from) {
+        Ok(Some(read)) => read,
+        Ok(None) => return SpendParse::stalled(resume),
+        Err(error) => {
+            return SpendParse {
+                read_error: Some(error.kind()),
+                ..SpendParse::stalled(resume)
+            };
+        }
     };
     fold_records(path, &records, next, resume, prices)
 }
@@ -124,6 +131,7 @@ fn fold_records(
         cursor: SpendCursor::with_state(next, &state),
         unknown_models,
         update: SpendUpdate::Extend,
+        read_error: None,
     }
 }
 

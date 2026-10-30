@@ -156,7 +156,9 @@ pub(crate) fn parse_codex_spend(
 ) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let mut state: CodexSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
-    let (events, next_offset) = parse_codex_session(path, from_offset, &mut state);
+    let read = parse_codex_session(path, from_offset, &mut state);
+    let read_error = read.as_ref().err().map(std::io::Error::kind);
+    let (events, next_offset) = read.unwrap_or_else(|_| (Vec::new(), from_offset));
     let mut out = Vec::with_capacity(events.len());
     let mut unknown_models = BTreeMap::new();
     for event in events {
@@ -203,6 +205,7 @@ pub(crate) fn parse_codex_spend(
         cursor: SpendCursor::with_state(next_offset, &state),
         unknown_models,
         update: SpendUpdate::Extend,
+        read_error,
     }
 }
 

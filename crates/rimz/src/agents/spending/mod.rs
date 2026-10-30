@@ -22,6 +22,7 @@ mod effort;
 mod engine;
 mod history;
 mod publish;
+mod rebuild;
 mod refresh;
 pub mod service;
 pub mod session_effort;
@@ -79,6 +80,7 @@ pub use effort::{
 };
 pub(in crate::agents) use effort::{SlotEffortBreakdown, slot_effort_breakdown};
 pub use engine::current_provider_spending_cache;
+pub use engine::rebuild_spending_history;
 #[doc(hidden)]
 pub use engine::refresh_global_spending_direct;
 use publish::WORKSPACE_SPENDING_VERSION;
@@ -87,6 +89,7 @@ pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
     read_workspace_spending_cache, write_provider_spending_cache, write_workspace_spending_cache,
 };
+pub use rebuild::{KeptDay, RebuildErr, RebuildReport, RebuildScope, RebuiltDay};
 #[cfg(test)]
 pub(in crate::agents) use refresh::dedup_chunk;
 use refresh::{RefreshCallbacks, recorded_unknown_models, refresh_spending_cache};
@@ -447,7 +450,7 @@ impl SpendingWalker {
         req: &WalkRequest<'_>,
         observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
-        self.walk_inner(cache_path, true, req, observer)
+        self.walk_inner(cache_path, true, req, observer, None)
     }
 
     pub fn walk_local(
@@ -456,7 +459,7 @@ impl SpendingWalker {
         req: &WalkRequest<'_>,
         observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
-        self.walk_inner(cache_path, false, req, observer)
+        self.walk_inner(cache_path, false, req, observer, None)
     }
 
     fn walk_inner(
@@ -465,6 +468,7 @@ impl SpendingWalker {
         persist: bool,
         req: &WalkRequest<'_>,
         observer: &mut dyn WalkObserver,
+        rebuild: Option<&mut rebuild::RebuildRun>,
     ) -> SpendingWalkResult {
         let mut stats = WalkStats::default();
         self.sync_from_disk(cache_path, &mut stats);
@@ -477,12 +481,20 @@ impl SpendingWalker {
         );
         let mut checkpoint_written = false;
         let mut checkpoint_generation = None;
+        let rebuilding = rebuild.is_some();
+        let mut incomplete = BTreeSet::new();
         {
             let authoritative = self.spending_discovery_is_authoritative();
             let accounts = &self.discovery.history_accounts;
+            if rebuilding && !authoritative {
+                incomplete.extend(accounts.iter().map(|account| account.login.clone()));
+            }
             let closed_days = &mut self.closed_days;
             let mut before_compact =
                 |cache: &SpendingDiskCache, parsed: &[&SpendingFile], unread: &[&SpendingFile]| {
+                    if rebuilding {
+                        incomplete.extend(unread.iter().map(|file| file.login.clone()));
+                    }
                     closed_days.invalidate_for_parsed(cache, parsed, req.now_secs);
                     if persist
                         && let Some(hold) = history::maintain(req.history, req.now_secs)
@@ -538,6 +550,16 @@ impl SpendingWalker {
                     tick: &mut tick,
                     before_compact: &mut before_compact,
                 },
+            );
+        }
+        if let Some(rebuild) = rebuild {
+            rebuild.report = self.closed_days.rebuild(
+                &self.cache,
+                req,
+                &self.discovery.history_accounts,
+                rebuild.scope,
+                &incomplete,
+                &mut |progress| observer.on_file(progress),
             );
         }
         self.discovery.reconcile(&self.cache, req.now_secs);

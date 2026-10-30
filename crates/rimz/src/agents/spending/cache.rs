@@ -246,6 +246,7 @@ pub struct SpendParse {
     pub cursor: SpendCursor,
     pub unknown_models: BTreeMap<String, u64>,
     pub update: SpendUpdate,
+    pub read_error: Option<std::io::ErrorKind>,
 }
 
 /// How a parsed slice updates a previously cached file.

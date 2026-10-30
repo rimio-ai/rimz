@@ -239,7 +239,7 @@ pub(super) fn telemetry(
     prior_stat: Option<&TranscriptStat>,
 ) -> Option<TelemetryRefresh> {
     let transcript = transcript_path(path)?;
-    let mut refresh = settings_snapshot(path, None)?;
+    let mut refresh = settings_snapshot(path, None).ok().flatten()?;
     if !refresh.transcript_header_valid {
         return None;
     }
@@ -261,17 +261,25 @@ pub(super) fn telemetry(
 pub(super) fn settings_snapshot(
     path: &Path,
     prior_stat: Option<&TranscriptStat>,
-) -> Option<TelemetryRefresh> {
-    let settings_path = settings_path(path)?;
-    let transcript_path = transcript_path(path)?;
+) -> std::io::Result<Option<TelemetryRefresh>> {
+    let Some(settings_path) = settings_path(path) else {
+        return Ok(None);
+    };
+    let Some(transcript_path) = transcript_path(path) else {
+        return Ok(None);
+    };
     let header = session_header(&transcript_path);
     let transcript_header_valid = header.is_some();
     let session_cwd = header.and_then(|header| header.cwd);
-    let stat = TranscriptStat::from_path(&settings_path)?;
+    let Some(stat) = TranscriptStat::from_path(&settings_path) else {
+        return Ok(None);
+    };
     if prior_stat == Some(&stat) {
-        return None;
+        return Ok(None);
     }
-    let settings = read_settings(&settings_path)?;
+    let Some(settings) = try_read_settings(&settings_path)? else {
+        return Ok(None);
+    };
     let token_usage = settings.token_usage.and_then(|usage| {
         let usage = AgentSessionUsage {
             input_tokens: usage.input_tokens,
@@ -296,7 +304,7 @@ pub(super) fn settings_snapshot(
         };
         (!usage.is_zero()).then_some(usage)
     });
-    Some(TelemetryRefresh {
+    Ok(Some(TelemetryRefresh {
         transcript_path,
         settings_path,
         session_cwd,
@@ -309,7 +317,7 @@ pub(super) fn settings_snapshot(
             current_usage,
             native_permission_wait: None,
         },
-    })
+    }))
 }
 
 /// Absolute session cwd from the validated version-2 header. Settings sidecar
@@ -463,8 +471,12 @@ fn transcript_path(path: &Path) -> Option<PathBuf> {
 }
 
 fn read_settings(path: &Path) -> Option<Settings> {
-    let bytes = std::fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    try_read_settings(path).ok().flatten()
+}
+
+fn try_read_settings(path: &Path) -> std::io::Result<Option<Settings>> {
+    let bytes = std::fs::read(path)?;
+    Ok(serde_json::from_slice(&bytes).ok())
 }
 
 fn non_empty(raw: Option<&str>) -> Option<&str> {

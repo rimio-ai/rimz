@@ -1692,7 +1692,8 @@ fn unit_test_rimz_home() -> PathBuf {
 
 /// Provider homes RimZ placed for named accounts, `<home>/accounts/<kind>/<name>`.
 /// Also holds shared role, effort, and closed-day spend records under `.history/`.
-/// These cannot be regenerated, so no RimZ command removes this tree.
+/// A spend day whose transcripts are gone cannot be regenerated, so no RimZ
+/// command removes this tree.
 pub fn accounts_dir() -> PathBuf {
     rimz_home().join("accounts")
 }

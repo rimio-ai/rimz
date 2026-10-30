@@ -2,15 +2,18 @@
 
 `rimz stats` renders account-global token and dollar history as a spend-first report or a held dashboard: a model spend chart, a token heatmap, totals for four windows, spend by model, provider, and profile, a compact activity summary, and the assists RimZ performed for the user. It runs in or out of a room and in or out of a project, and it touches no agent and no session. Stats itself writes only the shared state directories (`RuntimePaths::ensure_shared_dirs`), and it never opens a workspace tree. A walk that stats triggers writes what any spending walk writes: the spending publication, the shared price table (`pricing-cache.json`) when its price load refreshes, and the [shared history store](./agents/spending.md#shared-history-store) migration, closed-day recording, and maintenance.
 
-The command has three surfaces, and most rules on this page differ between them:
+The command has four surfaces, and most rules on this page differ between them:
 
 | Surface | Command | Renderer |
 | --- | --- | --- |
 | One-shot report | `rimz stats`, or one of `--agents`, `--teams`, `--subagents` for an explicit view | `panel::render_spend`, printed once as a scrollable report |
 | Held dashboard | `rimz stats --refresh` | `dashboard::Dashboard`, repainted on the alternate screen, and the default middle-column content of the [`rimzd` view](./rimzd.md#what-the-view-contains) |
 | JSON | `--json`, alone or with an explicit view, and `--assists --json` | `json.rs`, and `assists.rs` for the assist timeline |
+| Saved-day rebuild | `rimz stats --rebuild` | `rebuild.rs`, reporting rebuilt UTC days and before/after dollars, unchanged account-days, and kept-day warnings |
 
 The code is [`crates/rimz/src/cli/stats/`](../../crates/rimz/src/cli/stats/mod.rs). What every figure means for someone using RimZ is the [Token Insight guide](../guide/insight.md). Every flag and JSON field is in the [stats CLI reference](../reference/cli/stats.md).
+
+The rebuild calls `agents::spending::rebuild_spending_history` with the current headline spec, `RebuildScope::All`, and stderr progress. It waits a bounded time for the producer lock, then runs a fresh publishing walk without the ordinary cache shortcuts. The library owns transcript selection, cold parsing, comparison, durable appends and publication; the handler owns the summary and kept-account-day warnings. Requested rebuilds write no assist. The [closed-day history rules](./agents/spending.md#closed-day-spend-lines) define targets, prices, partial days, concurrency and retention.
 
 ## Where the figures come from
 

@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::agents::transcript_fs::read_transcript_lines;
+use crate::agents::transcript_fs::{read_transcript_lines, try_read_transcript_lines};
 
 #[derive(Clone, Debug)]
 pub(super) struct WireRecord {
@@ -717,8 +717,15 @@ fn loop_event(value: Value) -> LoopEvent {
 }
 
 pub(super) fn read_records(path: &Path, offset: u64) -> Option<(Vec<WireRecord>, u64)> {
-    let (bytes, next) = read_transcript_lines(path, offset)?;
-    Some((records_from_bytes(&bytes), next))
+    try_read_records(path, offset).ok().flatten()
+}
+
+pub(super) fn try_read_records(
+    path: &Path,
+    offset: u64,
+) -> std::io::Result<Option<(Vec<WireRecord>, u64)>> {
+    Ok(try_read_transcript_lines(path, offset)?
+        .map(|(bytes, next)| (records_from_bytes(&bytes), next)))
 }
 
 pub(super) fn read_subagent_records(path: &Path) -> Option<Vec<WireRecord>> {

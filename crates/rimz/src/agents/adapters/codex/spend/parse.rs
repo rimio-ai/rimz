@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::spending::{ResponseTiming, origin_path, response_timing};
 use crate::agents::transcript_fs::{
-    bytes_contains, deserialize_optional_object_lossy, read_transcript_lines,
+    bytes_contains, deserialize_optional_object_lossy, try_read_transcript_lines,
 };
 
 use super::super::rollout::{
@@ -246,9 +246,9 @@ pub(super) fn parse_codex_session(
     path: &Path,
     from_offset: u64,
     state: &mut CodexSpendState,
-) -> (Vec<CodexTokenEvent>, u64) {
-    let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
-        return (Vec::new(), from_offset);
+) -> std::io::Result<(Vec<CodexTokenEvent>, u64)> {
+    let Some((content, next_offset)) = try_read_transcript_lines(path, from_offset)? else {
+        return Ok((Vec::new(), from_offset));
     };
     let fallback_timestamp = file_mtime_rfc3339(path);
     let mut out = Vec::new();
@@ -323,7 +323,7 @@ pub(super) fn parse_codex_session(
             *total = total.saturating_add(count);
         }
     }
-    (out, next_offset)
+    Ok((out, next_offset))
 }
 
 /// The shared timestamp second of a copied parent history at the head of a

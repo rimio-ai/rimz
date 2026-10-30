@@ -28,6 +28,22 @@ pub(super) struct Maintenance {
     pub(super) paths: SpendingHistoryPaths,
 }
 
+pub(super) enum FormatMark {
+    Missing,
+    Compatible,
+    Unusable,
+}
+
+pub(super) fn format_mark(paths: &SpendingHistoryPaths) -> FormatMark {
+    match std::fs::read_to_string(paths.format()) {
+        Ok(mark) if mark.trim().parse::<u32>().is_ok_and(|mark| mark <= FORMAT) => {
+            FormatMark::Compatible
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => FormatMark::Missing,
+        _ => FormatMark::Unusable,
+    }
+}
+
 pub(super) fn try_maintain(
     paths: &SpendingHistoryPaths,
 ) -> Result<Option<Maintenance>, HistoryErr> {
@@ -35,16 +51,16 @@ pub(super) fn try_maintain(
     let Some(lock) = WorkspaceLock::try_acquire_mode(&paths.maintain_lock(), FILE_MODE)? else {
         return Ok(None);
     };
-    match std::fs::read_to_string(paths.format()) {
-        Ok(mark) if mark.trim().parse::<u32>().is_ok_and(|mark| mark <= FORMAT) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    match format_mark(paths) {
+        FormatMark::Compatible => {}
+        FormatMark::Missing => {
             provider_file::write_bytes_mode(
                 &paths.format(),
                 format!("{FORMAT}\n").as_bytes(),
                 FILE_MODE,
             )?;
         }
-        _ => return Ok(None),
+        FormatMark::Unusable => return Ok(None),
     }
     Ok(Some(Maintenance {
         _lock: lock,

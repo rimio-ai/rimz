@@ -5,6 +5,226 @@ use serde_json::json;
 
 use crate::common::Env;
 
+fn seed_rebuild_history(env: &Env) -> (jiff::civil::Date, jiff::civil::Date) {
+    let today = jiff::Timestamp::now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date();
+    let day = today.checked_sub(jiff::Span::new().days(20)).unwrap();
+    let kept = day.checked_sub(jiff::Span::new().days(1)).unwrap();
+    let projects = env.home_root.join(".claude/projects/repo");
+    std::fs::create_dir_all(&projects).unwrap();
+    let transcript = |day: jiff::civil::Date, usd: f64, id: &str| {
+        json!({
+            "timestamp": format!("{day}T12:00:00Z"), "costUSD": usd, "requestId": id,
+            "message": {"id": id, "usage": {"input_tokens": 10, "output_tokens": 5}}
+        })
+        .to_string()
+    };
+    std::fs::write(
+        projects.join("12345678-1234-4234-8234-123456789abc.jsonl"),
+        transcript(day, 2.0, "original"),
+    )
+    .unwrap();
+    let gone = projects.join("22345678-1234-4234-8234-123456789abc.jsonl");
+    std::fs::write(&gone, transcript(kept, 7.0, "gone")).unwrap();
+    env.rimz().args(["stats", "--json"]).assert().success();
+    std::fs::remove_file(gone).unwrap();
+    std::fs::write(
+        projects.join("32345678-1234-4234-8234-123456789abc.jsonl"),
+        transcript(day, 3.0, "restored"),
+    )
+    .unwrap();
+    (day, kept)
+}
+
+#[test]
+fn stats_rebuild_reports_changes_kept_days_and_no_manual_assist() {
+    let env = Env::new();
+    let (_, kept) = seed_rebuild_history(&env);
+    let output = env.rimz().args(["stats", "--rebuild"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Rebuilt 1 UTC day"), "{stdout}");
+    assert!(
+        stdout.contains("$2.00") && stdout.contains("$5.00"),
+        "{stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(&kept.to_string()), "{stderr}");
+    assert!(stderr.contains("claude@default"), "{stderr}");
+    assert!(stderr.contains("no transcripts were found"), "{stderr}");
+    assert!(stderr.contains("saved figure was kept"), "{stderr}");
+    let output = env.rimz().args(["stats", "--rebuild"]).assert().success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    assert!(stdout.contains("1 account-day unchanged"), "{stdout}");
+    assert_eq!(
+        stdout.trim(),
+        "No saved day changed; 1 account-day unchanged."
+    );
+    let output = env
+        .rimz()
+        .args(["stats", "--assists", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert!(report["events"].as_array().unwrap().is_empty(), "{report}");
+}
+
+#[test]
+#[cfg(unix)]
+fn stats_rebuild_refuses_incomplete_discovery_without_republishing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if nix::unistd::getuid().is_root() {
+        crate::common::skip("mode 000 files remain readable as root");
+        return;
+    }
+    let env = Env::new();
+    let today = jiff::Timestamp::now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date();
+    let projects = env.home_root.join(".claude/projects/repo");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::write(
+        projects.join("42345678-1234-4234-8234-123456789abc.jsonl"),
+        json!({
+            "timestamp": format!("{today}T00:00:00Z"), "costUSD": 3.0,
+            "message": {"id": "live", "usage": {"input_tokens": 10}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    seed_rebuild_history(&env);
+    let publication = env
+        .rimz_home()
+        .join("cache/providers/provider-spending.json");
+    let before = std::fs::read(&publication).unwrap();
+    let root = env.home_root.join(".claude/projects");
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o0)).unwrap();
+    let requested = env.rimz().args(["stats", "--rebuild"]).output().unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        requested.status.code(),
+        Some(1),
+        "incomplete input cannot report success: {requested:?}"
+    );
+    let stderr = String::from_utf8_lossy(&requested.stderr);
+    assert!(
+        stderr.contains("transcript discovery was incomplete"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("retry"), "{stderr}");
+    assert!(requested.stdout.is_empty(), "{requested:?}");
+    assert_eq!(std::fs::read(publication).unwrap(), before);
+    let report = env
+        .rimz()
+        .args(["stats", "--assists", "--json"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&report.stdout).unwrap();
+    assert!(report["events"].as_array().unwrap().is_empty());
+}
+
+#[test]
+#[cfg(unix)]
+fn stats_rebuild_warns_and_fails_when_an_account_is_deferred() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if nix::unistd::getuid().is_root() {
+        crate::common::skip("mode 000 files remain readable as root");
+        return;
+    }
+    let env = Env::new();
+    let (day, kept) = seed_rebuild_history(&env);
+    let unreadable = env
+        .home_root
+        .join(".claude/projects/repo/12345678-1234-4234-8234-123456789abc.jsonl");
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o0)).unwrap();
+    let output = env.rimz().args(["stats", "--rebuild"]).output().unwrap();
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "deferred input cannot report success: {output:?}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("No saved day changed"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("could not read claude@default transcripts"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&day.to_string()) && stderr.contains(&kept.to_string()),
+        "{stderr}"
+    );
+    assert!(stderr.contains("stay pending"), "{stderr}");
+    assert!(!stderr.contains("no transcripts were found"), "{stderr}");
+}
+
+#[test]
+fn stats_rebuild_names_unusable_format_marks_without_retry_advice() {
+    let env = Env::new();
+    seed_rebuild_history(&env);
+    let format = env.rimz_home().join("accounts/.history/format");
+    for mark in [Some("2\n"), Some("broken\n"), None] {
+        std::fs::remove_file(&format).unwrap();
+        if let Some(mark) = mark {
+            std::fs::write(&format, mark).unwrap();
+        } else {
+            std::fs::create_dir(&format).unwrap();
+        }
+        let output = env.rimz().args(["stats", "--rebuild"]).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("format mark is unusable"), "{stderr}");
+        assert!(stderr.contains(format.to_str().unwrap()), "{stderr}");
+        assert!(!stderr.contains("retry"), "{stderr}");
+        if mark.is_none() {
+            std::fs::remove_dir(&format).unwrap();
+        }
+    }
+}
+
+#[test]
+fn stats_rebuild_conflicts_with_display_flags_and_reports_empty_history() {
+    let env = Env::new();
+    let output = env.rimz().args(["stats", "--rebuild"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.to_lowercase().contains("nothing to rebuild"),
+        "{stdout}"
+    );
+    for flags in [
+        vec!["--json"],
+        vec!["--refresh"],
+        vec!["--assists"],
+        vec!["--agents"],
+        vec!["--teams"],
+        vec!["--subagents"],
+        vec!["--dollars"],
+        vec!["--window", "year"],
+        vec!["-n", "1"],
+        vec!["--all"],
+    ] {
+        env.rimz()
+            .args(["stats", "--rebuild"])
+            .args(flags)
+            .assert()
+            .code(2);
+    }
+}
+
 #[test]
 fn stats_reads_spend_under_an_unnamed_system_zone() {
     let env = Env::new();

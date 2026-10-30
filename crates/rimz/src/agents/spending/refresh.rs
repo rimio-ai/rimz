@@ -128,7 +128,7 @@ pub(crate) fn refresh_spending_cache(
     }
 
     (callbacks.on_jobs_scheduled)(stats);
-    refresh_spending_cache_jobs(
+    let _ = refresh_spending_cache_jobs(
         &jobs,
         cache,
         prices,
@@ -192,6 +192,53 @@ struct SpendingParseJob<'a> {
     now_secs: u64,
 }
 
+pub(super) fn reparse_spending_files(
+    files: &[SpendingFile],
+    prior: &SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> SpendingDiskCache {
+    let jobs = files
+        .iter()
+        .filter_map(|file| {
+            let stat = file.adapter.transcript_stat(&file.path)?;
+            let key = file.path.to_string_lossy().into_owned();
+            let parse_origin = prior
+                .files
+                .get(&key)
+                .and_then(|entry| entry.origin_path.clone());
+            Some(SpendingParseJob {
+                adapter: file.adapter,
+                file: &file.path,
+                key,
+                stat,
+                resume: None,
+                parse_origin,
+                now_secs,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut cache = SpendingDiskCache::default();
+    let total_files = jobs.len();
+    progress(SpendProgress {
+        finished_files: 0,
+        total_files,
+    });
+    let unread = refresh_spending_cache_jobs(
+        &jobs,
+        &mut cache,
+        prices,
+        &mut 0,
+        total_files,
+        &mut |_, tick| progress(tick),
+    );
+    for key in unread {
+        cache.files.remove(&key);
+    }
+    cache
+}
+
 fn refresh_spending_cache_jobs(
     jobs: &[SpendingParseJob<'_>],
     cache: &mut SpendingDiskCache,
@@ -199,9 +246,10 @@ fn refresh_spending_cache_jobs(
     finished_files: &mut usize,
     total_files: usize,
     tick: &mut dyn FnMut(&SpendingDiskCache, SpendProgress),
-) {
+) -> Vec<String> {
+    let mut unread = Vec::new();
     if jobs.is_empty() {
-        return;
+        return unread;
     }
 
     let workers = spending_parse_workers(jobs.len());
@@ -233,6 +281,9 @@ fn refresh_spending_cache_jobs(
         drop(tx);
         for (job_index, parsed) in rx {
             let job = &jobs[job_index];
+            if parsed.read_error.is_some() {
+                unread.push(job.key.clone());
+            }
             fold_spending_parse_job(cache, job, parsed);
             cache.mark_changed();
             *finished_files += 1;
@@ -245,6 +296,7 @@ fn refresh_spending_cache_jobs(
             );
         }
     });
+    unread
 }
 
 fn spending_parse_workers(job_count: usize) -> usize {

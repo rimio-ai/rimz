@@ -7,14 +7,18 @@ use jiff::{Timestamp, civil::Date, tz::TimeZone};
 use serde::{Deserialize, Serialize};
 
 use super::aggregate::{
-    CountedPayload, DedupPayload, SessionKey, WIDEST_SPEND_WINDOW_SECS,
+    CountedPayload, DedupPayload, SKIP_PARSE_MARGIN_SECS, SessionKey, WIDEST_SPEND_WINDOW_SECS,
     dedup_cached_entry_locations, file_session_key, indexed_counted_entries, session_key,
     within_widest_window,
 };
 use super::cache::{CacheStamp, cache_stamp};
 use super::discovery::HistoryAccount;
 use super::history::{self, Maintenance};
-use super::{CachedEntry, ResponseTiming, SharedName, SpendingDiskCache, SpendingFile, ToolCounts};
+use super::rebuild::{self, KeptDay, RebuildErr, RebuildReport, RebuildScope, RebuiltDay};
+use super::{
+    CachedEntry, ResponseTiming, SharedName, SpendProgress, SpendingDiskCache, SpendingFile,
+    ToolCounts, WalkRequest,
+};
 use crate::disk::atomic::{self, AtomicErr};
 use crate::disk::paths::SpendingHistoryPaths;
 use crate::ids::LoginKey;
@@ -48,14 +52,14 @@ struct SpendDay {
     rows: Vec<StoredRow>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 enum StoredRow {
     Spend(SpendRow),
     SessionOnly { session: StoredSession, ts: u64 },
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct SpendRow {
     session: StoredSession,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,7 +84,7 @@ struct SpendRow {
     fast: bool,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 struct StoredTiming {
     ms: u64,
     output: u64,
@@ -519,10 +523,7 @@ impl ClosedDays {
                 .find(|account| &account.login == login)
         };
         for record in grouped_days(cache, &all_files, recordable_account) {
-            let mut bytes = vec![b'\n'];
-            serde_json::to_writer(&mut bytes, &record)?;
-            bytes.push(b'\n');
-            history::append(&hold.paths, &hold.paths.spend(record.day.year()), &bytes)?;
+            append_day(hold, &record)?;
         }
         self.refresh(&hold.paths, accounts)?;
         self.recorded = incomplete.is_empty().then(|| RecordingKey {
@@ -531,6 +532,233 @@ impl ClosedDays {
         });
         Ok(())
     }
+
+    fn effective_days(&self) -> BTreeMap<(&str, &Path, Date), &SpendDay> {
+        let mut days = BTreeMap::new();
+        for day in self.segments.values().flat_map(|segment| &segment.days) {
+            days.insert((day.kind.as_str(), day.account.as_path(), day.day), day);
+        }
+        days
+    }
+
+    pub(super) fn rebuild(
+        &mut self,
+        cache: &SpendingDiskCache,
+        req: &WalkRequest<'_>,
+        accounts: &[HistoryAccount],
+        scope: RebuildScope,
+        incomplete: &BTreeSet<LoginKey>,
+        progress: &mut dyn FnMut(SpendProgress),
+    ) -> Result<RebuildReport, RebuildErr> {
+        let hold = rebuild::maintenance(req.history)?;
+        self.refresh(req.history, accounts)?;
+        drop(hold);
+        // refresh seeds the read key even when no segments exist.
+        let account_keys = &self
+            .read_key
+            .as_ref()
+            .expect("history refreshed above")
+            .accounts;
+        let days = match scope {
+            RebuildScope::All => {
+                self.effective_days()
+                    .into_values()
+                    .filter(|day| {
+                        account_keys.iter().any(|account| {
+                            account.kind == day.kind && account.identity == day.account
+                        }) && retained_day(day.day, req.now_secs)
+                    })
+                    .map(|day| day.day)
+                    .collect::<BTreeSet<_>>()
+            }
+            RebuildScope::Pending => BTreeSet::new(),
+        };
+        let mut report = RebuildReport {
+            days: days.iter().copied().collect(),
+            ..Default::default()
+        };
+        if days.is_empty() {
+            return Ok(report);
+        }
+        // No row is stamped later than its file's mtime plus the skip margin, so a file
+        // written before the earliest target day cannot hold one. Cursor rows cannot
+        // select files: compaction drops a copy's rows once they lose dedup.
+        let floor = days
+            .first()
+            .and_then(|day| day_start(*day))
+            .map_or(0, |start| start.saturating_sub(SKIP_PARSE_MARGIN_SECS));
+        let candidates = req
+            .files
+            .iter()
+            .filter(|file| {
+                cache
+                    .files
+                    .get(file.path.to_string_lossy().as_ref())
+                    .is_some_and(|cached| cached.stat.newest_mtime_secs() >= floor)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let scratch = super::refresh::reparse_spending_files(
+            &candidates,
+            cache,
+            req.prices,
+            req.now_secs,
+            progress,
+        );
+        report.files = scratch.files.len();
+        let mut incomplete = incomplete.clone();
+        incomplete.extend(
+            candidates
+                .iter()
+                .filter(|file| {
+                    !scratch
+                        .files
+                        .contains_key(file.path.to_string_lossy().as_ref())
+                })
+                .map(|file| file.login.clone()),
+        );
+        let mut rebuilt = grouped_days(&scratch, &candidates, |login, ts| {
+            if incomplete.contains(login) || !utc_day(ts).is_some_and(|day| days.contains(&day)) {
+                return None;
+            }
+            account_keys.iter().find(|account| &account.login == login)
+        })
+        .into_iter()
+        .map(|day| ((day.kind.clone(), day.account.clone(), day.day), day))
+        .collect::<BTreeMap<_, _>>();
+
+        let hold = rebuild::maintenance(req.history)?;
+        self.refresh(req.history, accounts)?;
+        let effective = self.effective_days();
+        // refresh seeds the read key even when no segments exist.
+        let account_keys = &self
+            .read_key
+            .as_ref()
+            .expect("history refreshed above")
+            .accounts;
+        let mut seen = BTreeSet::new();
+        for account in account_keys {
+            if !seen.insert((account.kind, &account.identity)) {
+                continue;
+            }
+            if account_keys.iter().any(|other| {
+                other.kind == account.kind
+                    && other.identity == account.identity
+                    && incomplete.contains(&other.login)
+            }) {
+                report.deferred_days.extend(days.iter().map(|day| KeptDay {
+                    login: account.login.clone(),
+                    day: *day,
+                }));
+                continue;
+            }
+            for day in &days {
+                let before = effective
+                    .get(&(account.kind, account.identity.as_path(), *day))
+                    .copied();
+                let Some(after) =
+                    rebuilt.remove(&(account.kind.to_owned(), account.identity.clone(), *day))
+                else {
+                    if before.is_some() {
+                        report.kept.push(KeptDay {
+                            login: account.login.clone(),
+                            day: *day,
+                        });
+                    }
+                    continue;
+                };
+                if before.is_some_and(|before| same_rows(&before.rows, &after.rows)) {
+                    report.unchanged += 1;
+                    continue;
+                }
+                if let Err(source) = append_day(&hold, &after) {
+                    return Err(RebuildErr::History {
+                        source,
+                        report: Box::new(report),
+                    });
+                }
+                report.rebuilt.push(RebuiltDay {
+                    login: account.login.clone(),
+                    day: *day,
+                    before_usd: before.map(SpendDay::dollars),
+                    after_usd: after.dollars(),
+                });
+            }
+        }
+        self.refresh(req.history, accounts)
+            .map_err(|source| RebuildErr::History {
+                source,
+                report: Box::new(report.clone()),
+            })?;
+        Ok(report)
+    }
+}
+
+impl SpendDay {
+    fn dollars(&self) -> f64 {
+        self.rows
+            .iter()
+            .map(|row| match row {
+                StoredRow::Spend(row) => row.usd,
+                StoredRow::SessionOnly { .. } => 0.0,
+            })
+            .sum()
+    }
+}
+
+fn same_rows(before: &[StoredRow], after: &[StoredRow]) -> bool {
+    if before.len() != after.len() {
+        return false;
+    }
+    let usd = |row: &StoredRow| match row {
+        StoredRow::Spend(row) => row.usd,
+        StoredRow::SessionOnly { .. } => 0.0,
+    };
+    let mut unmatched = before.iter().collect::<Vec<_>>();
+    unmatched.sort_by(|left, right| usd(left).total_cmp(&usd(right)));
+    let mut after = after.iter().collect::<Vec<_>>();
+    after.sort_by(|left, right| usd(left).total_cmp(&usd(right)));
+    for row in after {
+        let Some(index) = unmatched
+            .iter()
+            .position(|candidate| match (*candidate, row) {
+                (StoredRow::Spend(before), StoredRow::Spend(after)) => {
+                    if (before.usd - after.usd).abs() > before.usd.abs().max(after.usd.abs()) * 1e-9
+                    {
+                        return false;
+                    }
+                    let mut before = before.clone();
+                    before.usd = after.usd;
+                    before == *after
+                }
+                _ => *candidate == row,
+            })
+        else {
+            return false;
+        };
+        unmatched.remove(index);
+    }
+    true
+}
+
+fn append_day(hold: &Maintenance, record: &SpendDay) -> Result<(), AtomicErr> {
+    let mut bytes = vec![b'\n'];
+    serde_json::to_writer(&mut bytes, record)?;
+    bytes.push(b'\n');
+    history::append(&hold.paths, &hold.paths.spend(record.day.year()), &bytes)
+}
+
+fn utc_day(ts: u64) -> Option<Date> {
+    Timestamp::from_second(i64::try_from(ts).ok()?)
+        .ok()
+        .map(|ts| ts.to_zoned(TimeZone::UTC).date())
+}
+
+fn retained_day(day: Date, now_secs: u64) -> bool {
+    day_start(day).is_some_and(|start| {
+        start <= now_secs
+            && start.saturating_add(DAY_SECS) > now_secs.saturating_sub(WIDEST_SPEND_WINDOW_SECS)
+    })
 }
 
 fn grouped_days<'a>(
