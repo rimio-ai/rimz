@@ -335,7 +335,8 @@ fn stay_renders_with_you_or_asking_you_until_session_exit() {
     assert_eq!(
         list,
         json!([{
-            "id":id, "workflow":"review", "scope":room.env.project_root,
+            "id":id, "address":"review#project", "workflow":"review",
+            "scope":room.env.project_root,
             "state":"active", "node":"build", "since":value["record"]["entered_at"],
             "detail":"with you"
         }])
@@ -1193,10 +1194,17 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
         human.contains("NEEDS YOU") && human.contains("1 run(s) parked: review"),
         "{human}"
     );
-    assert_eq!(human.matches("review build asked").count(), 1, "{human}");
+    assert_eq!(
+        human.matches("review#project build asked").count(),
+        1,
+        "{human}"
+    );
     assert_eq!(history()["workflow_runs"][0]["id"], id);
     let show = success(room.command(&["loop", "show", "review"]).output().unwrap());
-    assert!(show.contains("RUNS") && show.contains(&id), "{show}");
+    assert!(
+        show.contains("RUNS") && show.contains("review#project"),
+        "{show}"
+    );
     // The run holding the scope wins before a broken definition is read.
     let skipped = || {
         history()["runs"]

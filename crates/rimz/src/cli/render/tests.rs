@@ -24,6 +24,31 @@ fn folded_span_names_only_positive_whole_seconds() {
 }
 
 #[test]
+fn workflow_clock_disambiguates_other_days_in_both_directions() {
+    let zone = jiff::tz::TimeZone::system();
+    let now = jiff::civil::date(2026, 10, 30)
+        .at(12, 56, 0, 0)
+        .to_zoned(zone)
+        .unwrap();
+    let readings = [-7, -6, -1, 0, 1, 6, 7].map(|days| {
+        let at = now.checked_add(jiff::Span::new().days(days)).unwrap();
+        workflow_clock(at.timestamp(), now.timestamp())
+    });
+    assert_eq!(
+        readings,
+        [
+            "2026-10-23 12:56",
+            "Sat 12:56",
+            "Thu 12:56",
+            "12:56",
+            "Sat 12:56",
+            "Thu 12:56",
+            "2026-11-06 12:56",
+        ]
+    );
+}
+
+#[test]
 fn ambiguity_rows_are_ranked_runnable_and_offer_stop_all() {
     let now = Timestamp::now();
     let mut agents = Vec::new();

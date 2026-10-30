@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -12,8 +11,12 @@ use rimz::ids::{EventId, WorkflowRunId};
 use rimz::store::workflow::{self as records, RunRecord};
 
 use super::render;
+use super::workflow_view::{self, session_attempt, with_you};
 
 mod host;
+mod list;
+mod receipt;
+mod resolve;
 use host::Host;
 
 #[derive(Debug, Args)]
@@ -46,24 +49,24 @@ enum Command {
     },
     /// Show a run's work directory, current position, and history.
     Show {
-        /// Run id (`wf_...`), as `workflow run` or `workflow list` prints it.
+        /// Run address `<workflow>#<lane>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
-        id: WorkflowRunId,
+        id: String,
         /// Print the work directory, run record, and history as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Cancel a run and interrupt its live script.
     Cancel {
-        /// Run id to cancel.
+        /// Run address `<workflow>#<lane>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
-        id: WorkflowRunId,
+        id: String,
     },
     /// Re-enter a parked node or extend a run's bounds.
     Resume {
-        /// Run id to resume or extend.
+        /// Run address `<workflow>#<lane>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
-        id: WorkflowRunId,
+        id: String,
         /// Re-enter this node instead of the parked one. Parked runs only.
         #[arg(long, value_name = "NODE")]
         at: Option<String>,
@@ -106,28 +109,10 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             worktree,
             prompt,
         } => start(name, worktree, prompt, globals),
-        Command::List { json } => list(json),
+        Command::List { json } => list::run(json, globals),
         Command::Show { id, json } => show(&id, json, globals),
-        Command::Cancel { id } => {
-            let (state, _) = locate(&id)?;
-            let changed = workflow::cancel(&state, &id, &Host::new(&state, globals, None))?;
-            writeln!(
-                render::out(),
-                "{id}: {}",
-                if changed {
-                    "canceled"
-                } else {
-                    "already terminal; unchanged"
-                }
-            )?;
-            Ok(())
-        }
-        Command::Resume { id, at, extend } => {
-            let (state, _) = locate(&id)?;
-            let record = workflow::resume(&state, &id, at.as_deref(), &extend)?;
-            writeln!(render::out(), "{}: resumed", record.id)?;
-            Ok(())
-        }
+        Command::Cancel { id } => receipt::cancel(&id, globals),
+        Command::Resume { id, at, extend } => receipt::resume(&id, at.as_deref(), &extend, globals),
         Command::Advance {
             id: Some(id),
             woken_by,
@@ -234,6 +219,11 @@ fn start(
         record.id,
         ctx.store.paths().workflow(&record.id).work.display()
     )?;
+    writeln!(
+        render::out(),
+        "→ {}",
+        resolve::run_command(&record, "show", globals, None, &[], &[])
+    )?;
     Ok(())
 }
 
@@ -244,165 +234,32 @@ fn locate(id: &WorkflowRunId) -> Result<(rimz::StatePaths, paths::WorkflowPaths)
         .with_context(|| format!("unknown workflow run {id}"))
 }
 
-pub(super) fn waiting(record: &RunRecord) -> Option<String> {
-    waiting_line(record, None)
+fn waiting_line(
+    record: &RunRecord,
+    spec: Option<&workflow::WorkflowSpec>,
+    history: Option<&[HistoryRow<'_>]>,
+) -> Option<String> {
+    let show_count = record.wait.as_ref().is_none_or(|wait| {
+        history.is_none_or(|rows| {
+            !wait_row_counts(rows, &wait.node, &wait.outcome, wait.first, wait.last)
+                .eq([wait.count])
+        })
+    });
+    workflow_view::wait_counted(record, spec, jiff::Timestamp::now(), show_count)
 }
 
-fn waiting_line(record: &RunRecord, history: Option<&[HistoryRow<'_>]>) -> Option<String> {
-    record.wait.as_ref().map(|w| {
-        if w.outcome == "capacity" {
-            return format!(
-                "{} · {}, {}, ×{}",
-                rimz::theme::fmt::capacity_wait(&w.kinds, w.first, w.gives_up_at),
-                w.node,
-                w.detail.as_deref().unwrap_or("—"),
-                w.count,
-            );
+fn show(target: &str, json: bool, globals: &super::GlobalFlags) -> Result<()> {
+    let run = match resolve::select(target, "show", globals, None, &[])? {
+        resolve::Selection::Workflow(runs) => {
+            return list::render(&runs, Some(target), json, globals);
         }
-        let zone = jiff::tz::TimeZone::system();
-        let detail = match w.outcome.as_str() {
-            "hold" => {
-                let hold = paths::StatePaths::for_project_root(&record.project_root)
-                    .ok()
-                    .and_then(|state| workflow::load(&state.workflow(&record.id).home).ok())
-                    .and_then(|spec| {
-                        spec.checks
-                            .get(&w.node)
-                            .and_then(|check| {
-                                w.case.and_then(|index| check.cases.get(index as usize))
-                            })
-                            .and_then(|case| case.hold.clone())
-                    })
-                    .unwrap_or_else(|| "?".into());
-                let elapsed = jiff::Timestamp::now()
-                    .duration_since(w.first)
-                    .as_secs()
-                    .max(0) as u64;
-                format!(
-                    "holding {} {}/{hold}",
-                    w.detail.as_deref().unwrap_or("—"),
-                    render::age_label(elapsed)
-                )
-            }
-            "unknown" => w
-                .detail
-                .as_ref()
-                .map_or_else(|| "unknown".into(), |detail| format!("unknown: {detail}")),
-            "window" => w
-                .detail
-                .as_ref()
-                .map_or_else(|| "window".into(), |detail| format!("window {detail}")),
-            "takeover" | "occupied" => w.outcome.clone(),
-            _ => format!("said {}", w.outcome),
-        };
-        let recheck = w
-            .recheck_at
-            .map(|at| format!(", recheck {}", at.to_zoned(zone.clone()).strftime("%H:%M")))
-            .unwrap_or_default();
-        let show_count = history.is_none_or(|rows| {
-            !wait_row_counts(rows, &w.node, &w.outcome, w.first, w.last).eq([w.count])
-        });
-        let count = if show_count {
-            format!(", ×{}", w.count)
-        } else {
-            String::new()
-        };
-        format!(
-            "waiting: {}, {detail}, since {}{count}{recheck}",
-            w.node,
-            w.first.to_zoned(zone).strftime("%H:%M"),
-        )
-    })
-}
-
-fn session_attempt(record: &records::RunRecord) -> Option<&records::LiveAttempt> {
-    record
-        .held
-        .as_ref()
-        .map(|held| &held.attempt)
-        .or(record.attempt.as_ref())
-        .filter(|attempt| attempt.kind == records::AttemptKind::Agent)
-}
-
-fn with_you(record: &records::RunRecord) -> bool {
-    record.state == records::RunState::Active
-        && session_attempt(record)
-            .is_some_and(|attempt| !attempt.lifecycle.is_turn() && attempt.run.is_some())
-}
-
-fn asking(record: &records::RunRecord) -> Option<&records::Asked> {
-    if record.state != records::RunState::Active {
-        return None;
-    }
-    session_attempt(record)?
-        .asking
-        .as_ref()
-        .map(|asking| &asking.ask)
-}
-
-fn list(json: bool) -> Result<()> {
-    let mut rows = Vec::new();
-    let mut table = render::Table::new([
-        "RUN", "WORKFLOW", "CHECKOUT", "STATE", "NODE", "SINCE", "DETAIL",
-    ]);
-    let rooms: BTreeMap<_, _> = paths::workflow_runs_under(&paths::rimz_home())?
-        .into_iter()
-        .map(|(state, _)| (state.root.clone(), state))
-        .collect();
-    for state in rooms.values() {
-        for r in records::list(state)? {
-            if r.state.is_terminal() {
-                continue;
-            }
-            let asking = asking(&r);
-            let asking_line = asking.map(|ask| {
-                format!(
-                    "asking you: {} ({}): {}",
-                    ask.handle,
-                    ask.kind,
-                    render::one_line(&ask.text)
-                )
-            });
-            let detail = if with_you(&r) {
-                asking_line.unwrap_or_else(|| {
-                    let mut detail = "with you".to_owned();
-                    if r.held.is_some() {
-                        detail.push_str(&format!("; checking {}", r.node));
-                    }
-                    if let Some(waiting) = waiting(&r) {
-                        detail.push_str(&format!("; {waiting}"));
-                    }
-                    detail
-                })
-            } else {
-                waiting(&r)
-                    .or_else(|| r.park.as_ref().map(records::Park::label))
-                    .or(asking_line)
-                    .unwrap_or_default()
-            };
-            rows.push(serde_json::json!({"id":r.id,"workflow":r.workflow,"scope":r.scope.path,"state":r.state,"node":r.node,"since":r.entered_at,"detail":detail}));
-            table.row([
-                render::cell(r.id.as_str()),
-                render::cell(&r.workflow),
-                render::cell(r.scope.path.display().to_string()),
-                render::cell(r.state.as_str())
-                    .fg(render::status::workflow(r.state, asking.is_some())),
-                render::cell(&r.node),
-                render::cell(r.entered_at.to_string()),
-                render::cell(detail),
-            ]);
-        }
-    }
-    if json {
-        render::json_pretty(&rows)
-    } else {
-        Ok(table.render(&mut render::out())?)
-    }
-}
-
-fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<()> {
-    let (state_paths, paths) = locate(id)?;
-    let record = records::load(&paths)?;
+        resolve::Selection::Run(run) => *run,
+    };
+    let resolve::Located {
+        state: state_paths,
+        paths,
+        record,
+    } = run;
     let journal = records::journal(&paths)?;
     if json {
         return render::json_pretty(
@@ -422,16 +279,17 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         },
         render::cell(record.scope.path.display().to_string()),
     );
-    let asking = asking(&record);
-    let state = if let Some(park) = &record.park {
-        format!("{} ({})", record.state.as_str(), park.label())
-    } else if asking.is_some() {
-        "active (asking you)".into()
-    } else if with_you(&record) {
-        "active (with you)".into()
-    } else {
-        record.state.as_str().into()
-    };
+    let asking = workflow_view::asking(&record).map(|asking| &asking.ask);
+    let state =
+        if let Some(park) = workflow_view::park(&record, Some(&spec), jiff::Timestamp::now()) {
+            format!("{} ({park})", record.state.as_str())
+        } else if asking.is_some() {
+            "active (asking you)".into()
+        } else if with_you(&record) {
+            "active (with you)".into()
+        } else {
+            record.state.as_str().into()
+        };
     header.push(
         "state",
         render::cell(state).fg(render::status::workflow(record.state, asking.is_some())),
@@ -485,8 +343,8 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         render::cell(record.prompt.as_deref().unwrap_or("none")),
     );
     header.render(&mut out)?;
-    if let Some(waiting) = waiting_line(&record, Some(&history)) {
-        writeln!(out, "{waiting}")?;
+    if let Some(waiting) = waiting_line(&record, Some(&spec), Some(&history)) {
+        writeln!(out, "waiting: {}, {waiting}", record.node)?;
     }
     if record
         .wait
@@ -786,18 +644,7 @@ fn render_history(
 }
 
 fn validation_root(globals: &super::GlobalFlags) -> Option<PathBuf> {
-    let workspace =
-        rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok()?;
-    let recorded = paths::StatePaths::for_project_root(&workspace.project_root)
-        .ok()
-        .is_some_and(|state| rimz::workspace::record::read(&state.workspace_record).is_ok());
-    if globals.root.is_none()
-        && workspace.root_class == rimz::workspace::RootClass::Directory
-        && !recorded
-    {
-        return None;
-    }
-    Some(workspace.project_root)
+    resolve::caller(globals).map(|workspace| workspace.project_root)
 }
 
 fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> Result<()> {
@@ -881,6 +728,8 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use jiff::Timestamp;
     use records::{EvaluationOrigin, JournalEntry, JournalEvent};
@@ -1169,9 +1018,13 @@ mod tests {
             evaluation(3, 2, "done", None),
         ];
         let record = waiting_record(0, 0, 1);
-        let line = waiting_line(&record, Some(&collapsed_history(&journal))).unwrap();
+        let line = waiting_line(&record, None, Some(&collapsed_history(&journal))).unwrap();
         assert!(!line.contains('×'), "{line}");
-        assert!(waiting(&record).unwrap().contains("×1"));
+        assert!(
+            workflow_view::wait(&record, None, Timestamp::now())
+                .unwrap()
+                .contains("×1")
+        );
         journal.push(wait(2, "pending", 0, 0, 1));
         assert_eq!(collapsed_history(&journal).len(), 3);
         assert!(!history(&journal).contains("pr wait"));
@@ -1186,7 +1039,7 @@ mod tests {
             kept_turn(3),
         ];
         let record = waiting_record(0, 2, 2);
-        let line = waiting_line(&record, Some(&collapsed_history(&journal))).unwrap();
+        let line = waiting_line(&record, None, Some(&collapsed_history(&journal))).unwrap();
         assert!(line.contains("×2"), "{line}");
         journal.push(wait(4, "pending", 0, 2, 2));
         assert_eq!(collapsed_history(&journal).len(), 4);
@@ -1202,7 +1055,7 @@ mod tests {
             evaluation(3, 3, "pending", None),
         ];
         let record = waiting_record(0, 3, 3);
-        let line = waiting_line(&record, Some(&collapsed_history(&journal))).unwrap();
+        let line = waiting_line(&record, None, Some(&collapsed_history(&journal))).unwrap();
         assert!(line.contains("×3"), "{line}");
     }
 
@@ -1210,7 +1063,7 @@ mod tests {
     fn early_advances_keep_a_count_no_single_evaluation_states() {
         let mut journal = vec![evaluation(1, 0, "pending", None)];
         let record = waiting_record(0, 2, 3);
-        let line = waiting_line(&record, Some(&collapsed_history(&journal))).unwrap();
+        let line = waiting_line(&record, None, Some(&collapsed_history(&journal))).unwrap();
         assert!(line.contains("×3"), "{line}");
         journal.push(wait(3, "pending", 0, 2, 3));
         assert_eq!(collapsed_history(&journal).len(), 1);

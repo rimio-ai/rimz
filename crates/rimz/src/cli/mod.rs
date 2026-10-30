@@ -60,6 +60,7 @@ mod web;
 #[cfg(feature = "testkit")]
 mod work_log;
 mod workflow;
+mod workflow_view;
 mod workspace;
 mod worktree;
 mod worktree_entry;

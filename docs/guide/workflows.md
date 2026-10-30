@@ -91,7 +91,7 @@ Then start the run:
    RUN=$(rimz workflow run fix-tests -w feat-x | sed -n 1p)
    ```
 
-`run` validates again, creates the run, and prints two lines: the run id (`wf_` and 32 hexadecimal digits) and the run's work directory. The first check starts in the background. If the suite already passes, the run ends at `@done` at once. Break a test first to watch the loop.
+`run` validates again, creates the run, and prints the run id (`wf_` and 32 hexadecimal digits), the run's work directory, then a `workflow show` hint for that run. The first two lines keep their scripting format. The first check starts in the background. If the suite already passes, the run ends at `@done` at once. Break a test first to watch the loop.
 
 Without `-w` the run uses the checkout you are in. `-w` selects an existing RimZ worktree and never creates one. A workflow holds at most one active or parked run per checkout, so a second `run` there refuses and names the run that holds it. `--prompt 'keep the public API unchanged'` adds text to the end of every agent step's prompt for this run.
 
@@ -100,9 +100,12 @@ Without `-w` the run uses the checkout you are in. `-w` selects an existing RimZ
 ```sh
 rimz workflow list         # every active and parked run, with its node and what it waits on
 rimz workflow show "$RUN"  # one run: position, visit counts, and its folded history
+rimz workflow show fix-tests  # live runs of this workflow, as list rows
 ```
 
-`show` lists checks and attempts in order, folding adjacent repeated evaluations into one row with their count, span, and newest answer; `--json` keeps every journal entry. An agent attempt names its handle, the commit before and after, and its cost. A command attempt shows its exit code, commits, and output log. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field the two commands print.
+`list` puts parks and blocking questions under NEEDS YOU, longest waiting first, with a hint to inspect the first run. ACTIVE holds the rest. Each row has a status glyph, a short address such as `fix-tests#feat-x`, its node, what it is doing, and its age. You can use that address instead of `$RUN` in `show`, `resume`, and `cancel`; the part after `#` is the checkout directory's name (the project directory for project scope). Several rooms get separate headings.
+
+`show` on an address or id lists checks and attempts in order, folding adjacent repeated evaluations into one row with their count, span, and newest answer; `--json` keeps every journal entry. An agent attempt names its handle, the commit before and after, and its cost. A command attempt shows its exit code, commits, and output log. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field and the rules for choosing a run by name or address.
 
 An attempt can end as `died` when an agent fails to start or crashes, or when a command fails. `show` prints any recorded `reason:` beneath the attempt. A command's log holds its output; an agent's own UI carries errors that it did not report to RimZ.
 
@@ -251,7 +254,7 @@ A judge runs headless in the checkout. Its permission mode is automatic unless i
 
 A judge that fails (its process fails, or it writes no answer or a bad one) runs once more, with `retry` in `context.json` saying what went wrong. A second failure parks the run. An [unsupported agent version](../reference/agent-support.md) refuses before the judge runs and follows the same retry and park policy; `workflow show` includes the upgrade instruction.
 
-`window` holds a judge until its provider's usage window has room, or an agent step until every agent cell's provider has room. `5h.left` and `7d.left` are the percent left in the 5-hour and 7-day windows, compared with a whole percent, as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). While it holds, `rimz workflow list` shows a line such as `waiting: review, window 5h.left=12<40, since 15:02, ×40`.
+`window` holds a judge until its provider's usage window has room, or an agent step until every agent cell's provider has room. `5h.left` and `7d.left` are the percent left in the 5-hour and 7-day windows, compared with a whole percent, as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). While it holds, `rimz workflow list` shows detail such as `window 5h.left=12<40, ×40`, beside the node and its relative age.
 
 Put the cheap case in a script and the unclear case in a judge. A script that answers `unsure`, routed to a judge, pays for a model only when it has to.
 
@@ -273,7 +276,7 @@ A blocking question or permission prompt from a turn step's leader or its subage
 
 `[workflow] deadline = "2026-11-01"` bounds the whole run. It takes a date (local midnight), a local date and time, or an RFC 3339 instant. When it passes, RimZ stops a live attempt and parks the run, unless `on.deadline` routes it somewhere else.
 
-A parked run appears in three places: a line in the [sidebar cockpit](../interface/sidebar.md), the NEEDS YOU section of `rimz loop list` when a loop task started it, and `rimz workflow list` with its reason. The [park reasons table](../reference/cli/workflow.md#park-reasons) gives the exact word for each case.
+A parked run appears in three places: a line in the [sidebar cockpit](../interface/sidebar.md), the NEEDS YOU section of `rimz loop list` when a loop task started it, and NEEDS YOU in `rimz workflow list`, with its address and reason. Blocking questions also appear under NEEDS YOU; a staying session that is simply `with you` stays in ACTIVE. The [park reasons table](../reference/cli/workflow.md#park-reasons) gives the exact word for each case.
 
 Fix what the reason names, then send the run back to work:
 
@@ -284,6 +287,8 @@ rimz workflow resume "$RUN" --extend visits=+2       # raise both visit caps for
 rimz workflow resume "$RUN" --extend deadline=2026-11-08
 ```
 
+The receipt names the resumed node, its visit limit when capped, and any new grant or armed deadline, then gives a `show` command. When a parked run re-enters a step with no visits left, it warns rather than promising progress that cannot happen. Extending an active run says `extended` and does not warn about visits its current attempt has already used. Either receipt warns if the armed deadline is already past. A deadline fires only once; plain resume after a deadline park continues without one until you grant a new deadline.
+
 A run that is still active takes `--extend` too, without `--at`. An extension is a grant on this run only, and the definition does not change. A visit grant raises both `max-visits` and `max-visits-per-key` for every step and key. `show` prints the total as `step fix: 3 visits of 3 + 2 grant`. If the step declares `max-visits-per-key`, it adds rows such as `  key "lint": 2 visits of 2 + 2 grant`, with keys rendered as JSON (`null` for unkeyed visits); otherwise it prints no key rows.
 
 ## Stop a run and clean up
@@ -292,7 +297,7 @@ A run that is still active takes `--extend` too, without `--at`. An extension is
 rimz workflow cancel "$RUN"
 ```
 
-`cancel` ends the run as `canceled` and stops whatever it is running: the check's script or shell command, the judge, a command step's process group, or every cell of an agent step's layout and its subagents. A run that already ended prints `already terminal; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
+`cancel` ends the run as `canceled` and stops whatever it is running: the check's script or shell command, the judge, a command step's process group, or every cell of an agent step's layout and its subagents. Its receipt names the address and gives a `show` hint. An already-finished run id prints `<address> is already <state>; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
 
 A run started by a condition loop task stays finished, even while its condition holds. To start another, run `rimz loop fire <name>` from that worktree, or start an independent run with `rimz workflow run`. Schedule, signal, and watch tasks can start another run on their next fire; disable the task with `rimz loop disable <name>` to prevent that.
 
