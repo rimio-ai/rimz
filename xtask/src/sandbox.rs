@@ -88,14 +88,17 @@ const KEEP_MARKER: &str = "kept";
 pub(crate) struct HostSandbox {
     root: PathBuf,
     env: BTreeMap<&'static str, PathBuf>,
+    git_local_env: Option<Vec<String>>,
     toolchain: Vec<(&'static str, PathBuf)>,
     reaper: Option<SandboxReaper>,
 }
 
 impl HostSandbox {
     pub(crate) fn for_tests(workspace_root: &Path) -> Result<Self> {
+        let git_local_env = git_local_env()?;
         let mut sandbox = Self::new()?;
-        sandbox.trust_workspace_for_git(workspace_root)?;
+        sandbox.trust_workspace_for_git(workspace_root, &git_local_env)?;
+        sandbox.git_local_env = Some(git_local_env);
         let skip_log = sandbox.root.join("skipped-tests");
         sandbox.env.insert(SKIP_LOG_ENV, skip_log);
         let missing_codex = sandbox.root.join("missing-codex");
@@ -149,14 +152,23 @@ impl HostSandbox {
         Ok(Self {
             root: root.keep(),
             env,
+            git_local_env: None,
             toolchain,
             reaper,
         })
     }
 
-    fn trust_workspace_for_git(&self, workspace_root: &Path) -> Result<()> {
+    fn trust_workspace_for_git(
+        &self,
+        workspace_root: &Path,
+        git_local_env: &[String],
+    ) -> Result<()> {
         let config = self.env["HOME"].join(".gitconfig");
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        for key in git_local_env {
+            command.env_remove(key);
+        }
+        let output = command
             .arg("config")
             .arg("--file")
             .arg(&config)
@@ -183,14 +195,23 @@ impl HostSandbox {
     }
 
     /// Keys a test run drops from the inherited environment: `NO_COLOR`, plus
-    /// every ambient room session key (see [`session_key`]). Without this, a
-    /// suite launched from inside a RimZ pane or supervised run hands its
-    /// `RIMZ_RUN_ID` and identity pin to in-process unit tests, which then take
-    /// the supervised branch a clean shell never sees. Keys the sandbox sets
-    /// itself, build-script inputs, and park-budget overrides survive: the runner applies removals after
-    /// the sandbox env, and dropping a build input would change the binary.
-    pub(crate) fn removed_test_env(&self) -> Vec<String> {
-        test_removed_env(std::env::vars_os().map(|(key, _)| key), &self.env)
+    /// every ambient room session key (see [`session_key`]) and git's
+    /// repository-local variables. This keeps fixture git out of the caller's
+    /// repository under `git rebase --exec`, and keeps in-process tests off the
+    /// supervised branch selected by an ambient `RIMZ_RUN_ID` or identity pin.
+    /// Keys the sandbox sets itself, build-script inputs, and test overrides
+    /// survive: removals apply after the sandbox env, and dropping a build
+    /// input would change the binary.
+    pub(crate) fn removed_test_env(&self) -> Result<Vec<String>> {
+        let local = match &self.git_local_env {
+            Some(local) => local.clone(),
+            None => git_local_env()?,
+        };
+        Ok(test_removed_env(
+            std::env::vars_os().map(|(key, _)| key),
+            &self.env,
+            &local,
+        ))
     }
 
     fn apply_to(&self, command: &mut Command, scrub_session: bool) {
@@ -569,15 +590,35 @@ const BUILD_INPUT_ENV: [&str; 4] = [
 /// room session: the park budget and the live web tier's Chromium override.
 const TEST_INPUT_ENV: [&str; 2] = ["RIMZ_TEST_PARK_BUDGET_MIB", "RIMZ_TEST_BROWSER"];
 
+pub(crate) fn git_local_env() -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--local-env-vars"])
+        .output()
+        .context("running `git rev-parse --local-env-vars`")?;
+    if !output.status.success() {
+        bail!(
+            "`git rev-parse --local-env-vars` failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)
+        .context("decoding `git rev-parse --local-env-vars`")?
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
 fn test_removed_env(
     ambient: impl Iterator<Item = std::ffi::OsString>,
     sandbox: &BTreeMap<&'static str, PathBuf>,
+    git_local_env: &[String],
 ) -> Vec<String> {
     let mut removed = vec!["NO_COLOR".to_owned()];
     removed.extend(
         ambient
-            .filter(|key| session_key(key))
             .filter_map(|key| key.into_string().ok())
+            .filter(|key| session_key(OsStr::new(key)) || git_local_env.contains(key))
             .filter(|key| {
                 !sandbox.contains_key(key.as_str())
                     && !BUILD_INPUT_ENV.contains(&key.as_str())

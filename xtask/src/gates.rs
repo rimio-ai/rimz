@@ -537,7 +537,7 @@ fn gate_doc(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
 fn gate_test(root: &Path, keep_going: bool, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     let sandbox = HostSandbox::for_tests(root)?;
     let env = sandbox.command_env();
-    let removed = sandbox.removed_test_env();
+    let removed = sandbox.removed_test_env()?;
     let no_fail_fast = keep_going.then_some("--no-fail-fast");
     let captured = run_streamed(
         root,
@@ -1036,7 +1036,7 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
     let command = parse_test_command(args)?;
     let sandbox = HostSandbox::for_tests(root)?;
     let env = sandbox.command_env();
-    let removed = sandbox.removed_test_env();
+    let removed = sandbox.removed_test_env()?;
     let removed = str_refs(&removed);
     let invocation = test_invocation(args);
     let allowed_skips = command
@@ -1185,7 +1185,7 @@ fn run_named_tests(
     invocation: &str,
 ) -> Result<()> {
     let env = &sandbox.command_env();
-    let removed = sandbox.removed_test_env();
+    let removed = sandbox.removed_test_env()?;
     let removed = &str_refs(&removed);
     let filterset = exact_name_filterset(&command.names);
     let mut list_args = nextest_args("list");
@@ -1267,7 +1267,7 @@ fn run_streaming_tests(
     requested: &[String],
 ) -> Result<()> {
     let env = sandbox.command_env();
-    let removed = sandbox.removed_test_env();
+    let removed = sandbox.removed_test_env()?;
     let status =
         crate::runner::run_inherited(root, "cargo", cargo_args, &env, &str_refs(&removed))?;
     report_skips(sandbox.skip_report());
@@ -1402,7 +1402,7 @@ pub(crate) fn locate_test(
     sandbox: &HostSandbox,
 ) -> Result<LocatedTest> {
     let env = sandbox.command_env();
-    let removed = sandbox.removed_test_env();
+    let removed = sandbox.removed_test_env()?;
     let mut list_args = nextest_args("list");
     list_args.extend([
         "-E".to_owned(),
@@ -1539,7 +1539,7 @@ pub(crate) fn test_archive(root: &Path, args: &[String]) -> Result<()> {
         "--locked".to_owned(),
     ];
     cargo_args.extend(args.iter().cloned());
-    let removed = sandbox.removed_test_env();
+    let removed = sandbox.removed_test_env()?;
     run_with_env_and_removed(root, "cargo", cargo_args, &env, &str_refs(&removed))
 }
 
@@ -1579,7 +1579,7 @@ pub(crate) fn coverage(root: &Path) -> Result<()> {
             "--locked",
         ],
         &env,
-        &str_refs(&sandbox.removed_test_env()),
+        &str_refs(&sandbox.removed_test_env()?),
     );
     report_skips(sandbox.skip_report());
     result

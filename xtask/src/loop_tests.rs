@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::gates::failure_detail;
 use crate::runner::run_streamed;
+use crate::sandbox::git_local_env;
 
 const PATTERN: &str = "loops/*/tests/test_*.py";
 
@@ -15,13 +16,16 @@ pub(crate) fn loop_tests(root: &Path) -> Result<()> {
 
 pub(crate) fn run_tests(root: &Path, program: &str, progress: &mut dyn FnMut(&str)) -> Result<()> {
     let mut failures = Vec::new();
-    for path in discover(root)? {
+    let paths = discover(root)?;
+    let removed = git_local_env()?;
+    let removed: Vec<_> = removed.iter().map(String::as_str).collect();
+    for path in paths {
         let captured = run_streamed(
             root,
             program,
             [Path::new("run"), Path::new("--script"), &path],
             &[],
-            &[],
+            &removed,
             progress,
         );
         let detail = match captured {

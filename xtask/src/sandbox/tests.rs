@@ -65,7 +65,7 @@ fn only_a_test_sandbox_names_a_skip_log_and_its_runs_keep_it() {
     assert!(log.starts_with(sandbox.root()), "{}", log.display());
     let ambient = [SKIP_LOG_ENV, "RIMZ_RUN_ID"].map(std::ffi::OsString::from);
     assert_eq!(
-        test_removed_env(ambient.into_iter(), &sandbox.env),
+        test_removed_env(ambient.into_iter(), &sandbox.env, &[]),
         ["NO_COLOR", "RIMZ_RUN_ID"]
     );
 
@@ -90,7 +90,7 @@ fn only_a_test_sandbox_exports_a_missing_codex_and_its_runs_keep_it() {
     assert!(!codex.exists(), "{}", codex.display());
     let ambient = [std::ffi::OsString::from(CODEX_BIN_ENV)];
     assert_eq!(
-        test_removed_env(ambient.into_iter(), &sandbox.env),
+        test_removed_env(ambient.into_iter(), &sandbox.env, &[]),
         ["NO_COLOR"]
     );
 
@@ -116,7 +116,7 @@ fn only_a_test_sandbox_exports_offline_pricing_and_its_runs_keep_it() {
     );
     let ambient = [std::ffi::OsString::from("RIMZ_PRICING_OFFLINE")];
     assert_eq!(
-        test_removed_env(ambient.into_iter(), &sandbox.env),
+        test_removed_env(ambient.into_iter(), &sandbox.env, &[]),
         ["NO_COLOR"]
     );
 
@@ -288,7 +288,7 @@ fn test_env_drops_room_session_keys_but_keeps_sandbox_and_build_inputs() {
     ]
     .map(std::ffi::OsString::from);
     assert_eq!(
-        test_removed_env(ambient.into_iter(), &sandbox),
+        test_removed_env(ambient.into_iter(), &sandbox, &[]),
         [
             "NO_COLOR",
             "RIMZ_RUN_ID",
@@ -300,6 +300,108 @@ fn test_env_drops_room_session_keys_but_keeps_sandbox_and_build_inputs() {
             "PI_CODING_AGENT_SESSION_DIR",
         ]
     );
+}
+
+#[test]
+fn test_env_drops_git_local_variables_but_keeps_nonlocal_git_settings() {
+    let local = ["GIT_DIR", "GIT_PREFIX", "GIT_CONFIG_PARAMETERS"].map(str::to_owned);
+    let ambient = [
+        "RIMZ_RUN_ID",
+        "TMUX_PANE",
+        "CODEX_HOME",
+        "GIT_DIR",
+        "GIT_PREFIX",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_EXEC_PATH",
+        "GIT_EDITOR",
+        "GIT_SEQUENCE_EDITOR",
+        "GIT_TRACE",
+        "GIT_AUTHOR_NAME",
+        "GIT_CONFIG_GLOBAL",
+    ]
+    .map(std::ffi::OsString::from);
+    assert_eq!(
+        test_removed_env(ambient.into_iter(), &BTreeMap::new(), &local),
+        [
+            "NO_COLOR",
+            "RIMZ_RUN_ID",
+            "TMUX_PANE",
+            "CODEX_HOME",
+            "GIT_DIR",
+            "GIT_PREFIX",
+            "GIT_CONFIG_PARAMETERS",
+        ]
+    );
+}
+
+#[test]
+fn git_local_removal_keeps_fixture_writes_out_of_the_callers_repository() {
+    let root = TempDir::new().unwrap();
+    let decoy = root.path().join("decoy");
+    let fixture = root.path().join("fixture");
+    std::fs::create_dir(&decoy).unwrap();
+    std::fs::create_dir(&fixture).unwrap();
+    let git = |root: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&decoy, &["init", "-b", "main"]);
+    git(&decoy, &["config", "user.email", "decoy@example.invalid"]);
+    git(&decoy, &["config", "user.name", "Decoy"]);
+    git(&decoy, &["commit", "--allow-empty", "-m", "decoy"]);
+    git(&decoy, &["remote", "add", "original", "../original.git"]);
+    let head = git(&decoy, &["rev-parse", "HEAD"]);
+    let email = git(&decoy, &["config", "user.email"]);
+    let remotes = git(&decoy, &["remote", "-v"]);
+    let local = git_local_env().unwrap();
+    let injected: Vec<_> = local
+        .iter()
+        .map(|key| {
+            let value = if key == "GIT_DIR" {
+                decoy.join(".git")
+            } else {
+                PathBuf::from("must-be-removed")
+            };
+            (key.as_str(), value)
+        })
+        .collect();
+    let removed = test_removed_env(
+        local.iter().map(std::ffi::OsString::from),
+        &BTreeMap::new(),
+        &local,
+    );
+    let removed: Vec<_> = removed.iter().map(String::as_str).collect();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec!["config", "user.email", "fixture@example.invalid"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["commit", "--allow-empty", "-m", "fixture"],
+        vec!["remote", "add", "origin", "../remote.git"],
+    ] {
+        let output =
+            crate::runner::run_streamed(&fixture, "git", &args, &injected, &removed, &mut |_| {})
+                .unwrap();
+        assert!(
+            output.status.success(),
+            "fixture git {args:?} must ignore ambient repository variables: {}",
+            output.output
+        );
+    }
+    assert!(fixture.join(".git").is_dir());
+    assert_eq!(git(&fixture, &["log", "-1", "--format=%s"]), "fixture");
+    assert_ne!(git(&fixture, &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&decoy, &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&decoy, &["config", "user.email"]), email);
+    assert_eq!(git(&decoy, &["remote", "-v"]), remotes);
 }
 
 fn host_env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> + use<> {
