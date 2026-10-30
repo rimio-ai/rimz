@@ -204,27 +204,33 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
 #[cfg(unix)]
 #[test]
 fn empty_dir_solo_keeps_root_lane_and_batch_ignores_with_notice() {
-    assert_empty_dir_launch(false, false, false);
+    assert_empty_dir_launch("codex", false, false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_dir_interactive_claude_grants_undecided_account() {
+    assert_empty_dir_launch("claude", false, false, false);
 }
 
 #[cfg(unix)]
 #[test]
 fn empty_dir_batch_ignores_with_notice() {
-    assert_empty_dir_launch(true, false, false);
+    assert_empty_dir_launch("codex", true, false, false);
 }
 
 #[cfg(unix)]
 #[test]
 fn empty_dir_explicit_cwd_overrides_solo_and_batch_silently() {
     for multi in [false, true] {
-        assert_empty_dir_launch(multi, true, false);
+        assert_empty_dir_launch("codex", multi, true, false);
     }
 }
 
 #[cfg(unix)]
 #[test]
 fn solo_launch_from_empty_dir_caller_uses_callers_checkout() {
-    assert_empty_dir_launch(false, false, true);
+    assert_empty_dir_launch("codex", false, false, true);
 }
 
 #[cfg(unix)]
@@ -266,10 +272,12 @@ fn empty_dir_exec_moves_only_cwd_not_parent_temp_unit() {
 }
 
 #[cfg(unix)]
-fn assert_empty_dir_launch(multi: bool, explicit_cwd: bool, empty_caller: bool) {
+fn assert_empty_dir_launch(kind: &str, multi: bool, explicit_cwd: bool, empty_caller: bool) {
     let env = Env::new();
-    env.install_agent_hooks("codex");
-    crate::common::trust_codex_preflight_hooks(&env);
+    env.install_agent_hooks(kind);
+    if kind == "codex" {
+        crate::common::trust_codex_preflight_hooks(&env);
+    }
     std::fs::write(
         env.rimz_home().join("config.toml"),
         "[agents]\nisolation = 'host'\n",
@@ -279,10 +287,10 @@ fn assert_empty_dir_launch(multi: bool, explicit_cwd: bool, empty_caller: bool) 
         &env,
         "agents",
         "researcher",
-        "description: Research\nagent: codex\ntools: [Read]\nempty-dir: true",
+        &format!("description: Research\nagent: {kind}\ntools: [Read]\nempty-dir: true"),
         "",
     );
-    let shim = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let shim = crate::common::write_failing_agent_shim(&env, kind, 1);
     let workspace = env.resolve_workspace(&env.project_root);
     env.store().record_workspace(&workspace).unwrap();
     let caller_cwd = env.store().paths().empty_agent_dir("caller");
@@ -343,6 +351,33 @@ fn assert_empty_dir_launch(multi: bool, explicit_cwd: bool, empty_caller: bool) 
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
+    if kind == "claude" {
+        assert!(
+            stderr.contains("trusted the empty folder") && stderr.contains("claude (default)"),
+            "{stderr}"
+        );
+        let config = env.home_root.join(".claude.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        assert_eq!(
+            value["projects"][env.rimz_home().join("empty").to_str().unwrap()]["hasTrustDialogAccepted"],
+            true
+        );
+        assert!(stderr.contains(config.to_str().unwrap()), "{stderr}");
+        let grants = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
+            .into_iter()
+            .map(|record| serde_json::to_value(record).unwrap())
+            .filter(|record| record["assist"] == "empty_dir_grant")
+            .collect::<Vec<_>>();
+        assert_eq!(grants.len(), 1, "{grants:?}");
+        assert_eq!(grants[0]["login"], "claude@default");
+        assert_eq!(grants[0]["profile"], "researcher");
+        assert_eq!(
+            grants[0]["key"],
+            env.rimz_home().join("empty").to_str().unwrap()
+        );
+        assert_eq!(grants[0]["path"], config.to_str().unwrap());
+    }
     let store = env.store();
     let agents = store
         .runtime_projection(rimz::RuntimeScope::Audit)

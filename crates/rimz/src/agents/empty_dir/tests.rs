@@ -25,9 +25,10 @@ fn account_verdict_uses_the_empty_root_and_its_git_ancestry() {
     ]);
     let claude = AgentKind::new_unchecked("claude");
     let codex = AgentKind::new_unchecked("codex");
-    assert!(
-        matches!(verdict_at(&root, &claude, &env), Verdict::Fallback(FolderTrust::Undecided(gap)) if gap.grant.is_ok() && gap.key == root)
-    );
+    assert!(matches!(
+        verdict_at(&root, &claude, &env),
+        Verdict::Grant(gap) if gap.grant.is_ok() && gap.key == root
+    ));
     fs::write(&config, serde_json::to_vec(&serde_json::json!({"projects": {root.display().to_string(): {"hasTrustDialogAccepted": true}}})).unwrap()).unwrap();
     assert_eq!(verdict_at(&root, &claude, &env), Verdict::Applies);
     assert_eq!(verdict_at(&root, &codex, &env), Verdict::Applies);
@@ -57,6 +58,12 @@ fn account_verdict_uses_the_empty_root_and_its_git_ancestry() {
     assert!(
         matches!(verdict_at(&root, &claude, &env), Verdict::Fallback(FolderTrust::Undecided(gap)) if gap.grant.is_err() && gap.key == temp.path())
     );
+    fs::remove_file(temp.path().join("codex.toml")).unwrap();
+    assert!(matches!(
+        verdict_at(&root, &codex, &env),
+        Verdict::Fallback(FolderTrust::Undecided(gap))
+            if gap.grant.is_ok() && gap.key == temp.path()
+    ));
     assert_eq!(paths.empty_dir_root(), root);
 }
 
@@ -77,7 +84,10 @@ fn root_under_symlinked_home_keeps_one_trust_key_before_and_after_creation() {
     ]);
     let trust = trust_at(&root, &AgentKind::new_unchecked("claude"), &env);
     assert!(
-        matches!(&trust, Some(FolderTrust::Undecided(gap)) if gap.key == home.join("missing/empty")),
+        matches!(
+            &trust,
+            Some(FolderTrust::Undecided(gap)) if gap.key == home.join("missing/empty")
+        ),
         "missing roots must use the key that later reads resolve: {trust:?}"
     );
     assert!(!root.exists());
@@ -87,6 +97,200 @@ fn root_under_symlinked_home_keeps_one_trust_key_before_and_after_creation() {
         root.canonicalize().unwrap().as_os_str(),
         "an existing root resolves to its canonical path, with no trailing separator"
     );
+}
+
+struct GrantFixture {
+    _temp: tempfile::TempDir,
+    root: PathBuf,
+    config: PathBuf,
+    env: BTreeMap<String, String>,
+}
+
+impl GrantFixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("empty");
+        let config = temp.path().join("provider.json");
+        fs::write(&config, r#"{"other_writer": 0}"#).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".into(), temp.path().display().to_string()),
+            (
+                "RIMZ_CLAUDE_GLOBAL_CONFIG".into(),
+                config.display().to_string(),
+            ),
+            ("RIMZ_CODEX_CONFIG".into(), config.display().to_string()),
+        ]);
+        Self {
+            _temp: temp,
+            root,
+            config,
+            env,
+        }
+    }
+}
+
+#[test]
+fn grant_retries_several_changes_and_preserves_the_other_writer() {
+    let fixture = GrantFixture::new();
+    let mut attempts = 0;
+    let result = settle_trust(
+        &fixture.root,
+        &AgentKind::new_unchecked("claude"),
+        &fixture.env,
+        |gap| {
+            attempts += 1;
+            if attempts < 3 {
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&gap.path).unwrap()).unwrap();
+                value["other_writer"] = attempts.into();
+                fs::write(&gap.path, serde_json::to_vec(&value).unwrap()).unwrap();
+            }
+            super::super::grant_folder_trust(gap)
+        },
+    );
+    assert!(
+        matches!(&result, Ok(Some(gap)) if gap.key == fixture.root),
+        "must grant after changed-file retries: {result:?}"
+    );
+    assert_eq!(attempts, 3);
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.config).unwrap()).unwrap();
+    assert_eq!(value["other_writer"], 2);
+    assert_eq!(
+        value["projects"][fixture.root.to_str().unwrap()]["hasTrustDialogAccepted"],
+        true
+    );
+}
+
+#[test]
+fn concurrent_grant_applies_without_reporting_a_write() {
+    let fixture = GrantFixture::new();
+    let mut attempts = 0;
+    let result = settle_trust(
+        &fixture.root,
+        &AgentKind::new_unchecked("claude"),
+        &fixture.env,
+        |gap| {
+            attempts += 1;
+            fs::write(&gap.path, &gap.grant.as_ref().unwrap().candidate).unwrap();
+            super::super::grant_folder_trust(gap)
+        },
+    );
+    assert!(
+        matches!(&result, Ok(None)),
+        "another writer's grant must apply with no grant reported: {result:?}"
+    );
+    assert_eq!(attempts, 1);
+}
+
+#[test]
+fn continuously_changed_file_exhausts_three_attempts_and_falls_back() {
+    let fixture = GrantFixture::new();
+    let mut attempts = 0;
+    let result = settle_trust(
+        &fixture.root,
+        &AgentKind::new_unchecked("claude"),
+        &fixture.env,
+        |gap| {
+            attempts += 1;
+            fs::write(
+                &gap.path,
+                serde_json::json!({"other_writer": attempts}).to_string(),
+            )
+            .unwrap();
+            super::super::grant_folder_trust(gap)
+        },
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(notice) if notice.contains(fixture.config.to_str().unwrap())
+                && notice.contains("changed") && notice.contains("3 attempts")
+        ),
+        "continued changes must name the file and bound: {result:?}"
+    );
+    assert_eq!(attempts, 3);
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.config).unwrap()).unwrap();
+    assert!(value.get("projects").is_none());
+}
+
+#[test]
+fn failed_grant_write_falls_back_with_the_file_and_error() {
+    let fixture = GrantFixture::new();
+    let original = fs::read(&fixture.config).unwrap();
+    let result = settle_trust(
+        &fixture.root,
+        &AgentKind::new_unchecked("claude"),
+        &fixture.env,
+        |gap| {
+            Err(crate::disk::atomic::AtomicErr::Io {
+                path: gap.path.clone(),
+                source: io::Error::new(io::ErrorKind::PermissionDenied, "blocked write"),
+            }
+            .into())
+        },
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(notice) if notice.contains(fixture.config.to_str().unwrap())
+                && notice.contains("blocked write")
+        ),
+        "write failure must fall back with its cause: {result:?}"
+    );
+    assert_eq!(fs::read(&fixture.config).unwrap(), original);
+}
+
+#[test]
+fn saved_untrusted_falls_back_without_calling_the_writer() {
+    let fixture = GrantFixture::new();
+    fs::write(
+        &fixture.config,
+        format!(
+            "[projects.{}]\ntrust_level = 'untrusted'\n",
+            toml::Value::String(fixture.root.display().to_string())
+        ),
+    )
+    .unwrap();
+    let original = fs::read(&fixture.config).unwrap();
+    let result = settle_trust(
+        &fixture.root,
+        &AgentKind::new_unchecked("codex"),
+        &fixture.env,
+        |_| panic!("must not rewrite saved distrust"),
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(notice) if notice.contains("saved the empty folder as untrusted")
+                && notice.contains("rimz doctor")
+        ),
+        "saved distrust must explain the fallback: {result:?}"
+    );
+    assert_eq!(fs::read(&fixture.config).unwrap(), original);
+}
+
+#[test]
+fn non_grantable_falls_back_without_calling_the_writer() {
+    let fixture = GrantFixture::new();
+    fs::write(&fixture.config, "{ malformed").unwrap();
+    let original = fs::read(&fixture.config).unwrap();
+    let result = settle_trust(
+        &fixture.root,
+        &AgentKind::new_unchecked("claude"),
+        &fixture.env,
+        |_| panic!("must not rewrite malformed trust"),
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(notice) if notice.contains("cannot write its folder trust")
+                && notice.contains("rimz doctor")
+        ),
+        "non-grantable trust must explain the fallback: {result:?}"
+    );
+    assert_eq!(fs::read(&fixture.config).unwrap(), original);
 }
 
 #[test]

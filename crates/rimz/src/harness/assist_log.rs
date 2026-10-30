@@ -26,6 +26,14 @@ pub struct AssistRecord {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
+    EmptyDirGrant {
+        kind: AgentKind,
+        login: crate::ids::LoginKey,
+        key: PathBuf,
+        path: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+    },
     PortForward {
         host: String,
         remote: u16,
@@ -481,6 +489,23 @@ mod tests {
                 delivered: true,
                 error: None,
             },
+        }
+    }
+
+    #[test]
+    fn empty_dir_grants_round_trip_with_and_without_a_profile() {
+        for profile in [Some("researcher"), None] {
+            let mut json = serde_json::json!({
+                "at": "2026-06-02T12:00:00Z", "assist": "empty_dir_grant",
+                "kind": "claude", "login": "claude@work", "key": "/empty",
+                "path": "/claude/.claude.json"
+            });
+            if let Some(profile) = profile {
+                json["profile"] = profile.into();
+            }
+            let record = serde_json::from_value::<AssistRecord>(json.clone());
+            assert!(record.is_ok(), "empty-dir grant must decode: {record:?}");
+            assert_eq!(serde_json::to_value(record.unwrap()).unwrap(), json);
         }
     }
 

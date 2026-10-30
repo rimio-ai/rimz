@@ -2742,6 +2742,35 @@ fn model_rate_column_is_windowed_and_other_is_untimed_on_dashboard() {
 }
 
 #[test]
+fn empty_dir_grant_has_its_own_category_benefit_and_forensics() {
+    let record = serde_json::from_value(serde_json::json!({
+        "at": "2026-06-02T12:00:00Z", "assist": "empty_dir_grant",
+        "kind": "claude", "login": "claude@work", "profile": "researcher",
+        "key": "/home/test/.rimz/empty", "path": "/home/test/.claude-work/.claude.json"
+    }));
+    assert!(record.is_ok(), "empty-dir grants must decode: {record:?}");
+    let stats = assists::AssistStats::from_records("all", vec![record.unwrap()]);
+    assert_eq!(
+        serde_json::to_value(&stats.rollup).unwrap()["empty_dir_grants"],
+        1
+    );
+    let rows = assists::category_rows(&stats.rollup, assists::CategoryMode::Timeline).join("\n");
+    assert!(rows.contains("Empty-dir trust:"), "{rows}");
+    let benefit = assists::benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+    assert!(
+        benefit.contains("claude (work)")
+            && benefit.contains("researcher")
+            && benefit.contains("/home/test/.rimz/empty"),
+        "{benefit}"
+    );
+    let forensic = assists::forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+    assert!(
+        forensic.contains("/home/test/.claude-work/.claude.json"),
+        "{forensic}"
+    );
+}
+
+#[test]
 fn tier_fallback_has_its_own_assist_category_and_forensic_line() {
     let record = serde_json::from_value(serde_json::json!({
         "at": "2026-06-02T12:00:00Z", "assist": "tier_fallback",
@@ -2994,6 +3023,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             resident_launches: 0,
             judge_declines: 0,
             model_aliases: 0,
+            empty_dir_grants: 0,
             tier_fallbacks: 0,
             redeems: 1,
             resets: 1,

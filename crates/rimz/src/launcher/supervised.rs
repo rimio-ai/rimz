@@ -361,32 +361,26 @@ fn prepare(
     login.preflight(&crate::agents::ambient_env())?;
     let mut checkout = None;
     let mut empty_dir_name = None;
-    match crate::agents::empty_dir::decide(
+    if let Some(prepared) = prepare_empty_dir(
         store.paths(),
         &projection.agents,
         request.name.as_deref(),
-        &agent_cell.kind,
+        agent_cell,
         &login,
-        agent_cell.empty_dir == Some(true)
-            && layout
-                .columns
-                .iter()
-                .map(|column| column.rows.len())
-                .sum::<usize>()
-                == 1
+        layout
+            .columns
+            .iter()
+            .map(|column| column.rows.len())
+            .sum::<usize>()
+            == 1
             && !worktree_launch
             && request.cwd.is_none(),
+        interaction,
     )? {
-        crate::agents::empty_dir::Decision::Applied(prepared) => {
-            checkout = Some(launch.cwd.display().to_string());
-            launch.cwd = prepared.cwd;
-            launch.repo_root = None;
-            empty_dir_name = Some(prepared.name);
-        }
-        crate::agents::empty_dir::Decision::Fallback(notice) => {
-            interaction.notice(Notice::Warning(&notice.to_string()))?
-        }
-        crate::agents::empty_dir::Decision::Skip => {}
+        checkout = Some(launch.cwd.display().to_string());
+        launch.cwd = prepared.cwd;
+        launch.repo_root = None;
+        empty_dir_name = Some(prepared.name);
     }
     preflight_launch.checkout.clone_from(&checkout);
     let launch_invocation = crate::harness::launch::ExecRequest {

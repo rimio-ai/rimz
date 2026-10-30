@@ -29,6 +29,7 @@ pub(super) struct AssistRollup {
     #[serde(skip_serializing_if = "is_zero")]
     pub(super) workflow_ends: usize,
     pub(super) port_forwards: usize,
+    pub(super) empty_dir_grants: usize,
     pub(super) molts: usize,
     pub(super) stall_notices: usize,
     pub(super) resident_launches: usize,
@@ -62,6 +63,15 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
+    EmptyDirGrant {
+        at: Timestamp,
+        kind: AgentKind,
+        login: rimz::ids::LoginKey,
+        key: std::path::PathBuf,
+        path: std::path::PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+    },
     PortForward {
         at: Timestamp,
         host: String,
@@ -393,6 +403,7 @@ impl AssistStats {
                 continue;
             }
             match event {
+                AssistEvent::EmptyDirGrant { .. } => rollup.empty_dir_grants += 1,
                 AssistEvent::PortForward { .. } => rollup.port_forwards += 1,
                 AssistEvent::WorkflowStart { .. } => rollup.workflow_starts += 1,
                 AssistEvent::WorkflowStep { .. } => rollup.workflow_steps += 1,
@@ -515,6 +526,7 @@ impl AssistEvent {
             | Self::JudgeDecline { .. }
             | Self::ResidentLaunch { .. }
             | Self::ModelAlias { .. }
+            | Self::EmptyDirGrant { .. }
             | Self::TierFallback { .. }
             | Self::Compact { .. }
             | Self::Resume { .. } => true,
@@ -525,6 +537,7 @@ impl AssistEvent {
     fn count_key(&self) -> &'static str {
         match self {
             Self::PortForward { .. } => "port_forwards",
+            Self::EmptyDirGrant { .. } => "empty_dir_grants",
             Self::WorkflowStart { .. } => "workflow_starts",
             Self::WorkflowStep { .. } => "workflow_steps",
             Self::WorkflowRoute { .. } => "workflow_routes",
@@ -558,6 +571,20 @@ impl AssistEvent {
 
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
+            Assist::EmptyDirGrant {
+                kind,
+                login,
+                key,
+                path,
+                profile,
+            } => Self::EmptyDirGrant {
+                at: record.at,
+                kind,
+                login,
+                key,
+                path,
+                profile,
+            },
             Assist::PortForward {
                 host,
                 remote,
@@ -1016,6 +1043,7 @@ impl AssistEvent {
     fn at(&self) -> Timestamp {
         match self {
             Self::PortForward { at, .. }
+            | Self::EmptyDirGrant { at, .. }
             | Self::Molt { at, .. }
             | Self::WorkflowStart { at, .. }
             | Self::WorkflowStep { at, .. }
@@ -1153,6 +1181,12 @@ pub(super) fn category_entries(
         rows.push((label, value));
     };
     row("Stall notice:", "stall_notices", rollup.stall_notices, None);
+    row(
+        "Empty-dir trust:",
+        "empty_dir_grants",
+        rollup.empty_dir_grants,
+        None,
+    );
     let launches = rollup.resident_launches;
     row(
         "Workflow:",
@@ -1344,6 +1378,20 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             to,
             ..
         } => format!("{time} {kind} alias {alias} now resolves to {to} (was {from})"),
+        AssistEvent::EmptyDirGrant {
+            kind,
+            login,
+            key,
+            profile,
+            ..
+        } => format!(
+            "{time} {kind} ({}) trusted the empty folder {}{}",
+            login.name,
+            key.display(),
+            profile
+                .as_ref()
+                .map_or_else(String::new, |profile| format!(" for {profile}"))
+        ),
         AssistEvent::TierFallback { profile, stamp, .. } => {
             let first = stamp
                 .passes()
@@ -1733,6 +1781,9 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             )),
         ),
         AssistEvent::ModelAlias { login, .. } => format!("{at} {benefit} · login {login}"),
+        AssistEvent::EmptyDirGrant { path, .. } => {
+            format!("{at} {benefit} · provider file {}", path.display())
+        }
         AssistEvent::TierFallback { agent_id, .. } => format!("{at} {benefit} · agent {agent_id}"),
         AssistEvent::Redeem {
             request_id,

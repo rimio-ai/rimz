@@ -355,6 +355,7 @@ pub(super) fn fixture() -> (Stats, TabAssists) {
         resident_launches: 957,
         judge_declines: 344,
         model_aliases: 4,
+        empty_dir_grants: 0,
         tier_fallbacks: 200,
         resumes: 680,
         recovered_secs: 161_280,

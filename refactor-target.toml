@@ -9662,12 +9662,12 @@ reason = "Provider adapters publish typed, secret-free failure causes through th
 [[verdict]]
 kind = "item"
 key = "agents::empty_dir"
-reason = "One library boundary owns empty-dir trust, cleanliness and cwd preparation for CLI launch and diagnostics."
+reason = "One library boundary owns empty-dir trust, bounded automatic root grants, cleanliness and cwd preparation for launch and diagnostics."
 
 [[verdict]]
 kind = "item"
 key = "agents::empty_dir::Verdict"
-reason = "Launch and diagnostics share the per-account applicability and provider-owned fallback reason."
+reason = "Launch and diagnostics distinguish an automatic empty-root grant from manual provider-owned fallback reasons."
 
 [[verdict]]
 kind = "item"
@@ -9702,12 +9702,12 @@ reason = "Machine diagnostics can check the shared parent without resolving a wo
 [[verdict]]
 kind = "item"
 key = "agents::empty_dir::Decision"
-reason = "Interactive and supervised launches share applied, fallback-notice and skipped outcomes."
+reason = "Interactive and supervised launches share applied, grant-written, fallback-notice and skipped outcomes, with grant evidence for notices and assists."
 
 [[verdict]]
 kind = "item"
 key = "agents::empty_dir::decide"
-reason = "One library workflow checks cleanliness, evaluates account trust and prepares fresh launch directories."
+reason = "One workflow checks cleanliness before writes, grants only undecided empty-root keys with bounded changed-file retries, and prepares fresh directories; re-entry never grants."
 
 [[verdict]]
 kind = "item"

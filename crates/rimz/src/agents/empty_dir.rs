@@ -12,6 +12,7 @@ use crate::ids::AgentKind;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
     Applies,
+    Grant(super::FolderTrustGap),
     Fallback(FolderTrust),
 }
 
@@ -44,6 +45,11 @@ pub struct Prepared {
 #[derive(Debug)]
 pub enum Decision {
     Applied(Prepared),
+    Granted {
+        key: PathBuf,
+        path: PathBuf,
+        prepared: Result<Prepared, EmptyDirErr>,
+    },
     Fallback(String),
     Skip,
 }
@@ -61,14 +67,28 @@ pub fn decide(
         return Ok(Decision::Skip);
     }
     check(paths)?;
-    match verdict(kind, &login.env(&super::ambient_env())) {
-        Verdict::Applies => {
-            prepare(paths, &agents.iter().collect::<Vec<_>>(), requested).map(Decision::Applied)
+    let grant = match settle_trust(
+        &paths.empty_dir_root(),
+        kind,
+        &login.env(&super::ambient_env()),
+        super::grant_folder_trust,
+    ) {
+        Ok(grant) => grant,
+        Err(cause) => {
+            return Ok(Decision::Fallback(format!(
+                "empty-dir ignored: {kind} ({}) {cause}",
+                login.name()
+            )));
         }
-        Verdict::Fallback(_) => Ok(Decision::Fallback(format!(
-            "empty-dir ignored: not trusted for {kind} account {} (see rimz doctor)",
-            login.name()
-        ))),
+    };
+    let prepared = prepare(paths, &agents.iter().collect::<Vec<_>>(), requested);
+    match grant {
+        Some(gap) => Ok(Decision::Granted {
+            key: gap.key,
+            path: gap.path,
+            prepared,
+        }),
+        None => prepared.map(Decision::Applied),
     }
 }
 
@@ -79,7 +99,55 @@ pub fn verdict(kind: &AgentKind, login_env: &BTreeMap<String, String>) -> Verdic
 fn verdict_at(root: &Path, kind: &AgentKind, login_env: &BTreeMap<String, String>) -> Verdict {
     match trust_at(root, kind, login_env) {
         None | Some(FolderTrust::Decided) => Verdict::Applies,
+        Some(FolderTrust::Undecided(gap))
+            if gap.grant.is_ok() && gap.key == resolved_root(root) =>
+        {
+            Verdict::Grant(gap)
+        }
         Some(trust) => Verdict::Fallback(trust),
+    }
+}
+
+fn settle_trust(
+    root: &Path,
+    kind: &AgentKind,
+    env: &BTreeMap<String, String>,
+    mut write: impl FnMut(&super::FolderTrustGap) -> Result<(), super::FolderTrustErr>,
+) -> Result<Option<super::FolderTrustGap>, String> {
+    const GRANT_ATTEMPTS: usize = 3;
+    let mut attempts = 0;
+    loop {
+        let gap = match verdict_at(root, kind, env) {
+            Verdict::Applies | Verdict::Fallback(FolderTrust::Decided) => return Ok(None),
+            Verdict::Fallback(FolderTrust::Restricted { .. }) => {
+                return Err("saved the empty folder as untrusted (see rimz doctor)".into());
+            }
+            Verdict::Fallback(FolderTrust::Undecided(gap)) => {
+                let cause = match gap.grant {
+                    Ok(_) => format!(
+                        "needs a grant that would also trust `{}`",
+                        gap.key.display()
+                    ),
+                    Err(reason) => format!("cannot write its folder trust: {reason}"),
+                };
+                return Err(format!("{cause} (see rimz doctor)"));
+            }
+            Verdict::Grant(gap) => gap,
+        };
+        if attempts == GRANT_ATTEMPTS {
+            return Err(format!(
+                "could not grant folder trust: `{}` changed during all {GRANT_ATTEMPTS} attempts",
+                gap.path.display()
+            ));
+        }
+        attempts += 1;
+        match write(&gap) {
+            Ok(()) => return Ok(Some(gap)),
+            Err(super::FolderTrustErr::Changed { .. }) => {}
+            Err(error) => {
+                return Err(format!("could not grant folder trust: {error}"));
+            }
+        }
     }
 }
 
