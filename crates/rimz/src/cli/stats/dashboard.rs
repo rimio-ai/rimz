@@ -203,7 +203,7 @@ impl Dashboard<'_> {
             &mut lines,
             pair(
                 self.provider_lines(&providers, active, half),
-                self.where_lines(totals, active, half),
+                self.where_lines([totals[0], totals[2]], active, half),
                 width,
             ),
         );
@@ -213,8 +213,8 @@ impl Dashboard<'_> {
             section(
                 &mut lines,
                 pair(
-                    self.profile_lines("Agents", &agents, half),
-                    self.profile_lines("Subagents", &subagents, half),
+                    self.profile_lines(RoleView::Agents, &agents, half),
+                    self.profile_lines(RoleView::Subagents, &subagents, half),
                     width,
                 ),
             );
@@ -306,13 +306,21 @@ impl Dashboard<'_> {
         lines
     }
 
-    fn profile_lines(&self, label: &str, rows: &[Row], width: usize) -> Vec<String> {
+    fn profile_lines(&self, role: RoleView, rows: &[Row], width: usize) -> Vec<String> {
         if rows.is_empty() {
             return Vec::new();
         }
         let total = rows.iter().map(|row| row.value.spend.usd).sum();
         let columns = SpendColumns::new(rows, width.saturating_sub(30).min(24));
-        let mut lines = vec![total_header(label, total, columns.dollars)];
+        let mut lines = vec![total_header(role.label(), total, columns.dollars)];
+        if role == RoleView::Subagents {
+            let note = render::paint(render::palette::muted(), "(already counted)");
+            if display_width(&lines[0]) + 2 + display_width(&note) <= width {
+                lines[0].push_str(&format!("  {note}"));
+            } else {
+                lines.push(note);
+            }
+        }
         lines.extend(rows.iter().map(|row| {
             self.spend_row(
                 row.name(),
@@ -430,20 +438,13 @@ impl Dashboard<'_> {
         lines
     }
 
-    fn where_lines(&self, totals: [f64; 3], active: Window, width: usize) -> Vec<String> {
+    fn where_lines(&self, [agents, teams]: [f64; 2], active: Window, width: usize) -> Vec<String> {
         let fleet = active.select(&self.stats.total).usd;
-        let [agents, subagents, teams] = totals;
-        let values = [
-            teams,
-            subagents,
-            agents,
-            (fleet - teams - subagents - agents).max(0.0),
-        ];
-        let labels = ["Teams", "Subagents", "Agents", "No role"];
-        let glyphs = ["█", "▓", "▒", "░"];
+        let values = [teams, agents, self.stats.no_owner(active)];
+        let labels = ["Teams", "Agents", "No owner"];
+        let glyphs = ["█", "▒", "░"];
         let styles = [
             render::palette::accent(),
-            render::palette::cool(),
             render::palette::muted(),
             render::palette::faint(),
         ];
@@ -459,28 +460,33 @@ impl Dashboard<'_> {
             ));
         }
         let mut lines = vec![render::paint(render::palette::header(), &title)];
-        let parts: Vec<_> = (0..4).map(|i| (values[i], glyphs[i], styles[i])).collect();
+        let parts: Vec<_> = (0..values.len())
+            .map(|i| (values[i], glyphs[i], styles[i]))
+            .collect();
         lines.push(stacked_bar(&parts, width.min(54)));
-        let total = values.iter().sum();
         let dollars = values
             .iter()
             .map(|&usd| display_width(&fmt_usd(usd)))
             .max()
             .unwrap_or(0)
             .max(7);
-        let entries = (0..4)
+        let entries = (0..values.len())
             .map(|i| {
                 format!(
                     "{} {}{}{}",
                     render::paint(styles[i], glyphs[i]),
                     pad_to(labels[i], 9),
                     pad_left(&fmt_usd(values[i]), dollars),
-                    pad_left(&percent(ratio(values[i], total)), 5)
+                    pad_left(&percent(ratio(values[i], fleet)), 5)
                 )
             })
             .collect::<Vec<_>>();
         for pair in entries.chunks(2) {
-            lines.push(format!("{}  {}", pad_to(&pair[0], 25), pair[1]));
+            lines.push(if let Some(right) = pair.get(1) {
+                format!("{}  {}", pad_to(&pair[0], 25), right)
+            } else {
+                pair[0].clone()
+            });
         }
         lines
     }

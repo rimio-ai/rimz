@@ -33,9 +33,9 @@ expression: text
    █ Other          $1,573  ━━━━━━━━━━━━━━──────────────────────────────────  30%          96%    4.6B
 
    Providers                                                 Where it went
-   ██████████████████████████████████████████████████████    ███████▓▓▓▓▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-   █ Claude      $2,821   54%   96% hit     219 sessions     █ Teams       $683  13%    ▓ Subagents   $359   7%
-   █ Codex       $2,418   46%   97% hit   1,498 sessions     ▒ Agents      $193   4%    ░ No role   $4,005  76%
+   ██████████████████████████████████████████████████████    ███████▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+   █ Claude      $2,821   54%   96% hit     219 sessions     █ Teams       $683  13%    ▒ Agents      $193   4%
+   █ Codex       $2,418   46%   97% hit   1,498 sessions     ░ No owner  $4,364  83%
    █ Pi           $0.01   <1%                 0 sessions
 
    Assists  7 kinds · rimz stats --assists for the timeline

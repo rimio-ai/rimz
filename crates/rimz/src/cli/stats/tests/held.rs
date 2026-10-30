@@ -895,7 +895,7 @@ fn dashboard_wide_dollars_keep_complete_shares() {
     let output = strip_ansi(&frame(&stats, &assists, Window::Year, 119, None).text);
     let row = output
         .lines()
-        .find(|line| line.contains("No role"))
+        .find(|line| line.contains("No owner"))
         .unwrap();
     assert!(row.contains("$123,456 100%"), "{row}");
 }

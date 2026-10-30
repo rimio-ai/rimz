@@ -142,13 +142,6 @@ impl RoleView {
         }
     }
 
-    fn count_header(self) -> &'static str {
-        match self {
-            Self::Agents | Self::Teams => "SESSIONS",
-            Self::Subagents => "RUNS",
-        }
-    }
-
     fn rows(self, stats: &Stats, active: Window) -> BTreeMap<String, RoleWindow> {
         let tallies = match self {
             Self::Agents => &stats.agents,
@@ -330,6 +323,7 @@ struct Stats {
     agents: BTreeMap<String, RoleTally>,
     teams: BTreeMap<String, BTreeMap<String, RoleTally>>,
     subagents: BTreeMap<String, RoleTally>,
+    ownerless_subagents: SpendTally,
     recorded_since_secs: Option<u64>,
     effort_since_secs: Option<u64>,
     by_day: BTreeMap<i64, DaySpend>,
@@ -360,6 +354,7 @@ impl Stats {
             agents: roles.agents,
             teams: roles.teams,
             subagents: roles.subagents,
+            ownerless_subagents: roles.ownerless_subagents,
             recorded_since_secs: roles.recorded_since_secs,
             effort_since_secs: roles.effort_since_secs,
             by_day: days,
@@ -378,6 +373,16 @@ impl Stats {
         Timestamp::from_millisecond(self.refreshed_at_ms as i64)
             .unwrap_or(Timestamp::UNIX_EPOCH)
             .to_zoned(jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC))
+    }
+
+    fn no_owner(&self, active: Window) -> f64 {
+        let owned: f64 = self
+            .agents
+            .values()
+            .chain(self.teams.values().flat_map(|roles| roles.values()))
+            .map(|row| active.select(&row.tally).usd)
+            .sum();
+        (active.select(&self.total).usd - owned).max(0.0)
     }
 
     fn recorded_since(&self) -> Option<jiff::Zoned> {

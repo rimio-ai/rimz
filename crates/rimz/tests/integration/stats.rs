@@ -190,7 +190,10 @@ fn stats_teams_envelope_is_uncapped_and_empty_view_names_the_window() {
     let text = String::from_utf8_lossy(&output.get_output().stdout);
     assert!(text.contains("No team spend recorded (week)."), "{text}");
     assert!(
-        text.contains("earlier spend counts as No role · agent-time and messages since"),
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("earlier spend counts as No owner recorded · agent-time and messages since"),
         "{text}"
     );
 }
