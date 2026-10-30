@@ -274,7 +274,12 @@ impl Transition<'_> {
         });
     }
 
-    pub(super) fn merge_wait(&mut self, object: &Value, recheck: bool) -> Result<(), TimeInputErr> {
+    pub(super) fn merge_wait(
+        &mut self,
+        object: &Value,
+        at: Timestamp,
+        recheck: bool,
+    ) -> Result<(), TimeInputErr> {
         let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
         let case = (outcome == "hold").then(|| case_index(object)).flatten();
         let detail = if let Some(case) = case {
@@ -319,12 +324,12 @@ impl Transition<'_> {
             detail: None,
             kinds: Vec::new(),
             gives_up_at: None,
-            first: self.now,
-            last: self.now,
+            first: at,
+            last: at,
             count: 0,
             recheck_at,
         });
-        wait.last = self.now;
+        wait.last = at;
         wait.count += 1;
         wait.detail = detail;
         wait.recheck_at = recheck_at;
@@ -345,6 +350,7 @@ impl Transition<'_> {
             held.verdict = Some(Verdict {
                 node: self.record.node.clone(),
                 entered_at: self.record.entered_at,
+                at: Some(self.now),
                 target: target.into(),
                 object,
                 reason,
@@ -353,7 +359,7 @@ impl Transition<'_> {
             return Ok(());
         }
         if target == "@wait" {
-            self.merge_wait(&object, true)?;
+            self.merge_wait(&object, self.now, true)?;
         } else {
             self.close_wait();
             match target {

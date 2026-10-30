@@ -45,6 +45,7 @@ fn held(record: &RunRecord, verdict: bool) -> RunRecord {
         verdict: verdict.then(|| Verdict {
             node: "pr".into(),
             entered_at: Timestamp::now(),
+            at: None,
             target: "@done".into(),
             object: json!({"outcome":"done"}),
             reason: records::ParkReason::User,
@@ -129,6 +130,15 @@ fn keeps(target: &str) -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
             again.wait.as_ref().unwrap().first,
             kept.wait.as_ref().unwrap().first
         );
+        let answers: Vec<_> = records::journal(&paths)
+            .unwrap()
+            .into_iter()
+            .filter_map(|row| {
+                matches!(row.event, JournalEvent::Evaluation { .. }).then_some(row.at)
+            })
+            .collect();
+        let wait = again.wait.as_ref().unwrap();
+        assert_eq!(vec![wait.first, wait.last], answers);
         kept = again;
     }
     (dir, state, kept, host)

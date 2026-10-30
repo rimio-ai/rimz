@@ -245,6 +245,8 @@ pub struct TurnEnd {
 pub struct Verdict {
     pub node: String,
     pub entered_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Timestamp>,
     pub target: String,
     pub object: Value,
     pub reason: ParkReason,
