@@ -437,7 +437,7 @@ While the room or account scope has no headroom, automation stays shut: `-p` lau
 
 ### Project config isn't taking effect
 
-A cloned repository can ship a `.rimz/config.toml` that names agents, profiles, teams, loop tasks, hooks, environment variables, and provider accounts, any of which can run a command or redirect your credentials. So RimZ keeps that file inert until you trust the workspace: on an untrusted clone it reads only structural metadata, and every command-running field stays disabled.
+A cloned repository can ship a `.rimz/config.toml` that names agents, profiles, teams, loop tasks, hooks, environment variables, and provider accounts, any of which can run a command or redirect your credentials. So RimZ keeps those settings inert until you trust the workspace: on an untrusted clone it still reads non-executing metadata such as [pack expectations](./configuration.md#expected-packs), and every command-running field stays disabled.
 
 ```sh
 rimz trust status    # show the trust state and, when stale, a field-level diff

@@ -81,6 +81,13 @@ pub(super) fn judge(
     for warning in &machine.notices.definition_warnings {
         warn(warning.path.display().to_string(), warning.to_string());
     }
+    if let Ok(Some(packs)) = crate::trust::project_packs(&workspace.project_root)
+        && let Ok(installed) = crate::packs::Record::read(&crate::disk::paths::agents_home())
+    {
+        for message in crate::packs::expectation_warnings(&packs, &installed) {
+            warn("packs.expect".into(), message);
+        }
+    }
     for message in &machine.notices.host_isolation_fallback {
         warn(
             "agents.isolation".into(),

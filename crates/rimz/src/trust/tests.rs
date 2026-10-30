@@ -215,7 +215,7 @@ fn unknown_non_command_field_does_not_change_hash() {
         "display_name = \"Query Engine\"\n\n[profiles.x]\nagent = \"claude\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
     );
     let extra = project_with(
-        "display_name = \"Query Engine dev\"\nsidebar = true\n\n[profiles.x]\nagent = \"claude\"\nsubagents = [\"explorer\"]\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+        "display_name = \"Query Engine dev\"\nsidebar = true\n\n[profiles.x]\nagent = \"claude\"\nsubagents = [\"explorer\"]\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n\n[packs]\nexpect = ['crew/crew']\n",
     );
     let a = read_project_config(&base.path().join(CONFIG_REL))
         .expect("read base")
@@ -224,6 +224,50 @@ fn unknown_non_command_field_does_not_change_hash() {
         .expect("read extra")
         .expect("config present");
     assert_eq!(executable_surface_hash(&a), executable_surface_hash(&b));
+}
+
+#[test]
+fn packs_content_reads_before_trust_without_affecting_grants() {
+    for text in [
+        "[packs]\nexpect = ['crew/crew']\n",
+        "[packs]\nexpect = 5\n",
+        "[packs]\nexpect = ['crew/crew', false]\n",
+        "packs = 'not a table'\n",
+        "[[packs]]\nexpect = true\n",
+    ] {
+        let project = project_with(text);
+        let home = tempdir().unwrap();
+        let parsed: toml::Value = toml::from_str(text).unwrap();
+        assert_eq!(
+            project_packs(project.path()).unwrap(),
+            Some(parsed["packs"].clone()),
+            "{text}"
+        );
+        let untrusted = status_with_roots(project.path(), home.path()).unwrap();
+        assert_eq!(untrusted.state, TrustState::Untrusted);
+        let grant = grant_with_roots(project.path(), home.path()).unwrap();
+        assert_eq!(grant.state, TrustState::Trusted);
+        let granted_hash = grant.current_hash;
+        std::fs::write(project.path().join(CONFIG_REL), "[packs]\nexpect = []\n").unwrap();
+        let unchanged = status_with_roots(project.path(), home.path()).unwrap();
+        assert_eq!(unchanged.state, TrustState::Trusted);
+        assert_eq!(unchanged.current_hash, granted_hash);
+        std::fs::write(
+            project.path().join(CONFIG_REL),
+            format!("{text}\n[env]\nCHANGED = 'true'\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            status_with_roots(project.path(), home.path())
+                .unwrap()
+                .state,
+            TrustState::Stale
+        );
+        assert_eq!(
+            project_packs(project.path()).unwrap(),
+            Some(parsed["packs"].clone())
+        );
+    }
 }
 
 #[test]

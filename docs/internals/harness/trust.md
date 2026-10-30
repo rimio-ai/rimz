@@ -2,7 +2,7 @@
 
 > How RimZ decides whether a repository's `.rimz/config.toml` may run commands on this machine: the executable-surface hash, launch-time enforcement, the grant entry points, the stale-grant diff, and the records on disk. The code is `crates/rimz/src/trust.rs`, and [fleet.md](./fleet.md) is the map for this area. For users, [security.md](../../guide/security.md) owns the threat model, [configuration.md § Project config](../../guide/configuration.md#project-config) the config surface a repo ships, and the [`rimz trust` reference](../../reference/cli/hooks-trust.md#project-trust) the command.
 
-Project config is inert until a human trusts it on this machine. A clone can ship agents, profiles, teams, loop tasks, hooks, language servers, account selections, and env in `<project_root>/.rimz/config.toml`, and each of those can run a command or change what one runs as. A grant pins a SHA-256 over every command-running field and stores the granted surface beside it. Every later read re-hashes the live config. When the hash differs, the workspace is `stale` and the grant stops applying until someone grants again.
+Command-running project settings are inert until a human trusts them on this machine. A clone can ship agents, profiles, teams, loop tasks, hooks, language servers, account selections, and env in `<project_root>/.rimz/config.toml`, and each of those can run a command or change what one runs as. A grant pins a SHA-256 over every command-running field and stores the granted surface beside it. Every later trust read re-hashes the live config. When the hash differs, the workspace is `stale` and the grant stops applying until someone grants again.
 
 The pin covers the surface itself because agents in the room can write `.rimz/config.toml`. An agent's edit or a pulled change to any command-running field breaks the hash, so neither can grant itself command execution at the next launch.
 
@@ -60,8 +60,11 @@ Every other key deserializes leniently and never touches the hash. `trust::Proje
 | team role | `owns`, `budget`, `keep-warm`, `flip-compact`, `idle-compact` |
 | profile | `budget`, `keep-warm`, `idle-compact`, `empty-dir` |
 | task | `team`, `max-strikes`, `account`, `budget`, `budget-per-day`, `surplus`, `surplus-after`, `throttle`, `capacity-wait`, `overlap`, `overlap-limit` |
+| packs | `expect` |
 
 The overlap keys decide how many already-approved triggers run the approved command. They do not change the command, so editing them does not re-key a grant.
+
+`crates/rimz/src/trust.rs::project_packs` reads `[packs]` through the same project reader in every trust state, preserving the exclusion of a `.rimz` that is the machine home. The table is retained as a lenient TOML value, so malformed expectations never fail the trust read. `crates/rimz/src/packs/mod.rs::expectation_warnings` checks the source grammar and installed names; `crates/rimz/src/room/judgment.rs::judge` records its messages under `packs.expect` after definition warnings. An unreadable project config or installed-packs record adds no expectation warnings. Expectations execute nothing, and installing remains a separate reviewed command. The user-facing contract is [expected packs](../../guide/configuration.md#expected-packs).
 
 Machine policy stays outside the hash because a repository cannot set it. Per-machine `[[notifications.handler]]` and `[notifications].command`, per-machine profiles, subagent profiles, and teams, per-machine loop `check` commands, `agents.isolation`, and `agents.shell` all live under `~/.rimz/` and are never trust-tracked. A repository profile in either scope that sets `isolation` is refused with `RepoProfileSetsIsolation`, even after a grant. The fix is a machine Markdown definition or `--isolation`. A repository therefore cannot choose host or scoped isolation. The [scoped mount view](../sandbox.md) is no substitute for trust: profile skill views do not make untrusted commands safe.
 
