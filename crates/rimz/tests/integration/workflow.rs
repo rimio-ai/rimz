@@ -1211,16 +1211,23 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
 
 #[test]
 fn human_show_wait_and_journal_are_readable() {
-    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
+    let pending = format!(
+        "printf '%s\\n' '{}'\n",
+        json!({
+            "outcome":"pending", "reason":"CI pending", "readings":{"ci":"pending","pr":null},
+            "recheck_at":"2099-01-01T00:00:00Z",
+        })
+    );
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &pending);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let text = success(command(&env, &["workflow", "show", &id]));
-    assert_eq!(text.lines().next().unwrap(), value["dir"].as_str().unwrap());
-    assert!(text.contains("waiting: pr, said pending"));
-    assert!(!text.contains("×1"), "{text}");
-    assert!(text.contains("evaluation"));
-    assert!(text.contains("CI pending"));
-    assert!(text.contains("Review this"));
+    assert!(
+        text.starts_with("review#project  ☾ waiting at pr"),
+        "{text}"
+    );
+    assert!(text.contains("×1"));
+    assert!(text.contains("trail  "), "{text}");
     let zone = jiff::tz::TimeZone::system();
     let today = jiff::Timestamp::now().to_zoned(zone.clone()).date();
     let local_time = |at: &Value| {
@@ -1240,25 +1247,29 @@ fn human_show_wait_and_journal_are_readable() {
     let wait = &value["record"]["wait"];
     assert!(
         text.contains(&format!(
-            "waiting: pr, said pending, recheck {}",
+            "said pending, ×1, recheck {}",
             local_time(&wait["recheck_at"])
         )),
         "{text}"
     );
+    let work = Path::new(value["dir"].as_str().unwrap())
+        .strip_prefix(&env.home_root)
+        .unwrap();
     let mut normalized = text
-        .replace(value["dir"].as_str().unwrap(), "<work>")
+        .replace(&format!("~/{}", work.display()), "<work>")
         .replace(env.project_root.to_str().unwrap(), "<checkout>");
     for at in [
+        &value["record"]["created_at"],
         &value["record"]["entered_at"],
         &value["record"]["wait"]["first"],
         &value["record"]["recheck_at"],
         &value["journal"][0]["at"],
-        &value["journal"][0]["object"]["recheck_at"],
     ] {
-        normalized = normalized.replace(at.as_str().unwrap(), "<time>");
+        normalized = normalized.replace(&local_time(at), "<clock>");
     }
-    normalized = normalized.replace(&local_time(&wait["recheck_at"]), "<clock>");
-    insta::assert_snapshot!("show_wait", normalized);
+    insta::with_settings!({filters => vec![(r"\b\d+[smhd]\b", "<age>")]}, {
+        insta::assert_snapshot!("show_wait", normalized);
+    });
     for _ in 0..2 {
         success(command(&env, &["workflow", "advance", &id]));
     }
@@ -1273,24 +1284,33 @@ fn human_show_wait_and_journal_are_readable() {
             .count(),
         1
     );
-    let waiting = success(command(&env, &["workflow", "show", &id]));
+    let waiting = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(
         waiting
             .lines()
-            .any(|line| line.starts_with("waiting:") && line.contains("×3")),
+            .any(|line| line.contains("said pending, ×3")),
         "{waiting}"
     );
     fs::write(dir.join("checks/pr.sh"), "printf 'not-json'").unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     settled(&env, &id, "parked");
     let parked = success(command(&env, &["workflow", "show", &id]));
-    assert!(parked.contains("pr wake review.ready"));
-    assert!(parked.contains("pr park invalid"));
+    assert!(parked.contains("parked invalid"), "{parked}");
+    let history = success(command(&env, &["workflow", "show", &id, "--history"]));
+    assert!(history.contains("pr wake review.ready"), "{history}");
+    assert!(
+        history.contains("CI pending") && history.contains("evaluation"),
+        "{history}"
+    );
+    assert_eq!(value["record"]["prompt"], "Review this");
     fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
     success(command(&env, &["workflow", "resume", &id]));
     settled(&env, &id, "done");
     let terminal = success(command(&env, &["workflow", "show", &id]));
-    assert!(terminal.contains("pr terminal done"));
+    assert!(
+        terminal.lines().next().unwrap().contains("done"),
+        "{terminal}"
+    );
 }
 
 #[test]
@@ -1310,7 +1330,7 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
     let evaluations = events(&waiting, "evaluation");
     assert_eq!(evaluations.len(), 3, "{evaluations:#?}");
     assert_eq!(waiting["record"]["wait"]["count"], 3);
-    let text = success(command(&env, &["workflow", "show", &id]));
+    let text = success(command(&env, &["workflow", "show", &id, "--history"]));
 
     fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
     success(command(&env, &["workflow", "advance", &id]));
@@ -1335,15 +1355,15 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
         .collect::<Vec<_>>();
     assert_eq!(rows.len(), 1, "{text}");
     assert!(
-        rows[0].contains("#1–3 pr evaluation pending ×3 over "),
+        rows[0].contains("#1–3 pr evaluation pending → @wait ×3 over "),
         "{text}"
     );
     let waiting_line = text
         .lines()
-        .find(|line| line.starts_with("waiting:"))
+        .find(|line| line.contains("waiting at pr"))
         .unwrap();
     assert!(!waiting_line.contains('×'), "{waiting_line}");
-    let finished = success(command(&env, &["workflow", "show", &id]));
+    let finished = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(!finished.contains("pr wait"), "{finished}");
     assert!(finished.contains("#4 pr evaluation done"), "{finished}");
 }
@@ -1371,17 +1391,17 @@ fn human_show_lists_json_keys_only_for_steps_with_per_key_caps() {
     let text = success(command(&env, &["workflow", "show", &id]));
     assert!(
         text.contains(concat!(
-            "step build: 4 visits of 5 + 3 grant\n",
-            "  key \"lint\": 2 visits of 2 + 3 grant\n",
-            "  key 8: 1 visits of 2 + 3 grant\n",
-            "  key null: 1 visits of 2 + 3 grant\n",
-            "step plain: 1 visits of 5 + 3 grant\n"
+            "visits  build 4 of 8\n",
+            "  build 2 of 5 for key \"lint\"\n",
+            "  build 1 of 5 for key 8\n",
+            "  build 1 of 5 for key null\n",
+            "visits  plain 1 of 8\n"
         )),
         "{text}"
     );
     assert_eq!(
         text.lines()
-            .filter(|line| line.starts_with("  key "))
+            .filter(|line| line.contains(" for key "))
             .count(),
         3
     );
@@ -1403,8 +1423,7 @@ fn human_window_wait_includes_evidence_and_omits_missing_recheck() {
         .workflow(&id.parse().unwrap());
     fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
     let text = success(command(&env, &["workflow", "show", &id]));
-    let line = "waiting: pr, window 5h.left=12<42, ×40";
-    assert!(text.lines().any(|shown| shown == line), "{text}");
+    assert!(text.contains("window 5h.left=12<42, ×40"), "{text}");
     let listed = success(command(&env, &["workflow", "list"]));
     assert!(listed.contains("window 5h.left=12<42, ×40"), "{listed}");
     success(command(&env, &["workflow", "cancel", &id]));

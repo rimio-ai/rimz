@@ -107,40 +107,20 @@ fn hop_kind(
     entry: &JournalEntry,
     following: &[JournalEntry],
 ) -> Option<(HopKind, Option<String>, Option<String>)> {
-    if matches!(
-        entry.event,
-        JournalEvent::Evaluation { .. } | JournalEvent::Route { .. }
-    ) && held_verdict(entry, following)
-    {
+    if matches!(entry.event, JournalEvent::Route { .. }) && held_verdict(entry, following) {
         return None;
     }
     let outcome: &str = match &entry.event {
-        JournalEvent::Evaluation {
-            origin,
-            outcome,
-            object,
-            ..
-        } if !object.is_null()
-            && ((*origin == EvaluationOrigin::Check && outcome != "invalid")
-                || following
-                    .first()
-                    .is_some_and(|next| repeats_evaluation(next, Some(entry)))) =>
-        {
-            outcome
+        JournalEvent::Evaluation { outcome, .. } => {
+            return evaluation_target(spec, entry, following)
+                .map(|target| (HopKind::Route, Some(outcome.clone()), Some(target)));
         }
         JournalEvent::Route { outcome, .. } => outcome,
         JournalEvent::Attempt { outcome, .. } => {
             if attempt_superseded(entry, *outcome, following) {
                 return None;
             }
-            match outcome {
-                AttemptOutcome::Ended => "ended",
-                AttemptOutcome::Died => "died",
-                AttemptOutcome::Canceled => "canceled",
-                AttemptOutcome::Limited => "limited",
-                AttemptOutcome::Timeout => "timeout",
-                AttemptOutcome::Asked => "asked",
-            }
+            outcome.as_str()
         }
         JournalEvent::TurnEnd {
             action: TurnEndAction::Kept | TurnEndAction::Closed,
@@ -164,6 +144,34 @@ fn hop_kind(
         Some(outcome.into()),
         Some(spec.target(&entry.node, outcome)?),
     ))
+}
+
+/// The routed target of an evaluation, shared by trail and full-history projection.
+pub fn evaluation_target(
+    spec: &WorkflowSpec,
+    entry: &JournalEntry,
+    following: &[JournalEntry],
+) -> Option<String> {
+    let JournalEvent::Evaluation {
+        origin,
+        outcome,
+        object,
+        ..
+    } = &entry.event
+    else {
+        return None;
+    };
+    if object.is_null() || held_verdict(entry, following) {
+        return None;
+    }
+    if (*origin == EvaluationOrigin::Check && outcome != "invalid")
+        || following
+            .first()
+            .is_some_and(|next| repeats_evaluation(next, Some(entry)))
+    {
+        return spec.target(&entry.node, outcome);
+    }
+    None
 }
 
 fn held_verdict(entry: &JournalEntry, following: &[JournalEntry]) -> bool {
@@ -221,6 +229,49 @@ fn attempt_superseded(
     }
 }
 
+/// The first bound's instant and target, for inspection: `first_bound` routed by the spec.
+pub fn next_bound(
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+    hold: Option<u32>,
+    now: Timestamp,
+) -> Result<Option<(Timestamp, String)>, TimeInputErr> {
+    Ok(
+        first_bound(spec, record, hold, now)?.and_then(|(at, outcome)| {
+            spec.target(&record.node, outcome)
+                .map(|target| (at, target))
+        }),
+    )
+}
+
+/// Earliest unfired deadline, timeout or supplied hold case, in that order on ties, with the
+/// outcome it settles. Engine rechecks take the instant alone, so timing never waits on routing.
+pub(super) fn first_bound<'a>(
+    spec: &'a WorkflowSpec,
+    record: &RunRecord,
+    hold: Option<u32>,
+    now: Timestamp,
+) -> Result<Option<(Timestamp, &'a str)>, TimeInputErr> {
+    let deadline = record
+        .deadline
+        .filter(|_| !record.deadline_fired)
+        .map(|at| (at, "deadline"));
+    let timeout = timeout_at(spec, record)?.map(|at| (at, "timeout"));
+    let hold = match hold {
+        Some(index) => hold_until(spec, record, index, now)?.zip(
+            spec.checks
+                .get(&record.node)
+                .and_then(|check| check.cases.get(index as usize))
+                .map(|case| case.outcome.as_str()),
+        ),
+        None => None,
+    };
+    Ok([deadline, timeout, hold]
+        .into_iter()
+        .flatten()
+        .min_by_key(|(at, _)| *at))
+}
+
 /// The check's entry-based timeout or a turn step's timeout, paused while asking.
 pub fn timeout_at(
     spec: &WorkflowSpec,
@@ -252,4 +303,27 @@ pub fn timeout_at(
         return Ok(None);
     };
     Ok(start.checked_add(super::state::duration(raw)?).ok())
+}
+
+/// The case's hold instant, measured from its first matching settlement or `now`.
+pub fn hold_until(
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+    case: u32,
+    now: Timestamp,
+) -> Result<Option<Timestamp>, TimeInputErr> {
+    let Some(hold) = spec
+        .checks
+        .get(&record.node)
+        .and_then(|check| check.cases.get(case as usize))
+        .and_then(|case| case.hold.as_deref())
+    else {
+        return Ok(None);
+    };
+    let first = record
+        .wait
+        .as_ref()
+        .filter(|wait| wait.is_hold() && wait.case == Some(case))
+        .map_or(now, |wait| wait.first);
+    Ok(first.checked_add(super::state::duration(hold)?).ok())
 }

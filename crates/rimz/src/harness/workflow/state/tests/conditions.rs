@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn inspection_hold_uses_the_matching_cases_first_settlement() {
+    let spec: WorkflowSpec = toml::from_str(concat!(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\n",
+        "cases=[{when=['ci=passed'],outcome='ready',for='2m'},",
+        "{when=['pr.merged'],outcome='ready',for='2m'},",
+        "{when=['team.stage=Done'],outcome='done'}]\n",
+        "on={ready='@done',done='@done'}\n",
+    ))
+    .unwrap();
+    let mut record = record();
+    let first = record.entered_at + jiff::SignedDuration::from_secs(10);
+    assert_eq!(
+        crate::harness::workflow::hold_until(&spec, &record, 0, first).unwrap(),
+        Some(first + jiff::SignedDuration::from_mins(2)),
+    );
+    record.wait = Some(Wait {
+        node: record.node.clone(),
+        outcome: "hold".into(),
+        case: Some(0),
+        detail: Some("ready".into()),
+        kinds: vec![],
+        gives_up_at: None,
+        first,
+        last: first,
+        count: 1,
+        recheck_at: None,
+    });
+    let now = first + jiff::SignedDuration::from_secs(30);
+    assert_eq!(
+        crate::harness::workflow::hold_until(&spec, &record, 0, now).unwrap(),
+        Some(first + jiff::SignedDuration::from_mins(2)),
+    );
+    assert_eq!(
+        crate::harness::workflow::hold_until(&spec, &record, 1, now).unwrap(),
+        Some(now + jiff::SignedDuration::from_mins(2)),
+        "a different case starts a fresh hold even with the same outcome",
+    );
+    record.wait.as_mut().unwrap().outcome = "unknown".into();
+    assert_eq!(
+        crate::harness::workflow::hold_until(&spec, &record, 0, now).unwrap(),
+        Some(now + jiff::SignedDuration::from_mins(2)),
+    );
+    assert_eq!(
+        crate::harness::workflow::hold_until(&spec, &record, 2, now).unwrap(),
+        None,
+    );
+}
+
+#[test]
 fn a_keyed_hold_preserves_routed_context_until_the_case_fires() {
     let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='next', pending='next'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\nkey='case'\n[checks.next]\nrun='true'\non.ok='@done'\n").unwrap();
     let paths = paths();

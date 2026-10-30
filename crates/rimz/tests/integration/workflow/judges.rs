@@ -27,14 +27,15 @@ pub(super) fn capacity(env: &Env, used: u8) -> jiff::Timestamp {
 
 use std::collections::BTreeMap;
 
-fn failed_judge(body: &str) -> Value {
+fn failed_judge(body: &str, envelope: &str) -> (Value, String) {
     let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"),
+        &format!(
+            "{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\non.invalid='recover'\n[checks.recover]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+        ),
         "",
     );
     let shell = write_fake_login_shell(&env, "judge-shell", &[]);
     let bin = env.home_root.join("judge-bin");
-    let envelope = r#"{"structured_output":{"outcome":"done"}}"#;
     write_path_shim(
         &bin,
         "claude",
@@ -51,12 +52,15 @@ fn failed_judge(body: &str) -> Value {
             .output()
             .unwrap(),
     );
-    settled(&env, receipt.lines().next().unwrap(), "parked")
+    let id = receipt.lines().next().unwrap();
+    let value = settled(&env, id, "parked");
+    let history = success(command(&env, &["workflow", "show", id, "--history"]));
+    (value, history)
 }
 
 #[test]
 fn judge_exit_names_the_code_without_an_exit_status_label() {
-    let value = failed_judge("exit 7");
+    let (value, _) = failed_judge("exit 7", r#"{"structured_output":{"outcome":"done"}}"#);
     assert_eq!(value["record"]["park"]["text"], "judge exited 7");
     assert!(
         events(&value, "evaluation")
@@ -67,12 +71,26 @@ fn judge_exit_names_the_code_without_an_exit_status_label() {
 
 #[test]
 fn judge_signal_names_the_signal() {
-    let value = failed_judge("kill -KILL \"$$\"");
+    let (value, _) = failed_judge(
+        "kill -KILL \"$$\"",
+        r#"{"structured_output":{"outcome":"done"}}"#,
+    );
     assert_eq!(value["record"]["park"]["text"], "judge killed by SIGKILL");
     assert!(
         events(&value, "evaluation")
             .iter()
             .all(|row| row["object"]["reason"] == "judge killed by SIGKILL")
+    );
+}
+
+#[test]
+fn failed_judge_history_does_not_invent_an_invalid_route() {
+    let (value, history) = failed_judge("exit 0", r#"{"structured_output":{"outcome":"missing"}}"#);
+    assert_eq!(value["record"]["park"]["reason"], "check", "{value:#}");
+    assert_eq!(events(&value, "evaluation").len(), 2, "{value:#}");
+    assert!(
+        !history.contains("evaluation invalid → recover"),
+        "failed judges did not route: {history}"
     );
 }
 

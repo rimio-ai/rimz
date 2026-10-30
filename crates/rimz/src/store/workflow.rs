@@ -341,6 +341,20 @@ pub enum AttemptOutcome {
     Canceled,
 }
 
+impl AttemptOutcome {
+    /// The attempt's wire word, as every surface prints it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ended => "ended",
+            Self::Died => "died",
+            Self::Timeout => "timeout",
+            Self::Asked => "asked",
+            Self::Limited => "limited",
+            Self::Canceled => "canceled",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Limited {
     pub reset_at: Option<Timestamp>,

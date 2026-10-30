@@ -66,6 +66,80 @@ fn inspection_timeout_uses_the_node_entry_time() {
 }
 
 #[test]
+fn inspection_forecast_uses_the_first_bound_with_engine_ties() {
+    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\non.deadline='@user'\n\
+        [checks.pr]\nelse='pending'\ntimeout='5m'\non={ready='@done',pending='@wait',timeout='@failed'}\n\
+        [[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='10m'\n").unwrap();
+    let mut record = record();
+    record.attempt = None;
+    record.wait = serde_json::from_value(json!({"node":"pr", "outcome":"hold", "case":0,
+        "first":record.entered_at, "last":record.entered_at, "count":1}))
+    .unwrap();
+    let mut actual = Vec::new();
+    for (deadline_secs, fired) in [(60, false), (300, false), (600, false), (60, true)] {
+        record.deadline = Some(record.entered_at + jiff::SignedDuration::from_secs(deadline_secs));
+        record.deadline_fired = fired;
+        actual.push(
+            super::super::next_bound(&spec, &record, Some(0), record.entered_at)
+                .unwrap()
+                .map(|(at, target)| (at.duration_since(record.entered_at).as_secs(), target)),
+        );
+    }
+    assert_eq!(
+        actual,
+        [
+            Some((60, "@user".into())),
+            Some((300, "@user".into())),
+            Some((300, "@failed".into())),
+            Some((300, "@failed".into())),
+        ]
+    );
+    let mut spec = spec;
+    spec.checks.get_mut("pr").unwrap().cases[0].hold = Some("5m".into());
+    assert_eq!(
+        super::super::next_bound(&spec, &record, Some(0), record.entered_at).unwrap(),
+        Some((
+            record.entered_at + jiff::SignedDuration::from_secs(300),
+            "@failed".into()
+        ))
+    );
+    spec.checks.get_mut("pr").unwrap().cases[0].hold = Some("1m".into());
+    assert_eq!(
+        super::super::next_bound(&spec, &record, Some(0), record.entered_at).unwrap(),
+        Some((
+            record.entered_at + jiff::SignedDuration::from_secs(60),
+            "@done".into()
+        ))
+    );
+}
+
+#[test]
+fn recheck_limit_takes_the_first_bound_without_routing_it() {
+    let spec = spec();
+    let paths = paths();
+    let mut record = record();
+    record.node = "unrouted".into();
+    let deadline = record.entered_at + jiff::SignedDuration::from_secs(30);
+    record.deadline = Some(deadline);
+    assert_eq!(
+        super::super::next_bound(&spec, &record, None, record.entered_at).unwrap(),
+        None
+    );
+    let t = Transition {
+        now: record.entered_at,
+        record,
+        spec: &spec,
+        paths: &paths,
+        entries: vec![],
+    };
+    assert_eq!(
+        t.bounded_recheck(Some(deadline + jiff::SignedDuration::from_secs(60)))
+            .unwrap(),
+        Some(deadline)
+    );
+}
+
+#[test]
 fn wait_backoff_cannot_hide_an_unfired_deadline() {
     let mut spec = spec();
     spec.checks

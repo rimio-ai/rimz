@@ -99,22 +99,23 @@ Without `-w` the run uses the checkout you are in. `-w` selects an existing RimZ
 
 ```sh
 rimz workflow list         # every active and parked run, with its node and what it waits on
-rimz workflow show "$RUN"  # one run: position, visit counts, and its folded history
+rimz workflow show "$RUN"  # one run: position, next moves, and a compact trail
+rimz workflow show "$RUN" --history  # every check and attempt, when you need the evidence
 rimz workflow show fix-tests  # live runs of this workflow, as list rows
 ```
 
 `list` puts parks and blocking questions under NEEDS YOU, longest waiting first, with a hint to inspect the first run. ACTIVE holds the rest. Each row has a status glyph, a short address such as `fix-tests#feat-x`, its node, what it is doing, and its age. You can use that address instead of `$RUN` in `show`, `resume`, and `cancel`; the part after `#` is the checkout directory's name (the project directory for project scope). Several rooms get separate headings.
 
-`show` on an address or id lists checks and attempts in order, folding adjacent repeated evaluations into one row with their count, span, and newest answer; `--json` keeps every journal entry. An agent attempt names its handle, the commit before and after, and its cost. A command attempt shows its exit code, commits, and output log. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field and the rules for choosing a run by name or address.
+`show` on an address or id starts with where the run is and what it is waiting for. It shows condition readings, visit counts, and a short trail of routing decisions, then the work directory and a command for full history. When parked, it explains why and gives the exact commands to resume, grant more bounds, choose another node, or cancel. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field and the rules for choosing a run by name or address.
 
-An attempt can end as `died` when an agent fails to start or crashes, or when a command fails. `show` prints any recorded `reason:` beneath the attempt. A command's log holds its output; an agent's own UI carries errors that it did not report to RimZ.
+An attempt can end as `died` when an agent fails to start or crashes, or when a command fails. Use `show --history` for checks and attempts in order, folding adjacent repeated evaluations with their count, span, newest answer, and summed judge cost (`--json` keeps every journal entry): the handle or exit code, commits before and after, duration, known cost, recorded `reason:`, and log path. A command's log holds its output; an agent's own UI carries errors that it did not report to RimZ.
 
 ## What a run does on your machine
 
 `rimz workflow run` creates the run directory, `~/.rimz/ws/<workspace-dir>/owned/workflows/<run-id>/`, with four entries:
 
 - `record.json`, the run's current position, which is the truth the engine reads.
-- `journal.jsonl`, the append-only history behind `show`'s folded rows; `show --json` includes every entry.
+- `journal.jsonl`, the append-only history behind `show --history`'s folded rows; `show --json` includes every entry.
 - `workflow.toml`, a sealed copy of the definition. Editing the original changes later runs, never this one. Scripts and prompt files are not copied: each check and launch reads them fresh from `~/.rimz/workflows/<name>/`.
 - `work/`, the work directory, which `RIMZ_WORKFLOW_DIR` names. It holds `context.json`, `notes/`, `signs/`, shell-check logs (`<seq>.check.log`), command-step logs (`<seq>.step.log`), and judge answers (`<seq>.check.json`). Your nodes keep their scratch here; the run record and journal sit outside it.
 
@@ -126,7 +127,7 @@ An agent step's `agent` accepts the same layout grammar as `rimz agents`: a kind
 
 For an agent step, `lifecycle = "turn"` is the default. When the leader's turn ends, RimZ stops every agent cell and its subagents, closes the command cells, records the commit before and after, and follows `then`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until you stop it.
 
-Use `lifecycle = "stay"` when you want to work with the agent across turns. The run reads `with you` in `workflow list` and `active (with you)` in `show`, or `asking you: …` and `active (asking you)` while a blocking question is open. Questions stay on the agent's card: answer in its pane. Turn ends, interruptions, provider limits, and provider session-end hooks do not end the attempt. Exiting the leader's provider process ends it as `ended` after registration, or `died` before registration, and follows `then`; a crash after registration also reads `ended`, so the check judges the work. Every layout cell closes. A staying step refuses `timeout` and `on.asked`; the workflow deadline, cancel, reset, and rebirth still end it as `canceled`.
+Use `lifecycle = "stay"` when you want to work with the agent across turns. The run reads `with you` in `workflow list` and `<step> is with you` in `show`, or `asking you: …` and `<step> is asking you` while a blocking question is open. Questions stay on the agent's card: answer in its pane. Turn ends, interruptions, provider limits, and provider session-end hooks do not end the attempt. Exiting the leader's provider process ends it as `ended` after registration, or `died` before registration, and follows `then`; a crash after registration also reads `ended`, so the check judges the work. Every layout cell closes. A staying step refuses `timeout` and `on.asked`; the workflow deadline, cancel, reset, and rebirth still end it as `canceled`.
 
 Use `lifecycle = "until"` to work across turns until the check says you are done. At each leader turn end, once the leader is at rest with no pending work, blocking question, or provider limit, RimZ runs `then` once. A route back to this step or to `@wait` keeps the layout open without another visit; every other route closes it and follows that route without repeating the check. A kept `@wait` waits for your next turn end, not a timer or signal. While the check runs, `list` reads `with you; checking <check>`, with any waiting detail appended; a blocking question still takes precedence. If RimZ observes a newer turn when it rechecks a closing verdict, it discards that verdict without stopping your session. Provider exit, deadline, and cancel still end the session as for `stay`. Both `stay` and `until` are staying steps.
 
@@ -289,7 +290,7 @@ rimz workflow resume "$RUN" --extend deadline=2026-11-08
 
 The receipt names the resumed node, its visit limit when capped, and any new grant or armed deadline, then gives a `show` command. When a parked run re-enters a step with no visits left, it warns rather than promising progress that cannot happen. Extending an active run says `extended` and does not warn about visits its current attempt has already used. Either receipt warns if the armed deadline is already past. A deadline fires only once; plain resume after a deadline park continues without one until you grant a new deadline.
 
-A run that is still active takes `--extend` too, without `--at`. An extension is a grant on this run only, and the definition does not change. A visit grant raises both `max-visits` and `max-visits-per-key` for every step and key. `show` prints the total as `step fix: 3 visits of 3 + 2 grant`. If the step declares `max-visits-per-key`, it adds rows such as `  key "lint": 2 visits of 2 + 2 grant`, with keys rendered as JSON (`null` for unkeyed visits); otherwise it prints no key rows.
+A run that is still active takes `--extend` too, without `--at`. An extension is a grant on this run only, and the definition does not change. A visit grant raises both `max-visits` and `max-visits-per-key` for every step and key. `show` includes the grant in the limit, such as `visits  fix 3 of 5`. If the step declares `max-visits-per-key`, it adds rows such as `  fix 2 of 4 for key "lint"`, with keys rendered as JSON (`null` for unkeyed visits); otherwise it prints no key rows.
 
 ## Stop a run and clean up
 

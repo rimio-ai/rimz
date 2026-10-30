@@ -101,7 +101,11 @@ fn a_turn_end_hook_keeps_the_layout_without_an_explicit_advance() {
     );
     let list = success(room.command(&["workflow", "list"]).output().unwrap());
     assert!(list.contains("with you"), "{list}");
-    let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
+    let text = success(
+        room.command(&["workflow", "show", &id, "--history"])
+            .output()
+            .unwrap(),
+    );
     assert!(text.contains("turn_end") && text.contains("kept"), "{text}");
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
@@ -197,11 +201,7 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     assert!(list.contains("with you; checking after"), "{list}");
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(
-        text.contains("active (with you)")
-            && text.lines().any(|line| {
-                line.strip_prefix("check:")
-                    .is_some_and(|check| check.trim() == "after")
-            }),
+        text.contains("build is with you") && text.contains("checking after"),
         "{text}"
     );
     waiting.write_all(&[1]).unwrap();

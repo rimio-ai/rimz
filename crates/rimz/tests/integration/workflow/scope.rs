@@ -64,7 +64,8 @@ fn project_scope_is_unique_across_checkouts_and_reports_the_override() {
     let id = receipt.lines().next().unwrap();
     let value = until(&env, id, |v| v["record"]["wait"].is_object());
     assert_eq!(value["record"]["scope"]["path"], json!(env.project_root));
-    assert!(success(command(&env, &["workflow", "show", id])).contains("scope project"));
+    assert_eq!(value["record"]["scope"]["kind"], "project");
+    assert!(success(command(&env, &["workflow", "show", id])).starts_with("review#project"));
     success(command(&env, &["workflow", "cancel", id]));
     let receipt = success(
         env.rimz()

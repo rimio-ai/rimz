@@ -2053,7 +2053,10 @@ path = "crates/rimz/src/harness"
 # soft_compact shares its module, request, decision and spawn with CLI/producer callers (+4).
 # soft_compact::compact_agents exposes the paced producer pass to sidebar refresh (+1).
 # WorkflowSpec::target, Step visit bounds, timeout_at, and journal hops share inspection rules (+7).
-surface-budget = 1040
+# hold_until shares the condition hold instant with workflow inspection (+1).
+# next_bound shares first-bound forecasting and engine recheck limits (+1).
+# evaluation_target shares routed-evaluation provenance across inspection views (+1).
+surface-budget = 1043
 
 [[verdict]]
 kind = "item"
@@ -3577,7 +3580,8 @@ path = "crates/rimz/src/store"
 # SoftCompactStep shares the optional steer-only/continue record tag with message policy (+1).
 # Store::queue_tail_message assigns an unclaimed continue's FIFO-tail id under the queue lock (+1).
 # workflow::RunAddress, its parser error, matching, and RunRecord::address share run names (+4).
-surface-budget = 523
+# workflow::AttemptOutcome::as_str shares the attempt word with journal inspection (+1).
+surface-budget = 524
 
 [[verdict]]
 kind = "item"
@@ -10290,6 +10294,21 @@ reason = "One read-only journal reader folds repeated checks without double-coun
 kind = "item"
 key = "harness::workflow::timeout_at"
 reason = "Inspection and transitions share check entry and paused turn-step timeout clocks."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::hold_until"
+reason = "Transitions and workflow inspection share each case's first-settlement hold instant."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::next_bound"
+reason = "Inspection and engine rechecks share the earliest unfired deadline, timeout or hold with engine tie order."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::evaluation_target"
+reason = "Trail and full history share which evaluations actually contributed a routed target."
 
 [[verdict]]
 kind = "item"
