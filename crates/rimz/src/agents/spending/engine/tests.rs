@@ -656,7 +656,7 @@ fn fresh_publication_derives_other_rooms_without_fleet_folds() {
             read_workspace_spending_cache(&runtime.workspace_spending_path(&scope.hash())),
             expected,
         );
-        assert_eq!(result.provider.version, 25);
+        assert_eq!(result.provider.version, 26);
         assert_eq!(result.workspace.version, 10);
     }
 }

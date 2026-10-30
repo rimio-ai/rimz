@@ -220,18 +220,34 @@ pub(super) fn fold(
             else {
                 continue;
             };
-            let effort = &mut tallies.entry(role.placement(kind.as_str())).effort;
-            if second >= window_starts.year {
-                effort.year.merge(credit);
-            }
-            if second >= window_starts.month {
-                effort.month.merge(credit);
-            }
-            if second >= window_starts.week {
-                effort.week.merge(credit);
-            }
-            if second >= window_starts.day {
-                effort.day.merge(credit);
+            let owner = role
+                .owner_placement()
+                .filter(|_| credit.active_ms > 0)
+                .map(|owner| {
+                    (
+                        owner,
+                        EffortWindow {
+                            active_ms: credit.active_ms,
+                            ..Default::default()
+                        },
+                    )
+                });
+            for (placement, credit) in
+                std::iter::once((role.placement(kind.as_str()), credit)).chain(owner)
+            {
+                let effort = &mut tallies.entry(placement).effort;
+                if second >= window_starts.year {
+                    effort.year.merge(credit);
+                }
+                if second >= window_starts.month {
+                    effort.month.merge(credit);
+                }
+                if second >= window_starts.week {
+                    effort.week.merge(credit);
+                }
+                if second >= window_starts.day {
+                    effort.day.merge(credit);
+                }
             }
         }
     }

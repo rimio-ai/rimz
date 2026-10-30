@@ -46,7 +46,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult, local_day_index};
 // v23: UTC-calendar-month spend per history pool for account monthly caps.
 // v24: local-day store windows and raw hourly model-dollar chart cells.
 // v25: native session keys count Claude per session, with subagents folded under their parent.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 25;
+// v26: subagent spend, tokens and active time also credit the recorded owner; ownerless coverage.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 26;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
