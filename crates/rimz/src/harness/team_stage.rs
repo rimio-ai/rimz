@@ -1100,7 +1100,10 @@ fn compact_flipper(
             threshold,
         },
         Err(reason) => Compaction::Skipped {
-            reason: reason.to_string(),
+            reason: match reason {
+                FlipCompactErr::Compact(error) => error.live_message(Timestamp::now()),
+                FlipCompactErr::Unavailable(reason) => reason,
+            },
         },
     }
 }
