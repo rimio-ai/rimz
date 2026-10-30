@@ -262,7 +262,15 @@ struct Batch {
 /// already running end on their own or by the same budget.
 fn run_copies(options: &Options, test: &LocatedTest, sandbox: &HostSandbox, out: &Path) -> Batch {
     let env = sandbox.command_env();
-    let removed = sandbox.removed_test_env();
+    let removed = match sandbox.removed_test_env() {
+        Ok(removed) => removed,
+        Err(error) => {
+            return Batch {
+                error: Some(error),
+                ..Batch::default()
+            };
+        }
+    };
     let width = options.copies.to_string().len().max(3);
     let next = AtomicUsize::new(1);
     let stop = AtomicBool::new(false);
