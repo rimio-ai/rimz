@@ -10026,7 +10026,7 @@ fn queued_delivery_batches_compatible_prompts() {
 fn compact_first_sends_once_when_its_recovery_wake_cannot_be_registered() {
     let env = Env::new();
     env.record(&env.project_root);
-    register_running_agent(
+    register_resting_agent(
         &env,
         "sess-compact-wake-fail",
         "compact-wake-fail",
@@ -10088,7 +10088,7 @@ fn compact_first_sends_once_when_its_recovery_wake_cannot_be_registered() {
 fn compact_first_claim_arms_recovery_before_the_command_finishes() {
     let env = Env::new();
     env.record(&env.project_root);
-    register_running_agent(
+    register_resting_agent(
         &env,
         "sess-compact-wake",
         "compact-wake",
@@ -10149,6 +10149,30 @@ fn steer_auto_compact_runs_before_a_full_window() {
     let env = Env::new();
     env.record(&env.project_root);
     register_running_agent(&env, "sess-ac", "feature-ac", &[("ZELLIJ_PANE_ID", "3")]);
+    seed_context_fill(&env, "sess-ac", 80);
+
+    let trace_log = env.project_root.join("zellij-ac-trace.log");
+    let out = run_traced_smart_compact(&env, &trace_log, "go");
+
+    let lines = trace_lines(&trace_log);
+    assert!(
+        !lines.iter().any(|line| is_compact_command(line)),
+        "an open turn must receive only the prompt; trace: {lines:?}"
+    );
+    let receipt = String::from_utf8_lossy(&out.stdout);
+    assert!(receipt.contains("sent"), "{receipt}");
+    assert!(!receipt.contains("compacted"), "{receipt}");
+    let messages = env.store().list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].body, MessageBody::Prompt);
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+}
+
+#[test]
+fn steer_auto_compact_runs_before_a_resting_agents_prompt() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_resting_agent(&env, "sess-ac", "feature-ac", &[("ZELLIJ_PANE_ID", "3")]);
     seed_context_fill(&env, "sess-ac", 80);
 
     let trace_log = env.project_root.join("zellij-ac-trace.log");
@@ -10232,11 +10256,80 @@ fn steer_auto_compact_runs_before_a_full_window() {
 }
 
 #[test]
+fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
+    for changed in ["open turn", "lower fill", "waiting"] {
+        for mode in [None, Some("--steer"), Some("--interrupt")] {
+            let env = Env::new();
+            env.record(&env.project_root);
+            env.install_agent_hooks("claude");
+            let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+            register_resting_agent(&env, "sess-ac-fresh", "ac-fresh", pane_env);
+            seed_context_fill(&env, "sess-ac-fresh", 80);
+            let trace = env.project_root.join("ac-fresh.log");
+            let before = DeliveryRendezvous::new(&env, "ac-before-lock");
+            let mut command = traced_rimz(&env, &trace);
+            command
+                .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+                .args(["message"]);
+            if let Some(mode) = mode {
+                command.arg(mode);
+            }
+            let child = command
+                .args(["@claude", "--smart-compact", "70%", "--", "go"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut release = before.arrive();
+            if changed == "open turn" {
+                run_hook(
+                    &env,
+                    json!({
+                        "hook_event_name": "UserPromptSubmit",
+                        "session_id": "sess-ac-fresh",
+                        "prompt": "work",
+                    }),
+                    pane_env,
+                );
+            } else if changed == "waiting" {
+                push_pending_agent_ask(&env, "sess-ac-fresh");
+            } else {
+                seed_context_fill(&env, "sess-ac-fresh", 20);
+            }
+            release.write_all(&[1]).unwrap();
+            let output = child.wait_with_output().unwrap();
+            let lines = trace_lines(&trace);
+            assert!(
+                !lines.iter().any(|line| is_compact_command(line)),
+                "mode {mode:?}, {changed}: compact-first used stale state: {lines:?}"
+            );
+            if changed == "waiting" {
+                assert!(lines.is_empty(), "no write into an input prompt: {lines:?}");
+                assert_eq!(output.status.success(), mode.is_none(), "{output:?}");
+                if mode.is_some() {
+                    assert!(
+                        String::from_utf8_lossy(&output.stderr).contains("waiting on your input"),
+                        "{output:?}"
+                    );
+                }
+                continue;
+            }
+            assert!(output.status.success(), "{output:?}");
+            assert_text_then_enter(&trace, &user_message("go"));
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains("compacted"),
+                "{output:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn sweep_times_out_unconfirmed_compact_without_writing_it_twice() {
     let env = Env::new();
     env.record(&env.project_root);
     env.write_config(&env.project_root, "");
-    register_running_agent(
+    register_resting_agent(
         &env,
         "sess-compact-once",
         "feature-compact-once",
@@ -10303,7 +10396,7 @@ fn message_compacts_at_the_builtin_threshold_unless_disabled() {
     for disabled in [false, true] {
         let env = Env::new();
         env.record(&env.project_root);
-        register_running_agent(
+        register_resting_agent(
             &env,
             "sess-ac-builtin",
             "feature-ac-builtin",
@@ -11492,7 +11585,7 @@ fn smart_compact_sends_the_configured_instruction() {
     ] {
         let env = Env::new();
         env.record(&env.project_root);
-        register_running_agent(
+        register_resting_agent(
             &env,
             "sess-ac-instruction",
             "feature-ac-instruction",
@@ -11542,7 +11635,7 @@ fn smart_compact_types_the_slash_token_apart_from_its_instruction() {
     );
     let env = Env::new();
     env.record(&env.project_root);
-    register_running_agent(
+    register_resting_agent(
         &env,
         "sess-ac-segments",
         "feature-ac-segments",
@@ -11693,7 +11786,7 @@ fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    register_running_agent(
+    register_resting_agent(
         &env,
         "sess-ac-fail",
         "feature-ac-fail",
@@ -11733,7 +11826,7 @@ fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
 fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
     let env = Env::new();
     env.record(&env.project_root);
-    register_running_agent(
+    register_resting_agent(
         &env,
         "sess-ac-dupe",
         "feature-ac-dupe",
@@ -11767,6 +11860,11 @@ fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
     run_hook(
         &env,
         json!({"hook_event_name": "UserPromptSubmit", "session_id": "sess-ac-dupe", "prompt": "a real prompt"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "sess-ac-dupe"}),
         &[("ZELLIJ_PANE_ID", "3")],
     );
     let third_trace = env.project_root.join("zellij-ac-dupe-third-trace.log");
@@ -12205,6 +12303,15 @@ fn assert_text_then_enter(trace_log: &Path, text: &str) {
     assert!(
         text_at < enter_at,
         "text must be pasted before Enter; trace: {lines:?}"
+    );
+}
+
+fn register_resting_agent(env: &Env, session_id: &str, branch: &str, pane_env: &[(&str, &str)]) {
+    register_running_agent(env, session_id, branch, pane_env);
+    run_hook(
+        env,
+        json!({"hook_event_name": "Stop", "session_id": session_id}),
+        pane_env,
     );
 }
 

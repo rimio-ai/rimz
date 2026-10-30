@@ -562,16 +562,18 @@ Delivery re-checks the marker after claiming a command and before writing its pa
 
 ### Smart compaction
 
-A provider compacts on its own near its context ceiling, so a prompt sent close to it can be cut in half by a compaction that fires mid-turn. `--smart-compact` compacts first, so the prompt lands against a fresh window.
+A provider compacts on its own near its context ceiling, so a prompt sent close to it can be cut in half by a compaction that fires mid-turn. `--smart-compact` compacts a resting agent first, so the prompt lands against a fresh window.
 
 Thresholds parse as `70%` (a fraction of the window), `120000` (absolute occupied tokens), or `180k` and `1m` (suffixed counts). Dispatch fills an omitted threshold from the [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) default for every caller, scheduled loop waits included: `258k` when unset, none for `"off"`. An explicit per-send threshold overrides the setting. An unknown fill never triggers, and the text sends untouched.
 
 A percent threshold reads the same fill gauge the sidebar card renders (`context_fill_pct`). A token threshold reads `occupied_context_tokens`, which prefers the folded statusline breakdown, then the per-call split (cache reads plus cache writes plus fresh input), then the carried `total_tokens` gauge.
 
-The two delivery modes compact differently:
+With the pane lock held, `write_live` resolves the live card again and reads that row with current context through `crates/rimz/src/store/mod.rs::Store::agent_with_context` in runtime scope. Compact-first checks this fresh row's fill and skips it while `AgentState::holds_open_turn()` is true, for boundary, steer, and interrupt alike. The prompt still follows its ordinary delivery path, with no `compacted` receipt when no command was sent.
+
+At rest, the delivery modes compact differently:
 
 - **Boundary.** Send the compact command alone, release the claimed prompt batch to `Queued` without an attempt penalty, and let `CompactionEnded` start a fresh delivery against the new window. A parked record reads the fill at the boundary, not at enqueue.
-- **Steer.** Type the compact command, then one message interval later paste the prompt. Reconciliation holds that `Sent` prompt while the compaction bracket delays its confirmation.
+- **Steer and interrupt.** Type the compact command, then one message interval later paste the prompt. Reconciliation holds that `Sent` prompt while the compaction bracket delays its confirmation. An interrupt to a resting agent sends no interrupt key.
 
 `write_live` queues, claims, and writes the command before `write_batch` checks the prompt batch's claims. A prompt canceled after its claim can therefore still cause its compaction.
 

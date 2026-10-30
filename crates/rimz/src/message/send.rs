@@ -222,10 +222,26 @@ fn write_live(
             .iter()
             .all(|message| message.body == MessageBody::Prompt)
     );
+    let fresh = if batch.iter().any(|message| message.auto_compact.is_some()) {
+        let current = store.snapshot_cached()?;
+        store
+            .rows_with_live_context(
+                current
+                    .agents
+                    .iter()
+                    .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none()),
+            )
+            .into_iter()
+            .next()
+            .map(std::borrow::Cow::into_owned)
+    } else {
+        None
+    };
+    let bound = fresh.as_ref().or(bound);
     let mut compacted = false;
     let compact = batch
         .iter()
-        .find_map(|message| compact_message_for_target(store, target, bound, message));
+        .find_map(|message| compact_message_for_target(store, target, fresh.as_ref(), message));
     if let Some((command, threshold, agent)) = compact {
         let command = store.queue_claimed_message(
             &command,
@@ -462,7 +478,7 @@ fn compact_message_for_target<'a>(
 ) -> Option<(MessageRecord, AutoCompact, &'a AgentState)> {
     let threshold = prompt.auto_compact?;
     let agent = bound?;
-    if !threshold.triggered(agent) {
+    if agent.holds_open_turn() || !threshold.triggered(agent) {
         return None;
     }
     if agent.compaction_unprompted(jiff::Timestamp::now()) {
