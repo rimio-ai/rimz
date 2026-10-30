@@ -461,26 +461,82 @@ impl std::fmt::Display for UnknownConfigKey {
     }
 }
 
-/// Definition files for the effective configured agent-spec catalog.
+/// The defining layer and its own qualified pack parent, independent of the source path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "origin", rename_all = "lowercase")]
+pub enum DefinitionOrigin {
+    Mine {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        inherits: Option<String>,
+    },
+    Pack {
+        pack: crate::packs::PackName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        inherits: Option<String>,
+    },
+    Project,
+}
+
+impl Default for DefinitionOrigin {
+    fn default() -> Self {
+        Self::Mine { inherits: None }
+    }
+}
+
+impl DefinitionOrigin {
+    fn new(pack: Option<&crate::packs::PackName>, parent: Option<&str>) -> Self {
+        let inherits = parent
+            .filter(|parent| parent.contains(':'))
+            .map(str::to_owned);
+        match pack {
+            Some(pack) => Self::Pack {
+                pack: pack.clone(),
+                inherits,
+            },
+            None => Self::Mine { inherits },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProfileSource {
+    path: PathBuf,
+    origin: DefinitionOrigin,
+}
+
+/// Definition files and origins for the effective configured agent-spec catalog.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AgentSpecSources {
-    agent_profiles: BTreeMap<String, PathBuf>,
-    subagent_profiles: BTreeMap<String, PathBuf>,
+    agent_profiles: BTreeMap<String, ProfileSource>,
+    subagent_profiles: BTreeMap<String, ProfileSource>,
     teams: BTreeMap<String, PathBuf>,
     commands: BTreeMap<String, PathBuf>,
 }
 
 impl AgentSpecSources {
+    pub fn profile_origin(
+        &self,
+        scope: effective::ProfileScope,
+        name: &str,
+    ) -> Option<&DefinitionOrigin> {
+        self.profile_source(scope, name)
+            .map(|source| &source.origin)
+    }
+
     pub fn team(&self, name: &str) -> Option<&Path> {
         self.teams.get(name).map(PathBuf::as_path)
     }
 
     pub fn profile(&self, scope: effective::ProfileScope, name: &str) -> Option<&Path> {
+        self.profile_source(scope, name)
+            .map(|source| source.path.as_path())
+    }
+
+    fn profile_source(&self, scope: effective::ProfileScope, name: &str) -> Option<&ProfileSource> {
         match scope {
             effective::ProfileScope::Agents => self.agent_profiles.get(name),
             effective::ProfileScope::Subagents => self.subagent_profiles.get(name),
         }
-        .map(PathBuf::as_path)
     }
 
     pub fn command(&self, name: &str) -> Option<&Path> {

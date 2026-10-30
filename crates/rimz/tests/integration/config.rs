@@ -472,6 +472,11 @@ fn agents_validate_loads_live_pack_definitions_and_warns_for_unknown_manifest_ke
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    for row in json["rows"].as_array().unwrap() {
+        assert_eq!(row["origin"], "pack", "{row}");
+        assert_eq!(row["pack"], "crew", "{row}");
+        assert!(row.get("inherits").is_none(), "{row}");
+    }
     assert!(
         json["rows"]
             .as_array()
@@ -480,6 +485,11 @@ fn agents_validate_loads_live_pack_definitions_and_warns_for_unknown_manifest_ke
             .any(|row| row["name"] == "packed"),
         "{json}"
     );
+    let output = env.rimz().args(["agents", "validate"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("ORIGIN  SOURCE"), "{text}");
+    assert!(text.contains("crew    "), "{text}");
     assert!(json["errors"].as_array().unwrap().is_empty(), "{json}");
     assert!(
         json["warnings"]
@@ -498,7 +508,7 @@ fn agents_validate_loads_live_pack_definitions_and_warns_for_unknown_manifest_ke
         .args(["agents", "profiles"])
         .assert()
         .success()
-        .stdout(contains("Edited pack worker"));
+        .stdout(contains("Edited pack worker").and(contains("packed — pi · xhigh [crew]")));
 }
 
 #[test]
@@ -893,6 +903,10 @@ fn keep_warm_while_refusals_follow_definition_loading_boundaries() {
 #[test]
 fn agents_home_definitions_feed_both_profile_catalogues_without_kind_rows() {
     let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        "[agents.commands]\nlocal = 'true'\n",
+    );
     crate::common::write_kind_base(&env, "claude");
     crate::common::write_kind_base(&env, "codex");
     write_machine_file(
@@ -933,6 +947,9 @@ fn agents_home_definitions_feed_both_profile_catalogues_without_kind_rows() {
             entries.iter().any(|entry| {
                 entry["name"] == expected_name
                     && entry["source"] == "profile"
+                    && entry["origin"] == "mine"
+                    && entry.get("pack").is_none()
+                    && entry.get("inherits").is_none()
                     && entry["agent"] == expected_agent
                     && entry["description"] == expected_description
             }),
@@ -941,6 +958,14 @@ fn agents_home_definitions_feed_both_profile_catalogues_without_kind_rows() {
         assert!(
             entries.iter().all(|entry| entry.get("path").is_none()),
             "{doorway} profiles must omit paths unless requested: {entries:?}"
+        );
+        let command = entries
+            .iter()
+            .find(|entry| entry["name"] == "local")
+            .unwrap();
+        assert_eq!(
+            command,
+            &serde_json::json!({"name": "local", "source": "command", "origin": "mine"})
         );
     }
 }

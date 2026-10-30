@@ -88,10 +88,15 @@ pub(super) fn resolve_namespace(mut resolver: Resolver<'_>, loaded: &mut LoadedD
             continue;
         }
         if let Some(resolved) = resolved {
+            let definition = &resolver.tree.definitions[&name];
             loaded.insert(
                 resolver.namespace,
                 &name,
-                &resolver.tree.definitions[&name].path,
+                &definition.path,
+                &super::DefinitionOrigin::new(
+                    definition.pack.as_ref(),
+                    definition.frontmatter.agent.as_deref(),
+                ),
                 resolved.profile,
             );
         }

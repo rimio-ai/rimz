@@ -6,6 +6,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use super::render;
+use rimz::config::DefinitionOrigin;
 use rimz::config::effective::ProfileScope;
 use rimz::harness::subagent_policy::{SubagentCatalog, SubagentProfile, SubagentProfileSource};
 
@@ -13,6 +14,8 @@ use rimz::harness::subagent_policy::{SubagentCatalog, SubagentProfile, SubagentP
 pub(crate) struct AgentProfileReport {
     pub(crate) name: String,
     pub(crate) source: &'static str,
+    #[serde(flatten)]
+    origin: DefinitionOrigin,
     #[serde(skip)]
     brand_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,6 +50,10 @@ pub(crate) fn available_profiles(
         .map(|(name, profile)| AgentProfileReport {
             name: name.clone(),
             source: "profile",
+            origin: sources
+                .profile_origin(scope, name)
+                .cloned()
+                .unwrap_or_default(),
             brand_kind: Some(provider_brand_kind(&profile.agent, profiles).to_owned()),
             agent: Some(profile.agent.clone()),
             model: profile.model.clone(),
@@ -62,6 +69,7 @@ pub(crate) fn available_profiles(
     reports.extend(commands.0.keys().map(|name| AgentProfileReport {
         name: name.clone(),
         source: "command",
+        origin: DefinitionOrigin::default(),
         brand_kind: None,
         agent: None,
         model: None,
@@ -107,16 +115,22 @@ fn subagent_report(
     profiles: &rimz::config::ProfilesConfig,
     sources: &rimz::config::AgentSpecSources,
 ) -> AgentProfileReport {
-    let (source, path) = match profile.source {
+    let (source, path, origin) = match profile.source {
         SubagentProfileSource::Profile => (
             "profile",
             sources
                 .profile(ProfileScope::Subagents, &profile.name)
                 .map(PathBuf::from),
+            sources
+                .profile_origin(ProfileScope::Subagents, &profile.name)
+                .cloned()
+                .unwrap_or_default(),
         ),
-        SubagentProfileSource::Command => {
-            ("command", sources.command(&profile.name).map(PathBuf::from))
-        }
+        SubagentProfileSource::Command => (
+            "command",
+            sources.command(&profile.name).map(PathBuf::from),
+            DefinitionOrigin::default(),
+        ),
     };
     let brand_kind = profile
         .agent
@@ -140,6 +154,7 @@ fn subagent_report(
         tier_fallback: tier.map(|tier| tier.fell_back),
         name: profile.name,
         source,
+        origin,
         brand_kind,
         agent: profile.agent,
         model: profile.model,
@@ -219,6 +234,18 @@ pub(super) fn profile_summary(
     segments.join(" · ")
 }
 
+pub(super) fn origin_label(origin: &DefinitionOrigin) -> String {
+    let (label, inherits) = match origin {
+        DefinitionOrigin::Mine { inherits } => ("mine", inherits),
+        DefinitionOrigin::Pack { pack, inherits } => (pack.as_str(), inherits),
+        DefinitionOrigin::Project => return "project".to_owned(),
+    };
+    match inherits.as_deref().and_then(|key| key.split_once(':')) {
+        Some((pack, _)) => format!("{label} → {pack}"),
+        None => label.to_owned(),
+    }
+}
+
 fn profile_cards(
     reports: &[AgentProfileReport],
     listing: ProfileListing,
@@ -275,9 +302,13 @@ fn profile_cards(
         };
         writeln!(
             out,
-            "{} — {}",
+            "{} — {} {}",
             render::paint(name_style, &report.name),
-            summary
+            summary,
+            render::paint(
+                render::palette::muted(),
+                &format!("[{}]", origin_label(&report.origin))
+            )
         )?;
         if let Some(description) = &report.description {
             writeln!(out, "  {description}")?;
@@ -363,6 +394,7 @@ mod tests {
                 tier_fallback: None,
                 name: "planner".to_owned(),
                 source: "profile",
+                origin: DefinitionOrigin::default(),
                 brand_kind: Some("codex".to_owned()),
                 agent: Some("codex".to_owned()),
                 model: Some("gpt-5.6".to_owned()),
@@ -377,6 +409,7 @@ mod tests {
                 tier_fallback: None,
                 name: "reviewer".to_owned(),
                 source: "profile",
+                origin: DefinitionOrigin::default(),
                 brand_kind: Some("claude".to_owned()),
                 agent: Some("claude".to_owned()),
                 model: None,
@@ -391,6 +424,7 @@ mod tests {
                 tier_fallback: None,
                 name: "coder".to_owned(),
                 source: "profile",
+                origin: DefinitionOrigin::default(),
                 brand_kind: Some("codex".to_owned()),
                 agent: Some("codex".to_owned()),
                 model: Some("gpt-5.6".to_owned()),
@@ -405,6 +439,7 @@ mod tests {
                 tier_fallback: None,
                 name: "lint".to_owned(),
                 source: "command",
+                origin: DefinitionOrigin::default(),
                 brand_kind: None,
                 agent: None,
                 model: None,
@@ -426,16 +461,16 @@ mod tests {
         .expect("render profile cards");
 
         insta::assert_snapshot!(String::from_utf8(output).expect("utf-8"), @r"
-        planner — codex · gpt-5.6 · high · fast
+        planner — codex · gpt-5.6 · high · fast [mine]
           Plans the work
           /tmp/.agents/agents/planner.md
 
-        reviewer — claude · max
+        reviewer — claude · max [mine]
           Reviews the result
 
-        coder — codex · gpt-5.6
+        coder — codex · gpt-5.6 [mine]
 
-        lint — command
+        lint — command [mine]
           /tmp/rimz/config.toml
         ");
     }
@@ -448,6 +483,7 @@ mod tests {
             tier_fallback: None,
             name: "planner".to_owned(),
             source: "profile",
+            origin: DefinitionOrigin::default(),
             brand_kind: Some("codex".to_owned()),
             agent: Some("codex".to_owned()),
             model: None,

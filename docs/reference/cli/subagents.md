@@ -292,11 +292,11 @@ rimz subagents profiles --path
 rimz subagents profiles --json --path
 ```
 
-`profiles` lists what a child can launch from as compact cards: child definitions with their agent, model, effort, and description, and `[agents.commands]` commands. It works from any shell. `--path` adds each entry's defining file.
+`profiles` lists what a child can launch from as compact cards: child definitions with their agent, model, effort, and description, and `[agents.commands]` commands. Each first line ends with the [origin label](../definitions.md#validation-and-failures) in brackets, including `[project]` for a trusted project's profile and `[mine → crew]` for a home definition inheriting from pack `crew`. It works from any shell. `--path` adds each entry's defining file.
 
 A [kind base](../definitions.md#kind-bases) (`agents/<kind>.md`) is listed under its kind's name, since a child can launch from it. An agent kind with no kind base is launchable directly but is not listed. Direct profiles belong to `rimz agents` and are not listed either, and neither are teams, because a launch creates one agent.
 
-`--json` prints an array of objects with `name` and `source` (`profile` or `command`), plus `agent`, `model`, `effort`, and `description` when set, and the absolute `path` only with `--path`. Tiered profiles also carry `tier` and `tier_fallback`; cards show the tier beside the concrete model and mark a fallback.
+`--json` prints an array of objects with `name`, `source` (`profile` or `command`), and `origin` (`mine`, `pack`, or `project`), plus `agent`, `model`, `effort`, and `description` when set, and the absolute `path` only with `--path`. `pack` is present only for a pack origin; `inherits` is present only for a definition's own qualified `agent:` parent. Tiered profiles also carry `tier` and `tier_fallback`; cards show the tier beside the concrete model and mark a fallback.
 
 A direct definition can restrict what its agents launch with `subagents: [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents: []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and a configuration hint.
 

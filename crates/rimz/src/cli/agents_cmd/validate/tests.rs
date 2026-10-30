@@ -421,6 +421,7 @@ fn effort_cell_appends_fast_only_when_on() {
         effort: Some("high".into()),
         fast: false,
         source: "agents/quick.md".into(),
+        origin: Default::default(),
         team: None,
         role: None,
         owns: Vec::new(),

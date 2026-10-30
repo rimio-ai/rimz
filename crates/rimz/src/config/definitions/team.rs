@@ -116,8 +116,9 @@ pub(super) fn load(
                 crate::harness::spec::validate_team(&name, &team, &namespace, commands)
                     .map_err(|error| item.error(error))?;
             }
+            let origin = super::DefinitionOrigin::new(item.pack.as_ref(), None);
             for (binding, profile) in profiles {
-                loaded.insert("agents", &binding.profile, &path, profile);
+                loaded.insert("agents", &binding.profile, &path, &origin, profile);
                 if let Some(row) = loaded.rows.last_mut() {
                     row.keep_warm = team.keep_warm(Some(&binding.role));
                     row.namespace = "team".to_owned();
@@ -364,6 +365,7 @@ impl SeatLoader<'_> {
                 role.agent.clone(),
                 Definition {
                     path: path.to_owned(),
+                    pack: None,
                     body: definition.body.clone(),
                     frontmatter: fm,
                 },

@@ -524,7 +524,9 @@ rimz agents profiles --teams         # include team role profiles
 rimz agents profiles --json --path
 ```
 
-JSON includes `source` (`profile` or `command`) and, only with `--path`, the absolute `path`.
+Each card's first line ends with its [origin label](../definitions.md#validation-and-failures) in brackets: `[mine]`, `[crew]`, or `[mine → crew]` for a home definition inheriting from pack `crew`. The listing reads machine sources, not project profiles.
+
+JSON includes `source` (`profile` or `command`), `origin` (`mine` or `pack`), `pack` only for a pack origin, and `inherits` only for a definition's own qualified `agent:` parent. Only `--path` adds the absolute `path`; `source` does not describe provenance.
 
 Tiered profiles show `model (tier)`, or `model (tier, fallback)` when resolution used a higher tier. Changing families within a tier is not a load-time fallback. JSON adds `tier` and `tier_fallback` only for tiered profiles; `model` and `effort` stay concrete. Validation rows use the same tier fields and fallback marker. `agents validate` warns once per routed definition and excluded family, naming the listed model and why that family cannot run it; warnings do not fail validation.
 
