@@ -9203,7 +9203,9 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
     assert!(
         list.lines()
             .any(|line| { line.trim_start().starts_with("legacy") && line.contains('✓') })
-            && show.contains("✓ completed")
+            && show.contains("✓ healthy · last run")
+            && show.contains(", completed")
+            && !show.contains("LAST RUN")
             && !show.contains("RECENT RUNS")
             && !show.contains("MODE")
             && !show.contains("last failure"),
