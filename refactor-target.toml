@@ -2728,7 +2728,8 @@ path = "crates/rimz/src/mux"
 # MuxBackend::attach_may_drop_early keeps version-specific attach recovery in the backend (+1).
 # ViewFit shares ordered fitted, skipped, and failed outcomes across sweep and jump (+1).
 # CompanionAppendErr distinguishes pre-spawn fallback from an uncertain spawn (+1).
-surface-budget = 298
+# SidebarTarget::zellij_step shares the bounded grid with controllers and live tests (+1).
+surface-budget = 299
 
 [[verdict]]
 kind = "item"
