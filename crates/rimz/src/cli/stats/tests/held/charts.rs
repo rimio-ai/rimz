@@ -161,7 +161,7 @@ fn dashboard_forecast_uses_the_publication_hour_and_zero_fills_missing_days() {
 #[test]
 fn dashboard_forecast_extends_only_the_bar_holding_today_in_its_model_tone() {
     let (mut stats, assists) = forecast_fixture(1.0, 4.0, 0.0);
-    let forecast_style = render::palette::model_forecast(Some(("claude", 0)));
+    let forecast_style = render::palette::model_styles(&["claude"], |_, _| true).0[0].forecast;
     let projected = Window::TABS.map(|tab| {
         let rows = plot(&stats, &assists, tab, 119);
         rows.iter()
@@ -184,8 +184,8 @@ fn dashboard_forecast_extends_only_the_bar_holding_today_in_its_model_tone() {
 
 #[test]
 fn dashboard_forecast_preserves_spent_eighths_over_its_background() {
-    let model = render::palette::model_shade("claude", 0);
-    let forecast = render::palette::model_forecast(Some(("claude", 0)));
+    let model = render::palette::model_styles(&["claude"], |_, _| true).0[0].mark;
+    let forecast = render::palette::model_styles(&["claude"], |_, _| true).0[0].forecast;
     let cases = [
         (2.0, 200.0, 200.0, 0, '▁', true),
         (12.0, 14.0, 100.0, 0, '▇', true),
@@ -268,8 +268,9 @@ fn dashboard_yesterday_overlay_shares_a_partial_spend_cell_as_background() {
         ),
     ]);
     let rows = plot(&stats, &assists, Window::Today, 119);
-    let style =
-        render::palette::model_shade("claude", 0).bg_color(render::palette::faint().get_fg_color());
+    let style = render::palette::model_styles(&["claude"], |_, _| true).0[0]
+        .mark
+        .bg_color(render::palette::faint().get_fg_color());
     assert!(rows[6].contains(&format!("{style}▁")), "{}", rows[6]);
 }
 
@@ -291,7 +292,10 @@ fn dashboard_yesterday_overlay_is_faint_above_actual_and_in_future_hours() {
     }
     let rows = plot(&stats, &assists, Window::Today, 119);
     let faint = render::paint(render::palette::faint(), "███");
-    let model = render::paint(render::palette::model_shade("claude", 0), "███");
+    let model = render::paint(
+        render::palette::model_styles(&["claude"], |_, _| true).0[0].mark,
+        "███",
+    );
     let gap = render::paint(render::palette::faint(), " ");
     assert!(
         rows[0].contains(&format!("{faint}{gap}{model}")),
