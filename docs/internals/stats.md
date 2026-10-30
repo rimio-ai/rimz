@@ -218,11 +218,14 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 | auto-redeem | a window reset, since a stamp write that fails afterwards does not undo it |
 | GC and temp eviction | it has no top-level error, so a partial sweep counts |
 | port forward | it has no error; the local supervisor opened the forward |
+| empty-dir grant | always: the provider-file write succeeded, independently of later launch preflights |
 | molt, idle-stop withdrawal, judge decline, workflow transitions, resident launch, model alias, tier fallback, compact command, room resume | always: each counts as recorded |
 
 `crates/rimz/src/cli/stats/assists.rs::category_entries` takes a `CategoryMode`: Dashboard omits held-attempt detail, counts Auto-compact requests as `compacts + held["compacts"]`, and hides zero-count categories. Timeline keeps effective counts and held detail. Both modes group counts by thousands and describe Auto-continue's duration as `(after 5.1h parked)`, not time saved. These are text projections, not changes to the rollup or timeline predicate.
 
 `port_forward` events count under `port_forwards`, with failed opens under `held.port_forwards`. They are written on the laptop, so only that RimZ home's stats include them. A listener returning after a close counts as a new forward; reopening an existing forward after a master replacement does not ([forward lifecycle](./remote.md#port-auto-forwarding)).
+
+`empty_dir_grant` events count under `empty_dir_grants` and the `Empty-dir trust:` category. The benefit names the provider, account, trusted folder, and profile when present; the forensic line adds the provider file. Failed writes and a concurrent writer's completed grant produce no assist.
 
 An attempt that did not take effect increments `held` under the count it would have joined (`AssistEvent::count_key`), and the timeline header prints it beside that count: `Auto-compact: N (M held)`. Four projections are easy to get wrong:
 

@@ -177,7 +177,7 @@ fn doctor_agent_shell_falls_back_or_is_omitted_for_non_bare_values() {
 }
 
 #[test]
-fn doctor_empty_dir_warns_only_for_configured_profiles_and_ungranted_accounts() {
+fn doctor_empty_dir_omits_accounts_that_fresh_launches_can_grant() {
     let env = Env::new();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
     assert_eq!(report["empty_dir"]["rows"], json!([]));
@@ -193,20 +193,10 @@ fn doctor_empty_dir_warns_only_for_configured_profiles_and_ungranted_accounts() 
         .output()
         .unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
-    let rows = report["empty_dir"]["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 2, "{report}");
-    for row in rows {
-        assert_eq!(row["kind"], "claude");
-        assert_eq!(row["profiles"], json!(["research"]));
-        assert_eq!(row["state"], "undecided");
-        assert_eq!(row["fix"], "run `rimz trust grant --empty-dir`");
-    }
+    assert_eq!(report["empty_dir"]["rows"], json!([]));
     let output = env.rimz().arg("doctor").output().unwrap();
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        text.contains("EMPTY-DIR") && text.contains("parent's directory instead"),
-        "{text}"
-    );
+    assert!(!text.contains("EMPTY-DIR"), "{text}");
     let bin = crate::common::write_env_dump_shim(&env, "claude");
     env.rimz()
         .env("PATH", crate::common::path_with_front(&bin))

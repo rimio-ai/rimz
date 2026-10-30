@@ -1232,24 +1232,11 @@ fn check_cell(
             )?,
             &machine.accounts,
         )?;
-    let decision = match empty_dir {
-        Some((agents, name)) => crate::agents::empty_dir::decide(
-            &state,
-            agents,
-            name,
-            &cell.kind,
-            &login,
-            cell.empty_dir == Some(true),
-        )?,
-        None => crate::agents::empty_dir::Decision::Skip,
-    };
-    let prepared = match decision {
-        crate::agents::empty_dir::Decision::Applied(prepared) => Some(prepared),
-        crate::agents::empty_dir::Decision::Fallback(notice) => {
-            interaction.notice(Notice::Warning(&notice.to_string()))?;
-            None
+    let prepared = match empty_dir {
+        Some((agents, name)) => {
+            prepare_empty_dir(&state, agents, name, cell, &login, true, interaction)?
         }
-        crate::agents::empty_dir::Decision::Skip => None,
+        None => None,
     };
     let cwd = prepared
         .as_ref()
@@ -1311,6 +1298,56 @@ fn check_cell(
         interaction.notice(Notice::Trust(&notice))?;
     }
     Ok((login.name().clone(), prepared))
+}
+
+fn prepare_empty_dir(
+    paths: &crate::StatePaths,
+    agents: &[AgentState],
+    requested: Option<&str>,
+    cell: &crate::harness::spec::AgentCell,
+    login: &crate::agents::ProviderLogin,
+    eligible: bool,
+    interaction: &mut dyn Interaction,
+) -> Result<Option<crate::agents::empty_dir::Prepared>> {
+    match crate::agents::empty_dir::decide(
+        paths,
+        agents,
+        requested,
+        &cell.kind,
+        login,
+        eligible && cell.empty_dir == Some(true),
+    )? {
+        crate::agents::empty_dir::Decision::Applied(prepared) => Ok(Some(prepared)),
+        crate::agents::empty_dir::Decision::Granted {
+            key,
+            path,
+            prepared,
+        } => {
+            crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+                at: jiff::Timestamp::now(),
+                assist: crate::harness::assist_log::Assist::EmptyDirGrant {
+                    kind: cell.kind.clone(),
+                    login: login.key(),
+                    key: key.clone(),
+                    path: path.clone(),
+                    profile: cell.launch.profile.clone(),
+                },
+            });
+            interaction.notice(Notice::Warning(&format!(
+                "rimz: trusted the empty folder {} for {} ({}) in {}",
+                key.display(),
+                cell.kind,
+                login.name(),
+                path.display()
+            )))?;
+            Ok(Some(prepared?))
+        }
+        crate::agents::empty_dir::Decision::Fallback(notice) => {
+            interaction.notice(Notice::Warning(&notice))?;
+            Ok(None)
+        }
+        crate::agents::empty_dir::Decision::Skip => Ok(None),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -434,7 +434,10 @@ impl std::str::FromStr for Isolation {
 
 /// A named agent profile. `agent` is a base reference: either a built-in agent
 /// kind or another profile that resolves to one.
-/// Also deserialized from trusted repository TOML: a new deserializable field must enter `crate::trust::ExecutableProfile` with a hash test, be `#[serde(skip)]`, or shape no command at all (`budget` and `keep_warm` gate RimZ's own notices, `idle_compact` RimZ's own compaction; `empty_dir` selects only the working directory).
+/// Also deserialized from trusted repository TOML: a new deserializable field must enter
+/// `crate::trust::ExecutableProfile` with a hash test, be `#[serde(skip)]`, or shape no command
+/// at all (`budget` and `keep_warm` gate RimZ's own notices, `idle_compact` its compaction;
+/// `empty_dir` selects the cwd and consents to folder trust only on RimZ's clean empty root).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,

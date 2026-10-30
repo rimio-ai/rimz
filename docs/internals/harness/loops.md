@@ -780,6 +780,7 @@ The redeem record also carries user-initiated redemptions under reason `manual`,
 | `Assist` variant | Writer | Records |
 | --- | --- | --- |
 | `port_forward` | the laptop's remote supervisor, after a report-driven SSH open attempt or a new local-port exhaustion | host, remote port, local port only on success, and error only on failure; no record for a master-replacement reopen or the forward limit |
+| `empty_dir_grant` | the shared launcher, after a fresh eligible `empty-dir` launch writes an undecided account's grant on the empty root | provider `kind`, account `login` (`kind@name`), trusted `key`, provider-file `path`, and `profile` when named; one record per successful write, even if a later preflight refuses; none when a concurrent writer already granted |
 | `resident_launch` | the loop helper, after stop and launch succeed and the ledger is published | task, condition evidence, destination checkout (scope when unnamed), the handles taken over from if any, and launched handles; an append error fails the fire and keeps the ledger entry |
 | `judge_decline` | the loop helper, after any fresh judge polarity decline | task, checkout, judge profile and kind, verdict reason, and optional cost; an append error fails the fire and leaves the published decline in place |
 | `workflow_start` | the loop runner, after a `workflow` task creates a run | run id, workflow, task, checkout, and whether the run has a prompt; a manual `rimz workflow run` appends none |

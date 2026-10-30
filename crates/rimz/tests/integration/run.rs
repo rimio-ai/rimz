@@ -1470,8 +1470,32 @@ fn subagent_empty_dir_preserves_named_lane() {
 
 #[cfg(unix)]
 #[test]
-fn subagent_empty_dir_without_grant_notices_fallback() {
-    assert_subagent_checkout_case(false, false, None, None, Some("fallback"));
+fn subagent_empty_dir_grants_undecided_account() {
+    assert_subagent_checkout_case(false, false, None, None, Some("grant"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_grant_stands_when_a_later_preflight_refuses() {
+    assert_subagent_checkout_case(false, false, None, None, Some("refused"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_malformed_trust_falls_back_without_writing() {
+    assert_subagent_checkout_case(false, false, None, None, Some("malformed"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_restricted_account_falls_back_without_writing() {
+    assert_subagent_checkout_case(false, false, None, None, Some("restricted"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_concurrent_fresh_launches_share_the_grant() {
+    assert_subagent_checkout_case(false, false, None, None, Some("concurrent"));
 }
 
 #[cfg(unix)]
@@ -1614,11 +1638,14 @@ fn assert_subagent_checkout_case(
     )
     .expect("write fanout tasks");
     env.install_agent_hooks("codex");
-    let kind = if matches!(empty, Some("fallback" | "dirty" | "revoked")) {
-        env.install_agent_hooks("claude");
-        "claude"
-    } else {
-        "codex"
+    let kind = match empty {
+        // Missing hooks make the supervised preflight refuse after the grant.
+        Some("refused") => "claude",
+        Some("grant" | "malformed" | "concurrent" | "dirty" | "revoked") => {
+            env.install_agent_hooks("claude");
+            "claude"
+        }
+        _ => "codex",
     };
     if empty.is_some() {
         crate::common::write_definition(
@@ -1644,9 +1671,34 @@ fn assert_subagent_checkout_case(
     }
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
-    if empty == Some("fallback") {
+    if matches!(empty, Some("grant" | "concurrent" | "refused")) {
         crate::common::trust_claude_project(&env, &checkout);
     }
+    let unchanged = match empty {
+        Some("malformed") => {
+            let path = env.home_root.join(".claude.json");
+            std::fs::write(&path, "{ malformed").unwrap();
+            Some(path)
+        }
+        Some("restricted") => {
+            let path = env.agent_config_path("codex");
+            let mut table: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+            table["projects"].as_table_mut().unwrap().insert(
+                empty_root.display().to_string(),
+                toml::Value::Table(toml::Table::from_iter([(
+                    "trust_level".into(),
+                    "untrusted".into(),
+                )])),
+            );
+            std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
+            Some(path)
+        }
+        _ => None,
+    }
+    .map(|path| {
+        let bytes = std::fs::read(&path).unwrap();
+        (path, bytes)
+    });
     if switch.is_some() {
         for name in ["work", "spare"] {
             let home = env.home_root.join(name);
@@ -1810,18 +1862,46 @@ fn assert_subagent_checkout_case(
             crate::common::room::MATERIALIZED_ROOM_PANES,
         );
     let launched = std::sync::atomic::AtomicBool::new(false);
-    let output = std::thread::scope(|scope| {
+    let (output, second_output) = std::thread::scope(|scope| {
         scope.spawn(|| {
-            if cwd == Some("missing") || empty == Some("dirty") {
-                return; // Missing cwd refuses before opening a child pane.
+            if cwd == Some("missing") || matches!(empty, Some("dirty" | "malformed" | "refused")) {
+                return; // Each of these refuses before opening a child pane.
             }
             bind_child_panes(&store, &trace_path, &workspace.session_name, &launched);
         });
+        let second = (empty == Some("concurrent")).then(|| {
+            let mut second = env.rimz();
+            second.args(command.get_args()).current_dir(&foreign).envs(
+                command
+                    .get_envs()
+                    .filter_map(|(key, value)| value.map(|value| (key, value))),
+            );
+            scope.spawn(move || second.bounded_output())
+        });
         let output = command.bounded_output();
+        let second_output = second.map(|second| second.join().unwrap().unwrap());
         launched.store(true, std::sync::atomic::Ordering::Relaxed);
-        output
-    })
-    .expect("launch subagents from foreign cwd");
+        (output.unwrap(), second_output)
+    });
+    if let Some((path, bytes)) = &unchanged {
+        assert_eq!(std::fs::read(path).unwrap(), *bytes);
+    }
+    if empty == Some("malformed") {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("empty-dir ignored:")
+                && stderr.contains("cannot write its folder trust")
+                && stderr.contains("claude (default)")
+                && stderr.contains("rimz doctor"),
+            "{stderr}"
+        );
+        assert!(
+            !output.status.success(),
+            "the fallback project also has unreadable trust"
+        );
+        assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+        return;
+    }
     if empty == Some("dirty") {
         assert_eq!(output.status.code(), Some(1));
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1841,34 +1921,121 @@ fn assert_subagent_checkout_case(
         assert!(!foreign.join("missing").exists());
         return;
     }
-    assert!(
-        output.status.success(),
-        "subagent launch failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    if empty == Some("refused") {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains(
+                "`rimz agents -p` requires claude hooks so the supervised turn can report \
+                 completion; run `rimz hooks install claude`"
+            ),
+            "{stderr}"
+        );
+        assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+    } else {
+        assert!(
+            output.status.success(),
+            "subagent launch failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     if empty.is_some() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             stderr.contains("empty-dir ignored"),
-            empty == Some("fallback"),
+            empty == Some("restricted"),
             "{stderr}"
         );
-        if empty == Some("fallback") {
+        if empty == Some("restricted") {
             assert!(
-                stderr.contains("claude")
-                    && stderr.contains("default")
+                stderr.contains("codex (default)")
+                    && stderr.contains("saved the empty folder as untrusted")
                     && stderr.contains("rimz doctor"),
                 "{stderr}"
             );
         }
     }
-    let expected_count = if fanout { 2 } else { 1 };
+    if matches!(empty, Some("grant" | "concurrent" | "refused")) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if matches!(empty, Some("grant" | "refused")) {
+            assert!(
+                stderr.contains("trusted the empty folder") && stderr.contains("claude (default)"),
+                "{stderr}"
+            );
+        }
+        let config = env.home_root.join(".claude.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        for key in [&empty_root, &checkout] {
+            assert_eq!(
+                value["projects"][key.to_str().unwrap()]["hasTrustDialogAccepted"],
+                true
+            );
+        }
+        let grants = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
+            .into_iter()
+            .map(|record| serde_json::to_value(record).unwrap())
+            .filter(|record| record["assist"] == "empty_dir_grant")
+            .collect::<Vec<_>>();
+        assert!(
+            (1..=if second_output.is_some() { 2 } else { 1 }).contains(&grants.len()),
+            "{grants:?}"
+        );
+        for grant in grants {
+            assert_eq!(grant["login"], "claude@default");
+            assert_eq!(grant["profile"], "researcher");
+            assert_eq!(grant["key"], empty_root.to_str().unwrap());
+            assert_eq!(grant["path"], config.to_str().unwrap());
+        }
+        if empty == Some("grant") {
+            let stats = env
+                .rimz()
+                .args(["stats", "--assists", "--json"])
+                .env("PATH", path_with_front(&agent_bin))
+                .bounded_output()
+                .unwrap();
+            assert!(stats.status.success(), "{stats:?}");
+            let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+            assert_eq!(stats["rollup"]["empty_dir_grants"], 1);
+            let doctor = env
+                .rimz()
+                .args(["doctor", "--json"])
+                .env("PATH", path_with_front(&agent_bin))
+                .bounded_output()
+                .unwrap();
+            let doctor: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+            assert_eq!(doctor["empty_dir"]["rows"], json!([]));
+        }
+    }
+    if empty == Some("refused") {
+        return;
+    }
+    if let Some(second) = &second_output {
+        let stderr = String::from_utf8_lossy(&second.stderr);
+        assert!(second.status.success(), "second launch: {stderr}");
+        assert!(!stderr.contains("empty-dir ignored"), "{stderr}");
+    }
+    let expected_count = if fanout || second_output.is_some() {
+        2
+    } else {
+        1
+    };
     let records = rimz::harness::run::list(store.paths()).expect("list child runs");
     assert_eq!(records.len(), expected_count);
     let agents = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("child launch history")
         .agents;
+    if second_output.is_some() {
+        for record in records {
+            assert_eq!(
+                record.worktree_path.parent(),
+                Some(store.paths().empty_room_dir().as_path())
+            );
+            assert!(record.worktree_path.is_dir());
+        }
+        return;
+    }
     assert_eq!(
         agents
             .iter()
@@ -1879,7 +2046,7 @@ fn assert_subagent_checkout_case(
         checkout.to_str()
     );
     let lane_path = if cwd.is_some() { foreign } else { checkout };
-    let applied = matches!(empty, Some("root" | "named" | "revoked"));
+    let applied = matches!(empty, Some("root" | "named" | "revoked" | "grant"));
     let checkout = if applied {
         let child = agents
             .iter()
@@ -1894,7 +2061,7 @@ fn assert_subagent_checkout_case(
         assert_eq!(child.root_lane, matches!(empty, Some("root" | "revoked")));
         assert_eq!(
             child.channel.as_deref(),
-            (empty == Some("named")).then_some("parent-checkout")
+            matches!(empty, Some("named" | "grant")).then_some("parent-checkout")
         );
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(

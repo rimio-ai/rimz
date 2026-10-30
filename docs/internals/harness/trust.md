@@ -182,9 +182,10 @@ Folder trust is a provider's own per-directory decision, such as Claude's accept
 | `rimz trust grant --agents [<kind>,...]` | the named kinds, or every undecided kind, at this project's grant key |
 | `rimz trust grant` on a TTY | the undecided kinds the user confirms after the preview |
 | `rimz trust grant --empty-dir` | the machine-wide empty-directory root, and not project trust |
+| fresh eligible `empty-dir` profile launch | an undecided, grantable account whose key is exactly the resolved empty root; the profile flag is consent, with no question or diff prompt |
 | attended `rimz start` | the undecided kinds the user accepts, offered after account resolution and before room birth judges remote-control readiness |
 
-Every write previews the provider-file diff through the shared CLI file-diff renderer, and checks the preview is still fresh before an atomic replacement. That check is not a compare-and-swap against a provider writing the file at the same time.
+Explicit grants and attended birth offers preview the provider-file diff through the shared CLI file-diff renderer. A fresh eligible `empty-dir` launch instead prints the trusted folder, account, and changed provider file, and appends an `empty_dir_grant` assist. Every write checks that its preview is still fresh before an atomic replacement. Automatic empty-root grants re-read a changed file and retry at most three writes; write errors or continued changes fall back with a notice. That check is not a compare-and-swap against a provider writing the file at the same time. Saved-untrusted decisions, non-grantable files, and grant keys wider than the empty root stay manual. Re-entry never grants automatically.
 
 Codex's saved-untrusted decision is `Restricted`, and no grant path writes over it. `rimz start` prints its fix on every start without asking and records no decline for it. `rimz doctor` and `rimz trust` resolve each kind's account as a launch would: room pins and live inherited defaults inside a room, else the trusted project, then the machine, then the provider default. A kind whose account fails to resolve does not hide its siblings' rows.
 
