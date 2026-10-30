@@ -240,21 +240,6 @@ pub(super) fn validate_spec(
                     "reserved engine outcome; a check routes its own outcomes plus timeout and invalid",
                 );
             }
-            if let Some(CheckKind::Agent(agent)) = check.kind()
-                && spec
-                    .steps
-                    .get(target)
-                    .and_then(|step| step.agent.as_deref())
-                    .and_then(|agent| step_layout(dir, agent, definitions, project_root).ok())
-                    .and_then(|layout| {
-                        let leader = crate::harness::spec::prompt_leader(&layout, None).ok()?;
-                        let cell = layout.agent_cells().nth(leader)?;
-                        Some(cell.launch.profile.as_deref().unwrap_or(&cell.kind) == agent)
-                    })
-                    == Some(true)
-            {
-                report.warnings.push(issue(&path, format!("judge and step {target} use the same profile {agent}; independence relies on the prompt")));
-            }
         }
         report.rows.push(NodeRow {
             workflow: name.into(),

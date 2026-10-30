@@ -99,7 +99,7 @@ An edge names another node, `@wait`, `@done`, `@failed`, or `@user`. Checks and 
 | A cycle through steps needs a `max-visits` on one of them. | A per-key cap alone cannot bound a check that names a new key every time. |
 | A check-only cycle needs a wait edge. A hold is not an edge and does not count. | Otherwise one advance would loop without pause. |
 
-Validation warns, without refusing, about a turn step whose leader adapter does not report background work (`do_background`, which every row carries), a judge sharing its target step leader's profile, and turn steps or judges while machine auto-continue is off.
+Validation warns, without refusing, about turn or `until` steps whose leader adapters do not report background work (`do_background`, which every row carries), and turn steps or judges while machine auto-continue is off.
 
 ### `run` and `shell`
 
