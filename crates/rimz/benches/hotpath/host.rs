@@ -883,7 +883,7 @@ impl Room {
                 let ended = record["at_ms"].as_i64().unwrap();
                 ended >= started_ms
                     && ended < ended_ms
-                    && record["event"]["kind"] == "fetch_reduction_stats"
+                    && record["event"]["kind"] == "fetch_cycle_stats"
             })
             .collect();
         let seconds: f64 = records

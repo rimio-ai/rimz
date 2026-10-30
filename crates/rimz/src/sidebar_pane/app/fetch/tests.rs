@@ -14,15 +14,8 @@ fn pacer_backstops_and_attention_deadlines_obey_the_floor() {
     let second = Duration::from_secs(1);
     let started = returned - second / 10;
     let next = |tick, watched, due| {
-        next_cycle(
-            span(started, returned),
-            tick,
-            watched,
-            due,
-            None,
-            FOLD_FLOOR,
-        )
-        .map(|at| at.duration_since(returned))
+        idle_cycle_start(span(started, returned), tick, watched, due, FOLD_FLOOR)
+            .map(|(at, _)| at.duration_since(returned))
     };
     assert_eq!(
         [
@@ -37,8 +30,8 @@ fn pacer_backstops_and_attention_deadlines_obey_the_floor() {
             next(Some(second), false, Some(started)),
             next(Some(second), false, Some(returned)),
             next(None, false, Some(returned + second / 2)),
-            next_cycle(None, Some(second), true, None, None, FOLD_FLOOR)
-                .map(|at| at.duration_since(returned)),
+            idle_cycle_start(None, Some(second), true, None, FOLD_FLOOR)
+                .map(|(at, _)| at.duration_since(returned)),
         ],
         [
             Some(second),
@@ -64,28 +57,14 @@ fn span(started: Instant, returned: Instant) -> Option<CycleSpan> {
 #[test]
 fn pacer_requests_stay_prompt_at_every_phase_and_without_subscribers() {
     let returned = Instant::now();
-    for watched in [false, true] {
-        for tick in [None, Some(Duration::from_secs(1))] {
-            for elapsed_ms in [0, 100, 250, 750, 6_000] {
-                let arrival = returned + Duration::from_millis(elapsed_ms);
-                assert_eq!(
-                    next_cycle(
-                        span(returned, returned),
-                        tick,
-                        watched,
-                        None,
-                        Some(arrival),
-                        FOLD_FLOOR
-                    ),
-                    Some(arrival.max(returned + FOLD_FLOOR))
-                );
-            }
-        }
+    for elapsed_ms in [0, 100, 250, 750, 6_000] {
+        let arrival = returned + Duration::from_millis(elapsed_ms);
+        assert_eq!(
+            request_cycle_start(Some(returned), arrival, FOLD_FLOOR),
+            arrival.max(returned + FOLD_FLOOR)
+        );
     }
-    assert_eq!(
-        next_cycle(None, None, false, None, Some(returned), FOLD_FLOOR),
-        Some(returned)
-    );
+    assert_eq!(request_cycle_start(None, returned, FOLD_FLOOR), returned);
 }
 
 #[test]
@@ -94,25 +73,19 @@ fn pacer_timeout_rechecks_from_the_same_previous_return() {
     let returned = clock.now();
     let tick = Duration::from_secs(1);
     assert_eq!(
-        next_cycle(
-            span(returned, returned),
-            Some(tick),
-            true,
-            None,
-            None,
-            FOLD_FLOOR
-        ),
+        idle_cycle_start(span(returned, returned), Some(tick), true, None, FOLD_FLOOR)
+            .map(|(at, _)| at),
         Some(returned + tick)
     );
     clock.advance(tick);
-    let next = next_cycle(
+    let next = idle_cycle_start(
         span(returned, returned),
         Some(tick),
         false,
         None,
-        None,
         FOLD_FLOOR,
-    );
+    )
+    .map(|(at, _)| at);
     assert_eq!(next, Some(returned + 5 * tick));
     assert!(
         next.is_some_and(|at| at > clock.now()),
@@ -122,31 +95,7 @@ fn pacer_timeout_rechecks_from_the_same_previous_return() {
 
 #[test]
 fn idle_cadence_composes_worker_watchdogs_and_refresher_over_sixty_seconds() {
-    let fixture = FetchFixture::new();
-    let frame = crate::testkit::fleet::seed_scale_room(
-        &fixture.state,
-        &fixture.runtime,
-        crate::testkit::fleet::ScaleRoom {
-            agents: 200,
-            panes: 100,
-            ended_sessions: 0,
-            orphan_contexts: 0,
-        },
-    )
-    .unwrap();
-    let mut seeded = IdleCycleFixture::new(fixture.state, fixture.runtime, frame, 100);
-    seeded.run_cycle();
-    let fold = seeded
-        .sink
-        .host_data
-        .lock()
-        .unwrap()
-        .views
-        .lock()
-        .fold
-        .clone()
-        .unwrap();
-    assert_eq!(fold.workspace.snapshot().agents.len(), 200);
+    let snapshot = WorkspaceSnapshot(super::super::fixtures::snapshot(&workspace()));
     let counts = [(false, 1), (true, 1), (true, 10)].map(|(watched, seconds)| {
         let clock = super::super::clock::LoopClock::play("2026-06-01T00:00:00Z".parse().unwrap());
         let tick = Duration::from_secs(seconds);
@@ -163,7 +112,7 @@ fn idle_cadence_composes_worker_watchdogs_and_refresher_over_sixty_seconds() {
         let publish = |at| {
             views.lock().fold = Some(Arc::new(WorkspaceFold {
                 sampled_at: at,
-                workspace: fold.workspace.clone(),
+                workspace: snapshot.clone(),
                 frame: None,
             }));
         };
@@ -186,17 +135,19 @@ fn idle_cadence_composes_worker_watchdogs_and_refresher_over_sixty_seconds() {
                     .lock()
                     .fresh_fold(now, tick, views.read().watched())
                     .is_none();
-            let requested = (watchdog_request || refresher_request).then_some(now);
-            if next_cycle(
-                span(returned, returned),
-                Some(tick),
-                views.read().watched(),
-                None,
-                requested,
-                FOLD_FLOOR,
-            )
-            .is_some_and(|at| at <= now)
-            {
+            let next = if watchdog_request || refresher_request {
+                Some(request_cycle_start(Some(returned), now, FOLD_FLOOR))
+            } else {
+                idle_cycle_start(
+                    span(returned, returned),
+                    Some(tick),
+                    views.read().watched(),
+                    None,
+                    FOLD_FLOOR,
+                )
+                .map(|(at, _)| at)
+            };
+            if next.is_some_and(|at| at <= now) {
                 cycles += 1;
                 returned = now;
                 completed.fill(now);
@@ -289,14 +240,14 @@ fn assert_unwatched_attention_delivery(reminder: bool) {
     let due = worker.clock.instant_at(
         jiff::Timestamp::from_millisecond(worker.attention_due_ms().unwrap() as i64).unwrap(),
     );
-    let next = next_cycle(
+    let next = idle_cycle_start(
         span(started, started),
         Some(Duration::from_secs(1)),
         false,
         Some(due),
-        None,
         FOLD_FLOOR,
-    );
+    )
+    .map(|(at, _)| at);
     assert!(
         next.is_some(),
         "a pending attention deadline must schedule a cycle"
@@ -815,20 +766,124 @@ fn fetch_window_records_reductions_once_per_window() {
     );
     let records = diagnostic_events(&diag);
     assert_eq!(records.len(), 1);
-    assert!(
-        matches!(
-            records[0],
-            crate::diag::record::DiagEvent::FetchReductionStats {
-                cycles: 3,
-                content_reductions: 2,
-                unchanged_reductions: 2,
-                ..
-            }
-        ),
-        "counts describe successful reductions, not unread publications"
-    );
+    let record = serde_json::to_value(&records[0]).unwrap();
+    assert_eq!(record["kind"], "fetch_cycle_stats");
+    assert_eq!(record["cycles"], 3);
+    assert_eq!(record["content_reductions"], 2);
+    assert_eq!(record["unchanged_reductions"], 2);
+    let triggers: u64 = [
+        "backstop_cycles",
+        "deadline_cycles",
+        "normal_request_cycles",
+        "fresh_panes_request_cycles",
+        "hard_refresh_request_cycles",
+    ]
+    .map(|field| record[field].as_u64().unwrap())
+    .into_iter()
+    .sum();
+    assert_eq!(triggers, 3);
+    assert_eq!(record["unwatched_cycles"], 0);
     cycles.run_cycle();
     assert_eq!(diagnostic_events(&diag).len(), 1);
+}
+
+#[test]
+fn fetch_window_attributes_merged_requests_deadlines_and_backstops() {
+    let tick = Duration::from_millis(30);
+    let (tx, rx) = std::sync::mpsc::channel();
+    for request in [
+        FetchRequest::default(),
+        FetchRequest::fresh_panes(),
+        FetchRequest::hard_refresh(),
+    ] {
+        tx.send(request).unwrap();
+    }
+    let sender = std::cell::RefCell::new(Some(tx));
+    let completed = std::cell::Cell::new(0);
+    let due = std::cell::Cell::new(None);
+    let mut starts = Vec::new();
+    let mut window = FetchWindow::default();
+    drive(
+        &rx,
+        Duration::from_millis(5),
+        || Some(tick),
+        || completed.get() == 0 || completed.get() >= 4,
+        || {
+            if completed.get() != 3 {
+                return None;
+            }
+            let at = due.get().unwrap_or_else(|| {
+                let at = Instant::now() + tick;
+                due.set(Some(at));
+                at
+            });
+            Some(at)
+        },
+        |_, trigger, watched| {
+            starts.push((trigger, watched));
+            window.record(trigger, watched);
+            completed.set(starts.len());
+            match starts.len() {
+                1 => sender
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .send(FetchRequest::default())
+                    .unwrap(),
+                2 => sender
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .send(FetchRequest::fresh_panes())
+                    .unwrap(),
+                5 => drop(sender.borrow_mut().take()),
+                _ => {}
+            }
+        },
+    );
+    assert_eq!(
+        starts,
+        [
+            (CycleTrigger::Request(FetchMode::HardRefresh), true),
+            (CycleTrigger::Request(FetchMode::Normal), false),
+            (CycleTrigger::Request(FetchMode::FreshPanes), false),
+            (CycleTrigger::Deadline, false),
+            (CycleTrigger::Backstop, true),
+        ]
+    );
+    let views = super::super::views::ViewsHandle::default();
+    let now = window.started + Duration::from_secs(60);
+    let record = serde_json::to_value(window.finish(&views, now).unwrap()).unwrap();
+    assert_eq!(record["kind"], "fetch_cycle_stats");
+    assert_eq!(record["cycles"], 5);
+    assert_eq!(record["unwatched_cycles"], 3);
+    for field in [
+        "backstop_cycles",
+        "deadline_cycles",
+        "normal_request_cycles",
+        "fresh_panes_request_cycles",
+        "hard_refresh_request_cycles",
+    ] {
+        assert_eq!(record[field], 1, "{field}");
+    }
+    assert!(window.finish(&views, now).is_none());
+    let empty = serde_json::to_value(
+        window
+            .finish(&views, now + Duration::from_secs(60))
+            .unwrap(),
+    )
+    .unwrap();
+    for field in [
+        "cycles",
+        "backstop_cycles",
+        "deadline_cycles",
+        "normal_request_cycles",
+        "fresh_panes_request_cycles",
+        "hard_refresh_request_cycles",
+        "unwatched_cycles",
+    ] {
+        assert_eq!(empty[field], 0, "{field}: reset at rollover");
+    }
 }
 
 #[test]
@@ -1479,7 +1534,13 @@ fn run_cycle(
 ) -> Vec<FetchUpdate> {
     let (mut sink, reader) = single_sink(host_data, wake_channel().0);
     reader.cursor.lock().unwrap().revision = reader.views.lock().revision;
-    worker.run_cycle(state, request, &mut sink);
+    worker.run_cycle(
+        state,
+        request,
+        CycleTrigger::Request(request.mode),
+        true,
+        &mut sink,
+    );
     reader
         .take_unseen()
         .into_iter()
@@ -2490,7 +2551,13 @@ fn fast_fold_replaces_the_retained_seed_and_failure_preserves_it() {
     .unwrap();
     let mut worker = fixture.worker();
     let (mut sink, rx) = single_sink(fixture.host_data.clone(), wake_channel().0);
-    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
+    worker.run_cycle(
+        &fixture.state,
+        FetchRequest::default(),
+        CycleTrigger::Request(FetchMode::Normal),
+        true,
+        &mut sink,
+    );
     assert!(matches!(
         rx.wait_first_unseen().unwrap().into_parts().0,
         FetchUpdate::Snapshot { .. }
@@ -2517,7 +2584,13 @@ fn fast_fold_replaces_the_retained_seed_and_failure_preserves_it() {
         serde_json::to_vec(&rollup).unwrap(),
     )
     .unwrap();
-    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
+    worker.run_cycle(
+        &fixture.state,
+        FetchRequest::default(),
+        CycleTrigger::Request(FetchMode::Normal),
+        true,
+        &mut sink,
+    );
     assert!(matches!(
         rx.wait_first_unseen().unwrap().into_parts().0,
         FetchUpdate::Snapshot { .. }
@@ -2654,7 +2727,13 @@ fn one_cycle_projects_each_pane_excluding_only_itself() {
     }
     let mut worker = fixture.worker();
     let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
-    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
+    worker.run_cycle(
+        &fixture.state,
+        FetchRequest::default(),
+        CycleTrigger::Request(FetchMode::Normal),
+        true,
+        &mut sink,
+    );
 
     for (own, rx) in updates {
         let mut config = pane_config(worker.config.clone());
@@ -2850,7 +2929,13 @@ fn one_cycle_shares_rosters_and_cards_across_renderers() {
     subscribe(&subscribers, second);
     let mut worker = fixture.worker();
     let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
-    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
+    worker.run_cycle(
+        &fixture.state,
+        FetchRequest::default(),
+        CycleTrigger::Request(FetchMode::Normal),
+        true,
+        &mut sink,
+    );
     let first = first_rx.first_unseen().unwrap();
     let second = second_rx.first_unseen().unwrap();
     let host = fixture.host_data.lock().unwrap();
@@ -2900,7 +2985,13 @@ fn a_lagging_cursor_replays_only_the_latest_room_fold() {
             "rimz-test",
         );
         fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
-        worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
+        worker.run_cycle(
+            &fixture.state,
+            FetchRequest::default(),
+            CycleTrigger::Request(FetchMode::Normal),
+            true,
+            &mut sink,
+        );
         let updates = advancing_rx.take_unseen();
         assert_eq!(updates.len(), 1, "unrelated subscriber keeps advancing");
         assert_eq!(shown_panes(&updates[0]), ["terminal_7", &newest]);
@@ -2963,7 +3054,13 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
     worker.observer = Some(observe::RoomObserver::new(tx.clone(), Arc::default()));
     let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     observe::take_extractions();
-    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
+    worker.run_cycle(
+        &fixture.state,
+        FetchRequest::default(),
+        CycleTrigger::Request(FetchMode::Normal),
+        true,
+        &mut sink,
+    );
     assert_eq!(
         observe::take_extractions(),
         (1, 0),
@@ -3092,7 +3189,13 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
     focus_anchor::take_reads();
     body_filter::take_reads();
     let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
-    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
+    worker.run_cycle(
+        &fixture.state,
+        FetchRequest::default(),
+        CycleTrigger::Request(FetchMode::Normal),
+        true,
+        &mut sink,
+    );
     let mut reads = (focus_anchor::take_reads(), body_filter::take_reads());
     for pane in panes {
         let own = pane.join().unwrap();
@@ -3170,7 +3273,7 @@ fn fetch_floor_merges_requests_after_the_previous_cycle_returns() {
                 || None,
                 || true,
                 || None,
-                |request| {
+                |request, _, _| {
                     cycles.push((Instant::now(), request));
                     if let Some(gap_tx) = gap_tx.take() {
                         // A start-to-start floor would already have expired.
@@ -3215,7 +3318,7 @@ fn fetch_floor_does_not_delay_a_request_after_a_long_idle() {
                 || None,
                 || true,
                 || None,
-                |request| {
+                |request, _, _| {
                     cycles.push((Instant::now(), request));
                     if cycles.len() == 1 {
                         finished_tx.send(()).unwrap();
@@ -3256,7 +3359,7 @@ fn fetch_floor_has_no_mode_bypass() {
             || None,
             || true,
             || None,
-            |cycle| {
+            |cycle, _, _| {
                 cycles.push((Instant::now(), cycle));
                 if let Some(tx) = sender.take() {
                     tx.send(request).unwrap();
@@ -3287,7 +3390,7 @@ fn fetch_floor_finishes_the_batch_when_senders_disconnect_during_the_gap() {
                 || None,
                 || true,
                 || None,
-                |request| {
+                |request, _, _| {
                     cycles.push((Instant::now(), request));
                     if cycles.len() == 1 {
                         finished_tx.send(Instant::now()).unwrap();
@@ -3327,7 +3430,7 @@ fn drive_backstop_runs_an_ordinary_cycle_after_an_idle_tick() {
         || Some(tick),
         || true,
         || None,
-        |request| {
+        |request, _, _| {
             cycles.push((Instant::now(), request));
             if cycles.len() == 1 {
                 returned_at = Some(Instant::now());
@@ -3360,7 +3463,7 @@ fn drive_backstop_waits_without_subscribers() {
             || None,
             || true,
             || None,
-            |_| {
+            |_, _, _| {
                 cycles += 1;
                 if cycles == 1 {
                     started.send(()).unwrap();
@@ -3383,7 +3486,7 @@ fn drive_backstop_waits_on_an_unrepresentable_tick() {
         || Some(Duration::MAX),
         || true,
         || None,
-        |_| {
+        |_, _, _| {
             cycles += 1;
             drop(sender.take());
         },
@@ -3420,7 +3523,7 @@ fn drive_backstop_restarts_after_each_cycle() {
         },
         || true,
         || None,
-        |request| {
+        |request, _, _| {
             cycles.push((Instant::now(), request));
             completed.set(cycles.len());
             if cycles.len() == 2 {
@@ -3460,7 +3563,7 @@ fn drive_backstop_rereads_membership_after_a_timeout() {
             },
             || true,
             || None,
-            |_| {
+            |_, _, _| {
                 cycles += 1;
                 if cycles == 1 {
                     started.send(()).unwrap();
@@ -3497,7 +3600,7 @@ fn drive_rechecks_the_watched_verdict_at_the_old_timeout() {
             },
             || reads.get() < 2,
             || None,
-            |_| cycles += 1,
+            |_, _, _| cycles += 1,
         );
         assert!(reads.get() >= 2, "the wait reached its old deadline");
         assert_eq!(
@@ -3523,8 +3626,8 @@ fn drive_runs_a_due_that_lands_mid_cycle_at_the_floor() {
         || Some(tick),
         || true,
         || due.get(),
-        |_| {
-            cycles.push(Instant::now());
+        |_, trigger, _| {
+            cycles.push((Instant::now(), trigger));
             if cycles.len() == 1 {
                 // The cycle has decided; its due lands before it returns.
                 due.set(Some(Instant::now() + floor / 3));
@@ -3537,7 +3640,8 @@ fn drive_runs_a_due_that_lands_mid_cycle_at_the_floor() {
         },
     );
     assert_eq!(cycles.len(), 2);
-    let gap = cycles[1].duration_since(returned_at.unwrap());
+    assert_eq!(cycles[1].1, CycleTrigger::Deadline);
+    let gap = cycles[1].0.duration_since(returned_at.unwrap());
     assert!(
         gap >= floor && gap < tick,
         "next cycle {gap:?} after return"

@@ -53,7 +53,7 @@ Every line in `audit/diag.log.jsonl` is one `DiagEnvelope` from [`record.rs`](..
 
 The `build` id is the first six bytes of the executable's linker build identity (`.note.gnu.build-id` on ELF, `LC_UUID` on Mach-O), or of a SHA-256 hash of the image when the identity is unavailable ([`build_id.rs`](../../crates/rimz/src/build_id.rs)). Every published pane frame carries the same stamp. Records written by an old and a new build during an upgrade therefore stay distinguishable in place. `rimz doctor` warns when fresh heartbeats show more than one build writing.
 
-Records are anomaly-first: routine fetch ticks, successful paints, and stable cache hits write nothing individually. Three families are deliberate exceptions. The fetch worker writes one aggregate `fetch_reduction_stats` record per window of at least a minute. The sidebar width traces record each accepted or rejected keypress, controller step, and terminal outcome. Hidden-view geometry repair writes one aggregate per finished sweep or jump fit, never one per window.
+Records are anomaly-first: routine fetch ticks, successful paints, and stable cache hits write nothing individually. Three families are deliberate exceptions. The fetch worker writes one aggregate `fetch_cycle_stats` record per window of at least a minute. The sidebar width traces record each accepted or rejected keypress, controller step, and terminal outcome. Hidden-view geometry repair writes one aggregate per finished sweep or jump fit, never one per window.
 
 ## Event taxonomy
 
@@ -66,7 +66,8 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | `duplicate_pane_id` | `sidebar::frame`, `store::snapshot::view` projection | A pane id listed twice |
 | `mixed_build_writers` | none | A prior frame stamped by a different build. No current code emits it. Retained logs decode it |
 | `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `link_alert`, `live_roster_held` | `sidebar_pane::app` | Renderer-side holds and releases, failed fetches, degraded refresh episodes, remote-link degraded and recovered episodes, and a recovery-roster removal withheld because the mux did not list the session, with the agents kept |
-| `fetch_reduction_stats` | `sidebar_pane::app::fetch` | One fetch-worker window of at least 60 seconds ([fetch windows](#fetch-reduction-windows)) |
+| `fetch_cycle_stats` | `sidebar_pane::app::fetch` | One fetch-worker window of at least 60 seconds, split by trigger and watched state ([fetch windows](#fetch-cycle-windows)) |
+| `fetch_reduction_stats` | none | Retained fetch windows without trigger counts; no current code emits it |
 | `group_migration` | `sidebar_pane::app::state` | A pane whose group changed between committed snapshots, with cwd before and after |
 | `renderer_panic` | `sidebar_pane::app` | Panics that would otherwise vanish with the pane |
 | `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` | `sidebar_pane::app::width_control` | Intent verdicts, controller nudges, learned feedback, and terminal outcomes for `a`/`d` width control |
@@ -123,9 +124,11 @@ The supervisor kinds come from `sidebar_pane::supervise`, which holds one tab's 
 
 `codex_daemon_reap`, `accounts`, `spending`, `rate_limits`, `sessions`, `account_usage`, `auto_continue`, `idle_compact`, `idle_stop`, `hibernate`, `cache_keepalive`, `keep_warm`, `auto_redeem`, `budget`, `run_timeout`, `orphan_sweep`, `auto_gc`, `diff_stats`, `cohort_spend`, `pipeline`, `pr_states`, `trunk`, and `other` for the rest of the metered pass (host-input fold, login resolution, seat policy load).
 
-### Fetch reduction windows
+### Fetch cycle windows
 
-`fetch_reduction_stats` carries `interval_ms`, `cycles`, `content_reductions`, `unchanged_reductions`, and `fold_ms` for one fetch-worker window of at least 60 seconds. `Views.reductions` counts full-content or clock-only reductions of successful updates by shared views and Scratch panes, interims included. Publications, completions, failures, hidden deferrals, and already-current co-viewers add nothing, and reductions after rollover enter the next window. `fold_ms` totals fast-fold and produce/fold time, input acquisition included and consumer projection excluded. Divide it by `cycles` for the per-cycle cost.
+`fetch_cycle_stats` carries `interval_ms`, `cycles`, `content_reductions`, `unchanged_reductions`, and `fold_ms` for one fetch-worker window of at least 60 seconds. Its trigger counts sum to `cycles`: `backstop_cycles`, `deadline_cycles` for an attention due earlier than the backstop, and `normal_request_cycles`, `fresh_panes_request_cycles`, `hard_refresh_request_cycles` for received requests, classified by the merged batch's strongest mode. A request merged at the floor counts as a request, not a timeout. `unwatched_cycles` counts cycles whose last pacer read found no mapped or resolved pane, and never exceeds `cycles`.
+
+`Views.reductions` counts full-content or clock-only reductions of successful updates by shared views and Scratch panes, interims included. Publications, completions, failures, hidden deferrals, and already-current co-viewers add nothing, and reductions after rollover enter the next window. `fold_ms` totals fast-fold and produce/fold time, input acquisition included and consumer projection excluded. Divide it by `cycles` for the per-cycle cost. The trigger counts carry their own tag rather than new keys on `fetch_reduction_stats`, so a retained line keeps the shape its build wrote.
 
 ### Hook drain evidence
 
@@ -151,7 +154,7 @@ Severity follows the event, and for a few kinds the event's own fields. `DiagEve
 | `info` | investigate | `resolution_fallback`, `mixed_build_writers`, `supervisor_convergence` |
 | `info` | contained | `workflow_retry`, `workflow_rerun`, `newborn_quarantined`, `local_session_bind_rejected`, `subagent_digest_backstopped`, `hook_drainer_reconnected` |
 | `info` | recovered | `frame_shrink_verified`, `pane_carry_refuted`, `gate_release`, `topology_writer_changed`, `recovery_seat_refilled`, `recovery_child_ended`, `pane_winsize_repaired`, `sidebar_view_repaired`, `scoped_bind_restored` |
-| `info` | expected | `group_migration`, `work_pane_boundary_moved`, `hidden_views_fitted`, `fetch_reduction_stats`, `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` |
+| `info` | expected | `group_migration`, `work_pane_boundary_moved`, `hidden_views_fitted`, `fetch_cycle_stats`, retained `fetch_reduction_stats`, `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` |
 | `warn` while active, `info` with `recovered_after_ms` | investigate, then recovered | `health_alert`, `link_alert`, `tick_budget_breach` |
 | `warn` unless `settled`, else `info` | investigate, or contained when settled | `client_reaped` |
 | `warn` for `start_regressed` and `foreground_kind_mismatch`, `info` for `probe_reports_absent` and `carry_expired` | investigate, or expected | `hosted_carry_dropped` |
@@ -167,7 +170,7 @@ One condition can write several records, and one record can stand for many occur
 - **Identity rate limit.** The sink admits one record per identity per 30-second window (`DIAG_RATE_LIMIT_WINDOW`), where the identity is the kind plus its salient evidence fields ([`DiagEvent::identity_key`](../../crates/rimz/src/diag/record.rs)). Suppressed repeats are counted onto the next record of that identity as `suppressed_since_last`, so a per-tick repeat collapses to one periodic line carrying the tally. The limiter belongs to the sink and is shared by every renderer sink the host derives from it. A successor drainer or host starts a fresh window.
 - **Kind ceiling.** Each kind admits at most 120 records per window (`DIAG_KIND_CEILING`). Drops past the ceiling are added to the next admitted record's `suppressed_since_last`.
 - **Wrapper lease transitions.** Both drainer-gap kinds use the normal sink limits. Identity includes agent kind, optional name and `since_ms`, plus the unreachable phase, so distinct gaps and crossing/recovery do not suppress one another. More than 120 transitions of one kind in a window can still hit the ceiling.
-- **Kinds that skip the identity limit.** `health_alert`, `renderer_panic`, `renderer_exit`, `client_reaped`, `client_reattached`, `topology_write_rejected`, `hidden_views_fitted`, `fetch_reduction_stats`, and the three width traces go through `DiagSink::emit_unlimited`: only the kind ceiling applies, so each occurrence is its own line.
+- **Kinds that skip the identity limit.** `health_alert`, `renderer_panic`, `renderer_exit`, `client_reaped`, `client_reattached`, `topology_write_rejected`, `hidden_views_fitted`, `fetch_cycle_stats`, and the three width traces go through `DiagSink::emit_unlimited`: only the kind ceiling applies, so each occurrence is its own line. Fetch windows emit at most once per minute per host.
 - **The observer adds no rate limit of its own.** The host's writer emits drafts through the sink. `dropped_msgs` separately counts drafts the full channel shed.
 - **Audit retention.** The room's audit sweep removes the oldest files under `audit/`, logs and captures alike, while any is older than 30 days or the directory exceeds 64 MiB (`disk::retention::AUDIT_RETENTION`, `AUDIT_MAX_BYTES`). Copy `audit/diag-frames/` pairs out at the start of an investigation.
 

@@ -495,6 +495,19 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         spawns_by_step: BTreeMap<String, u64>,
     },
+    FetchCycleStats {
+        interval_ms: u64,
+        cycles: u64,
+        content_reductions: u64,
+        unchanged_reductions: u64,
+        fold_ms: u64,
+        backstop_cycles: u64,
+        deadline_cycles: u64,
+        normal_request_cycles: u64,
+        fresh_panes_request_cycles: u64,
+        hard_refresh_request_cycles: u64,
+        unwatched_cycles: u64,
+    },
     FetchReductionStats {
         interval_ms: u64,
         cycles: u64,
@@ -831,6 +844,7 @@ impl DiagEvent {
             | Self::SidebarWidthNudge { .. }
             | Self::SidebarWidthSettle { .. }
             | Self::WorkPaneBoundaryMoved { .. }
+            | Self::FetchCycleStats { .. }
             | Self::FetchReductionStats { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
@@ -903,6 +917,7 @@ impl DiagEvent {
             Self::SidebarWidthSettle { .. } => "sidebar_width_settle",
             Self::WorkPaneBoundaryMoved { .. } => "work_pane_boundary_moved",
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
+            Self::FetchCycleStats { .. } => "fetch_cycle_stats",
             Self::FetchReductionStats { .. } => "fetch_reduction_stats",
             Self::ToolLoopEscalated { .. } => "tool_loop_escalated",
             Self::LiveRosterHeld { .. } => "live_roster_held",
@@ -1070,7 +1085,9 @@ impl DiagEvent {
                 };
                 format!("{}:{tick_loop:?}:{phase}:{since_ms}", self.kind_name())
             }
-            Self::FetchReductionStats { .. } => self.kind_name().to_owned(),
+            Self::FetchCycleStats { .. } | Self::FetchReductionStats { .. } => {
+                self.kind_name().to_owned()
+            }
             Self::ToolLoopEscalated {
                 agent_kind,
                 agent_id,
@@ -1848,6 +1865,26 @@ impl DiagEvent {
                     "{trigger:?}: {fitted} hidden views fitted to {target_cols}x{target_rows}, {failed} failed, {skipped} skipped"
                 )
             }
+            Self::FetchCycleStats {
+                interval_ms,
+                cycles,
+                content_reductions,
+                unchanged_reductions,
+                fold_ms,
+                backstop_cycles,
+                deadline_cycles,
+                normal_request_cycles,
+                fresh_panes_request_cycles,
+                hard_refresh_request_cycles,
+                unwatched_cycles,
+            } => format!(
+                "fetch over {interval_ms}ms: {cycles} cycles ({unwatched_cycles} unwatched), \
+                 {backstop_cycles} backstop / {deadline_cycles} deadline / \
+                 {normal_request_cycles} normal / {fresh_panes_request_cycles} fresh-panes / \
+                 {hard_refresh_request_cycles} hard-refresh requests, \
+                 {content_reductions} content / {unchanged_reductions} unchanged reductions, \
+                 {fold_ms}ms folding"
+            ),
             Self::FetchReductionStats {
                 interval_ms,
                 cycles,

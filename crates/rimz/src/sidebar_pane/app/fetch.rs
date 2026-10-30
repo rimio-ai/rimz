@@ -673,8 +673,21 @@ impl IdleCycleFixture {
         // A stamp ahead of the clock keeps production not-due however long the fold takes.
         self.worker.producer_cadence.last_attempt =
             Some(Instant::now() + Duration::from_secs(3600));
-        self.worker
-            .run_cycle(&self.state, FetchRequest::default(), &mut self.sink);
+        let watched = self
+            .sink
+            .host_data
+            .lock()
+            .expect("host data")
+            .views
+            .read()
+            .watched();
+        self.worker.run_cycle(
+            &self.state,
+            FetchRequest::default(),
+            CycleTrigger::Backstop,
+            watched,
+            &mut self.sink,
+        );
         let mut unchanged = 0;
         let views = self.sink.host_data.lock().expect("host data").views.clone();
         for (cursor, subscriber) in self.cursors.iter_mut().zip(&self.sink.cycle) {
@@ -787,12 +800,19 @@ impl FetchWorker {
     /// Fold event-fresh truth every cycle and reconcile panes at the data tick.
     /// Both lanes share the warm cursor; forced topology and hard refreshes
     /// bypass cadence without blocking any renderer.
-    fn run_cycle(&mut self, state: &StatePaths, request: FetchRequest, sink: &mut ResultSink) {
+    fn run_cycle(
+        &mut self,
+        state: &StatePaths,
+        request: FetchRequest,
+        trigger: CycleTrigger,
+        watched: bool,
+        sink: &mut ResultSink,
+    ) {
         sink.begin_cycle();
         let Some(eldest) = sink.cycle.first() else {
             return;
         };
-        self.window.cycles += 1;
+        self.window.record(trigger, watched);
         let sampled_at = Instant::now();
         let now_ms = crate::utils::time::unix_now_ms();
         let inputs = sink
@@ -1282,9 +1302,22 @@ impl FetchRequest {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CycleTrigger {
+    Backstop,
+    Deadline,
+    Request(FetchMode),
+}
+
 struct FetchWindow {
     started: Instant,
     cycles: u64,
+    backstop_cycles: u64,
+    deadline_cycles: u64,
+    normal_request_cycles: u64,
+    fresh_panes_request_cycles: u64,
+    hard_refresh_request_cycles: u64,
+    unwatched_cycles: u64,
     fold_time: Duration,
 }
 
@@ -1293,12 +1326,30 @@ impl Default for FetchWindow {
         Self {
             started: Instant::now(),
             cycles: 0,
+            backstop_cycles: 0,
+            deadline_cycles: 0,
+            normal_request_cycles: 0,
+            fresh_panes_request_cycles: 0,
+            hard_refresh_request_cycles: 0,
+            unwatched_cycles: 0,
             fold_time: Duration::ZERO,
         }
     }
 }
 
 impl FetchWindow {
+    fn record(&mut self, trigger: CycleTrigger, watched: bool) {
+        self.cycles += 1;
+        self.unwatched_cycles += u64::from(!watched);
+        match trigger {
+            CycleTrigger::Backstop => self.backstop_cycles += 1,
+            CycleTrigger::Deadline => self.deadline_cycles += 1,
+            CycleTrigger::Request(FetchMode::Normal) => self.normal_request_cycles += 1,
+            CycleTrigger::Request(FetchMode::FreshPanes) => self.fresh_panes_request_cycles += 1,
+            CycleTrigger::Request(FetchMode::HardRefresh) => self.hard_refresh_request_cycles += 1,
+        }
+    }
+
     fn finish(
         &mut self,
         views: &super::views::ViewsHandle,
@@ -1310,12 +1361,18 @@ impl FetchWindow {
         }
         let counts = std::mem::take(&mut views.lock().reductions);
         self.started = now;
-        Some(crate::diag::record::DiagEvent::FetchReductionStats {
+        Some(crate::diag::record::DiagEvent::FetchCycleStats {
             interval_ms: interval.as_millis() as u64,
             cycles: std::mem::take(&mut self.cycles),
             content_reductions: counts.content,
             unchanged_reductions: counts.unchanged,
             fold_ms: std::mem::take(&mut self.fold_time).as_millis() as u64,
+            backstop_cycles: std::mem::take(&mut self.backstop_cycles),
+            deadline_cycles: std::mem::take(&mut self.deadline_cycles),
+            normal_request_cycles: std::mem::take(&mut self.normal_request_cycles),
+            fresh_panes_request_cycles: std::mem::take(&mut self.fresh_panes_request_cycles),
+            hard_refresh_request_cycles: std::mem::take(&mut self.hard_refresh_request_cycles),
+            unwatched_cycles: std::mem::take(&mut self.unwatched_cycles),
         })
     }
 }
@@ -1500,13 +1557,13 @@ impl FetchWorker {
                     .and_then(|due| jiff::Timestamp::from_millisecond(due).ok())
                     .map(|due| clock.instant_at(due))
             },
-            |request| {
+            |request, trigger, watched| {
                 // Re-resolved every cycle so `workspace migrate` repoints reads
                 // without restarting the renderer.
                 match resolve_state(self.config.workspace_id.clone()) {
                     Ok(state) => {
                         let tick = self.meter.begin();
-                        self.run_cycle(&state, request, &mut sink);
+                        self.run_cycle(&state, request, trigger, watched, &mut sink);
                         if let Some(event) = self.meter.finish(
                             tick,
                             crate::utils::time::unix_now_ms(),
@@ -1557,17 +1614,13 @@ struct CycleSpan {
     returned: Instant,
 }
 
-fn next_cycle(
+fn idle_cycle_start(
     last: Option<CycleSpan>,
     tick: Option<Duration>,
     watched: bool,
     attention_due: Option<Instant>,
-    requested_at: Option<Instant>,
     fold_floor: Duration,
-) -> Option<Instant> {
-    if let Some(arrival) = requested_at {
-        return Some(last.map_or(arrival, |span| arrival.max(span.returned + fold_floor)));
-    }
+) -> Option<(Instant, CycleTrigger)> {
     let CycleSpan { started, returned } = last?;
     let tick = tick?;
     let backstop = returned.checked_add(fold_interval(watched, tick));
@@ -1580,69 +1633,76 @@ fn next_cycle(
     });
     backstop
         .into_iter()
-        .chain(attention)
-        .min()
-        .map(|at| at.max(returned + fold_floor))
+        .map(|at| (at, CycleTrigger::Backstop))
+        .chain(attention.map(|at| (at, CycleTrigger::Deadline)))
+        .min_by_key(|(at, _)| *at)
+        .map(|(at, trigger)| (at.max(returned + fold_floor), trigger))
+}
+
+fn request_cycle_start(
+    returned_at: Option<Instant>,
+    arrival: Instant,
+    fold_floor: Duration,
+) -> Instant {
+    returned_at.map_or(arrival, |last| arrival.max(last + fold_floor))
 }
 
 /// Run one cycle per merged batch, resting after each return regardless of mode.
 /// After the first cycle, requests, the watched-aware backstop and attention dues
-/// compete for the next start. Timeouts re-read all three inputs against the
-/// same cycle span; no subscribers means waiting for a request. A held batch
-/// still runs after all senders disconnect.
+/// compete for the next start. Timeouts re-read tick, watched verdict and due
+/// against the same cycle span, carrying that verdict into the cycle; request
+/// cycles read it after the floor rest and batch merge. No subscribers means
+/// waiting for a request. A held batch still runs after all senders disconnect.
 fn drive(
     requests: &Receiver<FetchRequest>,
     fold_floor: Duration,
     mut backstop: impl FnMut() -> Option<Duration>,
     mut watched: impl FnMut() -> bool,
     mut attention_due: impl FnMut() -> Option<Instant>,
-    mut cycle: impl FnMut(FetchRequest),
+    mut cycle: impl FnMut(FetchRequest, CycleTrigger, bool),
 ) {
     let mut last: Option<CycleSpan> = None;
     loop {
         let mut idle_deadline = || {
-            next_cycle(
-                last,
-                backstop(),
-                watched(),
-                attention_due(),
-                None,
-                fold_floor,
-            )
+            let last = last?;
+            let tick = backstop();
+            let watching = watched();
+            let (at, trigger) =
+                idle_cycle_start(Some(last), tick, watching, attention_due(), fold_floor)?;
+            Some((at, trigger, watching))
         };
-        let received = match last.and_then(|_| idle_deadline()) {
-            Some(deadline) => {
+        let received = match idle_deadline() {
+            Some((deadline, _, _)) => {
                 requests.recv_timeout(deadline.saturating_duration_since(Instant::now()))
             }
             None => requests.recv().map_err(|_| RecvTimeoutError::Disconnected),
         };
-        let mut request = match received {
-            Ok(request) => request,
+        let (mut request, mut trigger, mut idle_watched) = match received {
+            Ok(request) => (request, CycleTrigger::Request(request.mode), None),
             Err(RecvTimeoutError::Disconnected) => return,
-            Err(RecvTimeoutError::Timeout)
-                if idle_deadline().is_none_or(|at| at > Instant::now()) =>
-            {
-                continue;
+            Err(RecvTimeoutError::Timeout) => {
+                let Some((at, trigger, watching)) = idle_deadline() else {
+                    continue;
+                };
+                if at > Instant::now() {
+                    continue;
+                }
+                (FetchRequest::default(), trigger, Some(watching))
             }
-            Err(RecvTimeoutError::Timeout) => FetchRequest::default(),
         };
-        if let Some(rest) = next_cycle(
-            last,
-            None,
-            watched(),
-            None,
-            Some(Instant::now()),
-            fold_floor,
-        )
-        .and_then(|at| at.checked_duration_since(Instant::now()))
+        let returned_at = last.map(|span| span.returned);
+        if let Some(rest) = request_cycle_start(returned_at, Instant::now(), fold_floor)
+            .checked_duration_since(Instant::now())
         {
             std::thread::sleep(rest);
         }
         for waiting in requests.try_iter() {
             request.merge(waiting);
+            trigger = CycleTrigger::Request(request.mode);
+            idle_watched = None;
         }
         let started = Instant::now();
-        cycle(request);
+        cycle(request, trigger, idle_watched.unwrap_or_else(&mut watched));
         last = Some(CycleSpan {
             started,
             returned: Instant::now(),

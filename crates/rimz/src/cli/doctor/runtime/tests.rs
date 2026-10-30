@@ -1075,6 +1075,44 @@ fn diagnostic_classification_requires_complete_positive_evidence() {
 
 #[test]
 fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
+    let retained_line = serde_json::to_string(&serde_json::json!({
+        "v": "rimz.diag.v1",
+        "workspace_id": "ws-test",
+        "session_name": "rimz-test",
+        "at_ms": 60_000,
+        "severity": "info",
+        "event": {
+            "kind": "fetch_reduction_stats", "interval_ms": 60_000, "cycles": 60,
+            "content_reductions": 2, "unchanged_reductions": 58, "fold_ms": 10
+        }
+    }))
+    .unwrap();
+    let retained = serde_json::from_str::<rimz::diag::record::DiagEnvelope>(&retained_line);
+    assert!(
+        retained.is_ok(),
+        "retained fetch line must decode: {retained:?}"
+    );
+    let retained = retained.unwrap();
+    assert_eq!(
+        classify_diagnostic(&retained.event, retained.severity),
+        (model::DoctorState::Expected, model::DoctorImpact::Info)
+    );
+    let fetch_cycles = serde_json::from_value::<DiagEvent>(serde_json::json!({
+        "kind": "fetch_cycle_stats", "interval_ms": 60_000, "cycles": 5,
+        "content_reductions": 2, "unchanged_reductions": 3, "fold_ms": 7,
+        "backstop_cycles": 1, "deadline_cycles": 1, "normal_request_cycles": 1,
+        "fresh_panes_request_cycles": 1, "hard_refresh_request_cycles": 1,
+        "unwatched_cycles": 3
+    }));
+    assert!(
+        fetch_cycles.is_ok(),
+        "fetch cycle counts must decode: {fetch_cycles:?}"
+    );
+    let fetch_cycles = fetch_cycles.unwrap();
+    assert_eq!(
+        classify_diagnostic(&fetch_cycles, fetch_cycles.severity()),
+        (model::DoctorState::Expected, model::DoctorImpact::Info)
+    );
     for cause in [
         "no_room_clamp",
         "hold_expired",
