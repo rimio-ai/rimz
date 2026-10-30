@@ -57,6 +57,15 @@ fn spec() -> WorkflowSpec {
 }
 
 #[test]
+fn inspection_timeout_uses_the_node_entry_time() {
+    let record = record();
+    assert_eq!(
+        super::super::timeout_at(&spec(), &record).unwrap(),
+        Some(record.entered_at + jiff::SignedDuration::from_hours(1)),
+    );
+}
+
+#[test]
 fn wait_backoff_cannot_hide_an_unfired_deadline() {
     let mut spec = spec();
     spec.checks

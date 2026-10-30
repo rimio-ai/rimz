@@ -710,33 +710,7 @@ impl Transition<'_> {
     }
 
     pub(super) fn timeout_at(&self) -> Result<Option<Timestamp>, TimeInputErr> {
-        let (timeout, start) = if let Some(check) = self.spec.checks.get(&self.record.node) {
-            (check.timeout.as_deref(), self.record.entered_at)
-        } else {
-            let Some(attempt) = self.record.attempt.as_ref() else {
-                return Ok(None);
-            };
-            if !attempt.lifecycle.is_turn() || attempt.asking.is_some() {
-                return Ok(None);
-            }
-            let Ok(start) = attempt
-                .started_at
-                .checked_add(std::time::Duration::from_millis(attempt.asked_ms))
-            else {
-                return Ok(None);
-            };
-            (
-                self.spec
-                    .steps
-                    .get(&self.record.node)
-                    .and_then(|step| step.timeout.as_deref()),
-                start,
-            )
-        };
-        let Some(raw) = timeout else {
-            return Ok(None);
-        };
-        Ok(start.checked_add(duration(raw)?).ok())
+        super::timeout_at(self.spec, &self.record)
     }
 
     pub(super) fn bound(&mut self) -> Result<bool, TimeInputErr> {
@@ -847,7 +821,7 @@ impl Transition<'_> {
     }
 }
 
-fn duration(raw: &str) -> Result<std::time::Duration, TimeInputErr> {
+pub(super) fn duration(raw: &str) -> Result<std::time::Duration, TimeInputErr> {
     parse_duration_units(
         raw,
         &[

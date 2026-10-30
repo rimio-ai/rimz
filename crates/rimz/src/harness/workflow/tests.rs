@@ -124,6 +124,7 @@ impl AttemptHost for FakeHost {
 mod attempts;
 mod commands;
 mod conditions;
+mod inspection;
 mod turns;
 
 #[test]

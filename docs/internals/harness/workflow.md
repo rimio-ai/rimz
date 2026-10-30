@@ -11,6 +11,7 @@ Paths are under `crates/rimz/src/`.
 | Path | Owns |
 | --- | --- |
 | `harness/workflow/spec.rs` | `WorkflowSpec` and the serde types `rimz workflow schema` derives from, plus check- and step-kind selection (`Check::kind`, `Step::kind`), default edges (`Check::edges`), `run` argv resolution, deadline and window parsing. In the sidebar import graph. |
+| `harness/workflow/inspect.rs` | Read-only journal hops and the timeout instant shared by inspection and transitions. `WorkflowSpec::target` and `Step`'s visit-bound methods live beside the spec. |
 | `harness/workflow/validate.rs` | `validate` and `validate_spec`: every definition rule and the `rimz workflow validate` rows. |
 | `harness/workflow/engine.rs` | Run control: `create`, `advance` and its locked `prepare`, `cancel`, `resume`, `wake`, `wake_run`, `reassign_task`, and `persist`, the one publication path. |
 | `harness/workflow/engine/agent.rs` | The agent-attempt protocol: `compose`, `launch`, `prepare_end` (admits the off-lock stop), `finish` (settles it). |
@@ -18,7 +19,7 @@ Paths are under `crates/rimz/src/`.
 | `harness/workflow/state.rs` | `Transition`: locked routing, waits and holds, bounds, agent-end staging, shared step settlement, non-agent end recording (`finish_script`), and the hosted-child kill. |
 | `harness/workflow/script.rs` | `evaluate` and `execute_step`: host checks and command steps behind one interruptible child-publication boundary (`with_child`), and dispatch checks to `script/condition.rs` and `script/judge.rs`. |
 | `harness/workflow/mod.rs` | The `AttemptHost` seam, `ScopeRoots`, and `advance_args`, the one `workflow advance` argv that run creation and both wake edges spawn, including `--woken-by <event-id>` for an applying hook's ingress frame. |
-| `store/workflow.rs` | `RunRecord`, `JournalEntry`, their codecs, `list`, and `journal`. No transitions. |
+| `store/workflow.rs` | `RunRecord`, `JournalEntry`, their codecs, `list`, and `journal`, plus `RunAddress` derived from the recorded scope. No transitions. |
 | `cli/workflow.rs`, `cli/workflow/host.rs` | Parsing and presentation, without creating rooms. The private `Host` implements `AttemptHost` over the library launcher, the room snapshot, and the stop cascade. |
 | `crates/rimz/src/harness/schedule/signal.rs::wake_workflows` | The signal edge: reads records and spawns the wake helper. |
 | `crates/rimz/src/harness/schedule/fire.rs::tick_workflows` | The clock edge: paces and spawns one `advance` per due run. |
@@ -125,7 +126,7 @@ Step 1 runs before the prompt or definition bytes are read, so a held run wins o
 
 `cancel` takes the workspace lock and returns false on a terminal record, so the first terminal write wins. It kills the child of a hosted check or command step and ends the run `canceled`. For an agent step it stages a `canceled` end with cause `Cancel` and stops the attempt ([Stopping an attempt](#stopping-an-attempt)). While a live host is mid-launch or already ending the attempt, cancel leaves the stop to that host.
 
-`resume` refuses a terminal run, and on an active run it accepts only `--extend`. A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock) and a cleared judge retry. `--extend visits=+N` adds a run-wide `visit_grant` to every step's `max-visits` and `max-visits-per-key`, for every key, and `--extend deadline=<when>` replaces the deadline and re-arms it.
+`resume` refuses a terminal run, and on an active run it accepts only `--extend`. A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock) and a cleared judge retry. `--extend visits=+N` adds a run-wide `visit_grant` to every step's `max-visits` and `max-visits-per-key`, for every key, and `--extend deadline=<when>` replaces the deadline and re-arms it. The return value is the persisted record from before the detached advance was spawned, so a receipt need not reload a record that advance may already have changed.
 
 ## Storage and isolation boundary
 

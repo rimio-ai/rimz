@@ -17,6 +17,59 @@ fn record() -> RunRecord {
 }
 
 #[test]
+fn run_address_round_trips_and_matches_requested_lanes() {
+    let address: RunAddress = "review#feat-x".parse().unwrap();
+    assert_eq!(address.to_string(), "review#feat-x");
+    assert!(address.matches(&address));
+    assert!(
+        "review#feat/x"
+            .parse::<RunAddress>()
+            .unwrap()
+            .matches(&address)
+    );
+    assert!(
+        !"other#feat-x"
+            .parse::<RunAddress>()
+            .unwrap()
+            .matches(&address)
+    );
+    assert!(
+        !"review#feat-y"
+            .parse::<RunAddress>()
+            .unwrap()
+            .matches(&address)
+    );
+    assert_eq!(
+        "review#lane#part".parse::<RunAddress>().unwrap().lane,
+        "lane#part"
+    );
+}
+
+#[test]
+fn run_address_rejects_missing_or_empty_parts() {
+    for raw in ["review", "", "#lane", "review#", "#"] {
+        assert!(raw.parse::<RunAddress>().is_err(), "{raw:?}");
+    }
+}
+
+#[test]
+fn run_address_uses_the_recorded_scope_without_reading_the_checkout() {
+    let mut record = record();
+    for (kind, path, lane) in [
+        (ScopeKind::Worktree, "/project/.worktrees/feat-x", "feat-x"),
+        (ScopeKind::Worktree, "/project", "project"),
+        (ScopeKind::Project, "/project", "project"),
+        (ScopeKind::Worktree, "/no-longer-present/deleted", "deleted"),
+    ] {
+        record.scope = Scope {
+            kind,
+            path: path.into(),
+        };
+        assert_eq!(record.address().to_string(), format!("review#{lane}"));
+    }
+}
+
+#[test]
 fn manual_origin_round_trips_without_changing_legacy_records() {
     let mut value = serde_json::to_value(record()).unwrap();
     assert!(value.get("manual").is_none());

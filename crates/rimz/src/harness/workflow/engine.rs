@@ -634,21 +634,7 @@ fn prepare(
     }
     let mut launch_error = None;
     if let Some(step) = spec.steps.get(&t.record.node) {
-        let visits = t.record.visits.get(&t.record.node);
-        for (bound, max, visits) in [
-            ("max-visits", step.max_visits, visits.map_or(0, |v| v.total)),
-            (
-                "max-visits-per-key",
-                step.max_visits_per_key,
-                visits.map_or(0, |v| v.for_key(t.record.key.as_ref())),
-            ),
-        ] {
-            let Some(max) = max.map(|max| max.saturating_add(t.record.visit_grant)) else {
-                continue;
-            };
-            if visits < max {
-                continue;
-            }
+        if let Some((bound, visits, max)) = step.tripped_visit_bound(&t.record) {
             if !seen.insert(t.record.node.clone()) {
                 return Ok(Decision::Stop);
             }
@@ -1047,7 +1033,7 @@ pub fn resume(
     id: &WorkflowRunId,
     at: Option<&str>,
     extend: &[String],
-) -> Result<()> {
+) -> Result<RunRecord> {
     let paths = state.workflow(id);
     let spec = spec::load(&paths.home)?;
     let record = {
@@ -1121,7 +1107,8 @@ pub fn resume(
         persist(&t, &guard)?;
         t.record
     };
-    spawn(&record)
+    spawn(&record)?;
+    Ok(record)
 }
 
 pub(crate) fn reassign_task(

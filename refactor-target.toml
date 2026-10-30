@@ -2052,7 +2052,8 @@ path = "crates/rimz/src/harness"
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
 # soft_compact shares its module, request, decision and spawn with CLI/producer callers (+4).
 # soft_compact::compact_agents exposes the paced producer pass to sidebar refresh (+1).
-surface-budget = 1033
+# WorkflowSpec::target, Step visit bounds, timeout_at, and journal hops share inspection rules (+7).
+surface-budget = 1040
 
 [[verdict]]
 kind = "item"
@@ -3575,7 +3576,8 @@ path = "crates/rimz/src/store"
 # SidebarSnapshot::pane_session_demands shares the ladder's discovery request with the producer (+1).
 # SoftCompactStep shares the optional steer-only/continue record tag with message policy (+1).
 # Store::queue_tail_message assigns an unclaimed continue's FIFO-tail id under the queue lock (+1).
-surface-budget = 519
+# workflow::RunAddress, its parser error, matching, and RunRecord::address share run names (+4).
+surface-budget = 523
 
 [[verdict]]
 kind = "item"
@@ -10111,6 +10113,16 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 
 [[verdict]]
 kind = "item"
+key = "store::workflow::RunAddress"
+reason = "Workflow and loop inspection share a run name derived from its recorded scope."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunAddressErr"
+reason = "Address parsing reports missing or empty components before run resolution."
+
+[[verdict]]
+kind = "item"
 key = "store::workflow::RunState"
 reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
 
@@ -10258,6 +10270,26 @@ reason = "The workflow CLI and subsequent engine share the strict spec model, de
 kind = "item"
 key = "harness::workflow::WorkflowSpec"
 reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Hop"
+reason = "Inspection reads one timestamped journal projection for the trail and later rail."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::HopKind"
+reason = "Journal inspection distinguishes routing decisions, resumes, parks, and terminal states."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::hops"
+reason = "One read-only journal reader folds repeated checks without double-counting engine evidence."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::timeout_at"
+reason = "Inspection and transitions share check entry and paused turn-step timeout clocks."
 
 [[verdict]]
 kind = "item"
