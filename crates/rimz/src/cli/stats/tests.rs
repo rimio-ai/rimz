@@ -607,8 +607,8 @@ fn team_cache() -> ProviderSpendingCache {
 #[test]
 fn teams_sum_seats_and_render_effort_without_role_rows() {
     for (from_user, from_teammates, messages) in [
-        (1, 9, "10 (1 you)"),
-        (56, 1_178, "1234 (56 you)"),
+        (1, 9, "10 (1)"),
+        (56, 1_178, "1234 (56)"),
         (0, 10, "10"),
         (0, 0, "-"),
     ] {
@@ -634,7 +634,7 @@ fn teams_sum_seats_and_render_effort_without_role_rows() {
                     .lines()
                     .find(|line| line.contains("recon"))
                     .expect(&text);
-                assert!(text.contains("AGENT-TIME") && text.contains("MESSAGES"));
+                assert!(text.contains("AGENT-TIME") && text.contains("MSGS (YOU)"));
                 assert!(
                     row.contains("$60") && row.contains("100%") && row.contains("6h12m"),
                     "{row}"
@@ -662,7 +662,7 @@ fn teams_sum_seats_and_render_effort_without_role_rows() {
             }
             {
                 assert!(
-                    text.contains("AGENT-TIME") && text.contains("MESSAGES"),
+                    text.contains("AGENT-TIME") && text.contains("MSGS (YOU)"),
                     "{text}"
                 );
                 let cells: Vec<_> = row.split_whitespace().collect();
@@ -680,12 +680,12 @@ fn teams_sum_seats_and_render_effort_without_role_rows() {
                 );
                 let header = text
                     .lines()
-                    .find(|line| line.contains("MESSAGES"))
+                    .find(|line| line.contains("MSGS (YOU)"))
                     .expect(&text);
                 assert_eq!(
                     row.find(" 300").unwrap() + " 300".len(),
                     header.find("TOKENS").unwrap() + "TOKENS".len(),
-                    "TOKENS stays aligned past a wide MESSAGES cell:\n{header}\n{row}"
+                    "TOKENS stays aligned past a wide MSGS (YOU) cell:\n{header}\n{row}"
                 );
             }
         }
@@ -2586,7 +2586,7 @@ fn heatmap_cells_render_spaced() {
     };
     let mut lines = Vec::new();
 
-    heatmap_lines(&mut lines, &stats, today, 2, false);
+    heatmap_lines(&mut lines, &stats, today, 2, false, render::palette::meta());
 
     let monday = strip_ansi(lines.iter().find(|line| line.contains("Mon")).unwrap());
     let cells = monday.chars().skip(GUTTER).collect::<Vec<_>>();
@@ -2828,7 +2828,7 @@ fn today_dashboard_uses_day_breakdowns_and_grid_activity_without_a_trend() {
         "Today $12",
         "Current Mod",
         "Codex",
-        "today $12 so far · ~$12 by midnight · yesterday $18",
+        "today $12 so far · ~$12 by midnight · ░ yesterday $18",
         "3 active days since",
         "streak 2 days",
         "busiest",
@@ -2849,7 +2849,8 @@ fn today_dashboard_uses_day_breakdowns_and_grid_activity_without_a_trend() {
 
 #[test]
 fn model_rate_column_is_windowed_and_other_is_untimed_on_dashboard() {
-    let (stats, assists) = held::fixture();
+    let (mut stats, assists) = held::fixture();
+    stats.by_model.get_mut("small").unwrap().tally.year.usd = 0.1;
     let year = strip_ansi(&held::frame(&stats, &assists, Window::Year, 119, None).text);
     let week = strip_ansi(&held::frame(&stats, &assists, Window::Week, 119, None).text);
     assert!(
@@ -3350,7 +3351,14 @@ fn idle_compact_assist_renders_threshold_and_accepts_legacy_record() {
 #[test]
 fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     let mut lines = Vec::new();
-    panel_lines(&mut lines, &AssistStats::default(), 80, "Assists");
+    let title_style = render::palette::body().bold();
+    panel_lines(
+        &mut lines,
+        &AssistStats::default(),
+        80,
+        "Assists",
+        title_style,
+    );
     assert!(lines.is_empty());
 
     let stats = AssistStats {
@@ -3380,7 +3388,8 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             "Auto-resume: 2 (7 agents)",
         ]
     );
-    panel_lines(&mut lines, &stats, 80, "Assists");
+    panel_lines(&mut lines, &stats, 80, "Assists", title_style);
+    assert_eq!(lines[0], render::paint(title_style, "Assists"));
     assert_eq!(lines.len(), 3, "header plus two paired count rows");
     let panel = strip_ansi(&lines.join("\n"));
     assert!(panel.contains("Assists"));
@@ -3418,7 +3427,7 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
         }],
     };
     lines.clear();
-    panel_lines(&mut lines, &failed_only, 80, "Assists");
+    panel_lines(&mut lines, &failed_only, 80, "Assists", title_style);
     assert!(lines.is_empty());
 }
 

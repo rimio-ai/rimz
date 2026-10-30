@@ -1100,12 +1100,13 @@ pub(super) fn panel_lines(
     stats: &AssistStats,
     panel_width: usize,
     title: &str,
+    title_style: anstyle::Style,
 ) {
     let rows = category_rows(&stats.rollup, CategoryMode::Dashboard);
     if rows.is_empty() {
         return;
     }
-    lines.push(render::paint(render::palette::header(), title));
+    lines.push(render::paint(title_style, title));
     let split = rows.len().div_ceil(2);
     two_column(lines, &rows[..split], &rows[split..], panel_width);
 }

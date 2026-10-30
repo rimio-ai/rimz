@@ -188,7 +188,7 @@ Four meanings cover every human-facing use of color, and a new surface picks fro
 | --- | --- | --- |
 | Identity | the resolved provider brand, for provider names, agent handles, tabs, and emblems. Model spend markers use readable scheme hues nearest that brand; statuses, plans, and headings use their own roles. | `theme/provider.rs`, `theme/palette.rs` |
 | State | typed lifecycle values map to a state role, and a glyph or status word carries the same meaning without color | `cli/render/status.rs` |
-| Hierarchy | `body` for primary content, `muted` for labels and metadata, `faint` for separators and placeholders, bold for emphasis. Headings are muted bold, and `accent` marks categories. | every renderer |
+| Hierarchy | `body` for primary content, `muted` for labels and metadata, `faint` for separators and placeholders, bold for emphasis. Headings are muted bold except the held stats dashboard's body-bold section titles; `accent` marks categories. | every renderer |
 | Quantity | dollar green (`Identity::Money`) for currency, the token-category tones, and the heat ramp plus shape-readable bars for percentages and budgets | `theme/identity.rs`, `theme/palette.rs` |
 
 In the CLI, `cli/render/status.rs` holds the whole state mapping. `StateRole` names eight roles, and `role` maps each to a palette accessor:

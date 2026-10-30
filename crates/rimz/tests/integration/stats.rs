@@ -112,9 +112,9 @@ fn stats_panel_shows_teams_with_effort_and_keeps_roles_in_json_only() {
     for expected in [
         "Teams (today)",
         "AGENT-TIME",
-        "MESSAGES",
+        "MSGS (YOU)",
         "2 other teams",
-        "3 (1 you)",
+        "3 (1)",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
@@ -166,7 +166,7 @@ fn stats_teams_envelope_is_uncapped_and_empty_view_names_the_window() {
         "HIT",
         "SESSIONS",
         "AGENT-TIME",
-        "MESSAGES",
+        "MSGS (YOU)",
     ] {
         assert!(text.contains(name), "missing {name}: {text}");
     }

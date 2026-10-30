@@ -459,7 +459,7 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
         }
     }
     let output = frame(&stats, &assists, Window::Month, 119, Some(40));
-    assert_eq!(output.text.lines().count(), 38);
+    assert_eq!(output.text.lines().count(), 37);
     let mut terminal = Vec::new();
     rimz::tui::replace_frame(&mut terminal, output.text.as_bytes()).unwrap();
     let mut parser = vt100::Parser::new(40.try_into().unwrap(), 119.try_into().unwrap(), 0);
@@ -470,7 +470,7 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
             .lines()
             .find(|line| !line.trim().is_empty())
             .unwrap()
-            .contains("Token activity"),
+            .contains("Today $"),
         "{screen}"
     );
     assert!(
@@ -482,7 +482,7 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
 #[test]
 fn dashboard_mock_heights_and_snapshots() {
     let (stats, assists) = fixture();
-    for (rows, today_height, month_height) in [(76, 64, 72), (40, 37, 38)] {
+    for (rows, today_height, month_height) in [(76, 65, 73), (40, 34, 37)] {
         for tab in Window::TABS {
             let output = frame(&stats, &assists, tab, 119, Some(rows));
             let expected = if tab == Window::Today {
@@ -556,12 +556,12 @@ fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
         .split("Providers")
         .next()
         .unwrap();
-    assert_eq!(models.lines().filter(|line| line.contains('$')).count(), 5);
+    assert_eq!(models.lines().filter(|line| line.contains('$')).count(), 6);
     assert!(
-        models
-            .lines()
-            .any(|line| line.contains("Other") && line.contains('–'))
+        models.contains("Small") && models.contains("Unknown model"),
+        "{models}"
     );
+    assert!(!models.contains("Other"), "{models}");
     assert!(
         output
             .lines()
@@ -569,12 +569,12 @@ fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
     );
     assert!(output.contains("5,995 sessions"));
     assert!(!output.contains("agent-time and messages"));
-    let short = strip_ansi(&frame(&stats, &assists, Window::Month, 119, Some(44)).text);
+    let short = strip_ansi(&frame(&stats, &assists, Window::Month, 119, Some(34)).text);
     let other = short
         .lines()
         .find(|line| line.contains("Other") && line.contains("1h40m"))
         .expect(&short);
-    assert!(other.contains("7 (1 you)"), "{other}");
+    assert!(other.contains("7 (1)"), "{other}");
     assert!(short.contains("Assists  17 kinds"));
     stats.by_provider.get_mut("pi").unwrap().month.usd = 0.0;
     let unpriced = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
@@ -602,6 +602,64 @@ fn dashboard_single_tail_keeps_its_name_and_unknown_model_is_named() {
 }
 
 #[test]
+fn dashboard_caps_named_models_roles_and_providers_and_folds_small_providers() {
+    let (mut stats, assists) = fixture();
+    stats.by_model = model_map(std::array::from_fn::<_, 10, _>(|index| {
+        (format!("model-{index}"), every_window(tally(100, 10.0, 1)))
+    }));
+    let roles = (0..7)
+        .map(|index| {
+            (
+                format!("role-{index}"),
+                role_tally(every_window(tally(100, 10.0, 1))),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    stats.agents = roles.clone();
+    stats.subagents = roles.clone();
+    stats.teams = roles
+        .into_iter()
+        .map(|(name, role)| (name, BTreeMap::from([("seat".into(), role)])))
+        .collect();
+    stats.by_provider = (0..6)
+        .map(|index| {
+            (
+                format!("provider-{index}"),
+                every_window(tally(100, 10.0, 1)),
+            )
+        })
+        .collect();
+    let full = strip_ansi(&frame(&stats, &assists, Window::Month, 100, None).text);
+    for (label, count) in [("Models", 8), ("Agents", 5), ("Subagents", 5), ("Teams", 5)] {
+        let block = full
+            .split("\n\n")
+            .find(|block| block.trim_start().starts_with(label))
+            .unwrap();
+        assert_eq!(block.lines().skip(1).count(), count, "{block}");
+        assert!(block.contains("Other"), "{block}");
+    }
+    let providers = full
+        .split("\n\n")
+        .find(|block| block.trim_start().starts_with("Providers"))
+        .unwrap();
+    assert_eq!(providers.lines().skip(2).count(), 4, "{providers}");
+    stats.by_provider = BTreeMap::from([
+        ("claude".into(), every_window(tally(100, 100.0, 1))),
+        ("pi".into(), every_window(tally(1, 0.1, 1))),
+        ("grok".into(), every_window(tally(1, 0.1, 1))),
+    ]);
+    let output = strip_ansi(&frame(&stats, &assists, Window::Month, 100, None).text);
+    let providers = output
+        .split("\n\n")
+        .find(|block| block.trim_start().starts_with("Providers"))
+        .unwrap();
+    assert!(
+        providers.contains("Other") && !providers.contains("Pi") && !providers.contains("Grok"),
+        "{providers}"
+    );
+}
+
+#[test]
 fn dashboard_charts_use_per_range_publication_cells() {
     let (stats, assists) = fixture();
     assert_eq!(
@@ -621,34 +679,37 @@ fn dashboard_charts_use_per_range_publication_cells() {
 }
 
 #[test]
-fn dashboard_typical_counts_missing_days_and_titles_follow_the_active_tab() {
+fn dashboard_avg_counts_drawn_bars_and_titles_follow_the_active_tab() {
     let (mut stats, assists) = fixture();
     stats.by_day = BTreeMap::from([(TODAY, day(1, 24.0)), (TODAY - 1, day(1, 300.0))]);
+    let cells = |usd| BTreeMap::from([("opus-5.5".into(), usd)]);
+    stats.chart.days = BTreeMap::from([(TODAY, cells(24.0)), (TODAY - 1, cells(300.0))]);
+    stats.chart.weeks = BTreeMap::from([(TODAY, cells(24.0)), (TODAY - 7, cells(300.0))]);
     for (tab, expected) in [
         (Window::Today, "today $1,024 so far · ~"),
-        (Window::Week, "$162 a day"),
-        (Window::Month, "$162 a day"),
-        (Window::Year, "$162 per active day"),
+        (Window::Week, "┄ avg $46"),
+        (Window::Month, "┄ avg $11"),
+        (Window::Year, "┄ avg $6.23 a week"),
     ] {
         let output = strip_ansi(&frame(&stats, &assists, tab, 119, None).text);
         assert!(output.contains(expected), "{tab:?}: {output}");
         assert!(!output.contains("vs prior"));
         if matches!(tab, Window::Week | Window::Month) {
             let lines: Vec<_> = output.lines().collect();
-            let typical = lines
+            let average = lines
                 .iter()
-                .position(|line| line.contains('┤') && line.ends_with("$10"))
+                .position(|line| line.contains('┤') && line.contains("avg"))
                 .expect(&output);
             assert!(
-                lines[typical + 1].contains("└─"),
+                lines[average + 1].contains("└─"),
                 "a mean under half a row sits on the bottom row: {output}"
             );
         } else if tab == Window::Year {
             assert!(output.contains("Spend per week · last 52 weeks"));
-            assert!(!output.contains("typical"));
+            assert!(!output.contains("per active day"));
         } else {
-            assert!(output.contains("by midnight · yesterday $300"));
-            assert!(!output.contains("typical"));
+            assert!(output.contains("by midnight · ░ yesterday $300"));
+            assert!(!output.contains("avg"));
         }
     }
     stats.by_day.insert(TODAY - 8, day(1, 100.0));
@@ -785,6 +846,80 @@ fn dashboard_model_tones_follow_month_rank_and_stay_distinct_on_every_tab() {
 }
 
 #[test]
+fn dashboard_overflow_model_colours_stay_distinct_together_and_stable_across_tabs() {
+    let (mut stats, assists) = fixture();
+    stats.by_model = (0..16)
+        .map(|index| {
+            let mut tally = SpendTally::default();
+            let window = |usd| mock_window(usd, 100, 95, 0, 1);
+            match index {
+                0..=1 => {
+                    tally.day = window(1.0);
+                    tally.week = window(1.0);
+                    tally.month = window(1.0);
+                    tally.year = window(1.0);
+                }
+                2..=3 => {
+                    tally.week = window(100.0);
+                    tally.month = window(100.0);
+                    tally.year = window(100.0);
+                }
+                4..=9 => {
+                    tally.month = window(100_000.0);
+                    tally.year = window(100_000.0);
+                }
+                _ => tally.year = window(1_000_000.0),
+            }
+            (
+                format!("overflow-{index:02}"),
+                ModelTally {
+                    kind: "claude".into(),
+                    tally,
+                },
+            )
+        })
+        .collect();
+    stats.total = SpendTally::default();
+    for model in stats.by_model.values() {
+        stats.total.day.merge(&model.tally.day);
+        stats.total.week.merge(&model.tally.week);
+        stats.total.month.merge(&model.tally.month);
+        stats.total.year.merge(&model.tally.year);
+    }
+    let mut previous = BTreeMap::new();
+    for (tab, count) in Window::TABS.into_iter().zip([2, 2, 6, 7]) {
+        let output = frame(&stats, &assists, tab, 119, None).text;
+        let models = output
+            .split("Models")
+            .nth(1)
+            .unwrap()
+            .split("Providers")
+            .next()
+            .unwrap();
+        let mut styles = Vec::new();
+        for row in models
+            .lines()
+            .filter(|line| line.contains('█') && !line.contains("Other"))
+        {
+            let (style, rest) = row.split_once('█').unwrap();
+            let name = strip_ansi(rest)
+                .split('$')
+                .next()
+                .unwrap()
+                .trim()
+                .to_owned();
+            if let Some(before) = previous.insert(name, style.to_owned()) {
+                assert_eq!(style, before, "{tab:?}: {row}");
+            }
+            assert!(!styles.contains(&style), "{tab:?}: {models}");
+            styles.push(style);
+        }
+        assert_eq!(styles.len(), count);
+    }
+    assert_eq!(previous.len(), 16);
+}
+
+#[test]
 fn dashboard_chart_folds_the_same_models_as_the_table() {
     let (mut stats, assists) = fixture();
     for model in stats.by_model.values_mut() {
@@ -851,17 +986,21 @@ fn dashboard_empty_roles_have_unsigned_zero_shares() {
 }
 
 #[test]
-fn dashboard_average_uses_the_same_calendar_days_for_dollars_and_activity() {
+fn dashboard_avg_ignores_undrawn_history_and_has_no_line_without_spend() {
     let (mut stats, assists) = fixture();
-    stats.by_day = BTreeMap::from([(TODAY - 7, day(1, 10.0)), (TODAY, day(1, 4.0))]);
-    stats.total.week.usd = 14.0;
+    stats.by_day = BTreeMap::from([(TODAY - 30, day(1, 300_000.0))]);
+    stats.chart.days = BTreeMap::from([
+        (TODAY - 7, BTreeMap::from([("opus-5.5".into(), 300_000.0)])),
+        (TODAY, BTreeMap::from([("opus-5.5".into(), 14.0)])),
+    ]);
     let output = strip_ansi(&frame(&stats, &assists, Window::Week, 119, None).text);
-    assert!(output.contains("$4.00 a day"), "{output}");
-    stats.by_day.remove(&TODAY);
-    let output = strip_ansi(&frame(&stats, &assists, Window::Week, 119, None).text);
-    assert!(output.contains("$0.00 a day"), "{output}");
-    let output = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
-    assert!(output.contains("$10 a day"), "{output}");
+    assert!(output.contains("┄ avg $2.00"), "{output}");
+    stats.chart.days.clear();
+    stats.chart.weeks.clear();
+    for tab in [Window::Week, Window::Month, Window::Year] {
+        let output = strip_ansi(&frame(&stats, &assists, tab, 119, None).text);
+        assert!(!output.contains("avg"), "{output}");
+    }
 }
 
 #[test]
@@ -905,31 +1044,21 @@ fn dashboard_caps_extreme_trend_labels() {
 }
 
 #[test]
-fn dashboard_typical_never_exceeds_the_chart_ceiling() {
+fn dashboard_avg_uses_a_bare_caption_when_narrow() {
     let (mut stats, assists) = fixture();
-    stats.by_day.insert(TODAY - 30, day(1, 300_000.0));
-    let output = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
-    let chart = output.split("Spend per day").nth(1).unwrap();
-    assert!(chart.lines().nth(1).unwrap().contains("$12,000"), "{chart}");
-    let typical = chart
-        .lines()
-        .find(|line| line.contains('┤') && line.contains("$10,785"))
-        .unwrap();
-    assert!(
-        typical.ends_with("┄ $10,785") && !typical.contains("typical"),
-        "{chart}"
-    );
-    let axis = chart.lines().find(|line| line.contains("└─")).unwrap();
-    assert_eq!(
-        display_width(&axis[..axis.find("today").unwrap()]),
-        97,
-        "bars keep 3-cell strides: {chart}"
-    );
+    stats.chart.days = (0..30)
+        .map(|ago| {
+            (
+                TODAY - ago,
+                BTreeMap::from([("opus-5.5".into(), 300_000_000_000.0)]),
+            )
+        })
+        .collect();
     let narrow = strip_ansi(&frame(&stats, &assists, Window::Month, 60, None).text);
     assert!(
         narrow
             .lines()
-            .any(|line| line.contains('┤') && line.ends_with("$10,785")),
+            .any(|line| line.contains('┤') && line.ends_with("┄ $300,000,000,000")),
         "{narrow}"
     );
 }
@@ -958,6 +1087,18 @@ fn dashboard_narrow_weekly_chart_keeps_the_newest_weeks_and_now() {
             .any(|line| line.contains('┤') && line.ends_with('█')),
         "{chart}"
     );
+    for row in chart.lines().filter(|line| line.contains('┤')) {
+        assert!(
+            row.split_once('┤')
+                .unwrap()
+                .1
+                .chars()
+                .filter(|glyph| "▁▂▃▄▅▆▇█".contains(*glyph))
+                .count()
+                <= 1,
+            "the older week is outside the drawn span: {row}"
+        );
+    }
 }
 
 #[test]

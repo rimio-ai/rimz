@@ -54,7 +54,7 @@ fn spend_columns_match_the_mock() {
         "█ Opus 5.5       $9,371  ━━━━━━━━━━━━━━━━━━──────────────────────────────  38%          96%          85   15.4B",
         "Agents             $904                                   Subagents        $1,681  (already counted)",
         "● brainstormer     $266  ━━━━━━━─────────────────  29%    ● implementer    $1,060  ━━━━━━━━━━━━━━━─────────  63%",
-        "Teams            $3,148                                                          AGENT-TIME    MESSAGES  TOKENS",
+        "Teams            $3,148                                                          AGENT-TIME  MSGS (YOU)  TOKENS",
         "● recon          $2,621  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────  83%       18h10m          34    4.5B",
     ] {
         assert!(
@@ -70,18 +70,35 @@ fn spend_columns_match_the_mock() {
 #[test]
 fn provider_and_role_columns_match_the_mock() {
     let month = lines(Window::Month);
-    assert!(month.iter().any(|line| line == "█ Claude     $13,232   54%   96% hit     877 sessions     █ Teams     $3,148  13%    ▒ Agents      $904   4%"), "{}", month.join("\n"));
+    let start = month
+        .iter()
+        .position(|line| line.contains("Where it went"))
+        .unwrap();
+    assert_eq!(
+        month[start..]
+            .iter()
+            .take_while(|line| !line.is_empty())
+            .count(),
+        5,
+        "three owner entries below title and bar:\n{}",
+        month.join("\n")
+    );
+    let entries = &month[start + 2..start + 5];
+    for (row, group) in entries.iter().zip(["Teams", "Agents", "No owner"]) {
+        let right = row.chars().skip(58).collect::<String>();
+        assert!(right.contains(group), "{group}: {row}");
+        assert_eq!(right.matches('$').count(), 1, "{row}");
+    }
     assert!(
         month.iter().any(|line| line
-            == "█ Codex      $11,340   46%   97% hit   5,995 sessions     ░ No owner $20,520  84%"),
+            == "█ Claude     $13,232   54%   96% hit     877 sessions     █ Teams     $3,148  13%"),
         "{}",
         month.join("\n")
     );
-    assert!(
-        month
-            .iter()
-            .any(|line| line == "█ Pi           $0.04   <1%                 1 session")
-    );
+    assert!(month.iter().any(|line| line
+        == "█ Codex      $11,340   46%   97% hit   5,995 sessions     ▒ Agents      $904   4%"));
+    assert!(month.iter().any(|line| line
+        == "█ Pi           $0.04   <1%                 1 session      ░ No owner $20,520  84%"));
     let today = lines(Window::Today);
     assert!(
         today
@@ -119,7 +136,7 @@ fn heatmap_columns_match_the_mock() {
 }
 
 #[test]
-fn typical_line_matches_the_mock_row() {
+fn avg_line_matches_the_mock_row() {
     for (rows, height) in [(None, 7), (Some(40), 7)] {
         let month = lines_at(Window::Month, rows);
         let start = month
@@ -129,23 +146,23 @@ fn typical_line_matches_the_mock_row() {
         let plot = &month[start + 1..start + 1 + height];
         assert!(plot[0].contains("$1,500"), "{}", month.join("\n"));
         let half = plot.iter().position(|line| line.contains("$750")).unwrap();
-        let typical = plot
+        let average = plot
             .iter()
-            .position(|line| line.contains("typical $785"))
+            .position(|line| line.contains("avg $819"))
             .unwrap();
         assert_eq!(
-            typical, half,
-            "typical shares the middle row at height {height}"
+            average, half,
+            "average shares the middle row at height {height}"
         );
     }
 }
 
 #[test]
-fn week_typical_caption_keeps_its_label() {
+fn week_avg_caption_keeps_its_label() {
     let captions = [None, Some(40)].map(|rows| {
         lines_at(Window::Week, rows)
             .iter()
-            .find(|line| line.contains("$785"))
+            .find(|line| line.contains("$748"))
             .unwrap()
             .rsplit('┄')
             .next()
@@ -153,7 +170,7 @@ fn week_typical_caption_keeps_its_label() {
             .trim()
             .to_owned()
     });
-    assert_eq!(captions, ["typical $785"; 2]);
+    assert_eq!(captions, ["avg $748"; 2]);
 }
 
 #[test]
@@ -183,6 +200,15 @@ fn dashboard_order_footer_and_vertical_center_are_tab_independent() {
             text.find("[ ").unwrap() < text.find("Spend per").unwrap(),
             "{text}"
         );
+        let teams = text
+            .lines()
+            .position(|line| line.trim_start().starts_with("Teams "))
+            .unwrap();
+        let agents = text
+            .lines()
+            .position(|line| line.trim_start().starts_with("Agents "))
+            .unwrap();
+        assert!(teams < agents, "{text}");
     }
 }
 
@@ -276,7 +302,7 @@ fn dashboard_hint_survives_body_truncation_and_respects_hold() {
 }
 
 #[test]
-fn dashboard_shrinks_sections_before_the_heatmap_or_plot() {
+fn dashboard_shrinks_heatmap_before_roles_and_named_rows_before_teams() {
     let (stats, assists) = fixture();
     let mut previous = [true; 6];
     let mut lost = Vec::new();
@@ -285,6 +311,7 @@ fn dashboard_shrinks_sections_before_the_heatmap_or_plot() {
         let current = [
             output.contains(TAGLINE),
             output.contains("Stall notice:"),
+            output.contains("Token activity"),
             output
                 .lines()
                 .any(|line| line.trim_start().starts_with("Agents ")),
@@ -292,14 +319,13 @@ fn dashboard_shrinks_sections_before_the_heatmap_or_plot() {
                 .lines()
                 .any(|line| line.trim_start().starts_with("█ Fable 5.1")),
             output.contains("AGENT-TIME"),
-            output.contains("Token activity"),
         ];
         for index in 0..6 {
             if previous[index] && !current[index] {
                 lost.push(index);
             }
         }
-        if current[5] {
+        if current[2] {
             assert_eq!(
                 output.lines().filter(|line| line.contains('┤')).count(),
                 7,
@@ -312,20 +338,75 @@ fn dashboard_shrinks_sections_before_the_heatmap_or_plot() {
 }
 
 #[test]
+fn dashboard_titles_and_role_marks_use_content_and_group_tones() {
+    let (stats, assists) = fixture();
+    let output = frame(&stats, &assists, Window::Month, 119, None).text;
+    for title in [
+        "Token activity",
+        "Spend per day · last 30 days",
+        "Models",
+        "Providers",
+        "Where it went",
+        "Teams",
+        "Agents",
+        "Subagents",
+        "Assists",
+    ] {
+        assert!(
+            output.contains(&format!("{}{title}", render::palette::body().bold())),
+            "{title}: {output}"
+        );
+    }
+    assert!(
+        !output.contains(&render::palette::header().to_string()),
+        "{output}"
+    );
+    for (name, style) in [
+        ("recon", render::palette::accent()),
+        ("brainstormer", render::palette::meta()),
+        ("implementer", render::palette::cool()),
+    ] {
+        let row = output.lines().find(|line| line.contains(name)).unwrap();
+        assert!(row.contains(&render::paint(style, "●")), "{row}");
+        assert!(
+            row.contains(&render::paint(render::palette::body(), name)),
+            "{row}"
+        );
+        assert!(row.contains(&style.to_string()), "{row}");
+    }
+}
+
+#[test]
+fn dashboard_messages_keep_two_cell_gutters_for_wide_counts() {
+    let (mut stats, assists) = fixture();
+    let role = stats
+        .teams
+        .get_mut("recon")
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    role.effort.month.from_user = 6_789;
+    role.effort.month.from_teammates = 5_556;
+    let output = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
+    let row = output.lines().find(|line| line.contains("recon")).unwrap();
+    assert!(row.contains("  12345 (6789)  "), "{row}");
+    let header = output
+        .lines()
+        .find(|line| line.contains("MSGS (YOU)"))
+        .unwrap();
+    assert!(header.contains("  MSGS (YOU)  TOKENS"), "{header}");
+}
+
+#[test]
 fn chart_labels_match_the_mock_columns() {
     let month = lines(Window::Month);
     let axis = month.iter().find(|line| line.contains("└─")).unwrap();
     assert_eq!(display_width(&axis[..axis.find("today").unwrap()]), 94);
-    let typical = month
-        .iter()
-        .find(|line| line.contains("typical $785"))
-        .unwrap();
-    assert_eq!(
-        display_width(&typical[..typical.find("typical").unwrap()]),
-        101
-    );
-    assert!(typical.ends_with("██┄ typical $785"), "{typical}");
-    assert_eq!(display_width(typical), 113);
+    let average = month.iter().find(|line| line.contains("avg $819")).unwrap();
+    assert_eq!(display_width(&average[..average.find("avg").unwrap()]), 101);
+    assert!(average.ends_with("██┄ avg $819"), "{average}");
+    assert_eq!(display_width(average), 109);
     let week = lines(Window::Week);
     let axis_row = week.iter().position(|line| line.contains("└─")).unwrap();
     let bottom = &week[axis_row - 1];
@@ -359,8 +440,11 @@ fn narrow_week_axis_separates_dates_and_keeps_today_under_its_bar() {
     assert_eq!(
         axes,
         [
-            ("Oct 17    Oct 19    Oct 21   today".to_owned(), true),
             ("Oct 17      Oct 19      Oct 21      today".to_owned(), true),
+            (
+                "Oct 17 Oct 18 Oct 19 Oct 20 Oct 21        today".to_owned(),
+                true
+            ),
         ]
     );
 }

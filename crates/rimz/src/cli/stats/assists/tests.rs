@@ -47,7 +47,13 @@ fn category_modes_distinguish_requests_from_effects_and_label_parked_time() {
         ..Default::default()
     };
     let mut lines = Vec::new();
-    panel_lines(&mut lines, &stats, 113, "Assists");
+    panel_lines(
+        &mut lines,
+        &stats,
+        113,
+        "Assists",
+        render::palette::header(),
+    );
     assert!(
         !lines.join("\n").contains("held"),
         "the held panel selects dashboard copy"
