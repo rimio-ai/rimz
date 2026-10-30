@@ -8723,7 +8723,12 @@ reason = "The binary crate calls it at cli/paths.rs:66 and cli/hooks/lifecycle/i
 [[verdict]]
 kind = "item"
 key = "agents::turns::TurnOutcome"
-reason = "TurnRecord::outcome is public (turns.rs:27-41) and the binary's history command reads it (cli/agents_cmd/history.rs:71-143) (pass 24b)."
+reason = "TurnRecord::outcome is public and the binary's cli::agents_cmd::history::render_history reads it (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::prompt_is_keepalive_only"
+reason = "The history screen folds on the store's inert-turn predicate, keeping lifecycle and presentation classification aligned."
 
 [[verdict]]
 kind = "item"

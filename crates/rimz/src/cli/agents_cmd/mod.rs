@@ -602,7 +602,7 @@ enum AgentsSubcmd {
     History {
         /// Agent whose turns to show: @handle, @handle#lane, pet name, or pane id (tmux:%12).
         reference: String,
-        /// Keep the last N turns.
+        /// Keep the last N rows (turns with --json).
         #[arg(short = 'n', long = "tail")]
         tail: Option<usize>,
         /// Emit JSON.
