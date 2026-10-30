@@ -116,7 +116,7 @@ pub(super) fn prepare(
     };
     if verdict.target == held.attempt.node || verdict.target == "@wait" {
         if verdict.target == "@wait" {
-            t.merge_wait(&verdict.object, false)?;
+            t.merge_wait(&verdict.object, verdict.at.unwrap_or(t.now), false)?;
         } else {
             t.close_wait();
         }

@@ -2,6 +2,69 @@ use super::*;
 use crate::harness::workflow::state::Transition;
 
 #[test]
+fn kept_waits_merge_the_saved_answers_instant_instead_of_the_later_advance() {
+    let (_dir, state, record) = setup(UNTIL);
+    let host = FakeHost::new();
+    let mut live = advance_ok(&state, &record.id, &host);
+    let first = Timestamp::UNIX_EPOCH;
+    for (index, at) in [first, first + std::time::Duration::from_secs(10)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut pending = held(&live, true);
+        let verdict = pending.held.as_mut().unwrap().verdict.as_mut().unwrap();
+        verdict.at = Some(at);
+        verdict.target = "@wait".into();
+        verdict.object = json!({"outcome":"pending"});
+        update(&state, &pending);
+        live = advance_ok(&state, &record.id, &host);
+        let wait = live.wait.as_ref().unwrap();
+        assert_eq!(
+            (wait.first, wait.last, wait.count),
+            (first, at, index as u64 + 1)
+        );
+    }
+}
+
+#[test]
+fn a_legacy_held_verdict_without_an_answer_instant_uses_the_merge_instant() {
+    let (_dir, state, record) = setup(UNTIL);
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    let mut pending = held(&live, true);
+    let verdict = pending.held.as_mut().unwrap().verdict.as_mut().unwrap();
+    verdict.at = Some(Timestamp::UNIX_EPOCH);
+    verdict.target = "@wait".into();
+    verdict.object = json!({"outcome":"pending"});
+    let mut saved = serde_json::to_value(pending).unwrap();
+    saved["held"]["verdict"]
+        .as_object_mut()
+        .unwrap()
+        .remove("at");
+    let pending: RunRecord = serde_json::from_value(saved).unwrap();
+    assert!(
+        pending
+            .held
+            .as_ref()
+            .unwrap()
+            .verdict
+            .as_ref()
+            .unwrap()
+            .at
+            .is_none()
+    );
+    update(&state, &pending);
+    let kept = advance_ok(&state, &record.id, &host);
+    let wait = kept.wait.as_ref().unwrap();
+    let merged_at: Timestamp =
+        serde_json::from_value(decisions(&state, &kept)[0]["at"].clone()).unwrap();
+    assert_eq!(
+        (wait.first, wait.last, wait.count),
+        (merged_at, merged_at, 1)
+    );
+}
+
+#[test]
 fn forge_probe_during_the_session_can_close_a_later_held_check() {
     let (_dir, state, host, ended) = forge_check("pr=merged", 60, json!({"state":"merged"}));
     assert_eq!(ended.state, RunState::Done);
