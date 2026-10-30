@@ -66,7 +66,7 @@ Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Every table reject
 
 Every kind accepts an optional `summary`: one nonempty line describing what the node does. Omission never warns. Other fields outside a kind's row are refused on that kind. A `window` holds provider-window terms only. A condition takes `provider` exactly when a case reads a `window.*` term, and `account` only with `provider`.
 
-A condition's cases are ordered `[[checks.<name>.cases]]` tables:
+A condition's cases are an ordered array of tables. Write it inline in `[checks.<name>]`, one case per line (`cases = [ { when = [...], outcome = "..." }, ... ]`); the loader reads `[[checks.<name>.cases]]` blocks as the same array. Each case:
 
 | Field | Rule |
 | --- | --- |

@@ -3,6 +3,56 @@ use super::*;
 const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
 
 #[test]
+fn inline_cases_match_table_blocks_in_order() {
+    let (home, dir) = fixture();
+    let header = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@user',pending='@wait'}\n";
+    let actual: Vec<_> = [
+        r#"cases = [
+    { when = ["pr=merged"], outcome = "merged", key = 7 },
+    { when = ["ci=failed || pr.queue=dequeued"], outcome = "red", key = "ci", for = "2m" },
+]
+"#,
+        r#"[[checks.pr.cases]]
+when = ["pr=merged"]
+outcome = "merged"
+key = 7
+[[checks.pr.cases]]
+when = ["ci=failed || pr.queue=dequeued"]
+outcome = "red"
+key = "ci"
+for = "2m"
+"#,
+    ]
+    .into_iter()
+    .map(|cases| {
+        fs::write(dir.join("workflow.toml"), format!("{header}{cases}")).unwrap();
+        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        assert!(
+            report.errors.is_empty() && report.warnings.is_empty(),
+            "{report:?}"
+        );
+        load(&dir).unwrap().checks["pr"]
+            .cases
+            .iter()
+            .map(|case| {
+                serde_json::json!({
+                    "when": case.when, "outcome": case.outcome,
+                    "for": case.hold, "key": case.key
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .collect();
+    let expected = vec![
+        serde_json::json!({"when":["pr=merged"], "outcome":"merged", "for":null, "key":7}),
+        serde_json::json!({
+            "when":["ci=failed || pr.queue=dequeued"], "outcome":"red", "for":"2m", "key":"ci"
+        }),
+    ];
+    assert_eq!(actual, vec![expected.clone(), expected]);
+}
+
+#[test]
 fn an_explicit_empty_cases_field_is_not_ignored_on_a_run_check() {
     let (home, dir) = fixture();
     fs::write(dir.join("workflow.toml"), "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();

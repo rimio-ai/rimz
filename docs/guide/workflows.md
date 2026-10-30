@@ -170,16 +170,10 @@ summary = "Wait for merge or sustained CI trouble"
 else = "pending"
 on = { merged = "@done", red = "sweep", pending = "@wait" }
 timeout = "2d"
-
-[[checks.pr.cases]]
-when = ["pr=merged"]
-outcome = "merged"
-
-[[checks.pr.cases]]
-when = ["ci=failed || pr.queue=dequeued"]
-outcome = "red"
-key = "ci"
-for = "2m"
+cases = [
+  { when = ["pr=merged"], outcome = "merged" },
+  { when = ["ci=failed || pr.queue=dequeued"], outcome = "red", key = "ci", for = "2m" },
+]
 
 [steps.sweep]
 summary = "Repair CI and re-arm the PR"
@@ -191,7 +185,7 @@ max-visits = 5
 timeout = "6h"
 ```
 
-Cases are ordered. Each `when` array is ANDed, and its strings take the loop grammar (`!`, `&&`, `||`, parentheses, and branch selectors). The first true case wins; all false answers `else`. Every case outcome and `else` needs an `on` edge. Here a merged PR ends the run; a failing CI or dequeued PR held for two minutes launches `sweep`. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`.
+`cases` is an ordered list, one case per line. Each `when` array is ANDed, and its strings take the loop grammar (`!`, `&&`, `||`, parentheses, and branch selectors). The first true case wins; all false answers `else`. Every case outcome and `else` needs an `on` edge. Here a merged PR ends the run; a failing CI or dequeued PR held for two minutes launches `sweep`. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`.
 
 A sweep that repairs a queue removal must also re-arm the PR (enable auto-merge or add it to the queue); a push alone does not clear `pr.queue=dequeued`.
 
