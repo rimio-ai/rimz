@@ -93,8 +93,18 @@ pub(super) fn wait_frame(
 ) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let sample: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(runtime.pane_frame_path()).unwrap()).unwrap();
+        let bytes = match std::fs::read(runtime.pane_frame_path()) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                assert!(
+                    Instant::now() < deadline,
+                    "{label}: no host frame published"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            result => result.expect("read host frame"),
+        };
+        let sample: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let resolved = sample["client_view_fresh"] == true;
         let frame = serde_json::from_value::<rimz::sidebar::frame::PaneFrame>(sample).unwrap();
         if resolved && ready(&frame) {
