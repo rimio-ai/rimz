@@ -1208,6 +1208,58 @@ fn aggregate_oscillation_reports_a_provider_version_flip() {
 }
 
 #[test]
+fn aggregate_reset_credit_signature_ignores_subsecond_precision() {
+    let fractional = "2026-11-06T23:39:59.900000Z";
+    let frame = |at_ms, count, expiry: &str| {
+        let expiry = expiry.parse().unwrap();
+        panel_frame(
+            at_ms,
+            vec![SidebarProviderPanel {
+                reset_credits: Some(crate::agents::ResetCredits {
+                    count,
+                    soonest_expiry: Some(expiry),
+                    expiries: vec![expiry],
+                    effect: crate::agents::RedeemEffect::RestartsWindow,
+                }),
+                ..provider_panel("codex", Vec::new())
+            }],
+        )
+    };
+    let flips = [
+        (1, "2026-11-06T23:39:59Z"),
+        (2, fractional),
+        (1, "2026-11-06T23:40:00Z"),
+    ]
+    .map(|(count, expiry)| {
+        let mut observer = Observer::default();
+        observer.observe(frame(0, 1, fractional));
+        observer.observe(frame(11_000, 1, fractional));
+        observer.observe(frame(12_000, count, expiry));
+        aggregate_flips(&observer.observe(frame(13_000, 1, fractional)))
+    });
+
+    let identity = "provider_field:codex@default:reset_credits";
+    assert_eq!(
+        flips,
+        [
+            vec![],
+            vec![(
+                identity.to_owned(),
+                "1@2026-11-06T23:39:59Z".to_owned(),
+                "2@2026-11-06T23:39:59Z".to_owned(),
+                1_000,
+            )],
+            vec![(
+                identity.to_owned(),
+                "1@2026-11-06T23:39:59Z".to_owned(),
+                "1@2026-11-06T23:40:00Z".to_owned(),
+                1_000,
+            )],
+        ]
+    );
+}
+
+#[test]
 fn aggregate_oscillation_samples_a_missing_panel_as_absent() {
     let spend_identity = "provider_spend:claude@default";
 
