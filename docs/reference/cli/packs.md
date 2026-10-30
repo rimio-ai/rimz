@@ -6,6 +6,7 @@
 rimz packs [--json]
 rimz packs list [--json]
 rimz packs install <SOURCE> [--yes]
+rimz packs update [<PACK>] [--yes]
 rimz packs show <PACK> [--json]
 rimz packs remove <PACK>
 rimz packs exclude <PACK>[:<NAME>] [--type <TYPE>]
@@ -43,6 +44,14 @@ Each profile shows its resolved provider kind and effective mode, isolation, too
 The summary always prints. An unchanged install needs no confirmation; otherwise a terminal asks `Install these packs?`. Answering no succeeds with nothing activated. Without a terminal, pass `--yes`; without it the summary prints, nothing installs, and the command exits 1. `--yes` skips only the question, not the summary. These definitions grant capabilities like home definitions; the summary is not a sandbox. See [security and trust](../../guide/security.md#what-rimz-changes-on-your-machine).
 
 Fetching, staging, and confirmation do not hold the installation-record lock. If another pack mutation changes the record before commit, this install aborts with nothing changed and asks you to run it again. Git children are bounded to 120 seconds per command, have no terminal prompts or inherited repository-local Git variables, and do not fetch submodules.
+
+## Update Git sources
+
+`rimz packs update` checks installed sources in record order. Each source has its own transaction, also moving an unpinned dependency when its installed commit lacks a newly required pack. That dependency shares the review and commit; its later turn is already up to date. `update <PACK>` starts with the source containing that pack, moving all of that source's installed packs together and resolving its requirements the same way. Unpinned official sources follow the running binary's `v<version>` tag; unpinned third-party sources follow their remote default branch. Updates keep the installed pack selection and exclusions rather than adding newly marked defaults. If the new commit omits an installed pack, that source's update fails without changing its entry or record; the error names `rimz packs remove <pack>` as the fix before retrying.
+
+Each changed source prints the same pack and effective-profile review as an install. Update reviews print a reason only for a pack newly pulled in by a requirement, not a `named` label for existing packs. An update with no widened profile grants applies without asking, including without a terminal. A widening update asks `Apply this widening update?` on a terminal. Declining holds that source and succeeds. Without a terminal, a widening update is held and the command exits 1; `--yes` applies it without asking but still prints the review. A held update names its packs, widened profile fields, and the command to review again. Holds are not stored: the next run recomputes them.
+
+Pinned sources are skipped with their ref and the install command that follows updates again. For official and `github:` sources, that command selects an installed pack to avoid adding other defaults; a URL source keeps its bare URL. Linked sources are skipped with a reminder that edits show at once. An unchanged source reports `Already up to date:`. A failed or held source does not stop later sources; failures are reported after processing the others, alongside any host skill-link cleanup failure, and any failure or non-terminal hold exits 1. Successful earlier sources are not rolled back. Staging and consent remain outside the installation-record lock, and a record change before publication refuses that source's commit and requires a fresh review.
 
 ## Install or refresh a linked source
 
@@ -166,7 +175,7 @@ No packs installed. Install a source: rimz packs install crew
 
 Every successful mutating verb, including an already-applied change, prunes obsolete RimZ-owned host skill links across native provider roots and declared account homes. Receipts name removed links by root. Mutations add no links; a later host launch creates them. Foreign entries are untouched. Ownership and precedence are in [configuration](../../guide/configuration.md#skills).
 
-The record commits before entry cleanup. A repair or collection failure warns but does not prevent removal of a broken source. An entry-link cleanup failure still prints the removal receipt and a warning: the unrecorded entry is ignored. Incomplete host skill-link cleanup exits 1 with `pack change committed, but host skill link cleanup is incomplete`; it does not undo the pack change. `rimz uninstall` removes owned library and pack skill links but keeps `packs/` in every mode.
+The record commits before entry cleanup. A repair or collection failure warns but does not prevent removal of a broken source. An entry-link cleanup failure still prints the removal receipt and a warning: the unrecorded entry is ignored. Incomplete host skill-link cleanup exits 1 with `host skill link cleanup is incomplete`; it does not undo a committed pack change. `rimz uninstall` removes owned library and pack skill links but keeps `packs/` in every mode.
 
 ## Manifest
 
@@ -239,6 +248,6 @@ A linked checkout under `/tmp` or `/var/tmp` is hidden from scoped agents runnin
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Listed or showed an installed pack, even with load problems; committed a mutation and completed host skill-link cleanup; or declined an install. Already-applied changes also succeed. |
-| `1` | Unknown pack or selector, missing item, invalid source or manifest, missing Git ref/tag, fetch failure or timeout, a changed record before commit, Git install without a terminal or `--yes`, overlapping agents home, a pack name owned by another source, an `include` of one item whose type is excluded, record/I/O failure, or incomplete post-commit host skill-link cleanup. |
+| `0` | Listed or showed an installed pack, even with load problems; committed a mutation and completed host skill-link cleanup; declined an install or widening update on a terminal; or skipped pinned and linked update sources. Already-applied changes also succeed. |
+| `1` | Unknown pack or selector, missing item, invalid source or manifest, missing Git ref/tag, fetch failure or timeout, a changed record before commit, Git install without a terminal or `--yes`, a widening update held without a terminal or `--yes`, any failed update source (the others still apply), overlapping agents home, a pack name owned by another source, an `include` of one item whose type is excluded, record/I/O failure, or incomplete post-commit host skill-link cleanup. |
 | `2` | Invalid CLI syntax, pack name, item type, or source spelling; ambiguous item name; or an exclusion request with neither item nor type. |

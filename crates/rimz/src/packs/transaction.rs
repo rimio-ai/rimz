@@ -38,15 +38,41 @@ impl Transaction {
         Self::stage_with(home, source, &git::Client::default())
     }
 
+    /// Stage a following Git source's installed selection, refusing a stale source snapshot.
+    pub fn stage_update(home: &Path, installed: &InstalledSource) -> Result<Self> {
+        let source = GitSource {
+            source: installed.source.clone(),
+            url: installed
+                .url
+                .clone()
+                .unwrap_or_else(|| installed.source.clone()),
+            pack: None,
+            reference: None,
+        };
+        Self::stage_selected(home, &source, &git::Client::default(), Some(installed))
+    }
+
     pub(super) fn stage_with(
         home: &Path,
         source: &GitSource,
         client: &git::Client,
     ) -> Result<Self> {
+        Self::stage_selected(home, source, client, None)
+    }
+
+    fn stage_selected(
+        home: &Path,
+        source: &GitSource,
+        client: &git::Client,
+        installed: Option<&InstalledSource>,
+    ) -> Result<Self> {
         let root = paths::packs_dir(home);
         let root = std::path::absolute(&root).map_err(|error| io_err(&root, error))?;
         let root = normalize_path_lexical(&root);
         let before = read_record(&root)?;
+        if installed.is_some_and(|source| !before.sources.contains(source)) {
+            return Err(PackErr::RecordChanged);
+        }
         let new_parents: Vec<_> = root
             .ancestors()
             .take_while(|path| !path.exists())
@@ -66,18 +92,26 @@ impl Transaction {
         };
         let index = transaction.fetch(source, client)?;
         let manifest = &transaction.staged[&source.source].manifest;
-        let defaults = manifest.packs.iter().any(|pack| pack.default);
-        let selected = source.pack.as_ref().map_or_else(
-            || {
-                manifest
-                    .packs
-                    .iter()
-                    .filter(|pack| !defaults || pack.default)
-                    .map(|pack| pack.name.clone())
-                    .collect::<Vec<_>>()
-            },
-            |name| vec![name.clone()],
-        );
+        let selected = if let Some(installed) = installed {
+            installed
+                .packs
+                .iter()
+                .map(|pack| pack.name.clone())
+                .collect()
+        } else {
+            let defaults = manifest.packs.iter().any(|pack| pack.default);
+            source.pack.as_ref().map_or_else(
+                || {
+                    manifest
+                        .packs
+                        .iter()
+                        .filter(|pack| !defaults || pack.default)
+                        .map(|pack| pack.name.clone())
+                        .collect::<Vec<_>>()
+                },
+                |name| vec![name.clone()],
+            )
+        };
         for name in selected {
             transaction.select(index, &name, None)?;
         }
