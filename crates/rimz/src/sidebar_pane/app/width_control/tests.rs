@@ -749,9 +749,9 @@ fn width_key_burst_reprobes_a_view_resized_since_the_last_proof() {
         "rimz-test",
         None,
     );
-    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
+    write_zellij_topology_for_view_at(&runtime, 49, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
-    assert_eq!(controller.current_view_cols, Some(50));
+    assert_eq!(controller.current_view_cols, Some(49));
     assert_eq!(controller.convergence.target(), Some(target(24)));
 
     write_zellij_topology_for_view(&runtime, 320);
@@ -786,13 +786,13 @@ fn width_key_burst_narrower_steps_from_the_target_resolved_on_the_live_view() {
         "rimz-test",
         None,
     );
-    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
+    write_zellij_topology_for_view_at(&runtime, 49, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
     crate::mux::width_target::pin(
         &runtime,
         crate::mux::SidebarWidth::default(),
         target(24),
-        50,
+        49,
     )
     .expect("pin prior target");
 
@@ -847,9 +847,9 @@ fn width_key_burst_keeps_the_last_proven_view_when_the_probe_fails() {
         "rimz-test",
         None,
     );
-    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
+    write_zellij_topology_for_view_at(&runtime, 49, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
-    assert_eq!(controller.current_view_cols, Some(50));
+    assert_eq!(controller.current_view_cols, Some(49));
     assert_eq!(controller.convergence.target(), Some(target(24)));
 
     std::fs::remove_file(crate::mux::zellij::pane_topology::pane_topology_cache_path(
@@ -857,7 +857,7 @@ fn width_key_burst_keeps_the_last_proven_view_when_the_probe_fails() {
     ))
     .unwrap();
     controller.adjust(121, WidthAdjust::Wider);
-    assert_eq!(controller.current_view_cols, Some(50));
+    assert_eq!(controller.current_view_cols, Some(49));
     assert_eq!(controller.convergence.target(), Some(target(24)));
     controller.backstop_at(Some(121), None, None, &diag, burst_deadline(&controller));
 
@@ -1074,10 +1074,25 @@ fn missing_backend_geometry_retries_the_baseline_at_most_once_per_second() {
 }
 
 #[test]
+fn detached_placeholder_never_proves_the_baseline_without_an_event() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::disabled();
+    write_zellij_topology_panes(&runtime, 12, Some(50), controller.started_at_ms + 1, true);
+
+    controller.backstop(Some(12), Some(1), None, &diag);
+
+    assert_eq!(controller.current_view_cols, None);
+    assert_eq!(controller.convergence.target(), None);
+    assert!(!controller.convergence.in_flight());
+    assert!(controller.baseline_probe_deadline.is_some());
+    assert!(!runtime.sidebar_width_path().exists());
+}
+
+#[test]
 fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     let diag = crate::diag::DiagSink::disabled();
-    write_zellij_topology_panes(&runtime, 25, Some(50), controller.started_at_ms, false);
+    write_zellij_topology_panes(&runtime, 25, Some(49), controller.started_at_ms, false);
     controller.backstop(Some(24), Some(1), None, &diag);
     assert_eq!(controller.convergence.target(), None);
     assert_eq!(controller.current_view_cols, None);
@@ -1117,9 +1132,9 @@ fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
 fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     let diag = crate::diag::DiagSink::disabled();
-    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
+    write_zellij_topology_for_view_at(&runtime, 49, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
-    assert_eq!(controller.current_view_cols, Some(50));
+    assert_eq!(controller.current_view_cols, Some(49));
     assert_eq!(controller.convergence.target(), Some(target(24)));
     let adopted_share =
         crate::mux::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None)
@@ -1149,7 +1164,7 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
 fn unproven_viewport_never_rewrites_the_room_share() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     let diag = crate::diag::DiagSink::disabled();
-    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms.saturating_sub(1));
+    write_zellij_topology_for_view_at(&runtime, 49, controller.started_at_ms.saturating_sub(1));
 
     controller.backstop(Some(24), Some(1), None, &diag);
 

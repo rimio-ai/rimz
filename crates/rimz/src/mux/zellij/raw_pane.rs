@@ -12,6 +12,8 @@ use crate::mux::zellij::pane_topology::{
 use crate::mux::{WidthStep, ensure_pane_backend};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
+const DETACHED_SEED_COLS: u64 = 50;
+
 #[cfg(test)]
 thread_local! {
     static WIDTH_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -180,6 +182,10 @@ pub(super) fn parse_new_pane_id(stdout: &str) -> Option<ZellijPaneId> {
 /// A single pane cannot prove the viewport: the sidebar is materialized first,
 /// so that shape is a mid-layout snapshot whose extent is only the sidebar's.
 /// An unviewed tab can retain detached geometry even with two tiled extents.
+/// Zellij's [detached seed] is 50 columns and its birth client counts as a viewer,
+/// so that extent cannot prove a viewport either, even for a real 50-column client.
+///
+/// [detached seed]: https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-client/src/lib.rs
 pub(super) fn tab_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
     #[cfg(test)]
     WIDTH_DERIVATIONS.with(|count| count.set(count.get() + 1));
@@ -195,7 +201,8 @@ pub(super) fn tab_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Op
         .filter_map(|pane| pane.pane_x?.checked_add(pane.pane_columns?));
     let first = extents.next()?;
     let second = extents.next()?;
-    Some(extents.fold(first.max(second), u64::max))
+    let cols = extents.fold(first.max(second), u64::max);
+    (cols != DETACHED_SEED_COLS).then_some(cols)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
