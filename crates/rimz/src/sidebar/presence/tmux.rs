@@ -116,10 +116,10 @@ impl TmuxPresenceState {
             ControlLine::SessionWindowChanged { session, window } => {
                 (self.switch_window(session, window, seeding), None)
             }
-            ControlLine::Nudge | ControlLine::WindowAdded => {
-                (vec![PresenceTransition::Nudge], None)
-            }
-            ControlLine::Ignore | ControlLine::ClientSessionChanged { .. } => (Vec::new(), None),
+            ControlLine::Nudge
+            | ControlLine::WindowAdded
+            | ControlLine::ClientSessionChanged { .. } => (vec![PresenceTransition::Nudge], None),
+            ControlLine::Ignore => (Vec::new(), None),
         }
     }
 
