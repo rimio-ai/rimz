@@ -91,6 +91,15 @@ pub(super) struct EmptyDirRow {
     #[serde(flatten)]
     pub(super) trust: crate::cli::folder_trust::Row,
     pub(super) profiles: Vec<String>,
+    #[serde(skip)]
+    pub(super) cause: EmptyDirCause,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum EmptyDirCause {
+    Restricted,
+    NotGrantable,
+    WiderKey,
 }
 
 #[derive(Debug, Serialize)]

@@ -1930,6 +1930,7 @@ fn render_empty_dir(
     empty_dir: &super::model::EmptyDir,
     tally: &mut Tally,
 ) -> io::Result<()> {
+    use super::model::EmptyDirCause;
     use crate::cli::folder_trust::State;
     if empty_dir.rows.is_empty()
         && matches!(empty_dir.check, Probe::Ready(()))
@@ -1953,28 +1954,43 @@ fn render_empty_dir(
     if empty_dir.rows.is_empty() {
         return Ok(());
     }
-    let mut table = Table::new(["", "AGENT", "LOGIN", "PROFILES", "STATUS"]);
+    let mut groups = std::collections::BTreeMap::new();
     for row in &empty_dir.rows {
-        let fix = match &row.trust.state {
+        let (key, fix) = match &row.trust.state {
             State::Decided => continue,
-            State::Undecided { fix, .. } | State::Restricted { fix, .. } => fix,
+            State::Undecided { key, fix, .. } | State::Restricted { key, fix } => (key, fix),
+        };
+        groups
+            .entry((row.trust.kind, &row.profiles, row.cause, key, fix))
+            .or_insert_with(Vec::new)
+            .push(row.trust.login.as_str());
+    }
+    let mut table = Table::new(["", "AGENT", "LOGIN", "PROFILES", "STATUS", "CAUSE"]);
+    for ((kind, profiles, cause, key, fix), logins) in groups {
+        let logins = logins.join(", ");
+        let start = if profiles.len() == 1 {
+            "starts"
+        } else {
+            "start"
+        };
+        let profiles = profiles.join(", ");
+        let cause = match cause {
+            EmptyDirCause::Restricted => "saved the empty folder as untrusted".to_owned(),
+            EmptyDirCause::NotGrantable => "cannot write its folder trust".to_owned(),
+            EmptyDirCause::WiderKey => format!("needs a grant that would also trust {key}"),
         };
         table.row([
             counted(
                 tally,
                 Severity::Warning,
-                format!(
-                    "{}@{} falls back to the parent directory for profiles {}",
-                    row.trust.kind,
-                    row.trust.login,
-                    row.profiles.join(", ")
-                ),
+                format!("{profiles} {start} in your project: {kind} ({logins}) {cause}"),
                 fix,
             ),
-            cell(row.trust.kind),
-            cell(row.trust.login.as_str()),
-            cell(row.profiles.join(", ")),
-            cell("they start in the parent's directory instead").fg(palette::warn()),
+            cell(kind),
+            cell(logins),
+            cell(profiles),
+            cell("start in your project, not the empty folder").fg(palette::warn()),
+            cell(cause),
         ]);
     }
     table.render(w)
