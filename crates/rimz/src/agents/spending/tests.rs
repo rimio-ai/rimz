@@ -78,7 +78,7 @@ fn compute_spending_with_origins_and_scope(
         &mut RefreshCallbacks {
             on_jobs_scheduled: &mut on_jobs_scheduled,
             tick: &mut tick,
-            before_compact: &mut |_, _, _| {},
+            before_compact: &mut |_, _, _, _| {},
         },
     );
     let counted = dedup_cached_entries(files, cache).into_counted();

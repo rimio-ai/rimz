@@ -5,18 +5,30 @@ use anyhow::Result;
 
 use crate::cli::{render, spinner::Spinner};
 use rimz::RuntimePaths;
-use rimz::agents::spending::{KeptDay, RebuildScope, rebuild_spending_history};
+use rimz::agents::spending::{
+    KeptDay, RebuildErr, RebuildReport, RebuildScope, rebuild_spending_history,
+};
 use rimz::config::MachineConfig;
+use rimz::harness::assist_log::{self, Assist, AssistRecord};
 
 use super::{SPINNER_MIN_AGE, hold::progress_line};
 
-pub(super) fn run() -> Result<()> {
+pub(super) fn run(unattended: bool) -> Result<()> {
     let runtime = RuntimePaths::shared();
     let spec = MachineConfig::load_lenient().headline_spec();
-    let report = {
-        let spinner = Spinner::delayed("Rebuilding saved spend history", SPINNER_MIN_AGE);
+    let scope = if unattended {
+        RebuildScope::Pending
+    } else {
+        RebuildScope::All
+    };
+    let result = {
+        let spinner = (!unattended)
+            .then(|| Spinner::delayed("Rebuilding saved spend history", SPINNER_MIN_AGE));
         let stderr_tty = std::io::stderr().is_terminal();
-        rebuild_spending_history(&runtime, &spec, RebuildScope::All, &mut |progress| {
+        rebuild_spending_history(&runtime, &spec, scope, &mut |progress| {
+            let Some(spinner) = &spinner else {
+                return;
+            };
             let line = progress_line(progress);
             spinner.set(&line);
             if !stderr_tty
@@ -25,7 +37,19 @@ pub(super) fn run() -> Result<()> {
                 let _ = writeln!(render::err(), "{line}");
             }
         })
-    }?;
+    };
+    if unattended {
+        match &result {
+            Ok(report) => record_rebuild(report),
+            Err(RebuildErr::History { report, .. }) => record_rebuild(report),
+            Err(_) => {}
+        }
+        return match result {
+            Ok(report) if report.deferred_days.is_empty() => Ok(()),
+            _ => Err(render::AlreadyReported.into()),
+        };
+    }
+    let report = result?;
     let mut out = render::out();
     if report.days.is_empty() {
         writeln!(out, "Nothing to rebuild.")?;
@@ -125,6 +149,21 @@ fn day_warnings(account_days: &[KeptDay], warning: DayWarning) -> Vec<String> {
             }
         })
         .collect()
+}
+
+fn record_rebuild(report: &RebuildReport) {
+    if report.rebuilt.is_empty() {
+        return;
+    }
+    assist_log::append(&AssistRecord {
+        at: jiff::Timestamp::now(),
+        assist: Assist::SpendRebuild {
+            days: report.days.clone(),
+            files: report.files,
+            rebuilt: report.rebuilt.clone(),
+            kept: report.kept.clone(),
+        },
+    });
 }
 
 #[cfg(test)]

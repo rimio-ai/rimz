@@ -17,13 +17,23 @@ fn run_rebuild(
     files: &[SpendingFile],
     progress: &mut dyn FnMut(SpendProgress),
 ) -> (SpendingWalkResult, Result<RebuildReport, RebuildErr>) {
+    run_scoped_rebuild(fixture, now, files, RebuildScope::All, progress)
+}
+
+fn run_scoped_rebuild(
+    fixture: &mut Fixture,
+    now: u64,
+    files: &[SpendingFile],
+    scope: RebuildScope,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> (SpendingWalkResult, Result<RebuildReport, RebuildErr>) {
     struct Progress<'a>(&'a mut dyn FnMut(SpendProgress));
     impl WalkObserver for Progress<'_> {
         fn on_file(&mut self, progress: SpendProgress) {
             (self.0)(progress);
         }
     }
-    let mut run = RebuildRun::new(RebuildScope::All);
+    let mut run = RebuildRun::new(scope);
     let result = fixture.walker.walk_inner(
         &fixture.runtime.shared_spending_cursor_path(),
         true,
@@ -610,6 +620,234 @@ fn rebuild_dedups_readable_files_from_an_incomplete_account() {
 }
 
 #[test]
+fn interrupted_cold_fill_suppresses_growth_until_a_complete_walk() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    a.walk(now, true);
+    let cursor = a.runtime.shared_spending_cursor_path();
+    std::fs::remove_file(&cursor).unwrap();
+    a.walker = SpendingWalker::new();
+    let files = a.discover(now);
+    struct Interrupt;
+    impl WalkObserver for Interrupt {
+        fn on_interval(&mut self, _: &SpendingDiskCache) {
+            panic!("interrupt after the first cursor checkpoint");
+        }
+    }
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        a.walker.walk(
+            &cursor,
+            &WalkRequest {
+                history: &a.runtime.spending_history,
+                files: &files,
+                prices: &a.prices,
+                now_secs: now,
+                origin_overrides: &HashMap::new(),
+                user_inputs: &[],
+                scope: None,
+                spec: &HeadlineSpec::default(),
+            },
+            &mut Interrupt,
+        );
+    }));
+    assert!(interrupted.is_err());
+    let partial = read_spending_cache(&cursor);
+    assert!(!partial.files.is_empty() && partial.files.len() < files.len());
+    a.walker = SpendingWalker::new();
+    a.walk(now, true);
+    assert!(
+        a.walker.cache.rebuild_days.is_empty(),
+        "resuming a cold fill is not a restore"
+    );
+    assert!(read_spending_cache(&cursor).rebuild_days.is_empty());
+    std::fs::write(
+        a.path("32345678-1234-4234-8234-123456789abc"),
+        claude_line("2026-06-10", 4.0, "c", "c"),
+    )
+    .unwrap();
+    a.walk(now + 1, true);
+    assert_eq!(
+        a.walker.cache.rebuild_days,
+        BTreeSet::from(["2026-06-10".parse::<Date>().unwrap()])
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn ledger_read_failure_preserves_closed_growth_but_not_open_days() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if nix::unistd::getuid().is_root() {
+        return; // Root bypasses mode 000, so the fixture cannot deny the read.
+    }
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    a.walk(now, true);
+    let history = a.runtime.spending_history.spend(2026);
+    std::fs::set_permissions(&history, std::fs::Permissions::from_mode(0o0)).unwrap();
+    std::fs::write(
+        a.path(SECOND),
+        format!(
+            "{}\n{}\n",
+            claude_line("2026-06-10", 3.0, "b", "b"),
+            claude_line("2026-06-30", 4.0, "today", "today")
+        ),
+    )
+    .unwrap();
+    a.walker = SpendingWalker::new();
+    a.walk(now, true);
+    std::fs::set_permissions(&history, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        read_spending_cache(&a.runtime.shared_spending_cursor_path()).rebuild_days,
+        BTreeSet::from(["2026-06-10".parse::<Date>().unwrap()]),
+        "only closed growth survives a ledger read error"
+    );
+}
+
+#[test]
+fn rebuild_never_appends_an_open_day_in_either_scope() {
+    for scope in [RebuildScope::All, RebuildScope::Pending] {
+        let dir = TempDir::new().unwrap();
+        let mut a = Fixture::new(dir.path(), "a");
+        let now = seconds("2026-06-30T12:00:00Z");
+        std::fs::write(
+            a.path(SESSION),
+            format!(
+                "{}\n{}\n",
+                claude_line("2026-06-10", 2.0, "a", "a"),
+                claude_line("2026-06-30", 4.0, "today", "today")
+            ),
+        )
+        .unwrap();
+        a.walk(now, true);
+        let today = "2026-06-30".parse::<Date>().unwrap();
+        let mut open = a.lines()[0].clone();
+        open["day"] = json!(today);
+        let paths = &a.runtime.spending_history;
+        history::append(paths, &paths.spend(2026), format!("\n{open}\n").as_bytes()).unwrap();
+        a.walker.cache.rebuild_days.insert(today);
+        let before = a.lines();
+        let files = a.discover(now);
+        let (_, report) = run_scoped_rebuild(&mut a, now, &files, scope, &mut |_| {});
+        assert!(
+            report.unwrap().rebuilt.is_empty(),
+            "an open day must never be frozen by rebuild"
+        );
+        assert_eq!(a.lines(), before);
+    }
+}
+
+#[test]
+fn pending_rebuild_skips_files_last_written_before_the_earliest_pending_day() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    let old = a.path(SECOND);
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    std::fs::write(&old, claude_line("2026-05-01", 3.0, "b", "b")).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds("2026-05-01T13:00:00Z")),
+        )
+        .unwrap();
+    a.walk(now, true);
+    assert_eq!(a.lines().len(), 2);
+    a.walker
+        .cache
+        .rebuild_days
+        .insert("2026-06-10".parse::<Date>().unwrap());
+    let files = a.discover(now);
+    let (_, report) = run_scoped_rebuild(&mut a, now, &files, RebuildScope::Pending, &mut |_| {});
+    let report = report.unwrap();
+    assert_eq!(
+        report.files, 1,
+        "a file last written before the pending day cannot hold it"
+    );
+    assert_eq!(report.unchanged, 1);
+}
+
+#[test]
+fn growth_in_one_file_is_not_canceled_by_another_files_shrink() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    let path = a.path(SESSION);
+    let mut original: Value =
+        serde_json::from_str(&claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    original["message"]["usage"]["input_tokens"] = json!(1000);
+    std::fs::write(&path, original.to_string()).unwrap();
+    a.walk(now, true);
+    original["message"]["usage"]["input_tokens"] = json!(1);
+    std::fs::write(&path, original.to_string()).unwrap();
+    let cached = a
+        .walker
+        .cache
+        .files
+        .get_mut(path.to_str().unwrap())
+        .unwrap();
+    cached.cursor = SpendCursor::default();
+    cached.stat.len = u64::MAX;
+    std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    a.walk(now, true);
+    assert_eq!(
+        a.walker.cache.rebuild_days,
+        BTreeSet::from(["2026-06-10".parse::<Date>().unwrap()]),
+        "each file grows independently"
+    );
+}
+
+#[test]
+fn restored_cost_only_usage_marks_a_saved_day_pending() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    a.adapter = crate::agents::definition_by_kind("pi").unwrap();
+    let sessions = a.home.join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{SESSION}.jsonl")),
+        json!({
+            "type": "usage", "timestamp": "2026-06-10T15:00:00Z",
+            "usage": {"input": 10, "cost": {"total": 2.0}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(a.walk(now, true).spending.total.month.usd, 2.0);
+    let restored = sessions.join(format!("{SECOND}.jsonl"));
+    std::fs::write(
+        &restored,
+        json!({
+            "type": "usage", "timestamp": "2026-06-10T15:00:00Z",
+            "usage": {"cost": {"total": 3.0}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let entries = a.adapter.parse_spend(&restored, None, &a.prices).entries;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].cost_usd, 3.0);
+    assert_eq!(
+        entries[0].input + entries[0].output + entries[0].cache_write + entries[0].cache_read,
+        0
+    );
+    a.walk(now, true);
+    assert_eq!(
+        a.walker.cache.rebuild_days,
+        BTreeSet::from(["2026-06-10".parse::<Date>().unwrap()]),
+        "logged dollars without tokens are still new usage"
+    );
+}
+
+#[test]
 fn rebuild_leaves_undiscovered_accounts_unreported() {
     let dir = TempDir::new().unwrap();
     let mut a = Fixture::new(dir.path(), "a");
@@ -659,4 +897,486 @@ fn requested_rebuild_reports_a_busy_producer_without_parsing() {
         "a requested rebuild must win the producer lock"
     );
     assert_eq!(parsed, 0);
+}
+
+#[test]
+fn token_growth_survives_a_local_walk_and_requests_one_helper_per_reconciliation() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    a.walk(now, true);
+    std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    let files = a.discover(now);
+    let local = a.walk_files(&files, now, false);
+    let day = "2026-06-10".parse::<Date>().unwrap();
+    assert_eq!(a.walker.cache.rebuild_days, BTreeSet::from([day]));
+    assert!(!local.stats.rebuild_requested);
+    assert!(
+        read_spending_cache(&a.runtime.shared_spending_cursor_path())
+            .rebuild_days
+            .is_empty()
+    );
+    let published = a.walk_files(&files, now, true);
+    assert!(
+        published.stats.rebuild_requested,
+        "the unconsumed reconciliation must request the helper"
+    );
+    assert_eq!(
+        read_spending_cache(&a.runtime.shared_spending_cursor_path()).rebuild_days,
+        BTreeSet::from([day])
+    );
+    assert!(!a.walk_files(&files, now + 1, true).stats.rebuild_requested);
+    let files = a.discover(now + 900);
+    assert!(
+        a.walk_files(&files, now + 900, true)
+            .stats
+            .rebuild_requested
+    );
+}
+
+#[test]
+fn unusable_format_marks_consume_reconciliation_without_requesting_a_helper() {
+    for mark in [Some("2\n"), Some("broken\n"), None] {
+        let dir = TempDir::new().unwrap();
+        let mut a = Fixture::new(dir.path(), "a");
+        let now = seconds("2026-06-30T12:00:00Z");
+        std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+        a.walk(now, true);
+        std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+        let format = a.runtime.spending_history.format();
+        std::fs::remove_file(&format).unwrap();
+        if let Some(mark) = mark {
+            std::fs::write(&format, mark).unwrap();
+        } else {
+            std::fs::create_dir(&format).unwrap();
+        }
+        let files = a.discover(now);
+        let result = a.walk_files(&files, now, true);
+        assert!(
+            !result.stats.rebuild_requested,
+            "an unusable format mark must suppress the helper: {mark:?}"
+        );
+        assert_eq!(
+            a.walker.rebuild_checked_at,
+            a.walker.discovery.last_complete()
+        );
+        let day = "2026-06-10".parse::<Date>().unwrap();
+        assert_eq!(
+            read_spending_cache(&a.runtime.shared_spending_cursor_path()).rebuild_days,
+            BTreeSet::from([day])
+        );
+        if mark.is_none() {
+            std::fs::remove_dir(&format).unwrap();
+        }
+        std::fs::write(&format, "1\n").unwrap();
+        assert!(
+            !a.walk_files(&files, now + 1, true).stats.rebuild_requested,
+            "repairing the mark must not reuse a consumed reconciliation"
+        );
+        let result = a.walk(now + 900, true);
+        assert!(result.stats.rebuild_requested);
+        assert_eq!(a.walker.cache.rebuild_days, BTreeSet::from([day]));
+    }
+}
+
+#[test]
+fn a_missing_format_mark_allows_the_helper_without_creating_the_mark() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    a.walk(now, true);
+    std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    let hold = history::try_maintain(&a.runtime.spending_history)
+        .unwrap()
+        .unwrap();
+    std::fs::remove_file(a.runtime.spending_history.format()).unwrap();
+    let result = a.walk(now, true);
+    assert!(result.stats.rebuild_requested);
+    assert!(!a.runtime.spending_history.format().exists());
+    assert_eq!(a.walker.cache.rebuild_days.len(), 1);
+    drop(hold);
+}
+
+#[test]
+fn recent_appends_heals_shrinks_and_deletions_do_not_trigger_but_later_growth_does() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    let path = a.path(SESSION);
+    std::fs::write(
+        &path,
+        format!("{}\n", claude_line("2026-06-10", 2.0, "old", "old")),
+    )
+    .unwrap();
+    a.walk(now, true);
+    let mut negatives = Vec::new();
+    append_line(
+        &path,
+        &claude_line_ts("2026-06-30T11:00:00Z", 3.0, "recent", "recent"),
+    );
+    a.walk(now, true);
+    negatives.push(a.walker.cache.rebuild_days.is_empty());
+    let cached = a
+        .walker
+        .cache
+        .files
+        .get_mut(path.to_str().unwrap())
+        .unwrap();
+    cached.cursor = SpendCursor::default();
+    cached.stat.len = u64::MAX;
+    let healed = a.walk(now, true);
+    assert_eq!(
+        healed.stats.parse_jobs, 1,
+        "the heal must really reparse the file"
+    );
+    negatives.push(a.walker.cache.rebuild_days.is_empty());
+    std::fs::write(
+        &path,
+        claude_line_ts("2026-06-30T11:00:00Z", 3.0, "recent", "recent"),
+    )
+    .unwrap();
+    a.walk(now, true);
+    negatives.push(a.walker.cache.rebuild_days.is_empty());
+    std::fs::remove_file(path).unwrap();
+    a.walk(now, true);
+    negatives.push(a.walker.cache.rebuild_days.is_empty());
+    std::fs::write(
+        a.path(SECOND),
+        claude_line("2026-06-10", 4.0, "late", "late"),
+    )
+    .unwrap();
+    a.walk(now, true);
+    assert_eq!(
+        a.walker.cache.rebuild_days.len(),
+        1,
+        "only growth on the saved day triggers"
+    );
+    assert_eq!(negatives, [true; 4]);
+}
+
+#[test]
+fn local_growth_persists_below_the_floor_after_the_reconciliation_was_consumed() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    a.walk(now, true);
+    let checked = a.walker.rebuild_checked_at;
+    std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    let files = a.walker.discovery.discover(
+        std::iter::once((
+            crate::agents::ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked(
+                "claude",
+            )),
+            claude_adapter(),
+            BTreeMap::from([(
+                "CLAUDE_CONFIG_DIR".into(),
+                a.home.to_string_lossy().into_owned(),
+            )]),
+        )),
+        now,
+    );
+    assert_eq!(a.walker.discovery.last_complete(), checked);
+    a.walk_files(&files, now, false);
+    let result = a.walk_files(&files, now + 1, true);
+    assert!(
+        !result.stats.rebuild_requested,
+        "the already-consumed cadence must not fire again"
+    );
+    assert_eq!(
+        read_spending_cache(&a.runtime.shared_spending_cursor_path()).rebuild_days,
+        BTreeSet::from(["2026-06-10".parse::<Date>().unwrap()]),
+        "publishing must persist local growth even below the ordinary write floor"
+    );
+    let cursor = a.runtime.shared_spending_cursor_path();
+    let saved = std::fs::read(&cursor).unwrap();
+    std::fs::write(
+        a.path(SECOND),
+        format!(
+            "{}\n{}\n",
+            claude_line("2026-06-10", 3.0, "b", "b"),
+            claude_line("2026-06-30", 4.0, "recent", "recent"),
+        ),
+    )
+    .unwrap();
+    let result = a.walk_files(&files, now + 2, true);
+    assert_eq!(result.stats.parse_jobs, 1, "the cursor must become dirty");
+    assert!(
+        !result.stats.cache_written,
+        "an unchanged pending set must not bypass the persist floor"
+    );
+    assert_eq!(std::fs::read(&cursor).unwrap(), saved);
+    assert!(
+        a.walk_files(&files, now + 1 + SPENDING_PERSIST_MIN_INTERVAL, true)
+            .stats
+            .cache_written,
+        "ordinary dirty cursor changes persist once the floor expires"
+    );
+}
+
+#[test]
+fn newer_cursor_does_not_request_a_helper_without_a_persisted_pending_day() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    a.walk(now, true);
+    let cursor = a.runtime.shared_spending_cursor_path();
+    let mut newer = read_spending_cache(&cursor);
+    newer.version += 1;
+    std::fs::write(&cursor, serde_json::to_vec(&newer).unwrap()).unwrap();
+    assert_eq!(
+        cache::peek_cache_version(&cursor),
+        Some(SPENDING_CACHE_VERSION + 1)
+    );
+    a.walker = SpendingWalker::new();
+    let reset = a.walk(now, true);
+    assert!(!reset.stats.rebuild_requested);
+    assert!(a.walker.cache.rebuild_days.is_empty());
+    assert_eq!(a.walker.cache.files.len(), 1);
+    std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    let result = a.walk(now, true);
+    assert!(
+        !result.stats.rebuild_requested,
+        "a successful downgrade skip is not a persisted pending cursor"
+    );
+    assert_eq!(
+        a.walker.cache.rebuild_days,
+        BTreeSet::from(["2026-06-10".parse::<Date>().unwrap()])
+    );
+    assert_eq!(
+        cache::peek_cache_version(&cursor),
+        Some(SPENDING_CACHE_VERSION + 1)
+    );
+}
+
+#[test]
+fn lost_and_old_version_cursors_suppress_the_first_walk_not_subsequent_growth() {
+    let dir = TempDir::new().unwrap();
+    let now = seconds("2026-06-30T12:00:00Z");
+    let mut observations = Vec::new();
+    for missing in [false, true] {
+        let mut a = Fixture::new(dir.path(), if missing { "missing" } else { "old" });
+        let path = a.path(SESSION);
+        std::fs::write(
+            &path,
+            format!("{}\n", claude_line("2026-06-10", 2.0, "old", "old")),
+        )
+        .unwrap();
+        a.walk(now, true);
+        let cursor = a.runtime.shared_spending_cursor_path();
+        if missing {
+            std::fs::remove_file(&cursor).unwrap();
+        } else {
+            let mut cache = read_spending_cache(&cursor);
+            cache.version = SPENDING_CACHE_VERSION - 1;
+            std::fs::write(&cursor, serde_json::to_vec(&cache).unwrap()).unwrap();
+            let wire: Value = serde_json::from_slice(&std::fs::read(&cursor).unwrap()).unwrap();
+            assert_eq!(wire["version"], SPENDING_CACHE_VERSION - 1);
+        }
+        std::fs::write(
+            a.path(SECOND),
+            claude_line("2026-06-10", 3.0, "restored", "restored"),
+        )
+        .unwrap();
+        a.walker = SpendingWalker::new();
+        a.walk(now, true);
+        let suppressed = a.walker.cache.rebuild_days.is_empty();
+        append_line(&path, &claude_line("2026-06-10", 4.0, "later", "later"));
+        a.walk(now, true);
+        observations.push((suppressed, a.walker.cache.rebuild_days.len()));
+    }
+    assert_eq!(observations, [(true, 1), (true, 1)]);
+}
+
+#[test]
+fn pending_rebuild_publishes_restored_dollars_clears_pending_and_leaves_other_days_byte_exact() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    let original = a.path(SESSION);
+    std::fs::write(
+        &original,
+        format!("{}\n", claude_line("2026-06-10", 2.0, "a", "a")),
+    )
+    .unwrap();
+    append_line(&original, &claude_line("2026-06-09", 7.0, "other", "other"));
+    a.walk(now, true);
+    let history_path = a.runtime.spending_history.spend(2026);
+    let untouched = std::fs::read_to_string(&history_path)
+        .unwrap()
+        .lines()
+        .find(|line| line.contains("\"day\":\"2026-06-09\""))
+        .unwrap()
+        .to_owned();
+    std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    a.walk(now, true);
+    let files = a.discover(now);
+    let (result, report) =
+        run_scoped_rebuild(&mut a, now, &files, RebuildScope::Pending, &mut |_| {});
+    let report = report.unwrap();
+    assert_eq!(report.rebuilt.len(), 1);
+    assert_eq!(report.days, ["2026-06-10".parse::<Date>().unwrap()]);
+    assert_eq!(report.files, 2);
+    assert_eq!(report.rebuilt[0].before_usd, Some(2.0));
+    assert_eq!(report.rebuilt[0].after_usd, 5.0);
+    assert_eq!(result.spending.total.month.usd, 12.0);
+    assert!(
+        !result.stats.rebuild_requested,
+        "a rebuild walk must not request another helper"
+    );
+    assert!(
+        read_spending_cache(&a.runtime.shared_spending_cursor_path())
+            .rebuild_days
+            .is_empty()
+    );
+    assert_eq!(
+        std::fs::read_to_string(history_path)
+            .unwrap()
+            .lines()
+            .find(|line| line.contains("\"day\":\"2026-06-09\"")),
+        Some(untouched.as_str())
+    );
+    assert_eq!(a.lines().len(), 3);
+}
+
+#[test]
+fn checkpoints_never_persist_new_usage_without_its_pending_day() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    a.walk(now, true);
+    let restored = a.path(SECOND);
+    std::fs::write(&restored, claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    let files = a
+        .discover(now)
+        .into_iter()
+        .filter(|file| file.path == restored)
+        .collect::<Vec<_>>();
+    a.walker.last_persisted_now_secs = None;
+    let cursor = a.runtime.shared_spending_cursor_path();
+    let day = "2026-06-10".parse::<Date>().unwrap();
+    struct Checkpoint<'a> {
+        cursor: &'a Path,
+        restored: &'a Path,
+        day: Date,
+        intervals: usize,
+    }
+    impl WalkObserver for Checkpoint<'_> {
+        fn on_interval(&mut self, _: &SpendingDiskCache) {
+            self.intervals += 1;
+            let disk = read_spending_cache(self.cursor);
+            assert!(
+                !disk.files.contains_key(self.restored.to_str().unwrap())
+                    || disk.rebuild_days.contains(&self.day),
+                "a crash after a checkpoint must not lose the rebuild trigger"
+            );
+        }
+    }
+    let mut observer = Checkpoint {
+        cursor: &cursor,
+        restored: &restored,
+        day,
+        intervals: 0,
+    };
+    a.walker.walk(
+        &cursor,
+        &WalkRequest {
+            history: &a.runtime.spending_history,
+            files: &files,
+            prices: &a.prices,
+            now_secs: now,
+            origin_overrides: &HashMap::new(),
+            user_inputs: &[],
+            scope: None,
+            spec: &HeadlineSpec::default(),
+        },
+        &mut observer,
+    );
+    assert!(observer.intervals > 0);
+    let disk = read_spending_cache(&cursor);
+    assert!(disk.files.contains_key(restored.to_str().unwrap()));
+    assert_eq!(disk.rebuild_days, BTreeSet::from([day]));
+}
+
+#[test]
+fn pending_days_expire_with_the_spend_window_even_when_maintenance_is_busy() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    a.walk(now, true);
+    let day = "2026-06-10".parse::<Date>().unwrap();
+    a.walker.cache.rebuild_days = BTreeSet::from([day, "2024-06-10".parse().unwrap()]);
+    a.walker.cache.mark_changed();
+    let hold = history::try_maintain(&a.runtime.spending_history)
+        .unwrap()
+        .unwrap();
+    a.walk(now, true);
+    assert_eq!(
+        read_spending_cache(&a.runtime.shared_spending_cursor_path()).rebuild_days,
+        BTreeSet::from([day])
+    );
+    drop(hold);
+}
+
+#[test]
+fn pending_days_survive_busy_history_and_unread_accounts_until_a_successful_retry() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let now = seconds("2026-06-30T12:00:00Z");
+    std::fs::write(a.path(SESSION), claude_line("2026-06-10", 2.0, "a", "a")).unwrap();
+    a.walk(now, true);
+    std::fs::write(a.path(SECOND), claude_line("2026-06-10", 3.0, "b", "b")).unwrap();
+    a.walk(now, true);
+    let day = "2026-06-10".parse::<Date>().unwrap();
+    a.walker.cache.rebuild_days.insert(day);
+    a.walker.cache.mark_changed();
+    let files = a.discover(now);
+    let hold = history::try_maintain(&a.runtime.spending_history)
+        .unwrap()
+        .unwrap();
+    let mut ticks = 0;
+    let (_, report) = run_scoped_rebuild(&mut a, now, &files, RebuildScope::Pending, &mut |_| {
+        ticks += 1
+    });
+    assert!(matches!(report, Err(RebuildErr::MaintenanceUnavailable)));
+    assert_eq!(ticks, files.len(), "busy history must skip the cold parse");
+    assert_eq!(a.walker.cache.rebuild_days, BTreeSet::from([day]));
+    drop(hold);
+    for mark in ["2\n", "broken\n"] {
+        std::fs::write(a.runtime.spending_history.format(), mark).unwrap();
+        let (_, report) =
+            run_scoped_rebuild(&mut a, now, &files, RebuildScope::Pending, &mut |_| {});
+        assert!(matches!(report, Err(RebuildErr::FormatUnusable(_))));
+        assert_eq!(a.walker.cache.rebuild_days, BTreeSet::from([day]));
+    }
+    std::fs::write(a.runtime.spending_history.format(), "1\n").unwrap();
+    let unread = a.path("32345678-1234-4234-8234-123456789abc");
+    std::fs::write(&unread, "").unwrap();
+    let files = a.discover(now);
+    std::fs::remove_file(unread).unwrap();
+    let (_, report) = run_scoped_rebuild(&mut a, now, &files, RebuildScope::Pending, &mut |_| {});
+    let report = report.unwrap();
+    assert_eq!(
+        report
+            .deferred_days
+            .iter()
+            .map(|deferred| deferred.day)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([day])
+    );
+    assert!(report.rebuilt.is_empty() && report.kept.is_empty());
+    assert_eq!(a.walker.cache.rebuild_days, BTreeSet::from([day]));
+    let files = a.discover(now);
+    let (_, report) = run_scoped_rebuild(&mut a, now, &files, RebuildScope::Pending, &mut |_| {});
+    assert_eq!(report.unwrap().rebuilt.len(), 1);
+    assert!(
+        read_spending_cache(&a.runtime.shared_spending_cursor_path())
+            .rebuild_days
+            .is_empty()
+    );
 }

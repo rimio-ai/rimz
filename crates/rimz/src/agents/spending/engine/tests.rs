@@ -1881,3 +1881,174 @@ fn finished_walk_lowers_the_publication() {
 
     assert_eq!(published_total_year_usd(&runtime), 2.5);
 }
+
+struct RebuildFixture {
+    _dir: tempfile::TempDir,
+    runtime: RuntimePaths,
+    walker: SpendingWalker,
+    home: std::path::PathBuf,
+    files: Vec<super::super::SpendingFile>,
+    now_secs: u64,
+}
+
+impl RebuildFixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        runtime.spending_history =
+            crate::disk::paths::SpendingHistoryPaths::under(&dir.path().join("accounts"));
+        let home = dir.path().join("accounts/claude/shared");
+        let project = home.join("projects/project");
+        std::fs::create_dir_all(&project).unwrap();
+        let now_secs = unix_secs_now();
+        let ts = (now_secs / 86_400 - 20) * 86_400 + 43_200;
+        std::fs::write(
+            project.join("12345678-1234-4234-8234-123456789abc.jsonl"),
+            claude_cost_line_in(ts, 2.0, "original", &home),
+        )
+        .unwrap();
+        let mut walker = SpendingWalker::new();
+        let files = Self::discover(&mut walker, &home, now_secs);
+        let request = service_request(&runtime, None, &HeadlineSpec::default());
+        let context = super::request_context(&request, true);
+        super::walk_fleet_spending_files(
+            &mut walker,
+            &runtime,
+            &context,
+            super::FleetWalk::Publish,
+            &mut |_| {},
+            &files,
+            now_secs,
+        );
+        Self {
+            _dir: dir,
+            runtime,
+            walker,
+            home,
+            files,
+            now_secs,
+        }
+    }
+
+    fn discover(
+        walker: &mut SpendingWalker,
+        home: &std::path::Path,
+        now_secs: u64,
+    ) -> Vec<super::super::SpendingFile> {
+        walker.discovery.force_complete_for_test();
+        walker.discovery.discover(
+            std::iter::once((
+                crate::agents::ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked(
+                    "claude",
+                )),
+                crate::agents::definition_by_kind("claude").unwrap(),
+                BTreeMap::from([(
+                    "CLAUDE_CONFIG_DIR".into(),
+                    home.to_string_lossy().into_owned(),
+                )]),
+            )),
+            now_secs,
+        )
+    }
+
+    fn day(&self) -> jiff::civil::Date {
+        Timestamp::from_second(((self.now_secs / 86_400 - 20) * 86_400) as i64)
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .date()
+    }
+
+    fn pend(&mut self) {
+        self.walker.cache.rebuild_days.insert(self.day());
+        self.walker.cache.mark_changed();
+        assert!(write_spending_cache(
+            &self.runtime.shared_spending_cursor_path(),
+            &self.walker.cache
+        ));
+    }
+}
+
+#[test]
+fn scope_only_return_leaves_the_complete_reconciliation_for_a_publishing_walk() {
+    let mut fixture = RebuildFixture::new();
+    fixture.pend();
+    let checked = fixture.walker.rebuild_checked_at;
+    fixture.files = RebuildFixture::discover(&mut fixture.walker, &fixture.home, fixture.now_secs);
+    let complete = fixture.walker.discovery.last_complete();
+    let _discovery = override_discovered_spending_files_for_test(fixture.files.clone());
+    compute_fleet_spending_with_walker(
+        &mut fixture.walker,
+        &fixture.runtime,
+        Some(&fixture.home),
+        &HeadlineSpec::default(),
+    );
+    assert_eq!(
+        fixture.walker.rebuild_checked_at, checked,
+        "a scope-only answer must not consume the cadence"
+    );
+    let request = service_request(&fixture.runtime, None, &HeadlineSpec::default());
+    let context = super::request_context(&request, true);
+    super::walk_fleet_spending_files(
+        &mut fixture.walker,
+        &fixture.runtime,
+        &context,
+        super::FleetWalk::Publish,
+        &mut |_| {},
+        &fixture.files,
+        fixture.now_secs,
+    );
+    assert_eq!(
+        fixture.walker.rebuild_checked_at, complete,
+        "the next publishing walk must consume it"
+    );
+    assert_ne!(complete, checked);
+}
+
+#[test]
+fn pending_rebuild_finishes_with_the_new_dollars_in_the_durable_publication() {
+    let mut fixture = RebuildFixture::new();
+    let ts = (fixture.now_secs / 86_400 - 20) * 86_400 + 43_200;
+    std::fs::write(
+        fixture
+            .home
+            .join("projects/project/22345678-1234-4234-8234-123456789abc.jsonl"),
+        claude_cost_line_in(ts, 3.0, "restored", &fixture.home),
+    )
+    .unwrap();
+    fixture.files = RebuildFixture::discover(&mut fixture.walker, &fixture.home, fixture.now_secs);
+    fixture.pend();
+    let checked = fixture.walker.rebuild_checked_at;
+    let mut run = super::super::rebuild::RebuildRun::new(super::super::RebuildScope::Pending);
+    let request = service_request(&fixture.runtime, None, &HeadlineSpec::default());
+    let context = super::request_context(&request, true);
+    let result = super::walk_fleet_spending_files(
+        &mut fixture.walker,
+        &fixture.runtime,
+        &context,
+        super::FleetWalk::Rebuild(&mut run),
+        &mut |_| {},
+        &fixture.files,
+        fixture.now_secs,
+    );
+    assert_eq!(run.report.unwrap().rebuilt.len(), 1);
+    assert_eq!(result.provider.spending.total.year.usd, 5.0);
+    assert_eq!(
+        read_provider_spending_cache(&fixture.runtime.shared_provider_spending_path())
+            .spending
+            .total
+            .year
+            .usd,
+        5.0
+    );
+    assert!(
+        read_spending_cache(&fixture.runtime.shared_spending_cursor_path())
+            .rebuild_days
+            .is_empty()
+    );
+    assert_eq!(
+        fixture.walker.rebuild_checked_at, checked,
+        "a rebuild must not request another helper"
+    );
+}

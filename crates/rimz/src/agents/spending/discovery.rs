@@ -469,6 +469,10 @@ impl SpendingDiscoveryIndex {
         self.last_authoritative
     }
 
+    pub(super) fn last_complete(&self) -> Option<Instant> {
+        self.last_complete
+    }
+
     #[cfg(any(test, feature = "testkit"))]
     pub(crate) fn mark_non_authoritative_for_test(&mut self) {
         self.last_authoritative = false;

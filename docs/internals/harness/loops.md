@@ -785,6 +785,7 @@ The redeem record also carries user-initiated redemptions under reason `manual`,
 
 | `Assist` variant | Writer | Records |
 | --- | --- | --- |
+| `spend_rebuild` | detached `rimz stats --rebuild --unattended`, only after at least one replacement append | pending UTC `days` (`YYYY-MM-DD`), parsed transcript `files`, `rebuilt` account-days (`login`, `day`, optional `before_usd`, `after_usd`), and `kept` account-days (`login`, `day`); requested rebuilds append none |
 | `port_forward` | the laptop's remote supervisor, after a report-driven SSH open attempt or a new local-port exhaustion | host, remote port, local port only on success, and error only on failure; no record for a master-replacement reopen or the forward limit |
 | `empty_dir_grant` | the shared launcher, after a fresh eligible `empty-dir` launch writes an undecided account's grant on the empty root | provider `kind`, account `login` (`kind@name`), trusted `key`, provider-file `path`, and `profile` when named; one record per successful write, even if a later preflight refuses; none when a concurrent writer already granted |
 | `resident_launch` | the loop helper, after stop and launch succeed and the ledger is published | task, condition evidence, destination checkout (scope when unnamed), the handles taken over from if any, and launched handles; an append error fails the fire and keeps the ledger entry |

@@ -248,6 +248,8 @@ pub struct WalkStats {
     pub dedup_passes: u32,
     pub cache_parsed: bool,
     pub cache_written: bool,
+    /// The pending cursor was persisted and a new complete reconciliation requested a helper.
+    pub rebuild_requested: bool,
     /// Transcript parse jobs scheduled by this walk. An unchanged file or a
     /// memo-only recompute contributes zero; a grown file contributes one
     /// suffix job.
@@ -320,6 +322,8 @@ pub struct SpendingWalker {
     cache: SpendingDiskCache,
     cache_stamp: Option<CacheStamp>,
     last_persisted_now_secs: Option<u64>,
+    rebuild_days_dirty: bool,
+    rebuild_checked_at: Option<Instant>,
     memo: Option<SpendingMemo>,
     discovery: discovery::SpendingDiscoveryIndex,
     closed_days: closed_days::ClosedDays,
@@ -358,6 +362,8 @@ impl SpendingWalker {
             },
             cache_stamp: None,
             last_persisted_now_secs: None,
+            rebuild_days_dirty: false,
+            rebuild_checked_at: None,
             memo: None,
             discovery: discovery::SpendingDiscoveryIndex::default(),
             closed_days: closed_days::ClosedDays::default(),
@@ -473,12 +479,31 @@ impl SpendingWalker {
         let mut stats = WalkStats::default();
         self.sync_from_disk(cache_path, &mut stats);
         let prior_generation = self.cache.generation;
+        let pending_before = self.cache.rebuild_days.len();
+        self.cache
+            .rebuild_days
+            .retain(|day| closed_days::rebuildable_day(*day, req.now_secs));
+        let pending_expired = pending_before != self.cache.rebuild_days.len();
+        if pending_expired {
+            self.cache.mark_changed();
+        }
+        let pending_dirty = Cell::new(self.rebuild_days_dirty || pending_expired);
         let persist_worthy = Cell::new(
             persist
-                && self.last_persisted_now_secs.is_none_or(|last| {
-                    req.now_secs.saturating_sub(last) >= SPENDING_PERSIST_MIN_INTERVAL
-                }),
+                && (pending_dirty.get()
+                    || self.last_persisted_now_secs.is_none_or(|last| {
+                        req.now_secs.saturating_sub(last) >= SPENDING_PERSIST_MIN_INTERVAL
+                    })),
         );
+        let detecting_growth = !self.cache.files.is_empty() && !self.cache.fill_in_progress;
+        if self.cache.files.is_empty() && !req.files.is_empty() && !self.cache.fill_in_progress {
+            self.cache.fill_in_progress = true;
+            self.cache.mark_changed();
+        }
+        if persist && self.cache.fill_in_progress {
+            persist_worthy.set(true);
+        }
+        let checkpoint_ready = Cell::new(true);
         let mut checkpoint_written = false;
         let mut checkpoint_generation = None;
         let rebuilding = rebuild.is_some();
@@ -491,9 +516,34 @@ impl SpendingWalker {
             }
             let closed_days = &mut self.closed_days;
             let mut before_compact =
-                |cache: &SpendingDiskCache, parsed: &[&SpendingFile], unread: &[&SpendingFile]| {
+                |cache: &mut SpendingDiskCache,
+                 parsed: &[&SpendingFile],
+                 unread: &[&SpendingFile],
+                 growth: &[(LoginKey, u64)]| {
                     if rebuilding {
                         incomplete.extend(unread.iter().map(|file| file.login.clone()));
+                    }
+                    if !growth.is_empty() {
+                        let saved = closed_days.load(req.history, accounts);
+                        let pending = growth
+                            .iter()
+                            .filter(|(login, day)| {
+                                saved
+                                    .as_ref()
+                                    .map_or(true, |saved| saved.replaces(login, day * 86_400))
+                            })
+                            .filter_map(|(_, day)| closed_days::utc_day(day * 86_400))
+                            .filter(|day| closed_days::rebuildable_day(*day, req.now_secs))
+                            .collect::<Vec<_>>();
+                        let mut changed = false;
+                        for day in pending {
+                            changed |= cache.rebuild_days.insert(day);
+                        }
+                        if changed {
+                            cache.mark_changed();
+                            pending_dirty.set(true);
+                            persist_worthy.set(true);
+                        }
                     }
                     closed_days.invalidate_for_parsed(cache, parsed, req.now_secs);
                     if persist
@@ -516,6 +566,8 @@ impl SpendingWalker {
                 .checked_sub(WALK_CHECKPOINT_INTERVAL)
                 .unwrap_or_else(Instant::now);
             let mut on_jobs_scheduled = |stats: &WalkStats| {
+                // Parsed usage and its growth evidence must reach disk in the same cursor write.
+                checkpoint_ready.set(!detecting_growth || stats.parse_jobs == 0);
                 if stats.parse_bytes >= SPENDING_PERSIST_PARSE_BYTES {
                     persist_worthy.set(true);
                 }
@@ -524,12 +576,14 @@ impl SpendingWalker {
                 observer.on_file(progress);
                 if last_checkpoint.elapsed() >= WALK_CHECKPOINT_INTERVAL {
                     if persist
+                        && checkpoint_ready.get()
                         && persist_worthy.get()
                         && cache.dirty
                         && write_spending_cache(cache_path, cache)
                     {
                         checkpoint_written = true;
                         checkpoint_generation = Some(cache.generation);
+                        pending_dirty.set(false);
                     }
                     if cache.generation != last_checkpoint_generation {
                         observer.on_interval(cache);
@@ -552,6 +606,7 @@ impl SpendingWalker {
                 },
             );
         }
+        self.rebuild_days_dirty = pending_dirty.get();
         if let Some(rebuild) = rebuild {
             rebuild.report = self.closed_days.rebuild(
                 &self.cache,
@@ -561,6 +616,20 @@ impl SpendingWalker {
                 &incomplete,
                 &mut |progress| observer.on_file(progress),
             );
+            if let Ok(report) = &rebuild.report {
+                let pending_before = self.cache.rebuild_days.clone();
+                self.cache
+                    .rebuild_days
+                    .retain(|day| !report.days.contains(day));
+                self.cache
+                    .rebuild_days
+                    .extend(report.deferred_days.iter().map(|deferred| deferred.day));
+                if pending_before != self.cache.rebuild_days {
+                    self.cache.mark_changed();
+                    self.rebuild_days_dirty = true;
+                    persist_worthy.set(true);
+                }
+            }
         }
         self.discovery.reconcile(&self.cache, req.now_secs);
         if checkpoint_written {
@@ -571,15 +640,44 @@ impl SpendingWalker {
                 self.cache_stamp = cache_stamp(cache_path);
             }
         }
+        let finishing_fill = persist && self.cache.fill_in_progress;
+        if finishing_fill {
+            self.cache.fill_in_progress = false;
+            self.cache.mark_changed();
+            persist_worthy.set(true);
+        }
+        let reconciliation = self.discovery.last_complete().filter(|stamp| {
+            persist
+                && !rebuilding
+                && self.spending_discovery_is_authoritative()
+                && self.rebuild_checked_at != Some(*stamp)
+        });
+        let pending_check = reconciliation.is_some() && !self.cache.rebuild_days.is_empty();
+        let mut pending_persisted = false;
         if persist
-            && persist_worthy.get()
-            && self.cache.dirty
+            && (pending_check || (persist_worthy.get() && self.cache.dirty))
             && write_spending_cache(cache_path, &self.cache)
         {
             self.cache.dirty = false;
+            self.rebuild_days_dirty = false;
             self.cache_stamp = cache_stamp(cache_path);
             self.last_persisted_now_secs = Some(req.now_secs);
             stats.cache_written = true;
+            // A successful downgrade skip did not persist this walk's pending set.
+            pending_persisted = pending_check
+                && cache::peek_cache_version(cache_path) == Some(SPENDING_CACHE_VERSION);
+        } else if finishing_fill {
+            self.cache.fill_in_progress = true;
+        }
+        if let Some(stamp) = reconciliation
+            && (!pending_check || pending_persisted)
+        {
+            self.rebuild_checked_at = Some(stamp);
+            stats.rebuild_requested = pending_check
+                && !matches!(
+                    history::format_mark(req.history),
+                    history::FormatMark::Unusable
+                );
         }
         #[cfg(test)]
         panic_after_refresh_for_test();
@@ -593,7 +691,8 @@ impl SpendingWalker {
         let roles = session_roles::load_history(req.history, req.now_secs);
         let recorded = self
             .closed_days
-            .load(req.history, &self.discovery.history_accounts);
+            .load(req.history, &self.discovery.history_accounts)
+            .ok();
         let mut result = aggregate_counted_rollups(
             req.files,
             &self.cache,
@@ -607,7 +706,7 @@ impl SpendingWalker {
             },
             HistoryContext {
                 roles: Some(&roles),
-                spend: Some(recorded),
+                spend: recorded,
             },
         );
         result.stats = stats;
@@ -623,6 +722,7 @@ impl SpendingWalker {
         self.closed_days.invalidate_recording();
         self.memo = None;
         self.cache = read_spending_cache(cache_path);
+        self.rebuild_days_dirty = false;
         self.cache_stamp = stamp;
         stats.cache_parsed = stamp.is_some();
     }
@@ -707,6 +807,7 @@ impl SpendingWalker {
             && write_spending_cache(cache_path, &self.cache)
         {
             self.cache.dirty = false;
+            self.rebuild_days_dirty = false;
             self.cache_stamp = cache_stamp(cache_path);
             self.last_persisted_now_secs = Some(now_secs);
         }

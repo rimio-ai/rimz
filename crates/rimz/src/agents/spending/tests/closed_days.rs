@@ -2,7 +2,7 @@ use super::*;
 use crate::agents::{ProviderLogin, TranscriptStat};
 use crate::disk::paths::{RuntimePaths, SpendingHistoryPaths};
 use crate::ids::{AgentKind, WorkspaceId};
-use jiff::Timestamp;
+use jiff::{Timestamp, civil::Date};
 use serde_json::{Value, json};
 
 const SESSION: &str = "12345678-1234-4234-8234-123456789abc";
@@ -102,6 +102,7 @@ impl Fixture {
                     match self.adapter.spec().kind {
                         "codex" => "CODEX_HOME",
                         "grok" => "GROK_HOME",
+                        "pi" => "PI_CODING_AGENT_DIR",
                         _ => "CLAUDE_CONFIG_DIR",
                     }
                     .into(),
@@ -299,6 +300,7 @@ fn closed_days_recording_scans_only_when_a_day_can_be_added() {
         )
     };
     let mut observations = Vec::new();
+    let mut pending = Vec::new();
     for (at, cost, id) in [
         ("2026-06-30T12:00:00Z", 3.0, "recent"),
         ("2026-06-10T16:00:00Z", 99.0, "covered"),
@@ -306,6 +308,7 @@ fn closed_days_recording_scans_only_when_a_day_can_be_added() {
     ] {
         append_line(&path, &claude_line_ts(at, cost, id, id));
         observations.push(observe(&mut a, true));
+        pending.push(a.walker.cache.rebuild_days.clone());
     }
     observations.push(observe(&mut a, true));
 
@@ -354,6 +357,8 @@ fn closed_days_recording_scans_only_when_a_day_can_be_added() {
         ],
         "only uncovered closed days need recording dedup; deferred changes must survive"
     );
+    let covered = BTreeSet::from(["2026-06-10".parse::<Date>().unwrap()]);
+    assert_eq!(pending, [BTreeSet::new(), covered.clone(), covered]);
 }
 
 #[test]

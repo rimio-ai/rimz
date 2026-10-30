@@ -26,6 +26,12 @@ pub struct AssistRecord {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
+    SpendRebuild {
+        days: Vec<jiff::civil::Date>,
+        files: usize,
+        rebuilt: Vec<crate::agents::spending::RebuiltDay>,
+        kept: Vec<crate::agents::spending::KeptDay>,
+    },
     EmptyDirGrant {
         kind: AgentKind,
         login: crate::ids::LoginKey,
@@ -540,6 +546,24 @@ mod tests {
 
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
+        let rebuilt = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "spend_rebuild",
+            "days": ["2026-05-10"], "files": 2,
+            "rebuilt": [
+                {
+                    "login": "claude@default", "day": "2026-05-10",
+                    "before_usd": 2.0, "after_usd": 5.0
+                },
+                {"login": "codex@default", "day": "2026-05-10", "after_usd": 1.0}
+            ],
+            "kept": [{"login": "claude@default", "day": "2026-05-09"}]
+        });
+        let decoded = serde_json::from_value::<AssistRecord>(rebuilt.clone());
+        assert!(
+            decoded.is_ok(),
+            "spend rebuild is an accountable assist: {decoded:?}"
+        );
+        assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), rebuilt);
         let forwarded = serde_json::json!({
             "at": "2026-06-02T12:00:00Z", "assist": "port_forward",
             "host": "dev-box", "remote": 3000, "local": 3001

@@ -53,6 +53,7 @@ pub(super) struct AssistRollup {
     pub(super) restores: usize,
     pub(super) restored_sessions: usize,
     pub(super) sweeps: usize,
+    pub(super) spend_rebuilds: usize,
     pub(super) tmp_evictions: usize,
     pub(super) reclaimed_bytes: u64,
     /// Attempts that did not take effect, keyed by the count they would have joined.
@@ -63,6 +64,13 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
+    SpendRebuild {
+        at: Timestamp,
+        days: Vec<jiff::civil::Date>,
+        files: usize,
+        rebuilt: Vec<rimz::agents::spending::RebuiltDay>,
+        kept: Vec<rimz::agents::spending::KeptDay>,
+    },
     EmptyDirGrant {
         at: Timestamp,
         kind: AgentKind,
@@ -403,6 +411,7 @@ impl AssistStats {
                 continue;
             }
             match event {
+                AssistEvent::SpendRebuild { .. } => rollup.spend_rebuilds += 1,
                 AssistEvent::EmptyDirGrant { .. } => rollup.empty_dir_grants += 1,
                 AssistEvent::PortForward { .. } => rollup.port_forwards += 1,
                 AssistEvent::WorkflowStart { .. } => rollup.workflow_starts += 1,
@@ -517,6 +526,7 @@ impl AssistEvent {
             | Self::TmpEvict { error, .. }
             | Self::PortForward { error, .. } => error.is_none(),
             Self::Molt { .. }
+            | Self::SpendRebuild { .. }
             | Self::IdleStopWithdrawn { .. }
             | Self::WorkflowStart { .. }
             | Self::WorkflowStep { .. }
@@ -536,6 +546,7 @@ impl AssistEvent {
     /// The `AssistRollup` field this event counts toward, named as it serializes.
     fn count_key(&self) -> &'static str {
         match self {
+            Self::SpendRebuild { .. } => "spend_rebuilds",
             Self::PortForward { .. } => "port_forwards",
             Self::EmptyDirGrant { .. } => "empty_dir_grants",
             Self::WorkflowStart { .. } => "workflow_starts",
@@ -571,6 +582,18 @@ impl AssistEvent {
 
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
+            Assist::SpendRebuild {
+                days,
+                files,
+                rebuilt,
+                kept,
+            } => Self::SpendRebuild {
+                at: record.at,
+                days,
+                files,
+                rebuilt,
+                kept,
+            },
             Assist::EmptyDirGrant {
                 kind,
                 login,
@@ -1043,6 +1066,7 @@ impl AssistEvent {
     fn at(&self) -> Timestamp {
         match self {
             Self::PortForward { at, .. }
+            | Self::SpendRebuild { at, .. }
             | Self::EmptyDirGrant { at, .. }
             | Self::Molt { at, .. }
             | Self::WorkflowStart { at, .. }
@@ -1194,6 +1218,7 @@ enum RepeatSubject<'a> {
         &'a rimz::WorkspaceId,
         std::mem::Discriminant<rimz::harness::auto_gc::GcScope>,
     ),
+    SpendHistory,
 }
 
 #[derive(PartialEq, Eq)]
@@ -1272,6 +1297,7 @@ impl AssistEvent {
                 scope,
                 ..
             } => RepeatSubject::Gc(workspace_id, std::mem::discriminant(scope)),
+            Self::SpendRebuild { .. } => RepeatSubject::SpendHistory,
         }
     }
 
@@ -1314,6 +1340,8 @@ impl AssistEvent {
             Self::JudgeDecline { profile, .. } => RepeatKey::Judge(profile),
             Self::WorkflowStep { step, .. } => RepeatKey::Step(step),
             Self::WorkflowRoute { count: Some(_), .. } => return None,
+            // Each rebuild names its own days and dollars, so none repeats another.
+            Self::SpendRebuild { .. } => return None,
             Self::WorkflowRoute {
                 node, outcome, to, ..
             } => RepeatKey::Route(node, outcome, to),
@@ -1588,6 +1616,12 @@ pub(super) fn category_entries(
     let freed = (rollup.reclaimed_bytes > 0).then(|| render::fmt_bytes(rollup.reclaimed_bytes));
     row("Auto-gc:", "sweeps", rollup.sweeps, freed);
     row(
+        "Spend rebuild:",
+        "spend_rebuilds",
+        rollup.spend_rebuilds,
+        None,
+    );
+    row(
         "Temp evictions:",
         "tmp_evictions",
         rollup.tmp_evictions,
@@ -1609,6 +1643,22 @@ fn row_benefit_line(
     let at = event.at().to_zoned(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
+        AssistEvent::SpendRebuild { rebuilt, .. } => {
+            let days = rebuilt
+                .iter()
+                .map(|day| day.day)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
+            let before = rebuilt
+                .iter()
+                .filter_map(|day| day.before_usd)
+                .fold(0.0, |total, usd| total + usd);
+            let after = rebuilt.iter().fold(0.0, |total, day| total + day.after_usd);
+            format!(
+                "{time} ♻ spend rebuilt — {days} UTC day{}, ${before:.2} → ${after:.2}",
+                plural(days)
+            )
+        }
         AssistEvent::PortForward {
             host,
             remote,
@@ -2062,6 +2112,25 @@ fn forensic_row_line(event: &AssistEvent, zone: &jiff::tz::TimeZone, benefit: &s
     let at = event.at().to_zoned(zone.clone()).strftime("%Y-%m-%d %H:%M");
     let benefit = benefit.split_once(' ').map_or(benefit, |(_, rest)| rest);
     match event {
+        AssistEvent::SpendRebuild {
+            days, files, kept, ..
+        } => {
+            let days = days
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let kept = kept
+                .iter()
+                .map(|day| format!("{} {}", day.login, day.day))
+                .collect::<Vec<_>>();
+            let kept = if kept.is_empty() {
+                String::new()
+            } else {
+                format!(" · kept {}", kept.join(", "))
+            };
+            format!("{at} {benefit} · {files} files · pending {days}{kept}")
+        }
         AssistEvent::PortForward { .. } => format!("{at} {benefit}"),
         AssistEvent::WorkflowStart { run, .. }
         | AssistEvent::WorkflowStep { run, .. }

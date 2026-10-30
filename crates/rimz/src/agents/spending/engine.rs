@@ -486,6 +486,7 @@ fn walk_fleet_spending_files(
                 publish_workspace(runtime, scope_hash, &workspace);
             }
         }
+        spawn_rebuild_if_requested(runtime, &result.stats);
         return SpendingCaches {
             provider: provider.into(),
             workspace,
@@ -553,9 +554,22 @@ fn walk_fleet_spending_files(
             publish_workspace(runtime, scope_hash, &workspace);
         }
     }
+    spawn_rebuild_if_requested(runtime, &result.stats);
     SpendingCaches {
         provider: provider.into(),
         workspace,
+    }
+}
+
+fn spawn_rebuild_if_requested(runtime: &RuntimePaths, stats: &super::WalkStats) {
+    if stats.rebuild_requested
+        && let Err(error) = crate::child_process::spawn_detached_rimz(
+            runtime,
+            ["stats", "--rebuild", "--unattended"],
+            "saved spend rebuild",
+        )
+    {
+        tracing::warn!(%error, "failed to start saved spend rebuild");
     }
 }
 
@@ -583,7 +597,8 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             super::session_roles::load_history(&self.runtime.spending_history, self.now_secs);
         let recorded = self
             .closed_days
-            .load(&self.runtime.spending_history, &self.accounts);
+            .load(&self.runtime.spending_history, &self.accounts)
+            .ok();
         let result = crate::agents::spending::aggregate_walk_publish(
             self.files,
             cache,
@@ -593,7 +608,7 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             self.spec,
             super::HistoryContext {
                 roles: Some(&roles),
-                spend: Some(recorded),
+                spend: recorded,
             },
         );
         let published = read_provider_spending_cache(&self.provider_path);
