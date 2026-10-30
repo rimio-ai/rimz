@@ -1297,7 +1297,7 @@ fn coalesce_records_each_arrival_and_drains_the_merged_newest_trigger() {
     );
     let text = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
-        text.contains("  1 trigger waiting · runs when the active run ends · absorbed 1\n"),
+        text.contains("  2 fires waiting · one run follows when the active run ends\n"),
         "{text}"
     );
     let backlog = &show(&env, "busy")["backlog"];
@@ -1420,9 +1420,10 @@ fn queue_is_fifo_full_is_overlapped_and_release_starts_the_next_process() {
             .unwrap()
             .contains("queue full (2/2), skipped")
     );
+    let text = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
-        loop_ok(&env, &["loop", "show", "busy"])
-            .contains("  queue 2/2 · next runs when the active run ends\n")
+        text.contains("  2 fires queued (limit 2) · each runs in turn when the active run ends\n"),
+        "{text}"
     );
     let value = show(&env, "busy");
     assert_eq!(value["backlog"]["limit"], 2);

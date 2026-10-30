@@ -462,7 +462,7 @@ fn worktrees_unread_cells_are_unknown_with_a_reason() {
 }
 
 #[test]
-fn show_keeps_folded_evidence_but_omits_single_run_table() {
+fn show_keeps_folded_evidence_but_omits_empty_single_run_detail() {
     let mut view = show_view(false);
     view.records = [(10, 900), (20, 450_489), (30, 900)]
         .into_iter()
@@ -479,12 +479,81 @@ fn show_keeps_folded_evidence_but_omits_single_run_table() {
         text.contains("✓ completed ×3") && text.contains("900ms–7m") && text.contains("over 20s"),
         "{text}"
     );
-    assert!(text.contains("LAST RUN"), "{text}");
+    assert!(!text.contains("LAST RUN"), "{text}");
 
     view.records.truncate(1);
     let text = show_text(&view);
     assert!(!text.contains("RECENT RUNS"), "{text}");
-    assert!(text.contains("LAST RUN"), "{text}");
+    assert!(!text.contains("LAST RUN"), "{text}");
+}
+
+#[test]
+fn show_header_leads_with_the_finished_verdict_before_waiting_fires() {
+    use rimz::config::OverlapPolicy;
+    let cases = [
+        (
+            OverlapPolicy::Coalesce,
+            1,
+            5,
+            "  6 fires waiting · one run follows when the active run ends",
+        ),
+        (
+            OverlapPolicy::Queue,
+            3,
+            0,
+            "  3 fires queued (limit 10) · each runs in turn when the active run ends",
+        ),
+        (
+            OverlapPolicy::Replace,
+            1,
+            0,
+            "  1 fire waiting · one run follows when the active run ends · stopping pid 77",
+        ),
+    ];
+    let actual = cases.map(|(policy, count, absorbed, _)| {
+        let mut view = show_view(false);
+        let mut completed = scheduled(20, LoopRunResult::Completed);
+        completed.duration_ms = Some(10);
+        view.records = vec![completed];
+        view.entry.overlap = Some(policy);
+        view.entry.overlap_limit = Some(10);
+        view.in_flight = Some(InFlightRun {
+            holder: None,
+            run: None,
+            held: Vec::new(),
+        });
+        let triggers = vec![
+            serde_json::json!({
+                "arrived_at": "2026-01-01T00:00:00Z", "signal": null, "absorbed": absorbed
+            });
+            count
+        ];
+        let stopping = (policy == OverlapPolicy::Replace).then_some(schedule::backlog::StopMark {
+            pid: 77,
+            started_at: Timestamp::from_second(0).unwrap(),
+            cause: schedule::backlog::StopCause::Replace,
+        });
+        view.backlog = Some(
+            serde_json::from_value(serde_json::json!({
+                "triggers": triggers, "stopping": stopping
+            }))
+            .unwrap(),
+        );
+        show_text(&view)
+            .lines()
+            .take_while(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    });
+    let expected = cases.map(|(_, _, _, waiting)| {
+        vec![
+            "sweep · routine · ▸ running".to_owned(),
+            "  ✓ healthy · last finished run 1m ago, completed in 10ms".to_owned(),
+            waiting.to_owned(),
+            "  stop with `rimz loop stop sweep`".to_owned(),
+        ]
+    });
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -2052,6 +2121,7 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
 
     let (healthy, style) = verdict_line(
         &[failed, passed_check, neutral.clone(), completed.clone()],
+        false,
         now,
     )
     .unwrap();
@@ -2065,6 +2135,7 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     let failed = record(20, LoopRunResult::Failed);
     let (failing, style) = verdict_line(
         &[completed.clone(), failed, neutral.clone(), errored.clone()],
+        false,
         now,
     )
     .unwrap();
@@ -2074,17 +2145,17 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     );
     assert_eq!(style, ui::palette::alarm());
 
-    let (first, _) = verdict_line(&[completed.clone(), errored], now).unwrap();
+    let (first, _) = verdict_line(&[completed.clone(), errored], false, now).unwrap();
     assert_eq!(
         first,
         "✗ failing · last run 10s ago, error · first since a good run 10s ago"
     );
-    let (unbounded, _) = verdict_line(&[completed.clone(), completed], now).unwrap();
+    let (unbounded, _) = verdict_line(&[completed.clone(), completed], false, now).unwrap();
     assert_eq!(
         unbounded,
         "✓ healthy · last run 10s ago, completed in 5.0s · 2 runs in a row"
     );
-    assert!(verdict_line(&[neutral], now).is_none());
+    assert!(verdict_line(&[neutral], false, now).is_none());
 }
 
 #[test]
@@ -3095,6 +3166,30 @@ fn last_run_header_carries_duration_exit_and_signal() {
 }
 
 #[test]
+fn last_run_omits_empty_scheduled_output_but_keeps_manual_and_signal_context() {
+    let mut completed = scheduled(90, LoopRunResult::Completed);
+    completed.check = Some(check(Some(0), " \n\t"));
+    let scheduled = last_run(&[completed.clone()]);
+    completed.mode = Some(LoopRunMode::Manual);
+    let manual = last_run(&[completed.clone()]);
+    completed.mode = Some(LoopRunMode::Scheduled);
+    completed.signal = Some(run_log::SignalRecord {
+        name: "ci.passed".parse().unwrap(),
+        payload: Default::default(),
+    });
+    let signal = last_run(&[completed]);
+    assert_eq!(
+        (
+            scheduled.is_empty(),
+            manual.contains("LAST RUN") && manual.contains(" · manual\n  │ -\n"),
+            signal.contains("LAST RUN") && signal.contains(" · signal ci.passed\n  │ -\n"),
+        ),
+        (true, true, true),
+        "{scheduled}\n{manual}\n{signal}"
+    );
+}
+
+#[test]
 fn last_run_cuts_a_passing_check_to_its_tail_and_points_at_the_rest() {
     let seven = "l1\nl2\nl3\nl4\nl5\nl6\nl7\n";
     let mut passed = scheduled(80, LoopRunResult::Completed);
@@ -3216,7 +3311,7 @@ fn trailing_at_lock_fires_take_no_row_and_keep_the_stale_verdict() {
     records.push(scheduled(40, LoopRunResult::Completed));
     assert_eq!(
         stale_clause(&records, false).as_deref(),
-        Some("2 fires skipped during the last run, nothing has run since")
+        Some("fires skipped during the last run, nothing has run since")
     );
     assert_eq!(stale_clause(&records, true), None);
 
@@ -3241,7 +3336,7 @@ fn trailing_at_lock_fires_take_no_row_and_keep_the_stale_verdict() {
         };
         assert_eq!(
             clause(&[overlap(10), completed(20), refused(30)], false),
-            "1 fire skipped during the last run, nothing has run since"
+            "fires skipped during the last run, nothing has run since"
         );
         assert_eq!(clause(&[overlap(10), completed(20), refused(30)], true), "");
         assert_eq!(
@@ -3279,7 +3374,7 @@ fn trailing_at_lock_fires_take_no_row_and_keep_the_stale_verdict() {
                 ],
                 false
             ),
-            "2 fires skipped during the last run, nothing has run since"
+            "fires skipped during the last run, nothing has run since"
         );
         assert_eq!(
             clause(

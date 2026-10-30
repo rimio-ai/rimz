@@ -1105,6 +1105,17 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         &view.entry,
         view.kind,
     )?;
+    if let Some(rimz::config::WatchSpec::Command(command)) = &view.entry.watch {
+        write_watch_command(out, command)?;
+    }
+    write_verdict(out, &view.records, view.in_flight.is_some(), now)?;
+    let expr = worktree_expr(view);
+    let rows = if view.entry.each_worktree {
+        worktree_rows(view, expr)
+    } else {
+        Vec::new()
+    };
+    write_attention(out, view, &rows)?;
     if !view.entry.each_worktree {
         for (checkout, wait) in &view.capacity {
             writeln!(
@@ -1121,8 +1132,8 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     {
         let mut text = if view.entry.overlap == Some(rimz::config::OverlapPolicy::Queue) {
             format!(
-                "queue {}/{} · next runs when the active run ends",
-                backlog.triggers.len(),
+                "{} queued (limit {}) · each runs in turn when the active run ends",
+                fires(backlog.triggers.len()),
                 view.entry.overlap_limit.unwrap_or(10)
             )
         } else {
@@ -1130,11 +1141,13 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
                 .triggers
                 .front()
                 .map_or(0, |trigger| trigger.absorbed);
-            let mut text = "1 trigger waiting · runs when the active run ends".to_owned();
-            if absorbed > 0 {
-                text.push_str(&format!(" · absorbed {absorbed}"));
-            }
-            text
+            let count = usize::try_from(absorbed)
+                .unwrap_or(usize::MAX)
+                .saturating_add(1);
+            format!(
+                "{} waiting · one run follows when the active run ends",
+                fires(count)
+            )
         };
         if let Some(mark) = &backlog.stopping
             && mark.cause == schedule::backlog::StopCause::Replace
@@ -1143,16 +1156,6 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         }
         writeln!(out, "  {}", ui::paint(ui::palette::muted(), &text))?;
     }
-    if let Some(rimz::config::WatchSpec::Command(command)) = &view.entry.watch {
-        write_watch_command(out, command)?;
-    }
-    write_verdict(
-        out,
-        &view.name,
-        &view.records,
-        view.in_flight.is_some(),
-        now,
-    )?;
     if let Some(heard) = &view.heard
         && heard.count > 0
     {
@@ -1173,13 +1176,9 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             )
         )?;
     }
-    let expr = worktree_expr(view);
-    let rows = if view.entry.each_worktree {
-        worktree_rows(view, expr)
-    } else {
-        Vec::new()
-    };
-    write_attention(out, view, &rows)?;
+    if view.in_flight.is_some() {
+        writeln!(out, "  stop with `rimz loop stop {}`", view.name)?;
+    }
     if !view.entry.each_worktree && !view.launches.is_empty() {
         writeln!(out, "\nLAUNCHES")?;
         let mut launches = view.launches.iter().collect::<Vec<_>>();
@@ -1908,24 +1907,21 @@ fn write_throttle_readings(
     kv.render(out)
 }
 
-/// The answer under the headline: the verdict, any fires nothing has answered, and how to stop a running task.
+/// The answer under the headline: the verdict and any fires nothing has answered.
 fn write_verdict(
     out: &mut impl Write,
-    name: &str,
     records: &[LoopRunRecord],
     is_running: bool,
     now: Timestamp,
 ) -> std::io::Result<()> {
-    let verdict = verdict_line(records, now).map(|(verdict, style)| ui::paint(style, &verdict));
+    let verdict =
+        verdict_line(records, is_running, now).map(|(verdict, style)| ui::paint(style, &verdict));
     let stale =
         stale_clause(records, is_running).map(|clause| ui::paint(ui::palette::warn(), &clause));
     match (verdict, stale) {
         (Some(verdict), Some(stale)) => writeln!(out, "  {verdict} · {stale}")?,
         (Some(line), None) | (None, Some(line)) => writeln!(out, "  {line}")?,
         (None, None) => {}
-    }
-    if is_running {
-        writeln!(out, "  stop with `rimz loop stop {name}`")?;
     }
     Ok(())
 }
@@ -1997,12 +1993,7 @@ fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<Strin
         .take_while(|record| is_refused_fire(record))
         .filter(|record| is_overlap(record))
         .count();
-    (during > 0).then(|| {
-        format!(
-            "{} skipped during the last run, nothing has run since",
-            fires(during)
-        )
-    })
+    (during > 0).then(|| "fires skipped during the last run, nothing has run since".to_owned())
 }
 
 fn write_last_run(
@@ -2013,20 +2004,40 @@ fn write_last_run(
     now: Timestamp,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
-    let detail_idx = detail_index(records);
-    if let Some(idx) = detail_idx {
-        writeln!(out)?;
-        run_report::render_record_detail(
-            out,
-            entry,
-            &records[idx],
-            "LAST RUN",
-            &format!("rimz loop logs {name} -n {}", records.len() - idx),
-            now,
+    let Some(idx) = detail_index(records) else {
+        return Ok(());
+    };
+    let record = &records[idx];
+    if record.mode != Some(LoopRunMode::Manual)
+        && record.signal.is_none()
+        && record.run_id.is_none()
+    {
+        let mut summary = record.clone();
+        summary.check = summary.check.filter(|check| {
+            check.agent.is_some() || check.output_path.is_some() || !check.output.trim().is_empty()
+        });
+        let mut body = Vec::new();
+        run_report::write_record_forensics(
+            &mut body,
+            Some(entry),
+            &summary,
             prose,
+            run_report::Forensics::Summary,
         )?;
+        if body.is_empty() {
+            return Ok(());
+        }
     }
-    Ok(())
+    writeln!(out)?;
+    run_report::render_record_detail(
+        out,
+        entry,
+        record,
+        "LAST RUN",
+        &format!("rimz loop logs {name} -n {}", records.len() - idx),
+        now,
+        prose,
+    )
 }
 
 /// `show` for a fired one-shot whose run consumed its row: the run is all there is.
@@ -3040,13 +3051,22 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
     }
 }
 
-fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, anstyle::Style)> {
+fn verdict_line(
+    records: &[LoopRunRecord],
+    is_running: bool,
+    now: Timestamp,
+) -> Option<(String, anstyle::Style)> {
     let acting = run_log::acting_run(records)?;
     let healthy = acting.polarity == run_log::RunPolarity::Good;
     let newest = &acting.record;
     let status = run_status(newest);
+    let last = if is_running {
+        "last finished run"
+    } else {
+        "last run"
+    };
     let mut line = format!(
-        "{} {} · last run {}, {}",
+        "{} {} · {last} {}, {}",
         status.glyph,
         if healthy { "healthy" } else { "failing" },
         ui::rel_age(newest.at, now),
