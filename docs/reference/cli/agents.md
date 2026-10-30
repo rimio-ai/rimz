@@ -128,7 +128,19 @@ error: `planner` names a live agent (@planner) as well as a launch spec
     launch:  rimz agents launch planner
 ```
 
-A launch that opens a new pane or tab prints a receipt: the checkout path, then each member's handle, provider, and resolved model (`-` when unset). The handle is the one [`list`](#list) shows for that agent, with the pet name beside it whenever the two differ: a `coder` profile launch reads `launched @coder (round-binder) in #auth (…)`, and a second `coder` in the same lane is named by its pet name. When you gave a prompt, a shortened echo names its recipient, and non-team launches add copy-ready `Reach` and `Wait` commands for the leader, all under the same handle. A launch that creates a launch-prompt run (below) prints the peer receipt in their place. The receipt records what was launched; the agents start asynchronously. A named team prints the [team receipt](./teams.md#launch-a-team) instead, and a launch that takes over the current pane prints none.
+A launch that opens a new pane or tab prints a receipt: the checkout path, then each member's handle, provider, and resolved model (`-` when unset). A named account reads `claude@work` in the provider column; the provider's `default` account reads `claude`. The handle is the one [`list`](#list) shows for that agent, with the pet name beside it whenever the two differ: a `coder` profile launch reads `launched @coder (round-binder) in #auth (…)`, and a second `coder` in the same lane is named by its pet name. When you gave a prompt, a shortened echo names its recipient, and non-team launches add copy-ready `Reach` and `Wait` commands for the leader, all under the same handle. A launch that creates a launch-prompt run (below) prints the peer receipt in their place. The receipt records what was launched; the agents start asynchronously. A named team prints the [team receipt](./teams.md#launch-a-team) instead, and a launch that takes over the current pane prints none.
+
+In `#auth`, with the room using `claude@rimio`:
+
+```console
+$ rimz agents claude --name coder --model fable --new-tab
+launched @coder in #auth (/repo)
+
+  @coder   claude@rimio  fable
+
+Reach: rimz message @coder#auth '<text>'
+Wait:  rimz agents wait @coder#auth
+```
 
 When tier routing moves a member past an earlier entry, its receipt model adds the tier and every pass, for example `astra (senior; opus: not buildable; fable: logged out)`. A fresh launch also prints one stderr warning per moved member, naming its profile or role, tier, chosen model, and every pass, including the full build error. An unmoved launch prints neither addition. Replaying a session prints no new routing warning.
 

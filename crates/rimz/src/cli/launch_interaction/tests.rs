@@ -8,6 +8,37 @@ fn test_agent(id: &str) -> AgentState {
 use rimz::store::run::RunRecord;
 
 #[test]
+fn launch_receipt_names_accounts_and_aligns_provider_columns() {
+    let mut identities = [
+        launch_identity("claude", "named"),
+        launch_identity("claude", "default"),
+    ];
+    identities[0].launch.login = Some("rimio".parse().unwrap());
+    for identity in &mut identities {
+        identity.launch.model = Some("fable".into());
+    }
+    let mut output = anstream::StripStream::new(Vec::new());
+    write_launch_receipt(
+        &mut output,
+        &LaunchReceipt {
+            team: None,
+            channel: Some("auth"),
+            cwd: Path::new("/repo"),
+            identities: &identities,
+            handles: &receipt_handles(&identities, None),
+            leader_index: None,
+            terminal_width: 100,
+            hints: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(output.into_inner()).unwrap(),
+        "launched 2 agents in #auth (/repo)\n\n  @named     claude@rimio  fable\n  @default   claude        fable\n\n"
+    );
+}
+
+#[test]
 fn launch_receipt_carries_moved_stamp_to_the_roster() {
     let mut identity = launch_identity("codex", "coder");
     identity.launch.model = Some("astra".into());

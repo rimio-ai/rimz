@@ -370,6 +370,7 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
         .map(|(index, (identity, handle))| render::RosterRow {
             handle: receipt_label(handle, identity),
             kind: identity.kind.as_str().to_owned(),
+            login: identity.launch.login.clone(),
             model: identity.launch.model.clone(),
             tier: identity.launch.tier.as_deref().cloned(),
             leader: team.is_some() && receipt.leader_index == Some(index),

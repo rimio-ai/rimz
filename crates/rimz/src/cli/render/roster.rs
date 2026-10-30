@@ -8,6 +8,7 @@ use super::{paint, palette};
 pub(crate) struct RosterRow {
     pub handle: String,
     pub kind: String,
+    pub login: Option<rimz::ids::LoginName>,
     pub model: Option<String>,
     pub tier: Option<rimz::agents::TierStamp>,
     pub leader: bool,
@@ -62,7 +63,9 @@ impl Roster {
         let kind_width = self
             .rows
             .iter()
-            .map(|row| row.kind.len())
+            .map(|row| {
+                row.kind.len() + row.login.as_ref().map_or(0, |name| name.as_str().len() + 1)
+            })
             .max()
             .unwrap_or(0);
         let model_width = self
@@ -73,7 +76,11 @@ impl Roster {
             .unwrap_or(0);
         for row in &self.rows {
             let handle = format!("@{:<handle_width$}", row.handle);
-            let kind = format!("{:<kind_width$}", row.kind);
+            let kind = row
+                .login
+                .as_ref()
+                .map_or_else(|| row.kind.clone(), |name| format!("{}@{name}", row.kind));
+            let kind = format!("{kind:<kind_width$}");
             let mut model = row.model.as_deref().unwrap_or("-").to_owned();
             if let Some(tier) = row.tier.as_ref().filter(|tier| tier.moved()) {
                 let passes = tier
@@ -140,6 +147,7 @@ mod tests {
             RosterRow {
                 handle: "planner".to_owned(),
                 kind: "claude".to_owned(),
+                login: None,
                 model: Some("fable".to_owned()),
                 tier: None,
                 leader: true,
@@ -147,6 +155,7 @@ mod tests {
             RosterRow {
                 handle: "coder".to_owned(),
                 kind: "codex".to_owned(),
+                login: None,
                 model: Some("gpt-6-astra".to_owned()),
                 tier: None,
                 leader: false,
@@ -154,6 +163,7 @@ mod tests {
             RosterRow {
                 handle: "reviewer".to_owned(),
                 kind: "claude".to_owned(),
+                login: None,
                 model: None,
                 tier: None,
                 leader: false,
@@ -186,6 +196,7 @@ mod tests {
             Roster::new(vec![RosterRow {
                 handle: "coder".into(),
                 kind: "codex".into(),
+                login: None,
                 model: Some("astra".into()),
                 tier: Some(stamp.clone()),
                 leader: true,
