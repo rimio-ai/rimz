@@ -2305,6 +2305,46 @@ fn absent_owner_does_not_prevent_compacting_the_outgoing_stage_owner() {
 }
 
 #[test]
+fn repeated_compaction_keeps_the_live_age_out_of_the_assist_record() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.live_panes(&["terminal_3"]);
+    fixture.hook("coder", "Stop", Some("terminal_3"));
+    fixture.hook("coder", "PreCompact", Some("terminal_3"));
+    fixture.hook("coder", "PostCompact", Some("terminal_3"));
+    fixture.context_tokens("coder", 150_000);
+    let snapshot = fixture.env.store().snapshot_cached().unwrap();
+    assert!(
+        snapshot.agents.iter().any(|agent| {
+            agent.agent_id.as_str() == "coder" && agent.compacted_awaiting_prompt.is_some()
+        }),
+        "PostCompact must seed the repeat guard: {:?}",
+        snapshot.agents
+    );
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let output = success(fixture.flip("Review", Some("coder"), Some("Ready for review.")));
+    assert!(
+        output.contains("compact  skipped: already compacted ")
+            && output.contains(" ago and has not taken a turn since;"),
+        "{output}"
+    );
+    let records = rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None);
+    let errors = records
+        .iter()
+        .filter_map(|record| match &record.assist {
+            rimz::harness::assist_log::Assist::FlipCompact { error, .. } => error.as_deref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        errors,
+        [
+            "already compacted and has not taken a turn since; a compaction never follows a compaction"
+        ]
+    );
+}
+
+#[test]
 fn missing_pane_skips_compaction_without_failing_the_flip() {
     let fixture = Fixture::new();
     fixture.running("coder", Some("terminal_3"));

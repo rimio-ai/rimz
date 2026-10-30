@@ -70,7 +70,7 @@ pub(super) fn compact_agent(
             automated: false,
         },
     )
-    .map_err(|err| anyhow::anyhow!("{handle}: {err}"))?;
+    .map_err(|err| anyhow::anyhow!("{handle}: {}", err.live_message(jiff::Timestamp::now())))?;
     match outcome {
         CompactOutcome::Sent => writeln!(render::out(), "compacting {handle} ({message_id})")?,
         CompactOutcome::Queued => writeln!(

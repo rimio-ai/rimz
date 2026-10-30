@@ -24,8 +24,7 @@ pub enum CompactErr {
         status: MessageStatus,
     },
     #[error(
-        "already compacted {elapsed} ago and has not taken a turn since; a compaction never follows a compaction",
-        elapsed = crate::store::message::format_dwell(Timestamp::now().duration_since(*at).as_secs().max(0) as u64)
+        "already compacted and has not taken a turn since; a compaction never follows a compaction"
     )]
     Repeated { at: Timestamp },
     #[error("compaction {message_id}: {reason}")]
@@ -37,6 +36,22 @@ pub enum CompactErr {
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
     Deliver(#[from] deliver::DeliverErr),
+}
+
+impl CompactErr {
+    pub fn live_message(&self, now: Timestamp) -> String {
+        match self {
+            Self::Repeated { at } => {
+                let elapsed = crate::store::message::format_dwell(
+                    now.duration_since(*at).as_secs().max(0) as u64,
+                );
+                format!(
+                    "already compacted {elapsed} ago and has not taken a turn since; a compaction never follows a compaction"
+                )
+            }
+            _ => self.to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,6 +157,30 @@ mod tests {
     use crate::ids::WorkspaceId;
     use crate::store::message::MessageRecord;
     use crate::{RuntimePaths, StatePaths};
+
+    #[test]
+    fn repeated_compaction_display_is_age_free() {
+        let now = Timestamp::now();
+        let texts = [now - std::time::Duration::from_secs(3600), now]
+            .map(|at| CompactErr::Repeated { at }.to_string());
+        assert_eq!(
+            texts,
+            ["already compacted and has not taken a turn since; a compaction never follows a compaction";
+                2]
+        );
+    }
+
+    #[test]
+    fn repeated_compaction_live_message_uses_the_callers_time() {
+        let now: Timestamp = "2026-10-31T12:00:00Z".parse().unwrap();
+        let error = CompactErr::Repeated {
+            at: now - std::time::Duration::from_secs(300),
+        };
+        assert_eq!(
+            error.live_message(now),
+            "already compacted 5m ago and has not taken a turn since; a compaction never follows a compaction"
+        );
+    }
 
     #[test]
     fn standalone_compaction_refuses_brackets_pending_commands_and_completed_compactions() {
