@@ -1993,7 +1993,14 @@ fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<Strin
         .take_while(|record| is_refused_fire(record))
         .filter(|record| is_overlap(record))
         .count();
-    (during > 0).then(|| "fires skipped during the last run, nothing has run since".to_owned())
+    let skipped = match during {
+        0 => return None,
+        1 => "a fire",
+        _ => "fires",
+    };
+    Some(format!(
+        "{skipped} skipped during the last run, nothing has run since"
+    ))
 }
 
 fn write_last_run(
