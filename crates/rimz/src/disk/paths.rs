@@ -1155,9 +1155,11 @@ impl RuntimePaths {
         self.lane_path("sidebar-filter.json")
     }
 
-    /// The workspace-wide set of open unread episodes. The producer owns writes
-    /// for status-derived opens and row-gone pruning; renderers and CLI commands
-    /// write read receipts that derive this set back to read on the next fold.
+    /// The workspace-wide set of open unread episodes. The room host's fetch
+    /// worker owns writes for status-derived opens and row-gone pruning, on every
+    /// final fold that carries a pane frame, cached or produced; renderers and CLI
+    /// commands write read receipts that derive this set back to read on the next
+    /// fold.
     pub fn unread_path(&self) -> PathBuf {
         self.lane_path("unread.json")
     }
