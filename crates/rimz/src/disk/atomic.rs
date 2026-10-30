@@ -529,6 +529,24 @@ pub(crate) fn sync_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Sync a staged tree bottom-up, including read-only Git objects, without following links.
+#[must_use = "durability barrier; check the result"]
+pub(crate) fn sync_tree(root: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(root).map_err(AtomicErr::io(root))? {
+        let entry = entry.map_err(AtomicErr::io(root))?;
+        let path = entry.path();
+        let kind = entry.file_type().map_err(AtomicErr::io(&path))?;
+        if kind.is_dir() {
+            sync_tree(&path)?;
+        } else if kind.is_file() {
+            let file = File::open(&path).map_err(AtomicErr::io(&path))?;
+            testkit::count_fsync();
+            file.sync_all().map_err(AtomicErr::io(&path))?;
+        }
+    }
+    sync_dir(root)
+}
+
 /// Test-only observability seam. Every fsync syscall in the project funnels
 /// through this module (CI grep), so one relaxed counter beside each sync
 /// site lets the performance tier prove "zero fsyncs on the hot path" from
@@ -568,6 +586,24 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn sync_tree_flushes_read_only_files_and_directories_without_following_symlinks() {
+        let dir = tempdir().unwrap();
+        let tree = dir.path().join("tree");
+        std::fs::create_dir_all(tree.join("objects")).unwrap();
+        let object = tree.join("objects/object");
+        std::fs::write(&object, b"Git object").unwrap();
+        std::fs::set_permissions(&object, std::fs::Permissions::from_mode(0o444)).unwrap();
+        std::os::unix::fs::symlink("/nonexistent/pack-target", tree.join("external")).unwrap();
+        let before = testkit::fsync_count();
+        sync_tree(&tree).unwrap();
+        assert!(
+            testkit::fsync_count() - before >= 3,
+            "the object and both directories need durability barriers"
+        );
+        assert!(sync_tree(&tree.join("missing")).is_err());
+    }
 
     #[test]
     fn io_errors_name_the_path_that_failed() {

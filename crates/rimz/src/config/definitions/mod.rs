@@ -6,6 +6,7 @@ mod agent;
 mod catalog;
 pub(crate) mod frontmatter;
 pub mod inventory;
+pub mod review;
 mod team;
 mod traits;
 

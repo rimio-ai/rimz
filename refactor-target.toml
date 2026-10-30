@@ -322,7 +322,8 @@ upward-dependencies = ["address"]
 # SkillInventory carries pack items and problems without SkillChain::pack_skills (-1).
 # SpendingWalker::discover_login_spending_files gives benches isolated account-aware discovery (+1).
 # SkillChain::from_resolved keeps definition loads on one pack snapshot (+1).
-surface-budget = 1195
+# ToolSet::agent_types shares effective child-type grants with pack review (+1).
+surface-budget = 1196
 
 [[verdict]]
 kind = "item"
@@ -946,7 +947,38 @@ upward-dependencies = [
 # MachineConfig::load_time_zone_lenient shares the core-only lifecycle time zone (+1).
 # PackDefinition and PackDefinitionFate expose every shipped definition's loading fate (+2).
 # inventory, PackInventory, PackView, ItemMatchErr and four methods replace the two pack types (+6 net).
-surface-budget = 238
+# review, EffectiveGrants, ProfileChange, PackPreview and compare share staged-load review (+5).
+surface-budget = 243
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::review"
+reason = "Install and update review compare full definition loads without committing the candidate."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::review::EffectiveGrants"
+reason = "The CLI renders resolved kind, mode, isolation, tool bases and child types, and allowed rules."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::review::ProfileChange"
+reason = "A changed launch name carries its effective grants and the fields that widened."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::review::PackPreview"
+reason = "One candidate load supplies item fates and launch-profile changes for consent."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::review::compare"
+reason = "Pack commands compare committed and staged roots through the normal definition resolver."
+
+[[verdict]]
+kind = "item"
+key = "agents::tools::ToolSet::agent_types"
+reason = "Pack review compares the child-type grants that the launch renderer uses."
 
 [[verdict]]
 kind = "item"
@@ -1205,7 +1237,8 @@ allowed-dependencies = [
 # Remove the unused ambient skills_library accessor (-1).
 # SpendingHistoryPaths and exact-mode publication/locking share account-history disk mechanics (+16).
 # The cursor-coupled ledger accessors become migration-only legacy accessors (+0).
-surface-budget = 314
+# atomic::sync_tree makes staged Git trees durable before entry publication (+1).
+surface-budget = 315
 
 [[verdict]]
 kind = "item"
@@ -1225,7 +1258,59 @@ allowed-dependencies = ["disk", "proc", "utils"]
 # Manifest, PackManifest and Manifest::read stay private until a consumer needs them (-3).
 # Remove the unused resolve_in launch-environment accessor (-1).
 # GitSource and its reinstall spelling share normalized Git identity with the CLI (+2).
-surface-budget = 35
+# transaction, Transaction, PackChange and six public methods share optimistic staging (+9).
+# RetiredCheckouts retains replaced trees through a multi-source command (+1).
+surface-budget = 45
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction"
+reason = "Pack mutation staging and compare-and-publish live below config review and CLI consent."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::Transaction"
+reason = "A staged mutation holds its checkouts and commits only against its original record."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::RetiredCheckouts"
+reason = "Pack commands retain replaced checkout holds across every source commit until command exit."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::PackChange"
+reason = "The CLI borrows pack version changes and transient dependency reasons for the summary."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::Transaction::stage"
+reason = "Pack commands resolve following refs and dependencies outside the record lock."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::Transaction::current"
+reason = "Review loads the snapshotted record at its recorded checkouts rather than live entries."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::Transaction::candidate"
+reason = "Review uses the normal pack resolver with held staged roots and an uncommitted record."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::Transaction::changes"
+reason = "Install and update summaries share added or moved packs with old and new version identities."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::Transaction::up_to_date"
+reason = "An unchanged Git install still reviews its load but does not require a question."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::Transaction::commit"
+reason = "Record comparison, repair, collection and durable publication share one locked critical section."
 
 [[verdict]]
 kind = "item"
@@ -2018,7 +2103,7 @@ surface-budget = 9
 path = "crates/rimz/src/lib.rs"
 # The lowest-layer blocker vocabulary is shared with the CLI (+1).
 # The library launcher owns checkout creation (+1).
-# The packs module shares linked sources below config and skill consumers (+1).
+# The packs module shares Git and linked sources below config and skill consumers (+1).
 surface-budget = 73
 
 [[module]]
@@ -3724,7 +3809,8 @@ allowed-dependencies = []
 # symlink_dir_atomically keeps archive link publication in the durable write funnel (+1).
 # write_checkpoint publishes runtime checkpoints without making directories (+1).
 # Exact-mode creation, append, replacement and non-replacing copy support shared history (+4).
-surface-budget = 26
+# sync_tree shares bottom-up file and directory barriers for staged pack checkouts (+1).
+surface-budget = 27
 
 [[verdict]]
 kind = "item"
@@ -3750,6 +3836,11 @@ reason = "Shared ledger rewrites preserve group write access through durable pub
 kind = "item"
 key = "disk::atomic::write_bytes_if_absent_mode"
 reason = "Migration publishes a complete durable copy without replacing an existing segment."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::sync_tree"
+reason = "Staged Git trees sync read-only objects and directories before entries or records publish."
 
 [[verdict]]
 kind = "item"

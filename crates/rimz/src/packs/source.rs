@@ -119,6 +119,25 @@ fn component(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'_' | b'-' | b'.'))
 }
 
+pub(super) fn requirement(value: &str, parent: &str) -> Option<GitSource> {
+    if let Ok(pack) = value.parse() {
+        return Some(GitSource {
+            source: parent.to_owned(),
+            url: parent.to_owned(),
+            pack: Some(pack),
+            reference: None,
+        });
+    }
+    if !["crew/", "skills/", "github:"]
+        .iter()
+        .any(|prefix| value.starts_with(prefix))
+    {
+        return None;
+    }
+    let source = parse(value).ok()?;
+    (source.pack.is_some() && source.reference.is_none()).then_some(source)
+}
+
 impl GitSource {
     pub(super) fn official(&self) -> Option<&'static str> {
         OFFICIAL

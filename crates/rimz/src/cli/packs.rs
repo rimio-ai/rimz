@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::{Result, bail};
@@ -9,10 +9,12 @@ use rimz::agents::skills::SkillChain;
 use rimz::config::Isolation;
 use rimz::config::definitions::SkillCheck;
 use rimz::config::definitions::inventory::{ItemMatchErr, PackInventory, PackView};
+use rimz::config::definitions::review::{self, PackPreview};
 use rimz::disk::paths;
+use rimz::packs::transaction::{PackChange, Transaction};
 use rimz::packs::{
-    self, ExclusionOutcome, ExclusionTarget, InstallSource, InstallStatus, ItemFate, ItemType,
-    PackErr, PackName, Problem,
+    self, ExclusionOutcome, ExclusionTarget, GitSource, InstallSource, InstallStatus, ItemFate,
+    ItemType, PackErr, PackName, Problem,
 };
 
 use super::render::{self, palette, status::StateRole};
@@ -46,11 +48,14 @@ pub(super) struct PacksArgs {
 enum PacksSubcmd {
     /// List installed packs and load problems.
     List(ListArgs),
-    /// Link every pack in a local checkout; edits load without reinstalling.
+    /// Install Git packs with a review, or link a local checkout for live edits.
     Install {
-        /// Local source directory: ., .., /path, ./path, ../path, or ~/path.
-        #[arg(value_name = "PATH")]
+        /// crew, skills, github:owner/repo, a Git URL, or an explicit local path.
+        #[arg(value_name = "SOURCE")]
         source: InstallSource,
+        /// Skip the Git install question (required without a terminal).
+        #[arg(long)]
+        yes: bool,
     },
     /// Show a pack's items, overrides, exclusions, and failures.
     Show {
@@ -60,7 +65,7 @@ enum PacksSubcmd {
         #[arg(long)]
         json: bool,
     },
-    /// Stop loading a pack and prune its host skill links; keep the linked checkout.
+    /// Stop loading a pack and prune its host skill links; unlink its final entry.
     Remove {
         #[arg(value_name = "PACK")]
         pack: PackName,
@@ -104,10 +109,16 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
         }
         PacksSubcmd::Install {
             source: InstallSource::Linked(source),
-        } => install(&home, &source, &mut receipt)?,
+            yes: _,
+        } => install(&home, &source, &mut receipt, &mut warnings)?,
         PacksSubcmd::Install {
-            source: InstallSource::Git(_),
-        } => bail!("Git source installation is not available yet"),
+            source: InstallSource::Git(source),
+            yes,
+        } => {
+            if !install_git(&home, &source, yes, &mut receipt)? {
+                return Ok(());
+            }
+        }
         PacksSubcmd::Remove { pack } => {
             let outcome = packs::remove(&home, &pack)?;
             writeln!(receipt, "Removed {} from {}.", outcome.pack, outcome.source)?;
@@ -121,18 +132,27 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
     let inventory = load_inventory(&home);
     let cleanup = prune(&home, &mut receipt);
     let write = render::out().write_all(&receipt);
+    let mut seen = BTreeSet::new();
     for problem in warnings
         .iter()
         .chain(&inventory.problems)
         .chain(&inventory.warnings)
     {
-        warn(problem)?;
+        let path = std::fs::canonicalize(&problem.path).unwrap_or_else(|_| problem.path.clone());
+        if seen.insert((path, &problem.message)) {
+            warn(problem)?;
+        }
     }
     cleanup?;
     render::finish(write)
 }
 
-fn install(home: &Path, source: &Path, out: &mut impl Write) -> Result<()> {
+fn install(
+    home: &Path,
+    source: &Path,
+    out: &mut impl Write,
+    warnings: &mut Vec<Problem>,
+) -> Result<()> {
     let outcome = packs::install(home, source).map_err(|error| {
         let manifest_error = matches!(&error, PackErr::Invalid(problem)
             if problem.path.ends_with("rimz-packs.toml"));
@@ -169,7 +189,226 @@ fn install(home: &Path, source: &Path, out: &mut impl Write) -> Result<()> {
             }
         }
     }
+    warnings.extend(outcome.warnings);
     Ok(())
+}
+
+fn install_git(home: &Path, source: &GitSource, yes: bool, out: &mut impl Write) -> Result<bool> {
+    let transaction = Transaction::stage(home, source)?;
+    let machine = super::machine_config();
+    let env = rimz::agents::ambient_env();
+    let check = skill_check(&env, machine.agents.isolation);
+    let candidate = transaction.candidate()?;
+    let preview = review::compare(home, check, &machine, &transaction.current()?, &candidate);
+    let changes = transaction.changes();
+    let mut stdout = render::out();
+    writeln!(stdout, "Pack install review")?;
+    summary(&mut stdout, &changes, &preview)?;
+    stdout.flush()?;
+    let unchanged = transaction.up_to_date();
+    if !unchanged {
+        match decision(yes, "Install these packs?")? {
+            Decision::Apply => {}
+            Decision::Decline => {
+                writeln!(stdout, "Install aborted; nothing changed.")?;
+                return Ok(false);
+            }
+            Decision::NoTerminal => bail!(
+                "pass --yes to confirm this Git pack install without a terminal; nothing changed"
+            ),
+        }
+    }
+    let names: Vec<_> = if unchanged {
+        candidate
+            .record
+            .sources
+            .iter()
+            .filter(|installed| installed.source == source.url)
+            .flat_map(|source| &source.packs)
+            .map(|pack| pack.name.to_string())
+            .collect()
+    } else {
+        changes
+            .iter()
+            .map(|change| change.name.to_string())
+            .collect()
+    };
+    transaction.commit()?;
+    for name in names {
+        writeln!(
+            out,
+            "{} {name}.",
+            if unchanged {
+                "Already up to date:"
+            } else {
+                "Installed"
+            }
+        )?;
+        writeln!(out, "  Next: rimz packs show {name}")?;
+    }
+    Ok(true)
+}
+
+enum Decision {
+    Apply,
+    Decline,
+    NoTerminal,
+}
+
+fn decision(yes: bool, prompt: &str) -> Result<Decision> {
+    if yes {
+        return Ok(Decision::Apply);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Ok(Decision::NoTerminal);
+    }
+    Ok(if super::confirm(prompt)? {
+        Decision::Apply
+    } else {
+        Decision::Decline
+    })
+}
+
+fn summary(out: &mut impl Write, changes: &[PackChange<'_>], preview: &PackPreview) -> Result<()> {
+    if changes.is_empty() {
+        writeln!(out, "No changed packs.")?;
+    }
+    for change in changes {
+        let source = change.source;
+        let label = source_label(
+            &source.source,
+            source.url.as_deref(),
+            source.linked,
+            source.reference.as_deref(),
+            source.commit.as_deref(),
+            source.pinned,
+        );
+        let reason = change
+            .required_by
+            .map_or_else(|| "named".to_owned(), |pack| format!("required by {pack}"));
+        writeln!(out, "\n{}: {label} ({reason})", change.name)?;
+        if let Some(old) = change.previous {
+            writeln!(
+                out,
+                "  from {} -> {label}",
+                source_label(
+                    &old.source,
+                    old.url.as_deref(),
+                    old.linked,
+                    old.reference.as_deref(),
+                    old.commit.as_deref(),
+                    old.pinned
+                )
+            )?;
+        }
+        if source.packs.len() > 1 {
+            writeln!(out, "  All packs in this source share its ref and commit.")?;
+        }
+        let pack = preview.inventory.pack(change.name)?;
+        for kind in TYPES {
+            for item in pack.items.iter().filter(|item| item.kind == kind) {
+                writeln!(
+                    out,
+                    "  {}/{}: {}",
+                    kind.as_str(),
+                    item.name,
+                    fate_label(&item.fate, &pack.name)
+                )?;
+            }
+        }
+        write_problems(out, &pack.problems)?;
+    }
+    writeln!(out, "\nProfiles")?;
+    if preview.profiles.is_empty() {
+        writeln!(out, "No changed profiles.")?;
+    }
+    for profile in &preview.profiles {
+        writeln!(out, "{} ({})", profile.name, profile.namespace)?;
+        let grants = &profile.grants;
+        let tools = grants.tools.as_ref().map_or_else(
+            || "all".to_owned(),
+            |tools| {
+                let names: Vec<_> = tools
+                    .iter()
+                    .map(|(base, types)| {
+                        if base == "Agent" && !types.is_empty() {
+                            format!(
+                                "Agent({})",
+                                types.iter().cloned().collect::<Vec<_>>().join(",")
+                            )
+                        } else {
+                            base.clone()
+                        }
+                    })
+                    .collect();
+                if names.is_empty() {
+                    "none".to_owned()
+                } else {
+                    names.join(", ")
+                }
+            },
+        );
+        let allowed = if grants.allowed_tools.is_empty() {
+            "none".to_owned()
+        } else {
+            grants
+                .allowed_tools
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        for (field, value) in [
+            ("kind", grants.kind.to_string()),
+            ("mode", grants.mode.to_string()),
+            ("isolation", grants.isolation.to_string()),
+            ("tools", tools),
+            ("allowed-tools", allowed),
+        ] {
+            let mark = if profile.widened.contains(&field) {
+                render::paint(palette::warn(), " [widened]")
+            } else {
+                String::new()
+            };
+            writeln!(out, "  {field}: {value}{mark}")?;
+        }
+    }
+    write_problems(out, &preview.inventory.problems)?;
+    for warning in &preview.inventory.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
+fn source_label(
+    source: &str,
+    url: Option<&str>,
+    linked: bool,
+    reference: Option<&str>,
+    commit: Option<&str>,
+    pinned: bool,
+) -> String {
+    if linked {
+        return format!("{source} (linked)");
+    }
+    let source = GitSource {
+        source: source.to_owned(),
+        url: url.unwrap_or(source).to_owned(),
+        pack: None,
+        reference: None,
+    }
+    .spelling();
+    let mut label = source;
+    if let Some(reference) = reference {
+        label.push_str(&format!("@{reference}"));
+    }
+    if let Some(commit) = commit {
+        label.push_str(&format!(" {}", commit.get(..8).unwrap_or(commit)));
+    }
+    if pinned {
+        label.push_str(" pinned");
+    }
+    label
 }
 
 fn change(home: &Path, selection: Selection, include: bool, out: &mut impl Write) -> Result<()> {
@@ -300,14 +539,7 @@ fn prune(home: &Path, out: &mut impl Write) -> Result<()> {
 fn load_inventory(home: &Path) -> PackInventory {
     let machine = super::machine_config();
     let env = rimz::agents::ambient_env();
-    let check = if Isolation::ambient(&env).is_some_and(Isolation::is_scoped) {
-        SkillCheck::Skip
-    } else {
-        SkillCheck::Check {
-            env: &env,
-            machine_isolation: machine.agents.isolation,
-        }
-    };
+    let check = skill_check(&env, machine.agents.isolation);
     PackInventory::load(
         home,
         check,
@@ -316,6 +548,20 @@ fn load_inventory(home: &Path) -> PackInventory {
         &machine.tiers,
         machine.harness.auto_compact,
     )
+}
+
+fn skill_check(
+    env: &std::collections::BTreeMap<String, String>,
+    machine_isolation: Isolation,
+) -> SkillCheck<'_> {
+    if Isolation::ambient(env).is_some_and(Isolation::is_scoped) {
+        SkillCheck::Skip
+    } else {
+        SkillCheck::Check {
+            env,
+            machine_isolation,
+        }
+    }
 }
 
 fn fate_label(fate: &ItemFate, pack: &PackName) -> String {
@@ -355,11 +601,16 @@ fn list(inventory: &PackInventory, json: bool) -> Result<()> {
             .packs
             .iter()
             .map(|pack| {
-                serde_json::json!({
+                let mut row = serde_json::json!({
                     "name": pack.name, "description": pack.description, "source": pack.source,
                     "linked": pack.linked, "entry": pack.entry, "excluded": pack.excluded,
+                    "ref": pack.reference, "pinned": pack.pinned, "commit": pack.commit,
                     "counts": pack.counts, "problems": pack.problems,
-                })
+                });
+                if let Some(url) = &pack.url {
+                    row["url"] = url.clone().into();
+                }
+                row
             })
             .collect();
         return render::json_pretty(
@@ -370,7 +621,7 @@ fn list(inventory: &PackInventory, json: bool) -> Result<()> {
     if inventory.packs.is_empty() && inventory.problems.is_empty() {
         writeln!(
             out,
-            "No packs installed. Install a local source: rimz packs install ./path"
+            "No packs installed. Install a source: rimz packs install crew"
         )?;
     } else if !inventory.packs.is_empty() {
         let mut table = render::Table::new(["PACK", "LOADED", "SOURCE", "PROBLEMS"]).right(&[1]);
@@ -378,10 +629,13 @@ fn list(inventory: &PackInventory, json: bool) -> Result<()> {
             table.row([
                 render::cell(pack.name.to_string()).fg(palette::accent()),
                 render::cell(pack.counts.values().sum::<usize>().to_string()),
-                render::cell(format!(
-                    "{}{}",
-                    pack.source,
-                    if pack.linked { " (linked)" } else { "" }
+                render::cell(source_label(
+                    &pack.source,
+                    pack.url.as_deref(),
+                    pack.linked,
+                    pack.reference.as_deref(),
+                    pack.commit.as_deref(),
+                    pack.pinned,
                 )),
                 render::cell(if pack.problems.is_empty() {
                     "-".to_owned()
@@ -412,9 +666,15 @@ fn show(pack: &PackView) -> Result<()> {
     }
     writeln!(
         out,
-        "Source: {}{}",
-        pack.source,
-        if pack.linked { " (linked)" } else { "" }
+        "Source: {}",
+        source_label(
+            &pack.source,
+            pack.url.as_deref(),
+            pack.linked,
+            pack.reference.as_deref(),
+            pack.commit.as_deref(),
+            pack.pinned
+        )
     )?;
     for kind in TYPES {
         let items: Vec<_> = pack.items.iter().filter(|item| item.kind == kind).collect();
