@@ -38,7 +38,7 @@ fn scroll_rig() -> (Rig, FrameOutput) {
     (rig, output)
 }
 
-fn queued(wakeups: impl IntoIterator<Item = Wakeup>) -> WakeupInbox {
+pub(super) fn queued(wakeups: impl IntoIterator<Item = Wakeup>) -> WakeupInbox {
     let (tx, rx) = std::sync::mpsc::sync_channel(64);
     for wakeup in wakeups {
         tx.send(wakeup).unwrap();
@@ -226,7 +226,7 @@ impl SharedPanes {
         self.sample_with(clients, |_| {});
     }
 
-    fn sample_with(
+    pub(super) fn sample_with(
         &mut self,
         clients: &[(u32, usize)],
         amend: impl FnOnce(&mut crate::sidebar::frame::PaneFrame),
@@ -240,8 +240,12 @@ impl SharedPanes {
             sidebar.command = Some("rimz-sidebar".into());
             panes.push(sidebar);
         }
-        for (index, row) in self.snapshot.rows().enumerate() {
-            let mut working = row.pane.clone().unwrap();
+        for (index, mut working) in self
+            .snapshot
+            .rows()
+            .filter_map(|row| row.pane.clone())
+            .enumerate()
+        {
             working.view_id = Some(format!("tab_{}", usize::from(index >= 10)));
             panes.push(working);
         }
@@ -908,11 +912,12 @@ fn tmux_clients_share_a_view_through_focus_overlay_and_detach() {
 }
 
 #[test]
-fn a_view_change_wakes_no_unrelated_pane() {
+fn a_scrolled_layout_wakes_an_unmapped_peer() {
     let mut pair = SharedPanes::new(MuxName::Zellij);
     let (tx, rx) = std::sync::mpsc::sync_channel(64);
     let _subscription = pair.plane.subscribe(&pair.panes[1].state.pane.config, tx);
     pair.input(0);
+    assert!(matches!(rx.try_recv(), Ok(Wakeup::Tick)));
     assert!(rx.try_recv().is_err());
 }
 

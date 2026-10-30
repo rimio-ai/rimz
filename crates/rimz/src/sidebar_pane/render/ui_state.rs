@@ -58,6 +58,8 @@ pub(in crate::sidebar_pane) enum EntryCursor {
 /// Client presentation state, independent of a pane's render resources and hit geometry.
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct ViewState {
+    pub(in crate::sidebar_pane) layout_sequence: u64,
+    pub(in crate::sidebar_pane) layout_key: Option<LayoutKey>,
     pub(in crate::sidebar_pane) hook_drainer_alert: Option<Alert>,
     pub(in crate::sidebar_pane) selected_index: Option<usize>,
     pub(in crate::sidebar_pane) entry_cursor: Option<EntryCursor>,
@@ -214,6 +216,23 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::sidebar_pane) struct LayoutKey {
+    rows: Vec<(String, isize)>,
+    top_height: usize,
+    bottom_height: usize,
+    content_height: usize,
+    scroll_max: usize,
+    expanded_groups: BTreeSet<String>,
+    landed_open: bool,
+    delegation_overrides: BTreeMap<String, bool>,
+    delegation_history: BTreeMap<String, Option<Timestamp>>,
+    dashboard_tab: Option<DashboardTab>,
+    make_up_filter: BodyLens,
+    help_visible: bool,
+    search_draft: Option<String>,
+}
+
 impl UiState {
     pub(in crate::sidebar_pane) fn theme(&mut self, config: &ThemeConfig) -> Rc<Theme> {
         if let Some((cached_config, theme)) = &self.theme_cache
@@ -233,6 +252,28 @@ impl UiState {
 }
 
 impl ViewState {
+    pub(super) fn note_layout(&mut self, frame: &super::compose::ComposedFrame) {
+        let key = LayoutKey {
+            rows: frame.anchored_rows.clone(),
+            top_height: frame.top_height,
+            bottom_height: frame.bottom_height,
+            content_height: frame.content_height,
+            scroll_max: frame.scroll_max,
+            expanded_groups: self.expanded_groups.clone(),
+            landed_open: self.landed_open,
+            delegation_overrides: self.delegation_overrides.clone(),
+            delegation_history: self.delegation_history.clone(),
+            dashboard_tab: self.dashboard_tab.clone(),
+            make_up_filter: self.make_up_filter.clone(),
+            help_visible: self.help_visible,
+            search_draft: self.search_draft.clone(),
+        };
+        if self.layout_key.as_ref() != Some(&key) {
+            self.layout_sequence += 1;
+            self.layout_key = Some(key);
+        }
+    }
+
     pub(super) fn effective_held_expansions(&self, roster: &VisibleRoster<'_>) -> BTreeSet<String> {
         let selected_id = self
             .selected_index

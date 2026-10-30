@@ -1408,6 +1408,12 @@ struct ResultSink {
 
 impl ResultSink {
     fn shared(subscribers: Subscribers, host_data: Arc<Mutex<HostData>>) -> Self {
+        host_data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .views
+            .lock()
+            .subscribers = subscribers.clone();
         let mut sink = Self {
             subscribers,
             host_data,

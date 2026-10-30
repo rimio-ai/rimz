@@ -207,6 +207,7 @@ impl DataPlane {
         let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel(64);
         let host_data = Arc::new(Mutex::new(HostData::default()));
         let views = lock(&host_data).views.clone();
+        let subscribers = views.lock().subscribers.clone();
         let plane = Self {
             views,
             events: Arc::default(),
@@ -215,7 +216,7 @@ impl DataPlane {
             tmux_geometry: Arc::default(),
             jumps: Arc::default(),
             request_tx,
-            subscribers: Subscribers::default(),
+            subscribers,
             host_data,
             observe_tx,
             fit: None,
