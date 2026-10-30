@@ -501,6 +501,10 @@ impl ClosedDays {
                 path,
             });
         }
+        #[cfg(test)]
+        {
+            self.recording_dedups += 1;
+        }
         let recordable_account = |login: &LoginKey, ts: u64| {
             if ts / DAY_SECS >= now_secs.saturating_sub(CLOSE_LAG_SECS) / DAY_SECS
                 || !within_widest_window(ts, now_secs)
@@ -514,99 +518,11 @@ impl ClosedDays {
                 .iter()
                 .find(|account| &account.login == login)
         };
-        let mut sessions = BTreeMap::<_, BTreeMap<StoredSession, u64>>::new();
-        for file in &all_files {
-            let Some(cached) = cache.files.get(file.path.to_string_lossy().as_ref()) else {
-                continue;
-            };
-            let file_key = file_session_key(file.adapter, &file.path);
-            for entry in &cached.entries {
-                let Some(account) = recordable_account(&file.login, entry.ts_secs) else {
-                    continue;
-                };
-                let session =
-                    StoredSession::new(session_key(account.kind, file_key, entry), &account.home);
-                sessions
-                    .entry((
-                        account.kind,
-                        account.identity.clone(),
-                        entry.ts_secs / DAY_SECS,
-                    ))
-                    .or_default()
-                    .entry(session)
-                    .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
-                    .or_insert(entry.ts_secs);
-            }
-        }
-        let mut days = BTreeMap::<_, BTreeMap<_, SpendRow>>::new();
-        #[cfg(test)]
-        {
-            self.recording_dedups += 1;
-        }
-        let locations = dedup_cached_entry_locations(&all_files, cache);
-        for (row, location) in indexed_counted_entries(&all_files, cache, &locations)
-            .into_iter()
-            .zip(locations)
-        {
-            let entry = row.entry();
-            let day = entry.ts_secs / DAY_SECS;
-            let Some(account) = recordable_account(row.login(), entry.ts_secs) else {
-                continue;
-            };
-            let stored = SpendRow::new(&row, &account.home);
-            let rows = days
-                .entry((account.kind, account.identity.clone(), day))
-                .or_default();
-            let row_key = (
-                location.file_index,
-                stored.session.clone(),
-                stored.model.clone(),
-                stored.origin.clone(),
-            );
-            match rows.entry(row_key) {
-                std::collections::btree_map::Entry::Occupied(mut row) => {
-                    row.get_mut().merge(stored)
-                }
-                std::collections::btree_map::Entry::Vacant(row) => {
-                    row.insert(stored);
-                }
-            }
-        }
-        for ((kind, account, day), sessions) in sessions {
-            let rows = days
-                .remove(&(kind, account.clone(), day))
-                .unwrap_or_default();
-            let winners = rows
-                .values()
-                .map(|row| &row.session)
-                .collect::<BTreeSet<_>>();
-            let session_only = sessions
-                .into_iter()
-                .filter(|(session, _)| !winners.contains(session))
-                .map(|(session, ts)| StoredRow::SessionOnly { session, ts })
-                .collect::<Vec<_>>();
-            let rows = rows
-                .into_values()
-                .map(StoredRow::Spend)
-                .chain(session_only)
-                .collect();
-            let Some(day) = i64::try_from(day * DAY_SECS)
-                .ok()
-                .and_then(|ts| Timestamp::from_second(ts).ok())
-                .map(|ts| ts.to_zoned(TimeZone::UTC).date())
-            else {
-                continue;
-            };
-            let record = SpendDay {
-                kind: kind.to_owned(),
-                account,
-                day,
-                rows,
-            };
+        for record in grouped_days(cache, &all_files, recordable_account) {
             let mut bytes = vec![b'\n'];
             serde_json::to_writer(&mut bytes, &record)?;
             bytes.push(b'\n');
-            history::append(&hold.paths, &hold.paths.spend(day.year()), &bytes)?;
+            history::append(&hold.paths, &hold.paths.spend(record.day.year()), &bytes)?;
         }
         self.refresh(&hold.paths, accounts)?;
         self.recorded = incomplete.is_empty().then(|| RecordingKey {
@@ -615,6 +531,99 @@ impl ClosedDays {
         });
         Ok(())
     }
+}
+
+fn grouped_days<'a>(
+    cache: &SpendingDiskCache,
+    files: &[SpendingFile],
+    recordable_account: impl Fn(&LoginKey, u64) -> Option<&'a AccountKey>,
+) -> Vec<SpendDay> {
+    let mut sessions = BTreeMap::<_, BTreeMap<StoredSession, u64>>::new();
+    for file in files {
+        let Some(cached) = cache.files.get(file.path.to_string_lossy().as_ref()) else {
+            continue;
+        };
+        let file_key = file_session_key(file.adapter, &file.path);
+        for entry in &cached.entries {
+            let Some(account) = recordable_account(&file.login, entry.ts_secs) else {
+                continue;
+            };
+            let session =
+                StoredSession::new(session_key(account.kind, file_key, entry), &account.home);
+            sessions
+                .entry((
+                    account.kind,
+                    account.identity.clone(),
+                    entry.ts_secs / DAY_SECS,
+                ))
+                .or_default()
+                .entry(session)
+                .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
+                .or_insert(entry.ts_secs);
+        }
+    }
+    let mut days = BTreeMap::<_, BTreeMap<_, SpendRow>>::new();
+    let locations = dedup_cached_entry_locations(files, cache);
+    for (row, location) in indexed_counted_entries(files, cache, &locations)
+        .into_iter()
+        .zip(locations)
+    {
+        let entry = row.entry();
+        let day = entry.ts_secs / DAY_SECS;
+        let Some(account) = recordable_account(row.login(), entry.ts_secs) else {
+            continue;
+        };
+        let stored = SpendRow::new(&row, &account.home);
+        let rows = days
+            .entry((account.kind, account.identity.clone(), day))
+            .or_default();
+        let row_key = (
+            location.file_index,
+            stored.session.clone(),
+            stored.model.clone(),
+            stored.origin.clone(),
+        );
+        match rows.entry(row_key) {
+            std::collections::btree_map::Entry::Occupied(mut row) => row.get_mut().merge(stored),
+            std::collections::btree_map::Entry::Vacant(row) => {
+                row.insert(stored);
+            }
+        }
+    }
+    let mut records = Vec::new();
+    for ((kind, account, day), sessions) in sessions {
+        let rows = days
+            .remove(&(kind, account.clone(), day))
+            .unwrap_or_default();
+        let winners = rows
+            .values()
+            .map(|row| &row.session)
+            .collect::<BTreeSet<_>>();
+        let session_only = sessions
+            .into_iter()
+            .filter(|(session, _)| !winners.contains(session))
+            .map(|(session, ts)| StoredRow::SessionOnly { session, ts })
+            .collect::<Vec<_>>();
+        let rows = rows
+            .into_values()
+            .map(StoredRow::Spend)
+            .chain(session_only)
+            .collect();
+        let Some(day) = i64::try_from(day * DAY_SECS)
+            .ok()
+            .and_then(|ts| Timestamp::from_second(ts).ok())
+            .map(|ts| ts.to_zoned(TimeZone::UTC).date())
+        else {
+            continue;
+        };
+        records.push(SpendDay {
+            kind: kind.to_owned(),
+            account,
+            day,
+            rows,
+        });
+    }
+    records
 }
 
 fn day_start(day: Date) -> Option<u64> {
