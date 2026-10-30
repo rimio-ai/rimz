@@ -2002,6 +2002,7 @@ mod launch_options {
         let warnings = rimz::harness::plan::finalize_launch_layout(
             &mut warning_layout,
             LaunchFinalizeOptions {
+                smart_compact: None,
                 agent_base: None,
                 permission_mode: None,
                 isolation: None,

@@ -773,6 +773,25 @@ pub(super) fn collect_prompt_cache_fallback(
     super::model::PromptCacheFallback { ttl, kinds }
 }
 
+pub(super) fn collect_soft_compact_skips(
+    hooks: &[HookRow],
+) -> Vec<super::model::SoftCompactSkipRow> {
+    let mut rows: Vec<_> = hooks
+        .iter()
+        .filter(|row| row.detected)
+        .filter_map(|row| {
+            let definition = rimz::agents::find_definition(&row.kind)?;
+            let reason = rimz::agents::soft_compact_skip(definition)?;
+            Some(super::model::SoftCompactSkipRow {
+                kind: row.kind.clone(),
+                reason,
+            })
+        })
+        .collect();
+    rows.sort_unstable_by(|left, right| left.kind.cmp(&right.kind));
+    rows
+}
+
 pub(super) fn collect_plugins() -> Vec<PluginRow> {
     rimz::agents::plugins::loaded()
         .diagnostics
@@ -819,6 +838,25 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn soft_compact_skips_list_only_detected_kinds_with_their_reasons() {
+        let hooks = ["qoder", "codex", "amp", "muse", "kiro"].map(|kind| HookRow {
+            kind: kind.into(),
+            detected: kind != "kiro",
+            status: HookStatus::Installed,
+        });
+        assert_eq!(
+            serde_json::to_value(collect_soft_compact_skips(&hooks)).unwrap(),
+            serde_json::json!([
+                {"kind": "amp", "reason": "no_compact_command"},
+                {"kind": "muse", "reason": "no_compaction_signal"},
+                {"kind": "qoder", "reason": "no_live_context_reading"},
+            ])
+        );
+        assert!(collect_soft_compact_skips(&[]).is_empty());
+        assert!(collect_soft_compact_skips(&hooks[1..2]).is_empty());
+    }
 
     #[test]
     fn prompt_cache_fallback_lists_detected_kinds_using_any_sign_in_mode() {

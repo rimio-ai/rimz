@@ -521,6 +521,7 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
         crate::harness::plan::finalize_launch_layout(
             &mut layout,
             crate::harness::plan::LaunchFinalizeOptions {
+                smart_compact: None,
                 agent_base: None,
                 permission_mode: None,
                 isolation: None,
@@ -618,6 +619,7 @@ fn opencode_model_overrides_finalize_without_provider_model_args() {
         crate::harness::plan::finalize_launch_layout(
             &mut layout,
             crate::harness::plan::LaunchFinalizeOptions {
+                smart_compact: None,
                 agent_base: Some("opencode"),
                 permission_mode: None,
                 isolation: None,
@@ -808,6 +810,7 @@ fn team_cli_models_route_each_markdown_role() {
         crate::harness::plan::finalize_launch_layout(
             &mut layout,
             crate::harness::plan::LaunchFinalizeOptions {
+                smart_compact: None,
                 agent_base: None,
                 permission_mode: None,
                 isolation: None,
@@ -877,6 +880,7 @@ fn team_cli_models_route_each_markdown_role() {
     crate::harness::plan::finalize_launch_layout(
         &mut layout,
         crate::harness::plan::LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: None,
             isolation: None,

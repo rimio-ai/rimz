@@ -24,7 +24,9 @@ use super::adapters::opencode::OpencodeAdapter;
 use super::adapters::pi::PiAdapter;
 use super::adapters::qoder::QoderAdapter;
 use super::adapters::qwen::QwenAdapter;
-use super::definition::{AgentDefinition, AgentSpec};
+use super::definition::{
+    AgentDefinition, AgentSpec, CompactInstruction, ConcernCoverage, IntegrationConcern,
+};
 use super::{AgentErr, AgentState, Result};
 use crate::config::HarnessConfig;
 use crate::ids::AgentSessionId;
@@ -106,6 +108,63 @@ pub fn compact_command(agent: &AgentState, harness: &HarnessConfig) -> Option<St
     spec_by_kind(agent.kind.as_str())?
         .launch
         .compact_command(harness.compact_instruction(agent.compact_seat()))
+}
+
+/// Why an adapter cannot take part in mid-turn soft compaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftCompactSkip {
+    NoCompactCommand,
+    NoLiveContextReading,
+    NoCompactionSignal,
+}
+
+impl std::fmt::Display for SoftCompactSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoCompactCommand => "no compact command",
+            Self::NoLiveContextReading => "no live context reading",
+            Self::NoCompactionSignal => "no compaction signal",
+        })
+    }
+}
+
+/// Derive mid-turn participation from the adapter's declared command and coverage.
+pub fn soft_compact_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip> {
+    if definition.spec().launch.compact_command.is_none() {
+        return Some(SoftCompactSkip::NoCompactCommand);
+    }
+    if matches!(
+        definition.concern_coverage(IntegrationConcern::Compaction),
+        ConcernCoverage::Unsupported { .. }
+    ) {
+        return Some(SoftCompactSkip::NoCompactionSignal);
+    }
+    if matches!(
+        definition.concern_coverage(IntegrationConcern::ContextUsage),
+        ConcernCoverage::Unsupported { .. }
+    ) {
+        return Some(SoftCompactSkip::NoLiveContextReading);
+    }
+    None
+}
+
+/// Compose the wrap-up steer, carrying the seat's brief when the command cannot.
+pub fn soft_compact_prompt(agent: &AgentState, harness: &HarnessConfig) -> Option<String> {
+    let command = spec_by_kind(agent.kind.as_str())?.launch.compact_command?;
+    let prefix = concat!(
+        "Context is getting high, so I'm going to compact you once this turn ends. ",
+        "Wrap up the step you're on, without leaving any file half-edited, ",
+        "and don't start anything new. Then end your turn"
+    );
+    let brief = harness.compact_instruction(agent.compact_seat());
+    Some(
+        if command.instruction == CompactInstruction::Trailing || brief.is_empty() {
+            format!("{prefix}.")
+        } else {
+            format!("{prefix} with a note for yourself after the compaction:\n\n{brief}")
+        },
+    )
 }
 
 /// Display-order kinds — the walk doctor and the wiring probes iterate.

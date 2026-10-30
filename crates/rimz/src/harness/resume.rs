@@ -3270,6 +3270,7 @@ fn restore_resume_cell(
     crate::harness::plan::finalize_agent_cell(
         cell,
         crate::harness::plan::LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: mode.map(crate::harness::plan::PermissionModeChoice::Explicit),
             isolation: None,

@@ -19,6 +19,7 @@ use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
 use crate::harness::spend_ladder::{SpendFacts, SpendStep};
 use crate::ids::{AgentKind, AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
+use crate::store::message::AutoCompact;
 use crate::store::{
     writer::AgentLaunchIdentity, writer::AgentLaunchName, writer::AgentLaunchRequest,
 };
@@ -155,7 +156,84 @@ pub enum PermissionModeChoice {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct LaunchCompactPolicy<'a> {
+    teams: &'a crate::config::TeamsConfig,
+    profiles: &'a crate::config::ProfilesConfig,
+    subagent_profiles: &'a crate::config::ProfilesConfig,
+    harness: &'a crate::config::HarnessConfig,
+    scope: crate::config::effective::ProfileScope,
+    team: Option<&'a str>,
+}
+
+impl<'a> LaunchCompactPolicy<'a> {
+    pub fn new(
+        effective: &'a crate::config::effective::LaunchAgents,
+        harness: &'a crate::config::HarnessConfig,
+        scope: crate::config::effective::ProfileScope,
+        team: Option<&'a str>,
+    ) -> Self {
+        Self {
+            teams: &effective.teams,
+            profiles: &effective.profiles,
+            subagent_profiles: &effective.subagent_profiles,
+            harness,
+            scope,
+            team,
+        }
+    }
+
+    fn append_warnings(self, cell: &AgentCell, warnings: &mut Vec<LaunchFinalizeWarning>) {
+        let seat = crate::config::effective::SmartCompactSeat {
+            team: cell.launch.team.as_deref().or(self.team),
+            role: cell.launch.role.as_deref(),
+            profile: cell.launch.profile.as_deref(),
+            scope: cell.launch.profile_scope.unwrap_or(self.scope),
+        };
+        let Some(line) = seat.resolve(
+            self.teams,
+            self.profiles,
+            self.subagent_profiles,
+            self.harness,
+        ) else {
+            return;
+        };
+        let profile = cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str());
+        if seat
+            .explicit(self.teams, self.profiles, self.subagent_profiles)
+            .is_some()
+            && let Some(adapter) = crate::agents::find_definition(&cell.kind)
+            && let Some(reason) = crate::agents::soft_compact_skip(adapter)
+        {
+            warnings.push(LaunchFinalizeWarning::SmartCompactSkipped {
+                profile: profile.to_owned(),
+                agent: adapter.spec().kind,
+                line,
+                reason,
+            });
+        }
+        let AutoCompact::Tokens(tokens) = line else {
+            return;
+        };
+        let Some(AutoCompact::Tokens(window)) = cell
+            .auto_compact
+            .as_deref()
+            .and_then(|value| AutoCompact::parse(value).ok())
+        else {
+            return;
+        };
+        if tokens >= window {
+            warnings.push(LaunchFinalizeWarning::SmartCompactNativeWindow {
+                profile: profile.to_owned(),
+                line,
+                window: AutoCompact::Tokens(window),
+            });
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct LaunchFinalizeOptions<'a> {
+    pub smart_compact: Option<LaunchCompactPolicy<'a>>,
     pub agent_base: Option<&'a str>,
     pub permission_mode: Option<PermissionModeChoice>,
     pub isolation: Option<crate::config::Isolation>,
@@ -1021,6 +1099,12 @@ pub fn plan_supervised_launch(
     let finalized = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: Some(LaunchCompactPolicy::new(
+                &effective,
+                &machine_config.harness,
+                scope,
+                resolved.team_name.as_deref(),
+            )),
             agent_base,
             permission_mode: Some(permission_mode),
             isolation,
@@ -1083,6 +1167,17 @@ pub enum LaunchFinalizeWarning {
         profile: String,
         agent: &'static str,
         field: crate::agents::definition::SkippedPresetField,
+    },
+    SmartCompactSkipped {
+        profile: String,
+        agent: &'static str,
+        line: AutoCompact,
+        reason: crate::agents::SoftCompactSkip,
+    },
+    SmartCompactNativeWindow {
+        profile: String,
+        line: AutoCompact,
+        window: AutoCompact,
     },
     TierMoved {
         profile: String,
@@ -1192,6 +1287,23 @@ impl fmt::Display for LaunchFinalizeWarning {
                     }
                 }
             }
+            Self::SmartCompactSkipped {
+                profile,
+                agent,
+                line,
+                reason,
+            } => write!(
+                formatter,
+                "warning: `{profile}` smart-compact {line}: {agent} skips mid-turn soft compaction ({reason})"
+            ),
+            Self::SmartCompactNativeWindow {
+                profile,
+                line,
+                window,
+            } => write!(
+                formatter,
+                "warning: `{profile}` smart-compact {line} is at or above its auto-compact {window}; the provider compacts first"
+            ),
             Self::TierMoved { profile, stamp } => {
                 let passes = stamp
                     .passes()
@@ -1483,6 +1595,9 @@ pub(super) fn finalize_agent_cell(
         }),
         fast: cell.launch.fast,
     }));
+    if let Some(policy) = options.smart_compact {
+        policy.append_warnings(cell, warnings);
+    }
     Ok(())
 }
 

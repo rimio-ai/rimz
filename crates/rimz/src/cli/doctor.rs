@@ -153,6 +153,7 @@ fn collect_report(
         let hooks = collected(hooks);
         let prompt_cache_fallback =
             agents::collect_prompt_cache_fallback(&hooks, &crate::cli::machine_config().harness);
+        let soft_compact_skips = agents::collect_soft_compact_skips(&hooks);
         DoctorReport {
             schema: "rimz.doctor.v1",
             audit,
@@ -174,6 +175,7 @@ fn collect_report(
             hibernate: collected(hibernate),
             hooks,
             prompt_cache_fallback,
+            soft_compact_skips,
             accounts,
             plugins: collected(plugins),
             loop_tasks: collected(loop_tasks),

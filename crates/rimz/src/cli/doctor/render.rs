@@ -2268,6 +2268,25 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         )?;
     }
 
+    if !report.soft_compact_skips.is_empty() {
+        let skipped = report
+            .soft_compact_skips
+            .iter()
+            .map(|row| format!("{} ({})", row.kind, row.reason))
+            .collect::<Vec<_>>()
+            .join(", ");
+        note(
+            w,
+            Health::Neutral,
+            &format!("mid-turn soft compaction skipped: {skipped}"),
+        )?;
+        detail(
+            w,
+            palette::faint(),
+            "mid-turn compaction uses only the provider's own window",
+        )?;
+    }
+
     if !absent.is_empty() {
         absent.sort_unstable();
         note(

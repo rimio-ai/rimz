@@ -45,6 +45,7 @@ pub(super) struct DoctorReport {
     pub(super) hibernate: rimz::harness::hibernate::PreflightReport,
     pub(super) hooks: Vec<HookRow>,
     pub(super) prompt_cache_fallback: PromptCacheFallback,
+    pub(super) soft_compact_skips: Vec<SoftCompactSkipRow>,
     pub(super) accounts: Probe<Accounts>,
     pub(super) plugins: Vec<PluginRow>,
     pub(super) loop_tasks: LoopTasks,
@@ -620,6 +621,12 @@ pub(super) struct TopologyWriterId {
 pub(super) struct PromptCacheFallback {
     pub(super) ttl: String,
     pub(super) kinds: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct SoftCompactSkipRow {
+    pub(super) kind: String,
+    pub(super) reason: rimz::agents::SoftCompactSkip,
 }
 
 /// One adapter's RimZ-hook wiring state, with the fix to advance it.

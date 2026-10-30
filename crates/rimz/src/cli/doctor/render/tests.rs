@@ -783,6 +783,7 @@ fn report_fixture() -> DoctorReport {
             ttl: "1h".into(),
             kinds: Vec::new(),
         },
+        soft_compact_skips: Vec::new(),
         accounts: Probe::Ready(Accounts { rows: Vec::new() }),
         plugins: Vec::new(),
         loop_tasks: LoopTasks {
@@ -1064,6 +1065,32 @@ fn prompt_cache_fallback_is_always_json_and_uncounted_context_when_nonempty() {
         }
     }
     assert_eq!(actual, [(true, true, true, true, true); 4]);
+}
+
+#[test]
+fn soft_compact_skips_are_json_and_uncounted_context_only_when_detected() {
+    let mut report = report_fixture();
+    let mut tally = Tally::default();
+    assert!(!strip(|w| render_hooks(w, &report, &mut tally)).contains("soft compaction"));
+    assert_eq!(
+        serde_json::to_value(&report).unwrap()["soft_compact_skips"],
+        serde_json::json!([])
+    );
+    report.soft_compact_skips = vec![super::super::model::SoftCompactSkipRow {
+        kind: "amp".into(),
+        reason: rimz::agents::SoftCompactSkip::NoCompactCommand,
+    }];
+    let text = strip(|w| render_hooks(w, &report, &mut tally));
+    assert!(
+        text.contains("mid-turn soft compaction skipped: amp (no compact command)"),
+        "{text}"
+    );
+    assert!(text.contains("provider's own window"), "{text}");
+    assert_eq!(
+        serde_json::to_value(&report).unwrap()["soft_compact_skips"],
+        serde_json::json!([{"kind": "amp", "reason": "no_compact_command"}])
+    );
+    assert!(tally.warns.is_empty() && tally.alarms.is_empty());
 }
 
 #[test]
