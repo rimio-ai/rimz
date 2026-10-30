@@ -65,7 +65,7 @@ fn presence_watch_filters_client_attaches_and_switches_by_session() {
     recv_presence_line_until(&rx, Duration::from_secs(5), "attach seed", |line| {
         matches!(line, ControlLine::SeedPane { .. })
     });
-    let _other = AttachedTmuxClient::attach(&server.socket, "other", 80, 25);
+    let other = AttachedTmuxClient::attach(&server.socket, "other", 80, 25);
     let deadline = Instant::now() + Duration::from_secs(5);
     while server.display("other", "#{session_attached}") != "1" {
         assert!(Instant::now() < deadline, "other client did not attach");
@@ -80,12 +80,18 @@ fn presence_watch_filters_client_attaches_and_switches_by_session() {
         );
         matches!(line, ControlLine::Subscription { command: Some(command), .. } if command == "sleep")
     });
-    let _watched = AttachedTmuxClient::attach(&server.socket, "watched", 80, 25);
+    let watched = AttachedTmuxClient::attach(&server.socket, "watched", 80, 25);
     recv_presence_line_until(
         &rx,
         Duration::from_secs(5),
         "watched attach",
         |line| matches!(line, ControlLine::ClientSessionChanged { session } if session == "watched"),
+    );
+    let attached_pid = watched.child.process_id().unwrap().to_string();
+    let clients = server.stdout(&["list-clients", "-t", "watched", "-F", "#{client_pid}"]);
+    assert!(
+        clients.lines().any(|pid| pid == attached_pid),
+        "the attaching client must be listed when its attach event arrives: {clients}"
     );
     let other_client = server.stdout(&["list-clients", "-t", "other", "-F", "#{client_name}"]);
     server.tmux(&["switch-client", "-c", &other_client, "-t", "watched"]);
@@ -94,6 +100,12 @@ fn presence_watch_filters_client_attaches_and_switches_by_session() {
         Duration::from_secs(5),
         "watched switch",
         |line| matches!(line, ControlLine::ClientSessionChanged { session } if session == "watched"),
+    );
+    let switched_pid = other.child.process_id().unwrap().to_string();
+    let clients = server.stdout(&["list-clients", "-t", "watched", "-F", "#{client_pid}"]);
+    assert!(
+        clients.lines().any(|pid| pid == switched_pid),
+        "the switched client must already be listed: {clients}"
     );
     server.tmux(&["switch-client", "-c", &other_client, "-t", "other"]);
     server.tmux(&["respawn-pane", "-k", "-t", "watched:0", "sh"]);

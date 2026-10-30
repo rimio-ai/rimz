@@ -18,7 +18,14 @@ fn hidden_view_fit_trigger_ignores_hidden_layouts_and_tracks_the_current_window(
     };
     assert!(state.should_fit_hidden(&attached));
     let (transitions, diagnostic) = state.apply(attached, false);
-    assert!(transitions.is_empty());
+    assert!(matches!(
+        transitions.as_slice(),
+        [PresenceTransition::Nudge]
+    ));
+    assert!(matches!(
+        project_presence(transitions).as_slice(),
+        [SidebarEvent::PanesChanged]
+    ));
     assert!(diagnostic.is_none());
     assert!(!state.should_fit_hidden(&ControlLine::Nudge));
     state.apply(swin("$1", "@2"), false);
