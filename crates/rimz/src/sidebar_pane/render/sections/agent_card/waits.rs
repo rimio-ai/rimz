@@ -3,10 +3,11 @@
 use jiff::Timestamp;
 
 use crate::agents::{
-    ATTENTION_AGE_CEILING_SECS, BackgroundShell, PendingIdleStop, PendingWait, PendingWaitTrigger,
-    single_line_description, usable_description,
+    BackgroundShell, PendingIdleStop, PendingWait, PendingWaitTrigger, single_line_description,
+    usable_description,
 };
 use crate::proc::command::{command_program_basename, program_label};
+use crate::sidebar_pane::render::labels::hour_age_glyph;
 
 use super::*;
 
@@ -119,8 +120,9 @@ fn entry(
         headline: headline.map(|headline| Span::styled(headline, theme.body())),
         right: since
             .map(|at| {
+                let secs = age_secs(at, ctx.now);
                 vec![Span::styled(
-                    elapsed_cluster(theme, age_secs(at, ctx.now), ATTENTION_AGE_CEILING_SECS),
+                    format!("{} {:>3}", hour_age_glyph(theme, secs), elapsed_label(secs)),
                     theme.muted(),
                 )]
             })

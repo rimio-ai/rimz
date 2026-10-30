@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
+use crate::agents::AgentStatus;
 use crate::config::GlyphRole;
 use crate::store::snapshot::{
     PipelinePosition, SidebarPipeline, SidebarRow, SidebarStatusCount, SidebarWorktreeGroup,
@@ -24,7 +24,7 @@ use crate::sidebar_pane::render::fmt::{
 };
 use crate::sidebar_pane::render::heights::{CardHeights, CardKey};
 use crate::sidebar_pane::render::labels::{
-    TokenColumns, TokenDetail, branch_delta_spans, diff_spans, elapsed_glyph, status_glyph,
+    TokenColumns, TokenDetail, branch_delta_spans, diff_spans, hour_age_glyph, status_glyph,
     status_rest_style, status_style_at, token_breakdown_spans, token_total_glyph,
     trunk_glyph_spans, value_seam,
 };
@@ -566,10 +566,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
             activity_short(max_last_activity, ctx.now).map_or_else(Vec::new, |label| {
                 let seconds = age_secs(max_last_activity, ctx.now);
                 vec![Span::styled(
-                    format!(
-                        "{} {label}",
-                        elapsed_glyph(ctx.theme, seconds, ATTENTION_AGE_CEILING_SECS)
-                    ),
+                    format!("{} {label}", hour_age_glyph(ctx.theme, seconds)),
                     ctx.theme.muted(),
                 )]
             })

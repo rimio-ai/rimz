@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::theme::Component;
 use crate::theme::GlyphSetKind;
@@ -40,11 +41,11 @@ const NERD_AGE_SLICES: [&str; 8] = [
 ];
 
 /// The clock-fill glyph for an elapsed span, rounding down to completed
-/// fractions of `ceiling_secs`: the hour for attention clocks, the provider's
-/// cache TTL for a card's age pin. Unicode shows quarters (`◔`, `◑`, `◕`,
-/// `●`), while Nerd Font shows eighths across the `circle_slice` series, each
-/// clamped to its first face. The full face appears only at the ceiling; both
-/// read the ringed `◉` past it. One cell, so it never disturbs alignment.
+/// fractions of `ceiling_secs`. Unicode shows quarters (`◔`, `◑`, `◕`, `●`),
+/// while Nerd Font shows eighths across the `circle_slice` series, each clamped
+/// to its first face. The full face appears at the ceiling, then the ringed
+/// `◉` past it. Child quiet uses its stall window; card and wait ages use
+/// [`hour_age_glyph`] to stay full past the hour. Every face occupies one cell.
 pub(in crate::sidebar_pane::render) fn elapsed_glyph(
     theme: &Theme,
     secs: i64,
@@ -72,6 +73,15 @@ fn elapsed_quarter_role(secs: i64, ceiling_secs: i64) -> GlyphRole {
         3 => GlyphRole::ClockQ3,
         _ => GlyphRole::ClockQ4,
     }
+}
+
+/// An age face filled over an hour, staying full past it. Expiry belongs to the caller.
+pub(in crate::sidebar_pane::render) fn hour_age_glyph(theme: &Theme, secs: i64) -> String {
+    elapsed_glyph(
+        theme,
+        secs.min(ATTENTION_AGE_CEILING_SECS),
+        ATTENTION_AGE_CEILING_SECS,
+    )
 }
 
 pub(in crate::sidebar_pane::render) fn role_glyph(

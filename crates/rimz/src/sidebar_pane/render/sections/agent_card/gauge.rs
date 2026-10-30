@@ -1,10 +1,10 @@
 use super::*;
-use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::agents::model_display::model_label_source;
 use crate::sidebar_pane::pixel::meter::{MeterPixels, MeterRaster};
 use crate::sidebar_pane::pixel::{
     image_id_color, placeholder_cluster, placeholder_columns_supported,
 };
+use crate::sidebar_pane::render::labels::hour_age_glyph;
 
 /// The session's statusline enrichment, when it published any.
 pub(super) fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
@@ -103,8 +103,9 @@ pub(super) fn bar_row(
 ///
 /// At L2 every meter reserves a five-cell age cluster after a space; below L2
 /// the bar keeps that room and the stats line pins the age instead. The age
-/// appears from five minutes quiet, with a clock-fill glyph ([`elapsed_glyph`])
-/// and continuous tone: muted until half the known TTL, or the last ten
+/// appears from five minutes quiet, filling over an hour ([`hour_age_glyph`])
+/// and staying full past it unless the cache expires. Its continuous tone is
+/// muted until half the known TTL, or the last ten
 /// minutes if earlier, and never before the last hour
 /// ([`CACHE_WARNING_MAX_SECS`]), then warn through caution to alarm at the
 /// ceiling. Past the ceiling it wears the fixed expired-cache tone and ringed
@@ -335,10 +336,7 @@ pub(super) fn gauge_segments(
 /// What the card's prompt-cache clock says at the snapshot time.
 enum CacheAge {
     /// A keep-warm horizon holds the cache, counted from the last real turn.
-    Held {
-        ended: jiff::Timestamp,
-        until: jiff::Timestamp,
-    },
+    Held { ended: jiff::Timestamp },
     /// Count from the later of own activity and the last ping; an unknown TTL has no ceiling.
     Aging {
         since: jiff::Timestamp,
@@ -408,10 +406,10 @@ impl CachePhase {
 fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
     let cache = row.as_agent().and_then(|agent| agent.cache);
     if let Some(clock) = cache
-        && let Some(until) = clock.warm_until.filter(|until| now < *until)
+        && clock.warm_until.is_some_and(|until| now < until)
         && let Some(ended) = clock.held_since
     {
-        return CacheAge::Held { ended, until };
+        return CacheAge::Held { ended };
     }
     CacheAge::Aging {
         since: row.own_last_activity().max(
@@ -428,33 +426,26 @@ pub(super) fn cache_age_style(theme: &Theme, row: &SidebarRow, now: jiff::Timest
     cache_age(row, now).phase(now).style(theme)
 }
 
-/// The card's cache-age pin. While a keep-warm horizon holds the cache it reads
-/// the time since the last real turn ended, the face filling over the horizon
-/// in the steady `good` tone; otherwise the time since the agent's own activity
-/// or its last cache request (a ping refreshes the cache, not the activity),
-/// face over the card's provider cache TTL, else the hour. After half a known
-/// TTL, or in the last ten minutes if earlier, but never before the last hour,
-/// the pin heats from warn through caution to alarm; an unknown lifetime stays
-/// muted, and an expired cache wears the meter's expired-cache tone.
+/// The card's cache-age pin fills over the first hour of its label's quiet time
+/// and stays full past it; only an expired cache gets the ring. A keep-warm hold
+/// counts from the last real turn in steady `good`; otherwise the pin counts
+/// from own activity or the last cache request. Tone still follows the known
+/// TTL: muted until its warning band, then warn through caution to alarm.
+/// Unknown lifetimes stay muted; expired caches wear the meter's expired tone.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
     let age = cache_age(row, now);
     let style = cache_age_style(theme, row, now);
-    match age {
-        CacheAge::Held { ended, until } => {
-            let label = activity_short(ended, now)?;
-            let glyph = elapsed_glyph(theme, age_secs(ended, now), age_secs(ended, until));
-            Some(Span::styled(format!("{glyph} {label:>3}"), style))
-        }
-        CacheAge::Aging { since, ceiling } => {
-            let label = activity_short(since, now)?;
-            let secs = age_secs(since, now);
-            let ceiling = ceiling.unwrap_or(ATTENTION_AGE_CEILING_SECS);
-            Some(Span::styled(
-                format!("{} {label:>3}", elapsed_glyph(theme, secs, ceiling)),
-                style,
-            ))
-        }
-    }
+    let since = match age {
+        CacheAge::Held { ended } => ended,
+        CacheAge::Aging { since, .. } => since,
+    };
+    let label = activity_short(since, now)?;
+    let glyph = if age.expired(now) {
+        theme.glyph(GlyphRole::ClockOver).to_owned()
+    } else {
+        hour_age_glyph(theme, age_secs(since, now))
+    };
+    Some(Span::styled(format!("{glyph} {label:>3}"), style))
 }
 
 /// Cache expiry guidance follows the template's stats, including held cards.
@@ -675,14 +666,7 @@ mod tests {
         for age in [0, 300, 1800, 10000] {
             assert_eq!(phase(age, None), CachePhase::Unknown);
         }
-        assert_eq!(
-            CacheAge::Held {
-                ended: now,
-                until: now + std::time::Duration::from_secs(60)
-            }
-            .phase(now),
-            CachePhase::Held
-        );
+        assert_eq!(CacheAge::Held { ended: now }.phase(now), CachePhase::Held);
     }
 
     #[test]

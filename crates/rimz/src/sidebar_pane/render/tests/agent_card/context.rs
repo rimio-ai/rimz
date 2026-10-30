@@ -463,7 +463,7 @@ fn warm_held_and_unknown_lifetime_context_meters_keep_composition() {
         group_lines(&unknown, &theme, usize::MAX)
             .iter()
             .flat_map(|line| &line.spans)
-            .any(|span| span.content == "◉  2h" && span.style.fg == theme.muted().fg)
+            .any(|span| span.content == "●  2h" && span.style.fg == theme.muted().fg)
     );
 }
 
@@ -1743,13 +1743,11 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     );
 }
 
-/// The age pin fills over the card's provider cache TTL when enrichment
-/// stamped one, and while a keep-warm horizon holds the cache it reads the
-/// time since the last real turn in the steady held tone over the horizon.
+/// The face reads quiet time on the hour scale; the cache lifetime and hold
+/// still decide its tone, and only an expired cache gets the ring.
 #[test]
 fn context_line_age_pin_reads_the_card_cache_clock() {
-    let theme = Theme::fixed(false);
-    let age_span = |cache: Option<crate::store::snapshot::CacheClock>, idle_secs: u64| {
+    let age_span = |theme: &Theme, cache: Option<CacheClock>, idle_secs: u64| {
         let mut codex = agent(
             "codex-1",
             "codex",
@@ -1767,19 +1765,33 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
                 card.cache = cache;
             }
         }
-        cache_meter_line(&snapshot, &theme)
+        cache_meter_line(&snapshot, theme)
             .spans
             .iter()
             .find(|span| {
-                ['◔', '◑', '◕', '●', '◉']
-                    .iter()
-                    .any(|c| span.content.contains(*c))
+                [
+                    '◔',
+                    '◑',
+                    '◕',
+                    '●',
+                    '◉',
+                    '\u{f0a9e}',
+                    '\u{f0a9f}',
+                    '\u{f0aa0}',
+                    '\u{f0aa1}',
+                    '\u{f0aa2}',
+                    '\u{f0aa3}',
+                    '\u{f0aa4}',
+                    '\u{f0aa5}',
+                ]
+                .iter()
+                .any(|c| span.content.contains(*c))
             })
             .map(|span| (span.content.to_string(), span.style))
             .expect("the context line carries an age pin")
     };
     let ttl = |ceiling_secs| {
-        Some(crate::store::snapshot::CacheClock {
+        Some(CacheClock {
             ceiling_secs,
             last_request_at: None,
             warm_until: None,
@@ -1787,64 +1799,89 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
             rewarm_cost_usd: None,
         })
     };
-    let (hour_face, hour_style) = age_span(ttl(3600), 25 * 60);
-    let (half_face, half_style) = age_span(ttl(1800), 25 * 60);
-    assert_eq!(
-        hour_face, "◔ 25m",
-        "the hour window is not half gone at 25m"
-    );
-    assert_eq!(half_face, "◕ 25m", "a 30m window is in its last quarter");
-    assert_eq!(
-        age_span(None, 25 * 60).0,
-        hour_face,
-        "no TTL keeps the hour"
-    );
-    assert_eq!(
-        half_style,
-        theme.style(theme.warm_heat_tone(2.0 / 3.0), Modifier::empty())
-    );
-    assert_ne!(half_style, hour_style);
-    assert_eq!(
-        age_span(ttl(1800), 40 * 60),
-        (
-            "◉ 40m".to_owned(),
-            theme.style(theme.component(Component::CacheExpired), Modifier::empty())
-        ),
-        "the expired-cache tone once the provider's TTL has passed"
-    );
-
-    let held = |warm_until_secs: u64| {
-        Some(crate::store::snapshot::CacheClock {
+    let held = |quiet_minutes: u64, remaining_minutes: u64| {
+        Some(CacheClock {
             ceiling_secs: 1800,
             last_request_at: None,
-            warm_until: Some(fixed_now() + Duration::from_secs(warm_until_secs)),
-            held_since: Some(fixed_now() - Duration::from_secs(50 * 60)),
+            warm_until: Some(fixed_now() + Duration::from_secs(remaining_minutes * 60)),
+            held_since: Some(fixed_now() - Duration::from_secs(quiet_minutes * 60)),
             rewarm_cost_usd: None,
         })
     };
-    assert_eq!(
-        age_span(held(70 * 60), 20 * 60),
-        ("◔ 50m".to_owned(), theme.good(Modifier::empty())),
-        "held: time since the real turn, filling over the 2h horizon, no heat"
-    );
-    let expired = Some(crate::store::snapshot::CacheClock {
+    let expired = Some(CacheClock {
         warm_until: Some(fixed_now() - Duration::from_secs(1)),
-        ..held(0).unwrap()
+        ..held(50, 0).unwrap()
     });
-    assert_eq!(
-        age_span(expired, 20 * 60).0,
-        "◑ 20m",
-        "past the horizon the TTL ramp runs from the last ping"
-    );
-    let pinged = Some(crate::store::snapshot::CacheClock {
+    let pinged = Some(CacheClock {
         last_request_at: Some(fixed_now() - Duration::from_secs(20 * 60)),
         ..ttl(1800).unwrap()
     });
-    assert_eq!(
-        age_span(pinged, 50 * 60),
-        age_span(ttl(1800), 20 * 60),
-        "a ping the card never saw as activity still restarts its cache clock"
-    );
+    for modern in [false, true] {
+        let config = crate::config::ThemeConfig {
+            style: modern.then_some(crate::config::ThemeStyle::Modern),
+            ..Default::default()
+        };
+        let theme = Theme::fixed_for_theme(false, &config);
+        let heat = |amount| theme.style(theme.warm_heat_tone(amount), Modifier::empty());
+        let cold = theme.style(theme.component(Component::CacheExpired), Modifier::empty());
+        for (cache, quiet, unicode, nerd, style) in [
+            (ttl(3600), 25 * 60, "◔ 25m", "\u{f0aa0} 25m", theme.muted()),
+            (
+                ttl(1800),
+                25 * 60,
+                "◔ 25m",
+                "\u{f0aa0} 25m",
+                heat(2.0 / 3.0),
+            ),
+            (ttl(3600), 45 * 60, "◕ 45m", "\u{f0aa3} 45m", heat(0.5)),
+            (ttl(3600), 80 * 60, "◉  1h", "◉  1h", cold),
+            (
+                ttl(43_200),
+                5 * 3600,
+                "●  5h",
+                "\u{f0aa5}  5h",
+                theme.muted(),
+            ),
+            (ttl(43_200), 690 * 60, "● 11h", "\u{f0aa5} 11h", heat(0.5)),
+            (
+                ttl(1800),
+                20 * 60,
+                "◔ 20m",
+                "\u{f0a9f} 20m",
+                heat(1.0 / 3.0),
+            ),
+            (ttl(1800), 30 * 60, "◑ 30m", "\u{f0aa1} 30m", heat(1.0)),
+            (ttl(1800), 35 * 60, "◉ 35m", "◉ 35m", cold),
+            (None, 2 * 3600, "●  2h", "\u{f0aa5}  2h", theme.muted()),
+            (
+                held(116, 4),
+                20 * 60,
+                "●  1h",
+                "\u{f0aa5}  1h",
+                theme.good(Modifier::empty()),
+            ),
+            (
+                held(40, 80),
+                20 * 60,
+                "◑ 40m",
+                "\u{f0aa2} 40m",
+                theme.good(Modifier::empty()),
+            ),
+            (expired, 20 * 60, "◔ 20m", "\u{f0a9f} 20m", heat(1.0 / 3.0)),
+        ] {
+            let face = if modern { nerd } else { unicode };
+            assert_eq!(
+                age_span(&theme, cache, quiet),
+                (face.to_owned(), style),
+                "modern={modern}, quiet={quiet}, cache={cache:?}"
+            );
+        }
+        assert_eq!(
+            age_span(&theme, pinged, 50 * 60),
+            age_span(&theme, ttl(1800), 20 * 60),
+            "a ping restarts the cache clock without counting as activity"
+        );
+    }
 }
 #[test]
 fn codex_app_server_context_links_to_rich_card() {
