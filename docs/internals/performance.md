@@ -402,6 +402,8 @@ The work-counter index below distinguishes thread-local reads from process total
 
 Allocation counts are the steady regression signal, and medians move with host and load. Unless noted otherwise, the figures here were captured on `xlab-term`, a loaded LXC container on an AMD Ryzen 9 9950X with 28 online CPUs and the `performance` governor. Requested bytes and allocation requests come from the bench's counting allocator (`crates/rimz/benches/fleet.rs::counted`), which counts allocation and reallocation requests. Alloc/op is Divan's median `alloc` byte count, which excludes the grow bytes Divan reports separately.
 
+A base/head comparison of the fleet benches copies both bench binaries out of the target directory and runs them from one directory with the same `CARGO_MANIFEST_DIR`. Requested bytes include the checkout path: in `fleet::idle_cycle_hidden_fanout`, 12 allocations carry it, so the same base binary run from two checkouts whose paths differ by 48 bytes allocated 576 bytes apart. The comparison also interleaves at least six runs of each build (base, head, head, base, and so on), since paint percentiles move by about 0.05 ms between runs on a shared host. Four runs of `fleet::concurrent_hidden_fanout` on trunk `63d0d0c4e` and on `perf(sidebar): stretch idle folds in unwatched rooms` read head's paint p50 about 0.05 ms slower; twelve interleaved runs put both builds' p50 within each other's ranges (1.650 to 1.772 ms and 1.657 to 1.804 ms).
+
 #### Regression ceilings
 
 | Bench | Ceiling | Basis |
