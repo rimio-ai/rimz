@@ -280,7 +280,7 @@ Trailing lines report what the view left out:
 | `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
 | `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in #main` at the project root, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
-`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. When set, a row adds `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, and `compacted_context_tokens`.
+`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. When set, a row adds `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, `soft_compact` (`wrap_up` or `continue`), and `compacted_context_tokens`.
 
 ### Show one message
 
@@ -322,6 +322,6 @@ A follow-up waiting for a resumed child says `waiting for @child to register aft
 
 `steer` delivers now, past the schedule, conditions, queue order, and gate. An open prompt still blocks it without `--force`, and a missing agent or pane fails with the reason. A `claimed` message is refused with `delivery in progress; retry in a moment`, and a final one points to `requeue`.
 
-`requeue` writes a new queued message with a new id. It keeps the recipient and delivery settings unless flags override them, and re-arms every `--after` and `--when` condition. A message that is still queued is refused with a pointer to `edit` or `steer`, and a `sent` one must settle first.
+`requeue` writes a new queued message with a new id. It keeps the recipient and delivery settings unless flags override them, and re-arms every `--after` and `--when` condition. A soft-compaction wrap-up is refused: it is steer-only and never requeued. Any other message that is still queued is refused with a pointer to `edit` or `steer`, and a `sent` one must settle first.
 
 `cancel` processes every id, then exits 1 if any was not open. `clear` with a target cancels that agent's open messages. Without one, it cancels open messages in the lane from `--channel`, `--worktree`, or the current channel, and fails when there is none. Both reach system messages the list hides, and canceled records keep their text for `requeue`.

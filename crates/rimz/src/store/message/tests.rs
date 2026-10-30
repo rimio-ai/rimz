@@ -7,6 +7,134 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn soft_compact_tags_round_trip_through_records_events_and_requeue() {
+    use crate::store::event::MessageEventPayload;
+
+    let record = delivery_message(1, &agent("receiver", None), DeliveryGate::Any, None);
+    let outcomes = ["wrap_up", "continue"].map(|tag| {
+        let mut encoded = serde_json::to_value(&record).unwrap();
+        encoded["soft_compact"] = serde_json::json!(tag);
+        let tagged: MessageRecord = serde_json::from_value(encoded.clone()).unwrap();
+        let event = MessageEventPayload::from_record(&tagged, None);
+        let event_bytes = serde_json::to_vec(&event).unwrap();
+        let decoded_event: MessageEventPayload = serde_json::from_slice(&event_bytes).unwrap();
+        (
+            serde_json::to_value(&tagged).unwrap(),
+            serde_json::to_value(decoded_event).unwrap()["soft_compact"].clone(),
+            serde_json::to_value(MessageRecord::requeue_from(&tagged)).unwrap()["soft_compact"]
+                .clone(),
+        )
+    });
+    let expected = ["wrap_up", "continue"].map(|tag| {
+        let mut encoded = serde_json::to_value(&record).unwrap();
+        encoded["soft_compact"] = serde_json::json!(tag);
+        (encoded, serde_json::json!(tag), serde_json::json!(tag))
+    });
+    assert_eq!(outcomes, expected);
+}
+
+#[test]
+fn wrap_up_wakes_only_when_its_unclaimed_or_claimed_lease_expires() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut record = delivery_message(1, &agent("receiver", None), DeliveryGate::Any, None);
+    record.soft_compact = Some(SoftCompactStep::WrapUp);
+    record.updated_at = now;
+    for status in [MessageStatus::Queued, MessageStatus::Claimed] {
+        record.status = status;
+        record.last_attempt_at =
+            (status == MessageStatus::Claimed).then_some(now + Duration::from_secs(10));
+        let deadline = record.last_attempt_at.unwrap_or(now) + CLAIM_TTL;
+        assert_eq!(record.wake_deadline(now), Some(deadline), "{status:?}");
+        assert_eq!(queue_wake_deadline(&[record.clone()], now), Some(deadline));
+    }
+}
+
+#[test]
+fn untagged_message_keeps_legacy_bytes() {
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
+    let legacy = format!(
+        concat!(
+            "{{\"message_id\":\"msg_0000000000000001\",\"workspace_id\":\"{workspace}\",",
+            "\"kind\":\"claude\",\"agent_id\":\"receiver\",\"sender\":{{\"origin\":\"human\"}},",
+            "\"body\":\"prompt\",\"text\":\"next\",\"enter\":true,\"gate\":\"done\",",
+            "\"force\":false,\"status\":\"queued\",\"enqueued_at\":\"2025-01-01T00:00:00Z\",",
+            "\"updated_at\":\"2025-01-01T00:00:00Z\",\"attempts\":0,\"unconfirmed_sends\":0}}"
+        ),
+        workspace = workspace,
+    );
+    let record: MessageRecord = serde_json::from_str(&legacy).unwrap();
+    assert_eq!(serde_json::to_string(&record).unwrap(), legacy);
+    let event = crate::store::event::MessageEventPayload::from_record(&record, None);
+    assert!(
+        serde_json::to_value(event)
+            .unwrap()
+            .get("soft_compact")
+            .is_none()
+    );
+}
+
+#[test]
+fn soft_compact_wrap_up_never_enters_or_holds_the_boundary_fifo() {
+    let now = Timestamp::now();
+    let receiver = agent("receiver", Some("coder"));
+    let tagged = |id, status| {
+        let mut message = delivery_message(id, &receiver, DeliveryGate::Any, None);
+        message.status = status;
+        message.last_attempt_at = Some(now);
+        message.last_sent_at = Some(now);
+        let mut encoded = serde_json::to_value(message).unwrap();
+        encoded["soft_compact"] = serde_json::json!("wrap_up");
+        serde_json::from_value::<MessageRecord>(encoded).unwrap()
+    };
+    let statuses = [
+        MessageStatus::Queued,
+        MessageStatus::Claimed,
+        MessageStatus::Sent,
+    ];
+    let outcomes = statuses.map(|status| {
+        let live = [
+            tagged(1, status),
+            delivery_message(2, &receiver, DeliveryGate::Done, None),
+            tagged(3, MessageStatus::Queued),
+            delivery_message(4, &receiver, DeliveryGate::Done, None),
+        ];
+        (
+            live[0].is_deliverable(now),
+            queue_head(
+                live.iter(),
+                &receiver.kind,
+                &receiver.agent_id,
+                Some("coder"),
+                now,
+            )
+            .map(|message| message.message_id.clone()),
+            in_flight_claim(
+                live.iter(),
+                &receiver.kind,
+                &receiver.agent_id,
+                Some("coder"),
+                now,
+            )
+            .is_some(),
+            older_ready_blocker(live.iter(), &live[1], now, |_| true).is_some(),
+            delivery_batch_indices(&live, &live[1].message_id, AgentStatus::Idle, now),
+            delivery_batch_indices(&live, &live[0].message_id, AgentStatus::Idle, now),
+        )
+    });
+    assert_eq!(
+        outcomes,
+        statuses.map(|_| (
+            false,
+            Some(message_id(2)),
+            false,
+            false,
+            Some(vec![1, 3]),
+            None
+        ))
+    );
+}
+
+#[test]
 fn about_run_codec_is_optional_and_requeue_preserves_the_link() {
     let record = delivery_message(1, &agent("child", None), DeliveryGate::Done, None);
     let mut encoded = serde_json::to_value(&record).unwrap();

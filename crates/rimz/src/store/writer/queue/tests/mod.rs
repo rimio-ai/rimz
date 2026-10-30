@@ -237,4 +237,5 @@ mod claim;
 mod deliver;
 mod lifecycle;
 mod sender_notice;
+mod soft_compact;
 mod wake;

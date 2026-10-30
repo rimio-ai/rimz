@@ -1360,6 +1360,100 @@ fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
 }
 
 #[test]
+fn message_requeue_refuses_a_steer_only_wrap_up() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut record = MessageRecord::new_for_card(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        "soft-cli".into(),
+        None,
+        "wrap up".into(),
+        true,
+        DeliveryGate::Any,
+    );
+    record.soft_compact = Some(rimz::store::message::SoftCompactStep::WrapUp);
+    store.queue_message(&record, "soft-test").unwrap();
+    store
+        .cancel_message(&record.message_id, "soft-test", "missed steer")
+        .unwrap();
+    let output = env
+        .rimz()
+        .args(["message", "requeue", record.message_id.as_str()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "a wrap-up cannot be boundary-queued: {output:?}"
+    );
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("steer-only") && error.contains("never requeued"),
+        "{error}"
+    );
+    assert!(store.list_messages().unwrap().is_empty());
+}
+
+#[test]
+fn message_json_preserves_soft_compaction_tags_and_omits_absent_tags() {
+    use rimz::store::message::SoftCompactStep;
+
+    for tag in [
+        Some(SoftCompactStep::WrapUp),
+        Some(SoftCompactStep::Continue),
+        None,
+    ] {
+        for terminal in [false, true] {
+            let env = Env::new();
+            env.record(&env.project_root);
+            let mut record = MessageRecord::new_for_card(
+                env.workspace_id.clone(),
+                AgentKind::new_unchecked("claude"),
+                "soft-cli".into(),
+                None,
+                "soft compaction".into(),
+                true,
+                DeliveryGate::Any,
+            );
+            record.soft_compact = tag;
+            if terminal {
+                record.status = MessageStatus::Canceled;
+                env.store()
+                    .append_event(&EventEnvelope::message_event(
+                        &record,
+                        "soft-test",
+                        MessageEventMethod::Canceled,
+                        Some("test settled"),
+                    ))
+                    .unwrap();
+            } else {
+                env.store().queue_message(&record, "soft-test").unwrap();
+            }
+            let listed = run_success(
+                env.rimz()
+                    .args(["message", "list", "--all", "--system", "--json"]),
+                "soft message list",
+            );
+            let listed: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+            let shown = run_success(
+                env.rimz()
+                    .args(["message", "show", record.message_id.as_str(), "--json"]),
+                "soft message show",
+            );
+            let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+            for row in [&listed[0], &shown["message"]] {
+                assert_eq!(
+                    row.get("soft_compact").cloned(),
+                    tag.map(|tag| serde_json::to_value(tag).unwrap()),
+                    "{row}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn message_edit_and_requeue_enforce_record_lifecycle() {
     let env = Env::new();
     env.record(&env.project_root);

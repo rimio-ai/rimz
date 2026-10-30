@@ -66,6 +66,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `register_by` | Registration deadline for a child's resume, shared by its waiting follow-ups. Inert outside `Queued` |
 | `after`, `when` | Cross-agent conditions, each with a durable `met_at` stamp |
 | `auto_compact` | Context-fill threshold that fires a `/compact` ahead of the text |
+| `soft_compact` | Optional `wrap_up` (steer-only) or `continue` (ordinary boundary FIFO), mirrored in the event payload and omitted when absent |
 | `compacted_context_tokens` | The context reading a compaction fired on, so a stale gauge cannot fire it twice |
 | `batch_id` | Shared by records written in one paste. A turn start without prompt text confirms the batch together |
 | `retry_after` | Wake hint set by the sweep. On a `Sent` record held for compaction, ingress, or provider start, the shared reconciliation and read-side deadline |
@@ -80,7 +81,9 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 
 A successful explicit compaction-continuation edge moves every still-queued predecessor-card record to the successor session, preserving IDs, enqueue times, and FIFO order. The lifecycle writer audits each move with `message.edited`. This includes ordinary compact-first prompts deferred before Codex changed sessions; claimed and sent records stay on their recorded card.
 
-Two counters track two different failures, and they stay separate. `attempts` counts claims: a claim bumps it, and a retryable failure with `attempts` at `MAX_DELIVERY_ATTEMPTS` (5) ends the record `Abandoned`. `unconfirmed_sends` counts requeues of a prompt whose write no hook confirmed. Reconciliation requeues while it is below `DEFAULT_MAX_DELIVERY_ATTEMPTS` (3, `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` overrides it) and times out the next stale write, so a prompt reaches the pane at most four times by default. Commands have no requeue at all, because they are never resent.
+Two counters track two different failures, and they stay separate. `attempts` counts claims: a claim bumps it, and a retryable failure with `attempts` at `MAX_DELIVERY_ATTEMPTS` (5) ends the record `Abandoned`. `unconfirmed_sends` counts requeues of a prompt whose write no hook confirmed. Reconciliation requeues ordinary prompts while it is below `DEFAULT_MAX_DELIVERY_ATTEMPTS` (3, `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` overrides it) and times out the next stale write, so a prompt reaches the pane at most four times by default. Commands and steer-only wrap-ups have no reconciliation requeue at all, because they are never resent.
+
+A `soft_compact: "wrap_up"` record never enters boundary selection, batching, or the FIFO hold: only an explicit steer claims it. Prompt acknowledgements still confirm it, but operator requeue refuses it as steer-only. A `continue` record retains ordinary FIFO and requeue semantics. The optional tag leaves untagged record bytes unchanged; [the store's soft-compaction mark](../store.md#fields-the-fold-carries-forward) remembers the sent wrap-up and queued continuation across folds.
 
 ### Turn-opening injection sites
 
@@ -418,7 +421,7 @@ Origin classification is a separate, read-only decision in `store::message::clas
 
 #### Reconciliation
 
-Reconciliation (`Store::reconcile_stale_messages`) runs in `message sweep` and `gc`, and handles expired claims alongside stale writes.
+Reconciliation (`Store::reconcile_stale_messages`) runs in `message sweep` and `gc`, and handles expired claims alongside stale writes. Steer-only wrap-ups are a separate path: a `Queued` one is preserved until the claim TTL elapses from `updated_at`, and a `Claimed` one until its claim expires; only then does it become `Canceled`. Their wake deadlines use the same TTL, so the host does not sweep them early. At a `Sent` wrap-up's deadline, an open receiver turn silently pushes `retry_after` one prompt window ahead without changing counters or writing an event. Otherwise a receiver `turn_ended_at` at or after the last write settles it `Delivered`, and no such end settles it `TimedOut`. It never requeues or resends; the ordinary rules below apply only to other records.
 
 A `Sent` record's deadline for reconciliation, wakeups, FIFO, and acknowledgement selection is `retry_after` when set, otherwise its last write (`last_sent_at`, falling back to `updated_at`) plus its body's delivery window. Wake-in-flight readers additionally hold a `Sent` harness wake while its receiver's compaction bracket is open, without waiting for reconciliation to extend the deadline. A pass before that deadline leaves the record untouched, even if the condition that armed a hold has already cleared. Past the deadline, reconciliation tries each rule below in order and applies the first that matches.
 

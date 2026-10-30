@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::project::{
     AgentIdentityState, FoldEvent, agent_event_key, agent_mut, backfill_agent_identities,
-    compact_command_agent_key, decode_events, reduce_agent_states_seeded_with_identity,
+    decode_events, message_agent_key, reduce_agent_states_seeded_with_identity,
     unstamp_for_rebirth,
 };
 use super::{Result, SnapshotErr};
@@ -348,7 +348,7 @@ pub(crate) fn agent_rollup_with_carryover(
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
 /// [`AgentState::normalize_prompt_labels`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 48;
+const ROLLUP_CACHE_VERSION: u32 = 49;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -493,7 +493,8 @@ fn fold_delta(
     };
 
     // Hydrate continuing rows at rebirth, plus observed keys, linked predecessors,
-    // and command receivers. Stamps persist in raw_agents, not the shared carryover.
+    // and command or soft-compaction receivers. Stamps persist in raw_agents, not
+    // the shared carryover.
     let (before_rebirth, after_rebirth) = events.split_at(rebirth.unwrap_or(0));
     for delta in std::iter::once(before_rebirth)
         .filter(|delta| !delta.is_empty())
@@ -513,7 +514,7 @@ fn fold_delta(
         }
         for event in delta {
             let key = match &event.kind {
-                EventKind::Message { payload, .. } => compact_command_agent_key(
+                EventKind::Message { payload, .. } => message_agent_key(
                     seed.agents
                         .values()
                         .chain(carryover.agents.iter())

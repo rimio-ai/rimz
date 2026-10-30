@@ -327,7 +327,19 @@ upward-dependencies = ["address"]
 # RebuildScope, RebuildReport, RebuiltDay, KeptDay, RebuildErr and
 # rebuild_spending_history share saved-day rebuilds with the CLI (+6).
 # SoftCompactSkip, soft_compact_skip and soft_compact_prompt and their facade exports share mid-turn policy (+6).
-surface-budget = 1211
+# SoftCompactMark carries the fold's durable wrap-up epoch into helper policy (+1).
+# SoftCompactProgress distinguishes wrap-up, clean turn end and queued continuation (+1).
+surface-budget = 1213
+
+[[verdict]]
+kind = "item"
+key = "agents::state::SoftCompactProgress"
+reason = "Only a real clean turn end makes the marked wrap-up's continuation due."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::SoftCompactMark"
+reason = "The store folds the sent wrap-up epoch, clean turn end and queued continuation; producer and helper policy read it."
 
 [[verdict]]
 kind = "item"
@@ -3512,7 +3524,13 @@ path = "crates/rimz/src/store"
 # agent_context::read_cached_one isolates due-session reads from held projection records (+1).
 # CapacityWaitSummary carries only the room's oldest durable wait and total count (+1).
 # SidebarSnapshot::pane_session_demands shares the ladder's discovery request with the producer (+1).
-surface-budget = 517
+# SoftCompactStep shares the optional steer-only/continue record tag with message policy (+1).
+surface-budget = 518
+
+[[verdict]]
+kind = "item"
+key = "store::message::SoftCompactStep"
+reason = "Durable records and event payloads share the wrap-up/continue vocabulary with message delivery and helper policy."
 
 [[verdict]]
 kind = "item"

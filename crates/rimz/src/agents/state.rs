@@ -727,6 +727,23 @@ impl<'a> AgentCardRef<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftCompactProgress {
+    WrappingUp,
+    TurnEnded,
+    Continued,
+}
+
+/// The wrap-up sent in one compaction epoch and its clean-turn continuation progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoftCompactMark {
+    pub steered_at: Timestamp,
+    /// The steer's local epoch, or `None` for a continue inherited after compaction.
+    pub compactions: Option<u32>,
+    pub progress: SoftCompactProgress,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1034,9 +1051,11 @@ pub struct AgentState {
     /// of completed compaction brackets. Derived by the rollup from the state
     /// machine's bracket-close fact, carried forward unchanged on every other
     /// event, and rendered by the card as `↻ N` from the first completed
-    /// compaction. Display-only.
+    /// compaction. Also re-arms the mid-turn soft-compaction trigger.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_compact: Option<SoftCompactMark>,
     /// Named tool calls observed for this session.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_calls: BTreeMap<String, u32>,
@@ -1312,6 +1331,7 @@ impl AgentState {
             closed_turn_id: None,
             compacting_since: None,
             compaction_count: 0,
+            soft_compact: None,
             tool_calls: BTreeMap::new(),
             tool_repeat: None,
             last_compact_command_tokens: None,

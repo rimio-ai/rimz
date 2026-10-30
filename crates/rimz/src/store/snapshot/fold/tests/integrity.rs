@@ -158,6 +158,78 @@ fn catch_up_rollup_rejects_a_zeroed_middle_frame() {
     );
 }
 
+fn sequence_event(
+    workspace: &WorkspaceId,
+    kind: &str,
+    agent_id: &str,
+    action: usize,
+    timestamp: Timestamp,
+) -> EventEnvelope {
+    let mut event = if matches!(action, 4 | 5) {
+        let (step, status, method) = if action == 4 {
+            ("wrap_up", MessageStatus::Sent, MessageEventMethod::Sent)
+        } else {
+            (
+                "continue",
+                MessageStatus::Queued,
+                MessageEventMethod::Queued,
+            )
+        };
+        let mut record = MessageRecord::new(
+            workspace.clone(),
+            &agent(kind, agent_id, AgentStatus::Running, 0),
+            "soft compaction".to_owned(),
+            DeliveryGate::Any,
+        );
+        record.status = status;
+        let mut event = EventEnvelope::message_event(&record, "session", method, None);
+        let mut params = event.params_value();
+        params["soft_compact"] = serde_json::json!(step);
+        event.params = serde_json::value::to_raw_value(&params).unwrap();
+        event
+    } else {
+        let (name, signal) = match action {
+            1 => (
+                "UserPromptSubmit",
+                lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+            2 => (
+                "Stop",
+                lifecycle::LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+            3 => ("SessionEnd", lifecycle::LifecycleSignal::Ended),
+            6 => (
+                "Interrupt",
+                lifecycle::LifecycleSignal::TurnInterrupted { turn_id: None },
+            ),
+            7 => (
+                "Error",
+                lifecycle::LifecycleSignal::TurnEnded {
+                    errored: true,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+            8 => ("PreCompact", lifecycle::LifecycleSignal::Compacting),
+            9 => (
+                "PostCompact",
+                lifecycle::LifecycleSignal::CompactionEnded {
+                    auto: Some(true),
+                    failed: false,
+                },
+            ),
+            _ => ("SessionStart", lifecycle::LifecycleSignal::Registered),
+        };
+        lifecycle_at(workspace, kind, name, agent_id, signal)
+    };
+    event.timestamp = timestamp;
+    event
+}
+
 proptest::proptest! {
     /// The keystone fold invariant, generalized from the hand-built case
     /// above: over arbitrary lifecycle sequences and an arbitrary
@@ -165,13 +237,12 @@ proptest::proptest! {
     /// the whole log cold — agents and extent alike.
     #[test]
     fn fold_seed_delta_equals_fold_empty_all_over_arbitrary_sequences(
-        seq in proptest::collection::vec((0usize..2, 0usize..4, 0usize..3), 1..12),
+        seq in proptest::collection::vec((0usize..2, 0usize..10, 0usize..3), 1..12),
         split in proptest::prelude::any::<proptest::sample::Index>(),
     ) {
         use proptest::prelude::prop_assert_eq;
 
         const KINDS: [&str; 2] = ["claude", "codex"];
-        const EVENTS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"];
         const AGENTS: [&str; 3] = ["a", "b", "c"];
 
         let dir = tempfile::tempdir().unwrap();
@@ -181,20 +252,11 @@ proptest::proptest! {
 
         let events: Vec<_> = seq
             .iter()
-            .map(|&(kind, event, agent_id)| {
-                // The explicit signal each event name stamps in production.
-                let signal = match event {
-                    1 => lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
-                    2 => lifecycle::LifecycleSignal::TurnEnded {
-                        errored: false,
-                        parked_on_background: false,
-                        turn_id: None,
-                    },
-                    3 => lifecycle::LifecycleSignal::Ended,
-                    _ => lifecycle::LifecycleSignal::Registered,
-                };
-                lifecycle_at(&workspace, KINDS[kind], EVENTS[event], AGENTS[agent_id], signal)
-            })
+            .enumerate()
+            .map(|(index, &(kind, action, agent_id))| sequence_event(
+                &workspace, KINDS[kind], AGENTS[agent_id], action,
+                epoch() + Duration::from_secs(index as u64),
+            ))
             .collect();
         let at = split.index(events.len() + 1);
 
