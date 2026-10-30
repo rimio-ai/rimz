@@ -155,12 +155,26 @@ fn tab_view_width_needs_a_viewed_tab() {
     for viewed in [false, true] {
         let panes: Vec<PaneTopologyPane> = serde_json::from_value(serde_json::json!([
             {"id": 1, "tab_position": 0, "pane_x": 0, "pane_columns": 24},
-            {"id": 2, "tab_position": 0, "pane_x": 24, "pane_columns": 26,
+            {"id": 2, "tab_position": 0, "pane_x": 24, "pane_columns": 25,
              "tab_viewed": viewed},
             {"id": 3, "tab_position": 1, "tab_viewed": true}
         ]))
         .unwrap();
-        assert_eq!(tab_view_cols(&panes, 0), viewed.then_some(50));
+        assert_eq!(tab_view_cols(&panes, 0), viewed.then_some(49));
+    }
+}
+
+#[test]
+fn tab_view_width_refuses_the_detached_placeholder() {
+    for cols in [49, 50, 51] {
+        let panes: Vec<PaneTopologyPane> = serde_json::from_value(serde_json::json!([
+            {"id": 1, "tab_position": 0, "pane_x": 0, "pane_columns": 12,
+             "tab_viewed": true},
+            {"id": 2, "tab_position": 0, "pane_x": 12, "pane_columns": cols - 12,
+             "tab_viewed": true}
+        ]))
+        .unwrap();
+        assert_eq!(tab_view_cols(&panes, 0), (cols != 50).then_some(cols));
     }
 }
 
@@ -169,7 +183,7 @@ fn off_spec_width_names_only_viewed_tabs() {
     let panes: Vec<PaneTopologyPane> = serde_json::from_value(serde_json::json!([
         {"id": 1, "stable_tab_id": 0, "tab_position": 0, "tab_name": "rimzd", "pane_x": 0,
          "pane_columns": 30, "title": "rimz-sidebar"},
-        {"id": 2, "stable_tab_id": 0, "tab_position": 0, "pane_x": 30, "pane_columns": 20},
+        {"id": 2, "stable_tab_id": 0, "tab_position": 0, "pane_x": 30, "pane_columns": 19},
         {"id": 3, "stable_tab_id": 1, "tab_position": 1, "pane_x": 0, "pane_columns": 120,
          "title": "rimz-sidebar", "tab_viewed": true},
         {"id": 4, "stable_tab_id": 1, "tab_position": 1, "pane_x": 120, "pane_columns": 119,
