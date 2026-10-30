@@ -116,6 +116,9 @@ pub struct LoopRunRecord {
     pub throttle_wait_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder: Option<RunLockInfo>,
+    /// The lock tenure held by this fire, including when the stop ladder writes its record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_lock: Option<RunLockInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,6 +199,7 @@ impl LoopRunRecord {
             duration_ms: Some(duration_ms),
             throttle_wait_ms: None,
             holder: None,
+            run_lock: None,
             error: None,
             check: None,
             judge: Vec::new(),

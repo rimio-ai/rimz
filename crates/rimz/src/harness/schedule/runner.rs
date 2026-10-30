@@ -2357,6 +2357,7 @@ impl<'a> TaskFire<'a> {
             self.record_hold = None;
             return transition;
         };
+        record.run_lock = Some(holder);
         let result = (|| -> Result<RunTransition> {
             let root = self.entry.resolved_root();
             let paths = StatePaths::for_project_root(&root)?;
@@ -3136,6 +3137,7 @@ fn append_stopped_record(
         duration_ms,
     );
     record.mode = None;
+    record.run_lock = Some(info);
     set_stopped_result(&mut record, mark.cause);
     record.run_id = run.map(|record| record.run_id.to_string());
     let transition = if mark.cause == StopCause::Replace {

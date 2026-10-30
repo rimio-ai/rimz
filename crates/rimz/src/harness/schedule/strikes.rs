@@ -166,6 +166,7 @@ mod tests {
             duration_ms: Some(1),
             throttle_wait_ms: None,
             holder: None,
+            run_lock: None,
             absorbed: 0,
             error: None,
             check,

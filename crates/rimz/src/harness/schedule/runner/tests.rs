@@ -38,6 +38,50 @@ fn seed_backlog(root: &Path) {
 }
 
 #[test]
+fn terminal_records_name_the_lock_that_refused_other_fires() {
+    for unreadable_backlog in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        record_room(root.path()).unwrap();
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut fire = backlog_fire(root.path(), &catalog);
+        assert!(fire.prepare_run_lock(false).unwrap().is_none());
+        let (_, Some(info)) = held_run_lock("pending", root.path()).unwrap().unwrap() else {
+            panic!("holder is recorded")
+        };
+        let mut refused = backlog_fire(root.path(), &catalog);
+        let refused = refused.prepare_run_lock(false).unwrap().unwrap();
+        assert_eq!(refused.record.result, LoopRunResult::Deferred);
+        assert_eq!(refused.record.holder, Some(info));
+        assert_eq!(refused.record.run_lock, None);
+        std::fs::write(
+            backlog::path(&paths),
+            if unreadable_backlog {
+                "not json"
+            } else {
+                r#"{"version":1,"tasks":{}}"#
+            },
+        )
+        .unwrap();
+
+        let done = fire.record_terminal_with(
+            LoopRunResult::Completed,
+            LoopRunPresentation::default(),
+            TaskFireNotice::None,
+            None,
+            |_| {},
+        );
+        assert_eq!(done.record.run_lock, Some(info));
+        let recorded = run_log::task_records(
+            &crate::disk::paths::logs_dir(),
+            "pending",
+            Some(root.path()),
+        );
+        assert_eq!(recorded.last().unwrap().run_lock, Some(info));
+    }
+}
+
+#[test]
 fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
     for contents in ["not json", r#"{"version":2,"tasks":{}}"#] {
         for mode in [LoopRunMode::Scheduled, LoopRunMode::Manual] {
