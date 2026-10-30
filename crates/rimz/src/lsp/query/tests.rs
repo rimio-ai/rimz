@@ -235,6 +235,49 @@ fn enrichment_recovers_outline_ancestors_atomically() {
             .collect::<Vec<_>>(),
         [None, Some("tests"), Some("Store"), Some("Store")]
     );
+    let mut tuple_outline = twin_outline();
+    let Symbols::Tree(nodes) = &mut tuple_outline else {
+        panic!("hierarchical fixture");
+    };
+    for (ancestor, name, line) in [
+        ("impl Trait for (Tuple, u8)", "missing", 99),
+        ("<anonymous>", "generated", 100),
+    ] {
+        nodes.push(
+            serde_json::from_value(json!({
+                "name":ancestor,"kind":19,"range":range(),
+                "selectionRange":range(),"children":[{
+                    "name":name,"kind":12,"range":range(),
+                    "selectionRange":{
+                        "start":{"line":line,"character":0},"end":{"line":line,"character":4}
+                    }
+                }]
+            }))
+            .unwrap(),
+        );
+    }
+    let mut partial = vec![
+        twin("load", "a", Some("unchanged"), 3),
+        twin("missing", "a", Some("wrong"), 99),
+        twin("generated", "a", Some("anonymous"), 100),
+    ];
+    let enriched = enrich_containers(
+        &mut partial,
+        &BTreeMap::from([(uri.clone(), tuple_outline)]),
+    );
+    assert_eq!(
+        (
+            enriched,
+            partial
+                .iter()
+                .map(|symbol| symbol.container_name.as_deref())
+                .collect::<Vec<_>>()
+        ),
+        (
+            true,
+            vec![Some("tests"), Some("(Tuple, u8)"), Some("anonymous")]
+        )
+    );
     for outlines in [
         BTreeMap::new(),
         BTreeMap::from([(uri.clone(), Symbols::Flat(symbols.clone()))]),
@@ -248,6 +291,74 @@ fn enrichment_recovers_outline_ancestors_atomically() {
         assert!(!enrich_containers(&mut partial, &outlines));
         assert_eq!(serde_json::to_value(partial).unwrap(), before);
     }
+}
+
+#[test]
+fn enriched_names_preserve_rematch_and_preference_beside_non_path_self_types() {
+    let node = |name, start, end, children| {
+        json!({
+            "name":name,"kind":12,
+            "range":{"start":{"line":start,"character":0},"end":{"line":end,"character":0}},
+            "selectionRange":{
+                "start":{"line":start,"character":0},"end":{"line":start,"character":4}
+            },"children":children
+        })
+    };
+    let outline = serde_json::from_value(json!([
+        node("load", 1, 2, json!([])),
+        node(
+            "tests",
+            2,
+            6,
+            json!([
+                node("impl Foo", 3, 5, json!([node("x", 4, 5, json!([]))])),
+                node("load", 5, 6, json!([]))
+            ])
+        ),
+        node(
+            "impl Trait for (Tuple, u8)",
+            6,
+            9,
+            json!([node("x", 7, 8, json!([])), node("load", 8, 9, json!([]))])
+        )
+    ]))
+    .unwrap();
+    let outlines = BTreeMap::from([("file:///checkout/src/a.rs".into(), outline)]);
+    let xs = vec![
+        twin("x", "a", Some("Foo"), 4),
+        twin("x", "a", Some("(Tuple, u8)"), 7),
+    ];
+    let loads = vec![
+        twin("load", "a", None, 1),
+        twin("load", "a", None, 5),
+        twin("load", "a", Some("(Tuple, u8)"), 8),
+    ];
+    let unique_line = |resolution| match resolution {
+        Some(SymbolResolution::Unique(symbol)) => Some(symbol.location.range.start.line),
+        _ => None,
+    };
+    let root = Path::new("/checkout");
+    let mut enriched_xs = xs.clone();
+    let enriched = enrich_containers(&mut enriched_xs, &outlines);
+    let x_line = unique_line(rematch_enriched(root, "a::tests::Foo::x", &xs, &outlines).unwrap());
+    let load_line = unique_line(rematch_enriched(root, "a::load", &loads, &outlines).unwrap());
+    assert_eq!(
+        (
+            enriched,
+            enriched_xs
+                .iter()
+                .map(|symbol| symbol.container_name.as_deref())
+                .collect::<Vec<_>>(),
+            x_line,
+            load_line
+        ),
+        (
+            true,
+            vec![Some("tests::Foo"), Some("(Tuple, u8)")],
+            Some(4),
+            Some(1)
+        )
+    );
 }
 
 #[test]
@@ -490,6 +601,23 @@ fn outline_candidates_recover_whole_files_and_selection_positions() {
         ));
     }
     assert!(outline_candidates("file:///checkout/src/module.rs", "nosuch", &outline).is_empty());
+    let outline = serde_json::from_value(json!([
+        node("impl Real", 19, 1, json!([node("x", 6, 2, json!([]))])),
+        node(
+            "impl Trait for (Real, u8)",
+            19,
+            3,
+            json!([node("x", 6, 4, json!([]))])
+        )
+    ]))
+    .unwrap();
+    let candidates = outline_candidates("file:///checkout/src/b.rs", "x", &outline);
+    let count = candidates.len();
+    let ambiguous = matches!(
+        match_preferred_symbols(root, "src/b.rs::x", candidates).unwrap(),
+        Some(SymbolResolution::Ambiguous(_))
+    );
+    assert_eq!((count, ambiguous), (2, true));
 }
 
 #[test]
@@ -524,6 +652,41 @@ fn outline_candidates_reduce_generic_and_trait_impl_ancestors() {
             .collect::<Vec<_>>(),
         [Some("super::Type"), Some("Type")]
     );
+    let cases: &[(&str, &[Option<&str>])] = &[
+        ("extern", &[None]),
+        ("extern \"C\"", &[None]),
+        ("extern \"C-unwind\"", &[None]),
+        ("impl Trait for (Tuple, u8)", &[Some("(Tuple, u8)")]),
+        ("impl Trait for [u8; 4]", &[Some("[u8; 4]")]),
+        ("impl Trait for 0Type", &[Some("0Type")]),
+        ("impl Trait for Type::", &[Some("Type::")]),
+        ("impl dyn A + Send", &[Some("dyn A + Send")]),
+        ("impl Trait for fn(u8) -> R", &[Some("fn(u8) -> R")]),
+        ("impl Trait for Foo<fn() -> u8>", &[Some("Foo")]),
+        ("<anonymous>", &[]),
+        ("impl Trait for &'a Type", &[Some("Type")]),
+        ("impl Trait for dyn Type", &[Some("Type")]),
+        ("impl Trait for r#mod::r#type", &[Some("r#mod::r#type")]),
+        ("impl Trait for caf\u{e9}::Type", &[Some("caf\u{e9}::Type")]),
+        ("Trait", &[Some("Trait")]),
+        ("outer", &[Some("outer")]),
+        ("Enum::Variant", &[Some("Enum::Variant")]),
+        ("tests", &[Some("tests")]),
+    ];
+    for (ancestor, expected) in cases {
+        let outline =
+            serde_json::from_value(json!([node(ancestor, json!([node("member", json!([]))]))]))
+                .unwrap();
+        let candidates = outline_candidates("file:///checkout/src/a.rs", "member", &outline);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|symbol| symbol.container_name.as_deref())
+                .collect::<Vec<_>>(),
+            *expected,
+            "{ancestor}"
+        );
+    }
 }
 
 #[test]
@@ -916,6 +1079,10 @@ fn qualified_module_names_and_grammar_resolve() {
             "{written}"
         );
     }
+    assert_eq!(
+        ["Foo<fn() -> u8>", "fn(u8) -> R"].map(without_generics),
+        ["Foo", "fn(u8) -> R"]
+    );
 }
 
 fn render_ambiguous(root: &Path, name: &str, symbols: &[SymbolInformation]) -> Result<String> {
@@ -1532,6 +1699,292 @@ fn refs_put_production_before_inline_and_path_tests() {
 #[test]
 fn callers_put_production_before_inline_and_path_tests() {
     assert_test_last_groups(Verb::Callers, "callers");
+}
+
+#[test]
+fn find_names_reuse_outlines_per_symbol_and_remain_reusable() {
+    let root = Path::new("/checkout");
+    let node = |name, kind, start, end, children| {
+        json!({"name":name,"kind":kind,
+            "range":{"start":{"line":start,"character":0},"end":{"line":end,"character":0}},
+            "selectionRange":{
+                "start":{"line":start,"character":0},"end":{"line":start,"character":4}
+            },
+            "children":children})
+    };
+    let outline = json!([
+        node("load", 12, 1, 2, json!([])),
+        node(
+            "tests",
+            2,
+            2,
+            7,
+            json!([
+                node("load", 12, 3, 4, json!([])),
+                node(
+                    "impl RunFixture<T>",
+                    5,
+                    4,
+                    7,
+                    json!([node("open", 12, 5, 6, json!([]))])
+                )
+            ])
+        ),
+        node(
+            "impl Store<T>",
+            5,
+            8,
+            11,
+            json!([node("open", 12, 9, 10, json!([]))])
+        )
+    ]);
+    let symbols = vec![
+        twin("load", "a", None, 1),
+        twin("load", "a", None, 3),
+        twin("open", "a", Some("RunFixture"), 5),
+        twin("open", "a", Some("Store"), 9),
+        twin("missing", "a", Some("Server"), 99),
+    ];
+    let mut requests = Vec::new();
+    let rendered = render(
+        Verb::Find,
+        root,
+        None,
+        serde_json::to_value(&symbols).unwrap(),
+        ListOptions {
+            limit: None,
+            ..Scope::Checkout.into()
+        },
+        &BTreeSet::new(),
+        |path| {
+            requests.push(path.to_owned());
+            Ok(outline.clone())
+        },
+    )
+    .unwrap();
+    assert_eq!(requests, [Path::new("/checkout/src/a.rs")]);
+    assert_eq!(
+        rendered,
+        "function a::load  src/a.rs:2:1\nfunction a::Store::open  src/a.rs:10:1\nfunction a::Server::missing  src/a.rs:100:1\ntests:\nfunction a::tests::load  src/a.rs:4:1\nfunction a::tests::RunFixture::open  src/a.rs:6:1\n"
+    );
+    let outlines = BTreeMap::from([(
+        "file:///checkout/src/a.rs".into(),
+        serde_json::from_value(outline).unwrap(),
+    )]);
+    for line in rendered
+        .lines()
+        .filter_map(|line| line.strip_prefix("function "))
+    {
+        let (name, position) = line.split_once("  ").unwrap();
+        let member = name.rsplit("::").next().unwrap();
+        let candidates: Vec<_> = symbols
+            .iter()
+            .filter(|symbol| symbol.name == member)
+            .cloned()
+            .collect();
+        let resolved = if member == "missing" {
+            match_symbols(root, name, candidates).unwrap()
+        } else {
+            rematch_enriched(root, name, &candidates, &outlines)
+                .unwrap()
+                .unwrap()
+        };
+        let SymbolResolution::Unique(symbol) = resolved else {
+            panic!("{name} must resolve to its own item");
+        };
+        assert_eq!(
+            position_text(root, &symbol.location.uri, symbol.location.range.start).unwrap(),
+            position
+        );
+    }
+}
+
+#[test]
+fn find_skips_extern_blocks_and_keeps_complete_self_types() {
+    let node = |name, kind, start, end, children| {
+        json!({"name":name,"kind":kind,
+            "range":{"start":{"line":start,"character":0},"end":{"line":end,"character":0}},
+            "selectionRange":{
+                "start":{"line":start,"character":0},"end":{"line":start,"character":4}
+            },"children":children})
+    };
+    let outline = json!([
+        node(
+            "extern \"C\"",
+            3,
+            0,
+            3,
+            json!([node("getpid", 12, 1, 2, json!([]))])
+        ),
+        node(
+            "tests",
+            2,
+            3,
+            8,
+            json!([
+                node(
+                    "extern",
+                    3,
+                    4,
+                    6,
+                    json!([node("getpid", 12, 5, 6, json!([]))])
+                ),
+                node(
+                    "impl Trait for (Tuple, u8)",
+                    19,
+                    6,
+                    8,
+                    json!([node("method", 12, 7, 8, json!([]))])
+                )
+            ])
+        ),
+        node(
+            "impl Trait for (Tuple, u8)",
+            19,
+            8,
+            11,
+            json!([node("method", 12, 9, 10, json!([]))])
+        ),
+        node(
+            "impl dyn Trait + Send",
+            19,
+            11,
+            14,
+            json!([node("method", 12, 12, 13, json!([]))])
+        ),
+        node(
+            "impl Trait for fn(u8) -> Out",
+            19,
+            14,
+            17,
+            json!([node("call", 12, 15, 16, json!([]))])
+        )
+    ]);
+    let mut requests = 0;
+    let rendered = render(
+        Verb::Find,
+        Path::new("/checkout"),
+        None,
+        json!([
+            twin("getpid", "ffi", None, 1),
+            twin("getpid", "ffi", None, 5),
+            twin("method", "ffi", Some("(Tuple, u8)"), 9),
+            twin("method", "ffi", Some("(Tuple, u8)"), 7),
+            twin("method", "ffi", Some("dyn Trait + Send"), 12),
+            twin("call", "ffi", Some("fn(u8) -> Out"), 15)
+        ]),
+        ListOptions {
+            limit: None,
+            ..Scope::Checkout.into()
+        },
+        &BTreeSet::new(),
+        |_| {
+            requests += 1;
+            Ok(outline.clone())
+        },
+    )
+    .unwrap();
+    assert_eq!(requests, 1);
+    assert_eq!(
+        rendered,
+        concat!(
+            "function ffi::getpid  src/ffi.rs:2:1\n",
+            "function ffi::(Tuple, u8)::method  src/ffi.rs:10:1\n",
+            "function ffi::dyn Trait + Send::method  src/ffi.rs:13:1\n",
+            "function ffi::fn(u8) -> Out::call  src/ffi.rs:16:1\n",
+            "tests:\n",
+            "function ffi::tests::getpid  src/ffi.rs:6:1\n",
+            "function ffi::tests::(Tuple, u8)::method  src/ffi.rs:8:1\n"
+        )
+    );
+}
+
+#[test]
+fn find_keeps_names_from_outlines_read_before_a_failure() {
+    let Symbols::Tree(nodes) = twin_outline() else {
+        panic!("hierarchical fixture");
+    };
+    let outline = serde_json::to_value(nodes).unwrap();
+    for failed in [None, Some(json!({"invalid":"outline"}))] {
+        let mut requests = Vec::new();
+        let rendered = render(
+            Verb::Find,
+            Path::new("/checkout"),
+            None,
+            json!([
+                twin("load", "a", None, 3),
+                twin("load", "b", Some("Server"), 3),
+                twin("load", "c", Some("Later"), 3),
+            ]),
+            ListOptions {
+                limit: None,
+                ..Scope::Checkout.into()
+            },
+            &BTreeSet::new(),
+            |path| {
+                requests.push(path.to_owned());
+                if path == Path::new("/checkout/src/a.rs") {
+                    return Ok(outline.clone());
+                }
+                failed
+                    .clone()
+                    .ok_or_else(|| LspErr::Protocol("outline unavailable".into()))
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            requests,
+            [
+                Path::new("/checkout/src/a.rs"),
+                Path::new("/checkout/src/b.rs")
+            ]
+        );
+        assert_eq!(
+            rendered,
+            "function a::tests::load  src/a.rs:4:1\nfunction b::Server::load  src/b.rs:4:1\nfunction c::Later::load  src/c.rs:4:1\n"
+        );
+    }
+}
+
+#[test]
+fn find_null_outlines_keep_classifying_later_files_and_counting_tests() {
+    let mut requests = Vec::new();
+    let rendered = render(
+        Verb::Find,
+        Path::new("/checkout"),
+        None,
+        json!(["a.rs", "b.rs", "c.rs", "tests/d.rs"].map(|path| list_item(
+            Verb::Find,
+            &format!("file:///checkout/{path}"),
+            0
+        ))),
+        ListOptions {
+            limit: NonZeroUsize::new(2),
+            ..Scope::Checkout.into()
+        },
+        &BTreeSet::new(),
+        |path| {
+            requests.push(path.to_owned());
+            Ok(if path == Path::new("/checkout/b.rs") {
+                Value::Null
+            } else {
+                inline_tests()
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        requests,
+        [
+            Path::new("/checkout/a.rs"),
+            Path::new("/checkout/b.rs"),
+            Path::new("/checkout/c.rs")
+        ]
+    );
+    assert_eq!(
+        rendered,
+        "4 symbols, 3 in tests (showing 2, tests last)\nfunction b::work  b.rs:1:1\ntests:\nfunction a::work  a.rs:1:1\n2 more; add --limit N or --all\n"
+    );
 }
 
 #[test]

@@ -396,7 +396,7 @@ fn enrich_containers(
         .iter()
         .map(|symbol| {
             let (_, ancestors) = outline_node(symbol, outlines.get(&symbol.location.uri)?)?;
-            Some(outline_container(&ancestors))
+            Some(outline_container(&ancestors).unwrap_or_else(|| symbol.container_name.clone()))
         })
         .collect();
     let Some(containers) = containers else {
@@ -406,6 +406,14 @@ fn enrich_containers(
         symbol.container_name = container;
     }
     true
+}
+
+fn enrich_available_container(symbol: &mut SymbolInformation, outline: Option<&Symbols>) {
+    if let Some((_, ancestors)) = outline.and_then(|outline| outline_node(symbol, outline))
+        && let Some(container) = outline_container(&ancestors)
+    {
+        symbol.container_name = container;
+    }
 }
 
 fn narrow_candidates(
@@ -510,18 +518,55 @@ fn outline_node<'a>(
         .map(|(node, ancestors)| (*node, ancestors.clone()))
 }
 
-fn outline_container(ancestors: &[&str]) -> Option<String> {
-    let path: Vec<_> = ancestors
-        .iter()
-        .map(|name| {
-            without_generics(name)
-                .split_whitespace()
-                .next_back()
-                .unwrap_or("")
-                .to_owned()
-        })
-        .collect();
-    (!path.is_empty()).then(|| path.join("::"))
+/// The ancestors' container, `Some(None)` for a top-level item. Extern blocks add no segment.
+/// Impl self types lose generics and reduce to their last whitespace token when it is an
+/// identifier path and the type contains no `+` or `->`; otherwise their full text is kept.
+/// Other ancestors contribute their stripped name. An ancestor that strips to nothing
+/// makes the result `None`.
+fn outline_container(ancestors: &[&str]) -> Option<Option<String>> {
+    let mut path = Vec::new();
+    for name in ancestors {
+        let name = name.trim();
+        if name == "extern"
+            || name
+                .split_once(char::is_whitespace)
+                .is_some_and(|(label, abi)| {
+                    let abi = abi.trim();
+                    label == "extern" && abi.starts_with('"') && abi.ends_with('"')
+                })
+        {
+            continue;
+        }
+        let reduced = without_generics(name);
+        let reduced = reduced.trim();
+        if reduced.is_empty() {
+            return None;
+        }
+        let segment = if let Some(header) = reduced
+            .strip_prefix("impl")
+            .filter(|header| header.is_empty() || header.starts_with(char::is_whitespace))
+        {
+            let self_type = header
+                .split_once(" for ")
+                .map_or(header, |(_, ty)| ty)
+                .trim();
+            let last = self_type.split_whitespace().next_back()?;
+            let is_path = !self_type.contains('+')
+                && !self_type.contains("->")
+                && last.split("::").all(|identifier| {
+                    let mut chars = identifier.strip_prefix("r#").unwrap_or(identifier).chars();
+                    chars
+                        .next()
+                        .is_some_and(|first| first == '_' || first.is_alphabetic())
+                        && chars.all(|character| character == '_' || character.is_alphanumeric())
+                });
+            if is_path { last } else { self_type }
+        } else {
+            reduced
+        };
+        path.push(segment.to_owned());
+    }
+    Some((!path.is_empty()).then(|| path.join("::")))
 }
 
 fn outline_candidates(uri: &str, name: &str, outline: &Symbols) -> Vec<SymbolInformation> {
@@ -538,7 +583,9 @@ fn outline_candidates(uri: &str, name: &str, outline: &Symbols) -> Vec<SymbolInf
     let mut candidates = Vec::new();
     let mut pending: Vec<_> = nodes.iter().rev().map(|node| (node, Vec::new())).collect();
     while let Some((node, ancestors)) = pending.pop() {
-        if node.name == name {
+        if node.name == name
+            && let Some(container_name) = outline_container(&ancestors)
+        {
             candidates.push(SymbolInformation {
                 name: node.name.clone(),
                 kind: node.kind,
@@ -546,7 +593,7 @@ fn outline_candidates(uri: &str, name: &str, outline: &Symbols) -> Vec<SymbolInf
                     uri: uri.to_owned(),
                     range: node.selection_range,
                 },
-                container_name: outline_container(&ancestors),
+                container_name,
             });
         }
         let mut path = ancestors;
@@ -639,17 +686,22 @@ fn collapse_ranked(
 
 pub(super) fn without_generics(raw: &str) -> String {
     let mut depth = 0_u32;
+    let mut previous = None;
     raw.chars()
-        .filter(|character| match character {
-            '<' => {
-                depth += 1;
-                false
-            }
-            '>' => {
-                depth = depth.saturating_sub(1);
-                false
-            }
-            _ => depth == 0,
+        .filter(|character| {
+            let keep = match character {
+                '<' => {
+                    depth += 1;
+                    false
+                }
+                '>' if previous != Some('-') => {
+                    depth = depth.saturating_sub(1);
+                    false
+                }
+                _ => depth == 0,
+            };
+            previous = Some(*character);
+            keep
         })
         .collect()
 }
@@ -952,13 +1004,20 @@ fn render_find(
     }
     scoped.extend(external);
     let total = scoped.len();
+    let mut fetched = BTreeMap::new();
     let partition = partition_tests(
         root,
         scoped,
         options,
         tests_last,
         |symbol| (&symbol.location.uri, symbol.location.range.start),
-        outlines,
+        &mut |uri| {
+            let outline = outlines(uri)?;
+            if let Ok(symbols) = serde_json::from_value(outline.clone()) {
+                fetched.insert(DocumentKey::new(uri), symbols);
+            }
+            Ok(outline)
+        },
     )?;
     let shown = options.shown(total);
     let mut lines = Vec::new();
@@ -968,7 +1027,10 @@ fn render_find(
             lines.push("tests:".into());
             tests_started = true;
         }
-        lines.push(Candidate::new(root, symbol)?.line());
+        let mut symbol = symbol.clone();
+        let outline = fetched.get(&DocumentKey::new(&symbol.location.uri));
+        enrich_available_container(&mut symbol, outline);
+        lines.push(Candidate::new(root, &symbol)?.line());
     }
     Ok(finish_list(
         lines,
