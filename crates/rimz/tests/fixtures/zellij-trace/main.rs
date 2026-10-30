@@ -63,19 +63,20 @@ fn main() {
             env::var("ZELLIJ_PANE_ID").unwrap_or_default()
         );
     }
-    writeln!(file, "{line}").expect("write trace line");
+    append_entry(&mut file, &line);
     // RimZ deletes a `--layout` file once the call returns, so keep its panes.
     if env::var_os("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS").is_some()
         && let Some(layout) = args.windows(2).find(|pair| pair[0] == "--layout")
     {
         let contents = std::fs::read_to_string(&layout[1]).expect("read traced layout");
-        writeln!(file, "layout\t{}", contents.replace('\n', " ")).expect("write traced layout");
-        writeln!(
-            file,
-            "layout-json\t{}",
-            serde_json::to_string(&contents).unwrap()
-        )
-        .expect("write parseable traced layout");
+        append_entry(
+            &mut file,
+            &format!("layout\t{}", contents.replace('\n', " ")),
+        );
+        append_entry(
+            &mut file,
+            &format!("layout-json\t{}", serde_json::to_string(&contents).unwrap()),
+        );
     }
 
     let cli = &args[1..];
@@ -93,18 +94,18 @@ fn main() {
             record.completed_at = Some(jiff::Timestamp::now());
             rimz::harness::run::create(&paths, record).unwrap();
             rimz::store::run::wake_run(&runtime, record);
-            writeln!(file, "completed-at-open").unwrap();
+            append_entry(&mut file, "completed-at-open");
         }
         if env::var_os("RIMZ_TEST_ZELLIJ_TRACE_TIME").is_some() {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-            writeln!(file, "new-tab-at\t{}", now.as_nanos()).expect("record tab open time");
+            append_entry(&mut file, &format!("new-tab-at\t{}", now.as_nanos()));
         }
         if let Some(path) = env::var_os("RIMZ_TEST_ZELLIJ_ASSIST_LOG") {
             let count = std::fs::read_to_string(path)
                 .unwrap_or_default()
                 .lines()
                 .count();
-            writeln!(file, "assists-before-new-tab\t{count}").expect("record assist count at open");
+            append_entry(&mut file, &format!("assists-before-new-tab\t{count}"));
         }
         if env::var_os("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB").is_some() {
             std::process::exit(1);
@@ -212,6 +213,13 @@ fn classify_nested_invocation(cli: &[String]) -> Option<Invocation<'_>> {
         return Some(Invocation::Birth);
     }
     None
+}
+
+/// Appends one trace entry, newline included, in a single `write`: `writeln!` writes the entry and
+/// its newline separately, so two concurrent invocations could interleave as `AB\n\n`.
+fn append_entry(file: &mut std::fs::File, entry: &str) {
+    file.write_all(format!("{entry}\n").as_bytes())
+        .expect("append trace entry");
 }
 
 fn handle_list_sessions(log_path: &Path) {
