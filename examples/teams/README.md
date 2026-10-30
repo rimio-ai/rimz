@@ -77,15 +77,7 @@ Its coder keeps Codex's user-input tooling enabled, since it is the seat you tal
 
 ## Install
 
-Install the bundle matching the running RimZ release:
-
-```sh
-rimz teams install forge
-rimz teams install mill
-rimz teams install spot
-```
-
-From a checkout of this repository, copy a bundle when you want that checkout's version:
+Install a bundle by copying it from a checkout of this repository:
 
 ```sh
 mkdir -p ~/.rimz/{teams,agents}
@@ -94,7 +86,7 @@ cp -n examples/teams/spot/agents/*.md ~/.rimz/agents/
 rimz agents validate
 ```
 
-The plain install refuses any existing target definition; pass `--force` to replace it. Bundles include `claude.md` and `codex.md` base prompts as well as team-prefixed agent definitions, so review existing bases before replacing them. The copy commands above preserve existing files too.
+Bundles include `claude.md` and `codex.md` base prompts as well as team-prefixed agent definitions, so review existing bases before replacing them. The `cp -n` commands above preserve existing files.
 
 **Prerequisites:**
 
@@ -127,7 +119,7 @@ Any of the three also makes a solid skeleton for a team of your own: copy the bu
 ## See also
 
 - [Teams guide](../../docs/guide/teams.md): why split the work, and the forge loop in depth.
-- [Teams CLI reference](../../docs/reference/cli/teams.md): launch, resume, focus, stop, and install.
+- [Teams CLI reference](../../docs/reference/cli/teams.md): launch, resume, focus, and stop.
 - [Worktrees](../../docs/guide/worktrees.md): the isolated checkout `-w` gives the team.
 - [Messaging](../../docs/guide/messaging.md): handles, park and steer delivery, and channels.
 - [Examples index](../README.md): every shipped bundle.

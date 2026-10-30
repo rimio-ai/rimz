@@ -831,7 +831,7 @@ fn write_catalog(
 ) -> Result<()> {
     if reports.is_empty() {
         writeln!(w, "No teams defined.")?;
-        writeln!(w, "Install forge with: rimz teams install forge")?;
+        writeln!(w, "Install teams with: rimz packs install crew")?;
         writeln!(w, "Guide: docs/guide/teams.md")?;
         return Ok(());
     }
@@ -1005,7 +1005,7 @@ fn write_catalog(
         writeln!(w)?;
         writeln!(
             w,
-            "No installed teams. Install forge with: rimz teams install forge"
+            "No installed teams. Install teams with: rimz packs install crew"
         )?;
         writeln!(w, "Guide: docs/guide/teams.md")?;
     }

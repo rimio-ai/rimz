@@ -164,11 +164,11 @@ rimz agents 'claude/codex/term' -w feat-d      # one stack; focus opens a member
 rimz agents codex --from-pr 42                 # worktree checked out from a pull request
 ```
 
-**Combine models as teams.** A named [team](./docs/guide/teams.md) in `~/.rimz/teams/<name>.md` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. A staged team tracks its progress through `.rimz/team/blackboard.md`, linked into room state that survives worktree removal, and `rimz teams flip` hands a stage to the next role. RimZ is built this way; `examples/teams/` ships the `forge` team it uses, plus `mill` for refactors and `spot` for small fixes.
+**Combine models as teams.** A named [team](./docs/guide/teams.md) gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. A staged team tracks its progress through `.rimz/team/blackboard.md`, linked into room state that survives worktree removal, and `rimz teams flip` hands a stage to the next role. RimZ is built this way; `examples/teams/` ships the `forge` team it uses, plus `mill` for refactors and `spot` for small fixes.
 
 ```sh
 rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without a saved team
-rimz teams install forge                              # release-matched shipped team
+rimz packs install crew                               # release-matched team definitions
 rimz teams forge -w feat-complex                      # planner, coder, reviewer on one feature
 rimz teams spot -w fix-expiry                         # coder and reviewer on a small fix
 rimz teams show forge#feat-complex                    # roles, status, and where the run stands
@@ -307,7 +307,7 @@ Both are off by default, and setting one back to `false` undoes it. The [remote 
 
 ## Configuration
 
-RimZ runs with zero configuration, and everything you can tune is a plain file you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), so the files are their own reference. Agent profiles, teams, and skills are Markdown beside them, under `~/.rimz/agents/`, `~/.rimz/teams/`, and `~/.rimz/skills/`. [Linked packs](./docs/reference/cli/packs.md) supply definitions and skills below your own home files, with checkout edits loading without a copy or reinstall. After setup, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
+RimZ runs with zero configuration, and everything you can tune is a plain file you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), so the files are their own reference. Agent profiles, teams, and skills are Markdown beside them, under `~/.rimz/agents/`, `~/.rimz/teams/`, and `~/.rimz/skills/`. [Packs](./docs/reference/cli/packs.md) supply definitions and skills from Git or linked checkouts below your own home files; linked checkout edits load without a copy or reinstall. After setup, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
 
 For the best experience, we recommend one pass of these:
 

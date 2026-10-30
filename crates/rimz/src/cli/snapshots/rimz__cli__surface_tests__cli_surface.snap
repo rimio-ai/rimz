@@ -1443,8 +1443,6 @@ rimz help teams flip
 
 rimz help teams focus
 
-rimz help teams install
-
 rimz help teams launch
 
 rimz help teams list
@@ -3273,8 +3271,6 @@ rimz teams help focus
 
 rimz teams help help
 
-rimz teams help install
-
 rimz teams help launch
 
 rimz teams help list
@@ -3292,17 +3288,6 @@ rimz teams help show
 rimz teams help stop
 
 rimz teams help wait
-
-rimz teams install
-    <name>  [action=set takes=1..=1]
-    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
-    --force  [action=set-true takes=0..=0]
-    -h, --help  [action=help takes=0..=0]
-    --mux <MUX>  [action=set takes=1..=1 global]
-    --ref <TAG|BRANCH>  [action=set takes=1..=1]
-    --root <ROOT>  [action=set takes=1..=1 global]
-    --tmux  [action=set-true takes=0..=0 global]
-    --zellij  [action=set-true takes=0..=0 global]
 
 rimz teams launch
     <name>  [action=set takes=1..=1 required]

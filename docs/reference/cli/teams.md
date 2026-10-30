@@ -1,10 +1,10 @@
 # Teams
 
-`rimz teams` lists, inspects, launches, resumes, and drives named teams, hands a team's board from stage to stage, and installs team bundles.
+`rimz teams` lists, inspects, launches, resumes, and drives named teams, and hands a team's board from stage to stage. Install reusable definitions with [`rimz packs install crew`](./packs.md).
 
-Bare `rimz teams` exits 2 with the list command first, followed by the same orientation as `rimz teams --help`: See (`list show wait`), Drive (`focus stop restart flip record`), Start (`launch resume profiles`), and Define (`install`). Launch flags live under `rimz teams launch --help`.
+Bare `rimz teams` exits 2 with the list command first, followed by the same orientation as `rimz teams --help`: See (`list show wait`), Drive (`focus stop restart flip record`), and Start (`launch resume profiles`). Launch flags live under `rimz teams launch --help`.
 
-A positional word that is neither a command nor a configured team exits 2 and suggests up to three names at the closest distance within two edits (an adjacent transposition counts as one), verbs first. Without a close match it lists commands and configured teams. For example, `rimz teams pee` suggests `rimz teams peer`. A lone prompt matching a teams command or alias is also refused with exit 2: `rimz teams forge stop` suggests `rimz teams stop forge`. To send the literal prompt instead, use `rimz teams launch forge "stop"`. Explicit `launch` keeps exit 1 for an unknown team and suggests only teams.
+A positional word that is neither a command nor a configured team exits 2 and suggests up to three names at the closest distance within two edits (an adjacent transposition counts as one), verbs first. Without a close match it lists commands and configured teams; if no teams are configured, it names `rimz packs install crew` instead of an empty team list. For example, `rimz teams pee` suggests `rimz teams peer`. A lone prompt matching a teams command or alias is also refused with exit 2: `rimz teams forge stop` suggests `rimz teams stop forge`. To send the literal prompt instead, use `rimz teams launch forge "stop"`. Explicit `launch` keeps exit 1 for an unknown team and suggests only teams.
 
 A team is a configured set of roles and a layout. Each role keeps its own model, prompt, and `@role` handle, and every member of one launch shares one lane; that group of live members is a cohort, addressed as `team#lane` (for example `forge#feat-rate-limits`). The [teams guide](../../guide/teams.md) explains how to design and run a team, [configuration → teams](../../guide/configuration.md#teams) covers where the definition files live, and the [definition reference](../definitions.md#teams-and-seats) owns every field (`roles`, `leader`, `layout`, `stages`, `scratch-files`, `consensus-file`, `append-system-prompt-files`, and each role's `owns`, `signals`, and `flip-compact`). This page owns the command forms.
 
@@ -19,7 +19,6 @@ A team is a configured set of roles and a layout. Each role keeps its own model,
 | `rimz teams wait` | [Wait for a cohort to finish](#wait-for-a-cohort-to-finish). |
 | `rimz teams flip` | [Flip the board to the next stage](#flip-the-board-to-the-next-stage). |
 | `rimz teams record` | [Record an entry on the board](#record-an-entry-on-the-board). |
-| `rimz teams install` | [Install a team bundle](#install-a-team-bundle). |
 
 `rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend. Per-agent shaping (model, effort, prompts, permission mode, name, pane placement, supervised runs) stays on [`rimz agents`](./agents.md), which also launches one role of a team as `rimz agents forge.reviewer`. Every form takes the [global flags](../cli.md#global-flags).
 
@@ -224,7 +223,7 @@ A team launched from an agent's pane starts in that agent's own checkout unless 
 
 A checkout holding another team (a live member, or team history with a board stage other than `Done`) [refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-checkout); `rimz teams flip <team>#<lane> Done "<note>"` releases a stopped run without removing its checkout. A channel held at a different checkout [also refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-channel), even for the same team, whether the channel is explicit or derived from the checkout.
 
-`rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. The team's tab selects the leader's pane internally; whether the client enters it follows the [agent launch focus rule](./agents.md#channel-worktree-and-placement). Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree). A live cohort receives the prompt through its leader, or is just focused when no prompt is supplied; an agent caller or `--bg` preserves focus. A missing leader refuses with exit 1 and commands to message live members. A closed cohort prompts to resume, start fresh, or remove; cancellation and non-terminal refusals exit 1 with prompt-preserving next commands. A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
+`rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. The team's tab selects the leader's pane internally; whether the client enters it follows the [agent launch focus rule](./agents.md#channel-worktree-and-placement). Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree). A live cohort receives the prompt through its leader, or is just focused when no prompt is supplied; an agent caller or `--bg` preserves focus. A missing leader refuses with exit 1 and commands to message live members. A closed cohort prompts to resume, start fresh, or remove; cancellation and non-terminal refusals exit 1 with prompt-preserving next commands. An undefined team is refused with the suggestions or configuration hint described above, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
 
 | Flag | Effect |
 | --- | --- |
@@ -535,21 +534,3 @@ Only a hand-off (the same predicate as the clean-worktree rule) to a stage anoth
 | ``completed <steps>; <error>; re-run `rimz teams flip <team>#<lane> <stage> "<progress note>"` to repeat the signal and delivery`` | The board changed but appending the signal or delivering the notice failed. Re-run the flip rather than editing the board by hand. |
 
 A failure to fire subscriptions after the signal is appended is logged and does not fail the flip. Launch and flip also reject invalid stage configuration (blank or padded names, control characters, duplicate owners, a declared or owned `Done`, owned names missing from a nonempty `stages`); the rules are in [configuration → teams](../../guide/configuration.md#teams).
-
-## Install a team bundle
-
-```sh
-rimz teams install
-rimz teams install forge
-rimz teams install forge --force
-rimz teams install forge --ref main
-```
-
-Bare `install` lists the bundles under `examples/teams/` in the RimZ GitHub repository as a `TEAM REF` table. `install <name>` fetches `<name>.md` and the agent definitions selected by its roster, writing `<agents_home>/teams/<name>.md` and `<agents_home>/agents/<agent>.md`. The bundle's kind bases (`agents/claude.md`, `agents/codex.md`) are written only where the home has no base file; an existing home base is never replaced, `--force` included. The default agents home is `~/.rimz`, which `RIMZ_HOME` relocates; `RIMZ_AGENTS_HOME` overrides the definition trees, skill library, and installed packs. This command writes home files, not a pack installation record; use [`rimz packs`](./packs.md) for linked pack sources.
-
-| Flag | Effect |
-| --- | --- |
-| `--ref TAG\|BRANCH` | Fetch from this tag or branch. The default is the release tag of the running binary, `v<version>`, so the bundle matches the command. When that tag is missing (a development build), the error suggests `--ref main`. |
-| `--force` | Overwrite existing target definition files. Unrelated files stay. Requires a name. |
-
-Without `--force`, any existing target is refused. Each file is written atomically. Network, GitHub API, parsing, and filesystem failures stop the install and name the failing source or destination. Run `rimz agents validate` after installation to check the merged definitions and skill chain.

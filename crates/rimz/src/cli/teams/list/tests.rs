@@ -1175,7 +1175,7 @@ fn human_catalog_and_empty_state_teach_the_command() {
     )
     .unwrap();
     let empty = String::from_utf8(empty).unwrap();
-    assert!(empty.contains("rimz teams install forge"));
+    assert!(empty.contains("rimz packs install crew"), "{empty}");
     assert!(empty.contains("docs/guide/teams.md"));
 
     let mut built_in_only = Vec::new();

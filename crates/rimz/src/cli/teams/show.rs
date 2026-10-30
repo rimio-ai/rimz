@@ -99,7 +99,7 @@ fn select_reports<'a>(
             .collect::<Vec<_>>();
         if valid.is_empty() {
             bail!(
-                "unknown team `{name}`; no teams are configured (install one with `rimz teams install forge`)"
+                "unknown team `{name}`; no teams are configured (install one with `rimz packs install crew`)"
             );
         }
         bail!(

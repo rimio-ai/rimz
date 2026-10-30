@@ -17,7 +17,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [web.md](./cli/web.md) | `rimz web`: opening a room in the browser, read-only broadcasts, the writable and broadcast daemons, named tokens, and the JSON payloads. |
 | [agents.md](./cli/agents.md) | `rimz agents`: launching layouts and team roles, supervised `-p` runs, resume, launch plans, registering a third-party kind, agent cards and the verbs that drive one agent, attribution, and the address grammar every agent-facing command shares. |
 | [subagents.md](./cli/subagents.md) | `rimz subagents`: launching supervised children from an agent, fanout, the fleet report, waits, list and stop, profiles, and pane placement. |
-| [teams.md](./cli/teams.md) | `rimz teams`: listing, inspecting, launching, resuming, and driving named teams, stage flips, and installing team bundles. |
+| [teams.md](./cli/teams.md) | `rimz teams`: listing, inspecting, launching, resuming, and driving named teams, and stage flips. |
 | [asks.md](./cli/asks.md) | `rimz asks` and `rimz answer`: reading the prompt that blocks an agent, answering it in the agent's native UI, and what each agent accepts. |
 | [message.md](./cli/message.md) | `rimz message`: parking text for the next turn boundary, steering a live turn, scheduling and cross-agent conditions, fan-out, the message header, reply waits, statuses, and the inbox verbs. |
 | [wait.md](./cli/wait.md) | `rimz wait`: a self-only wakeup after a delay, a process exit, or a watched command, and listing or canceling pending waits. |
