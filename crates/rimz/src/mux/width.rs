@@ -182,6 +182,33 @@ impl SidebarTarget {
         }
     }
 
+    /// Render the nearest bounded 5% Zellij step, breaking ties narrower.
+    /// With geometry, estimates must reach the 24-column floor; the floor wins
+    /// over the percentage bound. Without geometry, columns keep the birth cap.
+    pub fn zellij_step(self, view_cols: Option<u16>, max_percent: u16) -> (u16, NonZeroU16) {
+        let max_percent = max_percent.clamp(10, 90) / 5 * 5;
+        let Some(view_cols) = view_cols.and_then(NonZeroU16::new) else {
+            let percent = (5..=max_percent)
+                .step_by(5)
+                .min_by_key(|percent| (self.share.0.abs_diff(percent * 10), *percent))
+                .unwrap_or(5);
+            return (percent, self.max_cols);
+        };
+        let estimate =
+            |percent: u16| (u32::from(percent) * u32::from(view_cols.get())).div_ceil(100) as u16;
+        let target = self.cols(Some(view_cols.get())).get();
+        let percent = (5..=max_percent)
+            .step_by(5)
+            .filter(|percent| estimate(*percent) >= MIN_ADJUSTABLE_WIDTH)
+            .min_by_key(|percent| (estimate(*percent).abs_diff(target), *percent))
+            .unwrap_or_else(|| {
+                ((MIN_ADJUSTABLE_WIDTH - 1) * 100 / view_cols.get() + 1).div_ceil(5) * 5
+            });
+        // Positive view and percentage make the ceiling estimate nonzero.
+        let cols = NonZeroU16::new(estimate(percent)).expect("positive Zellij step estimate");
+        (percent, cols)
+    }
+
     /// Spell the resolved share as a whole percentage for Zellij layout KDL.
     pub(super) fn percent(self) -> u16 {
         self.share.to_percent_rounded()
@@ -469,6 +496,141 @@ mod tests {
             below_floor.cols(Some(120)),
             NonZeroU16::new(MIN_ADJUSTABLE_WIDTH).unwrap(),
         );
+    }
+
+    #[test]
+    fn zellij_step_chooses_the_closest_bounded_grid_width() {
+        let target = SidebarTarget {
+            share: WidthPermille::from_percent(25),
+            max_cols: NonZeroU16::new(64).unwrap(),
+            pinned: false,
+        };
+        for (view, percent, cols) in [(300, 20, 60), (270, 25, 68), (290, 20, 58)] {
+            assert_eq!(
+                target.zellij_step(Some(view), 50),
+                (percent, NonZeroU16::new(cols).unwrap())
+            );
+        }
+        assert_eq!(
+            SidebarTarget {
+                share: WidthPermille::from_percent(30),
+                ..target
+            }
+            .zellij_step(Some(340), 50),
+            (20, NonZeroU16::new(68).unwrap())
+        );
+        for (permille, percent) in [(213, 20), (244, 25), (225, 20), (400, 40)] {
+            assert_eq!(
+                SidebarTarget {
+                    share: WidthPermille::try_from(permille).unwrap(),
+                    ..target
+                }
+                .zellij_step(None, 50)
+                .0,
+                percent
+            );
+        }
+        let pinned = SidebarTarget {
+            pinned: true,
+            share: WidthPermille::try_from(225).unwrap(),
+            ..target
+        };
+        assert_eq!(
+            pinned.zellij_step(Some(280), 50),
+            (20, NonZeroU16::new(56).unwrap())
+        );
+        assert_eq!(
+            SidebarTarget {
+                share: WidthPermille::from_percent(50),
+                ..pinned
+            }
+            .zellij_step(Some(300), 44),
+            (40, NonZeroU16::new(120).unwrap())
+        );
+        assert_eq!(
+            target.zellij_step(Some(80), 10),
+            (30, NonZeroU16::new(24).unwrap())
+        );
+        assert_eq!(
+            SidebarTarget {
+                share: WidthPermille::from_percent(12),
+                ..target
+            }
+            .zellij_step(Some(400), 50),
+            (10, NonZeroU16::new(40).unwrap())
+        );
+    }
+
+    #[test]
+    fn zellij_target_band_admits_exactly_one_grid_step() {
+        for view in 80..=600 {
+            for percent in (5..=90).step_by(5) {
+                let target = SidebarTarget {
+                    share: WidthPermille::from_percent(percent),
+                    max_cols: NonZeroU16::new(64).unwrap(),
+                    pinned: false,
+                };
+                let (percent, cols) = target.zellij_step(Some(view), 90);
+                assert_eq!(percent % 5, 0, "view {view}");
+                let admitted = (5_u64..=100)
+                    .step_by(5)
+                    .filter(|step| {
+                        let estimate = (step * u64::from(view)).div_ceil(100);
+                        !sidebar_width_off_spec(
+                            estimate,
+                            u64::from(cols.get()),
+                            zellij_resize_stop_step_cols(u64::from(view)),
+                        )
+                    })
+                    .count();
+                assert_eq!(admitted, 1, "view {view}, target {cols}");
+            }
+        }
+    }
+
+    #[test]
+    fn zellij_pinned_grid_target_keeps_drags_in_band_unless_the_floor_excludes_the_step() {
+        for view in 80..=600 {
+            for max_percent in (10..=90).step_by(5) {
+                for measured in MIN_ADJUSTABLE_WIDTH..=view * max_percent / 100 {
+                    let target = SidebarTarget {
+                        share: WidthPermille::from_cols(
+                            NonZeroU16::new(measured).unwrap(),
+                            NonZeroU16::new(view).unwrap(),
+                        ),
+                        max_cols: NonZeroU16::new(64).unwrap(),
+                        pinned: true,
+                    };
+                    let estimate = |percent: u16| (percent * view).div_ceil(100);
+                    let nearest = (5..=100)
+                        .step_by(5)
+                        .min_by_key(|percent| (estimate(*percent).abs_diff(measured), *percent))
+                        .unwrap();
+                    let (percent, cols) = target.zellij_step(Some(view), max_percent);
+                    if estimate(nearest) >= MIN_ADJUSTABLE_WIDTH {
+                        assert!(
+                            !sidebar_width_off_spec(
+                                u64::from(measured),
+                                u64::from(cols.get()),
+                                zellij_resize_stop_step_cols(u64::from(view))
+                            ),
+                            "view {view}, max {max_percent}, drag {measured}, target {cols}"
+                        );
+                    } else {
+                        let floor_step = (5..=100)
+                            .step_by(5)
+                            .find(|percent| estimate(*percent) >= MIN_ADJUSTABLE_WIDTH)
+                            .unwrap();
+                        assert_eq!(
+                            (percent, cols.get()),
+                            (floor_step, estimate(floor_step)),
+                            "view {view}, max {max_percent}, drag {measured}"
+                        );
+                    }
+                    assert_eq!(percent % 5, 0, "view {view}, drag {measured}");
+                }
+            }
+        }
     }
 
     #[test]
