@@ -99,10 +99,10 @@ Without `-w` the run uses the checkout you are in. `-w` selects an existing RimZ
 
 ```sh
 rimz workflow list         # every active and parked run, with its node and what it waits on
-rimz workflow show "$RUN"  # one run: position, visit counts, and its full history
+rimz workflow show "$RUN"  # one run: position, visit counts, and its folded history
 ```
 
-`show` lists each check's answer and each attempt in order. An agent attempt names its handle, the commit before and after, and its cost. A command attempt shows its exit code, commits, and output log. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field the two commands print.
+`show` lists checks and attempts in order, folding adjacent repeated evaluations into one row with their count, span, and newest answer; `--json` keeps every journal entry. An agent attempt names its handle, the commit before and after, and its cost. A command attempt shows its exit code, commits, and output log. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field the two commands print.
 
 An attempt can end as `died` when an agent fails to start or crashes, or when a command fails. `show` prints any recorded `reason:` beneath the attempt. A command's log holds its output; an agent's own UI carries errors that it did not report to RimZ.
 
@@ -111,7 +111,7 @@ An attempt can end as `died` when an agent fails to start or crashes, or when a 
 `rimz workflow run` creates the run directory, `~/.rimz/ws/<workspace-dir>/owned/workflows/<run-id>/`, with four entries:
 
 - `record.json`, the run's current position, which is the truth the engine reads.
-- `journal.jsonl`, the append-only history `show` prints.
+- `journal.jsonl`, the append-only history behind `show`'s folded rows; `show --json` includes every entry.
 - `workflow.toml`, a sealed copy of the definition. Editing the original changes later runs, never this one. Scripts and prompt files are not copied: each check and launch reads them fresh from `~/.rimz/workflows/<name>/`.
 - `work/`, the work directory, which `RIMZ_WORKFLOW_DIR` names. It holds `context.json`, `notes/`, `signs/`, shell-check logs (`<seq>.check.log`), command-step logs (`<seq>.step.log`), and judge answers (`<seq>.check.json`). Your nodes keep their scratch here; the run record and journal sit outside it.
 

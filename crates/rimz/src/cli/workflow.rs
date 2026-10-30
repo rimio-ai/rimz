@@ -245,6 +245,10 @@ fn locate(id: &WorkflowRunId) -> Result<(rimz::StatePaths, paths::WorkflowPaths)
 }
 
 pub(super) fn waiting(record: &RunRecord) -> Option<String> {
+    waiting_line(record, true)
+}
+
+fn waiting_line(record: &RunRecord, show_count: bool) -> Option<String> {
     record.wait.as_ref().map(|w| {
         if w.outcome == "capacity" {
             return format!(
@@ -295,11 +299,15 @@ pub(super) fn waiting(record: &RunRecord) -> Option<String> {
             .recheck_at
             .map(|at| format!(", recheck {}", at.to_zoned(zone.clone()).strftime("%H:%M")))
             .unwrap_or_default();
+        let count = if show_count {
+            format!(", ×{}", w.count)
+        } else {
+            String::new()
+        };
         format!(
-            "waiting: {}, {detail}, since {}, ×{}{recheck}",
+            "waiting: {}, {detail}, since {}{count}{recheck}",
             w.node,
             w.first.to_zoned(zone).strftime("%H:%M"),
-            w.count,
         )
     })
 }
@@ -399,6 +407,7 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         );
     }
     let spec = workflow::load(&paths.home)?;
+    let history = collapsed_history(&journal);
     let mut out = render::out();
     writeln!(out, "{}", paths.work.display())?;
     let mut header = render::KeyVals::new();
@@ -473,7 +482,10 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         render::cell(record.prompt.as_deref().unwrap_or("none")),
     );
     header.render(&mut out)?;
-    if let Some(waiting) = waiting(&record) {
+    let show_count = record.wait.as_ref().is_none_or(|wait| {
+        !wait_in_history(&history, &wait.node, &wait.outcome, wait.first, wait.last)
+    });
+    if let Some(waiting) = waiting_line(&record, show_count) {
         writeln!(out, "{waiting}")?;
     }
     if record
@@ -520,9 +532,132 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
             }
         }
     }
-    writeln!(out, "history:")?;
+    render_history(&mut out, &history, &spec)
+}
+
+struct HistoryRow<'a> {
+    first: &'a records::JournalEntry,
+    latest: &'a records::JournalEntry,
+    count: u64,
+}
+
+impl HistoryRow<'_> {
+    fn note(&self) -> String {
+        let (count, first, last, detail) = match &self.latest.event {
+            records::JournalEvent::Wait {
+                count,
+                first,
+                last,
+                detail,
+                ..
+            } => (*count, *first, *last, detail.as_deref()),
+            _ => (self.count, self.first.at, self.latest.at, None),
+        };
+        let mut note = if count > 1 {
+            let span = last.duration_since(first).as_secs().max(0) as u64;
+            format!(" ×{count} over {}", render::age_label(span))
+        } else {
+            String::new()
+        };
+        if let Some(detail) = detail {
+            note.push_str(&format!(" · {detail}"));
+        }
+        note
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum HistoryKey<'a> {
+    Evaluation {
+        node: &'a str,
+        origin: records::EvaluationOrigin,
+        outcome: &'a str,
+        case: Option<u64>,
+    },
+    Wake {
+        node: &'a str,
+        signal: &'a str,
+    },
+}
+
+fn history_key(entry: &records::JournalEntry) -> Option<HistoryKey<'_>> {
+    match &entry.event {
+        records::JournalEvent::Evaluation {
+            origin,
+            outcome,
+            object,
+            ..
+        } => Some(HistoryKey::Evaluation {
+            node: &entry.node,
+            origin: *origin,
+            outcome,
+            case: object.get("case").and_then(serde_json::Value::as_u64),
+        }),
+        records::JournalEvent::Wake { signal } => Some(HistoryKey::Wake {
+            node: &entry.node,
+            signal,
+        }),
+        _ => None,
+    }
+}
+
+fn collapsed_history(journal: &[records::JournalEntry]) -> Vec<HistoryRow<'_>> {
+    let mut rows = Vec::<HistoryRow<'_>>::new();
     for entry in journal {
-        let value = serde_json::to_value(&entry)?;
+        if let records::JournalEvent::Wait {
+            outcome,
+            first,
+            last,
+            ..
+        } = &entry.event
+            && wait_in_history(&rows, &entry.node, outcome, *first, *last)
+        {
+            continue;
+        }
+        if let Some(key) = history_key(entry)
+            && let Some(row) = rows.last_mut()
+            && history_key(row.latest).as_ref() == Some(&key)
+        {
+            row.latest = entry;
+            row.count += 1;
+            continue;
+        }
+        rows.push(HistoryRow {
+            first: entry,
+            latest: entry,
+            count: 1,
+        });
+    }
+    rows
+}
+
+fn wait_in_history(
+    rows: &[HistoryRow<'_>],
+    node: &str,
+    outcome: &str,
+    first: jiff::Timestamp,
+    last: jiff::Timestamp,
+) -> bool {
+    rows.iter().rev().any(|row| {
+        row.latest.node == node
+            && matches!(
+                &row.latest.event,
+                records::JournalEvent::Evaluation { outcome: answer, .. } if answer == outcome
+            )
+            && row.first.at <= last
+            && first <= row.latest.at
+    })
+}
+
+fn render_history(
+    out: &mut impl Write,
+    rows: &[HistoryRow<'_>],
+    spec: &workflow::WorkflowSpec,
+) -> Result<()> {
+    writeln!(out, "history:")?;
+    for row in rows {
+        let entry = row.latest;
+        let value = serde_json::to_value(entry)?;
         let event = value["event"].as_str().unwrap_or_default();
         let action = value
             .get("action")
@@ -532,9 +667,7 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
             .iter()
             .find_map(|field| value.get(*field).and_then(|v| v.as_str()))
             .map_or_else(String::new, |word| format!(" {word}"));
-        let count = value
-            .get("count")
-            .map_or_else(String::new, |count| format!(" ×{count}"));
+        let note = row.note();
         let target = value
             .get("target")
             .and_then(serde_json::Value::as_str)
@@ -543,12 +676,15 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
             .get("object")
             .or_else(|| value.get("input"))
             .map_or_else(String::new, |v| format!(" {v}"));
+        let seq = match (row.count, row.first.seq, entry.seq) {
+            (1, _, Some(seq)) => seq.to_string(),
+            (_, Some(first), Some(last)) => format!("{first}–{last}"),
+            _ => "—".into(),
+        };
         writeln!(
             out,
-            "  {} #{} {} {event}{action}{outcome}{target}{count}{payload}",
-            entry.at,
-            entry.seq.map_or_else(|| "—".into(), |seq| seq.to_string()),
-            entry.node
+            "  {} #{seq} {} {event}{action}{outcome}{target}{note}{payload}",
+            entry.at, entry.node
         )?;
         if let records::JournalEvent::Attempt {
             handle,
@@ -736,4 +872,246 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
         bail!("{} workflow error(s)", report.errors.len());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jiff::Timestamp;
+    use records::{EvaluationOrigin, JournalEntry, JournalEvent};
+    use serde_json::json;
+
+    fn at(minute: i64) -> Timestamp {
+        "2026-10-30T19:00:00Z"
+            .parse::<Timestamp>()
+            .unwrap()
+            .checked_add(jiff::SignedDuration::from_secs(minute * 60))
+            .unwrap()
+    }
+
+    fn evaluation(seq: u64, minute: i64, outcome: &str, case: Option<u32>) -> JournalEntry {
+        let mut object = json!({"outcome":outcome, "reason":format!("answer {seq}")});
+        if let Some(case) = case {
+            object["case"] = json!(case);
+        }
+        JournalEntry {
+            seq: Some(seq),
+            at: at(minute),
+            node: "pr".into(),
+            event: JournalEvent::Evaluation {
+                origin: EvaluationOrigin::Check,
+                outcome: outcome.into(),
+                object,
+                digests: BTreeMap::new(),
+                started_at: at(minute),
+                ended_at: at(minute),
+                stderr_tail: None,
+                cost_usd: None,
+                retry: None,
+            },
+        }
+    }
+
+    fn wake(minute: i64, signal: &str) -> JournalEntry {
+        JournalEntry {
+            seq: None,
+            at: at(minute),
+            node: "pr".into(),
+            event: JournalEvent::Wake {
+                signal: signal.into(),
+            },
+        }
+    }
+
+    fn wait(minute: i64, outcome: &str, first: i64, last: i64, count: u64) -> JournalEntry {
+        JournalEntry {
+            seq: None,
+            at: at(minute),
+            node: "pr".into(),
+            event: JournalEvent::Wait {
+                outcome: outcome.into(),
+                detail: None,
+                first: at(first),
+                last: at(last),
+                count,
+                recheck_at: None,
+            },
+        }
+    }
+
+    fn history(journal: &[JournalEntry]) -> String {
+        let spec = toml::from_str(
+            "[workflow]\nscope='worktree'\nstart='pr'\n\
+             [checks.pr]\nrun='sh checks/pr.sh'\non.done='@done'\n\
+             [steps.build]\nagent='codex'\nprompt-file='prompt.md'\nthen='pr'\n",
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        render_history(&mut out, &collapsed_history(journal), &spec).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn evaluations_fold_with_newest_answer_and_suppress_the_closed_wait() {
+        let mut journal = (1..=5)
+            .map(|seq| evaluation(seq, seq as i64 - 1, "pending", None))
+            .collect::<Vec<_>>();
+        journal.push(evaluation(6, 5, "done", None));
+        journal.push(wait(5, "pending", 0, 4, 5));
+        let text = history(&journal);
+        assert_eq!(collapsed_history(&journal).len(), 2, "{text}");
+        assert!(
+            text.contains("2026-10-30T19:04:00Z #1–5 pr evaluation pending ×5 over 4m "),
+            "{text}"
+        );
+        assert!(text.contains("\"reason\":\"answer 5\""), "{text}");
+        assert!(!text.contains("answer 1"), "{text}");
+        assert!(
+            text.contains("2026-10-30T19:05:00Z #6 pr evaluation done {"),
+            "{text}"
+        );
+        assert!(!text.contains("pr wait"), "{text}");
+    }
+
+    #[test]
+    fn a_closed_hold_searches_past_a_newer_case_without_breaking_its_run() {
+        let journal = [
+            evaluation(1, 0, "hold", Some(0)),
+            evaluation(2, 1, "hold", Some(0)),
+            evaluation(3, 2, "hold", Some(1)),
+            wait(2, "hold", 0, 1, 2),
+            evaluation(4, 3, "hold", Some(1)),
+            evaluation(5, 4, "hold", Some(1)),
+        ];
+        let text = history(&journal);
+        assert_eq!(collapsed_history(&journal).len(), 2, "{text}");
+        assert!(
+            text.contains("#1–2 pr evaluation hold ×2 over 1m "),
+            "{text}"
+        );
+        assert!(
+            text.contains("#3–5 pr evaluation hold ×3 over 2m "),
+            "{text}"
+        );
+        assert!(!text.contains("pr wait"), "{text}");
+    }
+
+    #[test]
+    fn wakes_break_evaluation_runs_and_only_fold_with_the_same_signal() {
+        let mut journal = vec![
+            evaluation(1, 0, "pending", None),
+            wake(1, "review.ready"),
+            evaluation(2, 2, "pending", None),
+        ];
+        assert_eq!(collapsed_history(&journal).len(), 3);
+        journal.extend([
+            wake(3, "review.ready"),
+            wake(12, "review.ready"),
+            wake(13, "review.changed"),
+        ]);
+        let text = history(&journal);
+        assert_eq!(collapsed_history(&journal).len(), 5, "{text}");
+        assert!(
+            text.contains("2026-10-30T19:12:00Z #— pr wake review.ready ×2 over 9m\n"),
+            "{text}"
+        );
+        assert!(text.contains("pr wake review.changed\n"), "{text}");
+    }
+
+    #[test]
+    fn unrepresented_waits_show_their_span_and_detail_but_no_singleton_count() {
+        let mut window = wait(3, "window", 0, 2, 3);
+        window.node = "build".into();
+        if let JournalEvent::Wait { detail, .. } = &mut window.event {
+            *detail = Some("5h.left=12<42".into());
+        }
+        let text = history(&[window, wait(4, "pending", 4, 4, 1)]);
+        assert_eq!(
+            text,
+            concat!(
+                "history:\n",
+                "  2026-10-30T19:03:00Z #— build wait window ×3 over 2m · 5h.left=12<42\n",
+                "  2026-10-30T19:04:00Z #— pr wait pending\n",
+            )
+        );
+    }
+
+    #[test]
+    fn attempts_keep_individual_rows_and_their_detail_lines() {
+        let journal = [1, 2].map(|seq| JournalEntry {
+            seq: Some(seq),
+            at: at(seq as i64),
+            node: "build".into(),
+            event: JournalEvent::Attempt {
+                outcome: records::AttemptOutcome::Ended,
+                visit: seq,
+                key: None,
+                digests: BTreeMap::from([("prompt.md".into(), format!("digest-{seq}"))]),
+                started_at: at(seq as i64),
+                ended_at: at(seq as i64),
+                handle: Some(format!("@builder-{seq}")),
+                run_id: None,
+                head_start: Some("0123456789".into()),
+                head_end: Some("abcdef0123".into()),
+                code: None,
+                log: Some(PathBuf::from(format!("work/{seq}.step.log"))),
+                cost_usd: Some(0.25),
+                children: None,
+                limited: None,
+                asked: None,
+                reason: None,
+            },
+        });
+        let text = history(&journal);
+        assert_eq!(collapsed_history(&journal).len(), 2, "{text}");
+        for seq in [1, 2] {
+            assert!(
+                text.contains(&format!("#{seq} build attempt ended\n")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!(
+                    concat!(
+                        "    @builder-{seq} HEAD 01234567 → abcdef01 cost $0.25\n",
+                        "    log: work/{seq}.step.log\n    prompt.md: digest-{seq}\n",
+                    ),
+                    seq = seq,
+                )),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn evaluation_keys_keep_origins_nodes_and_outcomes_separate() {
+        let check = evaluation(1, 0, "pending", None);
+        let mut engine = evaluation(2, 1, "pending", None);
+        if let JournalEvent::Evaluation { origin, .. } = &mut engine.event {
+            *origin = EvaluationOrigin::Engine;
+        }
+        let mut other_node = engine.clone();
+        other_node.node = "ci".into();
+        let mut other_outcome = other_node.clone();
+        if let JournalEvent::Evaluation {
+            outcome, object, ..
+        } = &mut other_outcome.event
+        {
+            *outcome = "done".into();
+            object["outcome"] = json!("done");
+        }
+        let journal = [check, engine, other_node, other_outcome];
+        assert_eq!(collapsed_history(&journal).len(), 4);
+    }
+
+    #[test]
+    fn an_open_wait_is_represented_only_by_its_nodes_outcome_and_span() {
+        let journal = [evaluation(1, 1, "pending", None)];
+        let rows = collapsed_history(&journal);
+        assert!(wait_in_history(&rows, "pr", "pending", at(1), at(1)));
+        assert!(wait_in_history(&rows, "pr", "pending", at(0), at(2)));
+        assert!(!wait_in_history(&rows, "pr", "window", at(0), at(2)));
+        assert!(!wait_in_history(&rows, "ci", "pending", at(0), at(2)));
+        assert!(!wait_in_history(&rows, "pr", "pending", at(2), at(3)));
+        assert!(!wait_in_history(&rows, "pr", "pending", at(0), at(0)));
+    }
 }
