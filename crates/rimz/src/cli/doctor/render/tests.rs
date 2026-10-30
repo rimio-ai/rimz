@@ -981,6 +981,11 @@ fn packs_section_counts_modified_and_unreadable_checkouts_but_not_clean_ones() {
             let valid = text.contains("PACKS") == (*case != "empty")
                 && tally.warns.len() == expected_count
                 && tally.alarms.is_empty()
+                && (!matches!(*case, "modified" | "many")
+                    || (closing
+                        .contains("rimz packs customize <pack>:<name> --type <type> --copy")
+                        && closing.contains("existing home overrides")
+                        && !text.contains("rimz packs customize")))
                 && match *case {
                     "modified" => {
                         text.contains("crew")
