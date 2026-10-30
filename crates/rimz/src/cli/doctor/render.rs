@@ -261,6 +261,17 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_terminal(w, &report.terminal, &mut tally)?;
     render_home(w, &report.home, &mut tally)?;
     render_machine_config(w, &report.machine_config, &mut tally)?;
+    render_packs(
+        w,
+        &report.packs,
+        &report.machine_config,
+        report
+            .home
+            .agents_home_override
+            .as_deref()
+            .unwrap_or(&report.home.path),
+        &mut tally,
+    )?;
     render_sandbox(w, &report.sandbox, &mut tally)?;
     render_hibernate(w, &report.hibernate, &mut tally)?;
     render_hooks(w, report, &mut tally)?;
@@ -791,6 +802,101 @@ fn render_machine_config(
         );
         let (glyph, style) = Severity::Warning.parts();
         writeln!(w, "    {}", paint(style, &format!("{glyph} {detail}")))?;
+    }
+    Ok(())
+}
+
+fn render_packs(
+    w: &mut impl Write,
+    packs: &Probe<rimz::packs::CheckoutReport>,
+    config: &MachineConfigHealth,
+    home: &str,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    use rimz::packs::CheckoutState;
+    if matches!(packs, Probe::Ready(report) if report.checkouts.is_empty()) {
+        return Ok(());
+    }
+    section(w, tally, "PACKS")?;
+    let report = match packs {
+        Probe::Ready(report) => report,
+        Probe::Unavailable { error, .. } => {
+            if config
+                .broken_files
+                .iter()
+                .any(|problem| *error == format!("{}: {}", problem.path, problem.error))
+            {
+                let (glyph, style) = Severity::Warning.parts();
+                return writeln!(w, "    {}", paint(style, &format!("{glyph} {error}")));
+            }
+            return counted_note(
+                tally,
+                w,
+                Severity::Warning,
+                error,
+                "repair the reported pack installation record, then re-run `rimz doctor`",
+            );
+        }
+    };
+    for checkout in &report.checkouts {
+        let names = checkout
+            .packs
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let path = checkout.path.to_string_lossy();
+        match &checkout.state {
+            CheckoutState::Clean => note(w, Health::Ok, &format!("{names}: checkout clean"))?,
+            CheckoutState::Modified { head, changed } => {
+                let mut differences = changed.iter().take(3).cloned().collect::<Vec<_>>();
+                if changed.len() > 3 {
+                    differences.push(format!("and {} more", changed.len() - 3));
+                }
+                // Client::inspect and layout::checkout admit only 40-hex commits.
+                if let Some(head) = head {
+                    differences.insert(
+                        0,
+                        format!(
+                            "HEAD {} differs from {}",
+                            &head[..12],
+                            &checkout.commit[..12]
+                        ),
+                    );
+                }
+                let text = format!(
+                    "{names}: {}; edits are lost when the pack's commit moves",
+                    differences.join(", ")
+                );
+                let reset =
+                    shlex::try_join(["git", "-C", &path, "reset", "--hard", &checkout.commit])
+                        .map_err(io::Error::other)?;
+                let clean = shlex::try_join(["git", "-C", &path, "clean", "-fd"])
+                    .map_err(io::Error::other)?;
+                counted_note(
+                    tally,
+                    w,
+                    Severity::Warning,
+                    &text,
+                    format!(
+                        "copy changes worth keeping into the matching tree under {home}, \
+                         where each home file overrides the pack; \
+                         then restore with `{reset} && {clean}`"
+                    ),
+                )?;
+            }
+            CheckoutState::Unreadable { error } => {
+                let install = shlex::try_join(["rimz", "packs", "install", &checkout.reinstall])
+                    .map_err(io::Error::other)?;
+                counted_note(
+                    tally,
+                    w,
+                    Severity::Warning,
+                    &format!("{names}: unreadable ({error})"),
+                    format!("delete checkout directory {path}, then run `{install}`"),
+                )?;
+            }
+        }
     }
     Ok(())
 }

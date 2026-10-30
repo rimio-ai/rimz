@@ -21,6 +21,77 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+fn installed_git_pack(env: &Env) -> PathBuf {
+    use crate::common::git::git;
+    let repo = env.home_root.join("pack-source");
+    std::fs::create_dir_all(repo.join("traits")).unwrap();
+    std::fs::write(
+        repo.join("rimz-packs.toml"),
+        "[[pack]]\nname = 'crew'\ndescription = 'Test crew'\npath = '.'\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("traits/craft.md"), "Craft.\n").unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    git(&repo, &["config", "user.name", "Pack Test"]);
+    git(&repo, &["config", "user.email", "packs@example.test"]);
+    git(&repo, &["config", "commit.gpgsign", "false"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "fixture"]);
+    let source = url::Url::from_directory_path(&repo).unwrap();
+    let rimz::packs::InstallSource::Git(source) = source.as_str().parse().unwrap() else {
+        panic!("file URL must be a Git source");
+    };
+    rimz::packs::transaction::Transaction::stage(&env.agents_home(), &source)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let record = rimz::packs::Record::read(&env.agents_home()).unwrap();
+    env.agents_home()
+        .join("packs")
+        .join(&record.sources[0].entry)
+        .canonicalize()
+        .unwrap()
+}
+
+#[test]
+fn doctor_reports_modified_pack_checkouts_in_json_and_human_output() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let checkout = installed_git_pack(&env);
+    std::fs::write(checkout.join("traits/craft.md"), "Edited by hand.\n").unwrap();
+    let output = env.rimz().args(["doctor", "--json"]).output().unwrap();
+    let report = doctor_json(&output);
+    let row = &report["packs"]["ready"]["checkouts"][0];
+    assert_eq!(row["state"], "modified", "{report}");
+    assert_eq!(row["path"], json!(checkout), "{row}");
+    assert_eq!(row["packs"], json!(["crew"]), "{row}");
+    assert_eq!(row["changed"], json!(["traits/craft.md"]), "{row}");
+    assert!(row.get("head").is_none(), "{row}");
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let config_position = json_text.find("\"machine_config\"").unwrap();
+    let packs_position = json_text.find("\"packs\"").unwrap();
+    let sandbox_position = json_text.find("\"sandbox\"").unwrap();
+    assert!(
+        config_position < packs_position && packs_position < sandbox_position,
+        "{json_text}"
+    );
+    let output = env.rimz().args(["doctor"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "PACKS",
+        "crew",
+        "traits/craft.md",
+        "overrides",
+        "reset --hard",
+        "clean -fd",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+}
+
 #[test]
 fn doctor_reports_recorded_skipped_settings_in_room_json_and_text() {
     let env = Env::new();
@@ -1018,6 +1089,13 @@ fn tree_listing(root: &Path) -> Vec<(PathBuf, Option<u64>, std::time::SystemTime
 #[test]
 fn doctor_preserves_existing_workspace_record() {
     let env = Env::new();
+    let git_available = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if git_available {
+        installed_git_pack(&env);
+    }
     inject_lifecycle(
         &env,
         "claude",
@@ -1045,6 +1123,12 @@ fn doctor_preserves_existing_workspace_record() {
     assert_eq!(report["agents"]["state"], "observed");
     assert_eq!(report["agents"]["counts"]["failed"], 1);
     assert_eq!(report["agents"]["rows"][0]["agent_id"], "read-only-agent");
+    if git_available {
+        assert_eq!(
+            report["packs"]["ready"]["checkouts"][0]["state"], "clean",
+            "{report}"
+        );
+    }
     for args in [["doctor", "--no-log-text"], ["doctor", "--audit"]] {
         let home_before = tree_listing(&env.rimz_home());
         let runtime_before = tree_listing(&env.runtime_root);

@@ -1265,7 +1265,28 @@ allowed-dependencies = ["disk", "proc", "utils"]
 # transaction, Transaction, PackChange and six public methods share optimistic staging (+9).
 # RetiredCheckouts retains replaced trees through a multi-source command (+1).
 # Transaction::stage_update preserves and validates the installed selection (+1).
-surface-budget = 47
+# CheckoutReport, Checkout, CheckoutState and inspect_checkouts share read-only health (+4).
+surface-budget = 51
+
+[[verdict]]
+kind = "item"
+key = "packs::CheckoutReport"
+reason = "Doctor receives recorded Git checkout health without inspecting linked sources."
+
+[[verdict]]
+kind = "item"
+key = "packs::Checkout"
+reason = "Doctor renders and serializes a recorded checkout's identity and observed state."
+
+[[verdict]]
+kind = "item"
+key = "packs::CheckoutState"
+reason = "Clean, modified and unreadable are typed checkout inspection outcomes."
+
+[[verdict]]
+kind = "item"
+key = "packs::inspect_checkouts"
+reason = "Doctor inspects recorded Git checkouts through the packs-owned bounded runner."
 
 [[verdict]]
 kind = "item"

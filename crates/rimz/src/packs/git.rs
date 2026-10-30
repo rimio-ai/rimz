@@ -177,6 +177,68 @@ impl Client {
         Ok(Revision { reference, commit })
     }
 
+    pub(super) fn inspect(
+        &self,
+        path: &Path,
+        commit: &str,
+        source_url: &str,
+    ) -> Result<CheckoutState> {
+        if !path.join(".git").is_dir() {
+            return Err(problem(&path.join(".git"), "missing checkout .git directory").into());
+        }
+        let output = self.run(
+            path,
+            &[
+                "--git-dir=.git",
+                "--work-tree=.",
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "-z",
+                "--untracked-files=all",
+            ],
+            source_url,
+            false,
+        )?;
+        let invalid = || git_error(source_url, "unrecognized Git checkout status");
+        let mut head = None;
+        let mut changed = Vec::new();
+        let mut entries = output.split('\0').filter(|entry| !entry.is_empty());
+        while let Some(entry) = entries.next() {
+            if let Some(oid) = entry.strip_prefix("# branch.oid ") {
+                head = Some(oid.to_owned());
+                continue;
+            }
+            if entry.starts_with("# ") {
+                continue;
+            }
+            let fields = match entry.as_bytes()[0] {
+                b'?' => 2,
+                b'1' => 9,
+                b'2' => 10,
+                b'u' => 11,
+                _ => return Err(invalid()),
+            };
+            let path = entry
+                .splitn(fields, ' ')
+                .nth(fields - 1)
+                .ok_or_else(invalid)?;
+            changed.push(path.to_owned());
+            if entry.starts_with("2 ") {
+                changed.push(entries.next().ok_or_else(invalid)?.to_owned());
+            }
+        }
+        let head = head.filter(|head| is_commit(head)).ok_or_else(invalid)?;
+        if head == commit && changed.is_empty() {
+            return Ok(CheckoutState::Clean);
+        }
+        Ok(CheckoutState::Modified {
+            head: (head != commit).then_some(head),
+            changed,
+        })
+    }
+
     pub(super) fn checkout(
         &self,
         path: &Path,
