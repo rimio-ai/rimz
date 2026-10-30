@@ -311,6 +311,34 @@ fn keep_warm_team_role_and_profile_fields_do_not_enter_trust_hash() {
 }
 
 #[test]
+fn smart_compact_role_and_profile_fields_do_not_enter_trust_hash() {
+    let base: ProjectConfig = toml::from_str(
+        "[profiles.worker]\nagent = 'claude'\n[agents.teams.mill]\n\
+         roles = [{role = 'lead', profile = 'worker'}]",
+    )
+    .unwrap();
+    let actual: Vec<_> = ["200k", "70%", "off"]
+        .map(|raw| {
+            let configured: ProjectConfig = toml::from_str(&format!(
+                "[profiles.worker]\nagent = 'claude'\nsmart-compact = '{raw}'\n\
+             [agents.teams.mill]\n\
+             roles = [{{role = 'lead', profile = 'worker', smart-compact = '{raw}'}}]",
+            ))
+            .unwrap();
+            let team = serde_json::to_value(&configured.teams()["mill"]).unwrap();
+            (
+                team["roles"][0]["smart-compact"].clone(),
+                executable_surface_hash(&configured) == executable_surface_hash(&base),
+            )
+        })
+        .into();
+    assert_eq!(
+        actual,
+        ["200000", "70%", "off"].map(|value| (serde_json::json!(value), true))
+    );
+}
+
+#[test]
 fn loop_overlap_fields_do_not_enter_project_trust_hash() {
     let base = "[tasks.x]\ncheck='true'\nevery='1h'\n";
     let configured = format!("{base}overlap='queue'\noverlap-limit=3\n");

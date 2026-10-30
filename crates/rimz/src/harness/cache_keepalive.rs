@@ -10,7 +10,7 @@ use super::schedule::when::{WhenExpr, WindowReadings, evaluate};
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
 use crate::config::{
-    HarnessConfig, IdleCompact, KeepWarm, MachineConfig, Profile, ProfilesConfig, TeamsConfig,
+    HarnessConfig, IdleCompact, KeepWarm, MachineConfig, ProfilesConfig, TeamsConfig,
 };
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
@@ -31,20 +31,18 @@ pub struct CacheKeepaliveRequest {
 pub struct SeatPolicy {
     pub teams: TeamsConfig,
     pub profiles: ProfilesConfig,
+    pub subagent_profiles: ProfilesConfig,
 }
 
 impl SeatPolicy {
     /// Trusted project definitions over the machine's, falling back to the machine snapshot.
     pub fn load(machine: &MachineConfig, project_root: Option<&Path>) -> Self {
-        match project_root.and_then(|root| crate::config::effective::load(machine, root).ok()) {
-            Some(launch) => Self {
-                teams: launch.teams,
-                profiles: launch.profiles,
-            },
-            None => Self {
-                teams: machine.agents.teams.clone(),
-                profiles: machine.agents.profiles.clone(),
-            },
+        let (teams, profiles, subagent_profiles) =
+            crate::config::effective::load_seat_tables(machine, project_root);
+        Self {
+            teams,
+            profiles,
+            subagent_profiles,
         }
     }
 
@@ -56,7 +54,7 @@ impl SeatPolicy {
         let setting = match &agent.team {
             Some(team) => self.teams.0.get(team)?.keep_warm(agent.role.as_deref())?,
             None => crate::config::KeepWarmFields {
-                max: self.profile_setting(agent.profile.as_deref()?, |profile| {
+                max: self.profiles.setting(agent.profile.as_deref()?, |profile| {
                     profile
                         .keep_warm
                         .as_ref()
@@ -112,7 +110,8 @@ impl SeatPolicy {
         });
         let setting = role
             .or_else(|| {
-                self.profile_setting(agent.profile.as_deref()?, |profile| profile.idle_compact)
+                self.profiles
+                    .setting(agent.profile.as_deref()?, |profile| profile.idle_compact)
             })
             .unwrap_or(harness.idle_compact);
         match setting {
@@ -121,17 +120,18 @@ impl SeatPolicy {
         }
     }
 
-    /// The first value a TOML profile or its base chain declares; an explicit `off` stops the
-    /// walk. Markdown definitions arrive with their inheritance already resolved.
-    fn profile_setting<T>(&self, name: &str, pick: impl Fn(&Profile) -> Option<T>) -> Option<T> {
-        let mut profile = self.profiles.0.get(name)?;
-        for _ in 0..self.profiles.0.len() {
-            if let Some(setting) = pick(profile) {
-                return Some(setting);
-            }
-            profile = self.profiles.0.get(&profile.agent)?;
-        }
-        None
+    /// The seat's smart-compaction line, including a pane-backed child's launch namespace.
+    pub fn smart_compact(
+        &self,
+        agent: &AgentState,
+        harness: &HarnessConfig,
+    ) -> Option<crate::store::message::AutoCompact> {
+        crate::config::effective::SmartCompactSeat::from(agent).resolve(
+            &self.teams,
+            &self.profiles,
+            &self.subagent_profiles,
+            harness,
+        )
     }
 
     /// The declared horizon when `holds` says keep-warm is holding the agent at `now`.

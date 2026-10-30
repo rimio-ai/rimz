@@ -191,6 +191,7 @@ fn team() -> Team {
             owns: Vec::new(),
             flip_compact: None,
             idle_compact: None,
+            smart_compact: None,
             keep_warm: None,
         }],
         leader: Some("planner".to_owned()),

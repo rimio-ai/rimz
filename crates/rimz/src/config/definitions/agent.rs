@@ -38,6 +38,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         model_reminder: None,
         keep_warm: None,
         idle_compact: None,
+        smart_compact: None,
         mode: None,
         model: None,
         effort: None,
@@ -506,6 +507,7 @@ impl Resolver<'_> {
             ));
         }
         profile.idle_compact = fm.idle_compact;
+        profile.smart_compact = fm.smart_compact;
         if let Some(listed) = fm.subagents.as_ref() {
             if self.namespace == "subagents" {
                 return Err(DefinitionErr::new(

@@ -958,7 +958,9 @@ upward-dependencies = [
 # PackOverride::identical shares byte comparison with migration and install hints (+1).
 # ResetOutcome and reset_identical share per-item results over one decision per home entry (+2).
 # DefinitionOrigin and AgentSpecSources::profile_origin carry listing provenance (+2).
-surface-budget = 258
+# SmartCompactSeat, its explicit/resolve methods and ProfilesConfig::setting share seat lines (+4).
+# load_seat_tables shares effective-or-machine fallback with dispatch and harness policy (+1).
+surface-budget = 263
 
 [[verdict]]
 kind = "item"
@@ -999,6 +1001,16 @@ reason = "Pack-wide reset carries removals, kept reasons and failures to the CLI
 kind = "item"
 key = "config::definitions::customization::reset_identical"
 reason = "Shared home entries are decided once; comparison errors keep entries and removal failures do not abort the pass."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::load_seat_tables"
+reason = "Dispatch and harness seat policy share the trusted-table load and machine fallback."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::SmartCompactSeat"
+reason = "Dispatch and harness consumers resolve the same role/profile threshold; launch warnings also distinguish a seat declaration from the harness fallback."
 
 [[verdict]]
 kind = "item"
@@ -2008,7 +2020,8 @@ path = "crates/rimz/src/harness"
 # CapacityRecord, CapacityWaits and load_capacity share read-only waits; removing the hold notice offsets one (+2 net).
 # load_live_capacity filters capacity waits against the planner's current condition clocks (+1).
 # spec::validate_team shares per-item team validation with pack loading (+1).
-surface-budget = 1025
+# SeatPolicy::smart_compact shares the config resolver with agent-row consumers (+1).
+surface-budget = 1026
 
 [[verdict]]
 kind = "item"

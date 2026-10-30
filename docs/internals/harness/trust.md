@@ -57,8 +57,8 @@ Every other key deserializes leniently and never touches the hash. `trust::Proje
 | Table | Unhashed keys |
 | --- | --- |
 | team | `keep-warm`, `leader`, `scratch-files`, `stages` |
-| team role | `owns`, `budget`, `keep-warm`, `flip-compact`, `idle-compact` |
-| profile | `budget`, `keep-warm`, `idle-compact`, `empty-dir` |
+| team role | `owns`, `budget`, `keep-warm`, `flip-compact`, `idle-compact`, `smart-compact` |
+| profile | `budget`, `keep-warm`, `idle-compact`, `smart-compact`, `empty-dir` |
 | task | `team`, `max-strikes`, `account`, `budget`, `budget-per-day`, `surplus`, `surplus-after`, `throttle`, `capacity-wait`, `overlap`, `overlap-limit` |
 | packs | `expect` |
 

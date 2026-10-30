@@ -31,6 +31,8 @@ pub(super) struct AgentFrontmatter {
     pub keep_warm: Option<crate::config::KeepWarmPolicy>,
     #[serde(default, deserialize_with = "idle_compact")]
     pub idle_compact: Option<IdleCompact>,
+    #[serde(default, deserialize_with = "smart_compact")]
+    pub smart_compact: Option<crate::config::FlipCompact>,
     pub model_reminder: Option<bool>,
     #[serde(default, deserialize_with = "list")]
     pub traits: Option<Vec<String>>,
@@ -71,7 +73,8 @@ impl AgentFrontmatter {
             subagents,
             model_reminder,
             keep_warm,
-            idle_compact
+            idle_compact,
+            smart_compact
         );
     }
 }
@@ -118,6 +121,8 @@ pub(super) struct RoleFrontmatter {
     pub flip_compact: Option<String>,
     #[serde(default, deserialize_with = "idle_compact")]
     pub idle_compact: Option<IdleCompact>,
+    #[serde(default, deserialize_with = "smart_compact")]
+    pub smart_compact: Option<crate::config::FlipCompact>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
     pub keep_warm: Option<crate::config::KeepWarmPolicy>,
@@ -148,6 +153,7 @@ impl RoleFrontmatter {
             fast: self.fast,
             auto_compact: self.auto_compact.clone(),
             idle_compact: self.idle_compact,
+            smart_compact: self.smart_compact,
             budget: self.budget.clone(),
             model_reminder: self.model_reminder,
             tools: self.tools.clone(),
@@ -233,6 +239,25 @@ fn flip_compact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Str
             Count::Integer(count) => count.to_string(),
         },
     ))
+}
+
+fn smart_compact<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<crate::config::FlipCompact>, D::Error> {
+    let invalid = || {
+        serde::de::Error::custom(
+            "smart-compact takes a token count such as '200k', a percentage such as '70%', or 'off'",
+        )
+    };
+    let Some(raw) = flip_compact(deserializer).map_err(|_| invalid())? else {
+        return Ok(None);
+    };
+    if raw.eq_ignore_ascii_case("off") {
+        return Ok(Some(crate::config::FlipCompact::Off));
+    }
+    crate::store::message::AutoCompact::parse(&raw)
+        .map(|line| Some(crate::config::FlipCompact::Threshold(line)))
+        .map_err(|_| invalid())
 }
 
 fn token_count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {

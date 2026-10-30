@@ -330,6 +330,21 @@ pub fn load(machine: &MachineConfig, project_root: &Path) -> Result<LaunchAgents
     load_with_roots(machine, project_root, &crate::disk::paths::rimz_home())
 }
 
+/// Seat policy uses trusted effective tables, or the supplied machine snapshot on failure.
+pub(crate) fn load_seat_tables(
+    machine: &MachineConfig,
+    project_root: Option<&Path>,
+) -> (TeamsConfig, ProfilesConfig, ProfilesConfig) {
+    match project_root.and_then(|root| load(machine, root).ok()) {
+        Some(launch) => (launch.teams, launch.profiles, launch.subagent_profiles),
+        None => (
+            machine.agents.teams.clone(),
+            machine.agents.profiles.clone(),
+            machine.subagents.profiles.clone(),
+        ),
+    }
+}
+
 /// `trust::status_with_roots` parses `.rimz/config.toml` before anything here reads it, so a malformed project file fails at trust status whatever the trust state.
 pub fn load_with_roots(
     machine: &MachineConfig,
@@ -798,6 +813,65 @@ impl LaunchAgents {
 pub enum ProfileScope {
     Agents,
     Subagents,
+}
+
+/// A seat's live configuration identity, also constructible before a launch has a row.
+pub(crate) struct SmartCompactSeat<'a> {
+    pub team: Option<&'a str>,
+    pub role: Option<&'a str>,
+    pub profile: Option<&'a str>,
+    pub scope: ProfileScope,
+}
+
+impl<'a> From<&'a crate::agents::AgentState> for SmartCompactSeat<'a> {
+    fn from(agent: &'a crate::agents::AgentState) -> Self {
+        Self {
+            team: agent.team.as_deref(),
+            role: agent.role.as_deref(),
+            profile: agent.profile.as_deref(),
+            scope: ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child()),
+        }
+    }
+}
+
+impl SmartCompactSeat<'_> {
+    pub fn explicit(
+        &self,
+        teams: &TeamsConfig,
+        profiles: &ProfilesConfig,
+        subagent_profiles: &ProfilesConfig,
+    ) -> Option<super::FlipCompact> {
+        let role = self.team.and_then(|team| {
+            let role = self.role?;
+            teams
+                .0
+                .get(team)?
+                .roles
+                .iter()
+                .find(|binding| binding.role == role)?
+                .smart_compact
+        });
+        role.or_else(|| {
+            let (_, profiles) =
+                self.scope
+                    .resolve_launch(self.profile, profiles, subagent_profiles);
+            profiles.setting(self.profile?, |profile| profile.smart_compact)
+        })
+    }
+
+    pub fn resolve(
+        &self,
+        teams: &TeamsConfig,
+        profiles: &ProfilesConfig,
+        subagent_profiles: &ProfilesConfig,
+        harness: &super::HarnessConfig,
+    ) -> Option<crate::store::message::AutoCompact> {
+        match self.explicit(teams, profiles, subagent_profiles) {
+            Some(super::FlipCompact::Off) => None,
+            Some(super::FlipCompact::Threshold(line)) => Some(line),
+            None => harness.smart_compact,
+        }
+    }
 }
 
 impl ProfileScope {

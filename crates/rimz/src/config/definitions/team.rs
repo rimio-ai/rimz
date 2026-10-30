@@ -207,6 +207,7 @@ fn roster(
             // A Markdown role's value rides its overlay into the seat's
             // `<team>.<role>` profile, inheriting like `auto-compact`.
             idle_compact: None,
+            smart_compact: None,
             keep_warm: role.keep_warm.clone(),
             signals: signals(path, role.signals.as_deref())?,
             owns,
