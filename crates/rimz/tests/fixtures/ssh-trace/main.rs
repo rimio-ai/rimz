@@ -195,7 +195,8 @@ fn record_and_enter_raw_tty_if_requested() {
             .append(true)
             .open(path)
             .expect("open ssh trace tty state log");
-        writeln!(log, "{}", if sane { "sane" } else { "damaged" })
+        // One write per entry, so concurrent stub processes cannot interleave their lines.
+        log.write_all(if sane { b"sane\n" } else { b"damaged\n" })
             .expect("write ssh trace tty state");
     }
     if enter_raw {
@@ -270,8 +271,10 @@ fn serve_web_tunnel(listener: std::net::TcpListener, log: &std::path::Path) {
             .append(true)
             .open(log)
             .expect("open tunnel HTTP log");
-        output.write_all(&head).expect("log tunnel request");
-        output.write_all(b"\n---\n").expect("separate requests");
+        // Each entry and its separator go out in one write, so concurrent entries stay whole.
+        output
+            .write_all(&[head.as_slice(), b"\n---\n"].concat())
+            .expect("log tunnel request");
 
         if head
             .windows(b"Upgrade: websocket".len())
@@ -282,8 +285,9 @@ fn serve_web_tunnel(listener: std::net::TcpListener, log: &std::path::Path) {
                 .expect("write upgrade response");
             let mut frame = [0_u8; 12];
             stream.read_exact(&mut frame).expect("read client frame");
-            output.write_all(&frame).expect("log client frame");
-            output.write_all(b"\n---\n").expect("separate client frame");
+            output
+                .write_all(&[frame.as_slice(), b"\n---\n"].concat())
+                .expect("log client frame");
         } else {
             stream
                 .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")

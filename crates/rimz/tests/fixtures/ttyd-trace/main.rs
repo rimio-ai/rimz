@@ -22,7 +22,10 @@ fn main() {
         .append(true)
         .open(log)
         .expect("open ttyd trace log");
-    writeln!(file, "{}", args.join("\t")).expect("write ttyd trace");
+    // One write per entry: `writeln!` on an unbuffered file issues two, which interleave
+    // when two stub processes append at once.
+    file.write_all(format!("{}\n", args.join("\t")).as_bytes())
+        .expect("write ttyd trace");
     let port = args
         .windows(2)
         .find(|pair| pair[0] == "-p")
