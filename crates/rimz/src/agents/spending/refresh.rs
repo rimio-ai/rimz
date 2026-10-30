@@ -10,6 +10,7 @@ use std::sync::{
 use super::SpendingFile;
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::{AgentDefinition, TranscriptStat};
+use crate::ids::LoginKey;
 
 use super::aggregate::stamp_file_origin;
 use super::aggregate::{
@@ -25,7 +26,8 @@ use super::{SpendProgress, WalkStats};
 const MAX_SPENDING_PARSE_WORKERS: usize = 8;
 
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
-type BeforeCompact<'a> = dyn FnMut(&SpendingDiskCache, &[&SpendingFile], &[&SpendingFile]) + 'a;
+type BeforeCompact<'a> =
+    dyn FnMut(&mut SpendingDiskCache, &[&SpendingFile], &[&SpendingFile], &[(LoginKey, u64)]) + 'a;
 
 pub(crate) fn refresh_spending_cache(
     files: &[SpendingFile],
@@ -127,6 +129,12 @@ pub(crate) fn refresh_spending_cache(
         });
     }
 
+    let before = (!cache.files.is_empty() && !cache.fill_in_progress).then(|| {
+        parsed_files
+            .iter()
+            .map(|file| file_day_usage(cache, file))
+            .collect::<Vec<_>>()
+    });
     (callbacks.on_jobs_scheduled)(stats);
     let _ = refresh_spending_cache_jobs(
         &jobs,
@@ -137,10 +145,40 @@ pub(crate) fn refresh_spending_cache(
         callbacks.tick,
     );
 
-    (callbacks.before_compact)(cache, &parsed_files, &unread_files);
+    let mut growth = BTreeSet::new();
+    if let Some(before) = before {
+        for (file, before) in parsed_files.iter().zip(before) {
+            for (day, (tokens, usd)) in file_day_usage(cache, file) {
+                let (prior_tokens, prior_usd) = before.get(&day).copied().unwrap_or_default();
+                if tokens > prior_tokens || (tokens == 0 && usd > prior_usd) {
+                    growth.insert((file.login.clone(), day));
+                }
+            }
+        }
+    }
+    let growth = growth.into_iter().collect::<Vec<_>>();
+    (callbacks.before_compact)(cache, &parsed_files, &unread_files, &growth);
     if compact_spending_cache(cache, files, now_secs) {
         cache.mark_changed();
     }
+}
+
+fn file_day_usage(cache: &SpendingDiskCache, file: &SpendingFile) -> BTreeMap<u64, (u64, f64)> {
+    let mut totals = BTreeMap::<_, (u64, f64)>::new();
+    let Some(cached) = cache.files.get(file.path.to_string_lossy().as_ref()) else {
+        return totals;
+    };
+    for entry in &cached.entries {
+        let tokens = entry
+            .input
+            .saturating_add(entry.output)
+            .saturating_add(entry.cache_write)
+            .saturating_add(entry.cache_read);
+        let (total_tokens, total_usd) = totals.entry(entry.ts_secs / 86_400).or_default();
+        *total_tokens = total_tokens.saturating_add(tokens);
+        *total_usd += entry.cost_usd;
+    }
+    totals
 }
 
 #[derive(Clone, Debug, PartialEq)]

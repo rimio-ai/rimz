@@ -3106,6 +3106,7 @@ rimz stats
     --subagents  [action=set-true takes=0..=0]
     --teams  [action=set-true takes=0..=0]
     --tmux  [action=set-true takes=0..=0 global]
+    --unattended  [action=set-true takes=0..=0 hidden]
     --window <WINDOW>  [action=set takes=1..=1 default=today values=today|week|month|year]
     --zellij  [action=set-true takes=0..=0 global]
 

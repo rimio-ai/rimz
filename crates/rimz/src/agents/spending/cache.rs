@@ -118,6 +118,12 @@ pub struct SpendingDiskCache {
     pub version: u32,
     #[serde(default)]
     pub files: HashMap<String, FileCacheEntry>,
+    // Saved days whose usage grew, plus the days a rebuild deferred. Expired outside the
+    // widest spend window, even while history maintenance is unavailable.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(super) rebuild_days: BTreeSet<jiff::civil::Date>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) fill_in_progress: bool,
     #[serde(skip)]
     pub dirty: bool,
     #[serde(skip)]

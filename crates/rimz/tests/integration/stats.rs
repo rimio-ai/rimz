@@ -106,6 +106,11 @@ fn stats_rebuild_refuses_incomplete_discovery_without_republishing() {
     let root = env.home_root.join(".claude/projects");
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o0)).unwrap();
     let requested = env.rimz().args(["stats", "--rebuild"]).output().unwrap();
+    let unattended = env
+        .rimz()
+        .args(["stats", "--rebuild", "--unattended"])
+        .output()
+        .unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(
         requested.status.code(),
@@ -119,6 +124,11 @@ fn stats_rebuild_refuses_incomplete_discovery_without_republishing() {
     );
     assert!(!stderr.contains("retry"), "{stderr}");
     assert!(requested.stdout.is_empty(), "{requested:?}");
+    assert_eq!(unattended.status.code(), Some(1));
+    assert!(
+        unattended.stdout.is_empty() && unattended.stderr.is_empty(),
+        "{unattended:?}"
+    );
     assert_eq!(std::fs::read(publication).unwrap(), before);
     let report = env
         .rimz()
@@ -164,6 +174,15 @@ fn stats_rebuild_warns_and_fails_when_an_account_is_deferred() {
     );
     assert!(stderr.contains("stay pending"), "{stderr}");
     assert!(!stderr.contains("no transcripts were found"), "{stderr}");
+    let cursor: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.rimz_home().join("cache/providers/spending.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        cursor["rebuild_days"],
+        json!([kept.to_string(), day.to_string()]),
+        "the deferred days must persist as pending"
+    );
 }
 
 #[test]
@@ -259,6 +278,67 @@ fn stats_reads_spend_under_an_unnamed_system_zone() {
     assert_eq!(spend.split_whitespace().nth(4), Some("$0.25"), "{stdout}");
     let stderr = String::from_utf8_lossy(&output.get_output().stderr);
     assert!(stderr.contains("no IANA name"), "{stderr}");
+}
+
+#[test]
+fn stats_unattended_rebuild_is_silent_and_records_only_effective_work() {
+    let env = Env::new();
+    let (day, _) = seed_rebuild_history(&env);
+    let cursor = env.rimz_home().join("cache/providers/spending.json");
+    for pending in [true, true, false] {
+        if pending {
+            let mut cache: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&cursor).unwrap()).unwrap();
+            cache["rebuild_days"] = json!([day.to_string()]);
+            std::fs::write(&cursor, serde_json::to_vec(&cache).unwrap()).unwrap();
+        }
+        let output = env
+            .rimz()
+            .args(["stats", "--rebuild", "--unattended"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+    let output = env
+        .rimz()
+        .args(["stats", "--assists", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["rollup"]["spend_rebuilds"], 1, "{report}");
+    let records = report["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["assist"] == "spend_rebuild")
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "{report}");
+    assert_eq!(records[0]["days"], json!([day.to_string()]));
+    assert_eq!(records[0]["files"], 2);
+    assert_eq!(records[0]["rebuilt"][0]["before_usd"], 2.0);
+    assert_eq!(records[0]["rebuilt"][0]["after_usd"], 5.0);
+    assert!(records[0]["kept"].as_array().unwrap().is_empty());
+    let cache: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cursor).unwrap()).unwrap();
+    assert!(cache.get("rebuild_days").is_none(), "{cache}");
+    std::fs::write(env.rimz_home().join("accounts/.history/format"), "2\n").unwrap();
+    let output = env
+        .rimz()
+        .args(["stats", "--rebuild", "--unattended"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty() && output.stderr.is_empty(),
+        "{output:?}"
+    );
+    env.rimz().args(["stats", "--unattended"]).assert().code(2);
 }
 
 fn publish_team_effort(env: &Env) {

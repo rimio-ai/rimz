@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn spend_rebuilds_roll_up_and_preserve_the_day_and_dollar_evidence() {
+    let wire = serde_json::json!({
+        "at": "2026-06-02T12:00:00Z", "assist": "spend_rebuild",
+        "days": ["2026-05-10"], "files": 2,
+        "rebuilt": [
+            {"login": "claude@default", "day": "2026-05-10", "before_usd": 2.0, "after_usd": 5.0},
+            {"login": "codex@default", "day": "2026-05-10", "after_usd": 1.0}
+        ],
+        "kept": [{"login": "claude@default", "day": "2026-05-09"}]
+    });
+    let record = serde_json::from_value::<AssistRecord>(wire.clone());
+    assert!(record.is_ok(), "spend_rebuild must decode: {record:?}");
+    let stats = AssistStats::from_records("all", vec![record.unwrap()]);
+    let rollup = serde_json::to_value(&stats.rollup).unwrap();
+    assert_eq!(rollup["spend_rebuilds"], 1, "{rollup}");
+    assert_eq!(stats.timeline(0, false).0.len(), 1);
+    for mode in [CategoryMode::Dashboard, CategoryMode::Timeline] {
+        assert!(
+            category_entries(&stats.rollup, mode)
+                .iter()
+                .any(|(label, value)| *label == "Spend rebuild:" && value == "1")
+        );
+    }
+    let zone = jiff::tz::TimeZone::UTC;
+    let benefit = benefit_line(&stats.events[0], &zone);
+    assert!(benefit.contains("1 UTC day"), "{benefit}");
+    assert!(benefit.contains("$2.00 → $6.00"), "{benefit}");
+    let forensic = forensic_line(&stats.events[0], &zone);
+    assert!(
+        forensic.contains("2 files") && forensic.contains("2026-05-09"),
+        "{forensic}"
+    );
+    let event = serde_json::to_value(&stats.events[0]).unwrap();
+    assert_eq!(event, wire);
+}
+
+#[test]
+fn spend_rebuild_without_before_figures_shows_zero_not_negative_zero() {
+    let record = serde_json::from_value::<AssistRecord>(serde_json::json!({
+        "at": "2026-06-02T12:00:00Z", "assist": "spend_rebuild",
+        "days": ["2026-05-10"], "files": 1,
+        "rebuilt": [{"login": "claude@default", "day": "2026-05-10", "after_usd": 5.0}],
+        "kept": []
+    }))
+    .unwrap();
+    let stats = AssistStats::from_records("all", vec![record]);
+    let zone = jiff::tz::TimeZone::UTC;
+    let benefit = benefit_line(&stats.events[0], &zone);
+    assert_eq!(benefit, "12:00 ♻ spend rebuilt — 1 UTC day, $0.00 → $5.00");
+    assert!(!forensic_line(&stats.events[0], &zone).contains("$-0.00"));
+}
+
+#[test]
 fn category_modes_distinguish_requests_from_effects_and_label_parked_time() {
     let rollup = AssistRollup {
         resumes: 16,
@@ -921,6 +974,29 @@ mod repeats {
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(
             lines[0].contains("waiting ×7") && lines[1].contains("waiting ×4"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains(" over ")),
+            "{lines:?}"
+        );
+        assert_eq!(older, 0);
+    }
+
+    #[test]
+    fn timeline_spend_rebuilds_keep_their_own_rows() {
+        let records = ["2026-05-11", "2026-05-10"].map(|day| {
+            serde_json::json!({
+                "assist": "spend_rebuild", "days": [day], "files": 1,
+                "rebuilt": [{"login": "claude@default", "day": day, "after_usd": 5.0}],
+                "kept": []
+            })
+        });
+        let stats = repeat_stats(records.into());
+        let (lines, older) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("2026-05-11") && lines[1].contains("2026-05-10"),
             "{lines:?}"
         );
         assert!(

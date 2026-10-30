@@ -13,7 +13,7 @@ The command has four surfaces, and most rules on this page differ between them:
 
 The code is [`crates/rimz/src/cli/stats/`](../../crates/rimz/src/cli/stats/mod.rs). What every figure means for someone using RimZ is the [Token Insight guide](../guide/insight.md). Every flag and JSON field is in the [stats CLI reference](../reference/cli/stats.md).
 
-The rebuild calls `agents::spending::rebuild_spending_history` with the current headline spec, `RebuildScope::All`, and stderr progress. It waits a bounded time for the producer lock, then runs a fresh publishing walk without the ordinary cache shortcuts. The library owns transcript selection, cold parsing, comparison, durable appends and publication; the handler owns the summary and kept-account-day warnings. Requested rebuilds write no assist. The [closed-day history rules](./agents/spending.md#closed-day-spend-lines) define targets, prices, partial days, concurrency and retention.
+The requested rebuild calls `agents::spending::rebuild_spending_history` with the current headline spec, `RebuildScope::All`, and stderr progress. It waits a bounded time for the producer lock, then runs a fresh publishing walk without the ordinary cache shortcuts. The library owns transcript selection, cold parsing, comparison, durable appends and publication; the handler owns the summary and kept-account-day warnings. Requested rebuilds write no assist. Hidden `--unattended` requires `--rebuild`, selects `RebuildScope::Pending`, and prints nothing, including on failure. The handler appends one `spend_rebuild` assist when the report contains replacements, and none for empty or unchanged work. The [closed-day history rules](./agents/spending.md#closed-day-spend-lines) define targets, prices, partial days, concurrency and retention.
 
 ## Where the figures come from
 
@@ -216,6 +216,7 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 | GC and temp eviction | it has no top-level error, so a partial sweep counts |
 | port forward | it has no error; the local supervisor opened the forward |
 | empty-dir grant | always: the provider-file write succeeded, independently of later launch preflights |
+| spend rebuild | always: the helper writes a record only after at least one replacement append |
 | molt, idle-stop withdrawal, judge decline, workflow transitions, resident launch, model alias, tier fallback, compact command, room resume | always: each counts as recorded |
 
 `crates/rimz/src/cli/stats/assists.rs::category_entries` takes a `CategoryMode`: Dashboard omits held-attempt detail, counts Auto-compact requests as `compacts + held["compacts"]`, and hides zero-count categories. Timeline keeps effective counts and held detail. Both modes group counts by thousands and describe Auto-continue's duration as `(after 5.1h parked)`, not time saved. These are text projections, not changes to the rollup or timeline predicate.

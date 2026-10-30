@@ -263,7 +263,6 @@ impl ClosedDays {
         let Some(recorded) = &self.recorded else {
             return;
         };
-        let closed_before = now_secs.saturating_sub(CLOSE_LAG_SECS) / DAY_SECS;
         if files.iter().any(|file| {
             if !recorded
                 .read
@@ -277,7 +276,7 @@ impl ClosedDays {
                 return false;
             };
             cached.entries.iter().any(|entry| {
-                entry.ts_secs / DAY_SECS < closed_before
+                is_closed_day(entry.ts_secs, now_secs)
                     && within_widest_window(entry.ts_secs, now_secs)
                     && !self.index.replaces(&file.login, entry.ts_secs)
             })
@@ -290,13 +289,14 @@ impl ClosedDays {
         &mut self,
         paths: &SpendingHistoryPaths,
         accounts: &[HistoryAccount],
-    ) -> &SpendIndex {
+    ) -> Result<&SpendIndex, AtomicErr> {
         if let Err(error) = self.refresh(paths, accounts) {
             tracing::warn!(%error, "failed to read closed-day spending history");
             self.index = SpendIndex::default();
             self.read_key = None;
+            return Err(error);
         }
-        &self.index
+        Ok(&self.index)
     }
 
     fn refresh(
@@ -510,7 +510,7 @@ impl ClosedDays {
             self.recording_dedups += 1;
         }
         let recordable_account = |login: &LoginKey, ts: u64| {
-            if ts / DAY_SECS >= now_secs.saturating_sub(CLOSE_LAG_SECS) / DAY_SECS
+            if !is_closed_day(ts, now_secs)
                 || !within_widest_window(ts, now_secs)
                 || self.index.replaces(login, ts)
                 || incomplete.contains(login)
@@ -559,20 +559,20 @@ impl ClosedDays {
             .as_ref()
             .expect("history refreshed above")
             .accounts;
-        let days = match scope {
-            RebuildScope::All => {
-                self.effective_days()
-                    .into_values()
-                    .filter(|day| {
-                        account_keys.iter().any(|account| {
-                            account.kind == day.kind && account.identity == day.account
-                        }) && retained_day(day.day, req.now_secs)
-                    })
-                    .map(|day| day.day)
-                    .collect::<BTreeSet<_>>()
-            }
-            RebuildScope::Pending => BTreeSet::new(),
+        let mut days = match scope {
+            RebuildScope::All => self
+                .effective_days()
+                .into_values()
+                .filter(|day| {
+                    account_keys
+                        .iter()
+                        .any(|account| account.kind == day.kind && account.identity == day.account)
+                })
+                .map(|day| day.day)
+                .collect::<BTreeSet<_>>(),
+            RebuildScope::Pending => cache.rebuild_days.clone(),
         };
+        days.retain(|day| rebuildable_day(*day, req.now_secs));
         let mut report = RebuildReport {
             days: days.iter().copied().collect(),
             ..Default::default()
@@ -748,15 +748,19 @@ fn append_day(hold: &Maintenance, record: &SpendDay) -> Result<(), AtomicErr> {
     history::append(&hold.paths, &hold.paths.spend(record.day.year()), &bytes)
 }
 
-fn utc_day(ts: u64) -> Option<Date> {
+pub(super) fn utc_day(ts: u64) -> Option<Date> {
     Timestamp::from_second(i64::try_from(ts).ok()?)
         .ok()
         .map(|ts| ts.to_zoned(TimeZone::UTC).date())
 }
 
-fn retained_day(day: Date, now_secs: u64) -> bool {
+fn is_closed_day(ts_secs: u64, now_secs: u64) -> bool {
+    ts_secs / DAY_SECS < now_secs.saturating_sub(CLOSE_LAG_SECS) / DAY_SECS
+}
+
+pub(super) fn rebuildable_day(day: Date, now_secs: u64) -> bool {
     day_start(day).is_some_and(|start| {
-        start <= now_secs
+        is_closed_day(start, now_secs)
             && start.saturating_add(DAY_SECS) > now_secs.saturating_sub(WIDEST_SPEND_WINDOW_SECS)
     })
 }

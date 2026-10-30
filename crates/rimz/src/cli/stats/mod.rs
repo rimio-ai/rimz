@@ -83,6 +83,8 @@ pub struct StatsArgs {
         ]
     )]
     rebuild: bool,
+    #[arg(long, hide = true, requires = "rebuild")]
+    unattended: bool,
     /// Scale the heatmap by dollars spent instead of tokens used.
     #[arg(long)]
     pub dollars: bool,
@@ -282,7 +284,7 @@ impl Window {
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.rebuild {
-        return rebuild::run();
+        return rebuild::run(args.unattended);
     }
     if args.assists {
         let assists = AssistStats::from_records(
