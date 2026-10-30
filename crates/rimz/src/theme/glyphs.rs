@@ -75,6 +75,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(ClockQ2, "◑", None),
     glyph!(ClockQ3, "◕", None),
     glyph!(ClockQ4, "●", None),
+    // An expired cache or child quiet past its stall window, never a long wait.
     glyph!(ClockOver, "◉", None),
     glyph!(ValueApprox, "≈", None),
     glyph!(Seam, "·", None),
