@@ -138,7 +138,8 @@
 # Glyphs are display-only and grouped the way the sidebar reads on screen. Both
 # shipped sets are listed as examples; uncomment any line to override one glyph.
 # Every glyph must occupy one terminal cell, or two when a trailing space pads a
-# double-width icon.
+# double-width icon. In the sections below, every `##` line is a key as
+# shipped; notes use a single `#`.
 ## set = "nerd_font"
 
 [theme.glyphs.unicode.status]
