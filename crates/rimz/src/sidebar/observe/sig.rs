@@ -490,7 +490,13 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
                 panel.reset_credits.as_ref().map(|credits| {
                     credits.soonest_expiry.map_or_else(
                         || credits.count.to_string(),
-                        |expiry| format!("{}@{expiry}", credits.count),
+                        |expiry| {
+                            format!(
+                                "{}@{}",
+                                credits.count,
+                                expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+                            )
+                        },
                     )
                 }),
             ),
@@ -598,6 +604,7 @@ mod tests {
     /// workspace tallies are set too.
     fn full_snapshot() -> SidebarSnapshot {
         let at = |secs| jiff::Timestamp::from_second(secs).unwrap();
+        let reset_expiry = "2027-01-15T08:00:00.900000Z".parse().unwrap();
         let tally = crate::SpendTally {
             headline: spent(1.5),
             week: spent(20.25),
@@ -628,8 +635,8 @@ mod tests {
             }),
             reset_credits: Some(crate::agents::ResetCredits {
                 count: 2,
-                soonest_expiry: Some(at(1_800_000_000)),
-                expiries: vec![at(1_800_000_000)],
+                soonest_expiry: Some(reset_expiry),
+                expiries: vec![reset_expiry],
                 effect: crate::agents::RedeemEffect::RestartsWindow,
             }),
             redeem_forecast: Some(crate::store::snapshot::RedeemForecast::Armed),
