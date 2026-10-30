@@ -11,7 +11,6 @@ use crate::ids::AgentKind;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
-    NotApplicable,
     Applies,
     Fallback(FolderTrust),
 }
@@ -62,7 +61,7 @@ pub fn decide(
         return Ok(Decision::Skip);
     }
     check(paths)?;
-    match verdict(true, kind, &login.env(&super::ambient_env())) {
+    match verdict(kind, &login.env(&super::ambient_env())) {
         Verdict::Applies => {
             prepare(paths, &agents.iter().collect::<Vec<_>>(), requested).map(Decision::Applied)
         }
@@ -70,28 +69,14 @@ pub fn decide(
             "empty-dir ignored: not trusted for {kind} account {} (see rimz doctor)",
             login.name()
         ))),
-        Verdict::NotApplicable => Ok(Decision::Skip),
     }
 }
 
-pub fn verdict(enabled: bool, kind: &AgentKind, login_env: &BTreeMap<String, String>) -> Verdict {
-    verdict_at(
-        &crate::disk::paths::empty_dir_root(),
-        enabled,
-        kind,
-        login_env,
-    )
+pub fn verdict(kind: &AgentKind, login_env: &BTreeMap<String, String>) -> Verdict {
+    verdict_at(&crate::disk::paths::empty_dir_root(), kind, login_env)
 }
 
-fn verdict_at(
-    root: &Path,
-    enabled: bool,
-    kind: &AgentKind,
-    login_env: &BTreeMap<String, String>,
-) -> Verdict {
-    if !enabled {
-        return Verdict::NotApplicable;
-    }
+fn verdict_at(root: &Path, kind: &AgentKind, login_env: &BTreeMap<String, String>) -> Verdict {
     match trust_at(root, kind, login_env) {
         None | Some(FolderTrust::Decided) => Verdict::Applies,
         Some(trust) => Verdict::Fallback(trust),
@@ -124,6 +109,7 @@ fn trust_at(
     login_env: &BTreeMap<String, String>,
 ) -> Option<FolderTrust> {
     let adapter = super::find_definition(kind.as_str())?;
+    let root = resolved_root(root);
     // A grant can precede directory creation. Probe Git at the nearest existing ancestor.
     let repo_root = root
         .ancestors()
@@ -138,7 +124,21 @@ fn trust_at(
                 .success()
                 .then(|| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
         });
-    adapter.folder_trust(root, repo_root.as_deref(), login_env)
+    adapter.folder_trust(&root, repo_root.as_deref(), login_env)
+}
+
+fn resolved_root(root: &Path) -> PathBuf {
+    root.ancestors()
+        .find_map(|ancestor| {
+            let resolved = ancestor.canonicalize().ok()?;
+            let rest = root.strip_prefix(ancestor).ok()?;
+            Some(if rest.as_os_str().is_empty() {
+                resolved
+            } else {
+                resolved.join(rest)
+            })
+        })
+        .unwrap_or_else(|| root.into())
 }
 
 /// Check both instruction-bearing parent levels; the agent's own contents are its own.
