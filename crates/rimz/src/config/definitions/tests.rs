@@ -2,6 +2,40 @@ use super::*;
 use crate::config::{CommandsConfig, SkillName};
 
 #[test]
+fn example_bundles_load_without_external_definitions() {
+    let bundles = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/teams");
+    for entry in std::fs::read_dir(bundles).unwrap() {
+        let entry = entry.unwrap();
+        if !entry.file_type().unwrap().is_dir() {
+            continue;
+        }
+        let name = entry.file_name().into_string().unwrap();
+        let path = entry.path().join(format!("{name}.md"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (yaml, _) = frontmatter::split(&path, &text).unwrap();
+        let team: frontmatter::TeamFrontmatter = frontmatter::parse(&path, yaml).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), &format!("teams/{name}.md"), &text);
+        let agents = root.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        for agent in std::fs::read_dir(entry.path().join("agents")).unwrap() {
+            let agent = agent.unwrap();
+            std::fs::copy(agent.path(), agents.join(agent.file_name())).unwrap();
+        }
+        let loaded = load_checked(root.path());
+        assert!(loaded.errors.is_empty(), "{name}: {:?}", loaded.errors);
+        assert_eq!(loaded.teams.0[&name].roles.len(), team.roles.len());
+        for role in team.roles {
+            assert!(
+                loaded.agent_profiles.0.contains_key(&role.agent),
+                "{name}: missing {}",
+                role.agent
+            );
+        }
+    }
+}
+
+#[test]
 fn shared_skill_and_trait_text_is_read_once_per_load() {
     let root = fixture();
     write(

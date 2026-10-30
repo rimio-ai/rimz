@@ -93,6 +93,33 @@ fn positional_launch_guards_commands_and_unknown_teams() {
 }
 
 #[test]
+fn unknown_launch_names_point_to_packs_only_when_no_teams_are_configured() {
+    let mut actual = Vec::new();
+    for teams in [
+        rimz::config::TeamsConfig::default(),
+        rimz::config::TeamsConfig(BTreeMap::from([(
+            "forge".to_owned(),
+            rimz::config::Team::default(),
+        )])),
+    ] {
+        let error = guard_launch("install", None, &teams, &Default::default()).unwrap_err();
+        assert!(error.downcast_ref::<UsageError>().is_some(), "{error}");
+        actual.push(error.to_string());
+    }
+    let commands = super::super::usage::scene_verbs("teams").join(", ");
+    let prefix = format!(
+        "`install` is neither a teams command nor a configured team\ncommands: {commands}\n"
+    );
+    assert_eq!(
+        actual,
+        [
+            format!("{prefix}no teams are configured (install one with `rimz packs install crew`)"),
+            format!("{prefix}configured teams: forge"),
+        ]
+    );
+}
+
+#[test]
 fn launch_rejects_attached_short_prompt() {
     for prefix in [vec!["rimz", "forge"], vec!["rimz", "launch", "forge"]] {
         for prompt in ["-wfeat", "-w=feat"] {

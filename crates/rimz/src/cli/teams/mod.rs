@@ -3,7 +3,6 @@
 mod board_context;
 mod cohort;
 mod flip;
-mod install;
 mod list;
 mod record;
 mod show;
@@ -97,8 +96,6 @@ enum TeamsSubcmd {
     Record(RecordArgs),
     /// Block until team cohorts' boards reach Done, then print their Result.
     Wait(WaitArgs),
-    /// List or install team bundles from the matching RimZ release.
-    Install(install::InstallArgs),
 }
 
 #[derive(Debug, Args)]
@@ -437,7 +434,6 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
             ensure_defined(&name, globals)?;
             cohort::restart(&name, worktree.as_deref(), globals)
         }
-        Some(TeamsSubcmd::Install(args)) => install::run(args),
         Some(TeamsSubcmd::Flip(args)) => flip::run(args, globals),
         Some(TeamsSubcmd::Record(args)) => record::run(args, globals),
         Some(TeamsSubcmd::Wait(args)) => wait::run(args, globals),
@@ -554,7 +550,7 @@ fn validate_team_name(
     let valid = teams.0.keys().cloned().collect::<Vec<_>>();
     if valid.is_empty() {
         bail!(
-            "unknown team `{name}`; no teams are configured (install one with `rimz teams install forge`)"
+            "unknown team `{name}`; no teams are configured (install one with `rimz packs install crew`)"
         );
     }
     bail!(
@@ -583,9 +579,16 @@ fn guard_launch(
             ))
             .into());
         }
-        let configured = teams.0.keys().cloned().collect::<Vec<_>>().join(", ");
+        let configured = if teams.0.is_empty() {
+            "no teams are configured (install one with `rimz packs install crew`)".to_owned()
+        } else {
+            format!(
+                "configured teams: {}",
+                teams.0.keys().cloned().collect::<Vec<_>>().join(", ")
+            )
+        };
         let message = format!(
-            "`{team}` is neither a teams command nor a configured team\ncommands: {}\nconfigured teams: {configured}",
+            "`{team}` is neither a teams command nor a configured team\ncommands: {}\n{configured}",
             verbs.join(", ")
         );
         return Err(UsageError::new(message).into());

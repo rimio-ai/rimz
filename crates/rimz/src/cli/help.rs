@@ -67,11 +67,10 @@ pub(crate) const AGENTS_GROUPS: [(&str, &[&str]); 4] = [
     ("Define", &["validate", "register", "check"]),
 ];
 
-const TEAMS_GROUPS: [(&str, &[&str]); 4] = [
+const TEAMS_GROUPS: [(&str, &[&str]); 3] = [
     ("See", &["list", "show", "wait"]),
     ("Drive", &["focus", "stop", "restart", "flip", "record"]),
     ("Start", &["launch", "resume", "profiles"]),
-    ("Define", &["install"]),
 ];
 
 /// A scene whose bare form orients instead of launching.
@@ -102,10 +101,10 @@ impl Scene {
         }
     }
 
-    fn groups(self) -> [(&'static str, &'static [&'static str]); 4] {
+    fn groups(self) -> &'static [(&'static str, &'static [&'static str])] {
         match self {
-            Self::Agents => AGENTS_GROUPS,
-            Self::Teams => TEAMS_GROUPS,
+            Self::Agents => &AGENTS_GROUPS,
+            Self::Teams => &TEAMS_GROUPS,
         }
     }
 }
@@ -117,6 +116,7 @@ pub(crate) fn scene_orientation(scene: Scene) -> String {
     lines.extend(
         scene
             .groups()
+            .iter()
             .map(|(heading, verbs)| format!("{:<9}{}", format!("{heading}:"), verbs.join("  "))),
     );
     lines.join("\n")
@@ -492,7 +492,6 @@ mod tests {
             ("See", "list show wait"),
             ("Drive", "focus stop restart flip record"),
             ("Start", "launch resume profiles"),
-            ("Define", "install"),
         ];
         let mut seen = BTreeSet::new();
         let help = teams.render_long_help().to_string();

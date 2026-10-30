@@ -31,14 +31,14 @@ The split itself is yours to design: two roles or five, one provider or several,
 
 ## Run the forge team
 
-`forge` is the team RimZ is built with: three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system prompt. Its roles run the `claude` and `codex` CLIs, so both must be on your `PATH`. Install the bundle that matches your RimZ release, then check what it wrote:
+`forge` is the team RimZ is built with: three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system prompt. Its roles run the `claude` and `codex` CLIs, so both must be on your `PATH`. Install the release-matched `crew` pack, review its definitions and grants, then validate the merged definitions:
 
 ```sh
-rimz teams install forge
+rimz packs install crew
 rimz agents validate
 ```
 
-`install` writes `~/.rimz/teams/forge.md` and the three role definitions it selects under `~/.rimz/agents/`, adding the shared `claude.md` and `codex.md` kind bases only if your machine has none. If one of those files already exists, the install stops rather than overwriting it, and `rimz teams install forge --force` replaces them. From a repository checkout you can copy the same files instead, which is the version to edit in place:
+Pack definitions load below your own home files and do not overwrite them. The [packs reference](../reference/cli/packs.md) covers the review, version selection, and updates. From a repository checkout you can copy the sample definitions into your home instead, which gives you files to edit in place:
 
 ```sh
 mkdir -p ~/.rimz/teams ~/.rimz/agents
@@ -78,7 +78,7 @@ None of the three is a relay for the others. The coder takes a choice the plan l
 rimz message @planner "use the token bucket from the gateway, not a new one"
 ```
 
-Two siblings ship beside forge and work exactly the same way. `mill` leads with an architect on a refactor that has to remove surface, and `spot` pairs a coder and a reviewer on a fix with no design left to do; [the bundle guide](../../examples/teams/README.md) walks all three pipelines and the prompts behind them.
+Two siblings ship beside forge and work exactly the same way. `mill` leads with an architect on a refactor that has to remove surface, and `spot` pairs a coder and a reviewer on a fix with no design left to do; [the sample guide](../../examples/teams/README.md) walks all three pipelines and the prompts behind them.
 
 ## See and drive your teams
 

@@ -230,7 +230,7 @@ fn profile_cards(
             ProfileListing::Subagents => "subagents",
             ProfileListing::Teams => {
                 writeln!(out, "No team profiles configured.")?;
-                writeln!(out, "Install a team with `rimz teams install forge`.")?;
+                writeln!(out, "Install teams with `rimz packs install crew`.")?;
                 return Ok(());
             }
         };
