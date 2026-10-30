@@ -247,13 +247,15 @@ Agent-initiated launches, forks, resumes, and restarts leave your focus alone, s
 
 **Fork an agent to try another approach.** `rimz agents fork @coder` from your shell takes over the launching pane with the full conversation under a new provider-assigned session id, in the source worktree, leaving the original session untouched and keeping its permission mode. Pass `--new-pane` to keep the launching pane, or `--new-tab` for a separate view. The fork gets a fresh pet name; `rimz agents fork @coder --name twin` pins `@twin` when you want both approaches to have memorable handles.
 
-**Compact context before the next task.** You can type the agent's native compaction command in its pane; `rimz agents compact @coder` submits that same command from wherever you are: at once on an idle agent, and queued until the next turn boundary on a busy one. To choose what survives the summary, pass an instruction on an agent whose CLI accepts one (Claude, Grok, Droid, and OMP today):
+**Compact context before the next task.** You can type the agent's native compaction command in its pane; `rimz agents compact @coder` submits that same command from wherever you are: at once on an idle agent, and queued until the next turn boundary on a busy one. To choose what survives the summary, pass an instruction on an agent whose CLI [accepts one](../reference/cli/agents.md#compact):
 
 ```sh
 rimz agents compact @coder "keep the open questions and the exact file list"
 ```
 
 Without an instruction it uses your [configured compaction brief](./configuration.md#smart-compaction). There is no way to force a compaction into a live turn, and RimZ refuses a second one until the agent has taken a new user turn. The [command reference](../reference/cli/agents.md#compact) covers instruction support and the delivery output.
+
+For hands-off work, [smart compaction](./loops.md#smart-compaction) watches the seat's context line: it asks a busy agent to wrap up, compacts at rest if needed, and continues behind queued messages. It also compacts before a message reaches an already-resting agent. Solo seats, team members, and supervised children share that policy; their provider's native window remains the backstop.
 
 Three everyday tasks have their own guides, with the depth this page leaves out. The [messaging guide](./messaging.md) sends text that parks at the turn boundary, interrupts the live turn, or arrives on a schedule. The [scripting guide](./scripting.md) turns the same launcher into one prompt, supervised until the work ends, with one exit code for a pipeline or CI job (`rimz agents … -p`). And when you are away from the terminal, [remote → answer asks from your phone](./remote.md#answer-asks-from-your-phone) keeps the bridge behind the Claude and Codex mobile apps up with every room, so an agent's question reaches you as a push.
 

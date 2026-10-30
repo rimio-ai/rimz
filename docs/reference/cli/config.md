@@ -107,7 +107,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `theme.scheme`, and the shorthand `theme` | a bundled theme name or a path to an Alacritty TOML file |
 | `theme.glyphs.set` and the shorthand `theme.glyphs`; `theme.glyphs.<set>.<namespace>.<role>` | a glyph set name or glyph string |
 | `harness.auto_compact` | `off` or a token count from `100k` through `1M` (default `272k`); see [native auto-compaction](../../guide/configuration.md#native-auto-compaction) |
-| `harness.smart_compact` | `off`, a token count (`258k`, the default), or a percentage (`70%`) |
+| `harness.smart_compact` | `off`, a token count (`258k`, the default), or a percentage (`70%`); fallback for [mid-turn soft compaction and compact-first delivery](../../guide/configuration.md#smart-compaction), overridden per role or profile |
 | `harness.flip_compact` | `off`, a token count (`180k`), or a percentage (`70%`); see [hand-off compaction](../../guide/configuration.md#hand-off-compaction) |
 | `harness.compact_instruction` | any string, including `""` |
 | `harness.idle_compact` | `off` or a token floor such as `100k` (default); see [idle compaction](../../guide/configuration.md#idle-compaction) |

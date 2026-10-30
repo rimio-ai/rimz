@@ -64,8 +64,8 @@ pub struct ResumeConfig {
     /// Resume any live parked agent by typing
     /// [`auto_continue_text`](Self::auto_continue_text) into its pane: rate
     /// limits at the spent-window reset, overloads and transient server errors on
-    /// the backoff ramp. Off by default: RimZ types into a pane on its own only
-    /// once you opt in. Best-effort and traced through message records.
+    /// the backoff ramp. Recovery of these parks is off by default, best-effort,
+    /// and traced through message records.
     pub auto_continue: bool,
     /// Retry ramp, in seconds, for non-clocked auto-continue. The last value
     /// repeats until [`auto_continue_max_retries`](Self::auto_continue_max_retries)
@@ -73,9 +73,9 @@ pub struct ResumeConfig {
     pub auto_continue_backoff_secs: Vec<u64>,
     /// Number of auto-continue attempts before leaving the row paused.
     pub auto_continue_max_retries: u32,
-    /// The text the producer nudges a parked agent with when `auto_continue` is
-    /// on. Sent as a bracketed paste plus a submit Enter, the same pane-send path
-    /// `message --steer` uses.
+    /// Text for park recovery when `auto_continue` is on, and for mid-turn soft
+    /// compaction's continue regardless of that switch. Blank text disables the
+    /// soft trigger. Sent through the message queue as a paste plus Enter.
     pub auto_continue_text: String,
     /// Spend a Codex reset credit automatically when an in-use account's spend
     /// ladder reaches a useful reset. Expiry rescue remains

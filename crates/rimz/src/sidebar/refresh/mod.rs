@@ -342,6 +342,9 @@ pub(super) fn refresh_heavy_lanes(
     steps.step("idle_compact", || {
         crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &policy)
     });
+    steps.step("soft_compact", || {
+        crate::harness::soft_compact::compact_agents(base, runtime, config, &policy)
+    });
     steps.step("idle_stop", || {
         crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime)
     });
