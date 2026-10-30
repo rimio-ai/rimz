@@ -13,7 +13,8 @@ rimz packs exclude <PACK>[:<NAME>] [--type <TYPE>]
 rimz packs include <PACK>[:<NAME>] [--type <TYPE>]
 rimz packs customize <PACK>:<NAME> [--type <TYPE>] [--copy]
 rimz packs diff <PACK>:<NAME> [--type <TYPE>]
-rimz packs reset <PACK>:<NAME> [--type <TYPE>]
+rimz packs reset <PACK>:<NAME> [--type <TYPE>] [--identical]
+rimz packs reset <PACK> [--type <TYPE>] --identical
 ```
 
 Pack names use `[A-Za-z0-9_-]+` and are unique across installed sources. Item types are `agents`, `subagents`, `teams`, `traits`, and `skills`. Kind bases belong to `agents`, not a separate type. Qualified `<pack>:<name>` keys select items for exclusions and definition `agent:` parents; they are not launch specs.
@@ -196,6 +197,20 @@ rimz agents validate
 rimz packs reset crew:coder --type agents
 ```
 
+### Remove identical home copies
+
+`reset --identical` removes only byte-identical home overrides. A definition compares as one file; a skill must have the same relative regular-file paths and bytes, including ancillary files. Empty directories do not affect equality; inner symlinks and other non-regular entries keep the skill. Differing overrides stay, each listed with its `rimz packs diff` command. The installation record is unchanged, and repeating the command removes nothing more unless files have changed.
+
+With a bare pack, `--identical` is required. Optional `--type` limits the pass to one tree. A pack-wide pass keeps cross-tree and configured-command claims, linked-tree entries that resolve to shipped items, and overrides with read or comparison errors, each listed as `Kept <pack>:<name> (<type>): <reason>`. It continues with the other items, deciding shared home entries once. An item-specific reset still refuses unremovable paths and fails fast on errors. If a proven-identical entry cannot be removed, host skill-link cleanup still runs and completed receipts still print before the command exits 1 with `Pack reset incomplete`. Receipts use the reloaded inventory, so removing one shared home claim can expose a pack conflict rather than a loading item.
+
+```sh
+rimz packs reset crew --identical
+rimz packs reset crew --type skills --identical
+rimz packs reset crew:coder --type agents --identical
+```
+
+A successful Git or linked install reports how many removable overrides are identical and names `rimz packs reset <pack> --identical`. Installation never removes those files automatically. See [moving a home crew into a pack](../../guide/configuration.md#moving-a-home-crew-into-a-pack).
+
 ## Remove a pack and clean up links
 
 `remove` stops loading one installed pack. If it was the source's last pack, RimZ also drops the source record and entry link. It never deletes a linked checkout. An owned Git checkout survives removal until a later installation-record mutation collects it. Dependencies are not removed. Reinstalling uses the usual selection rule (all packs for linked sources; defaults or a selector for Git).
@@ -290,4 +305,4 @@ A linked checkout under `/tmp` or `/var/tmp` is hidden from scoped agents runnin
 | --- | --- |
 | `0` | Listed or showed an installed pack, even with load problems; ran a diff, whether different, identical, or without an override; committed a mutation and completed host skill-link cleanup; declined an install or widening update on a terminal; or skipped pinned and linked update sources. Already-applied changes also succeed. An editor failure keeps the new override and succeeds. |
 | `1` | Unknown pack or selector, missing item, an excluded override target, an already-overridden customize target, an existing customize destination, inheriting a failed item, a reset outside the item's own home tree, of a configured command, or through a linked home tree to the shipped item itself, invalid source or manifest, missing Git ref/tag, fetch failure or timeout, a changed record before commit, Git install without a terminal or `--yes`, a widening update held without a terminal or `--yes`, any failed update source (the others still apply), overlapping agents home, a pack name owned by another source, an `include` of one item whose type is excluded, record/I/O failure, or incomplete post-commit host skill-link cleanup. |
-| `2` | Invalid CLI syntax, pack name, item type, or source spelling; empty or ambiguous item name; a copy-only customize target without `--copy`; or an exclusion request with neither item nor type. |
+| `2` | Invalid CLI syntax, pack name, item type, or source spelling; empty or ambiguous item name; a copy-only customize target without `--copy`; a bare `reset <pack>` without `--identical`; or an exclusion request with neither item nor type. |

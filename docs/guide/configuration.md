@@ -677,6 +677,18 @@ RimZ writes `agents/coder.md` under your agents home, with the shipped descripti
 
 Use `rimz packs diff crew:coder --type agents` to inspect your layer, and `rimz agents validate` to check it. To return to the shipped item, run `rimz packs reset crew:coder --type agents`; it removes your override without asking. Teams, traits, kind bases, and skills require `customize --copy`, which copies their shipped bytes rather than inheriting. A skill includes its whole directory. The [packs reference](../reference/cli/packs.md#customize-an-item) covers refusals and editor selection.
 
+#### Moving a home crew into a pack
+
+If you already keep your crew as home Markdown files, linking a pack with the same names leaves those home files in charge. That protects your edits, but also prevents identical copies from following future pack changes. Put the crew in a separate checkout with a [pack manifest](../reference/cli/packs.md#manifest), then link it and remove only unchanged home copies:
+
+```sh
+rimz packs install /path/to/rimz-crew
+rimz packs reset crew --identical
+rimz agents validate
+```
+
+Use the pack name declared by that checkout, `crew` here. Install prints a cleanup hint when it finds identical overrides, but removes none itself. The reset compares bytes, including every regular file of a skill, and deletes only exact home copies in their own tree. Differing overrides stay and get a `diff` command, so inspect and merge those deliberately. If your home `agents/` or `skills/` directory is itself a symlink into the checkout, its entries are the shipped files rather than copies: reset keeps each one with that reason and deletes nothing through the link, so replace the link with a real directory yourself. There is no migration marker: a second run removes nothing more unless your files have changed. The checkout stays separate from the agents home, and later linked edits load immediately.
+
 #### Skills
 
 Two separate things share the word. `~/.rimz/skills/` is a library you fill, shared across providers, and [packs](../reference/cli/packs.md) can supply skills beneath it; a profile's `skills:` list decides which skills that agent may invoke on its own.

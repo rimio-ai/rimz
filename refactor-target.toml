@@ -951,7 +951,9 @@ upward-dependencies = [
 # inventory, PackInventory, PackView, ItemMatchErr and four methods replace the two pack types (+6 net).
 # review, EffectiveGrants, ProfileChange, PackPreview and compare share staged-load review (+5).
 # customization, its four types, four methods and PackView::item own home overrides (+10).
-surface-budget = 253
+# PackOverride::identical shares byte comparison with migration and install hints (+1).
+# ResetOutcome and reset_identical share per-item results over one decision per home entry (+2).
+surface-budget = 256
 
 [[verdict]]
 kind = "item"
@@ -977,6 +979,16 @@ reason = "The CLI presents an inheriting layer, command override, or the files w
 kind = "item"
 key = "config::definitions::customization::FileDiff"
 reason = "Skill diffs present shipped and override paths for additions, removals and symlink targets."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::customization::ResetOutcome"
+reason = "Pack-wide reset carries removals, kept reasons and failures to the CLI's cleanup tail."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::customization::reset_identical"
+reason = "Shared home entries are decided once; comparison errors keep entries and removal failures do not abort the pass."
 
 [[verdict]]
 kind = "item"

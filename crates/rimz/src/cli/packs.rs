@@ -8,7 +8,9 @@ use rimz::agents::skill_links::{self, Desired};
 use rimz::agents::skills::SkillChain;
 use rimz::config::Isolation;
 use rimz::config::definitions::SkillCheck;
-use rimz::config::definitions::customization::{OverrideDiff, OverrideErr, PackOverride};
+use rimz::config::definitions::customization::{
+    self, OverrideDiff, OverrideErr, PackOverride, ResetOutcome,
+};
 use rimz::config::definitions::inventory::{ItemMatchErr, PackInventory, PackView};
 use rimz::config::definitions::review::{self, PackPreview};
 use rimz::disk::paths;
@@ -95,7 +97,13 @@ enum PacksSubcmd {
     /// Compare a home override with its shipped item.
     Diff(ItemSelection),
     /// Remove a home override and load the shipped item again.
-    Reset(ItemSelection),
+    Reset {
+        #[command(flatten)]
+        selection: Selection,
+        /// Remove only byte-identical overrides; accepts a whole pack.
+        #[arg(long)]
+        identical: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -150,7 +158,9 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
     let mut edit_path = None;
     let mut warnings = Vec::new();
     let mut failures = Vec::new();
+    let mut failure_heading = "Pack updates incomplete";
     let mut retired = Vec::new();
+    let mut installed = Vec::new();
     match args.command.unwrap_or(PacksSubcmd::List(args.listing)) {
         PacksSubcmd::List(args) => return list(&load_inventory(&home), args.json),
         PacksSubcmd::Show { pack, json } => {
@@ -165,14 +175,15 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
         PacksSubcmd::Install {
             source: InstallSource::Linked(source),
             yes: _,
-        } => install(&home, &source, &mut receipt, &mut warnings)?,
+        } => installed = install(&home, &source, &mut receipt, &mut warnings)?,
         PacksSubcmd::Install {
             source: InstallSource::Git(source),
             yes,
         } => {
-            if !install_git(&home, &source, yes, &mut receipt)? {
-                return Ok(());
-            }
+            installed = match install_git(&home, &source, yes, &mut receipt)? {
+                Some(names) => names,
+                None => return Ok(()),
+            };
         }
         PacksSubcmd::Update { pack, yes } => {
             failures = update(&home, pack.as_ref(), yes, &mut receipt, &mut retired)?;
@@ -190,9 +201,39 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
             edit_path = Some(customize(&home, selection, copy, &mut receipt)?);
         }
         PacksSubcmd::Diff(selection) => return diff(&home, selection),
-        PacksSubcmd::Reset(selection) => reset(&home, selection, &mut receipt)?,
+        PacksSubcmd::Reset {
+            selection,
+            identical,
+        } => {
+            failures = reset(&home, selection, identical, &mut receipt)?;
+            failure_heading = "Pack reset incomplete";
+        }
     }
     let inventory = load_inventory(&home);
+    for pack in inventory
+        .packs
+        .iter()
+        .filter(|pack| installed.contains(&pack.name))
+    {
+        let name = &pack.name;
+        let count = pack
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(item.fate, ItemFate::Overridden { .. })
+                    && PackOverride::new(&home, item)
+                        .identical()
+                        .is_ok_and(|same| same)
+            })
+            .count();
+        if count > 0 {
+            writeln!(
+                receipt,
+                "{name}: {count} identical override{}; remove with `rimz packs reset {name} --identical`.",
+                if count == 1 { "" } else { "s" }
+            )?;
+        }
+    }
     let cleanup = prune(&home, &mut receipt);
     let write = render::out().write_all(&receipt);
     let mut seen = BTreeSet::new();
@@ -214,7 +255,7 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
     }
     render::finish(write)?;
     if !failures.is_empty() {
-        bail!("Pack updates incomplete:\n{}", failures.join("\n"));
+        bail!("{failure_heading}:\n{}", failures.join("\n"));
     }
     if let Some(path) = edit_path {
         edit(&path)?;
@@ -227,7 +268,7 @@ fn install(
     source: &Path,
     out: &mut impl Write,
     warnings: &mut Vec<Problem>,
-) -> Result<()> {
+) -> Result<Vec<PackName>> {
     let outcome = packs::install(home, source).map_err(|error| {
         let manifest_error = matches!(&error, PackErr::Invalid(problem)
             if problem.path.ends_with("rimz-packs.toml"));
@@ -265,10 +306,15 @@ fn install(
         }
     }
     warnings.extend(outcome.warnings);
-    Ok(())
+    Ok(outcome.packs)
 }
 
-fn install_git(home: &Path, source: &GitSource, yes: bool, out: &mut impl Write) -> Result<bool> {
+fn install_git(
+    home: &Path,
+    source: &GitSource,
+    yes: bool,
+    out: &mut impl Write,
+) -> Result<Option<Vec<PackName>>> {
     let transaction = Transaction::stage(home, source)?;
     let machine = super::machine_config();
     let env = rimz::agents::ambient_env();
@@ -286,7 +332,7 @@ fn install_git(home: &Path, source: &GitSource, yes: bool, out: &mut impl Write)
             Decision::Apply => {}
             Decision::Decline => {
                 writeln!(stdout, "Install aborted; nothing changed.")?;
-                return Ok(false);
+                return Ok(None);
             }
             Decision::NoTerminal => bail!(
                 "pass --yes to confirm this Git pack install without a terminal; nothing changed"
@@ -298,18 +344,15 @@ fn install_git(home: &Path, source: &GitSource, yes: bool, out: &mut impl Write)
             .record
             .sources
             .iter()
-            .filter(|installed| installed.source == source.url)
+            .filter(|installed| installed.source == source.source)
             .flat_map(|source| &source.packs)
-            .map(|pack| pack.name.to_string())
+            .map(|pack| pack.name.clone())
             .collect()
     } else {
-        changes
-            .iter()
-            .map(|change| change.name.to_string())
-            .collect()
+        changes.iter().map(|change| change.name.clone()).collect()
     };
     transaction.commit()?;
-    for name in names {
+    for name in &names {
         writeln!(
             out,
             "{} {name}.",
@@ -321,7 +364,7 @@ fn install_git(home: &Path, source: &GitSource, yes: bool, out: &mut impl Write)
         )?;
         writeln!(out, "  Next: rimz packs show {name}")?;
     }
-    Ok(true)
+    Ok(Some(names))
 }
 
 fn update(
@@ -791,35 +834,100 @@ fn diff(home: &Path, selection: ItemSelection) -> Result<()> {
     Ok(())
 }
 
-fn reset(home: &Path, selection: ItemSelection, out: &mut impl Write) -> Result<()> {
+fn reset(
+    home: &Path,
+    selection: Selection,
+    identical: bool,
+    out: &mut impl Write,
+) -> Result<Vec<String>> {
+    let (pack_name, name) = parse_selection(&selection.target)?;
+    if name.is_none() && !identical {
+        return Err(UsageError::new("a bare reset <pack> requires --identical".to_owned()).into());
+    }
     let inventory = load_inventory(home);
-    let item = selected_item(&inventory, &selection)?;
-    let Some(path) = PackOverride::new(home, item).reset()? else {
-        writeln!(out, "{}:{} already has no override.", item.pack, item.name)?;
-        return Ok(());
+    let pack = inventory.pack(&pack_name)?;
+    let mut outcomes = if let Some(name) = name {
+        let item = pack.item(name, selection.kind).map_err(item_match_error)?;
+        match PackOverride::new(home, item).reset(identical)? {
+            Some(path) => vec![ResetOutcome::Removed { item, path }],
+            None if matches!(item.fate, ItemFate::Overridden { .. }) => {
+                vec![ResetOutcome::Kept { item, reason: None }]
+            }
+            None => Vec::new(),
+        }
+    } else {
+        customization::reset_identical(
+            home,
+            pack.items
+                .iter()
+                .filter(|item| selection.kind.is_none_or(|kind| item.kind == kind)),
+        )
     };
-    writeln!(out, "Removed {}.", path.display())?;
+    outcomes.sort_by_key(|outcome| !matches!(outcome, ResetOutcome::Removed { .. }));
     let after = load_inventory(home);
-    let Some(item) = after
-        .packs
-        .iter()
-        .find(|pack| pack.name == item.pack)
-        .and_then(|pack| {
-            pack.items.iter().find(|current| {
-                current.kind == item.kind && current.name == item.name && current.path == item.path
-            })
-        })
-    else {
-        return Ok(());
-    };
-    writeln!(
-        out,
-        "  {}/{}: {}",
-        item.kind.as_str(),
-        item.name,
-        fate_label(&item.fate, &item.pack)
-    )?;
-    Ok(())
+    let pack = after.packs.iter().find(|pack| pack.name == pack_name);
+    if outcomes.is_empty() {
+        writeln!(
+            out,
+            "{} already has no eligible override to reset.",
+            selection.target
+        )?;
+    }
+    let mut failures = Vec::new();
+    let mut removed = BTreeSet::new();
+    for outcome in outcomes {
+        match outcome {
+            ResetOutcome::Removed { item, path } => {
+                if removed.insert(path.clone()) {
+                    writeln!(out, "Removed {}.", path.display())?;
+                }
+                let Some(item) = pack.and_then(|pack| {
+                    pack.items.iter().find(|current| {
+                        current.kind == item.kind
+                            && current.name == item.name
+                            && current.path == item.path
+                    })
+                }) else {
+                    continue;
+                };
+                writeln!(
+                    out,
+                    "  {}/{}: {}",
+                    item.kind.as_str(),
+                    item.name,
+                    fate_label(&item.fate, &pack_name)
+                )?;
+            }
+            ResetOutcome::Kept { item, reason } => {
+                let key = format!("{pack_name}:{}", item.name);
+                if let Some(reason) = reason {
+                    writeln!(out, "Kept {key} ({}): {reason}", item.kind.as_str())?;
+                } else {
+                    writeln!(
+                        out,
+                        "Kept {key} ({}); diff: {}",
+                        item.kind.as_str(),
+                        shell_command([
+                            "rimz",
+                            "packs",
+                            "diff",
+                            &key,
+                            "--type",
+                            item.kind.as_str()
+                        ])
+                    )?;
+                }
+            }
+            ResetOutcome::Failed { item, error } => {
+                failures.push(format!(
+                    "{pack_name}:{} ({}): {error}",
+                    item.name,
+                    item.kind.as_str()
+                ));
+            }
+        }
+    }
+    Ok(failures)
 }
 
 fn change(home: &Path, selection: Selection, include: bool, out: &mut impl Write) -> Result<()> {
