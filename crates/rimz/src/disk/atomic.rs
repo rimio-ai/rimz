@@ -1,10 +1,11 @@
 //! Disk-write primitives and local temp-file hygiene.
 //!
-//! Two write shapes cover every disk write in the project:
+//! Write shapes cover every disk write in the project:
 //!
 //! - [`write_temp_then_rename`] (cold-path durable) and
 //!   [`write_temp_then_rename_cache`] (rename-atomic, no fsync) for whole
 //!   files.
+//! - `publish_staged_no_replace` for already-synced staged files or directories.
 //! - [`append_record_bytes`] for the event log — one `write()` per record,
 //!   no fsync; durability rides the write tail's debounced `sync_file_data`
 //!   group barrier and the pre-rotation sync.
@@ -25,6 +26,8 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AtomicErr {
+    #[error("destination already exists: {path}; nothing replaced")]
+    Exists { path: PathBuf },
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
@@ -78,6 +81,30 @@ pub fn write_bytes_if_absent_mode(path: &Path, bytes: &[u8], mode: u32) -> Resul
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => sync_parent_dir(path),
         Err(source) => Err(AtomicErr::io(path)(source)),
     }
+}
+
+/// Publish a staged file or directory without replacing any destination entry.
+/// The caller syncs the contents and prepares the parent on the same filesystem.
+#[must_use = "durability barrier; check the result"]
+pub(crate) fn publish_staged_no_replace(staged: &Path, destination: &Path) -> Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        staged,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|error| {
+        let source = io::Error::from(error);
+        if source.kind() == io::ErrorKind::AlreadyExists {
+            AtomicErr::Exists {
+                path: destination.to_owned(),
+            }
+        } else {
+            AtomicErr::io(destination)(source)
+        }
+    })?;
+    sync_parent_dir(destination)
 }
 
 /// Create a directory with an exact mode and durable parent entries.
@@ -586,6 +613,80 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn staged_publication_refuses_existing_entries_without_consuming_the_stage() {
+        let mut observed = Vec::new();
+        let mut expected = Vec::new();
+        for directory in [false, true] {
+            for occupant in ["absent", "file", "directory", "symlink"] {
+                let dir = tempdir().unwrap();
+                let staging = dir.path().join("staging");
+                std::fs::create_dir(&staging).unwrap();
+                let staged = staging.join("item");
+                let destination = dir.path().join("destination");
+                if directory {
+                    std::fs::create_dir(&staged).unwrap();
+                }
+                let payload = |path: &Path| {
+                    if directory {
+                        path.join("payload")
+                    } else {
+                        path.to_owned()
+                    }
+                };
+                std::fs::write(payload(&staged), b"staged bytes").unwrap();
+                match occupant {
+                    "file" => std::fs::write(&destination, b"existing bytes").unwrap(),
+                    "directory" => std::fs::create_dir(&destination).unwrap(),
+                    "symlink" => {
+                        std::os::unix::fs::symlink("missing", &destination).unwrap();
+                    }
+                    _ => {}
+                }
+                let before = testkit::fsync_count();
+                let result = publish_staged_no_replace(&staged, &destination);
+                let syncs = testkit::fsync_count() - before;
+                let correct_outcome = if occupant == "absent" {
+                    result.is_ok()
+                } else {
+                    matches!(result, Err(AtomicErr::Exists { path }) if path == destination)
+                };
+                let stage_kept = std::fs::read(payload(&staged)).ok();
+                let destination_kept = match occupant {
+                    "absent" => std::fs::read(payload(&destination))
+                        .is_ok_and(|bytes| bytes == b"staged bytes"),
+                    "file" => {
+                        std::fs::read(&destination).is_ok_and(|bytes| bytes == b"existing bytes")
+                    }
+                    "directory" => std::fs::read_dir(&destination)
+                        .is_ok_and(|mut entries| entries.next().is_none()),
+                    "symlink" => std::fs::read_link(&destination)
+                        .is_ok_and(|target| target == Path::new("missing")),
+                    _ => unreachable!(),
+                };
+                observed.push((
+                    directory,
+                    occupant,
+                    correct_outcome,
+                    staged.exists(),
+                    stage_kept,
+                    destination_kept,
+                    syncs,
+                ));
+                expected.push((
+                    directory,
+                    occupant,
+                    true,
+                    occupant != "absent",
+                    (occupant != "absent").then(|| b"staged bytes".to_vec()),
+                    true,
+                    u64::from(occupant == "absent"),
+                ));
+            }
+        }
+        assert_eq!(observed, expected);
+    }
 
     #[test]
     fn sync_tree_flushes_read_only_files_and_directories_without_following_symlinks() {

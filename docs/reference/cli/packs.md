@@ -11,6 +11,9 @@ rimz packs show <PACK> [--json]
 rimz packs remove <PACK>
 rimz packs exclude <PACK>[:<NAME>] [--type <TYPE>]
 rimz packs include <PACK>[:<NAME>] [--type <TYPE>]
+rimz packs customize <PACK>:<NAME> [--type <TYPE>] [--copy]
+rimz packs diff <PACK>:<NAME> [--type <TYPE>]
+rimz packs reset <PACK>:<NAME> [--type <TYPE>]
 ```
 
 Pack names use `[A-Za-z0-9_-]+` and are unique across installed sources. Item types are `agents`, `subagents`, `teams`, `traits`, and `skills`. Kind bases belong to `agents`, not a separate type. Qualified `<pack>:<name>` keys select items for exclusions and definition `agent:` parents; they are not launch specs.
@@ -81,7 +84,7 @@ PACK  LOADED  SOURCE                           PROBLEMS
 crew       7  /home/me/src/rimz-crew (linked)  -
 ```
 
-`rimz packs list` and `rimz packs show` have [routine-command permissions](../agent-support.md#permission-modes). The bare `rimz packs` spelling and mutating verbs do not.
+`rimz packs list`, `rimz packs show`, and `rimz packs diff` have [routine-command permissions](../agent-support.md#permission-modes). The bare `rimz packs` spelling and mutating verbs do not.
 
 ## Show a pack
 
@@ -164,9 +167,38 @@ Included crew --type teams.
 
 Including one item while its type remains excluded fails with the whole-type include command. Including the type leaves any individual item exclusions in place. Repeating an already-applied change succeeds with an `already` receipt. Receipts show the selected items' new fates and any conflicts opened or resolved. Excluding a referenced base, trait, parent, child, or skill can make dependent definitions fail; another tier can supply the missing name.
 
+## Customize an item
+
+`customize <pack>:<name>` writes an override under the agents home, in the shipped item's tree and with its filename. Agents and subagents inherit by default: the generated Markdown has `agent: <pack>:<name>`, the shipped description, an explicit `name` when it differs from the filename, and no body. Shipped launch settings and craft keep following the pack; fields you add replace inherited fields and your body follows its prompt. A conflicted item can be customized through its qualified parent.
+
+`--copy` writes the shipped bytes instead of inheriting. Teams, traits, kind bases, and skills require it. A skill copies the whole directory, including ancillary files and empty directories; symlinks and other non-regular entries refuse the copy. A failed definition cannot be inherited, but `--copy` can preserve its bytes for repair. Copies stop following changes to the copied file; its parent, trait, and skill references still resolve through the merged chains.
+
+An already-overridden item refuses, naming its winning path and the `diff` and `reset` commands. An existing destination that claims a different name also refuses without replacing it. Excluded items refuse all three override verbs and name the item or whole-type `include` command. An ambiguous name requires `--type`, as with exclusions.
+
+The receipt names the written path, its inheritance or copy mode, `rimz packs diff`, and, for definitions, `rimz agents validate`. After printing the receipt and any host skill-link cleanup lines, with both stdin and stdout on terminals, RimZ opens `$VISUAL`, otherwise `$EDITOR`, parsed as shell words with the path appended. With no editor, or without both terminals, it prints the path to edit. An invalid editor, spawn failure, or nonzero editor exit warns; the written override remains and the command succeeds. For a skill, the edit target is its `SKILL.md`. No default editor is chosen.
+
+```sh
+rimz packs customize crew:coder --type agents
+rimz packs customize crew:review --type skills --copy
+rimz packs diff crew:coder --type agents
+rimz agents validate
+```
+
+## Diff an override
+
+`diff` reads without changing files or pruning links. With no override it says so and names the shipped path. When the override's own `agent:` is this item's qualified key, it prints the whole override as an inheriting layer: its fields replace shipped settings and its body follows the shipped prompt. Other overrides get a unified diff from shipped to yours for each file whose bytes differ: `---` names the shipped path and `+++` the override, with `/dev/null` for a missing side. Skills compare the union of relative file paths, including added and removed files, and identical files print nothing; a symlink appears as `symlink to <target>` without reading its target, and other non-regular entries refuse the diff. Binary differences are identified without decoding their bytes as text. When no file differs, one line says the override at its path matches the shipped item. A configured-command override names its command and `config.toml`. Differences and matching overrides both exit 0.
+
+## Reset an override
+
+`reset <pack>:<name>` removes the winning override only when it is directly in the item's own home tree. A cross-tree definition or configured command refuses and names the path. When a linked home tree makes that entry resolve to, or contain, the shipped item itself, reset refuses and names both paths without removing anything. A home definition symlink or skill-directory symlink loses only the link, never its target. The command asks no confirmation: inspect with `diff` first. Each receipt names the removed path and the item's resulting fate when it remains in the reloaded inventory; an item with no override gets an `already` receipt.
+
+```sh
+rimz packs reset crew:coder --type agents
+```
+
 ## Remove a pack and clean up links
 
-`remove` stops loading one installed pack. If it was the source's last pack, RimZ also drops the source record and entry link. It never deletes a linked checkout. An owned Git checkout survives removal until a later pack mutation collects it. Dependencies are not removed. Reinstalling uses the usual selection rule (all packs for linked sources; defaults or a selector for Git).
+`remove` stops loading one installed pack. If it was the source's last pack, RimZ also drops the source record and entry link. It never deletes a linked checkout. An owned Git checkout survives removal until a later installation-record mutation collects it. Dependencies are not removed. Reinstalling uses the usual selection rule (all packs for linked sources; defaults or a selector for Git).
 
 ```console
 $ rimz packs remove crew
@@ -175,7 +207,9 @@ $ rimz packs
 No packs installed. Install a source: rimz packs install crew
 ```
 
-Every successful mutating verb, including an already-applied change, prunes obsolete RimZ-owned host skill links across native provider roots and declared account homes. Receipts name removed links by root. Mutations add no links; a later host launch creates them. Foreign entries are untouched. Ownership and precedence are in [configuration](../../guide/configuration.md#skills).
+Every successful mutating verb (`install`, `update`, `remove`, `exclude`, `include`, `customize`, and `reset`), including an already-applied change, prunes obsolete RimZ-owned host skill links across native provider roots and declared account homes. Receipts name removed links by root. Mutations add no links; a later host launch creates them. Foreign entries are untouched. Ownership and precedence are in [configuration](../../guide/configuration.md#skills).
+
+Installation-record mutations (`install`, `update`, `remove`, `exclude`, and `include`) also repair pack entries and collect retired checkouts. `customize` and `reset` write only home overrides; they do not change the installation record or collect checkouts.
 
 The record commits before entry cleanup. A repair or collection failure warns but does not prevent removal of a broken source. An entry-link cleanup failure still prints the removal receipt and a warning: the unrecorded entry is ignored. Incomplete host skill-link cleanup exits 1 with `host skill link cleanup is incomplete`; it does not undo a committed pack change. `rimz uninstall` removes owned library and pack skill links but keeps `packs/` in every mode.
 
@@ -246,7 +280,7 @@ The record shape for the linked source above is:
 
 A Git source instead records its normalized identity in `source`, its fetch URL in `url`, `linked: false`, a ref, `pinned` (default false for older records), and a full 40-hex commit. Older Git records without `url` use `source` as their fetch URL. Linked records omit `url`. The record version stays 1; older binaries ignore `pinned` and `url` and can still load or unlink the entry.
 
-A missing record is empty. Unknown record fields are ignored; a version above 1 withholds the whole pack tier with a newer-RimZ problem. The record is the commit point: install syncs a new Git tree and publishes the entry before the record, and removal rewrites the record before unlinking the final entry. Entries absent from the record never load and can be replaced by a later install. Mutations attempt to repair Git entries to the recorded commit before collecting unreferenced, unheld checkouts; removal warns on a maintenance failure and still commits. Both an entry's old target and the recorded checkout survive that repair pass. A checkout retired by publication lives until the next mutating pack command, preserving a running scoped agent's mounted skills through that command, however many sources it moves; after a later collection, restart that agent. The durability discipline is in [store internals](../../internals/store.md#write-classes).
+A missing record is empty. Unknown record fields are ignored; a version above 1 withholds the whole pack tier with a newer-RimZ problem. The record is the commit point: install syncs a new Git tree and publishes the entry before the record, and removal rewrites the record before unlinking the final entry. Entries absent from the record never load and can be replaced by a later install. Mutations attempt to repair Git entries to the recorded commit before collecting unreferenced, unheld checkouts; removal warns on a maintenance failure and still commits. Both an entry's old target and the recorded checkout survive that repair pass. A checkout retired by publication lives until the next installation-record mutation, preserving a running scoped agent's mounted skills through that command, however many sources it moves; after a later collection, restart that agent. The durability discipline is in [store internals](../../internals/store.md#write-classes).
 
 A linked checkout under `/tmp` or `/var/tmp` is hidden from scoped agents running `rimz` inside their mount view, because their temp unit replaces those paths. Test such a checkout from a host shell, or keep it outside those temporary trees for scoped use.
 
@@ -254,6 +288,6 @@ A linked checkout under `/tmp` or `/var/tmp` is hidden from scoped agents runnin
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Listed or showed an installed pack, even with load problems; committed a mutation and completed host skill-link cleanup; declined an install or widening update on a terminal; or skipped pinned and linked update sources. Already-applied changes also succeed. |
-| `1` | Unknown pack or selector, missing item, invalid source or manifest, missing Git ref/tag, fetch failure or timeout, a changed record before commit, Git install without a terminal or `--yes`, a widening update held without a terminal or `--yes`, any failed update source (the others still apply), overlapping agents home, a pack name owned by another source, an `include` of one item whose type is excluded, record/I/O failure, or incomplete post-commit host skill-link cleanup. |
-| `2` | Invalid CLI syntax, pack name, item type, or source spelling; ambiguous item name; or an exclusion request with neither item nor type. |
+| `0` | Listed or showed an installed pack, even with load problems; ran a diff, whether different, identical, or without an override; committed a mutation and completed host skill-link cleanup; declined an install or widening update on a terminal; or skipped pinned and linked update sources. Already-applied changes also succeed. An editor failure keeps the new override and succeeds. |
+| `1` | Unknown pack or selector, missing item, an excluded override target, an already-overridden customize target, an existing customize destination, inheriting a failed item, a reset outside the item's own home tree, of a configured command, or through a linked home tree to the shipped item itself, invalid source or manifest, missing Git ref/tag, fetch failure or timeout, a changed record before commit, Git install without a terminal or `--yes`, a widening update held without a terminal or `--yes`, any failed update source (the others still apply), overlapping agents home, a pack name owned by another source, an `include` of one item whose type is excluded, record/I/O failure, or incomplete post-commit host skill-link cleanup. |
+| `2` | Invalid CLI syntax, pack name, item type, or source spelling; empty or ambiguous item name; a copy-only customize target without `--copy`; or an exclusion request with neither item nor type. |

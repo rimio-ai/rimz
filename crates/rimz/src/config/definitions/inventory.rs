@@ -250,6 +250,19 @@ impl PackInventory {
 }
 
 impl PackView {
+    pub fn item(&self, name: &str, kind: Option<ItemType>) -> Result<&PackItem, ItemMatchErr> {
+        // match_item returns only an item target, including when a single type was requested.
+        let ExclusionTarget::Item(key) = self.match_item(name, kind, false)? else {
+            unreachable!("match_item always resolves an item, never a type")
+        };
+        // match_item counted this shipped item while resolving its type.
+        Ok(self
+            .items
+            .iter()
+            .find(|item| item.name == key.name && item.kind == key.kind)
+            .expect("matching shipped item"))
+    }
+
     pub fn match_item(
         &self,
         name: &str,

@@ -300,6 +300,7 @@ fn install_includes_shared_routine_rules_golden() {
         prefix_rule(pattern=["rimz", "loop", "logs"], decision="allow")
         prefix_rule(pattern=["rimz", "packs", "list"], decision="allow")
         prefix_rule(pattern=["rimz", "packs", "show"], decision="allow")
+        prefix_rule(pattern=["rimz", "packs", "diff"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "def"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "refs"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "hover"], decision="allow")

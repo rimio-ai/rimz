@@ -4,6 +4,7 @@
 
 mod agent;
 mod catalog;
+pub mod customization;
 pub(crate) mod frontmatter;
 pub mod inventory;
 pub mod review;

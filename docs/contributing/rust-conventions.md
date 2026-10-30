@@ -179,12 +179,13 @@ On Linux x86-64 and aarch64, both glibc and musl builds select jemalloc for Rust
 
 ## Atomic writes
 
-Two write shapes in `disk/atomic.rs` cover every disk write in the project:
+Write shapes in `disk/atomic.rs` cover every disk write in the project:
 
 - `write_temp_then_rename(path, value)` for cold-path durable state (trust grants, workspace records, hook installs, the rotation carryover); `write_temp_then_rename_cache` — rename-atomic, no fsync — for liveness files and rebuilt-on-next-read caches.
+- `publish_staged_no_replace(staged, destination)` for already-synced files or directories. It refuses any existing destination entry and syncs the destination's parent after publication.
 - `append_record_bytes(path, line) -> Result<()>` — the event-log append discipline (one `write()` per record, no fsync — appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync); the frame encoding itself lives beside its decoder in `store/event_log.rs`.
 
-Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `disk/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [store.md](../internals/store.md) for the frame format, torn-record recovery, and rotation rules.
+These primitives live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `disk/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [store.md](../internals/store.md) for the frame format, torn-record recovery, and rotation rules.
 
 ## Tests
 

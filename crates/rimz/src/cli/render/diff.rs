@@ -13,21 +13,35 @@ pub(crate) fn preview_file_diff(
     original: Option<&str>,
     candidate: &str,
 ) -> std::io::Result<()> {
-    let path = path.display().to_string();
-    let text = match original {
-        Some(original) => {
+    preview_diff(
+        out,
+        original.map(|text| (path, text)),
+        Some((path, candidate)),
+    )
+}
+
+pub(in crate::cli) fn preview_diff(
+    out: &mut (impl Write + ?Sized),
+    original: Option<(&Path, &str)>,
+    candidate: Option<(&Path, &str)>,
+) -> std::io::Result<()> {
+    let text = match (original, candidate) {
+        (Some((old_path, original)), Some((new_path, candidate))) => {
+            let old_path = old_path.display().to_string();
+            let new_path = new_path.display().to_string();
             let rendered = TextDiff::from_lines(original, candidate)
                 .unified_diff()
                 .context_radius(3)
-                .header(&path, &path)
+                .header(&old_path, &new_path)
                 .to_string();
             if rendered.is_empty() {
-                format!("--- {path}\n+++ {path}\n@@ no changes @@\n")
+                format!("--- {old_path}\n+++ {new_path}\n@@ no changes @@\n")
             } else {
                 rendered
             }
         }
-        None => {
+        (None, Some((path, candidate))) => {
+            let path = path.display();
             let mut text = format!("--- /dev/null\n+++ {path}\n@@ new file @@\n");
             for line in candidate.lines() {
                 text.push('+');
@@ -36,6 +50,19 @@ pub(crate) fn preview_file_diff(
             }
             text
         }
+        (Some((path, original)), None) => {
+            let mut text = format!(
+                "--- {}\n+++ /dev/null\n@@ deleted file @@\n",
+                path.display()
+            );
+            for line in original.lines() {
+                text.push('-');
+                text.push_str(line);
+                text.push('\n');
+            }
+            text
+        }
+        (None, None) => return Ok(()),
     };
     for line in text.lines() {
         writeln!(out, "    {}", color_diff_line(line))?;

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
@@ -8,6 +8,7 @@ use rimz::agents::skill_links::{self, Desired};
 use rimz::agents::skills::SkillChain;
 use rimz::config::Isolation;
 use rimz::config::definitions::SkillCheck;
+use rimz::config::definitions::customization::{OverrideDiff, OverrideErr, PackOverride};
 use rimz::config::definitions::inventory::{ItemMatchErr, PackInventory, PackView};
 use rimz::config::definitions::review::{self, PackPreview};
 use rimz::disk::paths;
@@ -83,6 +84,27 @@ enum PacksSubcmd {
     Exclude(Selection),
     /// Restore an excluded item or type.
     Include(Selection),
+    /// Create a home override of a shipped item.
+    Customize {
+        #[command(flatten)]
+        selection: ItemSelection,
+        /// Copy the shipped item instead of inheriting it.
+        #[arg(long)]
+        copy: bool,
+    },
+    /// Compare a home override with its shipped item.
+    Diff(ItemSelection),
+    /// Remove a home override and load the shipped item again.
+    Reset(ItemSelection),
+}
+
+#[derive(Debug, Args)]
+struct ItemSelection {
+    #[arg(value_name = "PACK:NAME")]
+    target: String,
+    /// Item type: agents, subagents, teams, traits, or skills.
+    #[arg(long = "type", value_name = "TYPE", value_parser = parse_type)]
+    kind: Option<ItemType>,
 }
 
 #[derive(Debug, Args)]
@@ -101,9 +123,31 @@ fn parse_type(value: &str) -> std::result::Result<ItemType, String> {
         .ok_or_else(|| "use agents, subagents, teams, traits, or skills".to_owned())
 }
 
+fn editor_command(
+    visual: Option<&str>,
+    editor: Option<&str>,
+    path: &Path,
+) -> Result<Option<Vec<std::ffi::OsString>>> {
+    let Some(editor) = visual
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| editor.filter(|value| !value.trim().is_empty()))
+    else {
+        return Ok(None);
+    };
+    let words = shlex::split(editor)
+        .ok_or_else(|| anyhow::anyhow!("editor contains invalid shell quoting"))?;
+    if words.is_empty() {
+        bail!("editor command is empty");
+    }
+    let mut words: Vec<std::ffi::OsString> = words.into_iter().map(Into::into).collect();
+    words.push(path.as_os_str().to_owned());
+    Ok(Some(words))
+}
+
 pub(super) fn run(args: PacksArgs) -> Result<()> {
     let home = paths::agents_home();
     let mut receipt = Vec::new();
+    let mut edit_path = None;
     let mut warnings = Vec::new();
     let mut failures = Vec::new();
     let mut retired = Vec::new();
@@ -142,6 +186,11 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
         }
         PacksSubcmd::Exclude(selection) => change(&home, selection, false, &mut receipt)?,
         PacksSubcmd::Include(selection) => change(&home, selection, true, &mut receipt)?,
+        PacksSubcmd::Customize { selection, copy } => {
+            edit_path = Some(customize(&home, selection, copy, &mut receipt)?);
+        }
+        PacksSubcmd::Diff(selection) => return diff(&home, selection),
+        PacksSubcmd::Reset(selection) => reset(&home, selection, &mut receipt)?,
     }
     let inventory = load_inventory(&home);
     let cleanup = prune(&home, &mut receipt);
@@ -166,6 +215,9 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
     render::finish(write)?;
     if !failures.is_empty() {
         bail!("Pack updates incomplete:\n{}", failures.join("\n"));
+    }
+    if let Some(path) = edit_path {
+        edit(&path)?;
     }
     Ok(())
 }
@@ -591,13 +643,10 @@ fn source_label(
     label
 }
 
-fn change(home: &Path, selection: Selection, include: bool, out: &mut impl Write) -> Result<()> {
-    let (name, item) = selection
-        .target
+fn parse_selection(target: &str) -> Result<(PackName, Option<&str>)> {
+    let (name, item) = target
         .split_once(':')
-        .map_or((selection.target.as_str(), None), |(pack, item)| {
-            (pack, Some(item))
-        });
+        .map_or((target, None), |(pack, item)| (pack, Some(item)));
     let name: PackName = name
         .parse()
         .map_err(|error: PackErr| UsageError::new(error.to_string()))?;
@@ -606,6 +655,175 @@ fn change(home: &Path, selection: Selection, include: bool, out: &mut impl Write
             UsageError::new("use <pack>:<name> with a non-empty item name".to_owned()).into(),
         );
     }
+    Ok((name, item))
+}
+
+fn selected_item<'a>(
+    inventory: &'a PackInventory,
+    selection: &ItemSelection,
+) -> Result<&'a rimz::packs::PackItem> {
+    let (pack, name) = parse_selection(&selection.target)?;
+    let name = name.ok_or_else(|| UsageError::new("name an item as <pack>:<name>".to_owned()))?;
+    inventory
+        .pack(&pack)?
+        .item(name, selection.kind)
+        .map_err(item_match_error)
+}
+
+fn customize(
+    home: &Path,
+    selection: ItemSelection,
+    copy: bool,
+    out: &mut impl Write,
+) -> Result<PathBuf> {
+    let inventory = load_inventory(home);
+    let item = selected_item(&inventory, &selection)?;
+    let path = PackOverride::new(home, item)
+        .customize(copy)
+        .map_err(|error| {
+            if matches!(error, OverrideErr::CopyOnly { .. }) {
+                anyhow::Error::new(UsageError::new(error.to_string()))
+            } else {
+                error.into()
+            }
+        })?;
+    let key = format!("{}:{}", item.pack, item.name);
+    if copy {
+        writeln!(
+            out,
+            "Created {} (copy, no longer follows {}).",
+            path.display(),
+            item.pack
+        )?;
+    } else {
+        writeln!(out, "Created {} (inherits {key}).", path.display())?;
+    }
+    writeln!(
+        out,
+        "Next: {}",
+        shell_command(["rimz", "packs", "diff", &key, "--type", item.kind.as_str()])
+    )?;
+    if item.kind != ItemType::Skills {
+        writeln!(out, "Next: rimz agents validate")?;
+    }
+    Ok(if item.kind == ItemType::Skills {
+        path.join("SKILL.md")
+    } else {
+        path
+    })
+}
+
+fn edit(path: &Path) -> Result<()> {
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        let visual = std::env::var("VISUAL").ok();
+        let editor = std::env::var("EDITOR").ok();
+        let result = editor_command(visual.as_deref(), editor.as_deref(), path).and_then(|words| {
+            let Some(words) = words else { return Ok(false) };
+            let result = std::process::Command::new(&words[0])
+                .args(&words[1..])
+                .status()?;
+            if !result.success() {
+                bail!("editor exited with {result}");
+            }
+            Ok(true)
+        });
+        match result {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => writeln!(
+                render::err(),
+                "warning: {error}; override kept at {}",
+                path.display()
+            )?,
+        }
+    }
+    render::finish(writeln!(render::out(), "Edit {}", path.display()))
+}
+
+fn diff(home: &Path, selection: ItemSelection) -> Result<()> {
+    let inventory = load_inventory(home);
+    let item = selected_item(&inventory, &selection)?;
+    let mut out = render::out();
+    match PackOverride::new(home, item).diff()? {
+        OverrideDiff::None => writeln!(
+            out,
+            "{}:{} has no override; shipped at {}.",
+            item.pack,
+            item.name,
+            item.path.display()
+        )?,
+        OverrideDiff::Inherits { text } => {
+            writeln!(
+                out,
+                "Override inherits {}:{}; fields replace shipped settings, body follows the shipped prompt:",
+                item.pack, item.name
+            )?;
+            write!(out, "{text}")?;
+        }
+        OverrideDiff::Command { path } => writeln!(
+            out,
+            "Overridden by configured command {} in {}.",
+            item.name,
+            path.display()
+        )?,
+        OverrideDiff::Files { path, changed } if changed.is_empty() => writeln!(
+            out,
+            "{}:{} override at {} matches the shipped item.",
+            item.pack,
+            item.name,
+            path.display()
+        )?,
+        OverrideDiff::Files { changed, .. } => {
+            for file in changed {
+                let original = file.shipped.as_deref().map(std::str::from_utf8).transpose();
+                let candidate = file.custom.as_deref().map(std::str::from_utf8).transpose();
+                match (original, candidate) {
+                    (Ok(original), Ok(candidate)) => render::diff::preview_diff(
+                        &mut out,
+                        original.map(|text| (file.shipped_path.as_path(), text)),
+                        candidate.map(|text| (file.path.as_path(), text)),
+                    )?,
+                    _ => writeln!(out, "Binary files differ: {}", file.path.display())?,
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reset(home: &Path, selection: ItemSelection, out: &mut impl Write) -> Result<()> {
+    let inventory = load_inventory(home);
+    let item = selected_item(&inventory, &selection)?;
+    let Some(path) = PackOverride::new(home, item).reset()? else {
+        writeln!(out, "{}:{} already has no override.", item.pack, item.name)?;
+        return Ok(());
+    };
+    writeln!(out, "Removed {}.", path.display())?;
+    let after = load_inventory(home);
+    let Some(item) = after
+        .packs
+        .iter()
+        .find(|pack| pack.name == item.pack)
+        .and_then(|pack| {
+            pack.items.iter().find(|current| {
+                current.kind == item.kind && current.name == item.name && current.path == item.path
+            })
+        })
+    else {
+        return Ok(());
+    };
+    writeln!(
+        out,
+        "  {}/{}: {}",
+        item.kind.as_str(),
+        item.name,
+        fate_label(&item.fate, &item.pack)
+    )?;
+    Ok(())
+}
+
+fn change(home: &Path, selection: Selection, include: bool, out: &mut impl Write) -> Result<()> {
+    let (name, item) = parse_selection(&selection.target)?;
     let before = load_inventory(home);
     let pack = before.pack(&name)?;
     let target = match item {
@@ -916,4 +1134,29 @@ fn warn(problem: &Problem) -> Result<()> {
         render::paint(palette::warn(), "warning:")
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_resolution_prefers_visual_splits_words_and_appends_the_path() {
+        let path = Path::new("/some path/coder.md");
+        assert_eq!(
+            editor_command(Some("code --wait 'two words'"), Some("vi"), path).unwrap(),
+            Some(vec![
+                "code".into(),
+                "--wait".into(),
+                "two words".into(),
+                "/some path/coder.md".into()
+            ])
+        );
+        assert_eq!(
+            editor_command(None, Some("vi -f"), path).unwrap(),
+            Some(vec!["vi".into(), "-f".into(), "/some path/coder.md".into()])
+        );
+        assert!(editor_command(None, None, path).unwrap().is_none());
+        assert!(editor_command(Some("'unfinished"), None, path).is_err());
+    }
 }

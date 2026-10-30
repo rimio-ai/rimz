@@ -950,7 +950,33 @@ upward-dependencies = [
 # PackDefinition and PackDefinitionFate expose every shipped definition's loading fate (+2).
 # inventory, PackInventory, PackView, ItemMatchErr and four methods replace the two pack types (+6 net).
 # review, EffectiveGrants, ProfileChange, PackPreview and compare share staged-load review (+5).
-surface-budget = 243
+# customization, its four types, four methods and PackView::item own home overrides (+10).
+surface-budget = 253
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::customization"
+reason = "Home override writes, comparisons and removal share the inventory and definition grammar."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::customization::OverrideErr"
+reason = "The CLI distinguishes copy-only usage errors from refused overrides and filesystem failures."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::customization::PackOverride"
+reason = "A shipped inventory item owns its override operations without reconstructing item paths in CLI."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::customization::OverrideDiff"
+reason = "The CLI presents an inheriting layer, command override, or the files whose bytes differ."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::customization::FileDiff"
+reason = "Skill diffs present shipped and override paths for additions, removals and symlink targets."
 
 [[verdict]]
 kind = "item"
@@ -1241,7 +1267,8 @@ allowed-dependencies = [
 # The cursor-coupled ledger accessors become migration-only legacy accessors (+0).
 # atomic::sync_tree makes staged Git trees durable before entry publication (+1).
 # paths::is_under_root shares empty-root containment across preflights and sandbox planning (+1).
-surface-budget = 316
+# atomic::publish_staged_no_replace shares non-replacing staged-entry publication (+1).
+surface-budget = 317
 
 [[verdict]]
 kind = "item"
@@ -3868,7 +3895,8 @@ allowed-dependencies = []
 # write_checkpoint publishes runtime checkpoints without making directories (+1).
 # Exact-mode creation, append, replacement and non-replacing copy support shared history (+4).
 # sync_tree shares bottom-up file and directory barriers for staged pack checkouts (+1).
-surface-budget = 27
+# publish_staged_no_replace publishes complete staged files and directories without replacement (+1).
+surface-budget = 28
 
 [[verdict]]
 kind = "item"
@@ -3899,6 +3927,11 @@ reason = "Migration publishes a complete durable copy without replacing an exist
 kind = "item"
 key = "disk::atomic::sync_tree"
 reason = "Staged Git trees sync read-only objects and directories before entries or records publish."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::publish_staged_no_replace"
+reason = "Home overrides publish synced staged files or directories without replacing concurrent entries."
 
 [[verdict]]
 kind = "item"

@@ -3468,6 +3468,13 @@ fn packs_qualified_parents_inherit_shadowed_and_conflicted_definitions_without_p
     let home = fixture();
     let one = linked_pack(home.path(), "one");
     let two = linked_pack(home.path(), "two");
+    definition(
+        one.path(),
+        "subagents/helper.md",
+        "agent: claude\nmodel: opus\ntools: [Read]",
+        "Shipped helper.",
+    );
+    definition(home.path(), "subagents/helper.md", "agent: one:helper", "");
     write(home.path(), "traits/shared.md", "Home trait.");
     definition(
         home.path(),
@@ -3497,6 +3504,10 @@ fn packs_qualified_parents_inherit_shadowed_and_conflicted_definitions_without_p
     );
     team_definition(home.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
     let loaded = clean(home.path());
+    let helper = &loaded.subagent_profiles.0["helper"];
+    assert_eq!(helper.model.as_deref(), Some("opus"));
+    assert_eq!(texts(helper), ["Shipped helper."]);
+    assert_eq!(helper.tools.as_ref().unwrap().bases(), ["Read"]);
     assert_eq!(
         texts(&loaded.agent_profiles.0["worker"]),
         ["Ancestor.", "Pack Home trait.", "Home worker."]

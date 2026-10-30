@@ -665,6 +665,18 @@ A profile is a named agent preset, loaded from `agents/<name>.md` for one you la
 
 On the command line, `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile, and repeated `--append-system-prompt-file` values replace its fragment list for that launch while leaving the team layer intact. `--agent <PROFILE|KIND>` swaps the engine and keeps the seat identity; the carry-over rules are in the [launch reference](../reference/cli/agents.md#shared-launch-params). Markdown definitions accept no raw `args` and no prompt-path keys: tools generate the arguments, and bodies supply the prompt.
 
+#### Customizing a pack item
+
+Copying a shipped profile into your home tree lets you edit it, but freezes every setting and prompt you copied. To keep following the pack while changing only a few fields, create an inheriting override instead:
+
+```sh
+rimz packs customize crew:coder --type agents
+```
+
+RimZ writes `agents/coder.md` under your agents home, with the shipped description, `agent: crew:coder`, and an empty body. Add the fields you want to replace; any prompt you add follows the shipped craft. In a terminal it opens your configured editor, otherwise it prints the path to edit. Existing files are never replaced. Subagents work the same way in their own tree.
+
+Use `rimz packs diff crew:coder --type agents` to inspect your layer, and `rimz agents validate` to check it. To return to the shipped item, run `rimz packs reset crew:coder --type agents`; it removes your override without asking. Teams, traits, kind bases, and skills require `customize --copy`, which copies their shipped bytes rather than inheriting. A skill includes its whole directory. The [packs reference](../reference/cli/packs.md#customize-an-item) covers refusals and editor selection.
+
 #### Skills
 
 Two separate things share the word. `~/.rimz/skills/` is a library you fill, shared across providers, and [packs](../reference/cli/packs.md) can supply skills beneath it; a profile's `skills:` list decides which skills that agent may invoke on its own.
@@ -673,7 +685,7 @@ Two separate things share the word. `~/.rimz/skills/` is a library you fill, sha
 
 Each host launch links the winning library and pack skills into the provider's [declared skill root](../reference/agent-support.md#config-homes-and-skills), including a named Claude account home on its first host launch. Your own directories and links are never replaced, and a collision is reported at launch. A pack link points through `packs/<entry>/`, not directly at the linked or owned Git checkout. A link is RimZ-owned when its target lies under the home library or packs directory, even if it dangles. If the provider root overlaps either directory, RimZ writes no links; a library already at that root is read natively.
 
-Delete a skill and its stale link goes at the next host launch for that root. `rimz packs install`, `update`, `remove`, `exclude`, and `include` also prune obsolete owned links across provider and declared account homes, adding none; new links wait for a host launch. `rimz uninstall` removes owned links but keeps your library and `packs/` in every mode. A scoped launch merges the same chain through the skill view instead of creating links.
+Delete a skill and its stale link goes at the next host launch for that root. `rimz packs install`, `update`, `remove`, `exclude`, `include`, `customize`, and `reset` also prune obsolete owned links across provider and declared account homes, adding none; new links wait for a host launch. `rimz uninstall` removes owned links but keeps your library and `packs/` in every mode. A scoped launch merges the same chain through the skill view instead of creating links.
 
 **The list.** In scoped mode, `skills: [merge, review]` in a Markdown profile keeps those two model-callable and turns every other skill RimZ can prepare into one you invoke by name. `skills: []` makes all of them user-invoked; it does not hide the view. Entries are bare directory names, never paths. A child list replaces its parent's rather than appending, omitting the field inherits, and once a parent sets a list no child can go back to unconfigured behaviour. With no list anywhere in the chain, invocation behaviour is the provider's own, except that a [launched subagent](./subagents.md#children-cannot-delegate) withholds `rimz-subagents` wherever skill restrictions are supported.
 
@@ -787,7 +799,7 @@ This key is machine-only: project config cannot override it, so a repository can
 
 Claude and Codex can otherwise pause for permission just to coordinate with another agent. RimZ defaults `allow-routine-rimz` to `true`. For Claude, it adds curated command permissions and the launch's scratch/shared directories through `--settings`, plus auto-mode context describing those commands and directories. Your Claude settings are preserved; RimZ does not edit `~/.claude/settings.json`. For Codex, `rimz hooks install` writes the same command prefixes into `$CODEX_HOME/rules/rimz.rules` (`~/.codex/rules/rimz.rules` by default); matching commands run unsandboxed without Guardian review. The file is shared by named accounts, including standalone accounts. See [permission modes](./fleet.md#set-a-permission-mode) for what this covers.
 
-The curated commands include `rimz packs list` and `rimz packs show`, not pack mutations or the bare `rimz packs` spelling. The [complete prefix list](../reference/agent-support.md#permission-modes) is shared by Claude and Codex.
+The curated commands include `rimz packs list`, `rimz packs show`, and `rimz packs diff`, not pack mutations or the bare `rimz packs` spelling. The [complete prefix list](../reference/agent-support.md#permission-modes) is shared by Claude and Codex.
 
 The switch also covers your installed `rimz-*` skills in Claude's skill directory, the RimZ library, or packs, in that precedence order with owned links skipped. Only exact directory names with a `SKILL.md` receive rules, never a wildcard grant. Turning it off does not remove the permissions from a profile's own `skills:` list.
 
