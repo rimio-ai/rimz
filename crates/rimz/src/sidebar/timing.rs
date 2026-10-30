@@ -250,13 +250,14 @@ pub(crate) const RELOAD_CONVERGE_POLL: Duration = Duration::from_millis(150);
 
 /// Watchdog interval for the self-close backstop: when no resize event arrives
 /// (e.g. background Zellij sessions that omit SIGWINCH after a pane closes),
-/// this asks the normal snapshot path for a fresh own-view count. Sized at 2s
-/// so cleanup stays prompt even when a caller configured a much slower data tick.
+/// this asks the normal snapshot path for a fresh own-view count. Watched rooms
+/// and empty-tab confirmation keep this 2s bound even with a slower data tick;
+/// otherwise it is added to the unwatched fold interval (7s by default).
 pub(crate) const SELF_CLOSE_WATCHDOG: Duration = Duration::from_secs(2);
 
 /// Maximum time a grow-resize paint hold may suppress frames while waiting for
-/// a post-resize pane observation. Matched to `SELF_CLOSE_WATCHDOG` so the
-/// close-verdict refresh and the hold expiry share one user-visible ceiling.
+/// a post-resize pane observation. Matched to the watched `SELF_CLOSE_WATCHDOG`
+/// so the close-verdict refresh and hold expiry share a user-visible ceiling.
 pub const RESIZE_PAINT_HOLD_CEILING: Duration = Duration::from_secs(2);
 
 /// Settling window and maximum delay for an ambiguous same-command exit.

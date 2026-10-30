@@ -25,6 +25,8 @@ use crate::sidebar::event_store::EventStore;
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::{ReadMarks, write_read_marks};
 #[cfg(test)]
+use crate::sidebar::timing::SELF_CLOSE_WATCHDOG;
+#[cfg(test)]
 use crate::sidebar::timing::TAB_READ_DWELL;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE};
 use crate::sidebar::unread::{self, UnreadClearCause};
@@ -54,9 +56,7 @@ use super::gate::{GateState, gate_remaining};
 use super::inbox::WakeupInbox;
 use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
 use super::layout_freeze;
-use super::lifecycle::{
-    PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, grow_beyond_legit, resize_grew,
-};
+use super::lifecycle::{PaintHold, SelfCloseState, grow_beyond_legit, resize_grew};
 use super::notify::{BellNotice, emit_terminal_notification};
 use super::paint::FramePainter;
 use super::selection::{
@@ -70,7 +70,7 @@ use super::state::{
 };
 use super::timing::{
     FOCUS_RESUME_WATCH_WINDOW, FRAME_MIN_TIMEOUT, animation_frame, duration_millis, frame_clock,
-    next_frame_after, tick_for,
+    next_frame_after, self_close_interval, tick_for,
 };
 use super::view_state::{FocusMarker, FocusRollback, ReadContext, SelectionFold, ViewContext};
 use super::width_control::WidthController;
@@ -766,8 +766,10 @@ impl LoopState {
     }
 
     fn frame_timing(&mut self) -> (bool, Duration) {
-        self.views
-            .with(&mut self.pane, Route::READ, PaneState::frame_timing)
+        let room_watched = self.views.record().watched();
+        self.views.with(&mut self.pane, Route::READ, |pane, view| {
+            pane.frame_timing(view, room_watched)
+        })
     }
 
     /// Whether an attached client's focus currently lands in this sidebar's tab.
@@ -1956,12 +1958,18 @@ impl LoopState {
         // normal snapshot path to refresh so the snapshot's own-view count can
         // close a lone sidebar. While confirming zero siblings, require fresh
         // topology before the confirm timer can close it.
+        let watchdog = self_close_interval(
+            self.watched(),
+            self.views.record().watched(),
+            self.pane.self_close.confirming_empty(),
+            tick_for(self.pane.config.tick_seconds),
+        );
         if self
             .pane
             .clock
             .now()
             .saturating_duration_since(self.pane.last_self_close_check)
-            >= SELF_CLOSE_WATCHDOG
+            >= watchdog
         {
             self.pane.last_self_close_check = self.pane.clock.now();
             let request = if self.pane.self_close.confirming_empty() {
@@ -2272,7 +2280,7 @@ impl PaneState {
         ))
     }
 
-    fn frame_timing(&mut self, v: &mut ViewBorrow<'_>) -> (bool, Duration) {
+    fn frame_timing(&mut self, v: &mut ViewBorrow<'_>, room_watched: bool) -> (bool, Duration) {
         let clock = frame_clock(
             self.clock.now(),
             v.context.anim_start,
@@ -2300,7 +2308,13 @@ impl PaneState {
         } else {
             // Cap by the watchdog so the self-close backstop fires on time even
             // when the data tick is much longer.
-            let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(
+            let watchdog_due = self_close_interval(
+                watched,
+                room_watched,
+                self.self_close.confirming_empty(),
+                tick_for(self.config.tick_seconds),
+            )
+            .saturating_sub(
                 self.clock
                     .now()
                     .saturating_duration_since(self.last_self_close_check),

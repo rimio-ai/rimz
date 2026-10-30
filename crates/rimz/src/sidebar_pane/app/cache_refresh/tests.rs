@@ -31,14 +31,44 @@ fn fold_freshness_excludes_tick_equality() {
     let tick = Duration::from_secs(1);
     let now = Instant::now();
     let mut views = Views::default();
-    let fresh: Vec<_> = [tick - Duration::from_nanos(1), tick, tick + tick]
+    for (watched, limit) in [(false, 6 * tick), (true, 2 * tick)] {
+        let fresh: Vec<_> = [limit - Duration::from_nanos(1), limit, limit + tick]
+            .into_iter()
+            .map(|age| {
+                publish(&mut views, fold(now - age));
+                views.fresh_fold(now, tick, watched).is_some()
+            })
+            .collect();
+        assert_eq!(fresh, [true, false, false], "watched={watched}");
+    }
+}
+
+#[test]
+fn folds_inside_the_room_interval_plus_tick_need_no_request() {
+    let tick = Duration::from_secs(1);
+    let accepted: Vec<_> = [(false, 5_500), (true, 1_500)]
         .into_iter()
-        .map(|age| {
-            publish(&mut views, fold(now - age));
-            views.fresh_fold(now, tick).is_some()
+        .map(|(watched, age_ms)| {
+            let data = Mutex::new(HostData::default());
+            let views = data.lock().unwrap().views.clone();
+            if watched {
+                views.lock().presentation(
+                    &crate::PaneId::from_parts(crate::MuxName::Zellij, "sidebar"),
+                    Instant::now(),
+                    true,
+                );
+            }
+            let retained = fold(Instant::now() - Duration::from_millis(age_ms));
+            publish(&mut views.lock(), retained.clone());
+            let (requests, pending) = channel();
+            let result = acquire_fold(&data, &requests, tick);
+            (
+                result.is_ok_and(|acquired| Arc::ptr_eq(&acquired, &retained)),
+                pending.try_iter().count(),
+            )
         })
         .collect();
-    assert_eq!(fresh, [true, false, false]);
+    assert_eq!(accepted, [(true, 0), (true, 0)]);
 }
 
 #[test]
@@ -75,7 +105,7 @@ fn fresh_fold_runs_heavy_lanes_without_another_fold_or_request() {
 fn stale_fold_waits_for_the_first_post_request_sample() {
     let data = Arc::new(Mutex::new(HostData::default()));
     let tick = Duration::from_secs(1);
-    let old = fold(Instant::now() - tick);
+    let old = fold(Instant::now() - 6 * tick);
     publish(&mut data.lock().unwrap().views.lock(), old.clone());
     let (requests, pending) = channel::<FetchRequest>();
     let worker_data = data.clone();

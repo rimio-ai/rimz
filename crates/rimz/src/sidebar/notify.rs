@@ -285,6 +285,13 @@ pub(crate) struct NotificationState {
 }
 
 impl NotificationState {
+    pub(crate) fn next_due_ms(&self, prefs: &NotificationsPrefs) -> Option<u64> {
+        if !prefs.enabled || prefs.coalesce_ms == 0 || self.pending.is_empty() {
+            return None;
+        }
+        Some(self.pending_since_ms?.saturating_add(prefs.coalesce_ms))
+    }
+
     pub(crate) fn evaluate(
         &mut self,
         snapshot: &SidebarSnapshot,

@@ -50,12 +50,25 @@ pub(super) fn tick_for(seconds: u64) -> Duration {
     Duration::from_secs(seconds.max(1))
 }
 
-#[allow(dead_code, reason = "The cadence consumers land in the next commit.")]
 pub(super) fn fold_interval(watched: bool, tick: Duration) -> Duration {
     if watched {
         tick
     } else {
         tick.max(crate::sidebar::timing::UNWATCHED_FOLD_INTERVAL)
+    }
+}
+
+pub(super) fn self_close_interval(
+    pane_watched: bool,
+    room_watched: bool,
+    confirming_empty: bool,
+    tick: Duration,
+) -> Duration {
+    let watchdog = crate::sidebar::timing::SELF_CLOSE_WATCHDOG;
+    if pane_watched || room_watched || confirming_empty {
+        watchdog
+    } else {
+        fold_interval(false, tick).saturating_add(watchdog)
     }
 }
 
@@ -94,6 +107,21 @@ mod tests {
                 fold_interval(false, 10 * second),
             ],
             [second, 5 * second, 10 * second, 10 * second]
+        );
+    }
+
+    #[test]
+    fn self_close_interval_keeps_visible_and_confirming_checks_prompt() {
+        let tick = Duration::from_secs(10);
+        assert_eq!(
+            [
+                self_close_interval(true, false, false, tick),
+                self_close_interval(false, true, false, tick),
+                self_close_interval(false, false, true, tick),
+                self_close_interval(false, false, false, Duration::from_secs(1)),
+                self_close_interval(false, false, false, tick),
+            ],
+            [2, 2, 2, 7, 12].map(Duration::from_secs)
         );
     }
 }

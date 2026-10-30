@@ -418,6 +418,7 @@ fn burst_coalesces_after_window() {
         .is_empty(),
         "the first edge waits for the coalesce window"
     );
+    assert_eq!(state.next_due_ms(&prefs), Some(1_100));
     assert!(
         evaluate_with_unread(
             &mut state,
@@ -448,6 +449,7 @@ fn burst_coalesces_after_window() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].notification_kind, NotificationKind::Coalesced);
     assert_eq!(out[0].agents.len(), 2);
+    assert_eq!(state.next_due_ms(&prefs), None);
 }
 
 #[test]

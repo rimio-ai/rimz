@@ -13,6 +13,15 @@ pub(super) struct RemindState {
 }
 
 impl RemindState {
+    pub(super) fn next_due_ms(&self, prefs: &NotificationsPrefs) -> Option<u64> {
+        if !prefs.enabled || prefs.remind_secs == 0 {
+            return None;
+        }
+        let armed_at_ms = self.armed_at_ms?;
+        let anchor = self.last_reminded_at_ms.unwrap_or(armed_at_ms);
+        Some(anchor.saturating_add(prefs.remind_secs.saturating_mul(1_000)))
+    }
+
     pub(super) fn evaluate(
         &mut self,
         now_ms: u64,
@@ -336,6 +345,7 @@ mod tests {
             ..NotificationsPrefs::default()
         };
         assert!(state.evaluate(1_000, &snapshot, &prefs).is_none());
+        assert_eq!(state.next_due_ms(&prefs), Some(2_000));
         assert!(state.evaluate(1_999, &snapshot, &prefs).is_none());
         let reminder = state.evaluate(2_000, &snapshot, &prefs);
         assert!(
@@ -343,9 +353,11 @@ mod tests {
             "room scope arms a reminder without an agent notification"
         );
         assert_eq!(reminder.unwrap().0.unread_count, Some(1));
+        assert_eq!(state.next_due_ms(&prefs), Some(3_000));
         assert!(state.evaluate(2_001, &snapshot, &prefs).is_none());
         assert!(state.evaluate(3_000, &snapshot, &prefs).is_some());
         prefs.enabled = false;
+        assert_eq!(state.next_due_ms(&prefs), None);
         assert!(state.evaluate(4_000, &snapshot, &prefs).is_none());
         prefs.enabled = true;
         assert!(state.evaluate(5_000, &snapshot, &prefs).is_none());
