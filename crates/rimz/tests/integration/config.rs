@@ -1132,6 +1132,39 @@ fn config_init_refuses_a_lone_existing_loop_file() {
 }
 
 #[test]
+fn profile_listings_warn_and_succeed_with_a_broken_theme() {
+    let env = Env::new();
+    let path = theme_config_path(&env);
+    write_machine_file(&path, "[tokens");
+
+    for command in ["agents", "subagents"] {
+        env.rimz()
+            .args([command, "profiles"])
+            .assert()
+            .success()
+            .stderr(contains(path.display().to_string()))
+            .stderr(contains("using built-in defaults for this file"));
+    }
+}
+
+#[test]
+fn config_get_refuses_a_broken_theme_without_defaulting() {
+    let env = Env::new();
+    let path = theme_config_path(&env);
+    write_machine_file(&path, "[tokens");
+
+    env.rimz()
+        .args(["config", "get", "sidebar.focus_key"])
+        .assert()
+        .code(1)
+        .stderr(contains(format!(
+            "error: loading per-machine config: cannot load {} — the file has a TOML error\n",
+            path.display()
+        )))
+        .stderr(contains("using built-in defaults").not());
+}
+
+#[test]
 fn config_get_json_distinguishes_unset_and_unknown_keys() {
     let env = Env::new();
 

@@ -1652,24 +1652,37 @@ fn load_from_surfaces_typed_config_errors() {
              command = \"notify {{nope}}\"\n",
             ExpectedErr::Notifications,
         ),
-        ("theme.toml", "[theme]\ngood = 300\n", ExpectedErr::Parse),
-        (
-            "theme.toml",
-            "[theme]\nselection = \"#bad\"\n",
-            ExpectedErr::Parse,
-        ),
-        (
-            "theme.toml",
-            "[theme.glyphs.unicode.tokens]\ntotal = \"abc\"\n",
-            ExpectedErr::Parse,
-        ),
-        (
-            "theme.toml",
-            "[theme.animations.idle]\nframes = [\"...\"]\n",
-            ExpectedErr::Parse,
-        ),
     ] {
         assert_config_err(expect_err(file, text), expected);
+    }
+}
+
+#[test]
+fn strict_load_recovers_broken_theme_with_matching_lenient_notices() {
+    for text in [
+        "[tokens",
+        "[theme]\ngood = 300\n",
+        "[theme]\nselection = \"#bad\"\n",
+        "[theme.glyphs.unicode.tokens]\ntotal = \"abc\"\n",
+        "[theme.animations.idle]\nframes = [\"...\"]\n",
+        "[theme.display]\nmax_cols = 0\n",
+        "[theme.display]\nscrollbar = \"bogus\"\n",
+    ] {
+        let dir = tempdir().expect("tempdir");
+        let path = write(&dir, "[sidebar]\nfocus_key = \"Alt+q\"\n");
+        write_named(&dir, "theme.toml", text);
+
+        let config = load_no_fragments(&path)
+            .unwrap_or_else(|err| panic!("broken theme must recover: {text:?}: {err:?}"));
+        assert_eq!(config.theme, ThemeConfig::default());
+        assert_eq!(config.sidebar.focus_key, "Alt+q");
+        assert_eq!(config.notices.unreadable_files.len(), 1);
+        let notice = &config.notices.unreadable_files[&dir.path().join("theme.toml")];
+        assert!(notice.contains("the file has a TOML error"), "{notice}");
+        assert_eq!(
+            config.notices.unreadable_files,
+            load_lenient_no_fragments(&path).notices.unreadable_files
+        );
     }
 }
 
@@ -1806,15 +1819,6 @@ fn display_numeric_bounds_parse_and_clamp_at_use() {
     assert_eq!(
         MachineConfig::default().theme.display.refresh_ms,
         crate::config::DEFAULT_REFRESH_MS
-    );
-
-    assert!(
-        load_no_fragments(&write_named(
-            &dir,
-            "theme.toml",
-            "[theme.display]\nmax_cols = 0\n"
-        ))
-        .is_err()
     );
 
     let too_low = load_no_fragments(&write_named(
@@ -1984,15 +1988,6 @@ fn display_enums_lists_and_nested_bands_parse() {
         toml::from_str(&toml::to_string(display).expect("serialize display"))
             .expect("parse display");
     assert_eq!(round_tripped, *display);
-
-    assert!(
-        load_no_fragments(&write_named(
-            &dir,
-            "theme.toml",
-            "[theme.display]\nscrollbar = \"bogus\"\n"
-        ))
-        .is_err()
-    );
 }
 
 #[test]

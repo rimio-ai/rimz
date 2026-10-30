@@ -580,13 +580,16 @@ impl MachineConfig {
         MachineConfigFiles::machine().path(MachineConfigFileKind::Theme)
     }
 
-    /// Load from the default per-machine paths with strict TOML validation and no memo. Missing files are defaults; broken Markdown definitions are retained in notices alongside the good definitions.
+    /// Load uncached per-machine settings with strict core and loop validation.
+    /// Missing files use defaults; a theme that cannot be read or parsed warns and
+    /// falls back to the built-in theme. Broken Markdown definitions remain in
+    /// notices alongside the good definitions.
     pub fn load() -> Result<Self> {
         Self::load_with_agent_spec_sources().map(|(config, _)| config)
     }
 
-    /// Load the strict per-machine config together with the declaring file for
-    /// every configured agent profile and command.
+    /// Load per-machine config with [`Self::load`]'s per-file rules, together with
+    /// the declaring file for every configured agent profile and command.
     pub fn load_with_agent_spec_sources() -> Result<(Self, AgentSpecSources)> {
         let files = MachineConfigFiles::machine();
         Self::load_from_with_agent_spec_sources(
@@ -604,7 +607,10 @@ impl MachineConfig {
             .map(|loop_| loop_.unwrap_or_default())
     }
 
-    /// Load memoized per-machine config for a runtime entry point. Unlike [`Self::load`], broken TOML degrades to built-in defaults with a warning; both retain Markdown definition failures in notices alongside the good definitions.
+    /// Load memoized per-machine config for a runtime entry point. Unlike [`Self::load`],
+    /// broken core and loop TOML also degrade to built-in defaults with a warning. Both
+    /// loaders recover an unreadable or malformed theme the same way and retain Markdown
+    /// definition failures in notices alongside the good definitions.
     pub fn load_lenient() -> Arc<Self> {
         let files = MachineConfigFiles::machine();
         Self::load_lenient_with_memo(files.core_path(), files.agents_home())
@@ -634,10 +640,10 @@ impl MachineConfig {
 
         let core = load_parsed_optional(files.core_path(), parse_core_text_collecting)?;
         validate_account_budgets(&core.value.accounts, files.core_path())?;
-        let theme = load_parsed_optional(&theme_path, parse_theme_text_collecting)?;
+        let mut notices = ConfigNotices::default();
+        let theme = recover_parsed(&theme_path, parse_theme_text_collecting, &mut notices);
         let loop_ = load_parsed_optional(&loop_path, parse_loop_text_collecting)?;
 
-        let mut notices = ConfigNotices::default();
         notices.add_unknown_keys(files.core_path(), core.unknown_keys);
         notices.add_unknown_keys(&theme_path, theme.unknown_keys);
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);

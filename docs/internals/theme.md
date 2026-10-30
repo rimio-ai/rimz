@@ -76,7 +76,7 @@ Every derived tone goes through [`oklab.rs`](../../crates/rimz/src/theme/oklab.r
 
 A malformed inline table or an unresolvable scheme name falls through to the next source, so resolution always returns a palette and never fails a render. The bundled catalog is the Alacritty files under [`crates/rimz/themes/alacritty/`](../../crates/rimz/themes/alacritty/). `crates/rimz/build.rs` compresses them into one embedded map that `config/scheme.rs` reads, and `cargo xtask theme-refresh` re-imports them from upstream.
 
-The config health path reports what the fall-through hides. `broken_machine_files_in` in `config.rs` runs `config::scheme::validate_theme` over every configured source, independent of precedence, and returns one `ConfigErr::Theme` per invalid source. Each message names the palette actually in effect. `rimz start` prints these as notices and still opens the room, and `rimz doctor` lists them in config health. `MachineConfig::load` does not run this check.
+The config health path reports what the fall-through hides. `broken_machine_files_in` in `config.rs` runs `config::scheme::validate_theme` over every configured source, independent of precedence, and returns one `ConfigErr::Theme` per invalid source. Each message names the palette actually in effect. `rimz start` prints these as notices and still opens the room, and `rimz doctor` lists them in config health. `MachineConfig::load` does not run this check. A theme file that cannot be read or parsed becomes a `ConfigNotices::unreadable_files` entry in both strict and lenient machine loads; only `ConfigEditor::get` keeps that read strict.
 
 ### 2. Derive the thirteen slots
 

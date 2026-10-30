@@ -116,7 +116,16 @@ impl ConfigEditor {
         &self.files
     }
 
+    /// Read effective settings strictly, including the theme. Check it before the
+    /// shared loader can recover it, so refusal never follows a defaults warning.
     pub fn get(&self, key: Option<&str>) -> Result<toml::Value> {
+        super::load_optional(
+            &self.files.path(MachineConfigFileKind::Theme),
+            super::parse_theme_text,
+        )
+        .map_err(|source| ConfigEditErr::Load {
+            source: Box::new(source),
+        })?;
         let config = MachineConfig::load_from(self.files.core_path(), self.files.agents_home())
             .map_err(|source| ConfigEditErr::Load {
                 source: Box::new(source),
