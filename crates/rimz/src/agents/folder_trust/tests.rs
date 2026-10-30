@@ -71,8 +71,9 @@ fn empty_dir_launch_refusal_names_the_machine_wide_grant() {
             .output()
             .unwrap();
         assert!(
-            output.status.success(),
-            "{}",
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         return;
