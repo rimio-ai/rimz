@@ -734,7 +734,7 @@ enum Subcmd {
     /// Removes hooks, rooms, and runtime footprint. Use --state, --config, or
     /// --all to purge durable state and config.
     Uninstall(uninstall::UninstallArgs),
-    /// Update RimZ to the latest release.
+    /// Update RimZ to the latest release, then its unpinned packs.
     Update(update::UpdateArgs),
     /// Create, enter, merge, sweep, and remove RimZ-owned git worktrees.
     Worktree(worktree::WorktreeArgs),

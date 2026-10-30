@@ -249,6 +249,8 @@ rimz update
 
 `update` reads the install path of the binary it is running from and reuses it. A Homebrew install refreshes formula data before upgrading the formula, so stale tap data cannot hide a released build, and a Cargo install reruns `cargo install --locked rimz`. A script or downloaded binary resolves the latest release, verifies the archive against `SHA256SUMS`, requires the extracted binary's `--version` to pass, then atomically replaces the running binary in place. When the binary changes, the new build runs `rimz reload`, so live sidebars, background hook processing, and any refreshing `rimz stats` dashboard move onto it without a pane changing. Outdated language-server brokers retire after their servers stop, without interrupting an index or losing agents' leases.
 
+After that succeeds, `update` brings unpinned packs along with the same permission review as `rimz packs update`, even when RimZ was already current; pinned and linked sources stay put. The [maintenance reference](../reference/cli/maintenance.md#update-rimz) says what holds an update and how to retry.
+
 `--version <TAG>` picks a release instead: an older tag to roll back, or `latest-main` to follow the rolling build. Cargo takes numbered tags only, normalizing a short `v0.4` to `0.4.0`. Homebrew picks its own formula version and refuses the flag, so to hold a machine on one release, install it standalone with the script's `RIMZ_VERSION`. The per-origin table and every refusal message are in the [maintenance reference](../reference/cli/maintenance.md#update-rimz).
 
 ## Uninstall

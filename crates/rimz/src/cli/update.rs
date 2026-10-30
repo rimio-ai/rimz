@@ -2,6 +2,7 @@
 //! RimZ surfaces onto the new build.
 
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -57,6 +58,34 @@ pub fn run(args: UpdateArgs, _globals: &GlobalFlags) -> Result<()> {
                 active_exe.display()
             );
         }
+    }
+    update_packs(&active_exe)
+}
+
+fn update_packs(active_exe: &Path) -> Result<()> {
+    let home = rimz::disk::paths::agents_home();
+    if rimz::packs::Record::read(&home).is_ok_and(|record| record.sources.is_empty()) {
+        return Ok(());
+    }
+    let packs = rimz::disk::paths::packs_dir(&home);
+    if let Ok(metadata) = std::fs::metadata(&packs)
+        && metadata.uid() != nix::unistd::Uid::effective().as_raw()
+    {
+        writeln!(
+            render::out(),
+            "Skipping pack updates: {} belongs to another user; run `rimz packs update` as its owner.",
+            packs.display()
+        )?;
+        return Ok(());
+    }
+    writeln!(render::out(), "Updating installed packs…")?;
+    let failure = "RimZ itself is updated or current, but pack updates did not complete; retry with `rimz packs update`";
+    let status = Command::new(active_exe)
+        .args(["packs", "update"])
+        .status()
+        .context(failure)?;
+    if !status.success() {
+        bail!("{failure}");
     }
     Ok(())
 }
