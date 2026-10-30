@@ -791,6 +791,73 @@ fn worktree_fire_lock_is_found_by_the_task_lookups() {
 }
 
 #[test]
+fn at_lock_refusals_store_the_holder_without_freezing_its_age() {
+    let holder = RunLockInfo {
+        pid: 42424,
+        started_at: Timestamp::now() - jiff::SignedDuration::from_secs(25 * 60),
+    };
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (mode, policy) in [
+        (LoopRunMode::Scheduled, OverlapPolicy::Coalesce),
+        (LoopRunMode::Scheduled, OverlapPolicy::Skip),
+        (LoopRunMode::Manual, OverlapPolicy::Coalesce),
+    ] {
+        for named in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            record_room(root.path()).unwrap();
+            let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+            let mut fire = backlog_fire(root.path(), &catalog);
+            fire.mode = mode;
+            fire.entry.overlap = Some(policy);
+            let path = fire.fire_run_lock_path(false).unwrap().unwrap();
+            std::fs::write(
+                &path,
+                if named {
+                    serde_json::to_vec(&holder).unwrap()
+                } else {
+                    Vec::new()
+                },
+            )
+            .unwrap();
+            let lock = File::open(&path).unwrap();
+            lock.try_lock().unwrap();
+            let finished = fire.prepare_run_lock(false).unwrap().unwrap();
+            let value = serde_json::to_value(&finished.record).unwrap();
+            let TaskFireNotice::Overlap { detail } = finished.notice else {
+                panic!("expected overlap notice");
+            };
+            actual.push((value["holder"].clone(), value["error"].clone(), detail));
+            let suffix = if mode == LoopRunMode::Scheduled && policy == OverlapPolicy::Coalesce {
+                assert_eq!(finished.record.result, LoopRunResult::Deferred);
+                "waiting"
+            } else {
+                assert_eq!(finished.record.result, LoopRunResult::Overlapped);
+                "skipped"
+            };
+            expected.push((
+                if named {
+                    serde_json::to_value(holder).unwrap()
+                } else {
+                    serde_json::Value::Null
+                },
+                serde_json::json!(format!("previous run still active — {suffix}")),
+                if named {
+                    Some(format!(
+                        "previous run still active (pid 42424, started 25m ago) — {suffix}"
+                    ))
+                } else if suffix == "waiting" {
+                    Some("previous run still active — waiting".into())
+                } else {
+                    None
+                },
+            ));
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn task_lookup_reports_the_earliest_holder_among_its_held_locks() {
     let root = tempfile::tempdir().unwrap();
     record_room(root.path()).unwrap();
@@ -1109,7 +1176,7 @@ fn budget_refusal_finishes_as_a_recorded_gate() {
 }
 
 #[test]
-fn deadline_expiry_and_relative_age_use_injected_time() {
+fn deadline_expiry_uses_injected_time() {
     let now = Timestamp::from_second(200_000).expect("now");
     let expired = TaskEntry {
         deadline: Some(Timestamp::from_second(199_999).expect("deadline")),
@@ -1117,10 +1184,6 @@ fn deadline_expiry_and_relative_age_use_injected_time() {
     };
 
     assert!(deadline_expired_at(&expired, now));
-    assert_eq!(
-        relative_age(Timestamp::from_second(198_500).expect("started"), now),
-        "25m ago"
-    );
 }
 
 fn surplus_entry(surplus: Option<&str>, surplus_after: Option<&str>) -> TaskEntry {

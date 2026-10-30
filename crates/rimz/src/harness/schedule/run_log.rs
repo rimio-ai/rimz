@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::disk::paths::logs_dir;
 use crate::harness::schedule::arming;
 use crate::harness::schedule::catalog::LoadedTask;
+use crate::harness::schedule::runner::RunLockInfo;
 use crate::harness::schedule::signal::WatchVerdict;
 use crate::harness::schedule::strikes;
 use crate::ids::MessageId;
@@ -114,6 +115,8 @@ pub struct LoopRunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throttle_wait_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder: Option<RunLockInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<CheckRecord>,
@@ -192,6 +195,7 @@ impl LoopRunRecord {
             mode: Some(mode),
             duration_ms: Some(duration_ms),
             throttle_wait_ms: None,
+            holder: None,
             error: None,
             check: None,
             judge: Vec::new(),

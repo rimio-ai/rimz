@@ -160,6 +160,10 @@ pub struct PreparedDelivery {
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "terminal evidence stays inline without an allocation or a public variant change"
+)]
 pub enum TaskFirePlan {
     Done(TaskFireFinished),
     AlreadyLaunched,
@@ -1541,17 +1545,6 @@ impl<'a> TaskFire<'a> {
                     } else {
                         "waiting".to_owned()
                     };
-                    let holder = info.map_or_else(
-                        || "previous run still active".to_owned(),
-                        |info| {
-                            format!(
-                                "previous run still active (pid {}, started {})",
-                                info.pid,
-                                relative_age(info.started_at, Timestamp::now())
-                            )
-                        },
-                    );
-                    let detail = Some(format!("{holder} — {suffix}"));
                     let mut finished = self.record_terminal_with(
                         if enqueued {
                             LoopRunResult::Deferred
@@ -1560,10 +1553,13 @@ impl<'a> TaskFire<'a> {
                         },
                         LoopRunPresentation::default(),
                         TaskFireNotice::Overlap {
-                            detail: detail.clone(),
+                            detail: Some(overlap_detail(info, &suffix)),
                         },
                         None,
-                        |record| record.error = detail,
+                        |record| {
+                            record.holder = info;
+                            record.error = Some(format!("previous run still active — {suffix}"));
+                        },
                     );
                     finished.replace_holder = replace_holder;
                     return Ok(Some(finished));
@@ -1616,21 +1612,17 @@ impl<'a> TaskFire<'a> {
     }
 
     fn record_overlap(&mut self, info: Option<RunLockInfo>) -> TaskFireFinished {
-        let detail = info.map(|info| {
-            format!(
-                "previous run still active (pid {}, started {}) — skipped",
-                info.pid,
-                relative_age(info.started_at, Timestamp::now())
-            )
-        });
         self.record_terminal_with(
             LoopRunResult::Overlapped,
             LoopRunPresentation::default(),
             TaskFireNotice::Overlap {
-                detail: detail.clone(),
+                detail: info.map(|info| overlap_detail(Some(info), "skipped")),
             },
             None,
-            |record| record.error = detail.clone(),
+            |record| {
+                record.holder = info;
+                record.error = Some("previous run still active — skipped".to_owned());
+            },
         )
     }
 
@@ -2491,22 +2483,18 @@ fn elapsed_millis(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-fn relative_age(ts: Timestamp, now: Timestamp) -> String {
-    let age = now.duration_since(ts);
-    if age.is_negative() {
-        return "now".to_owned();
-    }
-    let secs = age.as_secs().max(0) as u64;
-    let label = if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3_600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3_600)
-    } else {
-        format!("{}d", secs / 86_400)
-    };
-    format!("{label} ago")
+fn overlap_detail(info: Option<RunLockInfo>, suffix: &str) -> String {
+    let holder = info.map_or_else(
+        || "previous run still active".to_owned(),
+        |info| {
+            format!(
+                "previous run still active (pid {}, started {})",
+                info.pid,
+                crate::theme::fmt::rel_age(info.started_at, Timestamp::now())
+            )
+        },
+    );
+    format!("{holder} — {suffix}")
 }
 
 /// The account a task's gates, hooks preflight, window reads, and launch use

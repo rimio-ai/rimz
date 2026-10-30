@@ -165,6 +165,7 @@ mod tests {
             mode: Some(LoopRunMode::Scheduled),
             duration_ms: Some(1),
             throttle_wait_ms: None,
+            holder: None,
             absorbed: 0,
             error: None,
             check,

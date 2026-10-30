@@ -528,6 +528,18 @@ pub(super) fn write_record_forensics(
     if let Some(checkout) = &record.checkout {
         write_detail_link(out, "checkout", &checkout.display().to_string())?;
     }
+    if let Some(holder) = record.holder {
+        let elapsed = record.at.duration_since(holder.started_at).as_secs().max(0) as u64;
+        write_detail_link(
+            out,
+            "holder",
+            &format!(
+                "pid {} · started {} before this fire",
+                holder.pid,
+                ui::age_label(elapsed)
+            ),
+        )?;
+    }
     if record.result == LoopRunResult::Launched
         && let Some(leader) = &record.target
     {

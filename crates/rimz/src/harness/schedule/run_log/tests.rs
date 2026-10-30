@@ -2,6 +2,26 @@ use super::*;
 use std::io::Write as _;
 
 #[test]
+fn holder_survives_the_codec_and_caps_without_changing_legacy_records() {
+    let legacy = serde_json::json!({
+        "task": "busy", "at": "2026-01-01T00:25:00Z", "result": "overlapped"
+    });
+    let holder = serde_json::json!({"pid": 42424, "started_at": "2026-01-01T00:00:00Z"});
+    let mut named = legacy.clone();
+    named["holder"] = holder;
+    let encoded: Vec<_> = [legacy.clone(), named.clone()]
+        .into_iter()
+        .map(|value| {
+            let record: LoopRunRecord = serde_json::from_value(value).unwrap();
+            let bytes = serde_json::to_vec(&capped_record(&record)).unwrap();
+            let decoded: LoopRunRecord = serde_json::from_slice(&bytes).unwrap();
+            serde_json::to_value(decoded).unwrap()
+        })
+        .collect();
+    assert_eq!(encoded, [legacy, named]);
+}
+
+#[test]
 fn workflow_skip_round_trips_as_a_neutral_result() {
     let value = serde_json::json!({"task":"review", "at":"2026-01-01T00:00:00Z", "result":"workflow_skipped", "run_id":"wf_existing"});
     let row = serde_json::from_value::<LoopRunRecord>(value.clone());
@@ -224,6 +244,7 @@ fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         mode: None,
         duration_ms: None,
         throttle_wait_ms: None,
+        holder: None,
         absorbed: 0,
         error: None,
         check: None,
