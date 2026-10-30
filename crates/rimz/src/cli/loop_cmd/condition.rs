@@ -283,5 +283,5 @@ fn term_unread_reason(
 }
 
 pub(super) fn unread_reason(reason: Option<when::UnreadReason>) -> String {
-    schedule::unread_reason(reason, Timestamp::now())
+    schedule::unread_reason(reason, Some(Timestamp::now()))
 }
