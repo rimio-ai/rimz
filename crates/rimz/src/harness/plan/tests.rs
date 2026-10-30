@@ -4287,7 +4287,7 @@ fn tier_override_changes_the_supervised_launch_runtime() {
 }
 
 #[test]
-fn supervised_loop_account_pin_keeps_the_provider_while_unpinned_falls_back() {
+fn supervised_account_pin_keeps_the_provider_while_unpinned_falls_back() {
     use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
     use crate::store::writer::LaunchLogin;
 
@@ -4350,32 +4350,39 @@ fn supervised_loop_account_pin_keeps_the_provider_while_unpinned_falls_back() {
     )
     .unwrap();
 
-    for (login, expected_kind, expected_model) in [
-        (LaunchLogin::RoomDefault, "codex", "sol"),
-        (
-            LaunchLogin::Pinned("rimio".parse().unwrap()),
-            "claude",
-            "sonnet",
-        ),
-    ] {
-        let mut request = supervised_request("sonnet", "ping");
-        request.loop_task = Some("ping".into());
-        request.login = login;
-        let launch = plan_supervised_launch(
-            &request,
-            None,
-            None,
-            None,
-            &workspace,
-            &machine,
-            effective_launch(&machine, root.path()),
-            |_| LaunchLogin::Pinned("rimio".parse().unwrap()),
-            &mut Vec::new(),
-        )
-        .unwrap();
-        let cell = planned_cell(&launch);
-        assert_eq!(cell.kind.as_str(), expected_kind, "{:?}", request.login);
-        assert_eq!(cell.launch.model.as_deref(), Some(expected_model));
+    for loop_task in [None, Some("ping")] {
+        for (login, expected_kind, expected_model) in [
+            (LaunchLogin::RoomDefault, "codex", "sol"),
+            (
+                LaunchLogin::Pinned("rimio".parse().unwrap()),
+                "claude",
+                "sonnet",
+            ),
+        ] {
+            let mut request = supervised_request("sonnet", "ping");
+            request.loop_task = loop_task.map(str::to_owned);
+            request.login = login;
+            let launch = plan_supervised_launch(
+                &request,
+                None,
+                None,
+                None,
+                &workspace,
+                &machine,
+                effective_launch(&machine, root.path()),
+                |_| LaunchLogin::Pinned("rimio".parse().unwrap()),
+                &mut Vec::new(),
+            )
+            .unwrap();
+            let cell = planned_cell(&launch);
+            assert_eq!(
+                cell.kind.as_str(),
+                expected_kind,
+                "{:?}, loop {loop_task:?}",
+                request.login
+            );
+            assert_eq!(cell.launch.model.as_deref(), Some(expected_model));
+        }
     }
 }
 

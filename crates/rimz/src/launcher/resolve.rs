@@ -12,7 +12,7 @@ use crate::harness::budget::BudgetSpec;
 use crate::harness::plan::{
     LaunchFinalizeOptions, LaunchFinalizeWarning, PermissionModeChoice, ResolvedLaunch,
 };
-use crate::harness::spec::LayoutSpec;
+use crate::harness::spec::{Cell, LayoutSpec};
 use crate::store::snapshot::SidebarSnapshot;
 use anyhow::{Context, Result, bail};
 
@@ -67,14 +67,16 @@ pub fn resolve_finalized_layout(
     }
     let spec = qualified_spec.as_deref().or(spec);
     let mut effective = effective.clone();
-    let availability = room.map(|(runtime, state)| {
-        crate::harness::plan::LaunchAvailability::read(
-            runtime,
-            state,
-            machine_config,
-            jiff::Timestamp::now(),
-        )
-    });
+    let availability = room
+        .filter(|_| overrides.login.is_none())
+        .map(|(runtime, state)| {
+            crate::harness::plan::LaunchAvailability::read(
+                runtime,
+                state,
+                machine_config,
+                jiff::Timestamp::now(),
+            )
+        });
     let routed = effective.route(
         &machine_config.tiers,
         scope,
@@ -125,6 +127,19 @@ pub fn resolve_finalized_layout(
             max_turns,
         },
     )?;
+    if let Some(login) = &overrides.login {
+        for cell in resolved
+            .layout
+            .columns
+            .iter_mut()
+            .flat_map(|column| &mut column.rows)
+        {
+            let Cell::Agent(cell) = cell else {
+                continue;
+            };
+            cell.launch.login = Some(login.clone());
+        }
+    }
     Ok(FinalizedLaunch {
         profiles: match scope {
             ProfileScope::Agents => effective.profiles,
@@ -200,6 +215,21 @@ fn validate_resolved_launch_inputs(
     )?;
     if enforce_name_cardinality && layout.agent_kinds().count() != 1 {
         bail!("--name requires a layout with exactly one agent cell");
+    }
+    if overrides.login.is_some() {
+        let kinds = layout
+            .agent_kinds()
+            .collect::<std::collections::BTreeSet<_>>();
+        if kinds.len() > 1 {
+            bail!(
+                concat!(
+                    "--account names one provider's account, but this layout launches {}; ",
+                    "launch each provider's cells separately, or switch the room with ",
+                    "`rimz accounts use`"
+                ),
+                kinds.into_iter().collect::<Vec<_>>().join(", ")
+            );
+        }
     }
     launch_override_preset(overrides)
 }

@@ -68,7 +68,7 @@ The durable stamp is the login of the agent's latest process. Each launch path s
 
 | Path | Login |
 | --- | --- |
-| a fresh launch: peer, team member, loop, interactive | `LaunchLogin::RoomDefault`, resolved as pin-or-live under the launch batch's workspace lock, unless its `SupervisedRunRequest::login` pins one |
+| a fresh launch: peer, team member, loop, interactive | `LaunchLogin::RoomDefault`, resolved as pin-or-live under the launch batch's workspace lock, unless `LaunchOverrides::login` (`rimz agents --account`) or `SupervisedRunRequest::login` pins one |
 | a `rimz subagents` child of its parent's kind | `Pinned` on the parent's stamp. An unstamped parent counts as `default` |
 | a `rimz subagents` child of another kind | the room default for its own kind |
 | restart, resume, fork, subagent follow-up, lane, team, and crash recovery | the room default, when it shares a history pool with the session's stamp ([`harness::resume::relaunch_login`](../../../crates/rimz/src/harness/resume.rs)) |

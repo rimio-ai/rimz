@@ -17,6 +17,7 @@ pub(super) fn typed_overrides(
     overrides: &LaunchOverrideArgs,
 ) -> Result<rimz::launcher::LaunchOverrides> {
     Ok(rimz::launcher::LaunchOverrides {
+        login: overrides.account.clone(),
         mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?,
         tier: overrides.tier,
         agent: overrides.agent.clone(),
