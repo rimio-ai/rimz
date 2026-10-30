@@ -443,7 +443,8 @@ pub struct HarnessConfig {
     /// Native auto-compaction window for capable profiles without `auto-compact`; unset means 272k tokens, `off` passes no window.
     #[serde(with = "auto_compact_serde")]
     pub auto_compact: Option<u64>,
-    /// Compact before messages and scheduled loop waits when context reaches this threshold; unset means 258,000 tokens, `off` disables it.
+    /// Wrap up a filling turn and compact at rest, or compact before a message or
+    /// scheduled wait. The fallback line is 258,000 tokens; `off` disables it.
     #[serde(with = "smart_compact_serde")]
     pub smart_compact: Option<AutoCompact>,
     /// Free text appended to compact commands whose adapters accept it.

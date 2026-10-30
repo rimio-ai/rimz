@@ -274,7 +274,9 @@ aggressive_resize = true
 # Native window for Claude/Codex profiles without auto-compact; "off" passes none.
 # An engine switch drops this default silently where no window flag exists.
 # auto_compact = "272k"
-# smart_compact = "258k"         # compact before messages/waits at this threshold (tokens or "70%"); "off" disables it
+# Wrap up a filling turn, compact at rest, and continue; also compact before messages/waits.
+# A profile or role's smart-compact overrides this line; tokens or "70%", "off" disables it.
+# smart_compact = "258k"
 ## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's brief for the seat (solo or team member), "" = bare command
 # idle_compact = "100k"           # compact an idle agent at or above this many tokens before its prompt cache expires (TTL minus prompt_cache_margin); a profile or role may set its own idle-compact; off disables it
 # cache_keepalive = true          # keep waiting agents' prompt caches warm

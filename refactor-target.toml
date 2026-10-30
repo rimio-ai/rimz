@@ -2051,7 +2051,13 @@ path = "crates/rimz/src/harness"
 # SeatPolicy::smart_compact shares the config resolver with agent-row consumers (+1).
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
 # soft_compact shares its module, request, decision and spawn with CLI/producer callers (+4).
-surface-budget = 1032
+# soft_compact::compact_agents exposes the paced producer pass to sidebar refresh (+1).
+surface-budget = 1033
+
+[[verdict]]
+kind = "item"
+key = "harness::soft_compact::compact_agents"
+reason = "Sidebar refresh drives the shared soft-compaction decision through detached helpers and disposable pacing."
 
 [[verdict]]
 kind = "item"

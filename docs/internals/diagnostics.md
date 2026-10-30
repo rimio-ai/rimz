@@ -122,7 +122,7 @@ The supervisor kinds come from `sidebar_pane::supervise`, which holds one tab's 
 
 `tick_budget_breach` records sustained over-budget producer ticks: last and worst wall time, mux wait, fold bytes, spawns, the declared budgets, streak length, episode `since_ms`, and, on the recovery record, `recovered_after_ms` ([performance.md](./performance.md#the-tick-budget)). A cache-refresh record also carries `spawns_by_step`, the per-step spawn counts of the episode's worst-spawn pass, summing to its `spawns`. Zero steps are omitted, and a `fetch` record has no such field. Step names, in pass order:
 
-`codex_daemon_reap`, `accounts`, `spending`, `rate_limits`, `sessions`, `account_usage`, `auto_continue`, `idle_compact`, `idle_stop`, `hibernate`, `cache_keepalive`, `keep_warm`, `auto_redeem`, `budget`, `run_timeout`, `orphan_sweep`, `auto_gc`, `diff_stats`, `cohort_spend`, `pipeline`, `pr_states`, `trunk`, and `other` for the rest of the metered pass (host-input fold, login resolution, seat policy load).
+`codex_daemon_reap`, `accounts`, `spending`, `rate_limits`, `sessions`, `account_usage`, `auto_continue`, `idle_compact`, `soft_compact`, `idle_stop`, `hibernate`, `cache_keepalive`, `keep_warm`, `auto_redeem`, `budget`, `run_timeout`, `orphan_sweep`, `auto_gc`, `diff_stats`, `cohort_spend`, `pipeline`, `pr_states`, `trunk`, and `other` for the rest of the metered pass (host-input fold, login resolution, seat policy load).
 
 ### Fetch cycle windows
 

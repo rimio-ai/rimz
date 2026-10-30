@@ -400,7 +400,7 @@ OpenCode's project instructions and RimZ's launch reminder still follow the repl
 
 ### Auto-compaction window
 
-The `auto-compact` field on a profile or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction). Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).
+The `auto-compact` field on a profile or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction), which uses a seat line for mid-turn wrap-up and compact-first delivery without changing the native window. Mid-turn participation derives from compact-command, context, and compaction coverage; the configuration guide lists skipped kinds, and `rimz doctor` reports detected skips. Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).
 
 | Agent | Auto-compaction window | How the agent receives it |
 | --- | :--: | --- |

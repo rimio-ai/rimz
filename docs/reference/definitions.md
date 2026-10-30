@@ -236,6 +236,8 @@ A selector is `family.event` or `family.*`: the family begins with a lowercase A
 
 Resolution follows the team role's TOML override, then the first setting in the seat's profile chain, then [`harness.smart_compact`](../guide/configuration.md#smart-compaction), whose default is `258k`. A Markdown role's override belongs to its generated seat profile. A supervised child uses its launch profile's namespace, normally the subagent table. An explicit `off` stops inheritance. Unlike `auto-compact`, this field controls RimZ's compaction policy, not the provider's native window.
 
+The same line drives [mid-turn soft compaction](../guide/loops.md#smart-compaction) and compact-first message delivery to a resting agent. Mid-turn detection resolves current definitions; a queued message retains the line selected at enqueue. `rimz message --smart-compact` changes only that send's line.
+
 ### Idle compaction
 
 `idle-compact` accepts `off` or a positive token count: an integer or a string in digits or `k` such as `100k`, `250000`, or `1000k`, with no `m` suffix and no percentages. A bare YAML `off` (the boolean `false`) means `off`; `true` and `0` are refused. An idle seat compacts once its occupied context reaches the floor; see [idle compaction](../guide/configuration.md#idle-compaction) for the timing, provider defaults, and eligibility.
