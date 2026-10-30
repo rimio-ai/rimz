@@ -184,6 +184,7 @@ fn write_spec(w: &mut impl Write, report: &TeamReport) -> Result<()> {
             .map(|role| render::RosterRow {
                 handle: role.role.clone(),
                 kind: role.kind.clone().unwrap_or_else(|| "-".to_owned()),
+                login: None,
                 model: role.model.as_deref().map(|model| {
                     crate::cli::profile_report::model_label(model, role.tier, role.tier_fallback)
                 }),
