@@ -92,7 +92,7 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `97%` | session cache hit: green from 90%, yellow from 70%, red below |
 | `↻ 2` | completed context compactions |
 | `⟲ 5` | consecutive identical tool calls, shown from 3 through 19 |
-| `◔ 8m` | an age, never a duration. The face rounds down to completed quarters (eighths with Nerd Font), with a minimum first face. Card ages and waits fill over an hour and stay full past it; only an expired cache gives a card the ringed `◉`. Child quiet fills over `stalled_after_secs` and keeps `◉` past that window. |
+| `◔ 8m` | an age, never a duration. The face rounds down to completed quarters (eighths with Nerd Font), with a minimum first face. Card, wait, and finished-group ages fill over an hour and stay full past it; only an expired cache gives a card the ringed `◉`. Child quiet fills over `stalled_after_secs` and keeps `◉` past that window. |
 | `9m`, `2h` | plain muted runtime, frozen for finished children; pipeline durations use two units from an hour up, such as `4h12m`. |
 | `200k`, `1M` | the model's context window size |
 | `ϟ` (Nerd Font: ``) | fast mode, after the model on a card, after the effort on a subagent row (after the model when the row has no effort): bold amber, always still on child rows; on cards, still at rest and crackling only while running |
