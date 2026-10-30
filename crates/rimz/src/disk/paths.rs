@@ -1660,6 +1660,15 @@ pub fn holds_rimz_home(dir: &Path, home: &Path) -> bool {
         )
 }
 
+/// Whether `path` is under `root`, lexically or after resolving symlinks.
+pub(crate) fn is_under_root(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+        || matches!(
+            (path.canonicalize(), root.canonicalize()),
+            (Ok(path), Ok(root)) if path.starts_with(&root)
+        )
+}
+
 /// Under `cfg(test)`, the lib crate resolves the implicit home to a
 /// process-unique, uncreated temp path. Read-only callers leave no residue;
 /// mutating tests own a [`tempfile::TempDir`] and use [`StatePaths::under`].

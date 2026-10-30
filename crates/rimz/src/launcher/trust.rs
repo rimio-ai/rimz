@@ -108,11 +108,12 @@ pub fn preflight(
             message
         }
         Some(FolderTrust::Undecided(gap)) => {
-            let fix = if cwd.starts_with(crate::disk::paths::empty_dir_root()) {
-                gap.empty_dir_fix(kind)
-            } else {
-                gap.fix(kind, "rimz trust grant")
-            };
+            let fix =
+                if crate::disk::paths::is_under_root(cwd, &crate::disk::paths::empty_dir_root()) {
+                    gap.empty_dir_fix(kind)
+                } else {
+                    gap.fix(kind, "rimz trust grant")
+                };
             if matches!(unattended, Some(Unattended::Agent)) {
                 anyhow::bail!(
                     "agent-started launch refused: {kind} has no trust decision for `{}`; the pane would stop at its folder-trust prompt with nobody watching; ask the user to {}; {AGENT_RELAUNCH}",
@@ -345,36 +346,63 @@ mod tests {
 
     #[test]
     fn empty_dir_undecided_fix_is_machine_wide() {
-        let cwd = crate::disk::paths::empty_dir_root().join("child");
-        for unattended in [
-            None,
-            Some(super::Unattended::Subagent),
-            Some(super::Unattended::Agent),
-        ] {
-            let gap = crate::agents::FolderTrustGap {
-                key: "/empty".into(),
-                path: "/config".into(),
-                grant: Ok(crate::agents::FolderTrustPreview {
-                    original: None,
-                    candidate: String::new(),
-                }),
-            };
-            let result = super::preflight(
-                "claude",
-                &cwd,
-                Some(crate::agents::FolderTrust::Undecided(gap)),
-                unattended,
-            );
-            let text = match result {
-                Ok(notice) => notice.unwrap().to_string(),
-                Err(error) => error.to_string(),
-            };
+        if std::env::var_os("RIMZ_TEST_TRUST_LINKED_HOME").is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let real = dir.path().join("real");
+            let link = dir.path().join("link");
+            std::fs::create_dir_all(real.join("empty/child")).unwrap();
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "launcher::trust::tests::empty_dir_undecided_fix_is_machine_wide",
+                    "--nocapture",
+                ])
+                .env("RIMZ_HOME", &link)
+                .env("RIMZ_TEST_TRUST_LINKED_HOME", "1")
+                .output()
+                .unwrap();
             assert!(
-                text.contains("run `rimz trust grant --empty-dir`"),
-                "{text}"
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
             );
-            assert!(!text.contains("--agents"), "{text}");
-            assert!(!text.contains(" in `"), "{text}");
+            return;
+        }
+        let cwd = crate::disk::paths::empty_dir_root().join("child");
+        let resolved = cwd.canonicalize().unwrap();
+        for cwd in [&cwd, &resolved] {
+            for unattended in [
+                None,
+                Some(super::Unattended::Subagent),
+                Some(super::Unattended::Agent),
+            ] {
+                let gap = crate::agents::FolderTrustGap {
+                    key: cwd.to_path_buf(),
+                    path: "/config".into(),
+                    grant: Ok(crate::agents::FolderTrustPreview {
+                        original: None,
+                        candidate: String::new(),
+                    }),
+                };
+                let result = super::preflight(
+                    "claude",
+                    cwd,
+                    Some(crate::agents::FolderTrust::Undecided(gap)),
+                    unattended,
+                );
+                assert_eq!(result.is_err(), unattended.is_some());
+                let text = match result {
+                    Ok(notice) => notice.unwrap().to_string(),
+                    Err(error) => error.to_string(),
+                };
+                assert!(
+                    text.contains("run `rimz trust grant --empty-dir`"),
+                    "{text}"
+                );
+                assert!(!text.contains("--agents"), "{text}");
+                assert!(!text.contains(" in `"), "{text}");
+            }
         }
     }
 
