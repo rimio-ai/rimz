@@ -324,7 +324,9 @@ upward-dependencies = ["address"]
 # SkillChain::from_resolved keeps definition loads on one pack snapshot (+1).
 # ToolSet::agent_types shares effective child-type grants with pack review (+1).
 # SubagentOwner, resolve_owner and AgentSeat::from_identity share recorded ownership (+3).
-surface-budget = 1199
+# RebuildScope, RebuildReport, RebuiltDay, KeptDay, RebuildErr and
+# rebuild_spending_history share saved-day rebuilds with the CLI (+6).
+surface-budget = 1205
 
 [[verdict]]
 kind = "item"
@@ -756,7 +758,9 @@ path = "crates/rimz/src/agents/spending"
 # WindowStarts and its constructor share local-day spend and assist cutoffs (+2).
 # SpendingWalker::discover_login_spending_files gives benches isolated account-aware discovery (+1).
 # SubagentOwner, resolve_owner and AgentSeat::from_identity share recorded ownership (+3).
-surface-budget = 117
+# RebuildScope, RebuildReport, RebuiltDay, KeptDay, RebuildErr and
+# rebuild_spending_history share saved-day rebuilds with the CLI (+6).
+surface-budget = 123
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -1638,6 +1642,36 @@ reason = "Native filename identity belongs to adapters; the historical role join
 kind = "item"
 key = "agents::spending::aggregate::local_day_index"
 reason = "Stats computes today in the publication's timezone using the same civil-date convention as aggregation."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::engine::rebuild_spending_history"
+reason = "The stats command requests a producer-locked history rebuild without the ordinary freshness and scope-only shortcuts."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::rebuild::RebuildScope"
+reason = "The requested command and unattended helper select all saved days or the cursor's pending UTC days through one rebuild entry."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::rebuild::RebuildReport"
+reason = "The CLI presents the library's rebuilt, unchanged, kept, deferred account-day and parsed-file outcomes without owning rebuild policy."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::rebuild::RebuiltDay"
+reason = "Before/after account-day dollars cross the library/CLI seam and become the automatic rebuild's durable assist evidence."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::rebuild::KeptDay"
+reason = "The CLI names kept and deferred account-days; the unattended helper retains kept days in its assist evidence."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::rebuild::RebuildErr"
+reason = "Callers distinguish incomplete discovery, producer contention, unavailable shared maintenance, unusable format marks and history I/O failures."
 
 [[verdict]]
 kind = "item"

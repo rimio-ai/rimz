@@ -14,11 +14,12 @@ use super::paths;
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_secs, origin_path, price_split,
 };
+use crate::agents::transcript_fs::try_read_transcript_lines;
 use crate::agents::transcript_fs::{
     deserialize_optional_object_lossy, deserialize_optional_string_lossy,
     deserialize_optional_u64_lossy,
 };
-use crate::agents::{PriceBook, TokenSplit, read_transcript_lines};
+use crate::agents::{PriceBook, TokenSplit};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -245,8 +246,13 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
     let Some(session_id) = native_session_id(path) else {
         return result(state, from, Vec::new(), BTreeMap::new());
     };
-    let Some((bytes, next)) = read_transcript_lines(path, from) else {
-        return result(state, from, Vec::new(), BTreeMap::new());
+    let (bytes, next) = match try_read_transcript_lines(path, from) {
+        Ok(Some(read)) => read,
+        read => {
+            let mut parsed = result(state, from, Vec::new(), BTreeMap::new());
+            parsed.read_error = read.err().map(|error| error.kind());
+            return parsed;
+        }
     };
     let mut entries = Vec::new();
     let mut unknown_models = BTreeMap::new();
@@ -380,6 +386,7 @@ fn result(
         cursor: SpendCursor::with_state(offset, &state),
         unknown_models,
         update: SpendUpdate::Extend,
+        read_error: None,
     }
 }
 

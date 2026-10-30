@@ -11,7 +11,7 @@ use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, origin_path, price_split,
 };
-use crate::agents::transcript_fs::read_transcript_lines;
+use crate::agents::transcript_fs::try_read_transcript_lines;
 
 #[derive(Default, Deserialize, Serialize)]
 struct State {
@@ -20,8 +20,14 @@ struct State {
 }
 
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
-    let Ok(file) = std::fs::File::open(path) else {
-        return SpendParse::stalled(resume);
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) => {
+            return SpendParse {
+                read_error: Some(error.kind()),
+                ..SpendParse::stalled(resume)
+            };
+        }
     };
     let mut state = State::default();
     for line in std::io::BufReader::new(file)
@@ -50,7 +56,17 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
     } else {
         resume.map_or(0, |c| c.offset)
     };
-    let Some((content, next_offset)) = read_transcript_lines(path, from) else {
+    let read = match try_read_transcript_lines(path, from) {
+        Ok(read) => read,
+        Err(error) => {
+            return SpendParse {
+                origin: state.cwd,
+                read_error: Some(error.kind()),
+                ..SpendParse::stalled(resume)
+            };
+        }
+    };
+    let Some((content, next_offset)) = read else {
         if replaced && std::fs::metadata(path).is_ok_and(|m| m.len() == 0) {
             return SpendParse {
                 origin: state.cwd.clone(),
@@ -158,5 +174,6 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         } else {
             SpendUpdate::Extend
         },
+        read_error: None,
     }
 }

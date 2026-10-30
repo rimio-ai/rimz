@@ -125,11 +125,15 @@ pub(super) fn parse(path: &Path, _resume: Option<&SpendCursor>, prices: &PriceBo
     let mut entries = Vec::new();
     let mut origin = None;
     let mut unknown_models = BTreeMap::new();
+    let mut read_error = None;
     loop {
         let row = match rows.next() {
             Ok(Some(row)) => row,
             Ok(None) => break,
-            Err(_) => break,
+            Err(_) => {
+                read_error = Some(std::io::ErrorKind::Other);
+                break;
+            }
         };
         let thread_id = row
             .get::<_, Option<String>>(0)
@@ -182,6 +186,7 @@ pub(super) fn parse(path: &Path, _resume: Option<&SpendCursor>, prices: &PriceBo
         cursor: SpendCursor::default(),
         unknown_models,
         update: SpendUpdate::Replace,
+        read_error,
     }
 }
 
@@ -192,6 +197,7 @@ fn empty_parse(offset: u64) -> SpendParse {
         cursor: SpendCursor::new(offset),
         unknown_models: BTreeMap::new(),
         update: SpendUpdate::Extend,
+        read_error: Some(std::io::ErrorKind::Other),
     }
 }
 

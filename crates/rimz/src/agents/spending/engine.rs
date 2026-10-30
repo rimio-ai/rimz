@@ -20,6 +20,58 @@ use super::{SPENDING_STALE_GRACE, SpendingFile};
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
 
+/// Rebuild saved spend days directly under this namespace's producer lock.
+pub fn rebuild_spending_history(
+    runtime: &RuntimePaths,
+    headline: &HeadlineSpec,
+    scope: super::RebuildScope,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> Result<super::RebuildReport, super::RebuildErr> {
+    use crate::disk::lock::{LockErr, WorkspaceLock};
+
+    runtime.ensure_shared_dirs()?;
+    let _guard = WorkspaceLock::acquire_with_timeout(
+        &runtime.shared_spending_lock(),
+        Duration::from_secs(5),
+    )
+    .map_err(|error| match error {
+        LockErr::Timeout { .. } => super::RebuildErr::ProducerBusy,
+        error => super::RebuildErr::ProducerLock(error),
+    })?;
+    drop(super::rebuild::maintenance(&runtime.spending_history)?);
+    let mut walker = super::SpendingWalker::new();
+    let now_secs = super::unix_secs_now();
+    let files = walker.discover_spending_files(now_secs);
+    if !walker.spending_discovery_is_authoritative() {
+        return Err(super::RebuildErr::DiscoveryIncomplete);
+    }
+    let mut rebuild = super::rebuild::RebuildRun::new(scope);
+    let context = SpendingRequestContext {
+        project_root: None,
+        worktree_roots: &[],
+        worktree_home: None,
+        origin_overrides: HashMap::new(),
+        headline,
+        allow_local_fallback: false,
+    };
+    walk_fleet_spending_files(
+        &mut walker,
+        runtime,
+        &context,
+        FleetWalk::Rebuild(&mut rebuild),
+        progress,
+        &files,
+        now_secs,
+    );
+    rebuild.report
+}
+
+enum FleetWalk<'a> {
+    Local,
+    Publish,
+    Rebuild(&'a mut super::rebuild::RebuildRun),
+}
+
 /// Walk every provider's transcript history into a fleet-wide and per-provider
 /// [`Spending`](crate::agents::spending::Spending), publishing the stamped
 /// result to the persistent shared `provider-spending.json` — the cache consumer
@@ -237,12 +289,26 @@ fn compute_fleet_spending(
     }
     if publish {
         return walk_fleet_spending_files(
-            walker, runtime, context, true, progress, &files, now_secs,
+            walker,
+            runtime,
+            context,
+            FleetWalk::Publish,
+            progress,
+            &files,
+            now_secs,
         );
     }
     served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
         if context.allow_local_fallback {
-            walk_fleet_spending_files(walker, runtime, context, false, progress, &files, now_secs)
+            walk_fleet_spending_files(
+                walker,
+                runtime,
+                context,
+                FleetWalk::Local,
+                progress,
+                &files,
+                now_secs,
+            )
         } else {
             SpendingCaches {
                 provider: current_provider_spending_cache(runtime).into(),
@@ -308,9 +374,12 @@ fn walk_fleet_spending_context(
 ) -> crate::agents::spending::SpendingCaches {
     let now_secs = crate::agents::spending::unix_secs_now();
     let files = walker.discover_spending_files(now_secs);
-    walk_fleet_spending_files(
-        walker, runtime, context, publish, progress, &files, now_secs,
-    )
+    let mode = if publish {
+        FleetWalk::Publish
+    } else {
+        FleetWalk::Local
+    };
+    walk_fleet_spending_files(walker, runtime, context, mode, progress, &files, now_secs)
 }
 
 #[cfg(test)]
@@ -335,7 +404,7 @@ fn walk_fleet_spending_files(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     context: &SpendingRequestContext<'_>,
-    publish: bool,
+    mode: FleetWalk<'_>,
     progress: &mut dyn FnMut(SpendProgress),
     files: &[SpendingFile],
     now_secs: u64,
@@ -345,6 +414,12 @@ fn walk_fleet_spending_files(
         ProviderSpendingCache, SilentWalk, SpendProgress, SpendScope, SpendingCaches,
         WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
         read_provider_spending_cache, write_provider_spending_cache,
+    };
+
+    let (publish, rebuild) = match mode {
+        FleetWalk::Local => (false, None),
+        FleetWalk::Publish => (true, None),
+        FleetWalk::Rebuild(rebuild) => (true, Some(rebuild)),
     };
 
     if publish && let Err(error) = super::history::migrate(runtime, now_secs) {
@@ -388,7 +463,7 @@ fn walk_fleet_spending_files(
         };
         let cache_path = runtime.shared_spending_cursor_path();
         let result = if publish {
-            walker.walk(&cache_path, &req, &mut SilentWalk)
+            walker.walk_inner(&cache_path, true, &req, &mut SilentWalk, rebuild)
         } else {
             walker.walk_local(&cache_path, &req, &mut SilentWalk)
         };
@@ -456,7 +531,7 @@ fn walk_fleet_spending_files(
             accounts: walker.discovery.history_accounts.clone(),
             closed_days: Default::default(),
         };
-        walker.walk(&cache_path, &req, &mut observer)
+        walker.walk_inner(&cache_path, true, &req, &mut observer, rebuild)
     } else {
         let mut observer = SilentWalk;
         walker.walk_local(&cache_path, &req, &mut observer)

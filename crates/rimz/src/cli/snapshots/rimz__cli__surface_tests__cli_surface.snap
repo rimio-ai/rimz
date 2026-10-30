@@ -3100,6 +3100,7 @@ rimz stats
     --json  [action=set-true takes=0..=0]
     -n <LIMIT>  [action=set takes=1..=1 default=50]
     --mux <MUX>  [action=set takes=1..=1 global]
+    --rebuild  [action=set-true takes=0..=0]
     --refresh  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
     --subagents  [action=set-true takes=0..=0]

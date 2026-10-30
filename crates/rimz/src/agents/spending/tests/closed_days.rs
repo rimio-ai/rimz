@@ -29,17 +29,17 @@ fn row(at: &str, usd: f64) -> CachedEntry {
     entry
 }
 
-struct Fixture {
-    runtime: RuntimePaths,
-    home: PathBuf,
-    walker: SpendingWalker,
-    adapter: &'static AgentDefinition,
+pub(super) struct Fixture {
+    pub(super) runtime: RuntimePaths,
+    pub(super) home: PathBuf,
+    pub(super) walker: SpendingWalker,
+    pub(super) adapter: &'static AgentDefinition,
     timezone: &'static str,
-    prices: PriceBook,
+    pub(super) prices: PriceBook,
 }
 
 impl Fixture {
-    fn new(root: &Path, name: &str) -> Self {
+    pub(super) fn new(root: &Path, name: &str) -> Self {
         let home = root.join("accounts/claude/shared");
         std::fs::create_dir_all(home.join("projects/project")).unwrap();
         let runtime_root = root.join(name);
@@ -57,7 +57,7 @@ impl Fixture {
         }
     }
 
-    fn path(&self, session: &str) -> PathBuf {
+    pub(super) fn path(&self, session: &str) -> PathBuf {
         self.home
             .join("projects/project")
             .join(format!("{session}.jsonl"))
@@ -92,7 +92,7 @@ impl Fixture {
         ));
     }
 
-    fn discover(&mut self, now: u64) -> Vec<SpendingFile> {
+    pub(super) fn discover(&mut self, now: u64) -> Vec<SpendingFile> {
         self.walker.discovery.force_complete_for_test();
         self.walker.discovery.discover(
             std::iter::once((
@@ -112,12 +112,12 @@ impl Fixture {
         )
     }
 
-    fn walk(&mut self, now: u64, publish: bool) -> SpendingWalkResult {
+    pub(super) fn walk(&mut self, now: u64, publish: bool) -> SpendingWalkResult {
         let files = self.discover(now);
         self.walk_files(&files, now, publish)
     }
 
-    fn walk_files(
+    pub(super) fn walk_files(
         &mut self,
         files: &[SpendingFile],
         now: u64,
@@ -152,7 +152,7 @@ impl Fixture {
         }
     }
 
-    fn lines(&self) -> Vec<Value> {
+    pub(super) fn lines(&self) -> Vec<Value> {
         std::fs::read_to_string(self.runtime.spending_history.spend(2026))
             .unwrap_or_default()
             .lines()

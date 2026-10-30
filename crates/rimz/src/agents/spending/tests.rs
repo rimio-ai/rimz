@@ -583,5 +583,6 @@ mod closed_days;
 mod compaction;
 mod discovery;
 mod published_cache;
+mod rebuild;
 mod scoped_pin;
 mod walk_cache;

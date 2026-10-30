@@ -78,13 +78,19 @@ pub(super) fn spend(
         cursor: resume.and_then(SpendCursor::state),
     };
     let Some(output) = run_json(kind, "spend", plugin_dir, argv, Some(&request)) else {
-        return SpendParse::default();
+        return SpendParse {
+            read_error: Some(std::io::ErrorKind::Other),
+            ..SpendParse::default()
+        };
     };
     let response: SpendResponse = match serde_json::from_slice(&output) {
         Ok(response) => response,
         Err(err) => {
             warn!(kind, error = %err, "agent plugin spend probe returned invalid JSON");
-            return SpendParse::default();
+            return SpendParse {
+                read_error: Some(std::io::ErrorKind::InvalidData),
+                ..SpendParse::default()
+            };
         }
     };
     let entries = response
@@ -123,6 +129,7 @@ pub(super) fn spend(
         },
         unknown_models: Default::default(),
         update: SpendUpdate::Extend,
+        read_error: None,
     }
 }
 
@@ -495,6 +502,34 @@ mod tests {
             serde_json::to_string(&parsed.cursor).unwrap(),
             r#"{"o":4,"s":{"a":1,"z":2}}"#
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn spend_probe_distinguishes_unavailable_output_from_empty_spend() {
+        let dir = TempDir::new().unwrap();
+        let probe = dir.path().join("spend");
+        let transcript = dir.path().join("session.jsonl");
+        fs::write(&transcript, "").unwrap();
+        for (script, error) in [
+            ("printf '%s' '{}'", None),
+            ("exit 1", Some(std::io::ErrorKind::Other)),
+            (
+                "printf '%s' 'invalid'",
+                Some(std::io::ErrorKind::InvalidData),
+            ),
+        ] {
+            fs::write(&probe, format!("#!/bin/sh\ncat >/dev/null\n{script}\n")).unwrap();
+            fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+            let parsed = spend(
+                "testbot",
+                dir.path(),
+                &["./spend".into()],
+                &transcript,
+                None,
+            );
+            assert_eq!(parsed.read_error, error, "{script}");
+        }
     }
 
     #[test]

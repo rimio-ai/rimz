@@ -50,8 +50,14 @@ pub(super) fn parse_qwen_spend(
     _resume: Option<&SpendCursor>,
     prices: &PriceBook,
 ) -> SpendParse {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return SpendParse::default();
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => {
+            return SpendParse {
+                read_error: Some(error.kind()),
+                ..SpendParse::default()
+            };
+        }
     };
     let folded = fold_transcript(&text);
     let mut entries = Vec::new();
@@ -81,6 +87,7 @@ pub(super) fn parse_qwen_spend(
         cursor: SpendCursor::default(),
         unknown_models,
         update: SpendUpdate::Replace,
+        read_error: None,
     }
 }
 

@@ -16,8 +16,14 @@ use crate::agents::{AgentCost, AgentSessionUsage};
 use super::{config, droid_settings_path, transcript};
 
 pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
-    let Some(snapshot) = transcript::settings_snapshot(path, None) else {
-        return SpendParse::default();
+    let snapshot = match transcript::settings_snapshot(path, None) {
+        Ok(Some(snapshot)) => snapshot,
+        read => {
+            return SpendParse {
+                read_error: read.err().map(|error| error.kind()),
+                ..SpendParse::default()
+            };
+        }
     };
     let Some(selector) = snapshot.telemetry.model.as_deref().map(str::trim) else {
         return SpendParse::default();
@@ -63,6 +69,7 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
         cursor: SpendCursor::default(),
         unknown_models: BTreeMap::new(),
         update: SpendUpdate::Replace,
+        read_error: None,
     }
 }
 

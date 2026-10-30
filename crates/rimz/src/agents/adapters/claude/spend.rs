@@ -40,7 +40,7 @@ use crate::agents::spending::{
     origin_path, price_split, response_timing,
 };
 
-use crate::agents::transcript_fs::{bytes_contains, read_anchored_transcript};
+use crate::agents::transcript_fs::{bytes_contains, try_read_anchored_transcript};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
@@ -383,10 +383,21 @@ pub(super) fn parse_claude_spend_with_retention(
     prices: &PriceBook,
 ) -> (SpendParse, Option<CacheWriteRetention>) {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
-    let Some(read) =
-        read_anchored_transcript(path, from_offset, resume.and_then(|cursor| cursor.anchor))
-    else {
-        return (SpendParse::stalled(resume), None);
+    let read = match try_read_anchored_transcript(
+        path,
+        from_offset,
+        resume.and_then(|cursor| cursor.anchor),
+    ) {
+        Ok(read) => read,
+        Err(error) => {
+            return (
+                SpendParse {
+                    read_error: Some(error.kind()),
+                    ..SpendParse::stalled(resume)
+                },
+                None,
+            );
+        }
     };
     if read.content.is_empty() && !read.rewritten && resume.is_some() {
         return (SpendParse::stalled(resume), None);
@@ -537,6 +548,7 @@ pub(super) fn parse_claude_spend_with_retention(
             } else {
                 SpendUpdate::Extend
             },
+            read_error: None,
         },
         last_cache_write,
     )

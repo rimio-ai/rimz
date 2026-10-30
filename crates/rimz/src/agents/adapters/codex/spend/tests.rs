@@ -323,7 +323,9 @@ fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
         ],
     );
 
-    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default())
+        .unwrap()
+        .0;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].input_tokens, 100);
     assert_eq!(events[0].output_tokens, 50);
@@ -337,7 +339,9 @@ fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
         ],
     );
 
-    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default())
+        .unwrap()
+        .0;
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].input_tokens, 100);
     assert_eq!(events[0].cache_write_input_tokens, 40);
@@ -352,7 +356,9 @@ fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
         ],
     );
 
-    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default())
+        .unwrap()
+        .0;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].input_tokens, 200);
     assert_eq!(events[0].output_tokens, 80);
@@ -398,7 +404,9 @@ fn forked_rollout_skips_copied_history_and_keeps_its_cumulative_baseline() {
         ],
     );
 
-    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default())
+        .unwrap()
+        .0;
 
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].input_tokens, 150);
@@ -417,7 +425,9 @@ fn fork_with_one_usage_record_keeps_that_usage() {
         ],
     );
 
-    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default())
+        .unwrap()
+        .0;
 
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].input_tokens, 100);
@@ -814,7 +824,9 @@ fn cache_tokens_clamp_to_input_and_zero_usage_emits_nothing_in_both_formats() {
         ],
     );
     for path in [path, headless] {
-        let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+        let events = parse_codex_session(&path, 0, &mut CodexSpendState::default())
+            .unwrap()
+            .0;
         assert_eq!(events.len(), 1, "{}", path.display());
         assert_eq!(events[0].input_tokens, 100);
         assert_eq!(events[0].cached_input_tokens, 100);
@@ -1120,7 +1132,7 @@ fn fast_cursor_distinguishes_unobserved_standard_and_legacy_priority() {
     assert_eq!(serde_json::to_value(legacy).unwrap()["fast"], true);
     let (_dir, path) = write_session("standard-tier.jsonl", &[&tier_line(1, Some("default"))]);
     let mut state = CodexSpendState::default();
-    parse_codex_session(&path, 0, &mut state);
+    parse_codex_session(&path, 0, &mut state).unwrap();
     assert_eq!(serde_json::to_value(state).unwrap()["fast"], false);
 }
 

@@ -278,17 +278,24 @@ pub(super) fn read_transcript_tail_with_status(path: &Path) -> Option<Transcript
 /// final line still missing only its newline is counted without waiting.
 /// `None` on any IO error or when nothing consumable lies past `offset`.
 pub(super) fn read_transcript_lines(path: &Path, offset: u64) -> Option<(Vec<u8>, u64)> {
+    try_read_transcript_lines(path, offset).ok().flatten()
+}
+
+pub(super) fn try_read_transcript_lines(
+    path: &Path,
+    offset: u64,
+) -> std::io::Result<Option<(Vec<u8>, u64)>> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = fs::File::open(path).ok()?;
-    file.seek(SeekFrom::Start(offset)).ok()?;
+    let mut file = fs::File::open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
     let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
+    file.read_to_end(&mut buf)?;
     let (consumed, _) = complete_jsonl_prefix(&buf);
     if consumed == 0 {
-        return None;
+        return Ok(None);
     }
     buf.truncate(consumed);
-    Some((buf, offset + consumed as u64))
+    Ok(Some((buf, offset + consumed as u64)))
 }
 
 /// A complete JSONL suffix, or a cold read when the resume anchor no longer matches.
@@ -301,24 +308,32 @@ pub(super) struct AnchoredTranscript {
 
 pub(super) fn read_anchored_transcript(
     path: &Path,
-    mut offset: u64,
+    offset: u64,
     anchor: Option<u32>,
 ) -> Option<AnchoredTranscript> {
+    try_read_anchored_transcript(path, offset, anchor).ok()
+}
+
+pub(super) fn try_read_anchored_transcript(
+    path: &Path,
+    mut offset: u64,
+    anchor: Option<u32>,
+) -> std::io::Result<AnchoredTranscript> {
     use std::io::{Read, Seek, SeekFrom};
 
     const ANCHOR_BYTES: u64 = 4096;
-    let mut file = fs::File::open(path).ok()?;
+    let mut file = fs::File::open(path)?;
     let start = offset.saturating_sub(ANCHOR_BYTES);
     let mut window = (offset - start) as usize;
-    file.seek(SeekFrom::Start(start)).ok()?;
+    file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
+    file.read_to_end(&mut bytes)?;
     let rewritten = bytes.len() < window
         || (offset > 0 && anchor.is_some_and(|hash| crc32fast::hash(&bytes[..window]) != hash));
     if rewritten {
-        file.seek(SeekFrom::Start(0)).ok()?;
+        file.seek(SeekFrom::Start(0))?;
         bytes.clear();
-        file.read_to_end(&mut bytes).ok()?;
+        file.read_to_end(&mut bytes)?;
         offset = 0;
         window = 0;
     }
@@ -333,7 +348,7 @@ pub(super) fn read_anchored_transcript(
     };
     bytes.truncate(end);
     bytes.drain(..window);
-    Some(AnchoredTranscript {
+    Ok(AnchoredTranscript {
         content: bytes,
         offset: offset + consumed as u64,
         anchor: next_anchor,

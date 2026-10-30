@@ -6,7 +6,8 @@ use std::path::Path;
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, origin_path, price_split,
 };
-use crate::agents::{PriceBook, TokenSplit, read_transcript_lines};
+use crate::agents::transcript_fs::try_read_transcript_lines;
+use crate::agents::{PriceBook, TokenSplit};
 
 use super::transcript::{self, ModelUsage, TurnCompletion};
 
@@ -14,8 +15,15 @@ const USD_TICKS_PER_USD: f64 = 10_000_000_000.0;
 
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);
-    let Some((bytes, next)) = read_transcript_lines(path, from) else {
-        return SpendParse::stalled(resume);
+    let (bytes, next) = match try_read_transcript_lines(path, from) {
+        Ok(Some(read)) => read,
+        Ok(None) => return SpendParse::stalled(resume),
+        Err(error) => {
+            return SpendParse {
+                read_error: Some(error.kind()),
+                ..SpendParse::stalled(resume)
+            };
+        }
     };
     let summary = transcript::read_summary(path);
     let origin = summary
@@ -41,8 +49,15 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
     // top; a plain resume trusts the physical suffix. Grok carries no cross-line
     // state either way — the fold is rebuilt from the bytes it reads.
     let (completions, offset) = if rewound {
-        let Some((bytes, next)) = read_transcript_lines(path, 0) else {
-            return SpendParse::default();
+        let (bytes, next) = match try_read_transcript_lines(path, 0) {
+            Ok(Some(read)) => read,
+            Ok(None) => return SpendParse::default(),
+            Err(error) => {
+                return SpendParse {
+                    read_error: Some(error.kind()),
+                    ..SpendParse::default()
+                };
+            }
         };
         (folded_completions(&String::from_utf8_lossy(&bytes)), next)
     } else if resume.is_some() {
@@ -72,6 +87,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         } else {
             SpendUpdate::Extend
         },
+        read_error: None,
     }
 }
 

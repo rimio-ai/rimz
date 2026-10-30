@@ -12,6 +12,7 @@ rimz stats --assists -n 0 --all          # all retained attempts, including held
 rimz stats --agents                     # every agent profile, unfolded
 rimz stats --teams                      # every team, without per-role rows
 rimz stats --subagents                  # every subagent profile, unfolded
+rimz stats --rebuild                    # rebuild saved days from present transcripts
 ```
 
 | Flag | Effect |
@@ -26,8 +27,11 @@ rimz stats --subagents                  # every subagent profile, unfolded
 | `--subagents` | Show every subagent profile with spend or recorded effort in the selected window, with the agent columns. These dollars are already counted in their owners or the remainder. With `--json`, also include profiles with work tokens and no spend. Conflicts with `--agents`, `--teams`, `--refresh`, and `--assists`. |
 | `-n N` | With `--assists`, show at most N timeline lines, or N events with `--json` (default 50); 0 means all retained. |
 | `--all` | With `--assists`, include held and undelivered attempts. |
+| `--rebuild` | Rebuild every saved UTC day in retention for discovered accounts from present transcripts, using current prices. Prints rebuilt days and before/after dollars with unchanged account-days, `No saved day changed; N account-days unchanged.`, or `Nothing to rebuild.` Warns once per account on stderr when transcripts are gone and saved figures were kept, with the kept UTC-day count and dates (consecutive days as `start..end` ranges). Conflicts with `--json`, `--refresh`, `--assists`, `--agents`, `--teams`, `--subagents`, `--dollars`, `--window`, `-n`, and `--all`. |
 
 A conflicting pair exits `2`. Of the [global flags](../cli.md#global-flags), `--color` applies; `--root` and the backend flags are accepted and change nothing, because the figures are machine-wide.
+
+`--rebuild` exits `0` when every requested account-day was compared, including unchanged or empty history and days kept because no transcripts remain. Incomplete transcript discovery exits `1` before parsing or publishing, without retry advice. An account with an unread transcript is deferred: stdout keeps its summary, stderr names that account and its UTC dates (consecutive days as `start..end` ranges), says they stay pending, and the command exits `1`. An unavailable spending producer lock or shared history maintenance lock exits `1` with a retry message. A newer, malformed or unreadable history format mark also exits `1`, naming the mark file without retry advice; a missing mark is usable. Rebuilding writes no assist. A partially deleted day follows its remaining transcripts and may fall; a day with no transcripts keeps its saved figure. Transcript-logged costs stay as logged rather than taking a new list price.
 
 ## What the panel shows
 
@@ -71,7 +75,7 @@ With no daily history or role usage, the full report replaces the tables and hea
 
 A one-shot run can print figures from earlier today. A walk that begins before midnight still covers the earlier day even if it finishes after midnight, so a one-shot run refreshes it again. Run `rimz stats --refresh`, or open a room, for updates within the day.
 
-Recorded UTC days, closed fourteen days after their end, replace live account-days in these figures. They survive transcript deletion and cache rebuilds under `accounts/.history/`, shared with other homes using the same accounts folder and kept by uninstall and reset ([history rules](../../internals/agents/spending.md#closed-day-spend-lines)).
+Recorded UTC days, closed fourteen days after their end, replace live account-days in these figures. They survive transcript deletion and cache rebuilds under `accounts/.history/`, shared with other homes using the same accounts folder and kept by uninstall and reset. The newest decodable line for an account-day is effective; `--rebuild` appends replacements without removing the preceding figures ([history rules](../../internals/agents/spending.md#closed-day-spend-lines)).
 
 If a refresh cannot read session files and only an older publication remains, a one-shot run exits with an error rather than showing yesterday's breakdowns as today. The older publication stays intact, and a held dashboard can continue showing it.
 
