@@ -17,7 +17,9 @@ use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus, Turn
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::EventKind;
 use crate::store::event_log;
-use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, MessageStatus};
+use crate::store::message::{
+    HarnessNotice, MessageRecord, MessageSender, MessageStatus, SoftCompactStep,
+};
 use crate::store::run::RunStatus;
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -600,6 +602,16 @@ impl TurnWaitView {
                 && (!message.sent_hold_expired(self.now) || message.held_by_compaction(agent))
                 && message.same_agent_card(agent)
         })
+    }
+
+    /// A non-terminal soft continuation still owed to this live card.
+    pub(crate) fn soft_compact_in_flight(&self, agent: &AgentState) -> bool {
+        agent.ended_at.is_none()
+            && self.messages.iter().any(|message| {
+                message.soft_compact == Some(SoftCompactStep::Continue)
+                    && !message.status.is_terminal()
+                    && message.same_agent_card(agent)
+            })
     }
 
     fn card(&self, agent: &AgentState) -> CardView {

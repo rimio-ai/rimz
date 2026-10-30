@@ -252,6 +252,21 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
             .expect("one claim index returns one message")
     }
 
+    fn at_tail(&self, message: &MessageRecord) -> MessageRecord {
+        let mut queued = message.clone();
+        queued.message_id = MessageId::new();
+        if let Some(last) = self
+            .live()
+            .iter()
+            .filter(|live| live.same_card(message.card_ref()))
+            .max_by_key(|live| live.message_id.as_str())
+            && queued.message_id.as_str() <= last.message_id.as_str()
+        {
+            queued.message_id = last.message_id.successor();
+        }
+        queued
+    }
+
     fn stage_event(&mut self, event: EventEnvelope) {
         self.events.push(event);
     }
@@ -760,6 +775,25 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn queue_tail_message(
+        &self,
+        message: &MessageRecord,
+        session_name: &str,
+    ) -> Result<MessageRecord> {
+        self.commit_queue(|queue| {
+            let queued = queue.at_tail(message);
+            queue.upsert(queued.clone());
+            queue.stage_event(EventEnvelope::message_event(
+                &queued,
+                session_name,
+                MessageEventMethod::Queued,
+                None,
+            ));
+            Ok(queued)
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn queue_boundary_message(
         &self,
         message: &MessageRecord,
@@ -778,17 +812,7 @@ impl Store {
                 now,
             )
             .map(|blocker| blocker.message_id.clone());
-            let mut queued = message.clone();
-            queued.message_id = MessageId::new();
-            if let Some(last) = queue
-                .live()
-                .iter()
-                .filter(|live| live.same_card(message.card_ref()))
-                .max_by_key(|live| live.message_id.as_str())
-                && queued.message_id.as_str() <= last.message_id.as_str()
-            {
-                queued.message_id = last.message_id.successor();
-            }
+            let queued = queue.at_tail(message);
             let event = EventEnvelope::message_event(
                 &queued,
                 session_name,
@@ -1442,6 +1466,15 @@ impl Store {
                 result.head_sent = message.status == MessageStatus::Sent;
                 if message.status != MessageStatus::Queued {
                     return MessageUpdate::Keep;
+                }
+                if message.soft_compact == Some(SoftCompactStep::WrapUp)
+                    && disposition == DeliveryFailureDisposition::Terminal
+                {
+                    message.last_error = Some(error.to_owned());
+                    return MessageUpdate::Finalize {
+                        status: MessageStatus::Canceled,
+                        reason: Some(error.to_owned()),
+                    };
                 }
                 fail_delivery(message, disposition, error, now)
             });

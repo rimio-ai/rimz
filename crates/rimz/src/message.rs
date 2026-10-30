@@ -10,6 +10,7 @@ pub mod dispatch;
 pub(crate) mod fire;
 pub mod reply;
 pub mod send;
+pub mod soft_compact;
 pub mod synthetic;
 
 /// Delivery timing shared by dispatch, pane writes, and reply waits.

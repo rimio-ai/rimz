@@ -3133,6 +3133,20 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         "forward outcomes are assist records: {forwards:?}"
     );
     records.extend(forwards.unwrap());
+    let soft_compacts = [true, false].map(|delivered| {
+        serde_json::from_value::<AssistRecord>(serde_json::json!({
+            "at": ts(4_160), "assist": "soft_compact", "kind": "claude",
+            "agent_id": "session-2", "label": "@planner",
+            "threshold": rimz::store::message::AutoCompact::Tokens(100_000),
+            "occupied_tokens": 120_000, "message_id": "msg_soft", "delivered": delivered,
+            "error": if delivered { None } else { Some("waiting on input") },
+        }))
+    });
+    assert!(
+        soft_compacts.iter().all(Result::is_ok),
+        "soft-compaction attempts must be recognized: {soft_compacts:?}"
+    );
+    records.extend(soft_compacts.into_iter().map(Result::unwrap));
     let stats = AssistStats::from_records("7d", records);
 
     assert_eq!(
@@ -3157,6 +3171,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             resumes: 1,
             recovered_secs: 3_600,
             compacts: 2,
+            soft_compacts: 1,
             keepalives: 0,
             idle_stops: 0,
             idle_stop_withdrawals: 0,
@@ -3171,16 +3186,26 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             spend_rebuilds: 0,
             tmp_evictions: 0,
             reclaimed_bytes: 2_048,
-            held: [("resumes", 1), ("sweeps", 1), ("port_forwards", 1)].into(),
+            held: [
+                ("resumes", 1),
+                ("sweeps", 1),
+                ("port_forwards", 1),
+                ("soft_compacts", 1)
+            ]
+            .into(),
         }
     );
     assert_eq!(
         stats.events.len(),
-        10,
+        12,
         "every assist outcome stays forensic"
     );
-    assert_eq!(stats.timeline(0, false).0.len(), 7);
-    assert_eq!(stats.timeline(0, true).0.len(), 10);
+    assert_eq!(stats.timeline(0, false).0.len(), 8);
+    assert_eq!(stats.timeline(0, true).0.len(), 12);
+    assert_eq!(
+        serde_json::to_value(&stats.rollup).unwrap()["soft_compacts"],
+        1
+    );
     let categories = category_rows(&stats.rollup, assists::CategoryMode::Timeline)
         .into_iter()
         .map(|row| strip_ansi(&row))
@@ -3190,6 +3215,11 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         "Auto-resume: 1 (2 agents)"
     );
     assert_eq!(categories.last().unwrap(), "Auto-gc: 1 (2 KB, 1 held)");
+    assert!(
+        categories
+            .iter()
+            .any(|line| line == "Soft compact: 1 (1 held)")
+    );
     assert!(
         categories
             .iter()

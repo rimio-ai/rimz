@@ -1,6 +1,7 @@
 //! Harness wakes still owed to a supervised agent session.
 
 use crate::Store;
+use crate::agents::state::SoftCompactProgress;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::reply::TurnWaitView;
 use crate::store::StoreErr;
@@ -20,6 +21,11 @@ use super::fleet::FleetRuns;
 /// The team reporter queues before stamping the run: an open run is owed
 /// (unless its board already reads Done), and a settled run's report is in
 /// the later queue read. That read must therefore count `TeamReport` too.
+///
+/// The soft-compaction mark precedes the queue read: queuing a continue
+/// publishes its record before advancing the mark past the owed step. A
+/// wrap-up owes only while its turn is open, so an errored end that leaves
+/// the mark waiting for a clean one does not hold an idle agent forever.
 ///
 /// The wait terms keep `TurnWaitView`'s order, catalog → queue → rollup: a
 /// wake publishes its message record before it consumes its catalog row, and a
@@ -62,11 +68,25 @@ pub fn owed_wake(
                 return Ok(Some(OwedWake::Team));
             }
         }
+        if launcher.ended_at.is_none()
+            && launcher
+                .soft_compact
+                .is_some_and(|mark| match mark.progress {
+                    SoftCompactProgress::WrappingUp => launcher.holds_open_turn(),
+                    SoftCompactProgress::TurnEnded => true,
+                    SoftCompactProgress::Continued => false,
+                })
+        {
+            return Ok(Some(OwedWake::SoftCompact));
+        }
     }
     let view = TurnWaitView::load(store)?;
     let Some(agent) = find_agent(&view.snapshot.agents, kind, agent_id) else {
         return Ok(None);
     };
+    if view.soft_compact_in_flight(agent) {
+        return Ok(Some(OwedWake::SoftCompact));
+    }
     if !agent.pending_waits.is_empty() {
         return Ok(Some(OwedWake::Wait));
     }
@@ -82,6 +102,7 @@ pub enum OwedWake {
     WakeInFlight,
     Subagents,
     Team,
+    SoftCompact,
 }
 
 impl OwedWake {
@@ -91,6 +112,7 @@ impl OwedWake {
             Self::WakeInFlight => "wake in flight",
             Self::Subagents => "subagents",
             Self::Team => "team",
+            Self::SoftCompact => "soft compaction",
         }
     }
 }
@@ -142,6 +164,90 @@ mod tests {
                 spawned_subagents: &[],
             })
             .unwrap();
+    }
+
+    #[test]
+    fn soft_compaction_keeps_only_its_live_card_owed_until_continue_settles() {
+        use crate::store::message::SoftCompactStep;
+
+        let turn_end = |errored| LifecycleSignal::TurnEnded {
+            errored,
+            parked_on_background: false,
+            turn_id: None,
+        };
+        for (queued, terminal, after, expected) in [
+            (false, false, None, Some("soft compaction")),
+            (true, false, None, Some("soft compaction")),
+            (true, true, None, None),
+            (false, false, Some(turn_end(false)), Some("soft compaction")),
+            (false, false, Some(turn_end(true)), None),
+            (
+                false,
+                false,
+                Some(LifecycleSignal::TurnInterrupted { turn_id: None }),
+                None,
+            ),
+            (false, false, Some(LifecycleSignal::Ended), None),
+            (true, false, Some(LifecycleSignal::Ended), None),
+        ] {
+            let (_dir, store) = fixture();
+            register(&store, "parent", None);
+            register(&store, "other", None);
+            let kind = AgentKind::new_unchecked("codex");
+            let lifecycle = |signal| {
+                let observation = AgentLifecycleObservation::new(Some("parent".into()), signal);
+                store
+                    .append_agent_lifecycle(AgentLifecycleIntent {
+                        session_name: "owed-test",
+                        agent_kind: kind.clone(),
+                        event_name: "test",
+                        observation: &observation,
+                        spawned_subagents: &[],
+                    })
+                    .unwrap();
+            };
+            lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
+            let agent = store
+                .agent_with_context(&kind, &"parent".into(), crate::RuntimeScope::Runtime)
+                .unwrap()
+                .unwrap();
+            let mut wrap_up = MessageRecord::new(
+                store.paths().workspace_id.clone(),
+                &agent,
+                "wrap up".into(),
+                DeliveryGate::Any,
+            );
+            wrap_up.soft_compact = Some(SoftCompactStep::WrapUp);
+            wrap_up.status = MessageStatus::Sent;
+            store.queue_message(&wrap_up, "owed-test").unwrap();
+            if queued {
+                let mut continuation = MessageRecord::new(
+                    store.paths().workspace_id.clone(),
+                    &agent,
+                    "continue".into(),
+                    DeliveryGate::Done,
+                );
+                continuation.soft_compact = Some(SoftCompactStep::Continue);
+                store.queue_message(&continuation, "owed-test").unwrap();
+                if terminal {
+                    store
+                        .cancel_message(&continuation.message_id, "owed-test", "test settled")
+                        .unwrap();
+                }
+            }
+            let label = format!("queued={queued}, terminal={terminal}, after={after:?}");
+            if let Some(signal) = after {
+                lifecycle(signal);
+            }
+            assert_eq!(
+                owed_wake(&store, &kind, &agent.agent_id)
+                    .unwrap()
+                    .map(OwedWake::as_str),
+                expected,
+                "{label}"
+            );
+            assert_eq!(owed_wake(&store, &kind, &"other".into()).unwrap(), None);
+        }
     }
 
     #[test]

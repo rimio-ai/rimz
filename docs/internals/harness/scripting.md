@@ -151,6 +151,7 @@ A clean turn end does not complete a run while its session is still owed a harne
 | `Team` | a team this session launched has an open team run whose board is not `Done` (`fleet::owed_team_runs`) |
 | `Wait` | the card has an armed one-shot wait |
 | `WakeInFlight` | a harness `Wait`, `Signal`, `SubagentReport`, `AgentReport`, or `TeamReport` message for the card is non-terminal and, if `Sent`, either within its deadline or held by the receiver's open compaction bracket; the bracket has no age bound, and after it closes the deadline applies again |
+| `SoftCompact` | a live card's wrap-up turn is still open, or its clean end still owes continue, or a non-terminal soft-compaction continue is on its queue |
 
 A run whose `report_to` is `nobody` counts toward neither the fleet nor the team term, so a launcher with only detached work running ends its turn and completes instead of parking. The fleet and team terms are independent, so a launcher that launched only a team is owed too.
 
@@ -158,7 +159,8 @@ The read order follows each producer's write order, so that a wake in flight alw
 
 1. The fleet term is read first, through `FleetRuns` over the Audit projection. The digest reporter stamps the child rows before it queues the digest, so rows found unstamped are owed, and rows found stamped are followed by a queue read that the digest has by then reached.
 2. The team term follows. Its reporter queues before stamping the run, so an open run is owed unless its board already reads Done, and a settled run has its report in the queue read afterwards. This is why the queue read counts `TeamReport` without making it a per-member fleet digest.
-3. The wait terms reuse `TurnWaitView::load`, whose catalog, queue, rollup order matches a wake's own publish order.
+3. The soft-compaction mark is read before the queue: queue publication precedes the event that marks continue queued. The mark or the later queue therefore holds the run until continue's receiving turn. An ended row owes no soft-compaction wake.
+4. The wait terms reuse `TurnWaitView::load`, whose catalog, queue, rollup order matches a wake's own publish order.
 
 A park keeps the record `Running`: `parked_at` is an optional, defaulted timestamp, not a new status. The first in-turn signal (`TurnStarted`, `ToolUsed`, or `AwaitingInput`) clears it, and every terminal write clears it too. A keepalive turn's start is a ping edge the hook never folds into the run, so its first tool hook clears the park instead. Registration and compaction signals can arrive at rest and leave the park unchanged. `agents show` displays the park's age, and record JSON and NDJSON live status carry `parked_at`. Live status keeps reporting the card's raw rollup status, unchanged by this fold, so the timestamp is the park evidence.
 

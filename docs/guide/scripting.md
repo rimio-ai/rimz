@@ -93,7 +93,7 @@ rimz agents claude -p --output-format stream-json "Refactor the parser."
 
 | Format | Prints | Use it for |
 | --- | --- | --- |
-| `text` (default) | the run's answer: the final assistant message, or every turn's in order, separated by a `---` line, when the run parked on a wait | humans, and simple `grep`/`case` gates |
+| `text` (default) | the run's answer: the final assistant message, or every turn's in order, separated by a `---` line, when the run parked on a harness wake | humans, and simple `grep`/`case` gates |
 | `json` | the full run record | reading `run_id` (which `rimz transcript <run_id>` opens) and `transcript_path` (the provider's own session file) |
 | `stream-json` | run events as newline-delimited JSON while the turn runs | a pipeline that wants progress rather than a final blob |
 
@@ -125,7 +125,7 @@ The permission mode decides how often the run stops to ask, and it is a per-run 
 
 **You steer it mid-turn.** The run answers to a handle like any agent, so `rimz message --steer @<name>` injects new instructions into a turn a cron job started, and `rimz agents show` or `rimz agents logs -f` reads its progress from any pane. A drifting unattended run is a one-line correction rather than a kill and a rerun.
 
-**It can wait without finishing.** An agent can arm a [`rimz wait`](./loops.md#wake-a-running-agent) or launch children of its own and end its turn while they run. The run stays open, its pane stays alive, and your script keeps blocking; `rimz agents show` reports how long it has been parked. If nothing is left that could wake it, the run fails with exit `1` and a reason beginning `parked on a wake that never arrived`, which `--retries` can retry. `--timeout` bounds the run either way, parked time included.
+**It can wait without finishing.** An agent can arm a [`rimz wait`](./loops.md#wake-a-running-agent) or launch children of its own and end its turn while they run. A [soft-compaction wrap-up](./loops.md#smart-compaction) likewise keeps the run open until the continue turn finishes. Its pane stays alive, and your script keeps blocking; `rimz agents show` reports how long it has been parked. If nothing is left that could wake it, the run fails with exit `1` and a reason beginning `parked on a wake that never arrived`, which `--retries` can retry. `--timeout` bounds the run either way, parked time included.
 
 ## Fire now, collect later
 

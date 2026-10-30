@@ -903,3 +903,52 @@ fn unheld_miss_settles_a_queued_record_by_its_disposition() {
     assert_eq!(history[0].status, MessageStatus::Errored);
     assert_eq!(q.count("message.errored"), 1);
 }
+
+#[test]
+fn unheld_soft_compact_miss_cancels_only_a_still_queued_wrap_up() {
+    let q = Queue::new();
+    for id in [1, 2] {
+        q.queue_with(id, |record| {
+            record.soft_compact = Some(SoftCompactStep::WrapUp)
+        });
+    }
+    let claimed = q
+        .claim_message_for_steer(&message_id(2), Timestamp::now())
+        .unwrap()
+        .unwrap();
+    for id in [1, 2] {
+        q.record_unheld_delivery_miss(
+            &message_id(id),
+            DeliveryFailureDisposition::Terminal,
+            "agent is waiting on input",
+            "session",
+        )
+        .unwrap();
+    }
+    assert_eq!(q.by_id(&claimed.message_id), claimed);
+    let history = q.history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, MessageStatus::Canceled);
+    assert_eq!(
+        history[0].last_error.as_deref(),
+        Some("agent is waiting on input")
+    );
+}
+
+#[test]
+fn soft_compact_continue_gets_a_tail_id_without_claiming_the_boundary() {
+    let q = Queue::new();
+    let mut earlier = q.record(1);
+    earlier.message_id = MessageId::parse("msg_v000000000000000").unwrap();
+    q.queue_message(&earlier, "session").unwrap();
+    let mut continuation = q.record(2);
+    continuation.soft_compact = Some(SoftCompactStep::Continue);
+    let queued = q.queue_tail_message(&continuation, "session").unwrap();
+    assert!(
+        queued.message_id > earlier.message_id,
+        "a locked tail id sorts after every live record"
+    );
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(q.live(), vec![earlier, queued.clone()]);
+    assert_eq!(q.count("message.queued"), 2);
+}

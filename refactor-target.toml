@@ -2050,7 +2050,28 @@ path = "crates/rimz/src/harness"
 # spec::validate_team shares per-item team validation with pack loading (+1).
 # SeatPolicy::smart_compact shares the config resolver with agent-row consumers (+1).
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
-surface-budget = 1028
+# soft_compact shares its module, request, decision and spawn with CLI/producer callers (+4).
+surface-budget = 1032
+
+[[verdict]]
+kind = "item"
+key = "harness::soft_compact"
+reason = "The sidebar and detached helper share one read-only soft-compaction policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::soft_compact::SoftCompactRequest"
+reason = "The producer passes card identity and the cycle step to its detached CLI helper."
+
+[[verdict]]
+kind = "item"
+key = "harness::soft_compact::due_step"
+reason = "Producer and helper make the same live-row, context and durable-cycle decision."
+
+[[verdict]]
+kind = "item"
+key = "harness::soft_compact::spawn_soft_compact"
+reason = "Soft-compaction helpers use the shared typed argv and detached null-stdio transport."
 
 [[verdict]]
 kind = "item"
@@ -2769,7 +2790,29 @@ upward-dependencies = [
 # FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
 # InterruptConfirmation and the public DeliveryReport/deliver_one_report expose stop evidence to both CLI receipts (+3).
 # spawn_queued_head shares the FIFO selection and delivery argv across hooks and resumed wrappers (+1).
-surface-budget = 85
+# soft_compact exposes its module, both sends and the wrap-up delivery outcome to the helper (+4).
+# TurnWaitView::soft_compact_in_flight shares queued-cycle debt without another queue read (+1).
+surface-budget = 90
+
+[[verdict]]
+kind = "item"
+key = "message::soft_compact"
+reason = "Soft-compaction queue and delivery choreography belongs beside other message sends."
+
+[[verdict]]
+kind = "item"
+key = "message::soft_compact::WrapUpOutcome"
+reason = "The helper records whether a steer reached the pane, including a miss's reason."
+
+[[verdict]]
+kind = "item"
+key = "message::soft_compact::send_wrap_up"
+reason = "The explicit steer owns enqueue, one delivery attempt and queued-only cancellation."
+
+[[verdict]]
+kind = "item"
+key = "message::soft_compact::send_continue"
+reason = "The continue is queued at the card's locked FIFO tail before one boundary attempt."
 
 [[verdict]]
 kind = "item"
@@ -3525,7 +3568,8 @@ path = "crates/rimz/src/store"
 # CapacityWaitSummary carries only the room's oldest durable wait and total count (+1).
 # SidebarSnapshot::pane_session_demands shares the ladder's discovery request with the producer (+1).
 # SoftCompactStep shares the optional steer-only/continue record tag with message policy (+1).
-surface-budget = 518
+# Store::queue_tail_message assigns an unclaimed continue's FIFO-tail id under the queue lock (+1).
+surface-budget = 519
 
 [[verdict]]
 kind = "item"

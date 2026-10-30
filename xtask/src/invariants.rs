@@ -616,6 +616,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "drainer_outage.rs",
         "fleet.rs",
         "idle_compact.rs",
+        "soft_compact.rs",
         "idle_stop.rs",
         "hibernate.rs",
         "orphan_sweep.rs",
