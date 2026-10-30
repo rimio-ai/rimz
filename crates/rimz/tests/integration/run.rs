@@ -2034,13 +2034,14 @@ fn assert_subagent_checkout_case(
         if empty == Some("revoked") {
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
-                stderr.contains("rimz trust grant --empty-dir --agents claude"),
+                stderr.contains("run `rimz trust grant --empty-dir`\n"),
                 "{stderr}"
             );
             assert!(
                 !stderr.contains("rimz trust grant --agents claude"),
                 "{stderr}"
             );
+            assert!(!stderr.contains(" in `/"), "{stderr}");
         }
         assert!(
             output.status.success(),

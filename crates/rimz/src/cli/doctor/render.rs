@@ -3274,7 +3274,7 @@ fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
             writeln!(
                 w,
                 "      {}",
-                paint(palette::muted(), &format!("fix: {}", finding.fix))
+                paint(palette::body(), &format!("fix: {}", finding.fix))
             )?;
         }
     }

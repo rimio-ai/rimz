@@ -152,11 +152,16 @@ pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
     if args.json {
         print_json_report(&report, &rows, &empty_dir)?;
     } else {
-        print_agent_report(&rows, "agents", "rimz trust grant", None)?;
+        print_agent_report(
+            &rows,
+            "agents",
+            |gap, kind| gap.fix(kind, "rimz trust grant"),
+            None,
+        )?;
         print_agent_report(
             &empty_dir,
             "empty-dir",
-            "rimz trust grant --empty-dir",
+            |gap, kind| gap.empty_dir_fix(kind),
             Some(&rimz::disk::paths::empty_dir_root()),
         )?;
     }
@@ -206,16 +211,13 @@ fn grant_empty_dir(kinds: Option<&[String]>, json: bool) -> Result<()> {
             empty_dir: Vec<folder_trust::Row>,
         }
         render::json_pretty(&EmptyDirJson {
-            empty_dir: rows
-                .iter()
-                .map(|row| folder_trust::Row::for_subject(row, "rimz trust grant --empty-dir"))
-                .collect(),
+            empty_dir: rows.iter().map(folder_trust::Row::for_empty_dir).collect(),
         })?;
     } else {
         print_agent_report(
             &rows,
             "empty-dir",
-            "rimz trust grant --empty-dir",
+            |gap, kind| gap.empty_dir_fix(kind),
             Some(&rimz::disk::paths::empty_dir_root()),
         )?;
     }
@@ -247,7 +249,7 @@ fn print_json_report(
         agents: rows.iter().map(folder_trust::Row::from).collect(),
         empty_dir: empty_dir
             .iter()
-            .map(|row| folder_trust::Row::for_subject(row, "rimz trust grant --empty-dir"))
+            .map(folder_trust::Row::for_empty_dir)
             .collect(),
         state: report.state.as_str(),
         workspace_id: report.workspace_id.as_str(),
@@ -325,7 +327,7 @@ fn trust_banner(state: TrustState) -> &'static str {
 fn print_agent_report(
     rows: &[rimz::agents::FolderTrustRow],
     heading: &str,
-    subject: &str,
+    fix: impl Fn(&rimz::agents::FolderTrustGap, &str) -> String,
     folder: Option<&Path>,
 ) -> Result<()> {
     let mut out = render::out();
@@ -340,7 +342,7 @@ fn print_agent_report(
                 "restricted (saved untrusted) → {}",
                 FolderTrust::RESTRICTED_FIX
             ),
-            FolderTrust::Undecided(gap) => format!("undecided → {}", gap.fix(row.kind, subject)),
+            FolderTrust::Undecided(gap) => format!("undecided → {}", fix(gap, row.kind)),
         };
         writeln!(
             out,

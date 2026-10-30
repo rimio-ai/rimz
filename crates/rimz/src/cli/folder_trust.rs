@@ -2,7 +2,7 @@
 
 use super::render;
 use anyhow::Result;
-use rimz::agents::{FolderTrust, FolderTrustRow, RoomLoginSet};
+use rimz::agents::{FolderTrust, FolderTrustGap, FolderTrustRow, RoomLoginSet};
 use serde::Serialize;
 use std::io::Write;
 
@@ -52,12 +52,17 @@ pub(super) enum State {
 
 impl From<&FolderTrustRow> for Row {
     fn from(row: &FolderTrustRow) -> Self {
-        Self::for_subject(row, "rimz trust grant")
+        Self::with_fix(row, |gap| gap.fix(row.kind, "rimz trust grant"))
     }
 }
 
 impl Row {
-    pub(super) fn for_subject(row: &FolderTrustRow, subject: &str) -> Self {
+    /// A row for the machine-wide empty root, whose grant runs from any directory.
+    pub(super) fn for_empty_dir(row: &FolderTrustRow) -> Self {
+        Self::with_fix(row, |gap| gap.empty_dir_fix(row.kind))
+    }
+
+    fn with_fix(row: &FolderTrustRow, fix: impl FnOnce(&FolderTrustGap) -> String) -> Self {
         Self {
             kind: row.kind,
             login: row.login.clone(),
@@ -70,7 +75,7 @@ impl Row {
                 FolderTrust::Undecided(gap) => State::Undecided {
                     key: gap.key.display().to_string(),
                     path: gap.path.display().to_string(),
-                    fix: gap.fix(row.kind, subject),
+                    fix: fix(gap),
                 },
             },
         }

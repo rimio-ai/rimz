@@ -46,13 +46,13 @@ fn empty_dir_grant_is_machine_wide_and_preserves_project_trust() {
     for row in rows {
         assert_eq!(row["state"], "undecided");
         assert_eq!(row["key"], env.rimz_home().join("empty").to_str().unwrap());
-        assert!(
-            row["fix"]
-                .as_str()
-                .unwrap()
-                .contains("rimz trust grant --empty-dir --agents claude")
-        );
+        assert_eq!(row["fix"], "run `rimz trust grant --empty-dir`");
     }
+    command()
+        .args(["trust"])
+        .assert()
+        .success()
+        .stdout(contains("undecided → run `rimz trust grant --empty-dir`\n"));
     command()
         .current_dir(&env.home_root)
         .args(["trust", "grant", "--empty-dir"])
@@ -85,8 +85,9 @@ fn empty_dir_grant_kind_filter_does_not_write_claude() {
     let bin = write_env_dump_shim(&env, "codex");
     write_env_dump_shim(&env, "claude");
     let mut cmd = env.rimz();
-    crate::common::hermetic_providers(&env, &mut cmd).env("PATH", bin);
-    cmd.current_dir(&env.home_root)
+    crate::common::hermetic_providers(&env, &mut cmd).env("PATH", &bin);
+    let output = cmd
+        .current_dir(&env.home_root)
         .args([
             "trust",
             "grant",
@@ -95,8 +96,24 @@ fn empty_dir_grant_kind_filter_does_not_write_claude() {
             "codex",
             "--json",
         ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let row = report["empty_dir"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "claude")
+        .unwrap();
+    assert_eq!(row["fix"], "run `rimz trust grant --empty-dir`");
+    let mut cmd = env.rimz();
+    crate::common::hermetic_providers(&env, &mut cmd).env("PATH", bin);
+    cmd.current_dir(&env.home_root)
+        .args(["trust", "grant", "--empty-dir", "--agents", "codex"])
         .assert()
-        .success();
+        .success()
+        .stdout(contains("undecided → run `rimz trust grant --empty-dir`\n"));
     assert!(!env.home_root.join(".claude.json").exists());
     assert!(!env.home_root.join(".codex/config.toml").exists());
 }
