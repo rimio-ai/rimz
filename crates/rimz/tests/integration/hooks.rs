@@ -943,6 +943,131 @@ fn session_start_hooks_write_lifecycle_rows() {
 }
 
 #[test]
+fn first_subagent_hook_records_the_reserved_parent_team_seat() {
+    use rimz::agents::spending::session_roles::{SessionRole, SessionRoleRecord, SubagentOwner};
+    use rimz::agents::{LaunchParams, PermissionMode};
+    use rimz::ids::{AgentKind, MuxName, PaneId};
+    use rimz::store::writer::{
+        AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AgentLaunchScope, LaunchLogin,
+    };
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let parent = AgentLaunchIdentity {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: "launch_parent".into(),
+        name: "parent".into(),
+        name_explicit: true,
+        launch: LaunchParams {
+            profile: Some("planner".into()),
+            team: Some("forge".into()),
+            role: Some("coder".into()),
+            ..Default::default()
+        },
+        run_id: None,
+        prompt: None,
+    };
+    store
+        .bind_agent_launch(
+            &parent,
+            &workspace.session_name,
+            &env.project_root,
+            &PaneId::from_parts(MuxName::Tmux, "%1"),
+            None,
+        )
+        .unwrap();
+    let kind = AgentKind::new_unchecked("claude");
+    let mut run = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        kind.clone(),
+        PermissionMode::Auto,
+        "research".into(),
+        env.project_root.clone(),
+    );
+    run.subagent = true;
+    run.agent_id = Some("launch_child".into());
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let batch = store
+        .begin_agent_launch_batch(
+            &[AgentLaunchRequest {
+                kind: kind.clone(),
+                login: LaunchLogin::Pinned(Default::default()),
+                agent_id: run.agent_id.clone().unwrap(),
+                name: AgentLaunchName::Explicit("lookup-child".into()),
+                launch: LaunchParams {
+                    profile: Some("researcher".into()),
+                    parent_agent_id: Some(parent.agent_id.clone()),
+                    parent_agent_kind: Some(parent.kind.clone()),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                run_id: Some(run.run_id.clone()),
+                prompt: None,
+            }],
+            AgentLaunchScope {
+                session_name: workspace.session_name.clone(),
+                cwd: env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    let child = batch.single_identity().unwrap();
+    let reserved = store.snapshot().unwrap();
+    let reserved = reserved
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == child.agent_id)
+        .unwrap();
+    assert_eq!(reserved.launch_id.as_ref(), Some(&child.agent_id));
+    assert_eq!(reserved.parent_agent_id.as_ref(), Some(&parent.agent_id));
+    assert_eq!(reserved.parent_agent_kind.as_ref(), Some(&parent.kind));
+
+    let mut command = env.hook_command(kind.as_str());
+    command
+        .env("RIMZ_AGENT_ID", child.agent_id.as_str())
+        .env("RIMZ_AGENT_NAME", &child.name)
+        .env("RIMZ_AGENT_PROFILE", "researcher")
+        .env("RIMZ_RUN_ID", run.run_id.as_str())
+        .env("TMUX_PANE", "%2");
+    let output = env
+        .spawn_payload(
+            command,
+            &json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "child-provider-session",
+                "cwd": env.project_root,
+            })
+            .to_string(),
+        )
+        .wait_with_output()
+        .unwrap();
+    env.drain_hooks();
+    assert_hook_succeeded_neutral(kind.as_str(), output);
+
+    let year = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).year();
+    let history = rimz::disk::paths::SpendingHistoryPaths::under(&env.rimz_home().join("accounts"));
+    let record: SessionRoleRecord =
+        serde_json::from_reader(std::fs::File::open(history.roles(year)).unwrap()).unwrap();
+    assert_eq!(record.kind, kind);
+    assert_eq!(record.session, "child-provider-session");
+    let SessionRole::Subagent { profile, owner } = record.role else {
+        panic!("the supervised child must be recorded as a subagent");
+    };
+    assert_eq!(profile, "researcher");
+    assert_eq!(
+        owner,
+        Some(SubagentOwner::Team {
+            team: "forge".into(),
+            role: "coder".into(),
+        }),
+        "the first hook must resolve the reservation's parent seat"
+    );
+}
+
+#[test]
 fn runtime_env_context_reaches_the_root_prompt_and_never_a_side_conversation() {
     if crate::common::git::git_missing() {
         return;
