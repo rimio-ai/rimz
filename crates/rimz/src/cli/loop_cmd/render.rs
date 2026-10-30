@@ -1108,7 +1108,14 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     if let Some(rimz::config::WatchSpec::Command(command)) = &view.entry.watch {
         write_watch_command(out, command)?;
     }
-    write_verdict(out, &view.records, view.in_flight.is_some(), now)?;
+    let attribution = refused_fire_attribution(&view.records);
+    write_verdict(
+        out,
+        &view.records,
+        &attribution,
+        view.in_flight.is_some(),
+        now,
+    )?;
     let expr = worktree_expr(view);
     let rows = if view.entry.each_worktree {
         worktree_rows(view, expr)
@@ -1224,7 +1231,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         if view.show_agent_runs {
             write_agent_runs(out, &view.records, now)?;
         }
-        let rows = collapsed_run_rows(&view.records);
+        let rows = collapsed_run_rows(&view.records, &attribution);
         let repeats_detail = rows.len() == 1
             && rows[0].count == 1
             && rows[0].skipped == 0
@@ -1232,7 +1239,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             && detail_index(&view.records)
                 .is_some_and(|index| std::ptr::eq(rows[0].latest, &view.records[index]));
         if !repeats_detail {
-            write_runs_table(out, &view.records, runs, now)?;
+            write_runs_table(out, &view.records, &rows, runs, now)?;
         }
     }
     if !view.entry.each_worktree {
@@ -1911,13 +1918,14 @@ fn write_throttle_readings(
 fn write_verdict(
     out: &mut impl Write,
     records: &[LoopRunRecord],
+    attribution: &[FireAttribution],
     is_running: bool,
     now: Timestamp,
 ) -> std::io::Result<()> {
     let verdict =
         verdict_line(records, is_running, now).map(|(verdict, style)| ui::paint(style, &verdict));
-    let stale =
-        stale_clause(records, is_running).map(|clause| ui::paint(ui::palette::warn(), &clause));
+    let stale = stale_clause(records, attribution, is_running)
+        .map(|clause| ui::paint(ui::palette::warn(), &clause));
     match (verdict, stale) {
         (Some(verdict), Some(stale)) => writeln!(out, "  {verdict} · {stale}")?,
         (Some(line), None) | (None, Some(line)) => writeln!(out, "  {line}")?,
@@ -1928,6 +1936,13 @@ fn write_verdict(
 
 fn is_overlap(record: &LoopRunRecord) -> bool {
     record.result == LoopRunResult::Overlapped
+}
+
+fn is_at_lock_fire(record: &LoopRunRecord) -> bool {
+    matches!(
+        record.result,
+        LoopRunResult::Overlapped | LoopRunResult::Deferred
+    )
 }
 
 fn fires(count: usize) -> String {
@@ -1953,16 +1968,101 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
     )
 }
 
+#[derive(Clone, Copy)]
+enum FireAttribution {
+    Trailing,
+    Recorded(usize),
+    NoRecord(usize),
+}
+
+/// Exact tenure joins span the window. Unmatched holders use checkout-local evidence within
+/// legacy record boundaries, so a later tenure cannot reach back past an unstamped run.
+fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
+    let mut recorded_by_lock = BTreeMap::new();
+    let mut newest_by_checkout = BTreeMap::new();
+    let mut newest_at_record = Vec::with_capacity(records.len());
+    for (index, record) in records.iter().enumerate() {
+        let checkout = record.checkout.as_deref();
+        if let Some(info) = record.run_lock {
+            recorded_by_lock.insert((info.pid, info.started_at), index);
+        }
+        if let Some(info) = record
+            .run_lock
+            .or(record.holder.filter(|_| is_at_lock_fire(record)))
+        {
+            let newest = newest_by_checkout
+                .entry(checkout)
+                .or_insert(info.started_at);
+            *newest = (*newest).max(info.started_at);
+        }
+        newest_at_record.push(newest_by_checkout.get(&checkout).copied());
+        if record.run_lock.is_none() && !is_refused_fire(record) {
+            // A legacy record can account for the preceding tenure, bounding the next gap.
+            newest_by_checkout.remove(&checkout);
+        }
+    }
+
+    let mut attribution = vec![FireAttribution::Trailing; records.len()];
+    let mut next_run_by_checkout = BTreeMap::new();
+    let mut next_legacy_by_checkout = BTreeMap::new();
+    let mut missing_by_lock = BTreeMap::new();
+    for (index, record) in records.iter().enumerate().rev() {
+        let checkout = record.checkout.as_deref();
+        if !is_refused_fire(record) {
+            next_run_by_checkout.insert(checkout, index);
+            if record.run_lock.is_none() {
+                next_legacy_by_checkout.insert(checkout, index);
+            }
+        }
+        if !is_at_lock_fire(record) {
+            continue;
+        }
+        let Some(holder) = record.holder else {
+            if let Some(&run_index) = next_run_by_checkout.get(&checkout) {
+                attribution[index] = FireAttribution::Recorded(run_index);
+            }
+            continue;
+        };
+        let key = (holder.pid, holder.started_at);
+        if let Some(&run_index) = recorded_by_lock.get(&key) {
+            attribution[index] = FireAttribution::Recorded(run_index);
+            continue;
+        }
+        let fallback = next_legacy_by_checkout.get(&checkout).copied();
+        let newest = match fallback {
+            Some(run_index) => newest_at_record[run_index],
+            None => newest_by_checkout.get(&checkout).copied(),
+        };
+        if newest.is_some_and(|started_at| started_at > holder.started_at) {
+            let latest_fire = *missing_by_lock.entry(key).or_insert(index);
+            attribution[index] = FireAttribution::NoRecord(latest_fire);
+        } else if let Some(run_index) = fallback {
+            attribution[index] = FireAttribution::Recorded(run_index);
+        }
+    }
+    attribution
+}
+
 /// A skipped fire refused at the run lock is spent, and the run that refused it started
 /// before it. So fires refused during or after the newest run, with no run
 /// since, are fires nothing has answered. A run in flight with no refusal
 /// after the newest run started after every one of them, and answers them.
 /// Fires refused at the other gates ran nothing, so they neither bound the
 /// newest run nor end a count of overlaps.
-fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<String> {
+/// Fires on a `no record` row are excluded: a later tenure already proves their holder gone.
+fn stale_clause(
+    records: &[LoopRunRecord],
+    attribution: &[FireAttribution],
+    has_active_run: bool,
+) -> Option<String> {
     let newest_run = records.iter().rposition(|record| !is_refused_fire(record));
-    let tail = &records[newest_run.map_or(0, |idx| idx + 1)..];
-    let after = tail.iter().filter(|record| is_overlap(record)).count();
+    let start = newest_run.map_or(0, |idx| idx + 1);
+    let tail = records[start..]
+        .iter()
+        .zip(&attribution[start..])
+        .filter(|(_, destination)| !matches!(destination, FireAttribution::NoRecord(_)))
+        .map(|(record, _)| record);
+    let after = tail.clone().filter(|record| is_overlap(record)).count();
     if after > 0 && has_active_run {
         return Some(format!(
             "{} skipped while the active run holds the lock",
@@ -1972,11 +2072,7 @@ fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<Strin
     if after > 0 {
         // The counted overlaps are "the last fires" only when no fire refused
         // at another gate sits among or after them.
-        let trailing = tail
-            .iter()
-            .rev()
-            .take_while(|record| is_overlap(record))
-            .count();
+        let trailing = tail.rev().take_while(|record| is_overlap(record)).count();
         let skipped = match (trailing == after, after) {
             (true, 1) => "last fire".to_owned(),
             (true, _) => format!("last {after} fires"),
@@ -1987,11 +2083,15 @@ fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<Strin
     if has_active_run {
         return None;
     }
-    let during = records[..newest_run?]
+    let newest_run = newest_run?;
+    let during = records[..newest_run]
         .iter()
+        .zip(&attribution[..newest_run])
         .rev()
-        .take_while(|record| is_refused_fire(record))
-        .filter(|record| is_overlap(record))
+        .take_while(|(record, _)| is_refused_fire(record))
+        .filter(|(record, destination)| {
+            is_overlap(record) && !matches!(destination, FireAttribution::NoRecord(_))
+        })
         .count();
     let skipped = match during {
         0 => return None,
@@ -2637,10 +2737,10 @@ fn write_agent_runs(
 fn write_runs_table(
     out: &mut impl Write,
     records: &[LoopRunRecord],
+    rows: &[CollapsedRunRow<'_>],
     limit: usize,
     now: Timestamp,
 ) -> std::io::Result<()> {
-    let rows = collapsed_run_rows(records);
     let visible_rows = rows.iter().rev().take(limit).collect::<Vec<_>>();
     if visible_rows.is_empty() {
         return Ok(());
@@ -2658,9 +2758,12 @@ fn write_runs_table(
             &format!("RECENT RUNS (newest first · {shown} of {})", records.len())
         )
     )?;
-    let show_mode = visible_rows
+    let mut modes = visible_rows
         .iter()
-        .any(|row| row.key.mode != visible_rows[0].key.mode);
+        .filter(|row| !row.is_no_record())
+        .map(|row| row.key.mode);
+    let first_mode = modes.next().flatten();
+    let show_mode = modes.any(|mode| mode != first_mode);
     let show_cost = visible_rows.iter().any(|row| row.cost_usd.is_some());
     let show_tokens = visible_rows
         .iter()
@@ -2689,9 +2792,21 @@ fn write_runs_table(
         let record = row.latest;
         let mut cells = vec![ui::cell(ui::rel_age(record.at, now))];
         if show_mode {
-            cells.push(ui::cell(row.key.mode.map_or("-", LoopRunMode::label)).dash());
+            cells.push(
+                ui::cell(
+                    row.key
+                        .mode
+                        .filter(|_| !row.is_no_record())
+                        .map_or("-", LoopRunMode::label),
+                )
+                .dash(),
+            );
         }
-        cells.push(run_status_cell(record, row.count));
+        cells.push(if row.is_no_record() {
+            ui::cell("○ no record").fg(ui::palette::warn())
+        } else {
+            run_status_cell(record, row.count)
+        });
         cells.push(ui::cell(row.took().as_deref().unwrap_or("-")).dash());
         if show_cost {
             cells.push(ui::cell(row.cost_usd.map(run_cost).as_deref().unwrap_or("-")).dash());
@@ -2843,7 +2958,7 @@ struct CollapsedRunRow<'a> {
     cost_usd: Option<f64>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
-    /// Overlapped fires folded into this row: refused while its runs held the lock.
+    /// Overlapped fires attributed to the recorded or unrecorded lock tenures in this row.
     skipped: usize,
     waited: usize,
 }
@@ -2867,6 +2982,10 @@ impl<'a> CollapsedRunRow<'a> {
             skipped,
             waited,
         }
+    }
+
+    fn is_no_record(&self) -> bool {
+        is_at_lock_fire(self.latest)
     }
 
     fn merge(&mut self, previous: Self) {
@@ -2912,7 +3031,13 @@ impl<'a> CollapsedRunRow<'a> {
 
     fn note(&self, now: Timestamp) -> Option<String> {
         let mut parts = Vec::new();
-        if self.key.result == LoopRunResult::TakeoverBlocked
+        if self.is_no_record() {
+            let holder = self.latest.holder?;
+            parts.extend(checkout_note(
+                self.key.checkout,
+                Some(format!("pid {}", holder.pid)),
+            ));
+        } else if self.key.result == LoopRunResult::TakeoverBlocked
             && let Some(checkout) = self.key.checkout
         {
             parts.push(format!(
@@ -2940,37 +3065,48 @@ impl<'a> CollapsedRunRow<'a> {
     }
 }
 
-/// Table rows in record order. At-lock refusals fold as counts into their checkout's next
-/// run, never another gate refusal. Trailing refusals take no row.
-fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
+/// Table rows in log order. Lock refusals follow their attributed record or their holder's
+/// `no record` row; trailing refusals take no row. Exact tenure joins outrank checkout and result.
+fn collapsed_run_rows<'a>(
+    records: &'a [LoopRunRecord],
+    attribution: &[FireAttribution],
+) -> Vec<CollapsedRunRow<'a>> {
+    let mut folded = vec![(0, 0); records.len()];
+    for (record, destination) in records.iter().zip(attribution) {
+        let index = match *destination {
+            FireAttribution::Recorded(index) | FireAttribution::NoRecord(index) => index,
+            FireAttribution::Trailing => continue,
+        };
+        let (skipped, waited) = &mut folded[index];
+        if is_overlap(record) {
+            *skipped += 1;
+        } else {
+            *waited += 1;
+        }
+    }
     let mut rows = Vec::<Option<CollapsedRunRow<'_>>>::new();
     let mut by_checkout = BTreeMap::<&Path, usize>::new();
-    let mut pending = BTreeMap::<Option<&Path>, (usize, usize)>::new();
-    for record in records {
+    for (index, record) in records.iter().enumerate() {
         if record.result != LoopRunResult::TakeoverBlocked
             && let Some(checkout) = record.checkout.as_deref()
         {
             by_checkout.remove(checkout);
         }
-        if matches!(
-            record.result,
-            LoopRunResult::Overlapped | LoopRunResult::Deferred
-        ) {
-            let counts = pending.entry(record.checkout.as_deref()).or_default();
-            if is_overlap(record) {
-                counts.0 += 1;
-            } else {
-                counts.1 += 1;
+        let (skipped, waited) = folded[index];
+        if is_at_lock_fire(record) {
+            if skipped == 0 && waited == 0 {
+                continue;
             }
+            rows.push(Some(CollapsedRunRow {
+                count: 0,
+                duration: None,
+                cost_usd: None,
+                input_tokens: None,
+                output_tokens: None,
+                ..CollapsedRunRow::new(record, skipped, waited)
+            }));
             continue;
         }
-        let (skipped, waited) = if is_refused_fire(record) {
-            (0, 0)
-        } else {
-            pending
-                .remove(&record.checkout.as_deref())
-                .unwrap_or_default()
-        };
         let mut row = CollapsedRunRow::new(record, skipped, waited);
         if record.result == LoopRunResult::TakeoverBlocked
             && let Some(checkout) = record.checkout.as_deref()
@@ -3231,9 +3367,11 @@ fn record_note(record: &LoopRunRecord) -> Option<String> {
         (Some(queued), Some(note)) => Some(format!("{queued} · {note}")),
         (queued, note) => queued.or(note),
     };
-    let checkout = record
-        .checkout
-        .as_deref()
+    checkout_note(record.checkout.as_deref(), note)
+}
+
+fn checkout_note(checkout: Option<&Path>, note: Option<String>) -> Option<String> {
+    let checkout = checkout
         .and_then(Path::file_name)
         .map(|name| name.to_string_lossy());
     match (checkout, note) {

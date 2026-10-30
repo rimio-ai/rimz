@@ -1,6 +1,24 @@
 use super::super::run_report::render_record_detail;
 use super::*;
 
+fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
+    super::collapsed_run_rows(records, &refused_fire_attribution(records))
+}
+
+fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<String> {
+    super::stale_clause(records, &refused_fire_attribution(records), has_active_run)
+}
+
+fn write_runs_table(
+    out: &mut impl Write,
+    records: &[LoopRunRecord],
+    limit: usize,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    let rows = collapsed_run_rows(records);
+    super::write_runs_table(out, records, &rows, limit, now)
+}
+
 #[test]
 fn agent_check_rows_name_the_profile() {
     let decoded = toml::from_str::<TaskEntry>(
@@ -2859,6 +2877,354 @@ fn coalesce_history(old_shape: bool) -> Vec<LoopRunRecord> {
     follow_up.absorbed = 6;
     records.extend([follow_up, completed(660, 840), completed(720, 1720)]);
     records
+}
+
+#[test]
+fn refused_fires_stay_with_the_holder_that_refused_them() {
+    let gone = RunLockInfo {
+        pid: 3003569,
+        started_at: Timestamp::from_second(0).unwrap(),
+    };
+    let next = RunLockInfo {
+        pid: 42424,
+        started_at: Timestamp::from_second(70).unwrap(),
+    };
+    let mut records = (10..=60)
+        .step_by(10)
+        .map(|second| {
+            let mut row = deferred(second);
+            row.holder = Some(gone);
+            row
+        })
+        .collect::<Vec<_>>();
+    let mut waiting = deferred(80);
+    waiting.holder = Some(next);
+    records.push(waiting);
+    records.push(
+        serde_json::from_value(serde_json::json!({
+            "task": "wait", "at": Timestamp::from_second(90).unwrap(),
+            "result": "completed", "mode": "scheduled", "duration_ms": 47000,
+            "run_lock": next,
+        }))
+        .unwrap(),
+    );
+
+    let table = runs_table(&records, 10);
+    let lines = table.lines().collect::<Vec<_>>();
+    assert_eq!(
+        (
+            lines.iter().position(|line| line.contains("✓ completed")
+                && line.contains("47s")
+                && line.ends_with("1 fire waited on it")),
+            lines.iter().position(|line| line.contains("○ no record")
+                && line.ends_with("pid 3003569 · 6 fires waited on it")),
+            table.contains("8 of 8"),
+        ),
+        (Some(3), Some(4), true),
+        "{table}"
+    );
+}
+
+fn run_lock_info(pid: u32, second: i64) -> RunLockInfo {
+    RunLockInfo {
+        pid,
+        started_at: Timestamp::from_second(second).unwrap(),
+    }
+}
+
+fn refused_by(mut record: LoopRunRecord, holder: RunLockInfo) -> LoopRunRecord {
+    record.holder = Some(holder);
+    record
+}
+
+fn with_run_lock(mut record: LoopRunRecord, holder: RunLockInfo) -> LoopRunRecord {
+    record.run_lock = Some(holder);
+    record
+}
+
+#[test]
+fn an_uncontended_run_does_not_take_an_unrecorded_holders_fires() {
+    let gone = run_lock_info(3003569, 0);
+    let next = run_lock_info(42424, 70);
+    let mut records = (10..=60)
+        .step_by(10)
+        .map(|second| refused_by(deferred(second), gone))
+        .collect::<Vec<_>>();
+    records.push(with_run_lock(scheduled(90, LoopRunResult::Completed), next));
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        collapsed_run_rows(&records)
+            .iter()
+            .map(|row| (row.count, row.waited))
+            .collect::<Vec<_>>(),
+        [(0, 6), (1, 0)],
+        "{table}"
+    );
+    assert!(table.contains("7 of 7"), "{table}");
+}
+
+#[test]
+fn a_new_holder_separates_old_fires_even_when_its_record_has_no_stamp() {
+    let gone = run_lock_info(3003569, 0);
+    let next = run_lock_info(42424, 70);
+    let mut records = (10..=60)
+        .step_by(10)
+        .map(|second| refused_by(deferred(second), gone))
+        .collect::<Vec<_>>();
+    records.extend([
+        refused_by(deferred(80), next),
+        scheduled(90, LoopRunResult::Completed),
+    ]);
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        collapsed_run_rows(&records)
+            .iter()
+            .map(|row| (row.count, row.waited))
+            .collect::<Vec<_>>(),
+        [(0, 6), (1, 1)],
+        "{table}"
+    );
+    assert!(table.contains("8 of 8"), "{table}");
+}
+
+#[test]
+fn stamped_runs_take_holderless_fires_but_not_another_tenures_fires() {
+    let gone = run_lock_info(42424, 0);
+    let next = run_lock_info(42424, 25);
+    let records = [
+        old_deferred(10),
+        refused_by(deferred(20), gone),
+        with_run_lock(scheduled(30, LoopRunResult::Completed), next),
+    ];
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        collapsed_run_rows(&records)
+            .iter()
+            .map(|row| (row.count, row.waited))
+            .collect::<Vec<_>>(),
+        [(0, 1), (1, 1)],
+        "{table}"
+    );
+    assert!(table.contains("3 of 3"), "{table}");
+}
+
+#[test]
+fn stopped_holders_take_their_fires_without_a_checkout_on_the_record() {
+    let stopped = run_lock_info(11, 0);
+    let next = run_lock_info(22, 30);
+    let mut records = [
+        refused_by(deferred(10), stopped),
+        refused_by(overlap(11), stopped),
+        with_run_lock(scheduled(20, LoopRunResult::Canceled), stopped),
+        with_run_lock(scheduled(40, LoopRunResult::Completed), next),
+    ];
+    for index in [0, 1, 3] {
+        records[index].checkout = Some("/repo/alpha".into());
+    }
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        collapsed_run_rows(&records)
+            .iter()
+            .map(|row| (row.latest.result, row.skipped, row.waited))
+            .collect::<Vec<_>>(),
+        [
+            (LoopRunResult::Canceled, 1, 1),
+            (LoopRunResult::Completed, 0, 0),
+        ],
+        "{table}"
+    );
+    assert!(table.contains("4 of 4"), "{table}");
+}
+
+#[test]
+fn recorded_gate_refusals_take_their_matched_fires_and_keep_the_stale_clause() {
+    let holder = run_lock_info(11, 0);
+    for result in [
+        LoopRunResult::ThrottleSkipped,
+        LoopRunResult::CapacityHeld,
+        LoopRunResult::BudgetSkipped,
+        LoopRunResult::AccountSkipped,
+        LoopRunResult::SurplusSkipped,
+    ] {
+        let records = [
+            refused_by(overlap(10), holder),
+            refused_by(deferred(11), holder),
+            with_run_lock(scheduled(20, result), holder),
+        ];
+        let table = runs_table(&records, 10);
+        let rows = collapsed_run_rows(&records);
+        assert_eq!((rows[0].skipped, rows[0].waited), (1, 1), "{table}");
+        assert!(table.contains("3 of 3"), "{table}");
+        assert_eq!(
+            stale_clause(&records, false).as_deref(),
+            Some("1 fire skipped, nothing has run since")
+        );
+    }
+}
+
+#[test]
+fn late_skip_policy_refusals_fold_back_into_their_recorded_holder() {
+    let holder = run_lock_info(11, 0);
+    let records = [
+        with_run_lock(scheduled(10, LoopRunResult::Completed), holder),
+        refused_by(overlap(20), holder),
+    ];
+    let table = runs_table(&records, 10);
+    let rows = collapsed_run_rows(&records);
+    assert_eq!((rows.len(), rows[0].skipped), (1, 1), "{table}");
+    assert!(table.contains("2 of 2"), "{table}");
+}
+
+#[test]
+fn late_refusals_of_unrecorded_holders_keep_the_already_observed_new_tenure() {
+    let gone = run_lock_info(11, 0);
+    let next = run_lock_info(22, 15);
+    let records = [
+        with_run_lock(scheduled(20, LoopRunResult::Completed), next),
+        refused_by(overlap(30), gone),
+        scheduled(40, LoopRunResult::Completed),
+    ];
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        collapsed_run_rows(&records)
+            .iter()
+            .map(|row| (row.count, row.skipped))
+            .collect::<Vec<_>>(),
+        [(1, 0), (0, 1), (1, 0)],
+        "{table}"
+    );
+    assert_eq!(stale_clause(&records, false), None);
+}
+
+#[test]
+fn legacy_run_boundaries_preserve_single_holder_gaps_even_for_late_refusals() {
+    let first = run_lock_info(11, 0);
+    let second = run_lock_info(22, 25);
+    let records = [
+        refused_by(overlap(10), first),
+        scheduled(20, LoopRunResult::Completed),
+        refused_by(overlap(30), second),
+        scheduled(40, LoopRunResult::Completed),
+        refused_by(overlap(50), first),
+        scheduled(60, LoopRunResult::Completed),
+    ];
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        collapsed_run_rows(&records)
+            .iter()
+            .map(|row| (row.count, row.skipped))
+            .collect::<Vec<_>>(),
+        [(3, 3)],
+        "{table}"
+    );
+    assert!(
+        table.contains("6 of 6") && !table.contains("no record"),
+        "{table}"
+    );
+}
+
+#[test]
+fn unrecorded_holders_do_not_make_a_later_run_stale() {
+    let gone = run_lock_info(11, 0);
+    let next = run_lock_info(22, 30);
+    let records = [
+        refused_by(overlap(10), gone),
+        refused_by(overlap(20), gone),
+        with_run_lock(scheduled(40, LoopRunResult::Completed), next),
+    ];
+    assert_eq!(stale_clause(&records, false), None);
+}
+
+#[test]
+fn stale_clause_excludes_fires_on_a_no_record_row_from_its_tail() {
+    let gone = run_lock_info(11, 11);
+    let next = run_lock_info(22, 31);
+    let records = [
+        scheduled(10, LoopRunResult::Completed),
+        refused_by(overlap(20), gone),
+        refused_by(overlap(30), gone),
+        refused_by(overlap(40), next),
+    ];
+    assert_eq!(
+        [false, true].map(|running| stale_clause(&records, running)),
+        [
+            Some("last fire skipped, nothing has run since".into()),
+            Some("1 fire skipped while the active run holds the lock".into()),
+        ]
+    );
+}
+
+#[test]
+fn no_record_rows_keep_their_position_counts_and_empty_measurements() {
+    let first = run_lock_info(11, 0);
+    let second = run_lock_info(22, 30);
+    let third = run_lock_info(33, 50);
+    let mut completed = with_run_lock(scheduled(90, LoopRunResult::Completed), third);
+    completed.cost_usd = Some(1.0);
+    completed.input_tokens = Some(10);
+    let mut records = vec![
+        refused_by(deferred(10), first),
+        refused_by(deferred(20), first),
+        refused_by(deferred(40), second),
+        completed,
+    ];
+    for record in &mut records {
+        record.checkout = Some("/repo/alpha".into());
+    }
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        collapsed_run_rows(&records)
+            .iter()
+            .map(|row| (row.latest.at.as_second(), row.count, row.waited))
+            .collect::<Vec<_>>(),
+        [(20, 0, 2), (40, 0, 1), (90, 1, 0)],
+        "{table}"
+    );
+    assert!(!table.contains("MODE"), "{table}");
+    assert!(table.contains("4 of 4"), "{table}");
+    let missing = table
+        .lines()
+        .filter(|line| line.contains("○ no record"))
+        .collect::<Vec<_>>();
+    assert_eq!(missing.len(), 2, "{table}");
+    assert!(
+        missing[0].ends_with("alpha pid 22 · 1 fire waited on it"),
+        "{table}"
+    );
+    assert!(
+        missing[1].ends_with("alpha pid 11 · 2 fires waited on it"),
+        "{table}"
+    );
+    for line in missing {
+        assert!(!line.contains('×'), "{table}");
+        assert_eq!(
+            line.split_once("○ no record")
+                .unwrap()
+                .1
+                .split_whitespace()
+                .take(3)
+                .collect::<Vec<_>>(),
+            ["-", "-", "-"],
+            "{table}"
+        );
+    }
+
+    let mut manual = record(95, LoopRunResult::Completed);
+    manual.mode = Some(LoopRunMode::Manual);
+    records.push(manual);
+    let table = runs_table(&records, 10);
+    assert!(table.contains("MODE"), "{table}");
+    for line in table.lines().filter(|line| line.contains("○ no record")) {
+        assert_eq!(
+            line.split_once("○ no record")
+                .unwrap()
+                .0
+                .split_whitespace()
+                .last(),
+            Some("-"),
+            "{table}"
+        );
+    }
 }
 
 #[test]
