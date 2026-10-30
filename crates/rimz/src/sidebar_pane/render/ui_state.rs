@@ -216,7 +216,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(in crate::sidebar_pane) struct LayoutKey {
     rows: Vec<(String, isize)>,
     top_height: usize,
@@ -231,6 +231,25 @@ pub(in crate::sidebar_pane) struct LayoutKey {
     make_up_filter: BodyLens,
     help_visible: bool,
     search_draft: Option<String>,
+}
+
+impl LayoutKey {
+    /// Compares in place, so recomposing an unchanged layout allocates nothing.
+    fn describes(&self, frame: &super::compose::ComposedFrame, view: &ViewState) -> bool {
+        self.rows == frame.anchored_rows
+            && self.top_height == frame.top_height
+            && self.bottom_height == frame.bottom_height
+            && self.content_height == frame.content_height
+            && self.scroll_max == frame.scroll_max
+            && self.expanded_groups == view.expanded_groups
+            && self.landed_open == view.landed_open
+            && self.delegation_overrides == view.delegation_overrides
+            && self.delegation_history == view.delegation_history
+            && self.dashboard_tab == view.dashboard_tab
+            && self.make_up_filter == view.make_up_filter
+            && self.help_visible == view.help_visible
+            && self.search_draft == view.search_draft
+    }
 }
 
 impl UiState {
@@ -253,7 +272,14 @@ impl UiState {
 
 impl ViewState {
     pub(super) fn note_layout(&mut self, frame: &super::compose::ComposedFrame) {
-        let key = LayoutKey {
+        if self
+            .layout_key
+            .as_ref()
+            .is_some_and(|key| key.describes(frame, self))
+        {
+            return;
+        }
+        self.layout_key = Some(LayoutKey {
             rows: frame.anchored_rows.clone(),
             top_height: frame.top_height,
             bottom_height: frame.bottom_height,
@@ -267,11 +293,8 @@ impl ViewState {
             make_up_filter: self.make_up_filter.clone(),
             help_visible: self.help_visible,
             search_draft: self.search_draft.clone(),
-        };
-        if self.layout_key.as_ref() != Some(&key) {
-            self.layout_sequence += 1;
-            self.layout_key = Some(key);
-        }
+        });
+        self.layout_sequence += 1;
     }
 
     pub(super) fn effective_held_expansions(&self, roster: &VisibleRoster<'_>) -> BTreeSet<String> {
