@@ -77,6 +77,21 @@ pub struct FileDiff {
     pub custom: Option<Vec<u8>>,
 }
 
+pub enum ResetOutcome<'a> {
+    Removed {
+        item: &'a PackItem,
+        path: PathBuf,
+    },
+    Kept {
+        item: &'a PackItem,
+        reason: Option<String>,
+    },
+    Failed {
+        item: &'a PackItem,
+        error: String,
+    },
+}
+
 impl<'a> PackOverride<'a> {
     pub fn new(home: &'a Path, item: &'a PackItem) -> Self {
         Self { home, item }
@@ -194,12 +209,36 @@ impl<'a> PackOverride<'a> {
         })
     }
 
-    pub fn reset(&self) -> Result<Option<PathBuf>, OverrideErr> {
+    pub fn identical(&self) -> Result<bool, OverrideErr> {
+        self.require_included()?;
+        let Some(path) = self.own_path()? else {
+            return Ok(false);
+        };
+        self.identical_at(&path)
+    }
+
+    fn identical_at(&self, path: &Path) -> Result<bool, OverrideErr> {
+        if self.item.kind != ItemType::Skills {
+            return Ok(read(&self.item.path)? == read(path)?);
+        }
+        let compare = || -> Result<bool, OverrideErr> {
+            Ok(tree_files(&self.item.path, false)? == tree_files(path, false)?)
+        };
+        match compare() {
+            Err(OverrideErr::NotRegular { .. }) => Ok(false),
+            result => result,
+        }
+    }
+
+    pub fn reset(&self, identical: bool) -> Result<Option<PathBuf>, OverrideErr> {
         self.require_included()?;
         let Some(path) = self.own_path()? else {
             return Ok(None);
         };
         let metadata = fs::symlink_metadata(&path).map_err(|error| io(&path, error))?;
+        if identical && !self.identical()? {
+            return Ok(None);
+        }
         if metadata.is_dir() {
             fs::remove_dir_all(&path).map_err(|error| io(&path, error))?;
         } else {
@@ -217,12 +256,7 @@ impl<'a> PackOverride<'a> {
         if self.is_command_override(path) {
             return Err(OverrideErr::ConfiguredCommand { path: path.clone() });
         }
-        let entry = if self.item.kind == ItemType::Skills {
-            // SkillChain records every skill override at <entry>/SKILL.md.
-            path.parent().expect("skill override points to SKILL.md")
-        } else {
-            path.as_path()
-        };
+        let entry = override_entry(self.item.kind, path);
         let tree = self.home.join(self.item.kind.as_str());
         let absolute_entry = std::path::absolute(entry).map_err(|error| io(entry, error))?;
         let absolute_tree = std::path::absolute(&tree).map_err(|error| io(&tree, error))?;
@@ -306,6 +340,111 @@ impl<'a> PackOverride<'a> {
         }
         stub.push_str("---\n");
         Ok(stub)
+    }
+}
+
+pub fn reset_identical<'a>(
+    home: &Path,
+    items: impl IntoIterator<Item = &'a PackItem>,
+) -> Vec<ResetOutcome<'a>> {
+    let mut entries = BTreeMap::<PathBuf, Vec<&PackItem>>::new();
+    let mut outcomes = Vec::new();
+    for item in items {
+        let ItemFate::Overridden { path } = &item.fate else {
+            continue;
+        };
+        match resolved_entry(override_entry(item.kind, path)) {
+            Ok(entry) => entries.entry(entry).or_default().push(item),
+            Err(reason) => outcomes.push(ResetOutcome::Kept {
+                item,
+                reason: Some(reason.to_string()),
+            }),
+        }
+    }
+    for items in entries.into_values() {
+        let outcome = reset_identical_entry(home, &items);
+        for item in items {
+            outcomes.push(match &outcome {
+                ResetOutcome::Removed { path, .. } => ResetOutcome::Removed {
+                    item,
+                    path: path.clone(),
+                },
+                ResetOutcome::Kept { reason, .. } => ResetOutcome::Kept {
+                    item,
+                    reason: PackOverride::new(home, item)
+                        .own_path()
+                        .err()
+                        .map(|error| error.to_string())
+                        .or_else(|| reason.clone()),
+                },
+                ResetOutcome::Failed { error, .. } => ResetOutcome::Failed {
+                    item,
+                    error: error.clone(),
+                },
+            });
+        }
+    }
+    outcomes
+}
+
+fn reset_identical_entry<'a>(home: &Path, items: &[&'a PackItem]) -> ResetOutcome<'a> {
+    let mut eligible = None;
+    let mut refusal = None;
+    for &item in items {
+        match PackOverride::new(home, item).own_path() {
+            Ok(Some(path)) => {
+                eligible.get_or_insert((item, path));
+            }
+            Err(reason @ OverrideErr::OutsideTree { .. }) => {
+                refusal.get_or_insert((item, reason));
+            }
+            Err(reason) => {
+                return ResetOutcome::Kept {
+                    item,
+                    reason: Some(reason.to_string()),
+                };
+            }
+            Ok(None) => {}
+        }
+    }
+    let Some((item, path)) = eligible else {
+        // Each group contains immutable Overridden inventory items.
+        let (item, reason) = refusal.expect("an override group has an entry or a refusal");
+        return ResetOutcome::Kept {
+            item,
+            reason: Some(reason.to_string()),
+        };
+    };
+    let entry = PackOverride::new(home, item);
+    match entry.identical_at(&path) {
+        Ok(true) => {}
+        Ok(false) => return ResetOutcome::Kept { item, reason: None },
+        Err(reason) => {
+            return ResetOutcome::Kept {
+                item,
+                reason: Some(reason.to_string()),
+            };
+        }
+    }
+    match entry.reset(false) {
+        Ok(path) => ResetOutcome::Removed {
+            item,
+            // The selected item's immutable fate is still Overridden.
+            path: path.expect("a selected override has a home entry"),
+        },
+        Err(error) => ResetOutcome::Failed {
+            item,
+            error: error.to_string(),
+        },
+    }
+}
+
+fn override_entry(kind: ItemType, path: &Path) -> &Path {
+    if kind == ItemType::Skills {
+        // SkillChain records every skill override at <entry>/SKILL.md.
+        path.parent().expect("skill override points to SKILL.md")
+    } else {
+        path
     }
 }
 

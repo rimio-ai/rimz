@@ -119,8 +119,20 @@ fn git_install_prints_the_review_then_refuses_without_a_terminal_or_yes() {
 #[test]
 fn yes_installs_matching_official_dependencies_and_lists_full_version_identity() {
     let fixture = Fixture::new();
+    let worker = fixture.env.agents_home().join("agents/worker.md");
+    write(
+        &worker,
+        &fs::read_to_string(fixture.crew.join("agents/worker.md")).unwrap(),
+    );
     let output = fixture.run(&["packs", "install", "crew", "--yes"]);
     assert!(output.status.success(), "{output:?}");
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(receipt.contains("1 identical override"), "{receipt}");
+    assert!(
+        receipt.contains("rimz packs reset crew --identical"),
+        "{receipt}"
+    );
+    assert!(worker.exists());
     let record = fixture.record();
     assert_eq!(record["sources"].as_array().unwrap().len(), 2, "{record}");
     for source in record["sources"].as_array().unwrap() {
@@ -160,6 +172,20 @@ fn yes_installs_matching_official_dependencies_and_lists_full_version_identity()
         human.contains(&format!("crew@v{}", env!("CARGO_PKG_VERSION")))
             && human.contains(&fixture.commit[..8]),
         "{human}"
+    );
+    symlink(&fixture.crew, fixture.crew.with_extension("git")).unwrap();
+    let alias = "https://github.com/rimio-ai/rimz-crew.git/";
+    fixture
+        .run(&["packs", "install", alias, "--yes"])
+        .assert()
+        .success();
+    let repeated = fixture.run(&["packs", "install", alias]);
+    assert!(repeated.status.success(), "{repeated:?}");
+    let receipt = String::from_utf8_lossy(&repeated.stdout);
+    assert!(receipt.contains("1 identical override"), "{receipt}");
+    assert!(
+        receipt.contains("rimz packs reset crew --identical"),
+        "{receipt}"
     );
 }
 

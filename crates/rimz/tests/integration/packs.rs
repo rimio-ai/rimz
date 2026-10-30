@@ -11,6 +11,7 @@ use crate::common::Env;
 
 mod customize;
 mod git;
+mod migration;
 
 fn write(path: impl AsRef<Path>, text: &str) {
     let path = path.as_ref();
