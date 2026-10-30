@@ -206,7 +206,8 @@ struct ListArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
     )]
     channel: Option<String>,
-    /// Max rows to show, newest first. 0 lists all.
+    /// Max rows to show, newest first; machine repeats fold. With --json, count messages
+    /// instead of rows. 0 lists all.
     #[arg(long, value_name = "N")]
     limit: Option<usize>,
     /// Optional target filter.

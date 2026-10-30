@@ -77,6 +77,23 @@ pub(super) struct MessageListRow {
 }
 
 impl MessageListRow {
+    fn same_notice(&self, other: &Self) -> bool {
+        !self.sender.is_conversation()
+            && self.sender == other.sender
+            && rimz::agents::AgentCardRef::new(
+                &self.kind,
+                &self.agent_id,
+                self.agent_name.as_deref(),
+            )
+            .matches(rimz::agents::AgentCardRef::new(
+                &other.kind,
+                &other.agent_id,
+                other.agent_name.as_deref(),
+            ))
+            && self.body == other.body
+            && self.status == other.status
+    }
+
     pub(super) fn from_record(message: MessageRecord) -> Self {
         Self {
             message_id: message.message_id,
@@ -249,15 +266,10 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
             .then_with(|| b.message_id.as_str().cmp(a.message_id.as_str()))
     });
     let limit = args.limit.unwrap_or(DEFAULT_MESSAGE_LIST_LIMIT);
-    let hidden = if limit == 0 {
-        0
-    } else {
-        messages.len().saturating_sub(limit)
-    };
-    if limit != 0 {
-        messages.truncate(limit);
-    }
     if args.json {
+        if limit != 0 {
+            messages.truncate(limit);
+        }
         render::json_pretty(&messages)?;
     } else {
         let agents = rimz::address::addressable_agents(&snapshot);
@@ -268,7 +280,7 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
             &agents,
             &lane_scope,
             root_channel.as_deref(),
-            hidden,
+            limit,
             system_hidden,
             &empty,
         )?;
@@ -402,6 +414,40 @@ pub(super) fn projected_messages(store: &rimz::Store) -> Result<Vec<MessageListR
     Ok(rows.into_values().collect())
 }
 
+struct CollapsedMessageRow<'a> {
+    latest: &'a MessageListRow,
+    oldest: Timestamp,
+    count: usize,
+}
+
+fn collapsed_message_rows<'a>(
+    messages: &'a [MessageListRow],
+    root_channel: Option<&str>,
+) -> Vec<CollapsedMessageRow<'a>> {
+    let mut rows = Vec::<CollapsedMessageRow<'_>>::new();
+    let mut last_by_lane =
+        std::collections::BTreeMap::<Option<&str>, (usize, &MessageListRow)>::new();
+    for message in messages {
+        let lane = rimz::address::record_lane_label(message.channel.as_deref(), root_channel);
+        if let Some(&(index, previous)) = last_by_lane.get(&lane)
+            && previous.same_notice(message)
+        {
+            let row = &mut rows[index];
+            row.count += 1;
+            row.oldest = row.oldest.min(message.enqueued_at);
+            last_by_lane.insert(lane, (index, message));
+            continue;
+        }
+        last_by_lane.insert(lane, (rows.len(), message));
+        rows.push(CollapsedMessageRow {
+            latest: message,
+            oldest: message.enqueued_at,
+            count: 1,
+        });
+    }
+    rows
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_message_digest(
     out: &mut impl Write,
@@ -409,15 +455,20 @@ pub(super) fn render_message_digest(
     agents: &[&AgentState],
     lane_scope: &LaneScope,
     root_channel: Option<&str>,
-    hidden: usize,
+    limit: usize,
     system_hidden: usize,
     empty: &str,
 ) -> Result<()> {
     let now = Timestamp::now();
-    if messages.is_empty() {
+    let mut rows = collapsed_message_rows(&messages, root_channel);
+    if limit != 0 {
+        rows.truncate(limit);
+    }
+    let hidden = messages.len() - rows.iter().map(|row| row.count).sum::<usize>();
+    if rows.is_empty() {
         writeln!(out, "{}", render::paint(render::palette::faint(), empty))?;
     } else if matches!(lane_scope, LaneScope::All) {
-        for (index, (channel, rows)) in message_digest_groups(messages, root_channel)
+        for (index, (channel, rows)) in message_digest_groups(rows, root_channel)
             .into_iter()
             .enumerate()
         {
@@ -432,7 +483,7 @@ pub(super) fn render_message_digest(
             render_message_rows(out, rows, agents, root_channel, now, 2, 4)?;
         }
     } else {
-        render_message_rows(out, messages, agents, root_channel, now, 0, 2)?;
+        render_message_rows(out, rows, agents, root_channel, now, 0, 2)?;
     }
     if hidden > 0 {
         writeln!(
@@ -449,9 +500,9 @@ pub(super) fn render_message_digest(
     Ok(())
 }
 
-pub(super) fn render_message_rows(
+fn render_message_rows(
     out: &mut impl Write,
-    messages: Vec<MessageListRow>,
+    rows: Vec<CollapsedMessageRow<'_>>,
     agents: &[&AgentState],
     root_channel: Option<&str>,
     now: Timestamp,
@@ -461,27 +512,34 @@ pub(super) fn render_message_rows(
     let row_pad = " ".repeat(row_indent);
     let snippet_pad = " ".repeat(snippet_indent);
     let snippet_width = render::terminal_columns(120).saturating_sub(snippet_indent);
-    for message in messages {
+    for row in rows {
+        let message = row.latest;
         let lane = rimz::address::record_lane_label(message.channel.as_deref(), root_channel);
-        let target = scoped_handle(message_target(&message, agents, root_channel), lane);
+        let target = scoped_handle(message_target(message, agents, root_channel), lane);
         let sender = scoped_handle(message_sender(&message.sender, agents, root_channel), lane);
+        let status = if row.count > 1 {
+            format!("{} ×{}", message.status.as_str(), row.count)
+        } else {
+            message.status.as_str().to_owned()
+        };
         writeln!(
             out,
             "{row_pad}{}{}{}  {}  {}  {}",
             rendered_sender(&message.sender, &sender),
             render::paint(render::palette::faint(), " → "),
             render::paint(render::palette::meta().bold(), &target),
-            render::paint(
-                render::status::message(message.status),
-                message.status.as_str()
-            ),
+            render::paint(render::status::message(message.status), &status),
             render::rel_age(message.enqueued_at, now),
             render::paint(render::palette::faint(), message.message_id.as_str())
         )?;
+        let span = (row.count > 1)
+            .then(|| render::folded_span(row.oldest, message.enqueued_at))
+            .flatten();
+        let prefix = span.map(|span| format!("{span} · ")).unwrap_or_default();
         writeln!(
             out,
             "{snippet_pad}{}",
-            message_snippet(&message, snippet_width)
+            message_snippet(message, snippet_width, &prefix)
         )?;
     }
     Ok(())
@@ -508,14 +566,15 @@ pub(super) fn empty_message_digest(
     line
 }
 
-pub(super) fn message_digest_groups(
-    messages: Vec<MessageListRow>,
+fn message_digest_groups<'a>(
+    messages: Vec<CollapsedMessageRow<'a>>,
     root_channel: Option<&str>,
-) -> Vec<(Option<String>, Vec<MessageListRow>)> {
-    let mut groups: Vec<(Option<String>, Vec<MessageListRow>)> = Vec::new();
+) -> Vec<(Option<String>, Vec<CollapsedMessageRow<'a>>)> {
+    let mut groups: Vec<(Option<String>, Vec<CollapsedMessageRow<'_>>)> = Vec::new();
     for message in messages {
-        let lane = rimz::address::record_lane_label(message.channel.as_deref(), root_channel)
-            .map(str::to_owned);
+        let lane =
+            rimz::address::record_lane_label(message.latest.channel.as_deref(), root_channel)
+                .map(str::to_owned);
         if let Some((_, rows)) = groups.iter_mut().find(|(channel, _)| channel == &lane) {
             rows.push(message);
         } else {
@@ -586,7 +645,7 @@ pub(super) fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> S
     }
 }
 
-pub(super) fn message_snippet(message: &MessageListRow, width: usize) -> String {
+pub(super) fn message_snippet(message: &MessageListRow, width: usize, prefix: &str) -> String {
     let after = message
         .after
         .iter()
@@ -613,26 +672,42 @@ pub(super) fn message_snippet(message: &MessageListRow, width: usize) -> String 
         (marker, true) => marker,
         (None, false) => Some(when),
     };
-    if let Some(text) = message.text.as_deref() {
-        let text = collapse_home_in_snippet(text);
-        return preview(
-            &marker.map_or(text.clone(), |marker| format!("{text} · {marker}")),
-            width,
-        );
+    let text = message.text.as_deref().or_else(|| {
+        message
+            .last_error
+            .as_deref()
+            .filter(|reason| !reason.is_empty())
+    });
+    let detail = text.map(collapse_home_in_snippet).unwrap_or_else(|| {
+        if marker.is_some() {
+            String::new()
+        } else {
+            "(text no longer kept)".to_owned()
+        }
+    });
+    let suffix = marker.map_or_else(String::new, |marker| {
+        if text.is_some() {
+            format!(" · {marker}")
+        } else {
+            marker
+        }
+    });
+    let protected_width = prefix.width() + suffix.width();
+    let snippet = if text.is_none() && prefix.is_empty() && suffix.is_empty() {
+        detail
+    } else if protected_width <= width {
+        format!(
+            "{prefix}{}{suffix}",
+            preview(&detail, width - protected_width)
+        )
+    } else {
+        preview(&format!("{prefix}{detail}{suffix}"), width)
+    };
+    if message.text.is_some() {
+        snippet
+    } else {
+        render::paint(render::palette::faint(), &snippet)
     }
-    if let Some(reason) = message
-        .last_error
-        .as_deref()
-        .filter(|reason| !reason.is_empty())
-    {
-        let reason = collapse_home_in_snippet(reason);
-        let detail = marker.map_or(reason.clone(), |marker| format!("{reason} · {marker}"));
-        return render::paint(render::palette::faint(), &preview(&detail, width));
-    }
-    render::paint(
-        render::palette::faint(),
-        &marker.unwrap_or_else(|| "(text no longer kept)".to_owned()),
-    )
 }
 
 pub(super) fn collapse_home_in_snippet(text: &str) -> String {
@@ -718,443 +793,4 @@ pub(super) fn preview(text: &str, width: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use rimz::agents::AgentStatus;
-    use rimz::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
-    use rimz::pane::PaneRef;
-
-    #[test]
-    fn message_snippet_names_text_not_kept() {
-        let mut row = MessageListRow::from_record(MessageRecord::new(
-            workspace_id(),
-            &agent("sess-coder", AgentStatus::Idle),
-            "text".to_owned(),
-            DeliveryGate::Done,
-        ));
-        row.text = None;
-        assert!(message_snippet(&row, 120).contains("(text no longer kept)"));
-    }
-
-    #[test]
-    fn message_target_keeps_single_sigil() {
-        let mut coder = agent("sess-coder", AgentStatus::Idle);
-        coder.role = Some("coder".to_owned());
-        let snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![coder], now());
-        let message = MessageRecord::new(
-            workspace_id(),
-            &snapshot.agents[0],
-            "work".to_owned(),
-            DeliveryGate::Done,
-        );
-        let message = MessageListRow::from_record(message);
-        let agents = rimz::address::addressable_agents(&snapshot);
-        assert_eq!(message_target(&message, &agents, None), "@coder#project");
-    }
-
-    #[test]
-    fn message_snippet_marks_only_unmet_after_conditions() {
-        let upstream = agent("sess-planner", AgentStatus::Running);
-        let condition = AfterCondition {
-            kind: upstream.kind.clone(),
-            agent_id: upstream.agent_id.clone(),
-            agent_name: upstream.name.clone(),
-            address: "@planner".to_owned(),
-            met_at: None,
-        };
-        let receiver = agent("sess-coder", AgentStatus::Running);
-        let waiting = MessageListRow::from_record(
-            MessageRecord::new(
-                workspace_id(),
-                &receiver,
-                "read plan".to_owned(),
-                DeliveryGate::Done,
-            )
-            .with_after(vec![condition.clone()]),
-        );
-        let met = MessageListRow::from_record(
-            MessageRecord::new(
-                workspace_id(),
-                &receiver,
-                "read plan".to_owned(),
-                DeliveryGate::Done,
-            )
-            .with_after(vec![AfterCondition {
-                met_at: Some(now()),
-                ..condition
-            }]),
-        );
-
-        assert_eq!(message_snippet(&waiting, 120), "read plan · after @planner");
-        assert_eq!(message_snippet(&met, 120), "read plan");
-    }
-
-    #[test]
-    fn message_target_uses_stored_address_before_fallbacks() {
-        let message = MessageRecord::new(
-            workspace_id(),
-            &agent("sess-coder", AgentStatus::Idle),
-            "work".to_owned(),
-            DeliveryGate::Done,
-        )
-        .with_channel(Some("project".to_owned()))
-        .with_address(Some("@saved#project".to_owned()));
-        let message = MessageListRow::from_record(message);
-
-        assert_eq!(message_target(&message, &[], None), "@saved#project");
-    }
-
-    #[test]
-    fn message_target_falls_back_to_agent_name_and_channel_when_agent_is_gone() {
-        let message = MessageRecord::new(
-            workspace_id(),
-            &agent("sess-coder", AgentStatus::Idle),
-            "work".to_owned(),
-            DeliveryGate::Done,
-        )
-        .with_channel(Some("project".to_owned()));
-        let message = MessageListRow::from_record(message);
-
-        assert_eq!(
-            message_target(&message, &[], None),
-            "@sess-coder-name#project"
-        );
-    }
-
-    #[test]
-    fn message_target_falls_back_to_kind_id_for_nameless_records() {
-        let mut receiver = agent("sess-coder", AgentStatus::Idle);
-        receiver.name = None;
-        let message = MessageRecord::new(
-            workspace_id(),
-            &receiver,
-            "work".to_owned(),
-            DeliveryGate::Done,
-        );
-        let message = MessageListRow::from_record(message);
-
-        assert_eq!(message_target(&message, &[], None), "claude:sess-coder");
-    }
-
-    #[test]
-    fn scoped_handle_drops_matching_lane_suffix() {
-        assert_eq!(
-            scoped_handle("@coder#project".to_owned(), Some("project")),
-            "@coder"
-        );
-        // Lane membership is exact: a team lane keeps its suffix under the
-        // directory filter.
-        assert_eq!(
-            scoped_handle("@coder#project/forge".to_owned(), Some("project")),
-            "@coder#project/forge"
-        );
-        assert_eq!(
-            scoped_handle("@coder#ops".to_owned(), Some("project")),
-            "@coder#ops"
-        );
-        assert_eq!(scoped_handle("you".to_owned(), Some("project")), "you");
-    }
-
-    #[test]
-    fn preview_respects_width_and_flattens_control_whitespace() {
-        assert_eq!(preview("a\nb\tc", 10), "a b c");
-        assert_eq!(preview("abcdef", 4), "a...");
-        assert_eq!(preview("abcdef", 3), "...");
-    }
-
-    #[test]
-    fn message_digest_groups_all_lanes_once_by_latest_activity() {
-        let output = render_digest(
-            vec![
-                message_row("sess-docs-new", Some("docs"), "new docs"),
-                message_row("sess-ops", Some("ops"), "ops"),
-                message_row("sess-docs-old", Some("docs"), "old docs"),
-            ],
-            LaneScope::All,
-            None,
-        );
-
-        assert_eq!(output.matches("#docs").count(), 1);
-        assert_eq!(output.matches("#ops").count(), 1);
-        assert!(output.find("#docs").unwrap() < output.find("new docs").unwrap());
-        assert!(output.find("new docs").unwrap() < output.find("old docs").unwrap());
-        assert!(output.find("old docs").unwrap() < output.find("#ops").unwrap());
-
-        let lines: Vec<&str> = output.lines().collect();
-        let snippet = lines
-            .iter()
-            .position(|line| line.contains("new docs"))
-            .unwrap();
-        assert!(lines[snippet - 1].starts_with("  "));
-        assert!(lines[snippet].starts_with("    "));
-    }
-
-    #[test]
-    fn root_scope_includes_legacy_and_basename_records() {
-        assert!(LaneScope::Root.contains_channel(None, Some("project")));
-        assert!(LaneScope::Root.contains_channel(Some("project"), Some("project")));
-        assert!(!LaneScope::Root.contains_channel(Some("docs"), Some("project")));
-    }
-
-    #[test]
-    fn all_digest_groups_root_records_under_main_once() {
-        let output = render_digest(
-            vec![
-                message_row("root", Some("project"), "root text"),
-                message_row("legacy", None, "legacy text"),
-            ],
-            LaneScope::All,
-            None,
-        );
-        assert_eq!(output.matches("#main").count(), 1, "{output}");
-        assert!(!output.contains("#project"), "{output}");
-    }
-
-    #[test]
-    fn message_digest_scopes_handles_by_row_lane() {
-        let output = render_digest(
-            vec![
-                message_row_with_sender(
-                    "sess-same",
-                    Some("main"),
-                    "own lane",
-                    agent_sender("planner", Some("main")),
-                ),
-                message_row_with_sender(
-                    "sess-cross",
-                    Some("main"),
-                    "cross lane",
-                    agent_sender("reviewer", Some("docs")),
-                ),
-            ],
-            LaneScope::All,
-            None,
-        );
-
-        assert!(output.contains("@planner"));
-        assert!(!output.contains("@planner#main"));
-        assert!(output.contains("@reviewer#docs"));
-    }
-
-    #[test]
-    fn retain_conversation_keeps_human_and_agent_rows() {
-        let mut rows: Vec<_> = [
-            MessageSender::Human,
-            agent_sender("planner", None),
-            MessageSender::System,
-            MessageSender::Harness {
-                notice: rimz::store::message::HarnessNotice::Wait,
-            },
-            MessageSender::Subagent {
-                kind: AgentKind::new_unchecked("codex"),
-                name: "child".to_owned(),
-            },
-        ]
-        .into_iter()
-        .map(|sender| message_row_with_sender("sess-coder", None, "task", sender))
-        .collect();
-        assert_eq!(retain_conversation(&mut rows), 3);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].sender, MessageSender::Human);
-        assert_eq!(rows[1].sender, agent_sender("planner", None));
-    }
-
-    #[test]
-    fn message_digest_reports_hidden_system_rows() {
-        for rows in [Vec::new(), vec![message_row("sess-coder", None, "task")]] {
-            let mut out = Vec::new();
-            render_message_digest(
-                &mut out,
-                rows,
-                &[],
-                &LaneScope::Root,
-                None,
-                0,
-                2,
-                &empty_message_digest(&LaneScope::Root, None),
-            )
-            .unwrap();
-            let output = String::from_utf8(out).unwrap();
-            assert!(output.ends_with("... 2 system messages hidden (--system shows them)\n"));
-        }
-        assert!(
-            !render_digest(Vec::new(), LaneScope::Root, None).contains("system messages hidden")
-        );
-    }
-
-    #[test]
-    fn message_digest_empty_state_describes_scope_and_status() {
-        let all = render_digest(Vec::new(), LaneScope::All, None);
-        assert!(all.contains("no messages"));
-        assert!(!all.contains("shows every channel"));
-
-        let main = render_digest(Vec::new(), LaneScope::Root, None);
-        assert!(main.contains("no messages in #main"));
-        assert!(main.contains("rimz message list --all shows every channel"));
-
-        let named = render_digest(
-            Vec::new(),
-            LaneScope::Named("ops".to_owned()),
-            Some(MessageStatus::Queued),
-        );
-        assert!(named.contains("no queued messages in #ops"));
-        assert!(named.contains("rimz message list --all shows every channel"));
-    }
-
-    #[test]
-    fn collapse_home_in_snippet_handles_mid_text_home_and_no_home() {
-        assert_eq!(
-            collapse_home_in_snippet_to(
-                Some("/home/dev"),
-                "see /home/dev/worktree/plan.md then /tmp"
-            ),
-            "see ~/worktree/plan.md then /tmp"
-        );
-        assert_eq!(
-            collapse_home_in_snippet_to(None, "see /home/dev/worktree"),
-            "see /home/dev/worktree"
-        );
-        assert_eq!(
-            collapse_home_in_snippet_to(Some("/home/dev"), "see /home/development/plan.md"),
-            "see /home/development/plan.md"
-        );
-        assert_eq!(
-            collapse_home_in_snippet_to(Some("/home/dev/"), "see /home/dev/worktree"),
-            "see ~/worktree"
-        );
-        assert_eq!(collapse_home_in_snippet_to(Some("/"), "/tmp"), "/tmp");
-        assert_eq!(collapse_home_in_snippet_to(Some(""), "/tmp"), "/tmp");
-    }
-
-    #[test]
-    fn system_sender_renders_like_rimz_attribution() {
-        assert_eq!(
-            rendered_sender(&MessageSender::System, "rimz"),
-            rendered_sender(&agent_sender("rimz", None), "rimz")
-        );
-    }
-
-    #[test]
-    fn other_lanes_line_counts_only_queued_as_undelivered() {
-        let mut claimed = message_row("sess-a", Some("ops"), "claimed");
-        claimed.status = MessageStatus::Claimed;
-        let queued = message_row("sess-b", Some("ops"), "queued");
-        assert_eq!(
-            other_lanes_line(
-                &[claimed.clone(), queued],
-                &LaneScope::Root,
-                Some("project"),
-                false
-            )
-            .as_deref(),
-            Some(
-                "no messages in #main. 2 in 1 other lane, 1 not yet delivered — rimz message list --all --status queued"
-            )
-        );
-        assert_eq!(
-            other_lanes_line(&[claimed], &LaneScope::Root, Some("project"), false).as_deref(),
-            Some("no messages in #main. 1 in 1 other lane — rimz message list --all")
-        );
-        assert_eq!(
-            other_lanes_line(
-                &[
-                    message_row("legacy", None, "legacy root"),
-                    message_row("current", Some("project"), "current root"),
-                ],
-                &LaneScope::Named("ops".to_owned()),
-                Some("project"),
-                false,
-            )
-            .as_deref(),
-            Some(
-                "no messages in #ops. 2 in 1 other lane, 2 not yet delivered — rimz message list --all --status queued"
-            )
-        );
-    }
-
-    #[test]
-    fn known_channels_line_caps_at_twenty_names() {
-        let known = (0..23)
-            .map(|n| format!("lane-{n:02}"))
-            .collect::<std::collections::BTreeSet<_>>();
-        let line = known_channels_line(&known);
-        assert!(line.starts_with("lane-00, lane-01, "), "{line}");
-        assert!(line.ends_with("lane-19, …and 3 more"), "{line}");
-        assert_eq!(
-            known_channels_line(&std::collections::BTreeSet::new()),
-            "(none)"
-        );
-    }
-
-    fn workspace_id() -> WorkspaceId {
-        WorkspaceId::parse("ws_000000000000000000000000").unwrap()
-    }
-
-    fn render_digest(
-        messages: Vec<MessageListRow>,
-        lane_scope: LaneScope,
-        status: Option<MessageStatus>,
-    ) -> String {
-        let mut out = Vec::new();
-        render_message_digest(
-            &mut out,
-            messages,
-            &[],
-            &lane_scope,
-            Some("project"),
-            0,
-            0,
-            &empty_message_digest(&lane_scope, status),
-        )
-        .unwrap();
-        String::from_utf8(out).unwrap()
-    }
-
-    fn message_row(id: &str, channel: Option<&str>, text: &str) -> MessageListRow {
-        message_row_with_sender(id, channel, text, MessageSender::Human)
-    }
-
-    fn message_row_with_sender(
-        id: &str,
-        channel: Option<&str>,
-        text: &str,
-        sender: MessageSender,
-    ) -> MessageListRow {
-        let message = MessageRecord::new(
-            workspace_id(),
-            &agent(id, AgentStatus::Idle),
-            text.to_owned(),
-            DeliveryGate::Done,
-        )
-        .with_channel(channel.map(ToOwned::to_owned))
-        .with_sender(sender);
-        MessageListRow::from_record(message)
-    }
-
-    fn agent_sender(role: &str, channel: Option<&str>) -> MessageSender {
-        MessageSender::Agent {
-            agent_id: None,
-            kind: AgentKind::new_unchecked("codex"),
-            name: None,
-            profile: None,
-            role: Some(role.to_owned()),
-            channel: channel.map(ToOwned::to_owned),
-        }
-    }
-
-    fn agent(id: &str, status: AgentStatus) -> AgentState {
-        let mut agent = AgentState::stub("claude", id, status);
-        agent.pane = Some(PaneRef::from_id(PaneId::from_parts(
-            MuxName::Zellij,
-            "terminal_3",
-        )));
-        agent.worktree_path = Some("/repo/project".to_owned());
-        agent.worktree_branch = Some("project".to_owned());
-        agent
-    }
-
-    fn now() -> jiff::Timestamp {
-        jiff::Timestamp::UNIX_EPOCH
-    }
-}
+mod tests;

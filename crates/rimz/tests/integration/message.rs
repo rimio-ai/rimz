@@ -1223,6 +1223,77 @@ fn message_list_hides_system_traffic_unless_asked() {
 }
 
 #[test]
+fn message_list_folds_machine_repeats_but_keeps_json_records() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_running_agent(&env, "sess-repeats", "docs", &[]);
+    let human = queue_direct_channel_message(&env, "docs", "human conversation");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let mut machine_ids = Vec::new();
+    for n in 0..3 {
+        let message = MessageRecord::new(
+            env.workspace_id.clone(),
+            &snapshot.agents[0],
+            format!("wake for command {n}"),
+            DeliveryGate::Done,
+        )
+        .with_channel(Some("docs".to_owned()))
+        .with_sender(MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        });
+        env.store().queue_message(&message, "rimz-test").unwrap();
+        machine_ids.push(message.message_id.to_string());
+    }
+    let newest = machine_ids.last().unwrap();
+    for (limit, expected_rows) in [("0", 2), ("1", 1)] {
+        let shown = run_success(
+            env.rimz().args([
+                "message",
+                "list",
+                "--channel",
+                "docs",
+                "--system",
+                "--limit",
+                limit,
+            ]),
+            "folded message list",
+        );
+        let text = String::from_utf8_lossy(&shown.stdout);
+        assert_eq!(text.matches(" → ").count(), expected_rows, "{text}");
+        assert!(text.contains("queued ×3"), "{text}");
+        assert!(text.contains(newest), "{text}");
+        assert!(text.contains("wake for command 2"), "{text}");
+        assert!(!text.contains(&machine_ids[0]), "{text}");
+        if limit == "1" {
+            assert!(text.contains("... 1 older messages hidden"), "{text}");
+            assert!(!text.contains(&human), "{text}");
+        } else {
+            assert!(text.contains(&human), "{text}");
+        }
+    }
+    let all = list_message_ids(
+        &env,
+        &["message", "list", "--system", "--limit", "0", "--json"],
+        Some("docs"),
+    );
+    let expected = machine_ids
+        .iter()
+        .rev()
+        .cloned()
+        .chain([human])
+        .collect::<Vec<_>>();
+    assert_eq!(all, expected);
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--system", "--limit", "1", "--json"],
+            Some("docs"),
+        ),
+        vec![newest.clone()]
+    );
+}
+
+#[test]
 fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
     let env = Env::new();
     env.record(&env.project_root);

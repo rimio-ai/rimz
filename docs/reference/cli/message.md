@@ -249,8 +249,8 @@ Bare `rimz message` is `rimz message list` for the current lane. A shell at the 
 | `--channel <NAME>` | One known lane. `main`, the project's directory name, and the root path always select the root lane, with or without a target. An unknown explicit channel, including an inline lane, exits 1 and lists up to 20 known channels. Message history, live agents, and owned worktrees supply the names. The ambient lane is not checked. |
 | `--status <STATUS>` | Exactly one status. Also accepts `pending`, `cancelled`, and `removed`. Selecting `archived` shows archived messages. |
 | `--system` | Include system traffic: waits, signals, subagent digests, stage notices, automatic compaction commands, and `--no-from` text. |
-| `--limit <N>` | At most N rows, newest first. Default 200; `0` shows all. |
-| `--json` | Emit the rows as a JSON array. |
+| `--limit <N>` | At most N rows in human output, a folded repeat counting as one row, or N messages with `--json`, newest first. Default 200; `0` shows all. |
+| `--json` | Emit one entry per message as a JSON array, without folding repeats. |
 
 The list shows conversation by default: sends from you and from agents. Archived messages are hidden unless `--all` or `--status archived` asks for them. Each row is two lines, the header then the text clipped to the terminal width with `$HOME` shown as `~`:
 
@@ -258,6 +258,15 @@ The list shows conversation by default: sends from you and from agents. Archived
 user → @coder  queued  3m ago  msg_…
   Read plan.md when the planner finishes. · after @planner
 ```
+
+Conversation never folds. With `--system`, adjacent machine messages within each channel fold when their sender (including notice kind), recipient, body kind (`prompt` or `command`), and status agree. Text and reasons do not split a run, so a folded row quotes only the newest message. Its header keeps that message's id and age, with `×N` after the status. When the folded messages span at least one second, the text line starts with the enqueue span; a burst inside one second keeps `×N` without a span:
+
+```text
+@rimz → @coder  delivered ×6  18m ago  msg_…
+  over 14m · newest wake notice
+```
+
+The limit keeps whole folded rows. Use `show <id>` to inspect an individual message, or `--json` for every record. Unmet-condition markers and the fold span stay whole when the text is clipped, provided they fit the terminal width.
 
 An unfiltered empty lane reports counts from other lanes, not their rows. These counts exclude archived messages and, unless `--system` is passed, system traffic. Only queued messages count as not yet delivered, so the number matches what `--status queued` lists. The hint offers `rimz message list --all --status queued` when any are undelivered, otherwise `rimz message list --all`. A target or status filter keeps the scoped empty-state line, and JSON stays an array of the selected lane's rows. A row whose text is no longer retained and has no reason or condition shows `(text no longer kept)`. An invalid status lists all accepted status names.
 
@@ -267,7 +276,7 @@ Trailing lines report what the view left out:
 
 | Line | When |
 | --- | --- |
-| `... N older messages hidden (--limit 0 for all)` | The limit cut rows. |
+| `... N older messages hidden (--limit 0 for all)` | N messages fall beyond the shown rows, counting every member of each hidden fold. |
 | `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
 | `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in #main` at the project root, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
