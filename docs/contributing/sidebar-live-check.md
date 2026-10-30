@@ -143,12 +143,24 @@ ps -eo pid,ppid,rss,args | grep -E 'rimz sidebar (host|serve)' | grep -v grep
 
 Expect one `sidebar host` line and one `sidebar serve` line per tab, never a child `serve` painter. The host's parent is the `sidebar serve` supervisor that started it, and once that supervisor exits the host is reparented; it runs in its own session either way, so no pane's job control reaches it.
 
-The host's fetch worker folds for the whole room. About once a minute it appends a `fetch_reduction_stats` record to the room's `audit/diag.log.jsonl`, and `cycles` over `interval_ms` is the room's fold rate: about one a second when idle, whatever the number of tabs. Set `ROOT` and `SESSION` from the room card:
+The host's fetch worker folds for the whole room. About once a minute it appends a `fetch_cycle_stats` record to the room's `audit/diag.log.jsonl`. In a quiet room with the default tick, expect about 60 cycles/min while any sidebar is watched and 12 while none is watched, regardless of tab count. Requests and notification/reminder dues add cycles by design.
+
+For a before/after proof, hold a tmux room on the base build, then on the changed build, using the fixed-build layout above so a rebuild cannot replace the running bytes. Start each with `CARGO_TARGET_DIR="$P" "$P/xtask" sandbox room --mux tmux --for 30m`. In each room, attach using its card, let startup settle, and collect at least two complete watched windows. Detach every viewing client and collect at least two complete viewerless windows. Exclude the window crossing each attach/detach boundary. Only compare quiescent windows; use the request/deadline counts to explain any excess.
+
+Set `ROOT` and `SESSION` from the room card. This reader accepts `fetch_cycle_stats` and the `fetch_reduction_stats` tag older builds wrote. Report every rate as `60000 * cycles / interval_ms`, with the trigger split and `unwatched_cycles` where the record carries them:
 
 ```sh
-jq -c 'select(.event.kind == "fetch_reduction_stats") | .event | {cycles, interval_ms}' \
+jq -c '
+  select(.event.kind == "fetch_cycle_stats" or .event.kind == "fetch_reduction_stats") |
+  .event | {kind, cycles, interval_ms, cycles_per_minute: (60000 * .cycles / .interval_ms)} +
+  (if .kind == "fetch_cycle_stats" then
+    {backstop_cycles, deadline_cycles, normal_request_cycles,
+     fresh_panes_request_cycles, hard_refresh_request_cycles, unwatched_cycles}
+   else {} end)' \
   "$ROOT/home/.rimz/ws/$SESSION/audit/diag.log.jsonl"
 ```
+
+In a `fetch_cycle_stats` window, the five trigger counts sum to `cycles`, and a viewerless window has `unwatched_cycles == cycles`. Before detaching, scroll and expand cards and note their order. Reveal a hidden tab and re-attach at the same terminal size: the first retained paint preserves that view state, and fresh data should arrive within about a second. Run both checks on each build, not only the rate reader.
 
 To count what the host reads, such as its `/proc` opens per pass, trace it with `strace`. Yama's default `ptrace_scope` of 1 refuses `strace -p` on the host, which is not your descendant, so start the room under `strace -f` instead:
 
