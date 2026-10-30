@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentCardRef, AgentStatus};
+use crate::agents::{AgentCardRef, AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::message::{
@@ -630,6 +630,32 @@ impl Store {
             queue.stage_event(event);
             Ok(())
         })
+    }
+
+    /// Carry the queued FIFO across a provider's explicit compaction edge under
+    /// the lifecycle writer's existing workspace lock.
+    pub(super) fn rebind_queued_messages(
+        &self,
+        txn: &mut Txn<'_>,
+        predecessor: &AgentState,
+        successor: &AgentSessionId,
+        session_name: &str,
+    ) -> Result<()> {
+        let mut queue = QueueTxn::new(txn)?;
+        let now = Timestamp::now();
+        queue.apply_all(session_name, now, |message| {
+            if message.status != MessageStatus::Queued || !message.same_agent_card(predecessor) {
+                return MessageUpdate::Keep;
+            }
+            message.agent_id = successor.clone();
+            message.agent_name = None;
+            message.updated_at = now;
+            MessageUpdate::Rewrite {
+                method: MessageEventMethod::Edited,
+                reason: Some("compaction continuation changed session".to_owned()),
+            }
+        });
+        queue.finish(self)
     }
 
     /// Queue a resume follow-up and return its stored record and attempt outcome; a live card returns `None` without writing.
