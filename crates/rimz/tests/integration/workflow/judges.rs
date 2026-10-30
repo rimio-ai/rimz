@@ -27,6 +27,55 @@ pub(super) fn capacity(env: &Env, used: u8) -> jiff::Timestamp {
 
 use std::collections::BTreeMap;
 
+fn failed_judge(body: &str) -> Value {
+    let (env, _) = fixture(
+        &format!("{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"),
+        "",
+    );
+    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
+    let bin = env.home_root.join("judge-bin");
+    let envelope = r#"{"structured_output":{"outcome":"done"}}"#;
+    write_path_shim(
+        &bin,
+        "claude",
+        &format!(
+            "if [ \"$1\" = --version ]; then echo 'claude 9.0.0'; exit 0; fi\n\
+             printf '%s\\n' '{envelope}'\n{body}\n",
+        ),
+    );
+    let receipt = success(
+        env.rimz()
+            .args(["workflow", "run", "review"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&bin))
+            .output()
+            .unwrap(),
+    );
+    settled(&env, receipt.lines().next().unwrap(), "parked")
+}
+
+#[test]
+fn judge_exit_names_the_code_without_an_exit_status_label() {
+    let value = failed_judge("exit 7");
+    assert_eq!(value["record"]["park"]["text"], "judge exited 7");
+    assert!(
+        events(&value, "evaluation")
+            .iter()
+            .all(|row| row["object"]["reason"] == "judge exited 7")
+    );
+}
+
+#[test]
+fn judge_signal_names_the_signal() {
+    let value = failed_judge("kill -KILL \"$$\"");
+    assert_eq!(value["record"]["park"]["text"], "judge killed by SIGKILL");
+    assert!(
+        events(&value, "evaluation")
+            .iter()
+            .all(|row| row["object"]["reason"] == "judge killed by SIGKILL")
+    );
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn scoped_judge_guard_restores_and_records_replacements() {

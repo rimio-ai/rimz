@@ -698,6 +698,39 @@ fn invalid_defaults_park_and_deleted_script_is_invalid() {
     );
 }
 
+fn failed_script(body: &str) -> Value {
+    let (env, dir) = fixture(
+        &format!("{HEADER}[checks.pr]\nrun = 'sh checks/broken.sh'\non.ok = '@done'\n"),
+        body,
+    );
+    fs::rename(dir.join("checks/pr.sh"), dir.join("checks/broken.sh")).unwrap();
+    let id = start(&env);
+    settled(&env, &id, "parked")
+}
+
+#[test]
+fn invalid_script_exit_names_its_definition_path_and_code() {
+    let value = failed_script("exit 7\n");
+    assert_eq!(value["record"]["park"]["text"], "checks/broken.sh exited 7");
+    assert_eq!(
+        events(&value, "evaluation")[0]["object"]["reason"],
+        "checks/broken.sh exited 7"
+    );
+}
+
+#[test]
+fn invalid_script_signal_names_the_signal() {
+    let value = failed_script("kill -TERM \"$$\"\n");
+    assert_eq!(
+        value["record"]["park"]["text"],
+        "checks/broken.sh killed by SIGTERM"
+    );
+    assert_eq!(
+        events(&value, "evaluation")[0]["object"]["reason"],
+        "checks/broken.sh killed by SIGTERM"
+    );
+}
+
 fn steps_spec(cap: &str) -> String {
     format!(
         "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non = {{ work = 'build', done = '@done' }}\n[steps.build]\nagent = 'claude'\nprompt-file = 'prompt.md'\nthen = 'pr'\nmax-visits = 1\n{cap}\n"

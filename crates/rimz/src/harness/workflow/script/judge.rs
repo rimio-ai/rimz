@@ -142,10 +142,9 @@ fn run(
             return Err(error.text.clone());
         }
         if !output.status.success() {
-            return Err(response.error.map_or_else(
-                || format!("judge exited {}", output.status),
-                |error| error.text,
-            ));
+            return Err(response
+                .error
+                .map_or_else(|| exit_failure("judge", output.status), |error| error.text));
         }
         result.object = object(response.verdict, &headless.verdict_file)
             .map_err(|reason| response.error.map_or(reason, |error| error.text));
