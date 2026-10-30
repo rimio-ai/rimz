@@ -157,8 +157,8 @@ impl WidthControl {
         if self.is_fullscreen_held() {
             return;
         }
+        // An issued resize still needs its feedback, even across a re-arm.
         self.steps_issued = 0;
-        self.in_flight = None;
         self.retried_no_progress = false;
         self.no_progress_cycles = 0;
         self.reverse_max_distance = None;
@@ -378,6 +378,7 @@ pub(super) struct WidthController {
     current_view_cols: Option<u16>,
     last_siblings: Option<usize>,
     siblings_stable_since_ms: Option<u64>,
+    /// Latest roster or topology observation, guarding resize classification.
     structural_at_ms: Option<u64>,
     fullscreen_observed_at_ms: Option<u64>,
     idle_retry_deadline: Option<Instant>,
@@ -385,6 +386,12 @@ pub(super) struct WidthController {
     classification_deadline: Option<Instant>,
     classification_resize_at_ms: Option<u64>,
     key_burst: Option<WidthKeyBurst>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StructuralChange {
+    Roster,
+    Topology,
 }
 
 impl WidthController {
@@ -649,6 +656,7 @@ impl WidthController {
 
     pub(super) fn note_structural(
         &mut self,
+        change: StructuralChange,
         at_ms: u64,
         measured_cols: Option<u16>,
         diag: &DiagSink,
@@ -657,6 +665,9 @@ impl WidthController {
             self.structural_at_ms
                 .map_or(at_ms, |previous| previous.max(at_ms)),
         );
+        if change == StructuralChange::Topology && self.baseline_probe_deadline.is_none() {
+            return true;
+        }
         if self.refresh_target(Some(at_ms), true).is_none() {
             if self.pane.is_some() {
                 self.baseline_probe_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
@@ -666,8 +677,11 @@ impl WidthController {
         self.baseline_probe_deadline = None;
         if let Some(cols) = measured_cols
             && self.convergence.needs_adjustment(cols)
+            && (change == StructuralChange::Roster || self.classification_deadline.is_none())
         {
-            self.convergence.rearm();
+            if change == StructuralChange::Roster {
+                self.convergence.rearm();
+            }
             self.observe(cols, SidebarWidthControlTrigger::Structural, diag);
         }
         true
@@ -723,6 +737,7 @@ impl WidthController {
             }
             if previous.is_some_and(|previous| previous != siblings)
                 && !self.note_structural(
+                    StructuralChange::Roster,
                     panes_observed_at_ms.unwrap_or_else(crate::utils::time::unix_now_ms),
                     measured_cols,
                     diag,
@@ -981,9 +996,9 @@ impl WidthController {
             )
     }
 
-    /// Re-derive the target from a proven viewport. `floor` is the event this
-    /// decision reacts to: an older topology observation cannot describe the
-    /// geometry that event produced. A failed proof leaves the target untouched.
+    /// Re-derive the target from a proven viewport. `floor` is the observation
+    /// this decision reacts to: an older topology cannot prove its geometry.
+    /// A failed proof leaves the target untouched.
     fn refresh_target(
         &mut self,
         floor: Option<u64>,

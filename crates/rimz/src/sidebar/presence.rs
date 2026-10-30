@@ -80,7 +80,10 @@ pub struct ZellijWake {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZellijWakeOutcome {
     RejectedStaleWriter,
-    Accepted(Vec<SidebarEvent>),
+    Accepted {
+        events: Vec<SidebarEvent>,
+        panes_observed_at_ms: Option<u64>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -221,6 +224,7 @@ pub fn ingest_zellij_wake(
             clients: wake.focus_clients.clone(),
         });
     }
+    let panes_observed_at_ms = accepted_topology.as_ref().map(|cache| cache.produced_at_ms);
     if wake.reason == ZellijWakeReason::SwitchSettled
         && let (Some(active_tab), Some(generation), Some(session_name)) = (
             wake.active_tab,
@@ -237,7 +241,10 @@ pub fn ingest_zellij_wake(
             transitions.push(transition);
         }
     }
-    Ok(ZellijWakeOutcome::Accepted(project_presence(transitions)))
+    Ok(ZellijWakeOutcome::Accepted {
+        events: project_presence(transitions),
+        panes_observed_at_ms,
+    })
 }
 
 fn derive_work_boundary_moves(

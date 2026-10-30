@@ -73,7 +73,7 @@ use super::timing::{
     next_frame_after, self_close_interval, tick_for,
 };
 use super::view_state::{FocusMarker, FocusRollback, ReadContext, SelectionFold, ViewContext};
-use super::width_control::WidthController;
+use super::width_control::{StructuralChange, WidthController};
 use super::{Result, ServeConfig};
 #[cfg(test)]
 use crate::mux::focus_anchor::FocusActionError;
@@ -1133,16 +1133,22 @@ impl LoopState {
     ) {
         let sent_at_ms = envelope.sent_at_ms;
         let fold = self.event_needs_fold(&envelope.event);
-        if matches!(
-            &envelope.event,
-            SidebarEvent::PaneClosed { .. }
-                | SidebarEvent::PaneOpened { .. }
-                | SidebarEvent::PanesChanged
-        ) {
+        let structural = match &envelope.event {
+            SidebarEvent::PaneClosed { .. } | SidebarEvent::PaneOpened { .. } => {
+                Some(StructuralChange::Roster)
+            }
+            SidebarEvent::PanesChanged => Some(StructuralChange::Topology),
+            _ => None,
+        };
+        if let Some(change) = structural {
+            let observed_at_ms = envelope.panes_observed_at_ms.unwrap_or(sent_at_ms);
             let measured = terminal.size().ok().map(|size| size.width);
-            self.pane
-                .width_control
-                .note_structural(sent_at_ms, measured, &self.pane.diag);
+            self.pane.width_control.note_structural(
+                change,
+                observed_at_ms,
+                measured,
+                &self.pane.diag,
+            );
         }
         match envelope.event {
             SidebarEvent::WidthTargetChanged => {

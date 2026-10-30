@@ -468,6 +468,7 @@ fn wake_panes_changed_broadcasts_topology_nudge_and_stamps() {
         let event = recv_sidebar_event(&recv, name);
         assert_sidebar_envelope(&event, &env.workspace_id, None);
         assert_eq!(event["event"]["kind"], "panes_changed");
+        assert!(event.get("panes_observed_at_ms").is_none());
     }
 
     let stamp = env.read_stamp().expect("panes-changed writes the stamp");
@@ -524,6 +525,7 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
     assert_eq!(event["event"]["kind"], "pane_opened");
     assert_eq!(event["event"]["pane_id"], "zellij:terminal_9");
     assert_eq!(event["event"]["command"], "zsh");
+    assert_eq!(event["panes_observed_at_ms"], opened.produced_at_ms);
 
     let mut closed = opened;
     closed.produced_at_ms += 1;
@@ -546,6 +548,28 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
     assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
     assert_eq!(event["event"]["kind"], "pane_closed");
     assert_eq!(event["event"]["pane_id"], "zellij:terminal_9");
+    assert_eq!(event["panes_observed_at_ms"], closed.produced_at_ms);
+
+    closed.produced_at_ms += 1;
+    let unchanged_json = serde_json::to_string(&closed).unwrap();
+    assert!(
+        env.wake_with(
+            "panes-changed",
+            true,
+            &[
+                "--session-name",
+                SESSION_NAME,
+                "--topology",
+                &unchanged_json
+            ],
+        )
+        .status
+        .success()
+    );
+    let event = recv_sidebar_event(&recv_eldest, "eldest");
+    assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+    assert_eq!(event["event"]["kind"], "panes_changed");
+    assert_eq!(event["panes_observed_at_ms"], closed.produced_at_ms);
     env.assert_no_mux_fork();
 }
 

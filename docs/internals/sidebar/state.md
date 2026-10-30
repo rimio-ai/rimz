@@ -532,7 +532,7 @@ Heartbeats are bounded by TTL while the session lives and by purge at rebirth: a
 
 ## Realtime events
 
-Wakeup datagrams carry `SidebarEventEnvelope` ([`wakeup/events.rs`](../../../crates/rimz/src/wakeup/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event.
+Wakeup datagrams carry `SidebarEventEnvelope` ([`wakeup/events.rs`](../../../crates/rimz/src/wakeup/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, an optional pane-observation timestamp, and the typed event. A `rimz sidebar wake` that accepted a Zellij topology puts that topology's `produced_at_ms` in `panes_observed_at_ms` on every event in the batch. Topology-less and stale wakes, tmux, and other senders omit it. Structural width decisions use that observation as their proof floor, falling back to `sent_at_ms`. Focus repair, focus ordering, and overlay supersession still use send time.
 
 `session_name` is the scope. `Some` targets the one mux session whose pane ids the event names. `None` reaches every room host of the workspace, which is how store deltas and reloads travel. The host drops an event for another workspace or session once. Reload words and envelopes reach the host inbox directly. The plane records every other envelope once, then fans it out to subscribers' bounded wake channels for pane-local reactions and producer verification. The host's tmux watch and body-filter saves use the same in-memory ingress without a datagram.
 
@@ -553,7 +553,7 @@ A pane keeps its baseline only while a fold applies an overlay or focus intent, 
 | `CommandChanged` | `pane_id`, `command` | Overlay the command until a pull verifies the pane's row shape. | Host presence projector |
 | `FocusChanged` | `focused` and `unfocused` pane id lists | Set `SidebarSnapshot::focused_pane` to the current pane and mark it viewed. A transition naming only the prior pane clears the register. | Host presence projector, from client-derived Zellij focus or tmux pane and view focus |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull. Admits no card on its own. | Host presence projector |
-| `PanesChanged` | none | Nudge a producer pull: topology moved, identity unknown. | Projector fallback, or an incomplete tmux layout |
+| `PanesChanged` | none | Nudge a producer pull: topology moved, identity unknown. Mark structural evidence and prove a pending width baseline, without re-arming convergence. | Projector fallback, or an incomplete tmux layout |
 | `StoreDelta` | optional event method and lifecycle signal | Refetch the rollup. A session start or end also requests fresh panes. | Store and context-sidecar writers ([store.md → wakeups](../store.md#wakeups)) |
 | `FocusIntent` | target `pane_id`, nonce | Fold the durable focus anchor at once, unless the same nonce was already folded through the host push. | Renderer jumps |
 | `FocusStranded` | owning sidebar `pane_id`, generation, client views | Focus repair in the matching renderer (see below). Other renderers ignore it. | Host presence projector, from a settled Zellij switch or a tmux window switch |
@@ -583,8 +583,9 @@ Neither backend constructs a `SidebarEvent`. Both normalize what they see into p
 | The layout cannot be read whole | `PanesChanged` | tmux only: a window holding a floating pane, or a layout line that fails to parse. |
 | Topology moved but no typed event resulted | `PanesChanged` | The projector's fallback, from either backend. |
 | A divider drag resizes panes, roster unchanged | `PanesChanged` on Zellij, nothing on tmux | The Zellij plugin hashes pane position and column count, so a drag republishes an announced manifest with no roster, command, or focus diff. The tmux subscription carries no geometry. |
+| RimZ's own width nudge resizes panes, roster unchanged | `PanesChanged` on Zellij, nothing on tmux | The resize republishes the same no-diff manifest as a divider drag. |
 
-The last row has a consequence: a renderer that reads `PanesChanged` as structural evidence reads a Zellij divider drag as structure moving.
+The divider-drag row has a consequence: a renderer that reads `PanesChanged` as structural evidence reads a Zellij divider drag as structure moving. Width control still latches that marker, so Zellij drags still snap back rather than pinning the room share. A nudge's echo carries the same event, so `PanesChanged` never re-arms convergence or interrupts an armed drag classification; it proves geometry only while the baseline proof is pending.
 
 Each observation also carries event eligibility by pane role, which keeps each backend's established stream:
 

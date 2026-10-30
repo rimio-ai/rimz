@@ -1192,17 +1192,32 @@ fn wake(globals: &GlobalFlags, workspace_id: Option<String>, wake: ZellijWake) -
         ZellijWakeOutcome::RejectedStaleWriter => {
             std::process::exit(rimz::sidebar::presence::STALE_WRITER_EXIT_CODE)
         }
-        ZellijWakeOutcome::Accepted(events) => {
+        ZellijWakeOutcome::Accepted {
+            events,
+            panes_observed_at_ms,
+        } => {
             for event in events {
-                broadcast_wake_event(&runtime, wake.session_name.as_deref(), event);
+                broadcast_wake_event(
+                    &runtime,
+                    wake.session_name.as_deref(),
+                    event,
+                    panes_observed_at_ms,
+                );
             }
         }
     }
     Ok(())
 }
 
-fn broadcast_wake_event(runtime: &RuntimePaths, session_name: Option<&str>, event: SidebarEvent) {
-    if let Err(err) = rimz::wakeup::broadcast(runtime, session_name, event) {
+fn broadcast_wake_event(
+    runtime: &RuntimePaths,
+    session_name: Option<&str>,
+    event: SidebarEvent,
+    panes_observed_at_ms: Option<u64>,
+) {
+    if let Err(err) =
+        rimz::wakeup::broadcast_with_observation(runtime, session_name, event, panes_observed_at_ms)
+    {
         tracing::debug!(error = %err, "presence poke: event datagram failed");
     }
 }

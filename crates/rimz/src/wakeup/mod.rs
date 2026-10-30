@@ -79,17 +79,31 @@ pub fn broadcast(
     session_name: Option<&str>,
     event: SidebarEvent,
 ) -> std::result::Result<usize, WakeupErr> {
+    broadcast_with_observation(rt, session_name, event, None)
+}
+
+/// Broadcast an event with the observation stamp of its accepted topology.
+/// Send time remains the sender's current wall clock, independent of the
+/// optional structural-width proof floor.
+pub fn broadcast_with_observation(
+    rt: &RuntimePaths,
+    session_name: Option<&str>,
+    event: SidebarEvent,
+    panes_observed_at_ms: Option<u64>,
+) -> std::result::Result<usize, WakeupErr> {
     let sidebars = collect_fresh_sidebars(rt)?;
     let signaled = sidebars.len();
     let Some(sender) = sender_socket() else {
         return Ok(signaled);
     };
-    let payload = serde_json::to_vec(&SidebarEventEnvelope::new(
+    let mut envelope = SidebarEventEnvelope::new(
         rt.workspace_id.clone(),
         session_name.map(str::to_owned),
         crate::utils::time::unix_now_ms(),
         event,
-    ))?;
+    );
+    envelope.panes_observed_at_ms = panes_observed_at_ms;
+    let payload = serde_json::to_vec(&envelope)?;
     send_datagrams_with(
         &sender,
         &payload,

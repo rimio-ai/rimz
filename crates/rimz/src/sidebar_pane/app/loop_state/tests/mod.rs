@@ -493,6 +493,243 @@ fn settle_width(rig: &mut Rig) {
     );
 }
 
+fn zellij_width_rig(observed_at_ms: u64) -> Rig {
+    let mut rig = Rig::with_own_pane(PaneId::from_parts(MuxName::Zellij, "terminal_1"));
+    rig.terminal = Terminal::new(PaneBackend::captured(80, 24)).unwrap();
+    rig.runtime.ensure_dirs().unwrap();
+    write_zellij_width_topology(&rig, 80, 200, observed_at_ms);
+    rig.state.pane.diag = crate::diag::DiagSink::under(
+        rig._dir.path().to_path_buf(),
+        rig.ws.clone(),
+        "rimz-test",
+        None,
+    );
+    rig.state.pane.width_control = WidthController::new(
+        rig.runtime.clone(),
+        "rimz-test".to_owned(),
+        Some(rig.state.pane.config.own_pane.clone()),
+        MuxName::Zellij,
+        crate::mux::SidebarWidth::default(),
+    );
+    rig
+}
+
+fn write_zellij_width_topology(rig: &Rig, own_cols: u16, view_cols: u16, observed_at_ms: u64) {
+    let topology = serde_json::from_value(serde_json::json!({
+        "session_name": "rimz-test",
+        "produced_at_ms": observed_at_ms,
+        "panes": [
+            {"id": 1, "tab_position": 0, "tab_viewed": true,
+             "pane_x": 0, "pane_columns": own_cols, "title": "rimz-sidebar"},
+            {"id": 2, "tab_position": 0, "tab_viewed": true,
+             "pane_x": own_cols, "pane_columns": view_cols - own_cols, "title": "work"}
+        ]
+    }))
+    .unwrap();
+    crate::mux::zellij::pane_topology::write_pane_topology_cache(&rig.runtime, &topology).unwrap();
+}
+
+fn width_event(rig: &Rig, event: SidebarEvent, observed_at_ms: u64) -> SidebarEventEnvelope {
+    let mut envelope = SidebarEventEnvelope::new(
+        rig.ws.clone(),
+        Some("rimz-test".to_owned()),
+        observed_at_ms + 20,
+        event,
+    );
+    envelope.panes_observed_at_ms = Some(observed_at_ms);
+    envelope
+}
+
+fn zellij_burst_rig(observed_at_ms: u64) -> Rig {
+    let mut rig = zellij_width_rig(observed_at_ms);
+    rig.terminal = Terminal::new(PaneBackend::captured(74, 24)).unwrap();
+    write_zellij_width_topology(&rig, 75, 300, observed_at_ms);
+    rig.state.pane.width_control = WidthController::new(
+        rig.runtime.clone(),
+        "rimz-test".to_owned(),
+        Some(rig.state.pane.config.own_pane.clone()),
+        MuxName::Zellij,
+        crate::mux::SidebarWidth {
+            max_cols: std::num::NonZeroU16::new(64).unwrap(),
+            ..crate::mux::SidebarWidth::default()
+        },
+    );
+    rig
+}
+
+fn width_nudge_triggers(rig: &Rig) -> Vec<crate::diag::record::SidebarWidthControlTrigger> {
+    std::fs::read_to_string(rig.state.pane.diag.log_path().unwrap())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let record: crate::diag::record::DiagEnvelope = serde_json::from_str(line).unwrap();
+            match record.event {
+                crate::diag::record::DiagEvent::SidebarWidthNudge { trigger, .. } => Some(trigger),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn roster_event_batch_keeps_one_step_until_feedback() {
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    let mut rig = zellij_burst_rig(observed_at_ms);
+    for event in [
+        SidebarEvent::PaneClosed {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+        },
+        SidebarEvent::PaneClosed {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_4"),
+        },
+        SidebarEvent::PaneOpened {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+            command: None,
+        },
+    ] {
+        let envelope = width_event(&rig, event, observed_at_ms);
+        rig.state.on_event(&mut rig.terminal, envelope);
+    }
+    assert_eq!(width_nudge_triggers(&rig).len(), 1);
+
+    crate::mux::width_target::pin(
+        &rig.runtime,
+        crate::mux::SidebarWidth::default(),
+        std::num::NonZeroU16::new(48).unwrap(),
+        300,
+    )
+    .unwrap();
+    let envelope = width_event(&rig, SidebarEvent::WidthTargetChanged, observed_at_ms);
+    rig.state.on_event(&mut rig.terminal, envelope);
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 48);
+    assert_eq!(width_nudge_triggers(&rig).len(), 1);
+
+    rig.state.pane.width_control.observe(
+        59,
+        crate::diag::record::SidebarWidthControlTrigger::ResizeFeedback,
+        &rig.state.pane.diag,
+    );
+    rig.state.pane.width_control.observe(
+        44,
+        crate::diag::record::SidebarWidthControlTrigger::ResizeFeedback,
+        &rig.state.pane.diag,
+    );
+    assert_eq!(
+        width_nudge_triggers(&rig),
+        vec![
+            crate::diag::record::SidebarWidthControlTrigger::Structural,
+            crate::diag::record::SidebarWidthControlTrigger::ResizeFeedback,
+        ],
+    );
+    assert!(rig.state.pane.width_control.feedback_deadline().is_none());
+}
+
+#[test]
+fn roster_event_and_sibling_backstop_share_the_pending_step() {
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    let mut rig = zellij_burst_rig(observed_at_ms);
+    rig.state
+        .pane
+        .width_control
+        .backstop(None, Some(0), None, &rig.state.pane.diag);
+    let envelope = width_event(
+        &rig,
+        SidebarEvent::PaneOpened {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+            command: None,
+        },
+        observed_at_ms,
+    );
+    rig.state.on_event(&mut rig.terminal, envelope);
+    let feedback_deadline = rig.state.pane.width_control.feedback_deadline();
+
+    rig.state.pane.width_control.backstop(
+        Some(74),
+        Some(1),
+        Some(observed_at_ms),
+        &rig.state.pane.diag,
+    );
+
+    assert_eq!(width_nudge_triggers(&rig).len(), 1);
+    assert_eq!(
+        rig.state.pane.width_control.feedback_deadline(),
+        feedback_deadline
+    );
+    rig.state.pane.width_control.observe(
+        59,
+        crate::diag::record::SidebarWidthControlTrigger::ResizeFeedback,
+        &rig.state.pane.diag,
+    );
+    assert_eq!(width_nudge_triggers(&rig).len(), 1);
+    assert!(rig.state.pane.width_control.feedback_deadline().is_none());
+}
+
+#[test]
+fn stamped_roster_events_converge_against_their_own_topology() {
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    for event in [
+        SidebarEvent::PaneOpened {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+            command: None,
+        },
+        SidebarEvent::PaneClosed {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+        },
+    ] {
+        let mut rig = zellij_width_rig(observed_at_ms);
+        let envelope = width_event(&rig, event, observed_at_ms);
+        rig.state.on_event(&mut rig.terminal, envelope);
+
+        assert_eq!(rig.state.pane.width_control.max_legit_cols(), 50);
+        assert_eq!(
+            width_nudge_triggers(&rig),
+            vec![crate::diag::record::SidebarWidthControlTrigger::Structural],
+        );
+        assert!(rig.state.pane.width_control.feedback_deadline().is_some());
+    }
+}
+
+#[test]
+fn unstamped_roster_event_still_waits_for_post_send_topology() {
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    let mut rig = zellij_width_rig(observed_at_ms);
+    let mut envelope = width_event(
+        &rig,
+        SidebarEvent::PaneOpened {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+            command: None,
+        },
+        observed_at_ms,
+    );
+    envelope.panes_observed_at_ms = None;
+    rig.state.on_event(&mut rig.terminal, envelope);
+
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 72);
+    assert!(width_nudge_triggers(&rig).is_empty());
+    assert!(rig.state.pane.width_control.feedback_deadline().is_some());
+}
+
+#[test]
+fn stamped_roster_event_can_prove_topology_from_before_renderer_start() {
+    let observed_at_ms = crate::utils::time::unix_now_ms() - 1;
+    let mut rig = zellij_width_rig(observed_at_ms);
+    let envelope = width_event(
+        &rig,
+        SidebarEvent::PaneOpened {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+            command: None,
+        },
+        observed_at_ms,
+    );
+    rig.state.on_event(&mut rig.terminal, envelope);
+
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 50);
+    assert_eq!(
+        width_nudge_triggers(&rig),
+        vec![crate::diag::record::SidebarWidthControlTrigger::Structural],
+    );
+}
+
 fn own_view() -> crate::store::snapshot::SidebarOwnView {
     crate::store::snapshot::SidebarOwnView {
         sibling_count: 1,

@@ -94,6 +94,10 @@ fn wake(reason: ZellijWakeReason) -> ZellijWake {
     }
 }
 
+fn observed_at_ms(wake: &ZellijWake) -> Option<u64> {
+    wake.topology.as_ref().map(|cache| cache.produced_at_ms)
+}
+
 fn zellij_pane(raw: &str) -> PaneId {
     PaneId::from_parts(MuxName::Zellij, raw)
 }
@@ -150,10 +154,13 @@ fn clientless_roster_wake_emits_no_focus_transition_or_cached_sample() {
 
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
-        ZellijWakeOutcome::Accepted(vec![SidebarEvent::PaneOpened {
-            pane_id: zellij_pane("terminal_3"),
-            command: None,
-        }]),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::PaneOpened {
+                pane_id: zellij_pane("terminal_3"),
+                command: None,
+            }],
+            panes_observed_at_ms: observed_at_ms(&announced),
+        },
     );
     let cached = read_pane_topology_cache(&runtime, "rimz-test").unwrap();
     assert_eq!(cached.clients, None);
@@ -178,7 +185,10 @@ fn observed_same_focus_after_clientless_roster_emits_no_focus_transition() {
 
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
-        ZellijWakeOutcome::Accepted(vec![SidebarEvent::PanesChanged]),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::PanesChanged],
+            panes_observed_at_ms: observed_at_ms(&announced),
+        },
     );
     assert_eq!(
         std::fs::read(focus_observation_path(&runtime)).unwrap(),
@@ -196,7 +206,10 @@ fn clientless_first_wakes_and_writer_change_do_not_restore_foreign_focus() {
     for _ in 0..2 {
         assert_eq!(
             ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
-            ZellijWakeOutcome::Accepted(vec![SidebarEvent::PanesChanged]),
+            ZellijWakeOutcome::Accepted {
+                events: vec![SidebarEvent::PanesChanged],
+                panes_observed_at_ms: observed_at_ms(&announced),
+            },
         );
     }
     let mut announced = clientless_roster_wake(&state, &runtime);
@@ -206,10 +219,13 @@ fn clientless_first_wakes_and_writer_change_do_not_restore_foreign_focus() {
     announced.topology.as_mut().unwrap().clients = focus_topology().clients;
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
-        ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusChanged {
-            focused: vec![zellij_pane("terminal_1")],
-            unfocused: Vec::new(),
-        }]),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::FocusChanged {
+                focused: vec![zellij_pane("terminal_1")],
+                unfocused: Vec::new(),
+            }],
+            panes_observed_at_ms: observed_at_ms(&announced),
+        },
     );
 }
 
@@ -224,10 +240,13 @@ fn observed_changed_focus_after_clientless_roster_names_last_observed_prior() {
 
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
-        ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusChanged {
-            focused: vec![zellij_pane("terminal_2")],
-            unfocused: vec![zellij_pane("terminal_1")],
-        }]),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::FocusChanged {
+                focused: vec![zellij_pane("terminal_2")],
+                unfocused: vec![zellij_pane("terminal_1")],
+            }],
+            panes_observed_at_ms: observed_at_ms(&announced),
+        },
     );
 }
 
@@ -251,10 +270,13 @@ fn observed_empty_sample_after_clientless_roster_still_unfocuses() {
 
         assert_eq!(
             ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
-            ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusChanged {
-                focused: Vec::new(),
-                unfocused: vec![zellij_pane("terminal_1")],
-            }]),
+            ZellijWakeOutcome::Accepted {
+                events: vec![SidebarEvent::FocusChanged {
+                    focused: Vec::new(),
+                    unfocused: vec![zellij_pane("terminal_1")],
+                }],
+                panes_observed_at_ms: observed_at_ms(&announced),
+            },
         );
     }
 }
@@ -282,7 +304,10 @@ fn zellij_boundary_move_is_emitted_only_for_stable_work_topology() {
 
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
-        ZellijWakeOutcome::Accepted(Vec::new()),
+        ZellijWakeOutcome::Accepted {
+            events: Vec::new(),
+            panes_observed_at_ms: Some(incoming.produced_at_ms),
+        },
     );
     let records = std::fs::read_to_string(log_path).expect("boundary diagnostic");
     let envelope: crate::diag::record::DiagEnvelope =
@@ -414,7 +439,7 @@ fn stale_same_writer_wake_keeps_cache_and_still_reports_its_settled_strand() {
 
     assert!(matches!(
         ingest_zellij_wake(&state, &runtime, &incoming).unwrap(),
-        ZellijWakeOutcome::Accepted(events) if !events.is_empty()
+        ZellijWakeOutcome::Accepted { events, panes_observed_at_ms: None } if !events.is_empty()
     ));
     assert_eq!(
         read_pane_topology_cache(&runtime, "rimz-test"),
@@ -425,7 +450,8 @@ fn stale_same_writer_wake_keeps_cache_and_still_reports_its_settled_strand() {
         incoming.topology.as_mut().unwrap().produced_at_ms = produced_at_ms;
         assert!(matches!(
             ingest_zellij_wake(&state, &runtime, &incoming).unwrap(),
-            ZellijWakeOutcome::Accepted(events) if !events.is_empty()
+            ZellijWakeOutcome::Accepted { events, panes_observed_at_ms: Some(stamp) }
+                if !events.is_empty() && stamp == produced_at_ms
         ));
         assert_eq!(
             read_pane_topology_cache(&runtime, "rimz-test")
@@ -547,7 +573,10 @@ fn newer_accepted_writer_clears_a_superseded_conflict() {
 
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &accepted).unwrap(),
-        ZellijWakeOutcome::Accepted(Vec::new()),
+        ZellijWakeOutcome::Accepted {
+            events: Vec::new(),
+            panes_observed_at_ms: Some(produced_at_ms),
+        },
     );
     assert!(read_topology_writer_conflict(&runtime).is_none());
 }
@@ -597,11 +626,17 @@ fn sparse_requests_keep_their_fallbacks() {
     let (_dir, state, runtime) = paths();
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &wake(ZellijWakeReason::Announced)).unwrap(),
-        ZellijWakeOutcome::Accepted(vec![SidebarEvent::PanesChanged]),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::PanesChanged],
+            panes_observed_at_ms: None,
+        },
     );
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &wake(ZellijWakeReason::Alive)).unwrap(),
-        ZellijWakeOutcome::Accepted(Vec::new()),
+        ZellijWakeOutcome::Accepted {
+            events: Vec::new(),
+            panes_observed_at_ms: None,
+        },
     );
 
     let mut stranded = wake(ZellijWakeReason::FocusStranded);
@@ -609,11 +644,47 @@ fn sparse_requests_keep_their_fallbacks() {
     stranded.focus_generation = Some(8);
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &stranded).unwrap(),
-        ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusStranded {
-            pane_id: zellij_pane("terminal_7"),
-            generation: 8,
-            clients: Vec::new(),
-        }]),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::FocusStranded {
+                pane_id: zellij_pane("terminal_7"),
+                generation: 8,
+                clients: Vec::new(),
+            }],
+            panes_observed_at_ms: None,
+        },
+    );
+}
+
+#[test]
+fn wake_reports_only_the_topology_it_accepted() {
+    let (_dir, state, runtime) = paths();
+    let observed_at_ms = unix_now_ms();
+    let mut announced = wake(ZellijWakeReason::Announced);
+    announced.topology = Some(topology(observed_at_ms, Some(writer(1, 100))));
+    assert_eq!(
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::PanesChanged],
+            panes_observed_at_ms: Some(observed_at_ms),
+        },
+    );
+
+    announced.topology.as_mut().unwrap().produced_at_ms -= 1;
+    assert_eq!(
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+        ZellijWakeOutcome::Accepted {
+            events: Vec::new(),
+            panes_observed_at_ms: None,
+        },
+    );
+
+    announced.topology = None;
+    assert_eq!(
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::PanesChanged],
+            panes_observed_at_ms: None,
+        },
     );
 }
 
@@ -636,11 +707,14 @@ fn settled_switch_classifies_against_the_accepted_topology() {
 
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &incoming).unwrap(),
-        ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusStranded {
-            pane_id: zellij_pane("terminal_10"),
-            generation: 8,
-            clients: incoming.focus_clients,
-        }]),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::FocusStranded {
+                pane_id: zellij_pane("terminal_10"),
+                generation: 8,
+                clients: incoming.focus_clients,
+            }],
+            panes_observed_at_ms: incoming.topology.as_ref().map(|cache| cache.produced_at_ms),
+        },
     );
 }
 
@@ -720,7 +794,10 @@ fn announced_snapshot_is_sanitized_before_diff_and_persist() {
 
     assert_eq!(
         ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
-        ZellijWakeOutcome::Accepted(vec![SidebarEvent::PanesChanged]),
+        ZellijWakeOutcome::Accepted {
+            events: vec![SidebarEvent::PanesChanged],
+            panes_observed_at_ms: observed_at_ms(&announced),
+        },
     );
     assert_eq!(
         read_pane_topology_cache(&runtime, "rimz-test")
