@@ -9,6 +9,6 @@ state:          active
 current node:   pr, since <time>
 deadline:       none
 prompt:         Review this
-waiting: pr, said pending, since <clock>, ×1, recheck <clock>
+waiting: pr, said pending, since <clock>, recheck <clock>
 history:
   <time> #1 pr evaluation pending {"outcome":"pending","reason":"CI pending","recheck_at":"<time>"}

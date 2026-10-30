@@ -1172,7 +1172,7 @@ fn human_show_wait_and_journal_are_readable() {
     let text = success(command(&env, &["workflow", "show", &id]));
     assert_eq!(text.lines().next().unwrap(), value["dir"].as_str().unwrap());
     assert!(text.contains("waiting: pr, said pending"));
-    assert!(text.contains("×1"));
+    assert!(!text.contains("×1"), "{text}");
     assert!(text.contains("evaluation"));
     assert!(text.contains("CI pending"));
     assert!(text.contains("Review this"));
@@ -1187,7 +1187,7 @@ fn human_show_wait_and_journal_are_readable() {
     };
     let wait = &value["record"]["wait"];
     assert!(text.contains(&format!(
-        "waiting: pr, said pending, since {}, ×1, recheck {}",
+        "waiting: pr, said pending, since {}, recheck {}",
         local_time(&wait["first"]),
         local_time(&wait["recheck_at"])
     )));
@@ -1218,6 +1218,61 @@ fn human_show_wait_and_journal_are_readable() {
     settled(&env, &id, "done");
     let terminal = success(command(&env, &["workflow", "show", &id]));
     assert!(terminal.contains("pr terminal done"));
+}
+
+#[test]
+fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
+    let (env, dir) = fixture(
+        &format!("{HEADER}{WAIT}"),
+        &PENDING.replace("2099-01-01", "2000-01-01"),
+    );
+    let id = start(&env);
+    until(&env, &id, |v| {
+        v["record"]["wait"].is_object() && v["record"]["attempt"].is_null()
+    });
+    for _ in 0..2 {
+        success(command(&env, &["workflow", "advance", &id]));
+    }
+    let waiting = show(&env, &id);
+    let evaluations = events(&waiting, "evaluation");
+    assert_eq!(evaluations.len(), 3, "{evaluations:#?}");
+    assert_eq!(waiting["record"]["wait"]["count"], 3);
+    let text = success(command(&env, &["workflow", "show", &id]));
+
+    fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
+    success(command(&env, &["workflow", "advance", &id]));
+    let done = settled(&env, &id, "done");
+    let evaluations = events(&done, "evaluation");
+    assert_eq!(evaluations.len(), 4, "{evaluations:#?}");
+    assert_eq!(
+        evaluations
+            .iter()
+            .filter(|e| e["outcome"] == "pending")
+            .count(),
+        3,
+        "{evaluations:#?}"
+    );
+    let waits = events(&done, "wait");
+    assert_eq!(waits.len(), 1, "{waits:#?}");
+    assert_eq!(waits[0]["count"], 3);
+
+    let rows = text
+        .lines()
+        .filter(|line| line.contains("pr evaluation pending"))
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1, "{text}");
+    assert!(
+        rows[0].contains("#1–3 pr evaluation pending ×3 over "),
+        "{text}"
+    );
+    let waiting_line = text
+        .lines()
+        .find(|line| line.starts_with("waiting:"))
+        .unwrap();
+    assert!(!waiting_line.contains('×'), "{waiting_line}");
+    let finished = success(command(&env, &["workflow", "show", &id]));
+    assert!(!finished.contains("pr wait"), "{finished}");
+    assert!(finished.contains("#4 pr evaluation done"), "{finished}");
 }
 
 #[test]
