@@ -75,7 +75,7 @@ fn manifest_reads_all_fields_and_reports_unknown_keys() {
     let source = source(temp.path(), "source", &[("crew", ".")]);
     write(
         &source.join("rimz-packs.toml"),
-        "future = true\n[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\ndefault = true\nrequires = ['skills/essentials']\nrimz = '>=0.43'\nnew = 1\n",
+        "future = true\n[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\ndefault = true\nrequires = ['skills/essentials']\nrimz = '>=0.4'\nnew = 1\n",
     );
     let manifest = Manifest::read(&source);
     assert!(manifest.is_ok(), "{manifest:?}");
@@ -86,7 +86,7 @@ fn manifest_reads_all_fields_and_reports_unknown_keys() {
     assert_eq!(pack.path, Path::new("."));
     assert!(pack.default);
     assert_eq!(pack.requires, ["skills/essentials"]);
-    assert_eq!(pack.rimz.as_deref(), Some(">=0.43"));
+    assert_eq!(pack.rimz.as_deref(), Some(">=0.4"));
     assert_eq!(manifest.warnings.len(), 2);
     for (warning, key) in manifest.warnings.iter().zip(["future", "new"]) {
         assert_eq!(warning.path, source.join("rimz-packs.toml"));
@@ -112,6 +112,119 @@ fn resolve_separates_manifest_warnings_from_pack_problems() {
 }
 
 #[test]
+fn resolve_checks_rimz_requirements_without_withholding_packs() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = source(temp.path(), "source", &[("crew", ".")]);
+    let home = temp.path().join("home");
+    let mut record = seed(&home, &[(&source, "linked", &["crew"])]);
+    let version = env!("CARGO_PKG_VERSION");
+    let major = semver::Version::parse(version).unwrap().major;
+    let linked_remedy = format!("update the linked checkout at {}", source.display());
+    let cases = [
+        (None, None),
+        (Some(format!("={version}")), None),
+        (Some(format!(">={version}, <999.0.0")), None),
+        (Some(format!("^{version}")), None),
+        (Some(format!("~{version}")), None),
+        (Some("*".into()), None),
+        (Some(format!("{major}.*")), None),
+        (Some("<0.0.1".into()), Some("unsupported")),
+        (Some("not a range".into()), Some("malformed")),
+        (Some(" ".into()), Some("malformed")),
+    ];
+    let results: Vec<_> = cases
+        .iter()
+        .map(|(requirement, warning)| {
+            let mut text = "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\n".to_owned();
+            if let Some(requirement) = requirement {
+                text.push_str(&format!("rimz = {requirement:?}\n"));
+            }
+            write(&source.join("rimz-packs.toml"), &text);
+            let resolved = resolve(&home);
+            let valid_warning = match warning {
+                None => resolved.warnings.is_empty(),
+                Some(kind) => {
+                    resolved.warnings.len() == 1
+                        && resolved.warnings[0].path == home.join("packs/linked/rimz-packs.toml")
+                        && resolved.warnings[0].message.contains("crew")
+                        && resolved.warnings[0]
+                            .message
+                            .contains(requirement.as_deref().unwrap())
+                        && if *kind == "unsupported" {
+                            resolved.warnings[0].message.contains(version)
+                                && resolved.warnings[0].message.contains("still loads")
+                                && resolved.warnings[0].message.contains(&linked_remedy)
+                        } else {
+                            resolved.warnings[0].message.contains("malformed rimz")
+                        }
+                }
+            };
+            (
+                resolved.packs.len() == 1
+                    && resolved.problems.is_empty()
+                    && resolved.pack_problems.is_empty()
+                    && valid_warning,
+                requirement,
+                resolved,
+            )
+        })
+        .collect();
+    write(
+        &source.join("rimz-packs.toml"),
+        "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\nrimz = '<0.0.1'\n",
+    );
+    let remedies = [
+        (None, None, linked_remedy),
+        (
+            Some("https://github.com/rimio-ai/rimz-crew"),
+            None,
+            "run `rimz packs update crew`".into(),
+        ),
+        (
+            Some("https://github.com/rimio-ai/rimz-crew"),
+            Some("v1"),
+            "pinned at v1; follow updates again with `rimz packs install crew/crew`".into(),
+        ),
+    ];
+    let remedies: Vec<_> = remedies
+        .iter()
+        .map(|(url, reference, remedy)| {
+            let installed = &mut record.sources[0];
+            installed.source = url.map_or_else(|| source.display().to_string(), str::to_owned);
+            installed.url = url.map(str::to_owned);
+            installed.linked = url.is_none();
+            installed.pinned = reference.is_some();
+            installed.reference = reference.map(str::to_owned);
+            write(
+                &home.join("packs/installed.json"),
+                &serde_json::to_string(&record).unwrap(),
+            );
+            let resolved = resolve(&home);
+            let valid = resolved.warnings.len() == 1
+                && resolved.warnings[0].message.contains(remedy)
+                && resolved.packs.len() == 1
+                && resolved.problems.is_empty()
+                && resolved.pack_problems.is_empty();
+            (valid, remedy, resolved)
+        })
+        .collect();
+    assert_eq!(
+        (
+            results
+                .iter()
+                .map(|(valid, _, _)| *valid)
+                .collect::<Vec<_>>(),
+            remedies
+                .iter()
+                .map(|(valid, _, _)| *valid)
+                .collect::<Vec<_>>(),
+        ),
+        (vec![true; cases.len()], vec![true; remedies.len()]),
+        "{results:#?}\n{remedies:#?}"
+    );
+}
+
+#[test]
 fn manifest_refusals_name_the_path_and_field() {
     let temp = tempfile::tempdir().unwrap();
     let source = source(temp.path(), "source", &[("crew", ".")]);
@@ -132,7 +245,6 @@ fn manifest_refusals_name_the_path_and_field() {
         (format!("{base}requires = 'crew'"), "requires"),
         (format!("{base}requires = [1]"), "requires"),
         (format!("{base}rimz = 43"), "rimz"),
-        (format!("{base}rimz = ' '"), "rimz"),
     ];
     let results: Vec<_> = cases
         .iter()

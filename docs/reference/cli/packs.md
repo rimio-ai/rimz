@@ -188,7 +188,7 @@ description = "Local review crew"
 path = "."
 default = true
 requires = ["skills/essentials"]
-rimz = ">=0.43"
+rimz = ">=0.4"
 ```
 
 | Field | Contract |
@@ -198,7 +198,9 @@ rimz = ">=0.43"
 | `path` | Required relative path to an existing directory inside the source, after both lexical normalization and symlink resolution. Paths must be unique, including canonical aliases. `.` selects the source root. |
 | `default` | Optional boolean, default false. Selects the packs installed by a bare Git source; when none is true, all are selected. Does not filter linked installs. |
 | `requires` | Optional array of sibling names, `crew/<pack>`, `skills/<pack>`, or `github:<owner>/<repo>/<pack>`, without refs or URLs. Git installs resolve them transitively; linked installs only report unmet requirements. Malformed entries warn and are skipped. |
-| `rimz` | Optional nonempty string. Parsed only; no version grammar or compatibility check is applied. |
+| `rimz` | Optional Cargo version-requirement string, checked against the running RimZ package version (without its `+g<rev>` build suffix). An unsupported version warns and the pack still loads; malformed or blank requirements warn and are ignored. |
+
+Requirements accept comma-separated comparators (`>=0.4, <0.6`), caret (`^`), tilde (`~`), exact (`=`), and wildcard (`*`) ranges. A bare `0.4` means `^0.4`: `>=0.4.0, <0.5.0`. A pre-release RimZ version matches only a requirement that explicitly names a compatible pre-release. An unsupported-version warning names `rimz packs update <pack>` for unpinned Git sources, the pin and an unpinning `rimz packs install <source>` command for pinned sources, or the linked checkout path to update. It appears at room entry, in `rimz packs list`, `rimz agents validate`, and install or update review. It does not fail validation or withhold the pack's definitions or skills. Doctor shows the room's recorded warning under MULTIPLEXER; a supervised entry into an existing room keeps its previous warnings until the next normal start or attach.
 
 At least one `[[pack]]` is required. Missing required fields, wrong types, unsafe or duplicate names, escaping or duplicate paths, and missing directories refuse installation. Unknown keys at any level warn and otherwise load. A broken live manifest withholds its source's packs; an unusable pack directory withholds that pack while other valid recorded packs can still load. A pack skill read error withholds that pack's skills, not the library or other packs. A withheld healthy skill's row names the broken skill; the pack's problem carries the read error. Excluded and overridden skill copies are not read. A failed pack item's error names the `rimz packs exclude` command that sets it aside, whether it failed on a reserved launch name, an invalid team definition, a field its definition cannot take, or a `SKILL.md` it cannot read. Problems fail `rimz agents validate` and reach room-entry warnings and `rimz doctor`, without refusing unrelated launches. Home-only namespace reservations remain in force, including a home team `<x>-fast` when a pack supplies profile `x`; see [definition failures](../definitions.md#validation-and-failures).
 

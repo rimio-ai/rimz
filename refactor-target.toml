@@ -1261,10 +1261,11 @@ allowed-dependencies = ["disk", "proc", "utils"]
 # Manifest, PackManifest and Manifest::read stay private until a consumer needs them (-3).
 # Remove the unused resolve_in launch-environment accessor (-1).
 # GitSource and its reinstall spelling share normalized Git identity with the CLI (+2).
+# InstalledSource::spelling shares recorded pack selection in reinstall hints (+1).
 # transaction, Transaction, PackChange and six public methods share optimistic staging (+9).
 # RetiredCheckouts retains replaced trees through a multi-source command (+1).
 # Transaction::stage_update preserves and validates the installed selection (+1).
-surface-budget = 46
+surface-budget = 47
 
 [[verdict]]
 kind = "item"
