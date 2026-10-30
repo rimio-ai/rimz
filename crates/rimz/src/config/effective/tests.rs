@@ -1702,6 +1702,15 @@ fn trusted_repo_allowlist_can_reference_repo_subagent_profile() {
         sources.profile(ProfileScope::Subagents, "repo-child"),
         Some(project.path().join(".rimz/config.toml").as_path())
     );
+    for (scope, name) in [
+        (ProfileScope::Agents, "planner"),
+        (ProfileScope::Subagents, "repo-child"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(sources.profile_origin(scope, name)).unwrap(),
+            serde_json::json!({"origin": "project"})
+        );
+    }
 }
 
 #[test]

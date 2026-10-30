@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    AgentSpecSources, CommandsConfig, ConfigFileDiagnosis, MachineConfig, ProfilesConfig,
-    TaskEntry, Tasks, TeamsConfig,
+    AgentSpecSources, CommandsConfig, ConfigFileDiagnosis, DefinitionOrigin, MachineConfig,
+    ProfileSource, ProfilesConfig, TaskEntry, Tasks, TeamsConfig,
 };
 use crate::harness::schedule::{self, ScheduleErr};
 use crate::harness::spec::{self as agents_spec, LayoutErr};
@@ -515,19 +515,23 @@ pub fn load_with_roots(
         },
     )?;
 
+    let project_source = ProfileSource {
+        path: config_path.clone(),
+        origin: DefinitionOrigin::Project,
+    };
     let repo_sources = AgentSpecSources {
         teams: Default::default(),
         agent_profiles: repo
             .profiles
             .0
             .keys()
-            .map(|name| (name.clone(), config_path.clone()))
+            .map(|name| (name.clone(), project_source.clone()))
             .collect(),
         subagent_profiles: repo
             .subagent_profiles
             .0
             .keys()
-            .map(|name| (name.clone(), config_path.clone()))
+            .map(|name| (name.clone(), project_source.clone()))
             .collect(),
         commands: Default::default(),
     };

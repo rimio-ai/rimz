@@ -1040,7 +1040,7 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
             role.role == "lead"
         );
         assert_eq!(
-            loaded.sources.agent_profiles[&role.profile],
+            loaded.sources.agent_profiles[&role.profile].path,
             root.path().join("teams/probe.md")
         );
         let row = loaded
@@ -1980,7 +1980,7 @@ fn bases_are_emitted_in_both_namespaces_with_sources() {
             })
         );
         assert_eq!(
-            loaded.sources.agent_profiles[kind],
+            loaded.sources.agent_profiles[kind].path,
             root.path().join(format!("agents/{kind}.md"))
         );
         assert!(tool_args(&loaded, kind).is_empty());
@@ -3241,8 +3241,21 @@ fn packs_bind_seats_parents_traits_bases_and_children_through_the_merged_chain()
         "agent: parent\nsubagents: [helper]",
         "Worker.",
     );
+    definition(pack.path(), "agents/follower.md", "agent: crew:parent", "");
     team_definition(pack.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
     let packed = load_checked(home.path());
+    for row in &packed.rows {
+        let json = serde_json::to_value(row).unwrap();
+        assert_eq!(json["origin"], "pack", "{json}");
+        assert_eq!(json["pack"], "crew", "{json}");
+        assert_eq!(
+            json.get("inherits"),
+            (row.name == "follower")
+                .then(|| serde_json::json!("crew:parent"))
+                .as_ref(),
+            "{json}"
+        );
+    }
     assert!(
         packed.agent_profiles.0.contains_key("probe.lead"),
         "{:?}",
@@ -3291,6 +3304,18 @@ fn packs_bind_seats_parents_traits_bases_and_children_through_the_merged_chain()
         "Home worker.",
     );
     let overridden = clean(home.path());
+    for row in &overridden.rows {
+        let json = serde_json::to_value(row).unwrap();
+        assert_eq!(
+            json["origin"],
+            if ["claude", "parent", "worker"].contains(&row.name.as_str()) {
+                "mine"
+            } else {
+                "pack"
+            },
+            "{json}"
+        );
+    }
     assert_eq!(
         texts(&overridden.agent_profiles.0["probe.lead"]),
         ["Home worker."]
@@ -3505,6 +3530,30 @@ fn packs_qualified_parents_inherit_shadowed_and_conflicted_definitions_without_p
     team_definition(home.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
     let loaded = clean(home.path());
     let helper = &loaded.subagent_profiles.0["helper"];
+    for (name, parent) in [
+        ("worker", "one:worker"),
+        ("conflicted", "two:worker"),
+        ("helper", "one:helper"),
+    ] {
+        let row = loaded.rows.iter().find(|row| row.name == name).unwrap();
+        let json = serde_json::to_value(row).unwrap();
+        assert_eq!(json["origin"], "mine", "{json}");
+        assert_eq!(json["inherits"], parent, "{json}");
+        assert!(json.get("pack").is_none(), "{json}");
+    }
+    let seat = serde_json::to_value(
+        loaded
+            .rows
+            .iter()
+            .find(|row| row.name == "probe.lead")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(seat["origin"], "mine");
+    assert!(
+        seat.get("inherits").is_none(),
+        "seat origin belongs to its team: {seat}"
+    );
     assert_eq!(helper.model.as_deref(), Some("opus"));
     assert_eq!(texts(helper), ["Shipped helper."]);
     assert_eq!(helper.tools.as_ref().unwrap().bases(), ["Read"]);

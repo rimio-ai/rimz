@@ -19,7 +19,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
+use super::{
+    AgentSpecSources, CommandsConfig, DefinitionOrigin, Profile, ProfileSource, ProfilesConfig,
+    PromptSource, TeamsConfig,
+};
 use crate::packs::{ClaimResolution, ItemFate, PackItem, PackName, Problem, ResolvedPacks};
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
@@ -238,6 +241,8 @@ pub struct DefinitionRow {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub fast: bool,
     pub source: PathBuf,
+    #[serde(flatten)]
+    pub origin: DefinitionOrigin,
     pub team: Option<String>,
     pub role: Option<String>,
     pub owns: Vec<String>,
@@ -247,6 +252,7 @@ pub struct DefinitionRow {
 #[derive(Clone)]
 struct Definition {
     path: PathBuf,
+    pack: Option<PackName>,
     body: String,
     frontmatter: AgentFrontmatter,
 }
@@ -533,8 +539,9 @@ fn load_resolved(
                         text: body.trim().to_owned(),
                     });
                     bases.insert(stem.clone());
-                    loaded.insert("agents", &stem, path, profile.clone());
-                    loaded.insert("subagents", &stem, path, profile);
+                    let origin = DefinitionOrigin::new(item.pack.as_ref(), None);
+                    loaded.insert("agents", &stem, path, &origin, profile.clone());
+                    loaded.insert("subagents", &stem, path, &origin, profile);
                     return Ok(());
                 }
                 if !is_safe_name(name) {
@@ -585,6 +592,7 @@ fn load_resolved(
                 }
                 let definition = Definition {
                     path: path.clone(),
+                    pack: item.pack.clone(),
                     body: body.trim().to_owned(),
                     frontmatter: fm,
                 };
@@ -748,7 +756,14 @@ fn load_resolved(
 }
 
 impl LoadedDefinitions {
-    fn insert(&mut self, namespace: &str, name: &str, source: &Path, profile: Profile) {
+    fn insert(
+        &mut self,
+        namespace: &str,
+        name: &str,
+        source: &Path,
+        origin: &DefinitionOrigin,
+        profile: Profile,
+    ) {
         self.rows.push(DefinitionRow {
             keep_warm: profile
                 .keep_warm
@@ -768,6 +783,7 @@ impl LoadedDefinitions {
             effort: profile.effective_effort(),
             fast: profile.fast == Some(true),
             source: source.to_owned(),
+            origin: origin.clone(),
             team: None,
             role: None,
             owns: Vec::new(),
@@ -782,6 +798,12 @@ impl LoadedDefinitions {
             )
         };
         profiles.0.insert(name.to_owned(), profile);
-        sources.insert(name.to_owned(), source.to_owned());
+        sources.insert(
+            name.to_owned(),
+            ProfileSource {
+                path: source.to_owned(),
+                origin: origin.clone(),
+            },
+        );
     }
 }

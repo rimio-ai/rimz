@@ -59,7 +59,7 @@ rimz teams profiles --path          # add each profile's defining file
 rimz teams profiles --json --path
 ```
 
-`rimz teams profiles` lists the resolved seat profiles named `<team>.<role>` for a configured team, such as `forge.coder`, as the same cards and JSON as [`rimz agents profiles`](./agents.md#discover-agent-profiles). The launch grammar resolves those names as team roles, so `rimz agents profiles` leaves them out unless it gets `--teams`. The listing reads the machine configuration; with none configured it prints `No team profiles configured.` and the install command.
+`rimz teams profiles` lists the resolved seat profiles named `<team>.<role>` for a configured team, such as `forge.coder`, as the same cards and JSON as [`rimz agents profiles`](./agents.md#discover-agent-profiles). Each card's bracketed origin label, and JSON `origin`, optional `pack` and optional `inherits`, describe the team file rather than the underlying agent. The launch grammar resolves those names as team roles, so `rimz agents profiles` leaves them out unless it gets `--teams`. The listing reads the machine configuration; with none configured it prints `No team profiles configured.` and the install command.
 
 ## Inspect one team
 

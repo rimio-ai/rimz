@@ -953,7 +953,13 @@ upward-dependencies = [
 # customization, its four types, four methods and PackView::item own home overrides (+10).
 # PackOverride::identical shares byte comparison with migration and install hints (+1).
 # ResetOutcome and reset_identical share per-item results over one decision per home entry (+2).
-surface-budget = 256
+# DefinitionOrigin and AgentSpecSources::profile_origin carry listing provenance (+2).
+surface-budget = 258
+
+[[verdict]]
+kind = "item"
+key = "config::DefinitionOrigin"
+reason = "Profile catalogues and validation share typed origin and direct pack inheritance without deriving them from paths."
 
 [[verdict]]
 kind = "item"

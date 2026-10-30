@@ -212,7 +212,15 @@ fn rows<'a>(
     out: &mut impl Write,
     rows: impl Iterator<Item = &'a definitions::DefinitionRow>,
 ) -> Result<()> {
-    let mut table = render::Table::new(["NAME", "KIND", "MODEL", "EFFORT", "KEEP-WARM", "SOURCE"]);
+    let mut table = render::Table::new([
+        "NAME",
+        "KIND",
+        "MODEL",
+        "EFFORT",
+        "KEEP-WARM",
+        "ORIGIN",
+        "SOURCE",
+    ]);
     for row in rows {
         table.row([
             render::cell(&row.name).fg(render::palette::identity(&row.kind)),
@@ -235,6 +243,7 @@ fn rows<'a>(
                     )
                 },
             )),
+            render::cell(crate::cli::profile_report::origin_label(&row.origin)),
             render::cell(row.source.display().to_string()),
         ]);
     }
