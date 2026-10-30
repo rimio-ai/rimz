@@ -143,6 +143,27 @@ impl<'a> RunCommands<'a> {
     }
 }
 
+impl Target {
+    fn parse(raw: &str) -> Result<Self> {
+        if let Ok(id) = raw.parse::<WorkflowRunId>() {
+            return Ok(Self::Id(id));
+        }
+        if !raw.contains('#') {
+            return Ok(Self::Workflow(raw.into()));
+        }
+        let address = raw.parse().map_err(|_| {
+            UsageError::new(
+                "run address must be <workflow>#<lane>; workflow and lane must be nonempty".into(),
+            )
+        })?;
+        Ok(Self::Address(address))
+    }
+}
+
+pub(super) fn names_workflow(raw: &str) -> bool {
+    matches!(Target::parse(raw), Ok(Target::Workflow(_)))
+}
+
 fn candidate_target(record: &RunRecord, runs: &[Located]) -> String {
     let address = record.address();
     if runs.iter().any(|other| {
@@ -163,17 +184,7 @@ pub(super) fn select(
     at: Option<&str>,
     extend: &[String],
 ) -> Result<Selection> {
-    let target = if let Ok(id) = raw.parse::<WorkflowRunId>() {
-        Target::Id(id)
-    } else if raw.contains('#') {
-        Target::Address(raw.parse().map_err(|_| {
-            UsageError::new(
-                "run address must be <workflow>#<lane>; workflow and lane must be nonempty".into(),
-            )
-        })?)
-    } else {
-        Target::Workflow(raw.into())
-    };
+    let target = Target::parse(raw)?;
     if let Target::Id(id) = target {
         let (state, paths) = locate(&id)?;
         let record = records::load(&paths)?;

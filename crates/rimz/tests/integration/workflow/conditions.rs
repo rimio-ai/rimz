@@ -43,7 +43,7 @@ fn condition_holds_merge_survive_wakes_and_restart_after_another_answer() {
     assert_eq!(due.duration_since(began).as_secs(), 120);
     let text = success(command(&env, &["workflow", "show", &id]));
     assert!(
-        text.contains("holding ready ") && text.contains("/2m"),
+        text.contains("holding ready at pr") && text.contains("of 2m, then @done at"),
         "{text}"
     );
     let stage_board = env

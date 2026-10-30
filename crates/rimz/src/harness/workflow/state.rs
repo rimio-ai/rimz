@@ -195,20 +195,7 @@ impl Transition<'_> {
     }
 
     fn hold_until(&self, case: u32) -> Result<Option<Timestamp>, TimeInputErr> {
-        let Some(hold) = self.spec.checks[&self.record.node]
-            .cases
-            .get(case as usize)
-            .and_then(|case| case.hold.as_deref())
-        else {
-            return Ok(None);
-        };
-        let first = self
-            .record
-            .wait
-            .as_ref()
-            .filter(|wait| wait.is_hold() && wait.case == Some(case))
-            .map_or(self.now, |wait| wait.first);
-        Ok(first.checked_add(duration(hold)?).ok())
+        super::hold_until(self.spec, &self.record, case, self.now)
     }
 
     pub(super) fn close_wait(&mut self) {
@@ -703,9 +690,8 @@ impl Transition<'_> {
     }
 
     fn bounded_recheck(&self, at: Option<Timestamp>) -> Result<Option<Timestamp>, TimeInputErr> {
-        let timeout = self.timeout_at()?;
-        let deadline = self.record.deadline.filter(|_| !self.record.deadline_fired);
-        let limit = timeout.into_iter().chain(deadline).min();
+        let limit =
+            super::inspect::first_bound(self.spec, &self.record, None, self.now)?.map(|(at, _)| at);
         Ok(at.map(|at| limit.map_or(at, |limit| at.min(limit))))
     }
 

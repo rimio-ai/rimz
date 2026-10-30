@@ -123,7 +123,7 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
     ] {
         assert!(log.contains(expected), "{expected}: {log}");
     }
-    let text = success(command(&env, &["workflow", "show", &id]));
+    let text = success(command(&env, &["workflow", "show", &id, "--history"]));
     let code_text = code
         .as_i64()
         .map_or_else(|| "—".into(), |code| code.to_string());
@@ -352,7 +352,7 @@ fn command_failure(log_failure: bool) {
         reason.contains(if log_failure { "2.step.log" } else { "running" }),
         "{reason}"
     );
-    let text = success(command(&env, &["workflow", "show", &id]));
+    let text = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(text.contains(&format!("reason: {reason}")), "{text}");
     assert!(text.contains("    exit — HEAD — → —\n"), "{text}");
     let stats = assists(&env);

@@ -1,6 +1,8 @@
 use super::*;
 use rimz::store::workflow::{RunRecord, RunState};
 
+mod show;
+
 const SPEC: &str = "[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nshell='true'\non.ok='build'\ntimeout='1h'\n[steps.build]\nshell='true'\nthen='gate'\nmax-visits=2\n";
 
 fn seed(env: &Env, root: &Path, checkout: &Path, state: &str) -> RunRecord {

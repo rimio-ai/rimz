@@ -35,7 +35,7 @@ fn missing_leader_hooks_refuse_before_runs_or_panes() {
         attempts[0]["reason"],
         "`rimz agents -p` requires claude hooks so the supervised turn can report completion; run `rimz hooks install claude`"
     );
-    let text = success(command(&room.env, &["workflow", "show", &id]));
+    let text = success(command(&room.env, &["workflow", "show", &id, "--history"]));
     assert!(
         text.contains(&format!(
             "reason: {}",
@@ -344,7 +344,7 @@ fn stay_renders_with_you_or_asking_you_until_session_exit() {
     assert!(success(room.command(&["workflow", "list"]).output().unwrap()).contains("with you"));
     assert!(
         success(room.command(&["workflow", "show", &id]).output().unwrap())
-            .contains("active (with you)")
+            .contains("build is with you")
     );
     room.hook(
         &id,
@@ -362,7 +362,7 @@ fn stay_renders_with_you_or_asking_you_until_session_exit() {
     assert!(success(room.command(&["workflow", "list"]).output().unwrap()).contains("asking you:"));
     assert!(
         success(room.command(&["workflow", "show", &id]).output().unwrap())
-            .contains("active (asking you)")
+            .contains("build is asking you")
     );
     rimz::harness::run::settle_session_exit(&room.env.store(), &run.run_id, || None).unwrap();
     success(
@@ -1564,7 +1564,14 @@ fn show_keeps_durable_history_when_takeover_blockers_are_unavailable() {
             .unwrap(),
     );
     assert!(text.contains("blockers unavailable"), "{text}");
-    assert!(text.contains("history:"), "{text}");
+    assert!(text.contains("trail  "), "{text}");
+    let history = success(
+        room.command(&["workflow", "show", &id, "--history"])
+            .env("PATH", "/nonexistent-git-bin")
+            .output()
+            .unwrap(),
+    );
+    assert!(history.contains("evaluation"), "{history}");
 }
 
 #[test]
@@ -1635,7 +1642,7 @@ fn supervised_identity_prompt_and_lifecycle_completion() {
         fs::read_to_string(room.env.rimz_home().join("workflows/review/prompt.md")).unwrap(),
         "Build it"
     );
-    let human = success(command(&room.env, &["workflow", "show", &id]));
+    let human = success(command(&room.env, &["workflow", "show", &id, "--history"]));
     assert!(human.contains(previous["handle"].as_str().unwrap()));
     assert!(human.contains(&previous["head_start"].as_str().unwrap()[..8]));
     assert!(human.contains("cost") && human.contains("stopped (0)") && human.contains("live (0)"));
@@ -1744,7 +1751,7 @@ fn permission_stays_live_and_explicit_question_routes_with_evidence() {
             );
             assert!(!detail.contains('\n'), "{detail}");
             let human = success(command(&room.env, &["workflow", "show", &id]));
-            assert!(human.contains("active (asking you)"), "{human}");
+            assert!(human.contains("build is asking you"), "{human}");
             assert!(human.contains(asked["text"].as_str().unwrap()), "{human}");
             room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
             let ended = settled(&room.env, &id, "done");
@@ -1874,9 +1881,7 @@ fn closed_window_merges_without_visits_then_reopens() {
             .unwrap()
             .is_empty()
     );
-    assert!(
-        success(command(&room.env, &["workflow", "show", &id])).contains("waiting: build, window")
-    );
+    assert!(success(command(&room.env, &["workflow", "show", &id])).contains("build window"));
     capacity(0);
     success(
         room.command(&["workflow", "advance", &id])

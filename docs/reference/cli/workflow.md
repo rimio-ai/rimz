@@ -10,6 +10,7 @@ rimz workflow run babysit-pr                      # in the current checkout
 rimz workflow run babysit-pr -w feat-x --prompt 'merge before Friday'
 rimz workflow list                                # active and parked runs, every room
 rimz workflow show 'babysit-pr#feat-x'
+rimz workflow show 'babysit-pr#feat-x' --history     # detailed history, folded repeats
 rimz workflow show babysit-pr                      # live runs of this workflow
 rimz workflow resume 'babysit-pr#feat-x' --at pr --extend visits=+1
 rimz workflow cancel 'babysit-pr#feat-x'
@@ -45,7 +46,7 @@ Agent steps of automatically loop-started runs also ask the [start throttle](./l
 
 `rimz workflow list [--json]` prints every active and parked run across rooms, without column headers. NEEDS YOU holds parked runs and active runs with a blocking ask, longest waiting first. ACTIVE holds the rest, sorted by address. Rows are `<glyph> <address>  <node>  <detail>  <age>`: `?` for parked or asking, `☾` for an active wait, `⢿` for other active work, from the configured glyph set. Age starts at the park, at the opening of an ask, or at node entry otherwise. Detail truncates before age at narrow terminal widths. NEEDS YOU ends with a `workflow show` hint for its first run. Several rooms get headings, the caller's room first, and hints for other rooms carry `--root`. Finished runs are omitted.
 
-Detail is `asking you: <handle> (<kind>): <one-line text>` for a blocking ask; otherwise a live staying session reads `with you`, with `; checking <check>` while held and `; <wait phrase>` when waiting. Other runs print the [park phrase](#park-reasons), [wait phrase](#the-waiting-line), `running` (with ` · visit <n> of <max>` when capped), or `checking`. JSON `detail` uses the same phrase, without node or age. `show` prints `active (asking you)` while asking, otherwise `active (with you)` for a live staying attempt. Its session attempt is `held.attempt` while checking, otherwise `attempt`; its `lifecycle` is `stay` or `until`, omitted for turn attempts. An open blocking ask is stored in `asking`; `asked_ms` is the total closed pause time in milliseconds. Both are omitted when empty or zero. While held, NODE names the check, and `show` adds a `check` row but keeps the session's handle and sequence in its `attempt` row.
+Detail is `asking you: <handle> (<kind>): <one-line text>` for a blocking ask; otherwise a live staying session reads `with you`, with `; checking <check>` while held and `; <wait phrase>` when waiting. Other runs print the [park phrase](#park-reasons), [wait phrase](#the-waiting-line), `running` (with ` · visit <n> of <max>` when capped), or `checking`. JSON `detail` uses the same phrase, without node or age. A single-run `show` says `<step> is asking you` while asking, otherwise `<step> is with you` for a live staying attempt. Its session attempt is `held.attempt` while checking, otherwise `attempt`; its `lifecycle` is `stay` or `until`, omitted for turn attempts. An open blocking ask is stored in `asking`; `asked_ms` is the total closed pause time in milliseconds. Both are omitted when empty or zero. While held, NODE names the check; `show` keeps the session's step and handle in its headline and names the current check below it.
 
 ```console
 $ rimz workflow show repair
@@ -54,13 +55,19 @@ NEEDS YOU
   → rimz workflow show 'repair#feat-x'
 ```
 
-`rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope worktree` or `scope project`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live agent step's handle and sequence), `check` (the check evaluating a held session), `ask` (handle, kind, and text, while active and asking or parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the scope path when a step waits on takeover (`blockers unavailable` when the agent roster or the project's worktrees cannot be read), one `step <name>: N visits of <max> + <grant> grant` line per recorded step, and the history. An unbounded step prints `unbounded` instead of the limit and grant. A step declaring `max-visits-per-key` adds one indented `  key <json>: N visits of <max-visits-per-key> + <grant> grant` row per recorded key, in record order; unkeyed visits print `key null`. Steps without that field print no key rows. Each unfolded history line is time, `#seq` (`#—` without a sequence), node, event, any turn-end action, outcome, target, and the routed object; an agent attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
+`rimz workflow show <RUN> [--history | --json]` opens with the address and current state. A wait names its node, elapsed time, recheck and the next bound's time and target; a hold names its outcome, duration and the next bound's time and target. The forecast picks the earliest unfired deadline, timeout or hold completion, in that order on ties. A running step shows its visit limit and agent handle when available. Asking shows the question and says to answer in the pane or with `rimz answer`; a turn step's timeout pauses while asking. Finished runs say `done`, `failed`, or `canceled`, aged from termination. The next line names when and how the run started (by hand or by loop task), the number of completed attempts, and their known total cost, including judge evaluations. It omits cost when none is recorded, and never estimates a live attempt's spend.
 
-Adjacent evaluations with the same node, origin, outcome, and condition case index fold into one row, regardless of changes to their reason or other answer fields. Adjacent wakes fold when their node and signal agree; a wake between evaluations keeps its own row and breaks their run. A folded row uses the newest time, `#first–last` (or `#—` without sequences), `×N over <span>`, and the newest answer. The span runs from the oldest to the newest member. A closing check-wait summary takes no row when any earlier evaluation row at its node with its outcome overlaps the wait's inclusive span. Other waits, including step waits and waits whose evaluations are missing, print `×N over <span>` when N > 1, using the wait's first and last times, followed by ` · <detail>` when present. Omitting a summary does not break an evaluation run. `--json` keeps every journal entry, including closing waits, without folding.
+The current-node block shows the latest condition readings (`unread` for null), wait count and recheck, hold progress, running step, or full ask text. A takeover wait adds `takeover:` lines naming the agents that hold the scope path (`blockers unavailable` when the agent roster or the project's worktrees cannot be read). A parked run instead explains [why it stopped](#park-reasons) and prints `you can` commands. These commands, history footers, receipt hints and NEEDS YOU hints use the address when it selects this run, otherwise the run id, and add `--root` for another room. A visit cap lists the capped step's attempts and the refused visit; a per-key cap lists only that key's attempts. A timeout shows the flushed wait and the last shell-check log, and `invalid` shows the recorded stderr tail.
+
+`visits  <step> <used> of <max>` lists each visited capped step, with the run's grant included in the limit. A per-key cap adds `<step> <used> of <max> for key <json key>` in recorded key order (`null` for unkeyed visits). Uncapped steps print no visit rows. The `trail` projects routing decisions from the sealed specification and journal, folding consecutive matching check answers as `×N`. It includes resumes, parks and termination, keeps at most the newest eight hops with `+N earlier` for the rest, and ends in `now` while live. The footer names the home-relative work directory and the command for full history.
+
+`--history` replaces the compact view with the same headline and detailed journal history in recorded order, using local clocks and readable facts rather than raw JSON. Evaluations show outcomes and, only when they routed, targets, along with readings, reasons, shell logs, judge cost, and invalid stderr tails. Attempts show visits, handles or command exits, duration, cost, short HEAD before and after, logs, reasons, stopped and live children, provider reset, questions, and digests. Routes show targets and input fields; waits show outcome, count and span; turn ends show action, check, outcome and target. Parks, resumes, cancellation, terminal states and wake signals retain their recorded facts. `--history` requires an address or id, not a workflow name, and conflicts with `--json` (usage error, exit 2).
+
+Adjacent evaluations with the same node, origin, outcome, and condition case index fold into one row, regardless of changes to their reason or other answer fields. Adjacent wakes fold when their node and signal agree; a wake between evaluations keeps its own row and breaks their run. A folded row uses the newest time, `#first–last` (or `#—` without sequences), `×N over <span>`, the newest answer, and the judge cost its members recorded, summed. The span runs from the oldest to the newest member. A closing check-wait summary takes no row when any earlier evaluation row at its node with its outcome overlaps the wait's inclusive span. Other waits, including step waits and waits whose evaluations are missing, print `×N over <span>` when N > 1, using the wait's first and last times, followed by ` · <detail>` when present. Omitting a summary does not break an evaluation run. `--json` keeps every journal entry, including closing waits, without folding.
 
 ### The waiting line
 
-A run at a wait carries a shared phrase without node or `since`; `show` prefixes it with `waiting: <node>, `. Recheck and deadline clocks use local `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that. Capacity waits retain the shared sidebar clock format.
+A run at a wait carries a shared phrase without node or `since`; a single-run `show` puts it in its state headline and current-node block. Recheck, deadline and history clocks use local `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that. Capacity waits retain the shared sidebar clock format.
 
 ```console
 $ rimz workflow show ci-watch
@@ -77,7 +84,7 @@ ACTIVE
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot evict it yet. |
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
 | `waiting for capacity (<kinds>)` | A loop-started agent step is held by the start throttle. Its give-up time is absent for `forever`; reason and count follow ` · `. |
-| `×N` | How many advances found it still waiting. `show` omits this count only when exactly one history row states the wait with the same count. `workflow list` and the loop commands always retain it. |
+| `×N` | How many advances found it still waiting. `show --history` omits this count from the waiting phrase only when exactly one history row states the wait with the same count. `workflow list` and the loop commands always retain it. |
 | `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal matching that check's subscription clears it. For a `for` hold it is when the hold completes, and subscribed signals and the minute tick re-sample the case before then. |
 
 ## Cancel and resume
@@ -139,7 +146,7 @@ An unrecorded checkout retries a sustained-true condition every five minutes. A 
 
 ## Park reasons
 
-A parked run waits for you under NEEDS YOU in `rimz loop list`, in the sidebar cockpit, and in `list` and `show`.
+A parked run appears under NEEDS YOU in `workflow list` and, when it belongs to a loop task, `loop list`. The sidebar cockpit also surfaces it; `show` explains why and prints the available next commands.
 
 The list's park phrase is `<reason>[: <text>]`. Cap, timeout, and deadline phrases derive `cap: <used> of <max> visits`, `timeout: waited <timeout>`, and `deadline: passed <clock>` from the sealed spec and record; other reasons keep the recorded text on one line.
 
@@ -147,9 +154,9 @@ The list's park phrase is `<reason>[: <text>]`. Cap, timeout, and deadline phras
 | --- | --- |
 | `user` | An edge routed to `@user`; the text is the check's `reason`. |
 | `cap` | A step reached `max-visits` or `max-visits-per-key`, and `on.cap` defaults or routes to `@user`. |
-| `deadline` | The run's deadline passed with no `on.deadline` edge. |
-| `timeout` | A check's `timeout` passed with no `on.timeout` edge. |
-| `invalid` | A script check failed or printed a bad object with no `on.invalid` edge. |
+| `deadline` | The run's deadline passed, and `on.deadline` defaults or routes to `@user`. |
+| `timeout` | A check's `timeout` passed, and `on.timeout` defaults or routes to `@user`. |
+| `invalid` | A script or shell check could not evaluate (including invalid script output), and `on.invalid` defaults or routes to `@user`. |
 | `asked` | A turn step's leader or child blocked on a question or permission prompt and `on.asked` routes to `@user`; the text is the prompt. |
 | `check` | A check evaluation failed twice. |
 
@@ -161,7 +168,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 `list --json` and `show <workflow> --json` print arrays of `{id, address, workflow, scope, state, node, since, detail}`. `scope` is the scope path: the checkout, or the project root for `scope = "project"`. `since` remains node entry, not the human row's state-specific age. `detail` is the human phrase above. No existing key is removed, but consumers matching the old `waiting: <node>,` prefix must use the separate `node` and `since` fields instead.
 
-`show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries. An active attempt's optional `asking` is `{since, text, kind, handle}`, with `kind` one of `question`, `permission`, or `plan_approval`; `asked_ms` accumulates closed pauses. These fields pause a turn step's timeout, not the run deadline. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
+`show --json` prints `{address, dir, record, journal}`: the short run address, work directory, run record, and history entries. An active attempt's optional `asking` is `{since, text, kind, handle}`, with `kind` one of `question`, `permission`, or `plan_approval`; `asked_ms` accumulates closed pauses. These fields pause a turn step's timeout, not the run deadline. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
 
 A capacity wait has `record.wait.outcome = "capacity"`, provider `kinds`, and optional `gives_up_at` (absent for `forever`), alongside the usual `node`, `detail`, `first`, `last`, and `count`. Giving up journals a `capacity` route with input `{outcome: "capacity", step, reason, kinds, waited_ms}` and any inherited `key`.
 
@@ -175,7 +182,7 @@ Command-step attempts and `record.prev_attempt` carry nullable `code` (exit code
 
 A command step records `ended` on exit 0, `died` on another exit, signal, spawn failure, or log-open failure, and `timeout` when its step timeout interrupts it; these follow `then`. A run deadline records `canceled` and follows `on.deadline`. Cancel records `canceled` and ends the run. A lost host records `canceled` with a reason and follows `then`, without rerunning the action. An interrupted command whose bound is no longer due follows `then` as `canceled`. A child that exited on its own keeps its exit outcome even if a bound fell due before settlement. The next check receives the original routed input; the command's evidence is in `prev_attempt`.
 
-Text history keeps the attempt event line and adds `    exit <code|—> HEAD <start8|—> → <end8|—>` when `code` or `log` is present, followed by `    log: <path>` when present. Any attempt with a reason adds `    reason: <text>`. A running command has no live `attempt` header row; that row belongs to supervised agent runs.
+Text history keeps the attempt event line and adds `    exit <code|—> HEAD <start8|—> → <end8|—>` for a command step, followed by `    log: <path>` when present. An agent attempt names its handle instead of the exit. Any attempt with a reason adds `    reason: <text>`. A running command's headline has no agent handle.
 
 A visit cap routes `on.cap` with `{outcome: "cap", step, bound: "max-visits" | "max-visits-per-key", visits, max}`, plus the inherited `key` when present. The total cap is checked first and wins when both trip. `visits` is the tripped bound's count; `max` is its limit plus the run's visit grant. The journal's route input carries the same object.
 

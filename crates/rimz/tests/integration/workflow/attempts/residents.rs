@@ -391,7 +391,11 @@ fn stop_records_recursive_children_and_leaves_peers_and_cohorts_live() {
             .collect::<Vec<_>>(),
         vec![74, 75]
     );
-    let human = success(room.command(&["workflow", "show", &id]).output().unwrap());
+    let human = success(
+        room.command(&["workflow", "show", &id, "--history"])
+            .output()
+            .unwrap(),
+    );
     assert!(human.contains("stopped (2)") && human.contains("live (2)") && human.contains("forge"));
 }
 
@@ -502,9 +506,20 @@ fn turn_error_wakes_and_preserves_typed_limit_reset() {
             value["record"]["prev_attempt"]["limited"]["reset_at"],
             reset.to_string()
         );
+        let zone = jiff::tz::TimeZone::system();
+        let local_reset = reset.to_zoned(zone.clone());
+        let reset_format = if local_reset.date() == jiff::Timestamp::now().to_zoned(zone).date() {
+            "%H:%M"
+        } else {
+            "%a %H:%M"
+        };
         assert!(
-            success(room.command(&["workflow", "show", &id]).output().unwrap())
-                .contains(&reset.to_string())
+            success(
+                room.command(&["workflow", "show", &id, "--history"])
+                    .output()
+                    .unwrap()
+            )
+            .contains(&format!("reset_at: {}", local_reset.strftime(reset_format)))
         );
         let count = events(&value, "evaluation").len();
         success(

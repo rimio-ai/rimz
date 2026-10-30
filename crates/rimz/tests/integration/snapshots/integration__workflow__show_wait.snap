@@ -2,13 +2,11 @@
 source: crates/rimz/tests/integration/workflow.rs
 expression: normalized
 ---
-<work>
-workflow:       review
-scope worktree: <checkout>
-state:          active
-current node:   pr, since <time>
-deadline:       none
-prompt:         Review this
-waiting: pr, said pending, recheck <clock>
-history:
-  <time> #1 pr evaluation pending {"outcome":"pending","reason":"CI pending","recheck_at":"<time>"}
+review#project  ☾ waiting at pr <age>: said pending, ×1, recheck <clock> · gives up <clock>, then @user
+started <clock> by hand · 0 attempts
+  ci: pending
+  pr: unread
+  said pending, ×1, recheck <clock>
+trail  <clock> pr pending → @wait · now
+work dir <work>
+all of it: rimz workflow show 'review#project' --history
