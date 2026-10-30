@@ -7,7 +7,7 @@ rimz stats                              # print the panel once
 rimz stats --dollars                    # shade the heatmap by dollars instead of tokens
 rimz stats --refresh                    # hold the panel open and repaint every minute
 rimz stats --json | jq '.windows.week'  # tokens and dollars over the last 7 local days
-rimz stats --assists                    # latest 50 effective assists, newest first
+rimz stats --assists                    # latest 50 effective assist lines, repeats folded
 rimz stats --assists -n 0 --all          # all retained attempts, including held ones
 rimz stats --agents                     # every agent profile, unfolded
 rimz stats --teams                      # every team, without per-role rows
@@ -24,7 +24,7 @@ rimz stats --subagents                  # every subagent profile, unfolded
 | `--agents` | Show every solo agent profile with spend or recorded effort in the selected window, including provider-named rows, with spend, fleet dollar share, input, output, cached tokens, hit rate, distinct sessions, and agent-time. With `--json`, also include profiles with work tokens and no spend. Conflicts with `--teams`, `--subagents`, `--refresh`, and `--assists`. |
 | `--teams` | Show every team with spend or recorded effort in the selected window, with the agent columns plus messages. Team roles appear only in JSON. With `--json`, also include teams with work tokens and no spend. Conflicts with `--agents`, `--subagents`, `--refresh`, and `--assists`. |
 | `--subagents` | Show every subagent profile with spend or recorded effort in the selected window, with the agent columns. These dollars are already counted in their owners or the remainder. With `--json`, also include profiles with work tokens and no spend. Conflicts with `--agents`, `--teams`, `--refresh`, and `--assists`. |
-| `-n N` | With `--assists`, show at most N events (default 50); 0 means all retained. |
+| `-n N` | With `--assists`, show at most N timeline lines, or N events with `--json` (default 50); 0 means all retained. |
 | `--all` | With `--assists`, include held and undelivered attempts. |
 
 A conflicting pair exits `2`. Of the [global flags](../cli.md#global-flags), `--color` applies; `--root` and the backend flags are accepted and change nothing, because the figures are machine-wide.
@@ -162,9 +162,11 @@ The `Workflow: N` category sums the five [workflow](./workflow.md) assist kinds.
 
 The `Molts: N` category counts agents moved into fresh sessions by `rimz agents molt`. The JSON rollup exposes `molts`; each `molt` event names the predecessor (`kind`, `agent_id`, `label`), the successor (`successor_kind`, `successor_id`, `successor_label`), and optional inherited `generation`. The successor id is its launch id. A molt counts once its new tab opens, even if the successor later fails or arming the predecessor's idle stop fails. Timeline lines show both handles; forensic lines retain both providers and ids.
 
-By default, `rimz stats --assists` prints the latest 50 events that took effect, newest first, with the non-zero category counts over all retained records. Times use the configured timezone. Each line names the outcome and identifiers needed to trace it. `--all` includes held and undelivered attempts. When more remain, the trailer says `… N older; rimz stats --assists -n 0 for all`. Zero means all retained records across both log generations, not unlimited history.
+By default, `rimz stats --assists` prints the latest 50 lines of assists that took effect, newest first, with the non-zero category counts over all retained records. Times use the configured timezone. Repeated outcomes for the same subject and assist kind fold within that subject's history of that kind, even when other subjects or kinds interleave. A changed outcome or policy key breaks the repeats; different agents and targets stay apart. A repeated line reads `YYYY-MM-DD HH:MM outcome · ×N over span · identifiers`, using its newest member's time, reason, readings, and identifiers. Reclaimed bytes, GC removal and problem counts, judge cost, and recovered parked time are summed; idle, silence, and startup durations become ranges. Repeated resumes omit the individual clock-time span. A workflow route with its own poll count never folds again.
 
-The header counts each kind's attempts that did not take effect beside it, for example `Auto-compact: 2 (239 held)`. Delivery-based events count only when delivered, except a stall notice, which counts once queued for its parent and is held only on an error. A stall notice still counts if later withdrawn because its child run ended before delivery. Stops, freezes and relaunches use their recorded success flags. Redemption counts require a window reset; GC, temp evictions, and port forwards require no error. Molts, model aliases, tier fallbacks, empty-dir grants, resident launches, judge declines, compact commands and room resumes count as recorded.
+`-n` counts lines after folding, so each line's `×N` includes every matching record, even beyond the limit. `--all` includes held and undelivered attempts. When more remain, the trailer says `… N older; rimz stats --assists -n 0 for all`, where `older` counts records outside the printed lines. The printed repeat counts plus `older` equal the filtered record count. Zero shows all retained records across both log generations, not unlimited history. JSON keeps one event per record, with `-n` and `older` counting records rather than lines.
+
+The header counts each kind's attempts that did not take effect beside it, for example `Auto-compact: 2 (239 held)`. Delivery-based events count only when delivered, except a stall notice, which counts once queued for its parent and is held only on an error. A stall notice still counts if later withdrawn because its child run ended before delivery. Stops and relaunches use their recorded success flags. Hibernation counts freezes; a deepening step adds its reclaimed bytes, takes effect, and is never held. Redemption counts require a window reset; GC, temp evictions, and port forwards require no error. Molts, model aliases, tier fallbacks, empty-dir grants, resident launches, judge declines, compact commands and room resumes count as recorded.
 
 `rimz stats --assists --json` emits `{as_of, rollup, events, older}`, respecting `-n` and `--all`; its `as_of` is the read time, with the offset of the configured timezone. `--agents --json`, `--teams --json`, and `--subagents --json` emit `{as_of, window, agents|teams|subagents, roles_since?, effort_since?}` with only the selected array. The default stats JSON carries the assist rollup without events; every breakdown's `share` is a dollar share.
 
@@ -173,12 +175,12 @@ The header counts each kind's attempts that did not take effect beside it, for e
 | `▶` | Resident launch: a scheduled task opened its agents. |
 | `↘` | Tier fallback: the profile used the next available model. |
 | `▶` | Auto-continue: a parked agent resumed, or `resume held` when delivery did not happen. |
-| `◷` | Cache keepalive: idle duration, the keep-warm horizon when one was holding, and pending-wait count, followed by agent, message, and delivery verdict. |
+| `◷` | Cache keepalive: idle duration (a range for repeats), the keep-warm horizon when one was holding, and newest pending-wait count, followed by agent, message, and delivery verdict. |
 | `■` | Idle stop: an agent stopped by its `--when-idle` request, with how long it rested, the threshold, and who asked; `idle stop failed` carries the error. |
 | `↶` | Idle stop withdrawn: a prompt from the user kept the session, with the withdrawn threshold and who asked for the stop. |
 | `⤳` | Molt: the predecessor moved into a fresh successor session. |
 | `↺` | Launch retry: an agent whose CLI exited before its session opened, with the exit code, how long it lived, and the attempt number; `relaunch failed` carries the error. |
-| `⌁` | Compaction: before a delivery (`auto-compact`), after an idle gap (`idle compacted`), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
+| `⌁` | Compaction: before a delivery (`auto-compact`), after an idle gap (`idle compacted`, with a duration range for repeats), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
 | `↻` | Credit redemption for a provider account, with its outcome. |
 | `⟲` | Room restore after a crash or reboot, with the channels it brought back. |
 | `♻` | Automatic `rimz gc` sweep: `gc swept` for room scope or `machine gc swept` for machine scope, followed by what it reclaimed and removed and its cutoff; `gc failed` carries the error. |

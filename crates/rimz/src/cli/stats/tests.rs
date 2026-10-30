@@ -3251,7 +3251,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert!(
         forensics
             .iter()
-            .any(|line| line.contains("agent session-2 · message msg_4 · delivered true"))
+            .any(|line| line.ends_with("agent session-2 · message msg_4"))
     );
     assert!(forensics.iter().any(|line| {
         line.contains("workspace ws_0123456789abcdef01234567 · session rimz-test")

@@ -396,7 +396,7 @@ fn launch_retries_count_relaunches_and_preserve_spawn_failures() {
         "{line}"
     );
     let forensic = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
-    assert!(forensic.ends_with("relaunched true"), "{forensic}");
+    assert!(!forensic.contains("relaunched true"), "{forensic}");
     assert!(!forensic.contains("run "), "{forensic}");
 
     let failed = serde_json::from_value::<AssistRecord>(serde_json::json!({
@@ -476,7 +476,7 @@ fn idle_stop_stats_count_stops_and_preserve_failures() {
         lines.contains("■ @coder idle stopped after 200s (threshold 3m) — requested by @lead"),
         "{lines}"
     );
-    assert!(lines.contains("agent session-1 · stopped true"), "{lines}");
+    assert!(!lines.contains("stopped true"), "{lines}");
     assert!(
         lines.contains(
             "@coder idle stop failed after 200s (threshold 3m) — requested by @lead (no bound pane)"
@@ -697,6 +697,401 @@ fn flip_compaction_fold_and_render_preserve_skipped_attempts() {
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(lines, @"
-    1970-01-01 00:00 ⌁ @coder flip compaction — Implement → Review — 180k ctx, threshold 180k · agent session-1 · message msg_1 · delivered true
+    1970-01-01 00:00 ⌁ @coder flip compaction — Implement → Review — 180k ctx, threshold 180k · agent session-1 · message msg_1
     ");
+}
+
+mod repeats {
+    use super::*;
+
+    fn repeat_stats(records: Vec<serde_json::Value>) -> AssistStats {
+        let count = records.len();
+        AssistStats::from_records(
+            "all",
+            records
+                .into_iter()
+                .enumerate()
+                .map(|(index, mut record)| {
+                    record["at"] = serde_json::json!(
+                        Timestamp::from_second(((count - index) * 3600) as i64).unwrap()
+                    );
+                    serde_json::from_value(record).unwrap()
+                })
+                .collect(),
+        )
+    }
+
+    fn keepalive_record(agent: &str, delivered: bool) -> serde_json::Value {
+        serde_json::json!({
+            "assist": "cache_keepalive", "kind": "claude", "agent_id": agent,
+            "label": format!("@{agent}"), "idle_secs": 3600, "waits": 1,
+            "message_id": "msg_keepalive", "delivered": delivered, "capped": false
+        })
+    }
+
+    #[test]
+    fn timeline_repeats_follow_interleaved_subject_histories() {
+        let stats = repeat_stats(vec![
+            keepalive_record("a", true),
+            keepalive_record("b", true),
+            keepalive_record("a", true),
+            keepalive_record("b", true),
+            keepalive_record("a", true),
+        ]);
+        let (lines, older) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0]
+                .contains("@a cache keepalive after 1h — 1 wait pending · ×3 over 4h · agent a"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1]
+                .contains("@b cache keepalive after 1h — 1 wait pending · ×2 over 2h · agent b"),
+            "{lines:?}"
+        );
+        assert_eq!(older, 0);
+    }
+
+    #[test]
+    fn timeline_other_kinds_do_not_break_a_subjects_repeats() {
+        let stats = repeat_stats(vec![
+            keepalive_record("a", true),
+            serde_json::json!({
+                "assist": "hibernate", "kind": "claude", "agent_id": "a", "label": "@a",
+                "idle_secs": 3600, "frozen": true, "reclaimed_bytes": 1024
+            }),
+            keepalive_record("a", true),
+        ]);
+        let (lines, _) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("×2 over 2h"), "{lines:?}");
+        assert!(lines[1].contains("hibernated, 1 KB reclaimed"), "{lines:?}");
+        assert!(
+            !lines[1].contains("×") && !lines[1].contains("frozen true"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn timeline_a_different_key_breaks_repeats_in_the_filtered_stream() {
+        let stats = repeat_stats(vec![
+            keepalive_record("a", true),
+            keepalive_record("a", false),
+            keepalive_record("a", true),
+        ]);
+        let all = timeline_lines(&stats, 0, true, &jiff::tz::TimeZone::UTC).0;
+        let effective = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC).0;
+        assert_eq!((all.len(), effective.len()), (3, 1));
+        assert!(all.iter().all(|line| !line.contains("×")), "{all:?}");
+        assert!(effective[0].contains("×2 over 2h"), "{effective:?}");
+    }
+
+    #[test]
+    fn timeline_limits_count_lines_but_older_and_json_count_records() {
+        let stats = repeat_stats(vec![
+            keepalive_record("a", true),
+            keepalive_record("b", true),
+            keepalive_record("a", true),
+            keepalive_record("b", false),
+            keepalive_record("a", true),
+        ]);
+        let as_of = Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC);
+        let results = [false, true]
+            .into_iter()
+            .flat_map(|all| {
+                let stats = &stats;
+                let as_of = &as_of;
+                [0, 1, 2].into_iter().map(move |limit| {
+                    let (lines, older) =
+                        timeline_lines(stats, limit, all, &jiff::tz::TimeZone::UTC);
+                    let shown = lines
+                        .iter()
+                        .map(|line| {
+                            line.split_once(" · ×").map_or(1, |(_, repeat)| {
+                                repeat.split_once(' ').unwrap().0.parse::<usize>().unwrap()
+                            })
+                        })
+                        .sum::<usize>();
+                    let total = stats.timeline(0, all).0.len();
+                    let json = crate::cli::stats::json::assists_value(stats, limit, all, as_of);
+                    let expected_lines = if limit == 0 {
+                        if all { 3 } else { 2 }
+                    } else {
+                        limit
+                    };
+                    (
+                        all,
+                        limit,
+                        lines.len() == expected_lines,
+                        shown + older == total,
+                        json["events"]
+                            == serde_json::to_value(stats.timeline(limit, all).0).unwrap(),
+                        json["older"] == total - if limit == 0 { total } else { limit },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            results
+                .iter()
+                .all(|(_, _, rows, counted, events, older)| *rows && *counted && *events && *older),
+            "{results:?}"
+        );
+    }
+
+    #[test]
+    fn timeline_repeat_quantities_sum_and_keep_the_newest_reason() {
+        let hibernate = serde_json::json!({
+            "assist": "hibernate", "kind": "claude", "agent_id": "a", "label": "@a",
+            "idle_secs": 3600, "frozen": false, "reclaimed_bytes": 1024
+        });
+        let judge = serde_json::json!({
+            "assist": "judge_decline", "task": "review", "checkout": "/project",
+            "profile": "judge", "kind": "claude", "reason": "newest reason", "cost_usd": 0.25
+        });
+        let mut older_judge = judge.clone();
+        older_judge["reason"] = "older reason".into();
+        let mut older_keepalive = keepalive_record("a", true);
+        older_keepalive["idle_secs"] = 7200.into();
+        let resumes = [2, 1].map(|hour| {
+            serde_json::json!({
+                "assist": "auto_continue", "kind": "claude", "agent_id": "a", "label": "@a",
+                "park": "usage", "parked_since": format!("1970-01-01T0{}:00:00Z", hour - 1),
+                "delivered": true, "message_id": "msg_resume"
+            })
+        });
+        let cases = [
+            (
+                vec![hibernate.clone(), hibernate.clone(), hibernate],
+                vec!["hibernation deepened, 3 KB reclaimed", "×3 over 2h"],
+            ),
+            (
+                vec![judge, older_judge],
+                vec!["newest reason", "$0.50", "×2 over 1h"],
+            ),
+            (
+                vec![keepalive_record("a", true), older_keepalive],
+                vec!["after 1h–2h", "×2 over 1h"],
+            ),
+            (
+                vec![resumes[0].clone(), resumes[1].clone()],
+                vec!["2.0h recovered", "×2 over 1h"],
+            ),
+        ];
+        let results = cases
+            .into_iter()
+            .map(|(records, expected)| {
+                let stats = repeat_stats(records);
+                let (lines, _) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+                let correct = lines.len() == 1
+                    && expected.iter().all(|text| lines[0].contains(text))
+                    && !lines[0].contains('→')
+                    && !lines[0].contains("older reason");
+                (correct, lines)
+            })
+            .collect::<Vec<_>>();
+        assert!(results.iter().all(|(correct, _)| *correct), "{results:?}");
+    }
+
+    #[test]
+    fn timeline_counted_workflow_routes_keep_their_own_rows() {
+        let records = [7, 4].map(|count| {
+            serde_json::json!({
+                "assist": "workflow_route", "run": "wf_0190b8172c0070008000000000000001",
+                "workflow": "build", "node": "check", "outcome": "waiting", "to": "check",
+                "count": count
+            })
+        });
+        let stats = repeat_stats(records.into());
+        let (lines, older) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("waiting ×7") && lines[1].contains("waiting ×4"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains(" over ")),
+            "{lines:?}"
+        );
+        assert_eq!(older, 0);
+    }
+
+    #[test]
+    fn timeline_repeats_range_per_attempt_durations_in_their_original_units() {
+        let fixtures = [
+            (
+                serde_json::json!({
+                    "assist": "idle_compact", "kind": "claude", "agent_id": "a",
+                    "idle_secs": 600, "occupied_tokens": 100000, "message_id": "msg_idle",
+                    "delivered": true
+                }),
+                "idle_secs",
+                3600,
+                "after 0.2h–1.0h",
+            ),
+            (
+                serde_json::json!({
+                    "assist": "idle_compact", "kind": "claude", "agent_id": "a",
+                    "idle_secs": 600, "idle_after_secs": 300, "occupied_tokens": 100000,
+                    "message_id": "msg_idle", "delivered": true
+                }),
+                "idle_secs",
+                3600,
+                "after 10m–1h (threshold 5m)",
+            ),
+            (
+                serde_json::json!({
+                    "assist": "idle_stop", "kind": "claude", "agent_id": "a", "label": "@a",
+                    "idle_secs": 600, "idle_after_secs": 300, "stopped": true
+                }),
+                "idle_secs",
+                3600,
+                "after 10m–1h (threshold 5m)",
+            ),
+            (
+                serde_json::json!({
+                    "assist": "stall_notice", "kind": "claude", "agent_id": "a", "parent": "@lead",
+                    "silent_secs": 600, "message_id": "msg_stall", "delivered": true
+                }),
+                "silent_secs",
+                3600,
+                "silent 10m–1h",
+            ),
+            (
+                serde_json::json!({
+                    "assist": "launch_retry", "kind": "claude", "label": "@a",
+                    "attempt": 2, "startup_ms": 900, "exit_code": 1, "relaunched": true
+                }),
+                "startup_ms",
+                1200,
+                "after <1s–1s before",
+            ),
+        ];
+        let results = fixtures
+            .into_iter()
+            .map(|(newest, field, maximum, expected)| {
+                let mut older = newest.clone();
+                older[field] = maximum.into();
+                let stats = repeat_stats(vec![newest, older]);
+                let (lines, _) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+                (lines.len() == 1 && lines[0].contains(expected), lines)
+            })
+            .collect::<Vec<_>>();
+        assert!(results.iter().all(|(correct, _)| *correct), "{results:?}");
+    }
+
+    #[test]
+    fn timeline_repeats_sum_sweep_counts_and_keep_machine_and_room_streams_apart() {
+        let workspace = rimz::WorkspaceId::from_project_root(Path::new("/project"));
+        let room = serde_json::json!({
+            "assist": "auto_gc", "workspace_id": workspace, "scope": "room",
+            "older_than_secs": 3600, "reclaimed_bytes": 1024, "worktrees_removed": 1,
+            "workspaces_pruned": 2, "files_removed": 3, "messages_archived": 4, "problems": 5
+        });
+        let mut machine = room.clone();
+        machine["scope"] = "machine".into();
+        let evict = serde_json::json!({
+            "assist": "tmp_evict", "workspace_id": workspace, "handle": "a",
+            "reclaimed_bytes": 1024, "free_bytes_after": 4096, "floor_bytes": 8192
+        });
+        let stats = repeat_stats(vec![room.clone(), machine, room, evict.clone(), evict]);
+        let (lines, _) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[0].contains(
+                "2 KB reclaimed, 2 worktrees, 4 workspaces, 6 files, 8 messages, 10 problems"
+            ),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0].contains("×2 over 2h") && lines[1].contains("machine gc swept"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[2].contains("temp eviction — 2 KB reclaimed") && lines[2].contains("×2 over 1h"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn timeline_repeat_keys_preserve_policy_and_hibernation_transitions() {
+        let base = keepalive_record("a", true);
+        let frozen = serde_json::json!({
+            "assist": "hibernate", "kind": "claude", "agent_id": "a", "label": "@a",
+            "idle_secs": 3600, "frozen": true, "reclaimed_bytes": 1024
+        });
+        let route = serde_json::json!({
+            "assist": "workflow_route", "run": "wf_0190b8172c0070008000000000000001",
+            "workflow": "build", "node": "check", "outcome": "ready", "to": "build"
+        });
+        let idle_compact = serde_json::json!({
+            "assist": "idle_compact", "kind": "claude", "agent_id": "a", "idle_secs": 600,
+            "idle_after_secs": 300, "occupied_tokens": 100000, "message_id": "msg_idle",
+            "delivered": true
+        });
+        let idle_stop = serde_json::json!({
+            "assist": "idle_stop", "kind": "claude", "agent_id": "a", "label": "@a",
+            "idle_secs": 600, "idle_after_secs": 300, "requested_by": "@lead", "stopped": true
+        });
+        let flip = serde_json::json!({
+            "assist": "flip_compact", "kind": "claude", "agent_id": "a", "role": "coder",
+            "threshold": 100000, "from": "Build", "to": "Review", "delivered": true
+        });
+        let cases = [
+            (idle_compact, "idle_after_secs", serde_json::json!(600), 3),
+            (
+                idle_stop.clone(),
+                "idle_after_secs",
+                serde_json::json!(600),
+                3,
+            ),
+            (idle_stop, "requested_by", serde_json::json!("@other"), 3),
+            (flip, "threshold", serde_json::json!(150000), 3),
+            (base.clone(), "capped", serde_json::json!(true), 3),
+            (base.clone(), "agent_id", serde_json::json!("b"), 2),
+            (
+                base,
+                "error",
+                serde_json::json!("new reading, same outcome"),
+                1,
+            ),
+            (frozen, "frozen", serde_json::json!(false), 3),
+            (route.clone(), "to", serde_json::json!("review"), 3),
+            (
+                route,
+                "run",
+                serde_json::json!("wf_0190b8172c0070008000000000000002"),
+                2,
+            ),
+        ];
+        let results = cases
+            .into_iter()
+            .map(|(base, field, value, expected)| {
+                let mut changed = base.clone();
+                changed[field] = value;
+                let stats = repeat_stats(vec![base.clone(), changed, base]);
+                let (lines, _) = timeline_lines(&stats, 0, true, &jiff::tz::TimeZone::UTC);
+                (field, lines.len(), expected)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            results
+                .iter()
+                .all(|(_, actual, expected)| actual == expected),
+            "{results:?}"
+        );
+    }
+
+    #[test]
+    fn timeline_legacy_compaction_error_keeps_its_recorded_prose() {
+        let error = "already compacted 5m ago and has not taken a turn since; a compaction never follows a compaction";
+        let stats = repeat_stats(vec![serde_json::json!({
+            "assist": "flip_compact", "kind": "claude", "agent_id": "a", "role": "coder",
+            "threshold": 100000, "from": "Build", "to": "Review", "delivered": false,
+            "error": error
+        })]);
+        let (lines, _) = timeline_lines(&stats, 0, true, &jiff::tz::TimeZone::UTC);
+        assert!(lines[0].contains(error), "{lines:?}");
+    }
 }

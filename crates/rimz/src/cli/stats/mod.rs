@@ -95,7 +95,7 @@ pub struct StatsArgs {
     /// Show every subagent profile's spend and recorded effort in the selected window.
     #[arg(long, conflicts_with = "refresh")]
     pub subagents: bool,
-    /// Number of assists to show; 0 shows all retained events.
+    /// Timeline lines to show (events with --json); 0 shows all retained.
     #[arg(short = 'n', default_value_t = 50, requires = "assists")]
     pub limit: usize,
     /// Include held and undelivered assist attempts.
