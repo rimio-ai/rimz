@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::harness::schedule::{self, signal::SignalSelector, when::WhenExpr};
+use crate::store::workflow::{Key, RunRecord, StepVisits};
 
 pub use crate::store::workflow::ScopeKind;
 
@@ -22,6 +23,36 @@ pub struct WorkflowSpec {
 }
 
 impl WorkflowSpec {
+    /// Resolve a routing decision against this spec, including engine-owned outcomes.
+    pub fn target(&self, node: &str, outcome: &str) -> Option<String> {
+        if outcome == "deadline" {
+            return (self.checks.contains_key(node) || self.steps.contains_key(node)).then(|| {
+                self.workflow
+                    .on
+                    .deadline
+                    .as_deref()
+                    .unwrap_or("@user")
+                    .into()
+            });
+        }
+        if let Some(check) = self.checks.get(node) {
+            return if outcome == "hold" {
+                Some("@wait".into())
+            } else {
+                check.edges().get(outcome).cloned()
+            };
+        }
+        let step = self.steps.get(node)?;
+        let edge = match outcome {
+            "ended" | "died" | "canceled" | "limited" | "timeout" => "then",
+            other => other,
+        };
+        step.edges()
+            .get(edge)
+            .map(|(target, _)| (*target).to_owned())
+            .or_else(|| matches!(edge, "then" | "asked").then(|| "@user".into()))
+    }
+
     /// `Some(empty)` demands checkout facts; `None` means no condition or wake needs them.
     pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
         let mut branches = None;
@@ -230,6 +261,35 @@ pub(super) enum StepKind<'a> {
 }
 
 impl Step {
+    /// Configured bounds as (name, used, limit including grant), total before per-key.
+    pub fn visit_bounds(
+        &self,
+        visits: Option<&StepVisits>,
+        key: Option<&Key>,
+        grant: u64,
+    ) -> impl Iterator<Item = (&'static str, u64, u64)> {
+        [
+            ("max-visits", visits.map_or(0, |v| v.total), self.max_visits),
+            (
+                "max-visits-per-key",
+                visits.map_or(0, |v| v.for_key(key)),
+                self.max_visits_per_key,
+            ),
+        ]
+        .into_iter()
+        .filter_map(move |(bound, used, max)| Some((bound, used, max?.saturating_add(grant))))
+    }
+
+    /// The first exhausted bound for the record's current step and key.
+    pub fn tripped_visit_bound(&self, record: &RunRecord) -> Option<(&'static str, u64, u64)> {
+        self.visit_bounds(
+            record.visits.get(&record.node),
+            record.key.as_ref(),
+            record.visit_grant,
+        )
+        .find(|(_, used, max)| used >= max)
+    }
+
     pub(super) fn kind(&self) -> Option<StepKind<'_>> {
         match (&self.agent, &self.run, &self.shell) {
             (Some(agent), None, None) => Some(StepKind::Agent(agent)),

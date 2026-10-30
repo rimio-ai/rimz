@@ -124,8 +124,8 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         }
         Command::Resume { id, at, extend } => {
             let (state, _) = locate(&id)?;
-            workflow::resume(&state, &id, at.as_deref(), &extend)?;
-            writeln!(render::out(), "{id}: resumed")?;
+            let record = workflow::resume(&state, &id, at.as_deref(), &extend)?;
+            writeln!(render::out(), "{}: resumed", record.id)?;
             Ok(())
         }
         Command::Advance {

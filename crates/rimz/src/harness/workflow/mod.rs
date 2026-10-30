@@ -11,6 +11,7 @@ use crate::store::run::RunStatus;
 use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited, TurnEnd};
 
 mod engine;
+mod inspect;
 mod script;
 mod spec;
 mod state;
@@ -18,6 +19,7 @@ mod validate;
 
 pub(crate) use engine::reassign_task;
 pub use engine::{WorkflowErr, advance, cancel, create, resume, wake, wake_run};
+pub use inspect::{Hop, HopKind, hops, timeout_at};
 pub use spec::{
     Case, Check, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, WorkflowSpec, load,
     schema,

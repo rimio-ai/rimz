@@ -57,6 +57,46 @@ pub struct Scope {
     pub path: PathBuf,
 }
 
+/// A workflow name and the basename of its recorded scope path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunAddress {
+    pub workflow: String,
+    pub lane: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("run address must be <workflow>#<lane> with nonempty parts")]
+pub struct RunAddressErr;
+
+impl std::fmt::Display for RunAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}#{}", self.workflow, self.lane)
+    }
+}
+
+impl std::str::FromStr for RunAddress {
+    type Err = RunAddressErr;
+
+    fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
+        let (workflow, lane) = raw
+            .split_once('#')
+            .filter(|(workflow, lane)| !workflow.is_empty() && !lane.is_empty())
+            .ok_or(RunAddressErr)?;
+        Ok(Self {
+            workflow: workflow.into(),
+            lane: lane.into(),
+        })
+    }
+}
+
+impl RunAddress {
+    /// Match a requested address against a recorded one, accepting dashed worktree names.
+    pub fn matches(&self, address: &Self) -> bool {
+        self.workflow == address.workflow
+            && (self.lane == address.lane || self.lane.replace('/', "-") == address.lane)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
@@ -431,6 +471,20 @@ pub struct RunRecord {
 }
 
 impl RunRecord {
+    /// Derive the lane without resolving or reading the checkout, which may be gone.
+    pub fn address(&self) -> RunAddress {
+        RunAddress {
+            workflow: self.workflow.clone(),
+            lane: self
+                .scope
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+
     /// The shared predicate for a live run of a loop task.
     pub fn started_by(&self, task: &str) -> bool {
         !self.state.is_terminal() && self.task.as_deref() == Some(task)
