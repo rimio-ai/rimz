@@ -3499,9 +3499,10 @@ upward-dependencies = ["agents"]
 # fmt::dollars_estimate gives selected cache lines a two-significant-figure money vocabulary (+1).
 # fmt::active_duration shares agent-time formatting between attribution and stats (+1).
 # BrandColor::shade shares provider-relative model tones with renderers (+1).
+# Palette::model_tones assigns readable scheme hues while the CLI still uses the ladder (+1).
 # fmt::age_label and fmt::rel_age give CLI reports and launcher entry facts one age vocabulary (+2).
 # fmt::capacity_wait shares the local-time phrase across loop, workflow and sidebar surfaces (+1).
-surface-budget = 40
+surface-budget = 41
 
 [[verdict]]
 kind = "item"

@@ -75,6 +75,14 @@ pub(super) fn warm_toward(base: Rgb, target: Rgb, rotate: f32, chroma_scale: f32
     .to_rgb()
 }
 
+/// Distance in OKLab's a-b plane, lightness ignored: how far apart two colors' hue and
+/// chroma sit. Unlike a hue angle, it stays defined for achromatic colors.
+pub(super) fn chromatic_distance(left: Rgb, right: Rgb) -> f32 {
+    let left = Oklab::from_rgb(left);
+    let right = Oklab::from_rgb(right);
+    (left.a - right.a).hypot(left.b - right.b)
+}
+
 /// Test-only: the OKLab hue angle (radians) of an sRGB color, so a derived tone
 /// can be asserted to land on the intended arc between two hues rather than only
 /// passing per-channel inequalities a darker off-hue tone might also satisfy.
