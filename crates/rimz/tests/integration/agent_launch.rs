@@ -19,8 +19,8 @@ use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, Ev
 
 #[cfg(unix)]
 use crate::common::{
-    CommandTimeoutExt, Env, canonical, exec_args, path_with_front, write_env_dump_shim,
-    write_fake_bash_shell, write_fake_login_shell,
+    CommandTimeoutExt, Env, ScrubSessionEnvExt, canonical, exec_args, path_with_front,
+    write_env_dump_shim, write_fake_bash_shell, write_fake_login_shell,
 };
 
 #[cfg(unix)]
@@ -800,6 +800,141 @@ fn assert_restart_folder_trust(agent_trusted: bool) {
 #[test]
 fn agent_launch_refuses_a_login_without_hooks() {
     assert_launch_focus(&["agents", "claude", "--new-pane"], true, "unhooked");
+}
+
+#[cfg(unix)]
+#[test]
+fn interactive_launch_account_pins_the_named_login_without_changing_the_room() {
+    let env = Env::new();
+    let shim = write_env_dump_shim(&env, "claude");
+    let shell = write_fake_login_shell(&env, "account-shell", &[]);
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let second = env.home_root.join("claude-second");
+    env.rimz()
+        .args(["accounts", "add", "claude", "second", "--home"])
+        .arg(&second)
+        .env("PATH", path_with_front(&shim))
+        .assert_success_within_timeout("add the hooked second account");
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).unwrap();
+    let kind = AgentKind::new_unchecked("claude");
+    let default = rimz::ids::LoginName::default();
+    store
+        .switch_room_login(&workspace, &kind, &default)
+        .unwrap();
+    let before = rimz::workspace::record::read(&store.paths().workspace_record).unwrap();
+    assert_eq!(before.pins.get(&kind), Some(&default));
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap(),
+    );
+    let trace_path = env.home_root.join("account-launch.log");
+    let dump = env.home_root.join("account-launch.env");
+    let mut command = env.rimz();
+    let output = command
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "claude",
+            "--account",
+            "second",
+            "--new-pane",
+        ])
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim))
+        .env("ZELLIJ_PANE_ID", "2")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .env(
+            "RIMZ_TEST_IDLE_SHELL_MARKER",
+            env.home_root.join("account-idle-shell"),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        )
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let launches = store
+        .read_events()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.kind() {
+            EventKind::AgentLaunch(launch) => Some(launch),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [launch] = launches.as_slice() else {
+        panic!("expected one durable launch: {launches:?}");
+    };
+    assert_eq!(
+        launch.launch.login.as_ref().map(|login| login.as_str()),
+        Some("second")
+    );
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        receipt.lines().any(|line| {
+            line.contains(&launch.agent_name)
+                && line
+                    .split_whitespace()
+                    .any(|column| column == "claude@second")
+        }),
+        "{receipt}"
+    );
+
+    // The trace shim records the pane command without starting it.
+    let trace = std::fs::read_to_string(&trace_path).unwrap();
+    let argv = trace
+        .lines()
+        .find(|line| line.contains("\taction\tnew-pane\t"))
+        .and_then(|line| line.split_once("\t--\t"))
+        .unwrap_or_else(|| panic!("missing launched pane command: {trace}"))
+        .1
+        .split('\t')
+        .collect::<Vec<_>>();
+    let (program, args) = argv.split_first().unwrap();
+    let mut pane = std::process::Command::new(program);
+    pane.scrub_session_env()
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .current_dir(&env.project_root);
+    for (key, value) in command.get_envs() {
+        if let Some(value) = value {
+            pane.env(key, value);
+        } else {
+            pane.env_remove(key);
+        }
+    }
+    pane.env("ZELLIJ_PANE_ID", "3")
+        .assert_success_within_timeout("run the launched pane command");
+    let dumped = std::fs::read_to_string(&dump).unwrap();
+    assert!(
+        !dumped.lines().any(|line| line == "ARGV=--version"),
+        "expected the provider run, not a version probe: {dumped}"
+    );
+    let config_dir = dumped
+        .lines()
+        .find_map(|line| line.strip_prefix("CLAUDE_CONFIG_DIR="));
+    assert_eq!(config_dir, second.to_str(), "{dumped}");
+    assert_ne!(config_dir, env.home_root.join(".claude").to_str());
+    let after = rimz::workspace::record::read(&store.paths().workspace_record).unwrap();
+    assert_eq!(after.pins, before.pins);
 }
 
 #[test]
