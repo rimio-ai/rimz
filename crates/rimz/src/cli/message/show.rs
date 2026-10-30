@@ -1,12 +1,21 @@
 use super::*;
+use rimz::store::event::MessageEventMethod;
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct MessageTimelineRow {
-    method: String,
+    #[serde(serialize_with = "serialize_timeline_method")]
+    method: MessageEventMethod,
     at: Timestamp,
     attempts: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
+}
+
+fn serialize_timeline_method<S: serde::Serializer>(
+    method: &MessageEventMethod,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(method.as_str())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -242,6 +251,36 @@ fn render_message_kv(
     kv
 }
 
+struct CollapsedTimelineRow<'a> {
+    latest: &'a MessageTimelineRow,
+    oldest: Timestamp,
+    count: usize,
+}
+
+fn collapsed_timeline_rows(timeline: &[MessageTimelineRow]) -> Vec<CollapsedTimelineRow<'_>> {
+    let mut rows = Vec::<CollapsedTimelineRow<'_>>::new();
+    for event in timeline {
+        if let Some(row) = rows.last_mut()
+            && row.latest.method == event.method
+            && row.latest.attempts == event.attempts
+            && row.latest.reason.is_some() == event.reason.is_some()
+        {
+            row.count += 1;
+            row.oldest = row.oldest.min(event.at);
+            if event.at >= row.latest.at {
+                row.latest = event;
+            }
+            continue;
+        }
+        rows.push(CollapsedTimelineRow {
+            latest: event,
+            oldest: event.at,
+            count: 1,
+        });
+    }
+    rows
+}
+
 fn render_timeline(
     out: &mut impl Write,
     timeline: &[MessageTimelineRow],
@@ -256,13 +295,15 @@ fn render_timeline(
         writeln!(out, "  -")?;
         return Ok(());
     }
+    let rows = collapsed_timeline_rows(timeline);
     let show_attempts = timeline.iter().any(|event| event.attempts > 0);
-    let show_note = timeline.iter().any(|event| {
-        event
-            .reason
-            .as_deref()
-            .is_some_and(|reason| !reason.is_empty())
-    });
+    let show_note = rows.iter().any(|row| row.count > 1)
+        || timeline.iter().any(|event| {
+            event
+                .reason
+                .as_deref()
+                .is_some_and(|reason| !reason.is_empty())
+        });
     let mut headers = vec!["EVENT", "WHEN"];
     if show_attempts {
         headers.push("ATTEMPT");
@@ -271,25 +312,34 @@ fn render_timeline(
         headers.push("NOTE");
     }
     let mut table = render::Table::new(headers).indent(2);
-    for event in timeline {
-        let label = event
-            .method
-            .strip_prefix("message.")
-            .unwrap_or(&event.method);
+    for folded in rows {
+        let event = folded.latest;
+        let method = event.method.as_str();
+        let label = method.strip_prefix("message.").unwrap_or(method);
+        let label = if folded.count > 1 {
+            format!("{label} ×{}", folded.count)
+        } else {
+            label.to_owned()
+        };
         let mut row = vec![
-            render::cell(label.to_owned()),
+            render::cell(label),
             render::cell(time_with_absolute(event.at, now)),
         ];
         if show_attempts {
             row.push(render::cell(event.attempts.to_string()));
         }
         if show_note {
-            let reason = event
-                .reason
-                .as_deref()
-                .filter(|reason| !reason.is_empty())
-                .unwrap_or("-");
-            row.push(render::cell(reason).dash());
+            let reason = event.reason.as_deref().filter(|reason| !reason.is_empty());
+            let span = (folded.count > 1)
+                .then(|| render::folded_span(folded.oldest, event.at))
+                .flatten();
+            let note = match (span, reason) {
+                (Some(span), Some(reason)) => format!("{span} · {reason}"),
+                (Some(span), None) => span,
+                (None, Some(reason)) => reason.to_owned(),
+                (None, None) => "-".to_owned(),
+            };
+            row.push(render::cell(note).dash());
         }
         table.row(row);
     }
@@ -310,7 +360,7 @@ pub(super) fn message_timeline(
             continue;
         }
         rows.push(MessageTimelineRow {
-            method: method.as_str().to_owned(),
+            method,
             at: event.timestamp,
             attempts: payload.attempts,
             reason: payload.reason,
@@ -750,6 +800,136 @@ pub(super) fn delivery_action_hint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeline_requeues_fold_with_the_newest_reason_and_time() {
+        let events = vec![
+            timeline_event(MessageEventMethod::Queued, 0, 0, None),
+            timeline_event(MessageEventMethod::Queued, 60, 0, Some("older reason")),
+            timeline_event(MessageEventMethod::Queued, 240, 0, Some("newest reason")),
+            timeline_event(MessageEventMethod::Sent, 241, 1, None),
+        ];
+        let output = timeline_output(&events);
+        assert!(output.contains("queued ×2"), "{output}");
+        assert_eq!(output.matches("queued").count(), 2, "{output}");
+        assert!(output.contains("over 3m · newest reason"), "{output}");
+        assert!(!output.contains("older reason"), "{output}");
+        assert!(
+            output.contains(&time_with_absolute(events[0].at, timeline_now())),
+            "{output}"
+        );
+        let folded = output.lines().find(|line| line.contains('×')).unwrap();
+        assert!(
+            folded.contains(&time_with_absolute(events[2].at, timeline_now())),
+            "{output}"
+        );
+        assert!(output.contains("ATTEMPT"), "{output}");
+    }
+
+    #[test]
+    fn timeline_reason_presence_splits_but_reason_content_does_not() {
+        let events = [
+            timeline_event(MessageEventMethod::Queued, 0, 0, None),
+            timeline_event(MessageEventMethod::Queued, 1, 0, Some("")),
+            timeline_event(MessageEventMethod::Queued, 2, 0, Some("newest reason")),
+        ];
+        let output = timeline_output(&events);
+        assert!(output.contains("queued ×2"), "{output}");
+        assert_eq!(output.matches("queued").count(), 2, "{output}");
+        assert!(output.contains("over 1s · newest reason"), "{output}");
+        assert!(!output.contains("ATTEMPT"), "{output}");
+    }
+
+    #[test]
+    fn timeline_fold_key_uses_method_attempt_and_reason_presence() {
+        let first = timeline_event(MessageEventMethod::Queued, 0, 1, Some("first reason"));
+        let cases = [
+            timeline_event(MessageEventMethod::Edited, 1, 1, Some("next reason")),
+            timeline_event(MessageEventMethod::Queued, 1, 2, Some("next reason")),
+            timeline_event(MessageEventMethod::Queued, 1, 1, None),
+            timeline_event(MessageEventMethod::Queued, 1, 1, Some("different reason")),
+        ];
+        let folds = cases.map(|next| timeline_output(&[first.clone(), next]).contains("×2"));
+        assert_eq!(folds, [false, false, false, true]);
+    }
+
+    #[test]
+    fn timeline_fold_alone_adds_a_note_column() {
+        let events = [
+            timeline_event(MessageEventMethod::Edited, 0, 0, None),
+            timeline_event(MessageEventMethod::Edited, 60, 0, None),
+        ];
+        let output = timeline_output(&events);
+        assert!(output.contains("NOTE"), "{output}");
+        assert!(output.contains("edited ×2"), "{output}");
+        assert!(output.contains("over 1m"), "{output}");
+        assert!(
+            output.contains(&time_with_absolute(events[1].at, timeline_now())),
+            "{output}"
+        );
+        assert!(!output.contains("ATTEMPT"), "{output}");
+    }
+
+    #[test]
+    fn timeline_methods_and_attempts_keep_reconcile_cycles_separate() {
+        let events = [
+            timeline_event(MessageEventMethod::Queued, 0, 0, None),
+            timeline_event(MessageEventMethod::Sent, 1, 1, None),
+            timeline_event(MessageEventMethod::Queued, 2, 1, Some("reconcile")),
+            timeline_event(MessageEventMethod::Sent, 3, 2, None),
+            timeline_event(MessageEventMethod::Queued, 4, 2, Some("reconcile")),
+            timeline_event(MessageEventMethod::Delivered, 5, 2, None),
+        ];
+        let output = timeline_output(&events);
+        assert!(!output.contains('×'), "{output}");
+        assert!(!output.contains("over "), "{output}");
+        assert_eq!(output.matches("queued").count(), 3, "{output}");
+        assert_eq!(output.matches("sent").count(), 2, "{output}");
+        assert!(output.contains("delivered"), "{output}");
+    }
+
+    #[test]
+    fn timeline_json_keeps_each_event_and_its_method_string() {
+        let events = [
+            timeline_event(MessageEventMethod::Queued, 0, 0, None),
+            timeline_event(MessageEventMethod::Queued, 1, 0, Some("first reason")),
+            timeline_event(MessageEventMethod::Queued, 2, 0, Some("second reason")),
+        ];
+        assert_eq!(
+            serde_json::to_value(events).unwrap(),
+            serde_json::json!([
+                {"method": "message.queued", "at": "1970-01-01T00:00:00Z", "attempts": 0},
+                {"method": "message.queued", "at": "1970-01-01T00:00:01Z", "attempts": 0,
+                 "reason": "first reason"},
+                {"method": "message.queued", "at": "1970-01-01T00:00:02Z", "attempts": 0,
+                 "reason": "second reason"}
+            ])
+        );
+    }
+
+    fn timeline_event(
+        method: MessageEventMethod,
+        second: i64,
+        attempts: u32,
+        reason: Option<&str>,
+    ) -> MessageTimelineRow {
+        MessageTimelineRow {
+            method,
+            at: Timestamp::from_second(second).unwrap(),
+            attempts,
+            reason: reason.map(str::to_owned),
+        }
+    }
+
+    fn timeline_now() -> Timestamp {
+        Timestamp::from_second(3600).unwrap()
+    }
+
+    fn timeline_output(events: &[MessageTimelineRow]) -> String {
+        let mut out = Vec::new();
+        render_timeline(&mut out, events, timeline_now()).unwrap();
+        String::from_utf8(out).unwrap()
+    }
 
     #[test]
     fn prompt_wait_hint_routes_to_the_prompt_and_answer() {

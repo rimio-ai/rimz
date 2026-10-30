@@ -295,6 +295,8 @@ DELIVERY CHECK
 
 A scheduled message suggests `rimz message edit <id> --no-schedule` as well. An open prompt points to `rimz asks show @coder` and `rimz answer @coder <choice>`, just like the send receipt. `--json` prints `{"message": <row>, "timeline": [{"method", "at", "attempts", "reason"}], "delivery": {"check", "verdict"}}`, with `delivery` present only for open messages. Every sender class is reachable, including system messages the list hides.
 
+Adjacent timeline events fold when their event type, attempt number, and whether they carry a reason agree. A folded row adds `×N` to EVENT, keeps the newest event's WHEN, and starts NOTE with `over <span>` followed by the newest reason, if any. Events inside one second omit the span. The original reasonless enqueue stays separate from later requeues with reasons. `--json` keeps one timeline entry per event, without folding.
+
 A follow-up waiting for a resumed child says `waiting for @child to register after its resume`, with its absolute UTC deadline. The JSON message row and delivery check include `register_by` while it waits. Registration expiry applies only while the card is absent or ended no later than enqueue; once reconciled, `show` names the registration failure instead. A later end shows the ordinary receiver-ended reason.
 
 ### Change a queued message
