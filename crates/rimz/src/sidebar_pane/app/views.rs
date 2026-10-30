@@ -101,6 +101,11 @@ pub(super) struct ViewsRecord {
 }
 
 impl ViewsRecord {
+    #[allow(dead_code, reason = "The cadence consumers land in the next commit.")]
+    pub(super) fn watched(&self) -> bool {
+        !self.mapped_panes.is_empty() || !self.resolved_panes.is_empty()
+    }
+
     fn new(views: &Views, generation: u64) -> Self {
         Self {
             generation,

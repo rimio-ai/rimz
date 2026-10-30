@@ -50,6 +50,15 @@ pub(super) fn tick_for(seconds: u64) -> Duration {
     Duration::from_secs(seconds.max(1))
 }
 
+#[allow(dead_code, reason = "The cadence consumers land in the next commit.")]
+pub(super) fn fold_interval(watched: bool, tick: Duration) -> Duration {
+    if watched {
+        tick
+    } else {
+        tick.max(crate::sidebar::timing::UNWATCHED_FOLD_INTERVAL)
+    }
+}
+
 /// The next frame boundary after painting the frame scheduled for `scheduled`
 /// at wall-clock `now`. The grid normally advances by exactly one `frame`, so
 /// paints hold a fixed cadence regardless of how long a paint took. When the
@@ -68,4 +77,23 @@ pub(super) fn next_frame_after(scheduled: Instant, now: Instant, frame: Duration
 
 pub(super) fn duration_millis(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fold_interval_keeps_watched_ticks_and_stretches_only_short_unwatched_ticks() {
+        let second = Duration::from_secs(1);
+        assert_eq!(
+            [
+                fold_interval(true, second),
+                fold_interval(false, second),
+                fold_interval(true, 10 * second),
+                fold_interval(false, 10 * second),
+            ],
+            [second, 5 * second, 10 * second, 10 * second]
+        );
+    }
 }
