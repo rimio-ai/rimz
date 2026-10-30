@@ -3016,7 +3016,8 @@ path = "crates/rimz/src/sidebar"
 # CLICK_GUARD gives the renderer's stale-frame hit window its shared cadence (+1).
 # FOCUS_MARKER_TMUX_DWELL and FOCUS_MARKER_ZELLIJ_DWELL own backend-specific consumer dwell (+2).
 # HIBERNATED_CHECK_TTL shares the held-agent cadence with the transcript watcher (+1).
-surface-budget = 246
+# FOLD_FLOOR and UNWATCHED_FOLD_INTERVAL share room-fold cadence bounds (+2).
+surface-budget = 248
 
 [[verdict]]
 kind = "item"
@@ -3112,6 +3113,16 @@ reason = "The testkit source stamps rows with production attention scoring befor
 kind = "item"
 key = "sidebar::timing::CLICK_GUARD"
 reason = "The renderer resolves clicks against their painted frame for a bounded automatic-move window."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::FOLD_FLOOR"
+reason = "The fetch worker and fanout benchmark share the sidebar-owned end-to-start rest."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::UNWATCHED_FOLD_INTERVAL"
+reason = "Worker, refresher and self-close watchdog share the room's unwatched idle cadence."
 
 [[verdict]]
 kind = "item"

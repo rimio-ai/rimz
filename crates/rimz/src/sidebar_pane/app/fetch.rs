@@ -18,6 +18,7 @@ use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::sidebar::produce::{HostInputs, PaneProducer};
+use crate::sidebar::timing::FOLD_FLOOR;
 #[cfg(test)]
 use crate::sidebar::unread::UnreadEpisodes;
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, reconcile_snapshot};
@@ -1520,10 +1521,6 @@ pub(super) fn spawn_fetch_worker(
         worker.run(request_rx, ResultSink::shared(subscribers, host_data));
     })
 }
-
-/// The worker's idle gap after each cycle returns: an end-to-start gap bounds
-/// its duty cycle even when one cycle takes longer than the gap.
-const FOLD_FLOOR: Duration = Duration::from_millis(250);
 
 /// Run one cycle per batch, starting none sooner than `fold_floor` after the
 /// previous one returned, whatever the request's mode. Every request waiting

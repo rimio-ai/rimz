@@ -7,6 +7,10 @@ const HOLD: Duration = Duration::from_secs(10);
 fn assert_record(handle: &ViewsHandle) {
     let record = handle.read();
     let views = handle.lock();
+    assert_eq!(
+        record.watched(),
+        !views.panes.is_empty() || views.resolved_panes().next().is_some()
+    );
     assert_eq!(record.revision, views.revision);
     assert_eq!(record.fold.is_some(), views.fold.is_some());
     if let (Some(record), Some(locked)) = (&record.fold, &views.fold) {
@@ -37,6 +41,31 @@ fn assert_record(handle: &ViewsHandle) {
         };
         assert_eq!(outcomes(&record.latest), outcomes(&views.latest));
     }
+}
+
+#[test]
+fn room_watched_tracks_the_last_optimistically_mapped_pane() {
+    let clock = clock();
+    let handle = ViewsHandle::default();
+    assert!(!handle.read().watched());
+    handle.lock().presentation(&pane(10), clock.now(), true);
+    assert!(handle.read().watched(), "optimism needs no resolved client");
+    handle.lock().unpaint(&pane(10), clock.now());
+    assert!(!handle.read().watched(), "the last mapped pane left");
+}
+
+#[test]
+fn room_watched_includes_resolved_clients_without_a_mapped_pane() {
+    let clock = clock();
+    let handle = ViewsHandle::default();
+    sample(&mut handle.lock(), &clock, &[(1, 10)]);
+    handle.lock().panes.clear();
+    assert!(
+        handle.read().watched(),
+        "resolved clients still watch the room"
+    );
+    sample(&mut handle.lock(), &clock, &[]);
+    assert!(!handle.read().watched());
 }
 
 #[test]

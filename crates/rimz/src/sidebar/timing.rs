@@ -6,6 +6,12 @@
 
 use std::time::Duration;
 
+/// The worker's end-to-start rest, bounding duty cycle even after a slow fold.
+pub(crate) const FOLD_FLOOR: Duration = Duration::from_millis(250);
+
+/// Minimum idle fold interval when no sidebar in the room is watched.
+pub(crate) const UNWATCHED_FOLD_INTERVAL: Duration = Duration::from_secs(5);
+
 pub(crate) const HIBERNATED_CHECK_TTL: Duration = Duration::from_secs(60);
 
 pub(super) const DIFF_STATS_HIBERNATED_TTL: Duration = Duration::from_secs(10 * 60);
