@@ -16,6 +16,74 @@ fn strip(render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> io::Res
 }
 
 #[test]
+fn empty_dir_merges_only_matching_rows_and_keeps_remedies_in_the_closing_block() {
+    use crate::cli::doctor::model::{EmptyDir, EmptyDirCause, EmptyDirRow};
+    use crate::cli::folder_trust::{Row, State};
+    let row = |login: &str, fix: &str| EmptyDirRow {
+        trust: Row {
+            kind: "claude",
+            login: login.parse().unwrap(),
+            state: State::Undecided {
+                key: "/empty".into(),
+                path: "/claude.json".into(),
+                fix: fix.into(),
+            },
+        },
+        profiles: vec!["critic".into(), "newcomer".into()],
+        cause: EmptyDirCause::NotGrantable,
+    };
+    let mut wider = row("wide", "grant explicitly");
+    wider.trust.state = State::Undecided {
+        key: "/home".into(),
+        path: "/claude.json".into(),
+        fix: "grant explicitly".into(),
+    };
+    wider.cause = EmptyDirCause::WiderKey;
+    let empty = EmptyDir {
+        rows: vec![
+            row("default", "repair same"),
+            row("work", "repair same"),
+            row("spare", "repair spare"),
+            wider,
+        ],
+        check: Probe::Ready(()),
+        check_fix: "repair",
+        profiles_error: None,
+    };
+    let mut tally = Tally::default();
+    let text = strip(|w| render_empty_dir(w, &empty, &mut tally));
+    assert_eq!(
+        tally.warns.len(),
+        3,
+        "merge matching logins, never different fixes: {text}"
+    );
+    assert!(text.contains("default, work"), "{text}");
+    assert_eq!(
+        text.matches("start in your project, not the empty folder")
+            .count(),
+        3,
+        "{text}"
+    );
+    assert!(tally.warns.iter().all(|finding| {
+        finding
+            .text
+            .starts_with("critic, newcomer start in your project: ")
+    }));
+    assert!(tally.warns.iter().any(|finding| {
+        finding
+            .text
+            .contains("needs a grant that would also trust /home")
+    }));
+    assert!(
+        !text.contains("repair same") && !text.contains("repair spare"),
+        "{text}"
+    );
+    let closing = strip(|w| render_tally(w, &tally));
+    assert_eq!(closing.matches("fix: repair same").count(), 1, "{closing}");
+    assert_eq!(closing.matches("fix: repair spare").count(), 1, "{closing}");
+}
+
+#[test]
 fn room_skipped_settings_keep_the_setting_and_warning_visible() {
     let mut mux = mux_fixture();
     mux.room = Some(Room {

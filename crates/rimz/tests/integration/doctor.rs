@@ -208,6 +208,88 @@ fn doctor_empty_dir_omits_accounts_that_fresh_launches_can_grant() {
 }
 
 #[test]
+fn doctor_empty_dir_merges_manual_accounts_but_keeps_json_per_account() {
+    let env = Env::new();
+    for (name, kind) in [
+        ("critic", "codex"),
+        ("newcomer", "codex"),
+        ("reader", "claude"),
+    ] {
+        crate::common::write_definition(
+            &env,
+            "subagents",
+            name,
+            &format!("description: Research\nagent: {kind}\ntools: [Read]\nempty-dir: true"),
+            "Research.",
+        );
+    }
+    let work = env.home_root.join("codex-work");
+    let output = env
+        .rimz()
+        .args(["accounts", "add", "codex", "work", "--home"])
+        .arg(&work)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let empty = env.rimz_home().join("empty");
+    for config in [env.agent_config_path("codex"), work.join("config.toml")] {
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            config,
+            format!(
+                "[projects.{}]\ntrust_level = 'untrusted'\n",
+                toml::Value::String(empty.display().to_string())
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(env.home_root.join(".claude.json"), "{ malformed").unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(
+        report["empty_dir"]["rows"].as_array().unwrap().len(),
+        3,
+        "{report}"
+    );
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    let section = text
+        .split("EMPTY-DIR\n")
+        .nth(1)
+        .unwrap()
+        .split("\n\n")
+        .next()
+        .unwrap();
+    assert_eq!(
+        section
+            .lines()
+            .filter(|line| line.contains("start in your project, not the empty folder"))
+            .count(),
+        2,
+        "{section}"
+    );
+    assert!(section.contains("default, work"), "{section}");
+    assert!(
+        text.contains(concat!(
+            "critic, newcomer start in your project: codex (default, work) ",
+            "saved the empty folder as untrusted"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "reader starts in your project: claude (default) cannot write its folder trust"
+        ),
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("fix: pick Open restricted in the pane, or trust the folder in Codex")
+            .count(),
+        1,
+        "{text}"
+    );
+}
+
+#[test]
 fn doctor_empty_dir_reports_dirty_root_without_workspace() {
     let env = Env::new();
     let root = env.rimz_home().join("empty");

@@ -214,8 +214,8 @@ fn empty_dir_fix(error: &rimz::agents::empty_dir::EmptyDirErr) -> &'static str {
 }
 
 pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::model::EmptyDir {
-    use super::model::{EmptyDir, EmptyDirRow};
-    use rimz::agents::{LoginCatalog, RoomLoginSet, empty_dir};
+    use super::model::{EmptyDir, EmptyDirCause, EmptyDirRow};
+    use rimz::agents::{FolderTrust, LoginCatalog, RoomLoginSet, empty_dir};
 
     let machine = rimz::config::MachineConfig::load_lenient();
     let effective = ws
@@ -256,6 +256,12 @@ pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::
             else {
                 continue;
             };
+            let cause = match &trust {
+                FolderTrust::Restricted { .. } => EmptyDirCause::Restricted,
+                FolderTrust::Undecided(gap) if gap.grant.is_ok() => EmptyDirCause::WiderKey,
+                FolderTrust::Undecided(_) => EmptyDirCause::NotGrantable,
+                FolderTrust::Decided => continue,
+            };
             // resolve_profile rejects unknown terminal providers before grouping by kind.
             let row = rimz::agents::FolderTrustRow {
                 kind: rimz::agents::find_definition(kind.as_str())
@@ -268,6 +274,7 @@ pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::
             rows.push(EmptyDirRow {
                 trust: crate::cli::folder_trust::Row::for_empty_dir(&row),
                 profiles: profiles.clone(),
+                cause,
             });
         }
     }
