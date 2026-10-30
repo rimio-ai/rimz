@@ -1,6 +1,8 @@
 use super::*;
 use crate::common::git::{git, git_stdout};
 
+mod update;
+
 struct Fixture {
     env: Env,
     config: PathBuf,
@@ -350,7 +352,7 @@ fn git_install_does_not_fetch_into_the_callers_git_dir() {
     assert_eq!(fixture.record()["sources"][0]["commit"], fixture.commit);
 }
 
-fn answer(fixture: &Fixture, answer: &[u8]) -> (u32, String) {
+fn answer(fixture: &Fixture, args: &[&str], prompt: &str, answer: &[u8]) -> (u32, String) {
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::{Read as _, Write as _};
     use std::time::{Duration, Instant};
@@ -365,7 +367,7 @@ fn answer(fixture: &Fixture, answer: &[u8]) -> (u32, String) {
     let mut command = CommandBuilder::new(fixture.env.rimz_bin());
     fixture.env.pin_pty_command(&mut command);
     command.env("GIT_CONFIG_GLOBAL", &fixture.config);
-    command.args(["packs", "install", "crew"]);
+    command.args(args);
     command.cwd(&fixture.env.project_root);
     let mut child = pair.slave.spawn_command(command).unwrap();
     drop(pair.slave);
@@ -381,14 +383,14 @@ fn answer(fixture: &Fixture, answer: &[u8]) -> (u32, String) {
     });
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut bytes = Vec::new();
-    while !String::from_utf8_lossy(&bytes).contains("Install these packs?") {
+    while !String::from_utf8_lossy(&bytes).contains(prompt) {
         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(chunk) => bytes.extend(chunk),
             Err(_) => {
                 let _ = child.kill();
                 assert!(
-                    String::from_utf8_lossy(&bytes).contains("Install these packs?"),
-                    "no install question: {}",
+                    String::from_utf8_lossy(&bytes).contains(prompt),
+                    "no {prompt:?} question: {}",
                     String::from_utf8_lossy(&bytes)
                 );
             }
@@ -407,7 +409,7 @@ fn answer(fixture: &Fixture, answer: &[u8]) -> (u32, String) {
             let _ = child.kill();
             assert!(
                 Instant::now() < deadline,
-                "install did not finish: {}",
+                "command did not finish: {}",
                 String::from_utf8_lossy(&bytes)
             );
         }
@@ -425,7 +427,12 @@ fn answer(fixture: &Fixture, answer: &[u8]) -> (u32, String) {
 #[test]
 fn interactive_decline_is_success_without_an_install_and_yes_commits() {
     let fixture = Fixture::new();
-    let (code, output) = answer(&fixture, b"n\n");
+    let (code, output) = answer(
+        &fixture,
+        &["packs", "install", "crew"],
+        "Install these packs?",
+        b"n\n",
+    );
     assert_eq!(code, 0, "{output}");
     assert!(output.contains("nothing changed"), "{output}");
     assert!(
@@ -435,7 +442,12 @@ fn interactive_decline_is_success_without_an_install_and_yes_commits() {
             .join("packs/installed.json")
             .exists()
     );
-    let (code, output) = answer(&fixture, b"y\n");
+    let (code, output) = answer(
+        &fixture,
+        &["packs", "install", "crew"],
+        "Install these packs?",
+        b"y\n",
+    );
     assert_eq!(code, 0, "{output}");
     assert_eq!(fixture.record()["sources"].as_array().unwrap().len(), 2);
 }

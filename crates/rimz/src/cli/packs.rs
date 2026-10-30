@@ -11,7 +11,7 @@ use rimz::config::definitions::SkillCheck;
 use rimz::config::definitions::inventory::{ItemMatchErr, PackInventory, PackView};
 use rimz::config::definitions::review::{self, PackPreview};
 use rimz::disk::paths;
-use rimz::packs::transaction::{PackChange, Transaction};
+use rimz::packs::transaction::{PackChange, RetiredCheckouts, Transaction};
 use rimz::packs::{
     self, ExclusionOutcome, ExclusionTarget, GitSource, InstallSource, InstallStatus, ItemFate,
     ItemType, PackErr, PackName, Problem,
@@ -57,6 +57,15 @@ enum PacksSubcmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Update unpinned Git sources, holding changes that widen profile grants.
+    Update {
+        /// Update the source containing this pack, or all installed sources.
+        #[arg(value_name = "PACK")]
+        pack: Option<PackName>,
+        /// Apply widening updates without asking.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Show a pack's items, overrides, exclusions, and failures.
     Show {
         #[arg(value_name = "PACK")]
@@ -96,6 +105,8 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
     let home = paths::agents_home();
     let mut receipt = Vec::new();
     let mut warnings = Vec::new();
+    let mut failures = Vec::new();
+    let mut retired = Vec::new();
     match args.command.unwrap_or(PacksSubcmd::List(args.listing)) {
         PacksSubcmd::List(args) => return list(&load_inventory(&home), args.json),
         PacksSubcmd::Show { pack, json } => {
@@ -118,6 +129,9 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
             if !install_git(&home, &source, yes, &mut receipt)? {
                 return Ok(());
             }
+        }
+        PacksSubcmd::Update { pack, yes } => {
+            failures = update(&home, pack.as_ref(), yes, &mut receipt, &mut retired)?;
         }
         PacksSubcmd::Remove { pack } => {
             let outcome = packs::remove(&home, &pack)?;
@@ -143,8 +157,17 @@ pub(super) fn run(args: PacksArgs) -> Result<()> {
             warn(problem)?;
         }
     }
-    cleanup?;
-    render::finish(write)
+    if let Err(error) = cleanup {
+        if failures.is_empty() {
+            return Err(error);
+        }
+        failures.push(error.to_string());
+    }
+    render::finish(write)?;
+    if !failures.is_empty() {
+        bail!("Pack updates incomplete:\n{}", failures.join("\n"));
+    }
+    Ok(())
 }
 
 fn install(
@@ -203,7 +226,7 @@ fn install_git(home: &Path, source: &GitSource, yes: bool, out: &mut impl Write)
     let changes = transaction.changes();
     let mut stdout = render::out();
     writeln!(stdout, "Pack install review")?;
-    summary(&mut stdout, &changes, &preview)?;
+    summary(&mut stdout, &changes, &preview, Some("named"))?;
     stdout.flush()?;
     let unchanged = transaction.up_to_date();
     if !unchanged {
@@ -249,6 +272,159 @@ fn install_git(home: &Path, source: &GitSource, yes: bool, out: &mut impl Write)
     Ok(true)
 }
 
+fn update(
+    home: &Path,
+    pack: Option<&PackName>,
+    yes: bool,
+    out: &mut impl Write,
+    retired: &mut Vec<RetiredCheckouts>,
+) -> Result<Vec<String>> {
+    let record = packs::Record::read(home)?;
+    let sources = if let Some(name) = pack {
+        vec![
+            record
+                .sources
+                .iter()
+                .find(|source| source.packs.iter().any(|pack| pack.name == *name))
+                .ok_or_else(|| PackErr::UnknownPack {
+                    name: name.clone(),
+                    installed: record
+                        .sources
+                        .iter()
+                        .flat_map(|source| &source.packs)
+                        .map(|pack| pack.name.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                })?,
+        ]
+    } else {
+        record.sources.iter().collect()
+    };
+    if sources.is_empty() {
+        writeln!(
+            out,
+            "No installed packs. Install crew with: rimz packs install crew"
+        )?;
+    }
+    let mut failures = Vec::new();
+    for source in sources {
+        if let Err(error) = update_source(home, &source.source, yes, out, retired) {
+            let names = source
+                .packs
+                .iter()
+                .map(|pack| pack.name.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            failures.push(format!("{names}: {error:#}"));
+        }
+    }
+    Ok(failures)
+}
+
+fn update_source(
+    home: &Path,
+    url: &str,
+    yes: bool,
+    out: &mut impl Write,
+    retired: &mut Vec<RetiredCheckouts>,
+) -> Result<()> {
+    let record = packs::Record::read(home)?;
+    let source = record
+        .sources
+        .iter()
+        .find(|source| source.source == url)
+        .ok_or(PackErr::RecordChanged)?;
+    let names = source
+        .packs
+        .iter()
+        .map(|pack| pack.name.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if source.linked {
+        writeln!(out, "Skipped {names}: linked edits show at once.")?;
+        return Ok(());
+    }
+    if source.pinned {
+        let spelling = GitSource {
+            source: source.source.clone(),
+            url: source.url.clone().unwrap_or_else(|| source.source.clone()),
+            pack: source.packs.first().map(|pack| pack.name.clone()),
+            reference: None,
+        }
+        .spelling();
+        writeln!(
+            out,
+            "Skipped {names}: pinned at {}; follow updates again with `{}`.",
+            source.reference.as_deref().unwrap_or("<unknown>"),
+            shell_command(["rimz", "packs", "install", &spelling])
+        )?;
+        return Ok(());
+    }
+    let transaction = Transaction::stage_update(home, source)?;
+    if transaction.up_to_date() {
+        retired.push(transaction.commit()?);
+        writeln!(out, "Already up to date: {names}.")?;
+        return Ok(());
+    }
+    let machine = super::machine_config();
+    let env = rimz::agents::ambient_env();
+    let check = skill_check(&env, machine.agents.isolation);
+    let preview = review::compare(
+        home,
+        check,
+        &machine,
+        &transaction.current()?,
+        &transaction.candidate()?,
+    );
+    let changes = transaction.changes();
+    let mut stdout = render::out();
+    writeln!(stdout, "Pack update review")?;
+    summary(&mut stdout, &changes, &preview, None)?;
+    stdout.flush()?;
+    if preview
+        .profiles
+        .iter()
+        .any(|profile| !profile.widened.is_empty())
+    {
+        match decision(yes, "Apply this widening update?")? {
+            Decision::Apply => {}
+            answer => {
+                let fields = preview
+                    .profiles
+                    .iter()
+                    .filter(|profile| !profile.widened.is_empty())
+                    .map(|profile| format!("{}: {}", profile.name, profile.widened.join(", ")))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                writeln!(stdout, "Held {names}: {fields}.")?;
+                let command = shell_command(
+                    ["rimz", "packs", "update"]
+                        .into_iter()
+                        .chain(source.packs.first().map(|pack| pack.name.as_str())),
+                );
+                writeln!(stdout, "Review again: {command}")?;
+                if matches!(answer, Decision::NoTerminal) {
+                    writeln!(
+                        stdout,
+                        "Pass --yes to apply this widening update without a terminal."
+                    )?;
+                    bail!("widening update held; pass --yes to apply without a terminal");
+                }
+                return Ok(());
+            }
+        }
+    }
+    let names = changes
+        .iter()
+        .map(|change| change.name.to_string())
+        .collect::<Vec<_>>();
+    retired.push(transaction.commit()?);
+    for name in names {
+        writeln!(out, "Updated {name}.")?;
+    }
+    Ok(())
+}
+
 enum Decision {
     Apply,
     Decline,
@@ -269,7 +445,12 @@ fn decision(yes: bool, prompt: &str) -> Result<Decision> {
     })
 }
 
-fn summary(out: &mut impl Write, changes: &[PackChange<'_>], preview: &PackPreview) -> Result<()> {
+fn summary(
+    out: &mut impl Write,
+    changes: &[PackChange<'_>],
+    preview: &PackPreview,
+    named: Option<&str>,
+) -> Result<()> {
     if changes.is_empty() {
         writeln!(out, "No changed packs.")?;
     }
@@ -285,8 +466,13 @@ fn summary(out: &mut impl Write, changes: &[PackChange<'_>], preview: &PackPrevi
         );
         let reason = change
             .required_by
-            .map_or_else(|| "named".to_owned(), |pack| format!("required by {pack}"));
-        writeln!(out, "\n{}: {label} ({reason})", change.name)?;
+            .map(|pack| format!("required by {pack}"))
+            .or_else(|| named.map(str::to_owned));
+        write!(out, "\n{}: {label}", change.name)?;
+        if let Some(reason) = reason {
+            write!(out, " ({reason})")?;
+        }
+        writeln!(out)?;
         if let Some(old) = change.previous {
             writeln!(
                 out,
@@ -529,7 +715,7 @@ fn prune(home: &Path, out: &mut impl Write) -> Result<()> {
     }
     if !errors.is_empty() {
         bail!(
-            "pack change committed, but host skill link cleanup is incomplete:\n{}",
+            "host skill link cleanup is incomplete:\n{}",
             errors.join("\n")
         );
     }

@@ -1260,7 +1260,8 @@ allowed-dependencies = ["disk", "proc", "utils"]
 # GitSource and its reinstall spelling share normalized Git identity with the CLI (+2).
 # transaction, Transaction, PackChange and six public methods share optimistic staging (+9).
 # RetiredCheckouts retains replaced trees through a multi-source command (+1).
-surface-budget = 45
+# Transaction::stage_update preserves and validates the installed selection (+1).
+surface-budget = 46
 
 [[verdict]]
 kind = "item"
@@ -1286,6 +1287,11 @@ reason = "The CLI borrows pack version changes and transient dependency reasons 
 kind = "item"
 key = "packs::transaction::Transaction::stage"
 reason = "Pack commands resolve following refs and dependencies outside the record lock."
+
+[[verdict]]
+kind = "item"
+key = "packs::transaction::Transaction::stage_update"
+reason = "Updates stage only installed packs and their requirements, refusing a stale source snapshot."
 
 [[verdict]]
 kind = "item"

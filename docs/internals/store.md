@@ -424,6 +424,8 @@ Git pack entries use relative `.checkouts/<entry>-<commit>` targets under `<agen
 
 Git source records keep a normalized identity in `source` and the fetch spelling in `url`, without its ref suffix and with shorthand expanded. Linked records omit `url`; older Git records without it use `source` for transport. Reinstalling another spelling replaces `url`, which participates in the snapshot comparison before commit and in change detection.
 
+`rimz packs update` stages each source through `crates/rimz/src/packs/transaction.rs::Transaction::stage_update` and publishes through `crates/rimz/src/packs/transaction.rs::Transaction::commit`, preserving the installed selection and resolving new requirements. An unpinned dependency whose installed commit lacks a required pack moves inside the parent's review and record commit, retaining its other packs and exclusions. Its later turn in the update run is already up to date. The command holds every retired checkout until it exits, however many sources it moves; collection waits for the next mutating pack command. A declined or non-terminal widening update does not commit its candidate or persist a hold; the next run rebuilds the review. Failures do not roll back sources already committed.
+
 Every fsync call funnels through [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs), and no module hand-rolls its own temp-file dance. The `cargo xtask invariants` check `ensure_store_durability` rejects a `sync_all` or `sync_data` method call anywhere else. It matches those two std methods only, so a raw `libc` or `nix` fsync would pass the grep and has to be caught in review.
 
 A rename over a path replaces a symlink there with a regular file. To write through a link, resolve it first.
