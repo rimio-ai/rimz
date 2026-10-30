@@ -1,4 +1,4 @@
-//! First-wins account-day spend records, independent of transcript and cursor retention.
+//! Newest-wins account-day spend records, independent of transcript and cursor retention.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -375,8 +375,8 @@ impl ClosedDays {
         }
         let mut index = SpendIndex::default();
         let mut seen = BTreeSet::new();
-        for segment in self.segments.values() {
-            for day in &segment.days {
+        for segment in self.segments.values().rev() {
+            for day in segment.days.iter().rev() {
                 let Some(account) = key
                     .accounts
                     .iter()

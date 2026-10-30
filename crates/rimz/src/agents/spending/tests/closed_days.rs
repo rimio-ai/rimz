@@ -227,7 +227,7 @@ fn closed_days_recover_absent_files_and_survive_cursor_loss_across_homes() {
 }
 
 #[test]
-fn closed_days_first_account_day_wins_but_another_home_can_fill_a_gap() {
+fn closed_days_recording_keeps_saved_days_but_another_home_can_fill_a_gap() {
     let dir = TempDir::new().unwrap();
     let mut a = Fixture::new(dir.path(), "a");
     let now = seconds("2026-06-30T12:00:00Z");
@@ -454,8 +454,8 @@ fn closed_days_resolve_account_identity_ignore_unknown_accounts_and_skip_torn_li
     .unwrap();
     let result = a.walk(now, false);
     assert_eq!(
-        result.spending.total.month.usd, 2.0,
-        "first decodable matching account-day wins"
+        result.spending.total.month.usd, 99.0,
+        "last decodable matching account-day wins"
     );
     let other = TempDir::new().unwrap();
     let mut b = Fixture::new(other.path(), "b");
@@ -464,7 +464,7 @@ fn closed_days_resolve_account_identity_ignore_unknown_accounts_and_skip_torn_li
     std::fs::copy(&path, copied).unwrap();
     assert_eq!(
         b.walk(now, false).spending.total.month.usd,
-        2.0,
+        99.0,
         "relative identities agree across absolute roots"
     );
     a.home = dir.path().join("outside");
