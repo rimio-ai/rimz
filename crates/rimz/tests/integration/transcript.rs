@@ -6,6 +6,142 @@ use rimz::transcript::{TranscriptEntry, TranscriptKind};
 use crate::common::Env;
 
 #[test]
+fn agent_history_folds_keepalives_without_changing_json_turns() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let pricing = env.runtime_paths().shared_pricing_cache_path();
+    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
+    std::fs::write(
+        pricing,
+        r#"{"schema":4,"models":{"gpt-5-mini":{"input":0.000001,"output":0.000005}}}"#,
+    )
+    .unwrap();
+    let session = "history-session";
+    let session_dir = env.home_root.join(".copilot/session-state").join(session);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let transcript = session_dir.join("events.jsonl");
+    let keepalive = |age| {
+        format!(
+            "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\n\
+             Cache keepalive, no action needed.\nElapsed age: {age}m"
+        )
+    };
+    let prompts = [
+        "implement refresh-token rotation".to_owned(),
+        keepalive(5),
+        keepalive(10),
+        keepalive(15),
+        "add coverage for expiry edge cases".to_owned(),
+    ];
+    let mut events = Vec::new();
+    let mut spans = Vec::new();
+    for (index, prompt) in prompts.iter().enumerate() {
+        let started = jiff::Timestamp::from_second(1_704_110_400 + index as i64 * 300).unwrap();
+        let ended = started + jiff::SignedDuration::from_secs(index as i64 + 1);
+        events.extend([
+            json!({"type":"user.message","timestamp":started.to_string(),
+                "data":{"content":prompt}}),
+            json!({"type":"assistant.message","timestamp":ended.to_string(),
+                "data":{"content":"acknowledged"}}),
+            json!({"type":"session.shutdown","id":format!("shutdown-{index}"),
+            "timestamp":ended.to_string(),"data":{"modelMetrics":{"gpt-5-mini":{"usage":{
+                "inputTokens":125 * (index + 1),"outputTokens":10 * (index + 1),
+                "cacheReadTokens":25 * (index + 1)
+            }}}}}),
+        ]);
+        spans.push(
+            json!({"type":"span","name":"chat auto","endTime":[ended.as_second(),0],
+            "attributes":{"gen_ai.operation.name":"chat","gen_ai.conversation.id":session,
+                "gen_ai.response.model":"gpt-5-mini","gen_ai.usage.input_tokens":100,
+                "gen_ai.usage.cache_read.input_tokens":25,"gen_ai.usage.output_tokens":10}}),
+        );
+    }
+    for (path, records) in [
+        (&transcript, events),
+        (&env.home_root.join("copilot-otel.jsonl"), spans),
+    ] {
+        let mut bytes = Vec::new();
+        for record in records {
+            serde_json::to_writer(&mut bytes, &record).unwrap();
+            bytes.push(b'\n');
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+    for (event, payload) in [
+        (
+            "userPromptSubmitted",
+            json!({"sessionId":session,"prompt":prompts[0]}),
+        ),
+        (
+            "agentStop",
+            json!({"sessionId":session,"stopReason":"end_turn","transcriptPath":transcript}),
+        ),
+    ] {
+        let mut command = env.copilot_hook_command(event);
+        command.env(
+            "COPILOT_OTEL_FILE_EXPORTER_PATH",
+            env.home_root.join("copilot-otel.jsonl"),
+        );
+        let output = env
+            .spawn_payload(command, &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        env.drain_hooks();
+    }
+    let history = |flags: &[&str]| {
+        let output = env
+            .rimz()
+            .args(["agents", "history", session])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        output.stdout
+    };
+    let full: serde_json::Value = serde_json::from_slice(&history(&["--json"])).unwrap();
+    let records = full.as_array().unwrap();
+    assert_eq!(records.len(), 5, "{full}");
+    assert_eq!(
+        records
+            .iter()
+            .map(|row| row["prompt"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        prompts.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        records
+            .iter()
+            .map(|row| row["fresh_input"].as_u64().unwrap())
+            .sum::<u64>(),
+        500,
+        "{full}"
+    );
+    let last: serde_json::Value = serde_json::from_slice(&history(&["--json", "-n", "1"])).unwrap();
+    assert_eq!(last, json!([records[4]]));
+    let human = String::from_utf8(history(&[])).unwrap();
+    let tail = String::from_utf8(history(&["-n", "1"])).unwrap();
+    assert_eq!(
+        (human.lines().count() - 2, human.contains("keepalive ×3")),
+        (3, true),
+        "{human}"
+    );
+    assert!(
+        human.contains("5 turns · 550 fresh + 125 cached tokens"),
+        "{human}"
+    );
+    assert_eq!(tail.lines().count() - 2, 1, "{tail}");
+    assert!(
+        tail.contains(&prompts[4]) && !tail.contains("keepalive"),
+        "{tail}"
+    );
+    assert!(
+        tail.contains("1 turn · 110 fresh + 25 cached tokens"),
+        "{tail}"
+    );
+}
+
+#[test]
 fn transcript_and_agent_logs_window_old_history_with_an_all_hint() {
     let env = Env::new();
     let now = jiff::Timestamp::now();

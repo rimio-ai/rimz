@@ -153,18 +153,18 @@ Added tests/auth/refresh_expiry.rs covering sliding and hard expiry.
 
 `-f` keeps following new lines across an agent restart, and `--all` reaches back into the agent's earlier sessions. An agent can read its own conversation with `rimz agents logs @me`. A newly launched agent with nothing to show reads `@coder has no messages yet`, followed by its launch age when known and `no turn opened` if it has not started a turn. For the live screen rather than messages, use `rimz agents show @coder --capture`. The [logs reference](../reference/cli/agents.md#logs) covers ordering and tail selection.
 
-**Read what each turn cost.** `rimz agents history` joins the conversation's user turns to the provider's token and price records, so you can see which request consumed the session without leaving the agent view. `-n` keeps the newest rows and `--json` returns the same records to a script:
+**Read what each turn cost.** `rimz agents history` joins the conversation's user turns to the provider's token and price records, so you can see which request consumed the session without leaving the agent view. A long wait's keepalive pings fold into one row so the turns that did work stay visible. `-n` keeps the newest rows; `--json` returns one record per turn, and its `-n` counts turns:
 
 ```console
 $ rimz agents history @coder -n 3
-START  DUR     FRESH     COST  OUTCOME  FROM      PROMPT
-15:12   8m  ↘4k ↗510  $0.4210  done     user      implement refresh-token rotation
-15:38   3m  ↘1k ↗284  $0.2870  done     @planner  add coverage for the expiry edge cases
-15:44  12s   ↘320 ↗0  $0.0310  open     wait      run the focused integration tests
-3 turns · 6k fresh + 48k cached tokens · $0.7390
+START    DUR     FRESH     COST  OUTCOME  FROM          PROMPT
+15:12     8m  ↘4k ↗510  $0.4210  done     user          implement refresh-token rotation
+15:21  1s–3s  ↘300 ↗30  $0.0030  done     keepalive ×3  over 10m · Cache keepalive, no action needed.
+15:44    12s   ↘320 ↗0  $0.0310  open     wait          run the focused integration tests
+5 turns · 5k fresh + 48k cached tokens · $0.4550
 ```
 
-`↘` is the fresh input the turn sent and `↗` the tokens it produced; the footer sums these as `fresh` and counts cache reads and writes separately as `cached`. `FROM` tells you who sent the prompt, without burying its text in a delivery header. An unknown outcome reads `-`, not an interruption. Dates disappear when every shown turn started today.
+`↘` is fresh input and `↗` output, summed over each row's turns; the footer sums these as `fresh` and counts cache reads and writes separately as `cached`. `FROM` tells you who sent the prompt, without burying its text in a delivery header. An unknown outcome reads `-`, not an interruption. Dates disappear when every shown row starts today.
 
 **Credit the people and models behind the change.** A pull request usually opens after the first teammate has already exited, so live agent cards cannot supply a complete byline. `rimz agents attribution` reads the lane's audit records and provider transcripts instead:
 
