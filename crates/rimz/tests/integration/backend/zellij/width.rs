@@ -9,10 +9,158 @@ use super::support::*;
 
 const SETTLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
+#[test]
+fn renderer_hidden_tabs_follow_one_client_without_reveal() {
+    require_zellij!();
+    const VIEW_COLS: u16 = 300;
+    let room = LiveZellijSession::new("hidden-width");
+    let xdg = room.path();
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let mut sidebar = sidebar_opts(&name, cwd.path(), rimz, VIEW_COLS);
+    sidebar.workspace_id = WorkspaceId::from_project_root(&cwd.path().canonicalize().unwrap());
+    sidebar.runtime = rimz::RuntimePaths::under(sidebar.workspace_id.clone(), xdg).unwrap();
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
+    backend.open_sidebar(&sidebar, None).unwrap();
+    wait_for_pane_count(xdg, &name, 2);
+    let client = AttachedClient::attach(&room, VIEW_COLS, 80);
+    let target = sidebar
+        .target
+        .zellij_step(
+            Some(VIEW_COLS),
+            rimz::mux::SidebarWidth::default().max_percent,
+        )
+        .1;
+    let band = settled_band(u64::from(target.get()), u64::from(VIEW_COLS).div_ceil(20));
+    assert!(wait_for_sidebar_columns(
+        xdg,
+        &name,
+        std::slice::from_ref(&band)
+    ));
+    let visible = raw_sidebar_pane(xdg, &name);
+    let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", visible.id));
+    std::thread::sleep(SETTLE_WINDOW);
+
+    backend.send_keys(&pane, &name, "a").unwrap();
+    let narrower = wait_for_sidebar_columns_matching(
+        xdg,
+        &name,
+        visible.id,
+        |cols| cols < visible.pane_columns,
+        "visible renderer accepts its first width key",
+    );
+    std::thread::sleep(SETTLE_WINDOW);
+    let before = list_panes(xdg, &name).unwrap().tab_ids();
+    backend
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: "hidden".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
+                }])],
+                focused_pane: 0,
+            },
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar: sidebar.clone(),
+        })
+        .unwrap();
+    wait_for_tab_count(xdg, &name, 2);
+    let snapshot = list_panes(xdg, &name).unwrap();
+    let hidden_tab = snapshot
+        .tab_ids()
+        .into_iter()
+        .find(|id| !before.contains(id))
+        .unwrap();
+    let hidden = wait_for_tab_sidebar_pane(xdg, &name, hidden_tab, || "hidden sidebar".to_owned());
+    assert_eq!(
+        hidden.columns, narrower,
+        "both tabs begin at the same width"
+    );
+    for tab in snapshot.tab_ids() {
+        assert_eq!(
+            snapshot
+                .panes
+                .iter()
+                .filter(|pane| pane.tab_id == tab
+                    && !pane.is_plugin
+                    && !pane.is_floating
+                    && !pane.is_suppressed)
+                .map(|pane| pane.pane_x + pane.pane_columns)
+                .max(),
+            Some(u64::from(VIEW_COLS))
+        );
+    }
+    let visible_panes: Vec<_> = snapshot
+        .panes
+        .iter()
+        .filter(|pane| pane.tab_id == visible.tab_id && !pane.is_plugin)
+        .map(|pane| PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id)))
+        .collect();
+    let assert_visible_client = || {
+        let view = client.view();
+        assert_eq!(view.clients.len(), 1);
+        assert!(
+            view.viewed_panes
+                .iter()
+                .any(|pane| visible_panes.contains(pane)),
+            "the sole client must remain on the visible tab: {view:?}"
+        );
+    };
+    assert_visible_client();
+
+    backend.send_keys(&pane, &name, "d").unwrap();
+    let wider = wait_for_sidebar_columns_matching(
+        xdg,
+        &name,
+        visible.id,
+        |cols| cols > narrower,
+        "visible sidebar grows",
+    );
+    assert!(band.contains(&wider));
+    let followed = wait_for_sidebar_columns_matching(
+        xdg,
+        &name,
+        hidden.id,
+        |cols| band.contains(&cols),
+        "hidden sidebar follows the room step without a reveal",
+    );
+    assert!(followed > narrower);
+    std::thread::sleep(SETTLE_WINDOW);
+    assert_visible_client();
+    assert!(
+        sidebar_columns_by_tab(xdg, &name)
+            .values()
+            .all(|cols| band.contains(cols))
+    );
+}
+
 /// Mirror the symmetric half-step tolerance in `sidebar_width_off_spec`.
 fn settled_band(target_cols: u64, stop_step: u64) -> RangeInclusive<u64> {
     let half_step = stop_step.max(1) / 2;
     target_cols.saturating_sub(half_step)..=target_cols.saturating_add(half_step)
+}
+
+fn default_target_cols(view_cols: u16) -> u64 {
+    let width = rimz::mux::SidebarWidth::default();
+    let target = rimz::mux::SidebarTarget {
+        share: rimz::mux::WidthPermille::from_percent(
+            width.percent.resolve(Some(u64::from(view_cols))),
+        ),
+        max_cols: width.max_cols,
+        pinned: false,
+    };
+    u64::from(
+        target
+            .zellij_step(Some(view_cols), width.max_percent)
+            .1
+            .get(),
+    )
 }
 
 #[test]
@@ -40,7 +188,7 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
     write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
     let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
 
-    let target_cols = rimz::mux::SidebarWidth::default().target_cols(u64::from(VIEW_COLS));
+    let target_cols = default_target_cols(VIEW_COLS);
     let band = settled_band(target_cols, u64::from(VIEW_COLS).div_ceil(20));
     assert!(
         wait_for_sidebar_columns(xdg, &name, std::slice::from_ref(&band)),
@@ -128,7 +276,7 @@ fn renderer_repicks_the_viewport_after_a_wider_attach() {
         );
     }
 
-    let target_cols = rimz::mux::SidebarWidth::default().target_cols(u64::from(ATTACHED_VIEW_COLS));
+    let target_cols = default_target_cols(ATTACHED_VIEW_COLS);
     let stop_step = u64::from(ATTACHED_VIEW_COLS).div_ceil(20);
     let band = settled_band(target_cols, stop_step);
     let attach_at_ms = rimz::utils::time::unix_now_ms();
@@ -340,9 +488,9 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
 
     // The launch seed came from a 340-column terminal, but this attached client
     // is only 210 columns wide. The detached percentage seed therefore lands
-    // near 44 columns while the live narrow-view target rounds up to 53.
+    // near 42 columns while the live narrow-view step rounds up to 53.
     const VIEW_COLS: u64 = 210;
-    let target_cols = u16::try_from(rimz::mux::SidebarWidth::default().target_cols(VIEW_COLS))
+    let target_cols = u16::try_from(default_target_cols(u16::try_from(VIEW_COLS).unwrap()))
         .expect("target fits u16");
     let stop_step = VIEW_COLS.div_ceil(20);
     let target_band = || settled_band(u64::from(target_cols), stop_step);
@@ -366,7 +514,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
         sidebar_columns_by_tab(xdg, &name),
     );
 
-    // A native tab inherits the 340-column launch probe's whole-percent layout share,
+    // A native tab inherits the 340-column launch probe's 5% grid seed,
     // then live convergence applies the narrow-view policy.
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 2);
@@ -448,7 +596,11 @@ fn sidebar_widths_agree_across_tabs_after_a_pinned_retarget() {
     let _client = AttachedClient::attach(&room, VIEW_COLS, VIEW_ROWS);
 
     let native_step = u64::from(VIEW_COLS).div_ceil(20);
-    let initial_target = sidebar.target.cols(Some(VIEW_COLS)).get();
+    let initial_target = sidebar
+        .target
+        .zellij_step(Some(VIEW_COLS), sidebar.max_percent)
+        .1
+        .get();
     converge_each_sidebar_with_nudges(&backend, xdg, &name, initial_target, native_step);
     let settled = sidebar_columns_by_tab(xdg, &name)
         .into_values()

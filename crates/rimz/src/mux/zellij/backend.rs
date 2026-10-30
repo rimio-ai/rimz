@@ -14,8 +14,8 @@ use super::parse::{
     live_session_name_from_line, parse_client_view,
 };
 use super::raw_pane::{
-    floating_panes_in_anchor_view, is_daemon_host_pane, is_sidebar_pane, sidebar_geometry_off_spec,
-    tab_fullscreen_active, tab_view_cols,
+    first_proven_view_cols, floating_panes_in_anchor_view, is_daemon_host_pane, is_sidebar_pane,
+    sidebar_geometry_off_spec, tab_fullscreen_active,
 };
 use super::sidebar::DockOutcome;
 use super::tab_owner;
@@ -1573,7 +1573,8 @@ impl MuxBackend for ZellijBackend {
         let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
         let plan = super::super::plan_reconcile(&views, &live);
         let planned_closes = plan.close_panes();
-        let off_spec = off_spec_sidebars(&panes, &planned_closes, Some(opts.target));
+        let off_spec =
+            off_spec_sidebars(&panes, &planned_closes, Some(opts.target), opts.max_percent);
         if plan.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }
@@ -1813,23 +1814,24 @@ impl MuxBackend for ZellijBackend {
             })
             .flatten();
         let view_cols = (|| {
-            let panes = self
-                .topology_panes(&opts.sidebar.session_name, None, RECONCILE_LIST_TIMEOUT)
+            let cache = self
+                .topology_listing(
+                    Some(&opts.sidebar.session_name),
+                    None,
+                    Some(&opts.sidebar.workspace_id),
+                    None,
+                    RECONCILE_LIST_TIMEOUT,
+                )
                 .ok()?;
-            let tab = panes
-                .iter()
-                .find(|pane| pane.is_live_terminal())?
-                .tab_position;
-            tab_view_cols(&panes, tab)
-                .and_then(|cols| u16::try_from(cols).ok())
-                .filter(|cols| *cols > 0)
+            first_proven_view_cols(cache)
         })();
         let runtime = self.runtime_paths_for_workspace(opts.sidebar.workspace_id.clone())?;
         let width = crate::mux::SidebarWidth::from_config(
             &crate::config::MachineConfig::load_lenient().theme,
         );
-        let sidebar_percent =
-            crate::mux::width_target::resolve(&runtime, width, view_cols).percent();
+        let sidebar_percent = crate::mux::width_target::resolve(&runtime, width, view_cols)
+            .zellij_step(view_cols, width.max_percent)
+            .0;
         let layout = TempLayoutFile::new(render_tab_layout(opts, sidebar_percent)?)?;
         let mut args = vec![
             "new-tab".to_owned(),
@@ -2007,6 +2009,7 @@ pub(super) fn off_spec_sidebars(
     panes: &[PaneTopologyPane],
     closing: &[PaneId],
     width_target: Option<crate::mux::SidebarTarget>,
+    max_percent: u16,
 ) -> Vec<(u64, u64)> {
     let closing: HashSet<u64> = closing.iter().filter_map(parse_zellij_raw).collect();
     panes
@@ -2014,7 +2017,7 @@ pub(super) fn off_spec_sidebars(
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
         .filter(|pane| !closing.contains(&pane.id))
         .filter(|pane| !tab_fullscreen_active(panes, pane.tab_position))
-        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width_target))
+        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width_target, max_percent))
         .filter_map(|pane| Some((pane.stable_tab_id?, pane.id)))
         .collect()
 }

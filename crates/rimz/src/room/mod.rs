@@ -500,6 +500,7 @@ impl RoomContext {
             extra_env: self.extra_env.clone(),
             cwd: cwd.to_path_buf(),
             target,
+            max_percent: self.width.max_percent,
             detected_view_size: self.detected_size,
             rimz_bin: self.rimz_bin.clone(),
             pristine_birth: false,

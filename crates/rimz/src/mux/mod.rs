@@ -567,6 +567,8 @@ pub struct SidebarPaneOptions {
     pub cwd: PathBuf,
     /// The single room-wide target freshly-born and live panes converge to.
     pub target: SidebarTarget,
+    /// Maximum share when rendering the target on Zellij's native step grid.
+    pub max_percent: u16,
     /// The launching terminal's probed `(cols, rows)`. tmux reconcile uses it
     /// as the width basis when the session has no sized client, normalizing
     /// detached geometry to it first. `None` when the launch had no tty or the
@@ -598,6 +600,7 @@ pub struct WidthSyncOptions {
     pub session_name: String,
     pub workspace_id: WorkspaceId,
     pub target: SidebarTarget,
+    pub max_percent: u16,
 }
 
 /// The `rimz sidebar serve` argv after the program name — the one spelling

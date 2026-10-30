@@ -64,6 +64,7 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         )]),
         cwd: cwd.to_path_buf(),
         target,
+        max_percent: width.max_percent,
         detected_view_size: None,
         rimz_bin: stub,
         pristine_birth: false,

@@ -705,6 +705,7 @@ impl TestRoom {
                 max_cols: width.max_cols,
                 pinned: false,
             },
+            max_percent: width.max_percent,
             detected_view_size: None,
             rimz_bin: "rimz".into(),
             pristine_birth: false,
@@ -1531,10 +1532,10 @@ fn fullscreen_tabs_hold_sidebar_geometry_reconcile() {
     let sidebar = terminal_pane(1, 0, 200, 0, crate::pane::SIDEBAR_CHROME_TITLE);
     let mut work = terminal_pane(2, 0, 120, 80, "zsh");
     let panes = [sidebar.clone(), work.clone()];
-    assert_eq!(off_spec_sidebars(&panes, &[], None), vec![(0, 1)]);
+    assert_eq!(off_spec_sidebars(&panes, &[], None, 50), vec![(0, 1)]);
 
     work.is_fullscreen = true;
-    assert!(off_spec_sidebars(&[sidebar, work], &[], None).is_empty());
+    assert!(off_spec_sidebars(&[sidebar, work], &[], None, 50).is_empty());
 }
 
 #[cfg(unix)]
@@ -2719,6 +2720,8 @@ fn reconcile_judges_width_only_on_live_client_viewed_tabs() {
             vec![
                 terminal_pane(1, 0, 150, 0, "rimz-sidebar"),
                 terminal_pane(2, 0, 50, 150, "work"),
+                terminal_pane(5, 2, 150, 0, "rimz-sidebar"),
+                terminal_pane(6, 2, 50, 150, "hidden-work"),
             ],
         );
         let (temp, shim) = zellij_shim(&format!(
@@ -2728,7 +2731,7 @@ case " $* " in
   *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n'; {client}; exit 0 ;;
   *" action list-panes --all --json "*)
     cols=150; if [ -f "$dir/resized" ]; then cols=50; fi
-    printf '[{{"id":1,"tab_id":40,"tab_position":0,"pane_columns":%s,"pane_x":0,"title":"rimz-sidebar"}},{{"id":2,"tab_id":40,"tab_position":0,"pane_columns":%s,"pane_x":%s,"title":"work"}},{{"id":2,"is_plugin":true,"tab_id":40,"tab_position":0,"title":"bar"}},{{"id":3,"is_plugin":true,"tab_id":99,"tab_position":1,"title":"other-tab"}}]\n' "$cols" "$((200 - cols))" "$cols"; exit 0 ;;
+    printf '[{{"id":1,"tab_id":40,"tab_position":0,"pane_columns":%s,"pane_x":0,"title":"rimz-sidebar"}},{{"id":2,"tab_id":40,"tab_position":0,"pane_columns":%s,"pane_x":%s,"title":"work"}},{{"id":2,"is_plugin":true,"tab_id":40,"tab_position":0,"title":"bar"}},{{"id":3,"is_plugin":true,"tab_id":99,"tab_position":1,"title":"other-tab"}},{{"id":5,"tab_id":2,"tab_position":2,"pane_columns":150,"pane_x":0,"title":"rimz-sidebar"}},{{"id":6,"tab_id":2,"tab_position":2,"pane_columns":50,"pane_x":150,"title":"hidden-work"}}]\n' "$cols" "$((200 - cols))" "$cols"; exit 0 ;;
   *" action resize decrease right --pane-id terminal_1 "*) touch "$dir/resized"; exit 0 ;;
 esac
 exit 0
@@ -2741,10 +2744,10 @@ exit 0
         ));
         let backend = room.backend(&shim);
         let live = SidebarLiveness {
-            claimed_panes: [PaneId::from_parts(
-                crate::ids::MuxName::Zellij,
-                "terminal_1",
-            )]
+            claimed_panes: [
+                PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1"),
+                PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_5"),
+            ]
             .into(),
             ..SidebarLiveness::default()
         };
@@ -2769,6 +2772,10 @@ exit 0
             "viewed={viewed}: {report:?}"
         );
         let log = shim_log(&temp);
+        assert!(
+            !log.contains("--pane-id terminal_5"),
+            "hidden equal-width tab: {log}"
+        );
         assert_eq!(
             command_count(&log, "action resize"),
             usize::from(viewed),
@@ -3535,6 +3542,7 @@ exit 0
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
         workspace_id: room.workspace_id.clone(),
+        max_percent: 50,
         target: crate::mux::SidebarTarget {
             share: crate::mux::WidthPermille::from_cols(target_cols, view_cols),
             max_cols: target_cols,
@@ -3562,7 +3570,13 @@ exit 0
         .find(|pane| pane.is_terminal() && pane.id == 8)
         .and_then(|pane| pane.pane_columns)
         .expect("sidebar columns");
-    let target = u64::from(width.target.cols(Some(view_cols.get())).get());
+    let target = u64::from(
+        width
+            .target
+            .zellij_step(Some(view_cols.get()), width.max_percent)
+            .1
+            .get(),
+    );
     assert!(
         !crate::mux::width::sidebar_width_off_spec(
             final_cols,
@@ -3642,6 +3656,7 @@ exit 0
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
         workspace_id: room.workspace_id.clone(),
+        max_percent: 50,
         target: crate::mux::SidebarTarget {
             share: crate::mux::WidthPermille::from_cols(target_cols, view_cols),
             max_cols: target_cols,
@@ -3674,7 +3689,13 @@ exit 0
         .parse::<usize>()
         .expect("numeric resize count");
     let final_cols = widths.get(action_count).copied().unwrap_or(last);
-    let target = u64::from(width.target.cols(Some(view_cols.get())).get());
+    let target = u64::from(
+        width
+            .target
+            .zellij_step(Some(view_cols.get()), width.max_percent)
+            .1
+            .get(),
+    );
     assert!(
         !crate::mux::width::sidebar_width_off_spec(
             final_cols,
@@ -3738,6 +3759,7 @@ exit 0
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
         workspace_id: room.workspace_id.clone(),
+        max_percent: 50,
         target: crate::mux::SidebarTarget {
             share: crate::mux::WidthPermille::from_cols(target_cols, view_cols),
             max_cols: target_cols,
@@ -3770,7 +3792,13 @@ exit 0
         .expect("sidebar columns");
     assert!(!crate::mux::width::sidebar_width_off_spec(
         final_cols,
-        72,
+        u64::from(
+            width
+                .target
+                .zellij_step(Some(view_cols.get()), width.max_percent)
+                .1
+                .get()
+        ),
         crate::mux::width::zellij_resize_stop_step_cols(380)
     ));
 }

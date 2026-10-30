@@ -213,9 +213,9 @@ An unread card also rests on a soft wash, the selection blue lifted a step, the 
 | --- | --- | --- |
 | `refresh_ms` | `100` | the animation and paint grid in milliseconds, clamped to 16 through 1000. Data polling keeps its own cadence |
 | `pixel` | `auto` | `auto` lets kitty-graphics pets and context meters paint where the terminal supports them; `off` keeps both drawn out of text cells |
-| `width_percent` | unset | a fixed sidebar share of each view, clamped to 10 through `max_percent`. Unset means 30% on views wider than 240 columns or whenever pets are on, and 25% otherwise, also bounded by `max_percent` |
+| `width_percent` | unset | a fixed sidebar share of each view, clamped to 10 through `max_percent`. Unset means 30% on views wider than 240 columns or whenever pets are on, and 25% otherwise, also bounded by `max_percent`. Zellij uses the closest allowed 5% step |
 | `max_cols` | `72` | column cap on the unpinned sidebar default |
-| `max_percent` | `50` | maximum sidebar share, including widths you set with keys or dragging; clamped to 10 through 90. The 24-column minimum wins on narrow views |
+| `max_percent` | `50` | maximum sidebar share, including widths you set with keys or dragging; clamped to 10 through 90. Zellij uses the nearest 5% step inside this bound (`44` permits at most 40%). The 24-column minimum wins on narrow views |
 | `scrollbar` | `auto` | `auto` shows the overflow indicator only while the view moves; `always` and `never` pin it |
 | `card_density` | `auto` | `auto` keeps the standard card; `expanded` keeps the stats line on every engaged card and opens every card's subagents and waits; `compact` trims resting cards |
 | `stale_after_secs` | `86400` | Read idle and done cards quiet past this many seconds shrink to one line; `0` disables it, and `expanded` density never shrinks cards |

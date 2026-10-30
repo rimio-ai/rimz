@@ -4,6 +4,169 @@ use std::collections::HashSet;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
+fn width_proof_cache(
+    clients: Option<serde_json::Value>,
+    hidden_cols: u64,
+    latched: bool,
+) -> PaneTopologyCache {
+    serde_json::from_value(serde_json::json!({
+        "session_name": "rimz-test", "produced_at_ms": crate::utils::time::unix_now_ms(),
+        "clients": clients,
+        "panes": [
+            {"id": 1, "stable_tab_id": 10, "tab_position": 0, "pane_x": 0, "pane_columns": 60, "tab_viewed": latched},
+            {"id": 2, "stable_tab_id": 10, "tab_position": 0, "pane_x": 60, "pane_columns": 240, "tab_viewed": latched},
+            {"id": 3, "stable_tab_id": 20, "tab_position": 1, "pane_x": 0, "pane_columns": 24, "tab_viewed": latched},
+            {"id": 4, "stable_tab_id": 20, "tab_position": 1, "pane_x": 24, "pane_columns": hidden_cols - 24, "tab_viewed": latched},
+            {"id": 9, "is_plugin": true, "stable_tab_id": 10, "tab_position": 0}
+        ]
+    })).unwrap()
+}
+
+fn one_width_client() -> serde_json::Value {
+    serde_json::json!({"views": [{"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}}]})
+}
+
+#[test]
+fn new_tab_seed_skips_an_unproven_first_tab() {
+    let clients =
+        serde_json::json!({"views": [{"client_id": 1, "pane_id": {"kind": "terminal", "id": 4}}]});
+    let cache = width_proof_cache(Some(clients), 320, true);
+    assert_eq!(first_proven_view_cols(cache), Some(320));
+    assert_eq!(
+        first_proven_view_cols(width_proof_cache(None, 300, true)),
+        None
+    );
+}
+
+#[test]
+fn renderer_width_proof_uses_client_count_and_equal_width_tabs() {
+    let many = serde_json::json!({"views": [
+        {"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}},
+        {"client_id": 2, "pane_id": {"kind": "plugin", "id": 9}}
+    ]});
+    let unresolved = serde_json::json!({"views": [{"client_id": 1, "pane_id": {"kind": "terminal", "id": 999}}]});
+    let duplicate = serde_json::json!({"views": [
+        {"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}},
+        {"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}}
+    ]});
+    let plugin_focused = serde_json::json!({"views": [
+        {"client_id": 1, "pane_id": {"kind": "plugin", "id": 9}}
+    ]});
+    for (clients, hidden_cols, latched, visible, hidden) in [
+        (Some(one_width_client()), 300, false, true, true),
+        (Some(plugin_focused), 300, false, true, true),
+        (Some(one_width_client()), 320, true, true, false),
+        (Some(duplicate), 320, true, true, false),
+        (Some(one_width_client()), 50, true, true, false),
+        (Some(many.clone()), 320, true, true, true),
+        (Some(many), 300, false, false, false),
+        (
+            Some(serde_json::json!({"views": []})),
+            300,
+            true,
+            false,
+            false,
+        ),
+        (Some(unresolved), 300, true, false, false),
+        (None, 300, true, false, false),
+    ] {
+        let cache = width_proof_cache(clients, hidden_cols, latched);
+        let clients = sampled_client_tabs(&cache);
+        let table = WidthTable::new(cache, clients.as_ref());
+        assert_eq!(
+            table.panes[&1].1.is_some(),
+            visible,
+            "visible tab: {table:?}"
+        );
+        assert_eq!(table.panes[&3].1.is_some(), hidden, "hidden tab: {table:?}");
+    }
+    let mut cache = width_proof_cache(Some(one_width_client()), 50, true);
+    cache.panes[0].pane_columns = Some(24);
+    cache.panes[1].pane_x = Some(24);
+    cache.panes[1].pane_columns = Some(26);
+    let clients = sampled_client_tabs(&cache);
+    let table = WidthTable::new(cache, clients.as_ref());
+    assert!(
+        table.panes.values().all(|(_, step)| step.is_none()),
+        "equal detached placeholders still prove nothing"
+    );
+}
+
+#[test]
+fn width_memo_keeps_sampled_stable_tabs_through_withheld_topologies() {
+    use crate::mux::zellij::pane_topology::write_pane_topology_cache;
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut cache = width_proof_cache(Some(one_width_client()), 300, true);
+    write_pane_topology_cache(&runtime, &cache).unwrap();
+    let pane = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+    let mut memo = WidthMemo::default();
+    assert_eq!(
+        memo.step(&runtime, "rimz-test", &pane, cache.produced_at_ms, None)
+            .map(|step| step.view_cols)
+            .ok(),
+        Some(300)
+    );
+    cache.clients = None;
+    cache.clients_withheld = true;
+    for pane in &mut cache.panes {
+        pane.id += 10;
+        pane.tab_position += 1;
+        pane.tab_viewed = false;
+    }
+    let pane = PaneId::from_parts(MuxName::Zellij, "terminal_13");
+    write_pane_topology_cache(&runtime, &cache).unwrap();
+    assert_eq!(
+        memo.step(&runtime, "rimz-test", &pane, cache.produced_at_ms, None)
+            .map(|step| step.view_cols)
+            .ok(),
+        Some(300),
+        "a withheld publication must retain the sampled stable tab"
+    );
+    assert!(
+        WidthMemo::default()
+            .step(&runtime, "rimz-test", &pane, cache.produced_at_ms, None)
+            .is_err()
+    );
+    cache.clients_withheld = false;
+    write_pane_topology_cache(&runtime, &cache).unwrap();
+    assert!(
+        memo.step(&runtime, "rimz-test", &pane, cache.produced_at_ms, None)
+            .is_ok()
+    );
+    cache.clients = Some(serde_json::from_value(serde_json::json!({"views": []})).unwrap());
+    write_pane_topology_cache(&runtime, &cache).unwrap();
+    assert!(
+        memo.step(&runtime, "rimz-test", &pane, cache.produced_at_ms, None)
+            .is_err(),
+        "an observed zero-client sample replaces remembered proof"
+    );
+    cache.clients = Some(
+        serde_json::from_value(serde_json::json!({"views": [
+            {"client_id": 1, "pane_id": {"kind": "terminal", "id": 12}}
+        ]}))
+        .unwrap(),
+    );
+    write_pane_topology_cache(&runtime, &cache).unwrap();
+    assert!(
+        memo.step(&runtime, "rimz-test", &pane, cache.produced_at_ms, None)
+            .is_ok()
+    );
+    cache.clients = None;
+    cache.clients_withheld = true;
+    cache.panes.retain(|pane| pane.stable_tab_id != Some(10));
+    write_pane_topology_cache(&runtime, &cache).unwrap();
+    assert!(
+        memo.step(&runtime, "rimz-test", &pane, cache.produced_at_ms, None)
+            .is_err()
+    );
+}
+
 #[test]
 fn topology_retains_stable_tab_identity_separately_from_legacy_position() {
     let pane: PaneTopologyPane = serde_json::from_value(serde_json::json!({
@@ -38,6 +201,10 @@ fn width_memo_reads_and_derives_once_per_stamp_with_live_freshness() {
     let stamp = crate::utils::time::unix_now_ms();
     let mut cache: PaneTopologyCache = serde_json::from_value(serde_json::json!({
         "session_name": "rimz-test", "produced_at_ms": stamp,
+        "clients": {"views": [
+            {"client_id": 1, "pane_id": {"kind": "terminal", "id": 0}},
+            {"client_id": 2, "pane_id": {"kind": "plugin", "id": 9}}
+        ]},
         "panes": (0..40).flat_map(|n| [
             serde_json::json!({"id": 2*n, "is_plugin": false, "tab_id": n, "pane_x": 0, "pane_columns": 24, "tab_viewed": true}),
             serde_json::json!({"id": 2*n+1, "is_plugin": false, "tab_id": n, "pane_x": 24, "pane_columns": 176+n, "is_fullscreen": n == 39, "tab_viewed": true}),
@@ -183,7 +350,7 @@ fn off_spec_width_names_only_viewed_tabs() {
     let panes: Vec<PaneTopologyPane> = serde_json::from_value(serde_json::json!([
         {"id": 1, "stable_tab_id": 0, "tab_position": 0, "tab_name": "rimzd", "pane_x": 0,
          "pane_columns": 30, "title": "rimz-sidebar"},
-        {"id": 2, "stable_tab_id": 0, "tab_position": 0, "pane_x": 30, "pane_columns": 19},
+        {"id": 2, "stable_tab_id": 0, "tab_position": 0, "pane_x": 30, "pane_columns": 209},
         {"id": 3, "stable_tab_id": 1, "tab_position": 1, "pane_x": 0, "pane_columns": 120,
          "title": "rimz-sidebar", "tab_viewed": true},
         {"id": 4, "stable_tab_id": 1, "tab_position": 1, "pane_x": 120, "pane_columns": 119,
@@ -196,7 +363,7 @@ fn off_spec_width_names_only_viewed_tabs() {
         pinned: false,
     };
     assert_eq!(
-        super::super::backend::off_spec_sidebars(&panes, &[], Some(target)),
+        super::super::backend::off_spec_sidebars(&panes, &[], Some(target), 50),
         vec![(1, 3)]
     );
 }
@@ -536,7 +703,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
     let by_id = |id: u64| panes.iter().find(|pane| pane.id == id).unwrap();
     let excluded = HashSet::new();
     assert!(
-        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, Some(target), 50),
         "right-docked 50% sidebar is off-spec",
     );
     assert_eq!(
@@ -544,11 +711,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::SwapReachable),
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, None),
+        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, None, 50),
         "dock repair does not require a proven viewport",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(3), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(3), &panes, &excluded, Some(target), 50),
         "a layout-born sidebar below the target is repaired",
     );
     assert_eq!(
@@ -556,11 +723,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::Docked),
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(3), &panes, &excluded, None),
+        !sidebar_geometry_off_spec(by_id(3), &panes, &excluded, None, 50),
         "width-only repair requires a proven viewport",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(5), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(5), &panes, &excluded, Some(target), 50),
         "left but 50%-wide still wants the resize",
     );
     assert_eq!(
@@ -569,12 +736,12 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "a wide sidebar with a clear band is docked and only needs resizing",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(7), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(7), &panes, &excluded, Some(target), 50),
         "missing geometry requires dock verification, never an assumed healthy dock",
     );
     assert_eq!(sidebar_dock_verdict(by_id(7), &panes, &excluded), None);
     assert!(
-        sidebar_geometry_off_spec(by_id(9), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(9), &panes, &excluded, Some(target), 50),
         "the live broken nested-row shape is off-spec",
     );
     assert_eq!(
@@ -587,7 +754,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "the narrow one-right-column nested shape can be repaired by stacking",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(12), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(12), &panes, &excluded, Some(target), 50),
         "a docked sidebar below the target still needs resizing",
     );
     assert_eq!(
@@ -606,7 +773,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "plugin, floating, and suppressed panes do not intrude into the dock band",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(23), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(23), &panes, &excluded, Some(target), 50),
         "a dead pane still means the sidebar is not a full-height dock",
     );
     assert_eq!(
@@ -633,11 +800,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "a newly added nested sidebar can stack every live work pane without replacing it",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(30), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(30), &panes, &excluded, Some(target), 50),
         "a sidebar below the target grows",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(32), &panes, &excluded, Some(target)),
+        sidebar_geometry_off_spec(by_id(32), &panes, &excluded, Some(target), 50),
         "a sidebar at least one resize step above the target shrinks",
     );
     assert_eq!(

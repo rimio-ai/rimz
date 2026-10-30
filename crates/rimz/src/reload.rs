@@ -836,6 +836,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
         extra_env: crate::agents::registry::room_env(runtime),
         cwd: ws.project_root.clone(),
         target,
+        max_percent: width.max_percent,
         detected_view_size: None,
         rimz_bin,
         pristine_birth: false,

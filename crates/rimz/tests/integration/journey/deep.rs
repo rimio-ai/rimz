@@ -3957,6 +3957,8 @@ fn write_zellij_topology(
     session: &str,
     sidebar_only: bool,
 ) {
+    use rimz::mux::zellij::pane_topology::{TopologyClientView, TopologyClients, ZellijPaneId};
+
     let deadline = Instant::now() + CAPTURE_BUDGET;
     let mut panes = loop {
         let output = namespace
@@ -3986,6 +3988,9 @@ fn write_zellij_topology(
             let Some(object) = value.as_object_mut() else {
                 continue;
             };
+            if let Some(tab_id) = object.get("tab_id").cloned() {
+                object.entry("stable_tab_id").or_insert(tab_id);
+            }
             if object
                 .get("tab_position")
                 .is_some_and(|value| value.is_number())
@@ -4022,13 +4027,32 @@ fn write_zellij_topology(
             pane.tab_viewed = true;
         }
     }
+    // One client views each tab, so every sidebar stays visible; one tab proves
+    // its width through its sole client, several through the latch set above.
+    let mut viewed_tabs = Vec::new();
+    for pane in panes.iter().filter(|pane| !pane.is_plugin) {
+        if !viewed_tabs.iter().any(|(tab, _)| *tab == pane.tab_position) {
+            viewed_tabs.push((pane.tab_position, pane.id));
+        }
+    }
+    let views = (1..)
+        .zip(viewed_tabs)
+        .map(|(client_id, (_, pane_id))| TopologyClientView {
+            client_id,
+            pane_id: ZellijPaneId::Terminal(pane_id),
+        })
+        .collect();
     let cache = rimz::mux::zellij::pane_topology::PaneTopologyCache {
         session_name: session.to_owned(),
         produced_at_ms: rimz::utils::time::unix_now_ms(),
         writer: None,
         focused_pane: None,
         clients_withheld: false,
-        clients: None,
+        clients: Some(TopologyClients {
+            human_clients: None,
+            viewed_panes: None,
+            views,
+        }),
         panes,
     };
     rimz::mux::zellij::pane_topology::write_pane_topology_cache(runtime, &cache)

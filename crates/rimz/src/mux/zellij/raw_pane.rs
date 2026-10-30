@@ -27,6 +27,31 @@ pub(crate) fn take_width_derivations() -> usize {
 #[derive(Debug, Default)]
 pub(crate) struct WidthMemo {
     slot: Option<(StampedPath, String, Option<WidthTable>)>,
+    clients: Option<(String, ClientTabs)>,
+}
+
+type ClientTabs = HashMap<u32, Option<u64>>;
+
+fn sampled_client_tabs(cache: &PaneTopologyCache) -> Option<ClientTabs> {
+    if cache.clients_withheld {
+        return None;
+    }
+    Some(
+        cache
+            .clients
+            .as_ref()?
+            .views
+            .iter()
+            .map(|view| {
+                let tab = cache
+                    .panes
+                    .iter()
+                    .find(|pane| pane.native_id() == view.pane_id)
+                    .and_then(|pane| pane.stable_tab_id);
+                (view.client_id, tab)
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug)]
@@ -35,22 +60,65 @@ struct WidthTable {
     panes: HashMap<u64, (u64, Option<WidthStep>)>,
 }
 
+pub(super) fn first_proven_view_cols(cache: PaneTopologyCache) -> Option<u16> {
+    let clients = sampled_client_tabs(&cache);
+    let table = WidthTable::new(cache, clients.as_ref());
+    table
+        .cache
+        .panes
+        .iter()
+        .filter(|pane| pane.is_live_terminal())
+        .find_map(|pane| {
+            let cols = table.panes.get(&pane.id)?.1?.view_cols;
+            (cols != 0).then_some(cols)
+        })
+}
+
 impl WidthTable {
-    fn new(cache: PaneTopologyCache) -> Self {
-        let mut tabs = HashMap::new();
-        let mut panes = HashMap::new();
+    fn new(cache: PaneTopologyCache, clients: Option<&ClientTabs>) -> Self {
+        let mut extents = HashMap::new();
         for pane in cache.panes.iter().filter(|pane| !pane.is_plugin) {
-            let step = *tabs.entry(pane.tab_position).or_insert_with(|| {
-                tab_view_cols(&cache.panes, pane.tab_position).map(|view_cols| WidthStep {
+            extents
+                .entry(pane.tab_position)
+                .or_insert_with(|| tab_extent_cols(&cache.panes, pane.tab_position));
+        }
+        let client_count = clients.map_or(0, HashMap::len);
+        let visible_cols = clients
+            .filter(|clients| clients.len() == 1)
+            .and_then(|clients| clients.values().next().copied().flatten())
+            .and_then(|tab| {
+                cache
+                    .panes
+                    .iter()
+                    .find(|pane| pane.stable_tab_id == Some(tab))
+            })
+            .and_then(|pane| extents.get(&pane.tab_position).copied().flatten());
+        let tabs: HashMap<_, _> = extents
+            .into_iter()
+            .map(|(tab, cols)| {
+                let cols = cols.filter(|cols| match client_count {
+                    0 => false,
+                    1 => visible_cols == Some(*cols),
+                    _ => cache
+                        .panes
+                        .iter()
+                        .any(|pane| pane.tab_position == tab && pane.tab_viewed),
+                });
+                let step = cols.map(|view_cols| WidthStep {
                     cols: u16::try_from(crate::mux::width::zellij_resize_step_cols(view_cols))
                         .unwrap_or(u16::MAX),
                     stop_step_cols: u16::try_from(zellij_resize_stop_step_cols(view_cols))
                         .unwrap_or(u16::MAX),
                     exact: false,
                     view_cols: u16::try_from(view_cols).unwrap_or(0),
-                    fullscreen_active: Some(tab_fullscreen_active(&cache.panes, pane.tab_position)),
-                })
-            });
+                    fullscreen_active: Some(tab_fullscreen_active(&cache.panes, tab)),
+                });
+                (tab, step)
+            })
+            .collect();
+        let mut panes = HashMap::new();
+        for pane in cache.panes.iter().filter(|pane| !pane.is_plugin) {
+            let step = tabs.get(&pane.tab_position).copied().flatten();
             panes.entry(pane.id).or_insert((pane.tab_position, step));
         }
         Self { cache, panes }
@@ -79,11 +147,18 @@ impl WidthMemo {
             .as_ref()
             .is_none_or(|(cached, cached_session, _)| *cached != stamp || cached_session != session)
         {
-            self.slot = Some((
-                stamp,
-                session.to_owned(),
-                read_pane_topology_cache(runtime, session).map(WidthTable::new),
-            ));
+            let table = read_pane_topology_cache(runtime, session).map(|cache| {
+                if let Some(clients) = sampled_client_tabs(&cache) {
+                    self.clients = Some((session.to_owned(), clients));
+                }
+                let clients = self
+                    .clients
+                    .as_ref()
+                    .filter(|(sampled_session, _)| sampled_session == session)
+                    .map(|(_, clients)| clients);
+                WidthTable::new(cache, clients)
+            });
+            self.slot = Some((stamp, session.to_owned(), table));
         }
         let table = self
             .slot
@@ -177,24 +252,25 @@ pub(super) fn parse_new_pane_id(stdout: &str) -> Option<ZellijPaneId> {
     id.terminal_id().map(ZellijPaneId::Terminal)
 }
 
-/// The tiled width of `tab_position`, derived from the rightmost pane extent.
-/// Floating, suppressed, and plugin panes do not define the tab's view width.
-/// A single pane cannot prove the viewport: the sidebar is materialized first,
-/// so that shape is a mid-layout snapshot whose extent is only the sidebar's.
-/// An unviewed tab can retain detached geometry even with two tiled extents.
-/// Zellij's [detached seed] is 50 columns and its birth client counts as a viewer,
-/// so that extent cannot prove a viewport either, even for a real 50-column client.
-///
-/// [detached seed]: https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-client/src/lib.rs
+/// Repair's tiled viewport proof, restricted to tabs viewed by its live client
+/// snapshot. Renderers instead admit equal-width tabs with one sampled client,
+/// and use the plugin's viewed latch with two or more clients.
 pub(super) fn tab_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
-    #[cfg(test)]
-    WIDTH_DERIVATIONS.with(|count| count.set(count.get() + 1));
     if !panes
         .iter()
         .any(|pane| pane.tab_position == tab_position && pane.tab_viewed)
     {
         return None;
     }
+    tab_extent_cols(panes, tab_position)
+}
+
+/// Two tiled terminal extents prove the shape; a sidebar alone is mid-layout.
+/// Floating, suppressed and plugin panes do not contribute. Zellij's detached
+/// birth viewport is 50 columns, so even a real 50-column client is refused.
+fn tab_extent_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
+    #[cfg(test)]
+    WIDTH_DERIVATIONS.with(|count| count.set(count.get() + 1));
     let mut extents = panes
         .iter()
         .filter(|pane| pane.tab_position == tab_position && pane.is_terminal())
@@ -336,6 +412,7 @@ pub(super) fn sidebar_geometry_off_spec(
     panes: &[PaneTopologyPane],
     excluded: &HashSet<u64>,
     width_target: Option<crate::mux::SidebarTarget>,
+    max_percent: u16,
 ) -> bool {
     let Some(verdict) = sidebar_dock_verdict(pane, panes, excluded) else {
         return true;
@@ -345,7 +422,11 @@ pub(super) fn sidebar_geometry_off_spec(
             pane.pane_columns.is_some_and(|cols| {
                 tab_view_cols(panes, pane.tab_position).is_some_and(|view_cols| {
                     let target_cols = target
-                        .cols(Some(u16::try_from(view_cols).unwrap_or(u16::MAX)))
+                        .zellij_step(
+                            Some(u16::try_from(view_cols).unwrap_or(u16::MAX)),
+                            max_percent,
+                        )
+                        .1
                         .get();
                     sidebar_width_off_spec(
                         cols,
