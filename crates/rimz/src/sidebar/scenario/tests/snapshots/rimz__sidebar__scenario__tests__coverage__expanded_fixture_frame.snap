@@ -69,7 +69,7 @@ expression: strip_sgr(&ansi)
         22k · Haiku · xhigh                       5m
   claude-3 · Opus 4.8 · xhigh · 1M            $29.84
    API Error: Overloaded
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━───   85% ◉  1h
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━───   85% 󰪥  1h
    󰿦 853k · 󱥸 734k  85k  34k  106k
   pi · GPT 5.5 · xhigh
   claude-4 · Opus 4.8 · xhigh
@@ -77,11 +77,11 @@ expression: strip_sgr(&ansi)
   mux-merge #91                                main
   claude-6 · Opus 4.8 · xhigh · 1M            $15.38
    API Error: Overloaded
-   󰕰 ━━━━━━━━━━━━━━━━━━━╺━━╺─────────────   46% ◉  1h
+   󰕰 ━━━━━━━━━━━━━━━━━━━╺━━╺─────────────   46% 󰪥  1h
    󰿦 469k · 󱥸 403k  46k  18k  58k
   claude-7 · Opus 4.8 · xhigh · 1M             $2.41
    land tmux hook fix
-   󰕰 ━━━━━━━╺╺───────────────────────────   13% ◉  2h
+   󰕰 ━━━━━━━╺╺───────────────────────────   13% 󰪥  2h
    󰿦 132k · 󱥸 114k  13k  5k  16k
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────

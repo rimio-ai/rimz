@@ -1699,6 +1699,38 @@ fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
 }
 
 #[test]
+fn finished_worktree_age_stays_full_past_an_hour() {
+    let mut card = agent(
+        "worker",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished work"),
+    );
+    card.last_activity = fixed_now() - Duration::from_secs(7200);
+    let mut snapshot = snapshot_with(vec![card]);
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.finished = true;
+    group.cohort_effort = None;
+    for (style, glyph) in [
+        (None, "●"),
+        (Some(crate::config::ThemeStyle::Modern), "\u{f0aa5}"),
+    ] {
+        snapshot.theme.style = style;
+        let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+        let lines = group_lines(&snapshot, &theme, usize::MAX);
+        let age = format!("{glyph} 2h");
+        let span = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content == age);
+        assert!(span.is_some(), "{}", line_texts(&lines).join("\n"));
+        assert_eq!(span.unwrap().style, theme.muted());
+    }
+}
+
+#[test]
 fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot =

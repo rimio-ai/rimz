@@ -943,10 +943,7 @@ fn long_wait_clocks_and_child_runtimes_stay_muted() {
     let snapshot = snapshot_with(vec![parent, child]);
     let theme = Theme::fixed(false);
     let lines = group_lines(&snapshot, &theme, 0);
-    let clock = format!(
-        "{}  2h",
-        elapsed_glyph(&theme, 7200, ATTENTION_AGE_CEILING_SECS)
-    );
+    let clock = "●  2h";
     let tones: Vec<_> = lines
         .iter()
         .flat_map(|line| &line.spans)

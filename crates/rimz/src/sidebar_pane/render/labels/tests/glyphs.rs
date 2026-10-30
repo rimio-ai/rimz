@@ -124,6 +124,62 @@ fn elapsed_glyph_fills_by_the_eighth_of_its_ceiling() {
 }
 
 #[test]
+fn hour_age_glyph_fills_completed_quarters_and_stays_full() {
+    let theme = Theme::fixed(false);
+    for (secs, expected) in [
+        (-1, "◔"),
+        (0, "◔"),
+        (899, "◔"),
+        (900, "◔"),
+        (1799, "◔"),
+        (1800, "◑"),
+        (2699, "◑"),
+        (2700, "◕"),
+        (3599, "◕"),
+        (3600, "●"),
+        (3601, "●"),
+        (7200, "●"),
+        (i64::MAX, "●"),
+    ] {
+        assert_eq!(hour_age_glyph(&theme, secs), expected, "{secs}s");
+    }
+}
+
+#[test]
+fn hour_age_glyph_fills_completed_eighths_and_stays_full() {
+    let config = crate::config::ThemeConfig {
+        style: Some(crate::config::ThemeStyle::Modern),
+        ..Default::default()
+    };
+    let theme = Theme::fixed_for_theme(false, &config);
+    for (secs, expected) in [
+        (-1, "\u{f0a9e}"),
+        (0, "\u{f0a9e}"),
+        (449, "\u{f0a9e}"),
+        (450, "\u{f0a9e}"),
+        (899, "\u{f0a9e}"),
+        (900, "\u{f0a9f}"),
+        (1349, "\u{f0a9f}"),
+        (1350, "\u{f0aa0}"),
+        (1799, "\u{f0aa0}"),
+        (1800, "\u{f0aa1}"),
+        (2249, "\u{f0aa1}"),
+        (2250, "\u{f0aa2}"),
+        (2699, "\u{f0aa2}"),
+        (2700, "\u{f0aa3}"),
+        (3149, "\u{f0aa3}"),
+        (3150, "\u{f0aa4}"),
+        (3599, "\u{f0aa4}"),
+        (3600, "\u{f0aa5}"),
+        (3601, "\u{f0aa5}"),
+        (7200, "\u{f0aa5}"),
+        (i64::MAX, "\u{f0aa5}"),
+    ] {
+        assert_eq!(hour_age_glyph(&theme, secs), expected, "{secs}s");
+    }
+}
+
+#[test]
 fn window_style_tints_by_size_class_but_stays_subordinate() {
     let theme = Theme::fixed(false);
     let banded = |window| window_style(&theme, window);
