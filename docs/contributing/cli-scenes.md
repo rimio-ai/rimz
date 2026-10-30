@@ -1,6 +1,6 @@
 # CLI scenes
 
-> See [rust-conventions.md](./rust-conventions.md#cli-shape) for how the CLI is parsed and [the CLI layer contract](../../crates/rimz/src/cli/AGENTS.md) for what a handler may own.
+> See [rust-conventions.md](./rust-conventions.md#cli-shape) for how the CLI is parsed and [the CLI layer contract](../../crates/rimz/src/cli/AGENTS.md) for what a handler may own. Its [human-history rule](../../crates/rimz/src/cli/AGENTS.md#boundaries) covers folded repeats and one fact stated once.
 
 A scene is a top-level command that owns one kind of thing and the verbs over it: `rimz agents`, `rimz teams`, and `rimz subagents`. `rimz agents` is the reference design; `rimz teams` follows it. A change to a scene keeps the six rules below true, and a new scene starts from them. The command forms each scene prints live in its reference page ([agents.md](../reference/cli/agents.md), [teams.md](../reference/cli/teams.md)); the shared exit codes live in [cli.md](../reference/cli.md#exit-codes).
 
