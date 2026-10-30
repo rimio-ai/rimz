@@ -341,20 +341,20 @@ The first decodable line for each account-day wins forever, even if another home
 
 `accounts/.history/session-roles/<UTC-year>[.<tag>].jsonl` records which role each native session ran in, across homes sharing accounts and independent of run records and room state. The walk joins it to spend to publish solo, team-role, and subagent tallies.
 
-Each line carries `kind`, native `session`, `role` (`agent` or `subagent`), `profile`, and RFC 3339 `at`. A subagent requires a profile and carries no seat. An agent's profile is optional, and an agent row carries `seat`: `"solo"`, or `{"team":"<team>","role":"<role>"}` when `RIMZ_TEAM` is set. The seat's role is `RIMZ_AGENT_ROLE`, else the row's profile, else the provider kind. A row without a seat is unrecorded provenance, never a solo seat. Readers ignore unknown fields and skip malformed lines.
+Each line carries `kind`, native `session`, `role` (`agent` or `subagent`), `profile`, and RFC 3339 `at`. A subagent requires a profile, carries no seat, and optionally carries a resolved `owner`: `{"team":"<team>","role":"<role>"}` or `{"profile":"<profile>"}`. Older rows and children whose parent could not be found have no owner. An agent's profile is optional, and an agent row carries `seat`: `"solo"`, or `{"team":"<team>","role":"<role>"}` when `RIMZ_TEAM` is set. The seat's role is `RIMZ_AGENT_ROLE`, else the row's profile, else the provider kind. A row without a seat uses the legacy placement heuristic below. Readers ignore unknown fields and skip malformed lines. The optional owner leaves the shared history `FORMAT` at 1.
 
 ### Writing a row
 
 The lifecycle funnel writes a row for a primary, derived, or replayed observation with a native id, side conversations excluded, when the observation creates the session's row in the room or registers the session (a fresh start or a resume). Every other frame skips the index. Each hook frame applies in a fresh `rimz hooks apply` child with a cold parse memo, and `session_roles::record` reads every segment of the current and previous UTC year to preserve provenance, so writing on every frame would reread those files each time.
 
-- A pane whose run resolves to `subagent = true` supplies the subagent role, with its environment profile, else the provider kind, as the profile.
+- A pane whose run resolves to `subagent = true` supplies the subagent role, with its environment profile, else the provider kind, as the profile. Only this case reads the room snapshot to resolve an owner: the pane's `RIMZ_AGENT_ID` finds its row through `AgentState::answers_to`, then `AgentState::parent_is` finds its parent. The parent's team and role identify a team owner, with role falling back to profile, then the parent's kind; a solo owner's profile falls back to the parent's kind. Missing rows or links leave the owner absent. A snapshot read failure debug-logs and still writes the role ownerless.
 - Every other observed session is an agent.
-- Native provider children inherit the pane's role and seat. Claude companions join their parent's id, and Codex children join their own observed id.
+- Native provider children inherit the pane's role, seat, and owner. Claude companions join their parent's id, and Codex children join their own observed id.
 - An unobserved session has no row. Its spend still counts in provider totals.
 
 Appends use exact-mode `append_record_bytes_mode` followed by `sync_file_data`, without a lock; directory creation syncs its parent. A hook write error warns and leaves the hook reply unchanged.
 
-On the first observation in a new year, the writer carries the previous year's earliest role, profile, and seat forward and ignores the pane's current identity. A session absent from both retained years is recorded fresh. Only the shared maintainer removes older years, never the hook writer.
+On the first observation in a new year, the writer carries the previous year's whole earliest role, including profile, seat, and owner, forward and ignores the pane's current identity. The first record wins even when it has no owner. A session absent from both retained years is recorded fresh. Only the shared maintainer removes older years, never the hook writer.
 
 ### Reading and placement
 

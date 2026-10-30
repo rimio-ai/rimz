@@ -27,6 +27,7 @@ fn session_role_spend_survives_run_and_room_removal() {
             session: session.into(),
             role: SessionRole::Subagent {
                 profile: "fast".into(),
+                owner: None,
             },
             at,
         },

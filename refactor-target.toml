@@ -323,7 +323,8 @@ upward-dependencies = ["address"]
 # SpendingWalker::discover_login_spending_files gives benches isolated account-aware discovery (+1).
 # SkillChain::from_resolved keeps definition loads on one pack snapshot (+1).
 # ToolSet::agent_types shares effective child-type grants with pack review (+1).
-surface-budget = 1196
+# SubagentOwner, resolve_owner and AgentSeat::from_identity share recorded ownership (+3).
+surface-budget = 1199
 
 [[verdict]]
 kind = "item"
@@ -754,7 +755,8 @@ path = "crates/rimz/src/agents/spending"
 # cached_provider_spending shares stamped provider parses with host projections (+1).
 # WindowStarts and its constructor share local-day spend and assist cutoffs (+2).
 # SpendingWalker::discover_login_spending_files gives benches isolated account-aware discovery (+1).
-surface-budget = 114
+# SubagentOwner, resolve_owner and AgentSeat::from_identity share recorded ownership (+3).
+surface-budget = 117
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -1618,6 +1620,16 @@ reason = "Typed durable role enforces a required subagent profile at the hook-to
 kind = "item"
 key = "agents::spending::session_roles::AgentSeat"
 reason = "The hook records explicit solo or team/role provenance; profile dots alone cannot identify TOML seats or dotted solo profiles."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_roles::SubagentOwner"
+reason = "Resolved parent seats cross the hook/ledger boundary without a later room-state join."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_roles::resolve_owner"
+reason = "The hook delegates parent identity and seat resolution over snapshot rows to agents."
 
 [[verdict]]
 kind = "item"

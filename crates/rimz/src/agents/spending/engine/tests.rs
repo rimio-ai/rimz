@@ -110,6 +110,7 @@ fn effort_fixture() -> (tempfile::TempDir, RuntimePaths, u64) {
             at,
             role: session_roles::SessionRole::Subagent {
                 profile: "fast".into(),
+                owner: None,
             },
         },
     )

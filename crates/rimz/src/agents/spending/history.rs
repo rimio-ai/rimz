@@ -294,6 +294,7 @@ mod tests {
                 at: "2024-01-01T12:00:00Z".parse().unwrap(),
                 role: SessionRole::Subagent {
                     profile: "old".into(),
+                    owner: None,
                 },
             },
         );
@@ -316,6 +317,7 @@ mod tests {
                 at,
                 role: SessionRole::Subagent {
                     profile: "allowed".into(),
+                    owner: None,
                 },
             };
             session_roles::record(&runtime, &allowed).unwrap();
@@ -388,6 +390,7 @@ mod tests {
             at: "2026-05-01T12:00:00Z".parse().unwrap(),
             role: SessionRole::Subagent {
                 profile: "fast".into(),
+                owner: None,
             },
         };
         let record = effort("2026-05-01T12:00:00Z");
@@ -524,6 +527,7 @@ mod tests {
                 at: "2026-05-01T12:00:00Z".parse().unwrap(),
                 role: SessionRole::Subagent {
                     profile: "fast".into(),
+                    owner: None,
                 },
             },
         )
@@ -566,12 +570,14 @@ mod tests {
             at: "2026-05-02T12:00:00Z".parse().unwrap(),
             role: SessionRole::Subagent {
                 profile: "later".into(),
+                owner: None,
             },
         };
         let earlier = SessionRoleRecord {
             at: "2026-05-01T12:00:00Z".parse().unwrap(),
             role: SessionRole::Subagent {
                 profile: "earlier".into(),
+                owner: None,
             },
             ..later.clone()
         };
@@ -664,6 +670,7 @@ mod tests {
                 at,
                 role: SessionRole::Subagent {
                     profile: "shared".into(),
+                    owner: None,
                 },
             },
         )

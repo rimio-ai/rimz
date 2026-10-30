@@ -900,6 +900,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
                 child.into(),
                 SessionRole::Subagent {
                     profile: "fast".into(),
+                    owner: None,
                 },
             )]),
         ),

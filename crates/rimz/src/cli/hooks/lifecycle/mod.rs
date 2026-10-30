@@ -560,8 +560,23 @@ fn record_session_roles(
         validate_non_empty_identity_env,
     );
     let role = if subagent {
+        let owner = agent_identity_env(
+            None,
+            rimz::harness::launch::ENV_AGENT_ID,
+            validate_non_empty_identity_env,
+        )
+        .and_then(
+            |launch_id| match store.snapshot_with_context(|_, _| false) {
+                Ok(snapshot) => session_roles::resolve_owner(&snapshot.agents, &launch_id.into()),
+                Err(error) => {
+                    debug!(%error, "lifecycle: could not resolve subagent owner from snapshot");
+                    None
+                }
+            },
+        );
         SessionRole::Subagent {
             profile: profile.unwrap_or_else(|| agent.spec().kind.to_owned()),
+            owner,
         }
     } else {
         let team = agent_identity_env(
@@ -569,19 +584,17 @@ fn record_session_roles(
             rimz::harness::launch::ENV_TEAM,
             validate_non_empty_identity_env,
         );
-        let seat = match team {
-            Some(team) => AgentSeat::Team {
-                team,
-                role: agent_identity_env(
-                    None,
-                    rimz::harness::launch::ENV_AGENT_ROLE,
-                    validate_non_empty_identity_env,
-                )
-                .or_else(|| profile.clone())
-                .unwrap_or_else(|| agent.spec().kind.to_owned()),
-            },
-            None => AgentSeat::Solo,
-        };
+        let seat = AgentSeat::from_identity(
+            profile.as_deref(),
+            team.as_deref(),
+            agent_identity_env(
+                None,
+                rimz::harness::launch::ENV_AGENT_ROLE,
+                validate_non_empty_identity_env,
+            )
+            .as_deref(),
+            agent.spec().kind,
+        );
         SessionRole::Agent {
             profile,
             seat: Some(seat),
