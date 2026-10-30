@@ -326,7 +326,8 @@ upward-dependencies = ["address"]
 # SubagentOwner, resolve_owner and AgentSeat::from_identity share recorded ownership (+3).
 # RebuildScope, RebuildReport, RebuiltDay, KeptDay, RebuildErr and
 # rebuild_spending_history share saved-day rebuilds with the CLI (+6).
-surface-budget = 1205
+# SoftCompactSkip, soft_compact_skip and soft_compact_prompt and their facade exports share mid-turn policy (+6).
+surface-budget = 1211
 
 [[verdict]]
 kind = "item"
@@ -387,6 +388,21 @@ reason = "Definition checks and scoped views retain conflicts separately from ab
 kind = "item"
 key = "agents::registry::ResumeProbe"
 reason = "Pane repair distinguishes resumed, settled and retryable process-chain answers."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::SoftCompactSkip"
+reason = "Launch warnings, doctor and the soft-compaction producer share the adapter's typed skip reason."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::soft_compact_skip"
+reason = "Command and declared context/compaction coverage determine participation without a second provider list."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::soft_compact_prompt"
+reason = "The soft-compaction helper composes the exact wrap-up text with the existing seat brief and trailing-command capability."
 
 [[verdict]]
 kind = "item"
@@ -2021,7 +2037,8 @@ path = "crates/rimz/src/harness"
 # load_live_capacity filters capacity waits against the planner's current condition clocks (+1).
 # spec::validate_team shares per-item team validation with pack loading (+1).
 # SeatPolicy::smart_compact shares the config resolver with agent-row consumers (+1).
-surface-budget = 1026
+# LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
+surface-budget = 1028
 
 [[verdict]]
 kind = "item"
@@ -4141,6 +4158,8 @@ allowed-dependencies = [
     "ids",
     "mux",
     "proc",
+    # Smart/native window comparisons reuse the existing threshold parser.
+    "store::message",
     "store::writer",
     "workspace",
 ]
@@ -4161,7 +4180,8 @@ allowed-dependencies = [
 # run_exit_policy shares fresh and resumed run wrapper policy (+1).
 # LaunchFinalizeWarning::take_cell_notices shares restart warning conversion (+1).
 # normalize_cell_preset shares tuning normalization with replay (+1).
-surface-budget = 53
+# LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
+surface-budget = 55
 
 [[verdict]]
 kind = "item"
@@ -7265,6 +7285,11 @@ reason = "Returned or carried by pub finalize/resolve signatures the CLI matches
 kind = "item"
 key = "harness::plan::LaunchFinalizeWarning"
 reason = "Returned or carried by pub finalize/resolve signatures the CLI matches on; atlas caveat 13 (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::LaunchCompactPolicy"
+reason = "Launch entry points pass effective seat tables, profile scope and harness defaults to finalization for shared smart-compaction warnings."
 
 [[verdict]]
 kind = "item"

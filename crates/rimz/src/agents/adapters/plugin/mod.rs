@@ -912,6 +912,41 @@ setup-doc = "README.md"
         build_adapter(manifest, dir)
     }
 
+    #[test]
+    fn soft_compact_participation_follows_the_plugin_manifest() {
+        use crate::agents::{AgentDefinition, SoftCompactSkip, soft_compact_skip};
+
+        let adapter = adapter();
+        for (emits, command, expected) in [
+            (
+                vec!["context"],
+                Some("/compact"),
+                Some(SoftCompactSkip::NoCompactionSignal),
+            ),
+            (
+                vec!["compaction_start", "compaction_end"],
+                Some("/compact"),
+                Some(SoftCompactSkip::NoLiveContextReading),
+            ),
+            (
+                vec!["context", "compaction_start", "compaction_end"],
+                None,
+                Some(SoftCompactSkip::NoCompactCommand),
+            ),
+            (
+                vec!["context", "compaction_start", "compaction_end"],
+                Some("/compact"),
+                None,
+            ),
+        ] {
+            let mut manifest = adapter.manifest.clone();
+            manifest.emits = emits.into_iter().map(str::to_owned).collect();
+            manifest.launch.as_mut().unwrap().compact_command = command.map(str::to_owned);
+            let plugin = build_adapter(manifest, adapter.plugin_dir.to_path_buf());
+            assert_eq!(soft_compact_skip(&AgentDefinition::new(plugin)), expected);
+        }
+    }
+
     fn account_adapter(marker: &Path) -> &'static PluginAdapter {
         let root = TempDir::new().unwrap();
         let root = root.keep();

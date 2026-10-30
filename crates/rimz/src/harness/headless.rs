@@ -87,6 +87,12 @@ impl HeadlessProfile {
         let warnings = plan::finalize_launch_layout(
             &mut resolved.layout,
             LaunchFinalizeOptions {
+                smart_compact: Some(plan::LaunchCompactPolicy::new(
+                    &effective,
+                    &config.harness,
+                    ProfileScope::Agents,
+                    resolved.team_name.as_deref(),
+                )),
                 agent_base: Some(profile),
                 permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
                 isolation: None,

@@ -167,7 +167,7 @@ fn ordinary_adapters_accept_default_hook_ingress_ownership() {
 }
 
 #[test]
-fn every_adapter_exposes_a_manual_compaction_command() {
+fn adapters_without_a_manual_compaction_command_declare_compaction_unsupported() {
     // `--smart-compact` types this into the agent's composer; every wired
     // agent exposes a slash command (`/compact`, Cursor's `/summarize`), so
     // a new adapter that forgets to opt in fails
@@ -187,6 +187,77 @@ fn every_adapter_exposes_a_manual_compaction_command() {
             "missing compact command for {}",
             adapter.spec().kind
         );
+    }
+}
+
+#[test]
+fn soft_compact_participation_pins_every_builtin_skip_and_reason() {
+    let mut skipped: Vec<_> = BUILTINS
+        .iter()
+        .filter_map(|definition| {
+            soft_compact_skip(definition).map(|reason| (definition.spec().kind, reason.to_string()))
+        })
+        .collect();
+    skipped.sort_unstable();
+    assert_eq!(
+        skipped,
+        [
+            ("amp", "no compact command".into()),
+            ("antigravity", "no compact command".into()),
+            ("hermes", "no compaction signal".into()),
+            ("kiro", "no compaction signal".into()),
+            ("minimax", "no live context reading".into()),
+            ("muse", "no compaction signal".into()),
+            ("qoder", "no live context reading".into()),
+        ]
+    );
+}
+
+#[test]
+fn soft_compact_prompt_preserves_the_exact_endings_and_seat_briefs() {
+    let mut agent = AgentState::seed(
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("soft-compact"),
+        AgentStatus::Running,
+        jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+    );
+    let harness = HarnessConfig::default();
+    let prefix = "Context is getting high, so I'm going to compact you once this turn ends. Wrap up the step you're on, without leaving any file half-edited, and don't start anything new. Then end your turn";
+    for (kind, team, instruction, expected) in [
+        ("claude", None, None, format!("{prefix}.")),
+        (
+            "codex",
+            None,
+            None,
+            format!(
+                "{prefix} with a note for yourself after the compaction:\n\n{}",
+                harness.compact_instruction(crate::config::CompactSeat::Solo)
+            ),
+        ),
+        (
+            "codex",
+            Some("forge"),
+            None,
+            format!(
+                "{prefix} with a note for yourself after the compaction:\n\n{}",
+                harness.compact_instruction(crate::config::CompactSeat::Team)
+            ),
+        ),
+        (
+            "codex",
+            Some("forge"),
+            Some("  Keep exact decisions.\nAnd open questions.  "),
+            format!(
+                "{prefix} with a note for yourself after the compaction:\n\n  Keep exact decisions.\nAnd open questions.  "
+            ),
+        ),
+        ("codex", None, Some(""), format!("{prefix}.")),
+    ] {
+        agent.kind = AgentKind::new_unchecked(kind);
+        agent.team = team.map(str::to_owned);
+        let mut harness = harness.clone();
+        harness.compact_instruction = instruction.map(str::to_owned);
+        assert_eq!(soft_compact_prompt(&agent, &harness), Some(expected));
     }
 }
 

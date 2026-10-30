@@ -114,6 +114,12 @@ pub fn resolve_finalized_layout(
     let warnings = crate::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: Some(crate::harness::plan::LaunchCompactPolicy::new(
+                &effective,
+                &machine_config.harness,
+                scope,
+                resolved.team_name.as_deref(),
+            )),
             agent_base: if routed {
                 None
             } else {

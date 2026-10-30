@@ -1422,6 +1422,7 @@ fn finalize<'a>(
     finalize_launch_layout(
         layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: None,
             isolation: None,
@@ -1481,6 +1482,174 @@ fn effective_launch(
         &project_root.join("config-home"),
     )
     .expect("effective launch config")
+}
+
+fn finalized_smart_compact_warnings(
+    config: &str,
+    spec: &str,
+    scope: crate::config::effective::ProfileScope,
+    native_window: Option<&str>,
+) -> Vec<String> {
+    let mut machine: MachineConfig = toml::from_str(config).unwrap();
+    let tables: toml::Table = toml::from_str(config).unwrap();
+    machine.agents.profiles = tables["agents"]["profiles"].clone().try_into().unwrap();
+    if let Some(teams) = tables["agents"].get("teams") {
+        machine.agents.teams = teams.clone().try_into().unwrap();
+    }
+    if let Some(profiles) = tables
+        .get("subagents")
+        .and_then(|table| table.get("profiles"))
+    {
+        machine.subagents.profiles = profiles.clone().try_into().unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let effective = effective_launch(&machine, dir.path());
+    let mut resolved = super::resolve_launch(
+        &effective,
+        scope,
+        &machine.agents.commands,
+        Some(spec),
+        None,
+    )
+    .unwrap();
+    if let Some(window) = native_window {
+        for cell in resolved.layout.agent_cells_mut() {
+            cell.auto_compact = Some(window.into());
+        }
+    }
+    finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
+            smart_compact: Some(LaunchCompactPolicy::new(
+                &effective,
+                &machine.harness,
+                scope,
+                resolved.team_name.as_deref(),
+            )),
+            agent_base: None,
+            permission_mode: None,
+            isolation: None,
+            preset: &Default::default(),
+            passthrough: &[],
+            budget: None,
+            max_turns: None,
+        },
+    )
+    .unwrap()
+    .into_iter()
+    .map(|warning| warning.to_string())
+    .collect()
+}
+
+#[test]
+fn finalized_smart_compact_warns_only_for_explicit_skipping_seats() {
+    use crate::config::effective::ProfileScope::{Agents, Subagents};
+
+    let config = r#"
+[agents.profiles.base]
+agent = "amp"
+smart-compact = "200k"
+[agents.profiles.coder]
+agent = "base"
+[agents.profiles.muted]
+agent = "base"
+smart-compact = "off"
+[agents.profiles.enabled]
+agent = "codex"
+smart-compact = "200k"
+[subagents.profiles.coder]
+agent = "kiro"
+smart-compact = "60%"
+[agents.teams.forge]
+roles = [{role = "reviewer", profile = "coder", smart-compact = "70%", flip-compact = "off"}]
+"#;
+    for (spec, scope, expected) in [
+        (
+            "coder",
+            Agents,
+            vec![
+                "warning: `coder` smart-compact 200000 tokens: amp skips mid-turn soft compaction (no compact command)",
+            ],
+        ),
+        (
+            "forge.reviewer",
+            Agents,
+            vec![
+                "warning: `coder` smart-compact 70%: amp skips mid-turn soft compaction (no compact command)",
+            ],
+        ),
+        (
+            "coder",
+            Subagents,
+            vec![
+                "warning: `coder` smart-compact 60%: kiro skips mid-turn soft compaction (no compaction signal)",
+            ],
+        ),
+        ("muted", Agents, vec![]),
+        ("enabled", Agents, vec![]),
+        ("amp", Agents, vec![]),
+        ("codex", Agents, vec![]),
+    ] {
+        assert_eq!(
+            finalized_smart_compact_warnings(config, spec, scope, None),
+            expected,
+            "{spec} {scope:?}"
+        );
+    }
+}
+
+#[test]
+fn finalized_smart_compact_compares_only_effective_token_windows() {
+    use crate::config::effective::ProfileScope::Agents;
+
+    for (line, native, expected) in [
+        (
+            Some("200k"),
+            Some("200k"),
+            vec![
+                "warning: `coder` smart-compact 200000 tokens is at or above its auto-compact 200000 tokens; the provider compacts first",
+            ],
+        ),
+        (
+            Some("250k"),
+            Some("200k"),
+            vec![
+                "warning: `coder` smart-compact 250000 tokens is at or above its auto-compact 200000 tokens; the provider compacts first",
+            ],
+        ),
+        (
+            None,
+            Some("200k"),
+            vec![
+                "warning: `coder` smart-compact 258000 tokens is at or above its auto-compact 200000 tokens; the provider compacts first",
+            ],
+        ),
+        (Some("150k"), Some("200k"), vec![]),
+        (Some("70%"), Some("200k"), vec![]),
+        (Some("200k"), Some("70%"), vec![]),
+        (Some("off"), Some("200k"), vec![]),
+        (Some("200k"), None, vec![]),
+    ] {
+        let mut config =
+            "[harness]\nauto_compact = 'off'\n[agents.profiles.coder]\nagent = 'codex'\n"
+                .to_owned();
+        if let Some(line) = line {
+            config.push_str(&format!("smart-compact = '{line}'\n"));
+        }
+        if let Some(native) = native.filter(|value| *value != "70%") {
+            config.push_str(&format!("auto-compact = '{native}'\n"));
+        }
+        assert_eq!(
+            finalized_smart_compact_warnings(
+                &config,
+                "coder",
+                Agents,
+                native.filter(|value| *value == "70%"),
+            ),
+            expected,
+            "line {line:?}, native {native:?}"
+        );
+    }
 }
 
 #[test]
@@ -2299,6 +2468,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: None,
             isolation: None,
@@ -2335,6 +2505,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
     let err = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: None,
             isolation: None,
@@ -2587,6 +2758,7 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
             isolation: None,
@@ -2645,6 +2817,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
             isolation: Some(crate::config::Isolation::Scoped),
@@ -2674,6 +2847,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
@@ -2702,6 +2876,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     let err = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
@@ -2744,6 +2919,7 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
             finalize_launch_layout(
                 &mut resolved.layout,
                 LaunchFinalizeOptions {
+                    smart_compact: None,
                     agent_base: None,
                     permission_mode: Some(PermissionModeChoice::Explicit(chosen)),
                     isolation: None,
@@ -2789,6 +2965,7 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Ask)),
             isolation: None,
@@ -2843,6 +3020,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
             isolation: None,
@@ -3195,6 +3373,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: None,
             isolation: None,
@@ -3223,6 +3402,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     let err = finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: None,
             isolation: None,
@@ -3270,6 +3450,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
+            smart_compact: None,
             agent_base: None,
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
             isolation: None,
@@ -3694,6 +3875,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
         finalize_launch_layout(
             &mut layout,
             LaunchFinalizeOptions {
+                smart_compact: None,
                 agent_base: None,
                 permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
                 isolation: flag,
