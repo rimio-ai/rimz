@@ -1098,6 +1098,162 @@ fn render_ambiguous(root: &Path, name: &str, symbols: &[SymbolInformation]) -> R
 }
 
 #[test]
+fn qualified_names_start_at_rust_target_directories_and_round_trip() {
+    let root = Path::new("/checkout");
+    let cases = [
+        (
+            "crates/rimz/tests/integration/resume.rs",
+            None,
+            "integration::resume::x",
+            "crates::rimz::tests::integration::resume::x",
+        ),
+        (
+            "crates/rimz/tests/integration/main.rs",
+            None,
+            "integration::x",
+            "crates::rimz::tests::integration::x",
+        ),
+        (
+            "crates/rimz/tests/integration/examples/pi_extension.rs",
+            None,
+            "integration::examples::pi_extension::x",
+            "crates::rimz::tests::integration::examples::pi_extension::x",
+        ),
+        ("tests/a.rs", None, "a::x", "tests::a::x"),
+        (
+            "crates/rimz/benches/hotpath/host.rs",
+            None,
+            "hotpath::host::x",
+            "crates::rimz::benches::hotpath::host::x",
+        ),
+        (
+            "crates/rimz/examples/seed_perf_workspace.rs",
+            None,
+            "seed_perf_workspace::x",
+            "crates::rimz::examples::seed_perf_workspace::x",
+        ),
+        (
+            "crates/rimz/tests/fixtures/zellij-trace/main.rs",
+            None,
+            "fixtures::zellij-trace::x",
+            "crates::rimz::tests::fixtures::zellij-trace::x",
+        ),
+        (
+            "crates/rimz/build.rs",
+            None,
+            "crates::rimz::build::x",
+            "crates::rimz::build::x",
+        ),
+        (
+            "crates/rimz/src/lsp/query/tests.rs",
+            None,
+            "lsp::query::tests::x",
+            "lsp::query::tests::x",
+        ),
+        ("tests/fixtures/demo/src/lib.rs", None, "x", "x"),
+        (
+            "crates/rimz/src/nested/src/item.rs",
+            None,
+            "nested::item::x",
+            "nested::item::x",
+        ),
+        (
+            "tests/test_x.py",
+            None,
+            "tests::test_x::x",
+            "tests::test_x::x",
+        ),
+        (
+            "crates/rimz/tests/integration/resume.rs",
+            Some("agent_ref"),
+            "integration::resume::agent_ref::x",
+            "crates::rimz::tests::integration::resume::agent_ref::x",
+        ),
+        ("tests.rs", None, "tests::x", "tests::x"),
+        ("tests/main.rs", None, "x", "tests::x"),
+    ];
+    let mut actual = Vec::new();
+    for (file, container, expected, previous) in cases {
+        let indexed = json!([{
+            "name": "x", "kind": 12, "containerName": container,
+            "location": {"uri": format!("file:///checkout/{file}"), "range": range()}
+        }]);
+        let symbol: SymbolInformation = serde_json::from_value(indexed[0].clone()).unwrap();
+        let printed = Candidate::new(root, &symbol).unwrap().name;
+        for name in [printed.as_str(), expected, previous] {
+            assert!(
+                matches!(
+                    resolve_symbol(root, name, indexed.clone()).unwrap(),
+                    SymbolResolution::Unique(found) if found.location == symbol.location
+                ),
+                "{file}: {name} must resolve to the indexed item"
+            );
+        }
+        actual.push(printed);
+    }
+    assert_eq!(actual, cases.map(|(_, _, expected, _)| expected));
+}
+
+#[test]
+fn rust_target_candidates_list_reusable_names_in_text_and_json() {
+    let root = Path::new("/checkout");
+    let indexed = json!([
+        {
+            "name": "x", "kind": 12, "containerName": "agent_ref",
+            "location": {
+                "uri": "file:///checkout/crates/rimz/tests/integration/resume.rs", "range": range()
+            }
+        },
+        {
+            "name": "x", "kind": 12,
+            "location": {"uri": "file:///checkout/src/other.rs", "range": range()}
+        }
+    ]);
+    let symbols: Vec<SymbolInformation> = serde_json::from_value(indexed.clone()).unwrap();
+    for output in [
+        Output::NotFound {
+            listed_symbols: 0,
+            unresolved: 0,
+            name: "wrong::x".into(),
+            symbols: symbols.clone(),
+        },
+        Output::Ambiguous {
+            unresolved: 0,
+            name: "x".into(),
+            symbols: symbols.clone(),
+        },
+    ] {
+        let text = render_outcome(root, &output, false).unwrap();
+        assert_eq!(
+            text.lines().skip(1).collect::<Vec<_>>(),
+            [
+                "function integration::resume::agent_ref::x  crates/rimz/tests/integration/resume.rs:2:3",
+                "function other::x  src/other.rs:2:3",
+            ]
+        );
+        let json = outcome_json(root, &output).unwrap();
+        assert_eq!(
+            json["candidates"],
+            json!([
+                {
+                    "name": "integration::resume::agent_ref::x", "kind": "function",
+                    "position": "crates/rimz/tests/integration/resume.rs:2:3"
+                },
+                {
+                    "name": "other::x", "kind": "function", "position": "src/other.rs:2:3"
+                }
+            ])
+        );
+        for (candidate, symbol) in json["candidates"].as_array().unwrap().iter().zip(&symbols) {
+            assert!(matches!(
+                resolve_symbol(root, candidate["name"].as_str().unwrap(), indexed.clone()).unwrap(),
+                SymbolResolution::Unique(found) if found.location == symbol.location
+            ));
+        }
+    }
+}
+
+#[test]
 fn lookup_outcomes_render_qualified_reusable_candidates() {
     let root = Path::new("/checkout");
     let missing = Output::NotFound {
@@ -2028,7 +2184,7 @@ fn find_keeps_rank_within_production_and_tests() {
     .unwrap();
     assert_eq!(
         rendered,
-        "function z::worker  z.rs:3:1\nfunction a::unrelated  a.rs:3:1\nfunction work  /external/a.rs:3:1\ntests:\nfunction tests::a::work  tests/a.rs:1:1\nfunction a::rework  a.rs:1:1\nfunction worker  /external/tests/a.rs:1:1\n"
+        "function z::worker  z.rs:3:1\nfunction a::unrelated  a.rs:3:1\nfunction work  /external/a.rs:3:1\ntests:\nfunction a::work  tests/a.rs:1:1\nfunction a::rework  a.rs:1:1\nfunction worker  /external/tests/a.rs:1:1\n"
     );
     assert_eq!(
         outlines,
@@ -2260,7 +2416,7 @@ fn test_only_lists_keep_counts_and_boundary() {
         let entry = match verb {
             Verb::Refs => "tests/a.rs\n  1:1  source\n",
             Verb::Callers => "tests/a.rs\n  1:1  work\n",
-            _ => "function tests::a::work  tests/a.rs:1:1\n",
+            _ => "function a::work  tests/a.rs:1:1\n",
         };
         assert_eq!(
             rendered,

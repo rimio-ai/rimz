@@ -958,9 +958,25 @@ struct Candidate {
 impl Candidate {
     fn new(root: &Path, symbol: &SymbolInformation) -> Result<Self> {
         let path = module_path(root, &symbol.location.uri)?;
+        let file = file_path(&symbol.location.uri)?;
         let start = path
             .iter()
             .position(|segment| segment == "src")
+            .or_else(|| {
+                if file.extension()? != "rs" {
+                    return None;
+                }
+                file.strip_prefix(root)
+                    .ok()?
+                    .parent()?
+                    .components()
+                    .position(|component| {
+                        matches!(
+                            component.as_os_str().to_str(),
+                            Some("tests" | "benches" | "examples")
+                        )
+                    })
+            })
             .map_or(0, |index| index + 1);
         let name = path
             .into_iter()
