@@ -24,6 +24,12 @@ enum PixelSession {
     Ready,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum PaintKind {
+    Routed,
+    Mirror,
+}
+
 pub(super) struct FramePainter {
     assets: PetAssets,
     painter: PixelPainter,
@@ -199,7 +205,8 @@ impl FramePainter {
         view: &mut ViewState,
         ui: &mut UiState,
     ) -> io::Result<()> {
-        let (body_result, frame) = self.compose_frame(terminal, snapshot, alert, view, ui);
+        let (body_result, frame) =
+            self.compose_frame(terminal, snapshot, alert, view, ui, PaintKind::Routed);
         body_result.and(frame.write(terminal.backend_mut()))
     }
 
@@ -210,6 +217,7 @@ impl FramePainter {
         alert: Option<&render::Alert>,
         view: &mut ViewState,
         ui: &mut UiState,
+        kind: PaintKind,
     ) -> (io::Result<()>, BufferedFrame) {
         terminal.backend_mut().begin_frame();
         let mut graphics = Vec::new();
@@ -217,12 +225,17 @@ impl FramePainter {
         let body_result = (|| {
             let now_ms = u64::from(snapshot.theme.display.resolved_refresh_ms())
                 .saturating_mul(view.animation_phase);
-            self.ensure_pixel_transmitted(&mut graphics, ui, now_ms)?;
-            bracket = !graphics.is_empty();
-            terminal.backend_mut().write_all(&graphics)?;
-            graphics.clear();
+            let transmit_pixels = !self.pixel_wrap || matches!(kind, PaintKind::Routed);
+            if transmit_pixels {
+                self.ensure_pixel_transmitted(&mut graphics, ui, now_ms)?;
+                bracket = !graphics.is_empty();
+                terminal.backend_mut().write_all(&graphics)?;
+                graphics.clear();
+            }
             render::draw_to_terminal(terminal, snapshot, alert, view, ui)?;
-            self.ensure_meters_transmitted(&mut graphics, ui, now_ms)?;
+            if transmit_pixels {
+                self.ensure_meters_transmitted(&mut graphics, ui, now_ms)?;
+            }
             bracket |= !graphics.is_empty();
             terminal.backend_mut().write_all(&graphics)
         })();

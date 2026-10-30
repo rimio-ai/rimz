@@ -166,6 +166,11 @@ impl IdleCycleFixture {
                     let mut terminal = ratatui::Terminal::new(backend).expect("fixture terminal");
                     let mut inbox = WakeupInbox::new(receiver);
                     let counts = host_pass::thread_counters();
+                    while renderer.bench_painted().is_none() {
+                        renderer
+                            .step(&mut inbox, &mut terminal)
+                            .expect("warm first frame");
+                    }
                     let warm = counts.get(Counter::TimeoutIdle);
                     while if watching {
                         counts.get(Counter::WakePublication) == 0
@@ -210,19 +215,22 @@ impl IdleCycleFixture {
                             break;
                         }
                     }
+                    let before_reveal = publication.lock().unwrap().0;
                     barrier.wait();
+                    if !(watching || reveal) {
+                        ack.send((index, None)).unwrap();
+                        return;
+                    }
                     loop {
                         renderer
                             .step(&mut inbox, &mut terminal)
                             .expect("reveal pass");
-                        if counts.get(Counter::WakePublication) > acknowledged {
-                            let paint = (watching || reveal)
-                                .then(|| painted_publication(&renderer, &publication))
-                                .flatten();
-                            if !(watching || reveal) || paint.is_some() {
-                                ack.send((index, paint)).unwrap();
-                                break;
-                            }
+                        let publication_revision = publication.lock().unwrap().0;
+                        if publication_revision > before_reveal
+                            && let Some(paint) = painted_publication(&renderer, &publication)
+                        {
+                            ack.send((index, Some(paint))).unwrap();
+                            break;
                         }
                     }
                 });

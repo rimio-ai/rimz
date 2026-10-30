@@ -58,7 +58,7 @@ use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
 use super::layout_freeze;
 use super::lifecycle::{PaintHold, SelfCloseState, grow_beyond_legit, resize_grew};
 use super::notify::{BellNotice, emit_terminal_notification};
-use super::paint::FramePainter;
+use super::paint::{FramePainter, PaintKind};
 use super::selection::{
     InputEffect, InputOutcome, click_focus_pane, finish_search, handle_key, handle_mouse_click,
     handle_scroll, reconcile_selection, row_index_of_pane, set_make_up_filter,
@@ -73,6 +73,7 @@ use super::timing::{
     next_frame_after, self_close_interval, tick_for,
 };
 use super::view_state::{FocusMarker, FocusRollback, ReadContext, SelectionFold, ViewContext};
+use super::views::ViewId;
 use super::width_control::{StructuralChange, WidthController};
 use super::{Result, ServeConfig};
 #[cfg(test)]
@@ -135,6 +136,23 @@ struct HiddenDrain {
     pane: Option<PaneId>,
     own_view: Option<SidebarOwnView>,
     viewed_panes: Vec<PaneId>,
+}
+
+struct MirroredLayout {
+    target: (ViewId, u64),
+    size: ratatui::layout::Size,
+    at: Instant,
+}
+
+struct MirrorSource {
+    target: (ViewId, u64),
+    view: ViewState,
+    snapshot: SidebarSnapshot,
+    alert: Option<render::Alert>,
+    gate_notice: Option<render::GateNotice>,
+    nonce: Option<crate::ids::FocusNonce>,
+    #[cfg(feature = "testkit")]
+    revision: u64,
 }
 
 impl HiddenDrain {
@@ -242,6 +260,7 @@ pub(super) struct PaneState {
     diag: crate::diag::DiagSink,
     own: super::views::Cursor,
     hidden: HiddenDrain,
+    mirrored: Option<MirroredLayout>,
     pending_focus_push: Option<FocusPush>,
     painted_focus_anchor_ms: u64,
     painted_at: Instant,
@@ -589,6 +608,7 @@ impl LoopState {
                 diag,
                 own: super::views::Cursor::default(),
                 hidden: HiddenDrain::default(),
+                mirrored: None,
                 fold_effects: FoldEffects::default(),
                 baseline_seed: None,
                 pending_focus_push: None,
@@ -645,7 +665,7 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         self.report_baseline();
-        let (_, timeout) = self.frame_timing();
+        let (_, timeout) = self.frame_timing_for_terminal(terminal);
         inbox.wait(timeout);
         self.advance(inbox, terminal).map(|_| ())
     }
@@ -683,7 +703,7 @@ impl LoopState {
         self.run_width_control_backstop(terminal);
         let (active, _) = self.frame_timing();
         self.paint_frame_if_due(terminal, active)?;
-        let (_, timeout) = self.frame_timing();
+        let (_, timeout) = self.frame_timing_for_terminal(terminal);
         let now = self.pane.clock.now();
         let mut deadline = now + timeout;
         if self.watched()
@@ -770,6 +790,56 @@ impl LoopState {
         self.views.with(&mut self.pane, Route::READ, |pane, view| {
             pane.frame_timing(view, room_watched)
         })
+    }
+
+    fn mirror_deadline(&self, size: ratatui::layout::Size) -> Option<(Instant, Duration)> {
+        if self.watched() {
+            return None;
+        }
+        let record = self.views.record();
+        let own = &self.pane.config.own_pane;
+        if record.mapped(own) || record.resolved(own) {
+            return None;
+        }
+        let target = record.mirror_target?;
+        if self
+            .pane
+            .mirrored
+            .as_ref()
+            .is_some_and(|last| last.target == target && last.size == size)
+        {
+            return None;
+        }
+        let due = self.pane.mirrored.as_ref().map_or_else(
+            || self.pane.clock.now(),
+            |last| last.at + record.mirror_interval,
+        );
+        Some((due, record.mirror_interval))
+    }
+
+    fn mirror_size(terminal: &mut Terminal<PaneBackend>) -> ratatui::layout::Size {
+        if let Some(size) = terminal.backend().pane_size() {
+            return ratatui::layout::Size::new(size.cols, size.rows);
+        }
+        terminal.get_frame().area().as_size()
+    }
+
+    fn frame_timing_for_terminal(
+        &mut self,
+        terminal: &mut Terminal<PaneBackend>,
+    ) -> (bool, Duration) {
+        let size = (!self.watched() && self.views.record().mirror_target.is_some())
+            .then(|| Self::mirror_size(terminal));
+        let (active, timeout) = self.frame_timing();
+        let Some((due, interval)) = size.and_then(|size| self.mirror_deadline(size)) else {
+            return (active, timeout);
+        };
+        // A due mirror refused by a paint gate retries on the next wake or frame, not a busy loop.
+        let remaining = due
+            .checked_duration_since(self.pane.clock.now())
+            .filter(|remaining| !remaining.is_zero())
+            .unwrap_or(interval);
+        (active, timeout.min(remaining.max(FRAME_MIN_TIMEOUT)))
     }
 
     /// Whether an attached client's focus currently lands in this sidebar's tab.
@@ -1737,8 +1807,8 @@ impl LoopState {
     /// refetch was the input lag. Input paints synchronously so a keypress or
     /// click feels instant rather than waiting for the next frame. Wheel ticks
     /// share one paint after the run, never an intermediate paint. User input
-    /// is viewing evidence; a hidden attachment's relayout keeps its redraw
-    /// pending until it is watched.
+    /// is viewing evidence; a hidden attachment's resize only re-mirrors the
+    /// painted client layout, without routing a view or accepting deferred data.
     fn apply_input(
         &mut self,
         wakeups: impl IntoIterator<Item = Wakeup>,
@@ -2035,6 +2105,10 @@ impl LoopState {
                 }
             }
         }
+        if !self.pane.should_exit && !self.pane.self_close.confirming_empty() && !paint_blocked {
+            self.paint_hidden_mirror_if_due(terminal)?;
+        }
+        let now = self.pane.clock.now();
         let watched = self.watched();
         let foreground = self.foreground_paint_due(now, active, watched);
         // Once the tab has emptied, never paint again. A grow resize also
@@ -2091,6 +2165,92 @@ impl LoopState {
         let marker_due = self.inspect_view(|_, view| matches!(view.focus_marker, Some(FocusMarker::Dwelling(until)) if now >= until));
         (watched && (active || self.pane.dirty))
             && (now >= self.pane.next_frame || (watched && marker_due))
+    }
+
+    fn paint_hidden_mirror_if_due(&mut self, terminal: &mut Terminal<PaneBackend>) -> Result<()> {
+        if self.watched()
+            || self.views.record().mirror_target.is_none()
+            || terminal.backend().is_unsized()
+        {
+            return Ok(());
+        }
+        let size = Self::mirror_size(terminal);
+        if self
+            .mirror_deadline(size)
+            .is_none_or(|(due, _)| self.pane.clock.now() < due)
+        {
+            return Ok(());
+        }
+        let Some(mut source) = self.views.mirror_source(&self.pane) else {
+            return Ok(());
+        };
+        let interval = animation_frame(&source.snapshot);
+        if self.pane.mirrored.as_ref().is_some_and(|last| {
+            (last.target == source.target && last.size == size)
+                || self.pane.clock.now().saturating_duration_since(last.at) < interval
+        }) {
+            return Ok(());
+        }
+        if self
+            .pane
+            .focus_peers
+            .as_ref()
+            .is_some_and(|peers| !peers.accepts(source.nonce, self.pane.clock.now()))
+        {
+            return Ok(());
+        }
+        source.view.scroll_ease.cancel();
+        source.view.offset_authoritative = false;
+        source.view.landed_reveal = false;
+        source.view.reveal_row = None;
+        source.view.focus_placement = None;
+        source.view.own_input_reveal = false;
+        self.pane.paint.refresh_view(
+            &mut self.pane.ui,
+            &source.view,
+            &source.snapshot,
+            source.alert.as_ref().is_some_and(render::Alert::is_active),
+        );
+        let permit = self
+            .pane
+            .focus_peers
+            .as_ref()
+            .map(|peers| peers.paint_permit(source.nonce, self.pane.clock.now()));
+        if matches!(permit, Some(None))
+            || permit
+                .as_ref()
+                .and_then(Option::as_ref)
+                .is_some_and(|permit| !permit())
+        {
+            return Ok(());
+        }
+        self.pane.ui.gate_notice = source.gate_notice;
+        let (result, frame) = self.pane.paint.compose_frame(
+            terminal,
+            &source.snapshot,
+            source.alert.as_ref(),
+            &mut source.view,
+            &mut self.pane.ui,
+            PaintKind::Mirror,
+        );
+        let output = frame.write(terminal.backend_mut());
+        result.and(output)?;
+        let size = terminal.get_frame().area().as_size();
+        self.pane.paints += 1;
+        self.pane.painted_at = self.pane.clock.now();
+        self.pane.painted_height = size.height;
+        self.pane.click_guard = None;
+        self.pane.mirrored = Some(MirroredLayout {
+            target: source.target,
+            size,
+            at: self.pane.painted_at,
+        });
+        #[cfg(feature = "testkit")]
+        {
+            self.pane.bench_painted_revision = Some(source.revision);
+            self.pane.bench_painted_deadline = None;
+        }
+        Ok(())
     }
 
     fn paint_now(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> Result<()> {
@@ -2192,6 +2352,9 @@ impl LoopState {
             let output = frame.write(terminal.backend_mut());
             result.and(output)?;
             self.pane.painted_at = self.pane.clock.now();
+            if let Some(mirrored) = &mut self.pane.mirrored {
+                mirrored.at = self.pane.painted_at;
+            }
             #[cfg(feature = "testkit")]
             {
                 self.pane.bench_painted_revision = token.map(|(_, revision, _)| revision);
@@ -2462,6 +2625,7 @@ impl PaneState {
             // Paint, animation, and frame scheduling, which a clock-only
             // delivery drives itself.
             paint: _,
+            mirrored: _,
             titled: _,
             dirty: _,
             paint_hold: _,
@@ -2839,6 +3003,7 @@ impl PaneState {
             v.context.health.alert.as_ref(),
             v.state,
             &mut self.ui,
+            PaintKind::Routed,
         );
         if result.is_err() {
             return (result, frame);
@@ -2846,6 +3011,11 @@ impl PaneState {
         self.painted_at = self.clock.now();
         self.paints += 1;
         self.painted_height = terminal.get_frame().area().height;
+        self.mirrored = v.target.shared_id().map(|id| MirroredLayout {
+            target: (id, v.state.layout_sequence),
+            size: terminal.get_frame().area().as_size(),
+            at: self.painted_at,
+        });
         self.painted_baseline.clone_from(&v.state.baseline_pane);
         self.baseline_seed = None;
         self.painted_selection.clone_from(&v.state.drawn_selection);
