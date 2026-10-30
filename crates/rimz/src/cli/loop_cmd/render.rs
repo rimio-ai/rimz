@@ -1227,7 +1227,9 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         }
         let rows = collapsed_run_rows(&view.records);
         let repeats_detail = rows.len() == 1
+            && rows[0].count == 1
             && rows[0].skipped == 0
+            && rows[0].waited == 0
             && detail_index(&view.records)
                 .is_some_and(|index| std::ptr::eq(rows[0].latest, &view.records[index]));
         if !repeats_detail {
@@ -2622,9 +2624,12 @@ fn write_runs_table(
 ) -> std::io::Result<()> {
     let rows = collapsed_run_rows(records);
     let visible_rows = rows.iter().rev().take(limit).collect::<Vec<_>>();
+    if visible_rows.is_empty() {
+        return Ok(());
+    }
     let shown = visible_rows
         .iter()
-        .map(|row| row.count + row.skipped)
+        .map(|row| row.count + row.skipped + row.waited)
         .sum::<usize>();
     writeln!(out)?;
     writeln!(
@@ -2638,12 +2643,10 @@ fn write_runs_table(
     let show_mode = visible_rows
         .iter()
         .any(|row| row.key.mode != visible_rows[0].key.mode);
-    let show_cost = visible_rows
-        .iter()
-        .any(|row| valid_cost(row.latest).is_some());
+    let show_cost = visible_rows.iter().any(|row| row.cost_usd.is_some());
     let show_tokens = visible_rows
         .iter()
-        .any(|row| row.latest.input_tokens.is_some() || row.latest.output_tokens.is_some());
+        .any(|row| row.input_tokens.is_some() || row.output_tokens.is_some());
     let show_note = visible_rows.iter().any(|row| row.note(now).is_some());
     let mut headers = vec!["WHEN"];
     if show_mode {
@@ -2671,25 +2674,14 @@ fn write_runs_table(
             cells.push(ui::cell(row.key.mode.map_or("-", LoopRunMode::label)).dash());
         }
         cells.push(run_status_cell(record, row.count));
-        cells.push(
-            ui::cell(
-                record
-                    .watch
-                    .as_ref()
-                    .map(|verdict| verdict.elapsed_ms())
-                    .or(record.duration_ms)
-                    .map(format_duration_ms)
-                    .unwrap_or_else(|| "-".to_owned()),
-            )
-            .dash(),
-        );
+        cells.push(ui::cell(row.took().as_deref().unwrap_or("-")).dash());
         if show_cost {
-            cells.push(cost_cell(record));
+            cells.push(ui::cell(row.cost_usd.map(run_cost).as_deref().unwrap_or("-")).dash());
         }
         if show_tokens {
             cells.push(
                 ui::cell(
-                    token_segments(record.input_tokens, record.output_tokens)
+                    token_segments(row.input_tokens, row.output_tokens)
                         .unwrap_or_else(|| "-".to_owned()),
                 )
                 .dash(),
@@ -2711,122 +2703,280 @@ fn blocked_notice(state: TrustState) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct RunRowKey {
-    mode: Option<LoopRunMode>,
-    result: LoopRunResult,
-    exit: Option<String>,
-    note: Option<String>,
+enum RunExit {
+    Process(ProcessExit),
+    WatchRunning,
+    WatchMet,
+    WatchNotMet,
+    WatchExited(Option<i32>),
+    WatchTimedOut,
+    WatchLost,
 }
 
-impl RunRowKey {
-    fn new(record: &LoopRunRecord) -> Self {
+impl RunExit {
+    fn of(record: &LoopRunRecord) -> Option<Self> {
+        use schedule::signal::WatchVerdict;
+        if let Some(watch) = &record.watch {
+            return Some(match watch {
+                WatchVerdict::Running { .. } => Self::WatchRunning,
+                WatchVerdict::Met { .. } => Self::WatchMet,
+                WatchVerdict::NotMet { .. } => Self::WatchNotMet,
+                WatchVerdict::Exited { code, .. } => Self::WatchExited(*code),
+                WatchVerdict::TimedOut { .. } => Self::WatchTimedOut,
+                WatchVerdict::Lost { .. } => Self::WatchLost,
+            });
+        }
+        ProcessExit::of(record).map(Self::Process)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessExit {
+    Code(i32),
+    Timeout,
+    Signal,
+}
+
+impl ProcessExit {
+    fn of(record: &LoopRunRecord) -> Option<Self> {
+        if let Some(RunStage::Check(check)) = record.stages().next() {
+            return Some(if check.timed_out {
+                Self::Timeout
+            } else {
+                check.code.map_or(Self::Signal, Self::Code)
+            });
+        }
+        record
+            .run_id
+            .as_ref()
+            .and_then(|_| record.result.spawn_exit_code())
+            .map(Self::Code)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckSkipOutcome {
+    JudgePassed,
+    JudgeDeclined,
+    CheckPassed,
+    CheckFailed,
+    CheckTimedOut,
+}
+
+impl CheckSkipOutcome {
+    fn of(record: &LoopRunRecord) -> Self {
+        match record.stages().last() {
+            Some(RunStage::Judge(judge)) if judge.verdict == Some(true) => Self::JudgePassed,
+            Some(RunStage::Judge(_)) => Self::JudgeDeclined,
+            Some(RunStage::Check(check)) if check.timed_out => Self::CheckTimedOut,
+            _ if record.last_verdict() == Some(true) => Self::CheckPassed,
+            _ => Self::CheckFailed,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::JudgePassed => "judge passed",
+            Self::JudgeDeclined => "judge declined",
+            Self::CheckPassed => "check passed",
+            Self::CheckFailed => "check failed",
+            Self::CheckTimedOut => "check timed out",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RunRowKey<'a> {
+    mode: Option<LoopRunMode>,
+    result: LoopRunResult,
+    outcome: Option<CheckSkipOutcome>,
+    exit: Option<RunExit>,
+    checkout: Option<&'a Path>,
+    run_id: Option<&'a str>,
+    target: Option<&'a str>,
+    skipped: bool,
+    waited: bool,
+}
+
+impl<'a> RunRowKey<'a> {
+    fn new(record: &'a LoopRunRecord, skipped: usize, waited: usize) -> Self {
         Self {
             mode: record.mode,
             result: record.result,
-            exit: record_exit(record),
-            note: record_note(record),
+            outcome: (record.result == LoopRunResult::CheckSkipped && record.watch.is_none())
+                .then(|| CheckSkipOutcome::of(record)),
+            exit: RunExit::of(record),
+            checkout: record.checkout.as_deref(),
+            run_id: record.run_id.as_deref(),
+            target: record.target.as_deref(),
+            skipped: skipped > 0,
+            waited: waited > 0,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct CollapsedRunRow<'a> {
-    key: RunRowKey,
+    key: RunRowKey<'a>,
     latest: &'a LoopRunRecord,
     count: usize,
-    refusal_since: Option<Timestamp>,
+    oldest: Timestamp,
+    duration: Option<(u64, u64)>,
+    cost_usd: Option<f64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
     /// Overlapped fires folded into this row: refused while its runs held the lock.
     skipped: usize,
+    waited: usize,
 }
 
-impl CollapsedRunRow<'_> {
-    fn note(&self, now: Timestamp) -> Option<String> {
-        let note = self.key.note.as_ref().map(|note| match self.refusal_since {
-            Some(since) => format!("{note} · since {}", ui::rel_age(since, now)),
-            None => note.clone(),
-        });
-        let skipped = (self.skipped > 0)
-            .then(|| format!("{} skipped, run already active", fires(self.skipped)));
-        match (note, skipped) {
-            (Some(note), Some(skipped)) => Some(format!("{note} · {skipped}")),
-            (note, skipped) => note.or(skipped),
+impl<'a> CollapsedRunRow<'a> {
+    fn new(record: &'a LoopRunRecord, skipped: usize, waited: usize) -> Self {
+        Self {
+            key: RunRowKey::new(record, skipped, waited),
+            latest: record,
+            count: 1,
+            oldest: record.at,
+            duration: record
+                .watch
+                .as_ref()
+                .map(|watch| watch.elapsed_ms())
+                .or(record.duration_ms)
+                .map(|duration| (duration, duration)),
+            cost_usd: valid_cost(record),
+            input_tokens: record.input_tokens,
+            output_tokens: record.output_tokens,
+            skipped,
+            waited,
         }
+    }
+
+    fn merge(&mut self, previous: Self) {
+        self.count += previous.count;
+        self.skipped += previous.skipped;
+        self.waited += previous.waited;
+        self.oldest = self.oldest.min(previous.oldest);
+        if previous.latest.at > self.latest.at {
+            self.latest = previous.latest;
+        }
+        self.duration = match (self.duration, previous.duration) {
+            (Some((min, max)), Some((older_min, older_max))) => {
+                Some((min.min(older_min), max.max(older_max)))
+            }
+            (duration, None) | (None, duration) => duration,
+        };
+        self.cost_usd = self
+            .cost_usd
+            .into_iter()
+            .chain(previous.cost_usd)
+            .reduce(|a, b| a + b);
+        self.input_tokens = self
+            .input_tokens
+            .into_iter()
+            .chain(previous.input_tokens)
+            .reduce(u64::saturating_add);
+        self.output_tokens = self
+            .output_tokens
+            .into_iter()
+            .chain(previous.output_tokens)
+            .reduce(u64::saturating_add);
+        self.key.skipped = self.skipped > 0;
+        self.key.waited = self.waited > 0;
+    }
+
+    fn took(&self) -> Option<String> {
+        let (min, max) = self.duration?;
+        let min = format_duration_ms(min);
+        let max = format_duration_ms(max);
+        Some(if min == max {
+            min
+        } else {
+            format!("{min}–{max}")
+        })
+    }
+
+    fn note(&self, now: Timestamp) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.key.result == LoopRunResult::TakeoverBlocked
+            && let Some(checkout) = self.key.checkout
+        {
+            parts.push(format!(
+                "{} · {} · since {}",
+                checkout.file_name().unwrap_or_default().to_string_lossy(),
+                self.latest.error.as_deref().unwrap_or_default(),
+                ui::rel_age(self.oldest, now)
+            ));
+        } else {
+            if self.count > 1 {
+                let span = self.latest.at.duration_since(self.oldest).as_secs().max(0) as u64;
+                parts.push(format!("over {}", ui::age_label(span)));
+            }
+            parts.extend(record_note(self.latest));
+        }
+        if self.waited > 0 {
+            parts.push(format!("{} waited on it", fires(self.waited)));
+        }
+        if self.skipped > 0 {
+            parts.push(format!(
+                "{} skipped, run already active",
+                fires(self.skipped)
+            ));
+        }
+        (!parts.is_empty()).then(|| parts.join(" · "))
     }
 }
 
-/// Table rows in record order. An overlap takes no row once a later record
-/// exists: its row precedes the row of the run that refused it, so it folds
-/// into the next record as a count, and neighbours it used to split collapse.
-/// Overlaps with no later record are a run still in flight, or one that
-/// crashed, and keep one row.
+/// Table rows in record order. At-lock refusals fold as counts into their checkout's next
+/// run, never another gate refusal. Trailing refusals take no row.
 fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
     let mut rows = Vec::<Option<CollapsedRunRow<'_>>>::new();
     let mut by_checkout = BTreeMap::<&Path, usize>::new();
-    let mut overlaps = 0;
+    let mut pending = BTreeMap::<Option<&Path>, (usize, usize)>::new();
     for record in records {
         if record.result != LoopRunResult::TakeoverBlocked
             && let Some(checkout) = record.checkout.as_deref()
         {
             by_checkout.remove(checkout);
         }
-        if is_overlap(record) {
-            overlaps += 1;
+        if matches!(
+            record.result,
+            LoopRunResult::Overlapped | LoopRunResult::Deferred
+        ) {
+            let counts = pending.entry(record.checkout.as_deref()).or_default();
+            if is_overlap(record) {
+                counts.0 += 1;
+            } else {
+                counts.1 += 1;
+            }
             continue;
         }
-        let key = RunRowKey::new(record);
+        let (skipped, waited) = if is_refused_fire(record) {
+            (0, 0)
+        } else {
+            pending
+                .remove(&record.checkout.as_deref())
+                .unwrap_or_default()
+        };
+        let mut row = CollapsedRunRow::new(record, skipped, waited);
         if record.result == LoopRunResult::TakeoverBlocked
             && let Some(checkout) = record.checkout.as_deref()
         {
             let previous = by_checkout
                 .insert(checkout, rows.len())
                 .and_then(|index| rows[index].take());
-            let mut row = CollapsedRunRow {
-                key,
-                latest: record,
-                count: 1,
-                refusal_since: Some(record.at),
-                skipped: overlaps,
-            };
             if let Some(previous) = previous {
-                row.count += previous.count;
-                row.skipped += previous.skipped;
-                row.refusal_since = previous.refusal_since.map(|since| since.min(record.at));
+                row.merge(previous);
             }
-            row.key.note = Some(format!(
-                "{} · {}",
-                checkout.file_name().unwrap_or_default().to_string_lossy(),
-                record.error.as_deref().unwrap_or_default()
-            ));
-            rows.push(Some(row));
-        } else if let Some(row) = rows
+        } else if let Some(previous) = rows
             .last_mut()
             .and_then(Option::as_mut)
-            .filter(|row| row.key == key)
+            .filter(|previous| previous.key == row.key)
         {
-            row.count += 1;
-            row.skipped += overlaps;
-            if record.at >= row.latest.at {
-                row.latest = record;
-            }
-        } else {
-            rows.push(Some(CollapsedRunRow {
-                key,
-                latest: record,
-                count: 1,
-                refusal_since: None,
-                skipped: overlaps,
-            }));
+            let older = std::mem::replace(previous, row);
+            previous.merge(older);
+            continue;
         }
-        overlaps = 0;
-    }
-    if let Some(latest) = records.last().filter(|_| overlaps > 0) {
-        rows.push(Some(CollapsedRunRow {
-            key: RunRowKey::new(latest),
-            latest,
-            count: overlaps,
-            refusal_since: None,
-            skipped: 0,
-        }));
+        rows.push(Some(row));
     }
     rows.into_iter().flatten().collect()
 }
@@ -2939,14 +3089,7 @@ pub(super) fn check_skip_display(record: &LoopRunRecord) -> (&'static str, ansty
 }
 
 fn check_skipped_label(record: &LoopRunRecord) -> &'static str {
-    match record.stages().last() {
-        Some(RunStage::Judge(judge)) if judge.verdict == Some(true) => "judge passed",
-        Some(RunStage::Judge(_)) => "judge declined",
-        Some(RunStage::Check(check)) if check.timed_out => "check timed out",
-        _ if record.last_verdict() == Some(true) => "check passed",
-        Some(_) => "check failed",
-        None => "check failed",
-    }
+    CheckSkipOutcome::of(record).label()
 }
 
 fn failure_exit_label(record: &LoopRunRecord) -> Option<String> {
@@ -3040,22 +3183,11 @@ pub(super) fn record_exit(record: &LoopRunRecord) -> Option<String> {
     if let Some(verdict) = &record.watch {
         return Some(verdict.label());
     }
-    if let Some(RunStage::Check(check)) = record.stages().next() {
-        if check.timed_out {
-            return Some("timeout".to_owned());
-        }
-        return Some(
-            check
-                .code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "signal".to_owned()),
-        );
-    }
-    record
-        .run_id
-        .as_ref()
-        .and_then(|_| record.result.spawn_exit_code())
-        .map(|code| code.to_string())
+    ProcessExit::of(record).map(|exit| match exit {
+        ProcessExit::Code(code) => code.to_string(),
+        ProcessExit::Timeout => "timeout".to_owned(),
+        ProcessExit::Signal => "signal".to_owned(),
+    })
 }
 
 fn record_note(record: &LoopRunRecord) -> Option<String> {

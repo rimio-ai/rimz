@@ -462,14 +462,28 @@ fn worktrees_unread_cells_are_unknown_with_a_reason() {
 }
 
 #[test]
-fn show_omits_a_recent_table_that_only_repeats_the_last_run() {
+fn show_keeps_folded_evidence_but_omits_single_run_table() {
     let mut view = show_view(false);
-    view.records = (1..=4)
-        .map(|second| record(second, LoopRunResult::Completed))
+    view.records = [(10, 900), (20, 450_489), (30, 900)]
+        .into_iter()
+        .map(|(second, duration_ms)| {
+            let mut run = scheduled(second, LoopRunResult::Completed);
+            run.duration_ms = Some(duration_ms);
+            run.check = Some(check(Some(0), ""));
+            run
+        })
         .collect();
     let text = show_text(&view);
+    assert!(text.contains("RECENT RUNS"), "{text}");
+    assert!(
+        text.contains("✓ completed ×3") && text.contains("900ms–7m") && text.contains("over 20s"),
+        "{text}"
+    );
+    assert!(text.contains("LAST RUN"), "{text}");
+
+    view.records.truncate(1);
+    let text = show_text(&view);
     assert!(!text.contains("RECENT RUNS"), "{text}");
-    assert!(text.contains("4 runs in a row"), "{text}");
     assert!(text.contains("LAST RUN"), "{text}");
 }
 
@@ -1433,13 +1447,18 @@ fn takeover_refusals_fold_alternating_checkouts_with_latest_reason_and_oldest_ag
 fn takeover_refusal_folding_preserves_other_rows_and_overlap_counts() {
     let mut completed = scheduled(30, LoopRunResult::Completed);
     completed.checkout = Some("/repo/alpha".into());
+    let alpha_overlap = |second| {
+        let mut row = overlap(second);
+        row.checkout = Some("/repo/alpha".into());
+        row
+    };
     let records = [
-        overlap(5),
+        alpha_overlap(5),
         refusal(10, "/repo/alpha", "@old is working"),
         completed,
         scheduled(40, LoopRunResult::Failed),
         scheduled(50, LoopRunResult::Failed),
-        overlap(60),
+        alpha_overlap(60),
         refusal(70, "/repo/alpha", "@new is waiting on you"),
         scheduled(80, LoopRunResult::Failed),
     ];
@@ -1796,14 +1815,30 @@ fn agent_check_skips_name_a_decline_without_changing_passed_labels() {
     assert_eq!(check_skipped_label(&row), "judge passed");
 }
 
-/// An overlap as `prepare_run_lock` records it: a note no two fires share.
 fn overlap(second: i64) -> LoopRunRecord {
     let mut row = record(second, LoopRunResult::Overlapped);
     row.mode = Some(LoopRunMode::Scheduled);
     row.duration_ms = Some(0);
+    row.holder = Some(RunLockInfo {
+        pid: 42424,
+        started_at: Timestamp::from_second(0).unwrap(),
+    });
+    row.error = Some("previous run still active — skipped".into());
+    row
+}
+
+fn deferred(second: i64) -> LoopRunRecord {
+    let mut row = overlap(second);
+    row.result = LoopRunResult::Deferred;
+    row.error = Some("previous run still active — waiting".into());
+    row
+}
+
+fn old_deferred(second: i64) -> LoopRunRecord {
+    let mut row = deferred(second);
+    row.holder = None;
     row.error = Some(format!(
-        "previous run still active (pid {}, started {second}m ago) — skipped",
-        4_000 + second
+        "previous run still active (pid 42424, started {second}m ago) — waiting"
     ));
     row
 }
@@ -2692,7 +2727,7 @@ fn runs_table_shows_tokens_only_when_present() {
 }
 
 #[test]
-fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
+fn collapsed_run_rows_ignore_reason_text_and_keep_the_newest_note() {
     let mut first = record(10, LoopRunResult::Failed);
     first.mode = Some(LoopRunMode::Scheduled);
     first.duration_ms = Some(10);
@@ -2721,16 +2756,203 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
 
     let rows = collapsed_run_rows(&records);
 
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].count, 2);
     assert_eq!(
-        rows[0].latest.at,
-        Timestamp::from_second(20).expect("timestamp")
+        rows.iter()
+            .map(|row| (
+                row.count,
+                row.latest.at.as_second(),
+                record_note(row.latest)
+            ))
+            .collect::<Vec<_>>(),
+        [(3, 30, Some("different".into()))]
     );
-    assert_eq!(rows[0].latest.duration_ms, Some(20));
-    assert_eq!(rows[0].key.note.as_deref(), Some("boom"));
-    assert_eq!(rows[1].count, 1);
-    assert_eq!(rows[1].key.note.as_deref(), Some("different"));
+}
+
+fn coalesce_history(old_shape: bool) -> Vec<LoopRunRecord> {
+    let completed = |second, duration_ms| {
+        let mut row = scheduled(second, LoopRunResult::Completed);
+        row.duration_ms = Some(duration_ms);
+        row
+    };
+    let mut records = vec![completed(1, 834), completed(61, 906), completed(121, 1391)];
+    records.extend((180..=540).step_by(60).map(|second| {
+        if old_shape {
+            old_deferred(second)
+        } else {
+            deferred(second)
+        }
+    }));
+    records.push(completed(600, 450489));
+    let mut follow_up = completed(601, 1583);
+    follow_up.absorbed = 6;
+    records.extend([follow_up, completed(660, 840), completed(720, 1720)]);
+    records
+}
+
+#[test]
+fn coalesce_history_separates_the_busy_run_and_folds_the_follow_up() {
+    let records = coalesce_history(false);
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        (
+            collapsed_run_rows(&records)
+                .iter()
+                .map(|row| row.count)
+                .collect::<Vec<_>>(),
+            table.contains("deferred"),
+            table
+                .lines()
+                .any(|line| line.contains("7m") && line.ends_with("7 fires waited on it")),
+            table.matches("✓ completed ×3").count(),
+            table.contains("840ms–1.7s  over 1m"),
+            table.contains("14 of 14"),
+        ),
+        (vec![3, 1, 3], false, true, 2, true, true),
+        "{table}"
+    );
+}
+
+#[test]
+fn old_deferred_prose_folds_like_typed_holder_records() {
+    assert_eq!(
+        runs_table(&coalesce_history(true), 10),
+        runs_table(&coalesce_history(false), 10)
+    );
+}
+
+#[test]
+fn at_lock_fires_wait_for_a_run_in_their_own_checkout_past_other_gates() {
+    let in_checkout = |mut row: LoopRunRecord, checkout: &str| {
+        row.checkout = Some(PathBuf::from(checkout));
+        row
+    };
+    let records = [
+        in_checkout(deferred(10), "/repo/alpha"),
+        in_checkout(overlap(11), "/repo/alpha"),
+        in_checkout(scheduled(20, LoopRunResult::Completed), "/repo/beta"),
+        in_checkout(scheduled(30, LoopRunResult::BudgetSkipped), "/repo/alpha"),
+        in_checkout(scheduled(40, LoopRunResult::Completed), "/repo/alpha"),
+    ];
+    let table = runs_table(&records, 10);
+    let notes = table
+        .lines()
+        .filter(|line| line.contains("✓ completed"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        (
+            collapsed_run_rows(&records).len(),
+            notes.iter().any(|line| line
+                .ends_with("alpha · 1 fire waited on it · 1 fire skipped, run already active")),
+            notes.iter().any(|line| line.ends_with("beta")),
+            table.contains("5 of 5"),
+        ),
+        (3, true, true, true),
+        "{table}"
+    );
+}
+
+#[test]
+fn typed_run_keys_fold_watch_times_and_gate_reasons_but_keep_identities_and_verdicts() {
+    use rimz::harness::schedule::signal::WatchVerdict;
+    let mut watch = scheduled(10, LoopRunResult::Completed);
+    watch.watch = Some(WatchVerdict::Exited {
+        code: Some(0),
+        elapsed_ms: 1000,
+    });
+    let mut later_watch = watch.clone();
+    later_watch.at = Timestamp::from_second(20).unwrap();
+    later_watch.watch = Some(WatchVerdict::Exited {
+        code: Some(0),
+        elapsed_ms: 2000,
+    });
+    let mut budget = scheduled(10, LoopRunResult::BudgetSkipped);
+    budget.error = Some("daily cap reached".into());
+    let mut later_budget = budget.clone();
+    later_budget.at = Timestamp::from_second(20).unwrap();
+    later_budget.error = Some("room budget reached".into());
+    let mut run = scheduled(10, LoopRunResult::Completed);
+    run.run_id = Some("run_first".into());
+    let mut later_run = run.clone();
+    later_run.run_id = Some("run_second".into());
+    let mut judge = scheduled(10, LoopRunResult::CheckSkipped);
+    judge.judge = vec![
+        serde_json::from_value(serde_json::json!({
+            "profile": "review", "kind": "claude", "verdict": true
+        }))
+        .unwrap(),
+    ];
+    let mut declined = judge.clone();
+    declined.judge[0].verdict = Some(false);
+    let collided = vec![
+        overlap(10),
+        scheduled(20, LoopRunResult::Completed),
+        overlap(30),
+        overlap(40),
+        scheduled(50, LoopRunResult::Completed),
+    ];
+    let cases = [
+        vec![watch, later_watch],
+        vec![budget, later_budget],
+        vec![run, later_run],
+        vec![judge, declined],
+        collided,
+    ];
+    let actual = cases
+        .iter()
+        .map(|records| {
+            collapsed_run_rows(records)
+                .iter()
+                .map(|row| (row.count, row.skipped))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        [
+            vec![(2, 0)],
+            vec![(2, 0)],
+            vec![(1, 0), (1, 0)],
+            vec![(1, 0), (1, 0)],
+            vec![(2, 3)]
+        ]
+    );
+    let table = runs_table(&cases[1], 10);
+    assert!(table.contains("over 10s · room budget reached"), "{table}");
+}
+
+#[test]
+fn collapsed_judge_skips_sum_spend_and_tokens_and_range_durations() {
+    let records = [
+        (10, 1000, Some(0.1), Some(1000), Some(100)),
+        (20, 2000, Some(0.2), Some(2000), Some(200)),
+        (30, 1500, None, None, None),
+    ]
+    .map(|(second, duration, cost, input, output)| {
+        let mut row = scheduled(second, LoopRunResult::CheckSkipped);
+        row.judge = vec![
+            serde_json::from_value(serde_json::json!({
+                "profile": "review", "kind": "claude", "verdict": false, "reason": "not yet"
+            }))
+            .unwrap(),
+        ];
+        row.duration_ms = Some(duration);
+        row.cost_usd = cost;
+        row.input_tokens = input;
+        row.output_tokens = output;
+        row
+    });
+    let table = runs_table(&records, 10);
+    assert_eq!(
+        (
+            table.contains("judge declined ×3"),
+            table.contains("$0.30"),
+            table.contains("↘ 3k ↗ 300"),
+            table.contains("1.0s–2.0s"),
+            table.contains("over 20s · not yet")
+        ),
+        (true, true, true, true, true),
+        "{table}"
+    );
 }
 
 #[test]
@@ -2933,10 +3155,18 @@ fn overlaps_fold_into_the_run_that_follows_them() {
         scheduled(30, LoopRunResult::Completed),
     ];
     let rows = collapsed_run_rows(&records);
-    assert_eq!(rows.len(), 1);
-    assert_eq!((rows[0].count, rows[0].skipped), (2, 1));
     let table = runs_table(&records, 10);
-    assert!(table.contains("✓ completed ×2"), "{table}");
+    assert_eq!(
+        (
+            rows.iter()
+                .map(|row| (row.count, row.skipped))
+                .collect::<Vec<_>>(),
+            table.matches("✓ completed").count(),
+            table.contains("✓ completed ×2"),
+        ),
+        (vec![(1, 0), (1, 1)], 2, false),
+        "{table}"
+    );
     assert!(
         table.contains("1 fire skipped, run already active"),
         "{table}"
@@ -2944,16 +3174,35 @@ fn overlaps_fold_into_the_run_that_follows_them() {
 }
 
 #[test]
-fn trailing_overlaps_keep_a_row_and_mark_the_verdict() {
+fn trailing_at_lock_fires_take_no_row_and_keep_the_stale_verdict() {
     let mut records = vec![
         scheduled(10, LoopRunResult::Completed),
         overlap(20),
         overlap(30),
     ];
     let table = runs_table(&records, 10);
-    assert!(
-        table.find("○ overlapped ×2").unwrap() < table.find("✓ completed").unwrap(),
-        "{table}"
+    let views = [false, true].map(|running| {
+        let mut view = show_view(false);
+        view.records = records.clone();
+        view.records.push(deferred(40));
+        view.in_flight = running.then_some(InFlightRun {
+            holder: None,
+            run: None,
+            held: Vec::new(),
+        });
+        show_text(&view)
+    });
+    assert_eq!(
+        (
+            table.contains("overlapped"),
+            table.matches("✓ completed").count(),
+            runs_table(&[overlap(10), deferred(20)], 10).is_empty(),
+            views
+                .iter()
+                .all(|view| !view.contains("○ overlapped") && !view.contains("○ deferred")),
+        ),
+        (false, 1, true, true),
+        "{table}\n{views:?}"
     );
     assert_eq!(
         stale_clause(&records, false).as_deref(),

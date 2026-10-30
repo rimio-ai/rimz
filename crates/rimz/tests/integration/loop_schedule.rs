@@ -9339,7 +9339,7 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
             && !show
                 .lines()
                 .any(|line| line.trim_start().starts_with("active:"))
-            && show.contains("○ overlapped")
+            && !show.contains("○ overlapped")
             && !show.contains("LAST RUN"),
         "{show}"
     );
