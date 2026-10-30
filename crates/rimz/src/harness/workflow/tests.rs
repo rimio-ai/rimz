@@ -827,7 +827,7 @@ fn validation_refuses_judges_without_a_headless_launch() {
 }
 
 #[test]
-fn validation_resolves_edges_and_warns_about_judge_independence() {
+fn validation_resolves_edges_and_warns_about_auto_continue() {
     let (home, dir) = fixture();
     let text = VALID.replace(
         "run = \"python3 checks/pick.py\"",
@@ -837,12 +837,7 @@ fn validation_resolves_edges_and_warns_about_judge_independence() {
     let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
     assert_eq!(report.rows.len(), 2);
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|issue| issue.message.contains("same profile"))
-    );
+    assert_eq!(report.warnings.len(), 2, "{report:?}");
     assert_eq!(
         report
             .warnings
