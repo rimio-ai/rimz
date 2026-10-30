@@ -2904,13 +2904,10 @@ impl<'a> CollapsedRunRow<'a> {
 
     fn took(&self) -> Option<String> {
         let (min, max) = self.duration?;
-        let min = format_duration_ms(min);
-        let max = format_duration_ms(max);
-        Some(if min == max {
-            min
-        } else {
-            format!("{min}–{max}")
-        })
+        Some(ui::range_label(
+            format_duration_ms(min),
+            format_duration_ms(max),
+        ))
     }
 
     fn note(&self, now: Timestamp) -> Option<String> {

@@ -669,6 +669,14 @@ pub(crate) fn age_label(secs: u64) -> String {
     rimz::theme::fmt::age_label(secs)
 }
 
+pub(super) fn range_label(min: String, max: String) -> String {
+    if min == max {
+        min
+    } else {
+        format!("{min}–{max}")
+    }
+}
+
 /// Descending non-zero units from days to seconds, no separators: `4m12s`, `1h3m`, `0s`.
 pub(crate) fn format_compact_duration(mut seconds: u64) -> String {
     let mut rendered = String::new();
