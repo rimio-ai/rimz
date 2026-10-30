@@ -560,6 +560,8 @@ target/debug/xtask sandbox in "$ROOT" --as-ancestor '@coder' -- "$BIN" "--$MUX" 
 
 To feed a provider other than the stub's own (`--source codex`), run plain `sandbox in` with `RIMZ_AGENT_PID` set to the stub's pid from its card: `--as` binds the feed to the stub's own row. `hooks feed` returns before the drainer applies the event, so poll the read until `last_activity` moves rather than reading once.
 
+To raise an ask, feed a Claude `PermissionRequest` event whose `tool_name` is an ordinary tool such as `Bash`; a `Notification` event maps to no lifecycle signal and leaves the card as it was.
+
 The room restarts the stub agent when its process is killed, so an agent leaves a tab only when its pane closes. No hand recipe makes an agent exit into a kept shell; the live `producer_*` backend tests cover that case.
 
 `a` runs a RimZ command as the agent and `rz` runs one as the plain user shell (`rz agents`). Keep each prefix in a function, not a variable: zsh does not split an unquoted variable into words, so `$PREFIX agents` fails there as one unknown command.
