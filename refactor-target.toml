@@ -3595,7 +3595,13 @@ surface-budget = 28
 
 [[module]]
 path = "crates/rimz/src/wakeup"
-surface-budget = 27
+# broadcast_with_observation carries accepted topology evidence from the CLI (+1).
+surface-budget = 28
+
+[[verdict]]
+kind = "item"
+key = "wakeup::broadcast_with_observation"
+reason = "Zellij wake batches carry their accepted topology's observation without restamping send time."
 
 [[verdict]]
 kind = "item"

@@ -424,8 +424,9 @@ pub fn read_pane_topology_cache(
 /// Zellij's roster. The window matches the presence liveness window so one
 /// normal keepalive jitter does not fail a read. Normal verification pulls use
 /// no topology floor: the wake that asks for verification has already written
-/// the topology payload it carries. A caller can require a post-event publication
-/// with the optional floor; structural reconcile reads the live pane list instead.
+/// the topology payload it carries. The optional floor requires a topology at
+/// least as new as the observation the caller reacts to; structural reconcile
+/// reads the live pane list instead.
 pub fn pane_topology_cache_is_fresh(
     cache: &PaneTopologyCache,
     now_ms: u64,

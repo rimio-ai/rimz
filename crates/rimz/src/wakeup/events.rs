@@ -23,6 +23,10 @@ pub(crate) struct SidebarEventEnvelope {
     /// observation stamp; receivers TTL on their own clock, so sender skew can
     /// mis-order an overlay briefly but never pin it.
     pub sent_at_ms: u64,
+    /// Observation stamp of the Zellij topology accepted by the sending wake.
+    /// Structural width decisions use this floor; other senders omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panes_observed_at_ms: Option<u64>,
     pub event: SidebarEvent,
 }
 
@@ -38,6 +42,7 @@ impl SidebarEventEnvelope {
             workspace_id,
             session_name,
             sent_at_ms,
+            panes_observed_at_ms: None,
             event,
         }
     }
@@ -265,6 +270,23 @@ mod tests {
         assert!(!String::from_utf8_lossy(&encoded).contains("session_name"));
         let decoded: SidebarEventEnvelope =
             serde_json::from_slice(&encoded).expect("decode event envelope");
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn topology_observation_round_trips_and_defaults_older_senders() {
+        let mut expected = envelope(SidebarEvent::PanesChanged);
+        expected.panes_observed_at_ms = Some(22);
+        let encoded = serde_json::to_value(&expected).unwrap();
+        let decoded: SidebarEventEnvelope = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, expected);
+        assert_eq!(decoded.v, "rimz.sidebar-event.v2");
+
+        expected.panes_observed_at_ms = None;
+        let legacy = serde_json::to_value(&expected).unwrap();
+        assert!(legacy.get("panes_observed_at_ms").is_none());
+        let decoded: SidebarEventEnvelope = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.panes_observed_at_ms, None);
         assert_eq!(decoded, expected);
     }
 

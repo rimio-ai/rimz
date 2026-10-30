@@ -29,7 +29,7 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 ## Boundaries
 
 - [`mux/`](../mux/AGENTS.md) supplies the pane roster behind the `PaneRef` seam in [`frame.rs`](./frame.rs); backend knowledge stops there. It also owns the runtime files the multiplexer writes or dispatches on: the focus anchor, the room width target, and the Zellij topology and presence-desired caches.
-- [`wakeup/`](../wakeup/mod.rs) is the shared wire below this module: the heartbeat record, the event vocabulary, and the best-effort datagram send. `mux`, `store`, and `remote_control` send through it too, so a wire-visible change there carries the envelope or heartbeat protocol version with it.
+- [`wakeup/`](../wakeup/mod.rs) is the shared wire below this module: the heartbeat record, the event vocabulary, and the best-effort datagram send. `mux`, `store`, and `remote_control` send through it too. An optional field that older readers ignore and newer readers default needs no version bump; a change an older reader would reject or misread carries the envelope or heartbeat protocol version with it.
 - [`sidebar_pane/`](../sidebar_pane/AGENTS.md) renders the snapshot and holds no data-plane policy.
 - [`agents/`](../agents/AGENTS.md) never imports `crate::sidebar`; the invariant enforces the direction, and workspace inputs flow outward through `agents::spending`.
 

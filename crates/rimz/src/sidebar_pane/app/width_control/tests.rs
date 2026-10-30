@@ -998,6 +998,7 @@ fn observation_without_a_controlled_pane_stays_idle() {
         &crate::diag::DiagSink::disabled(),
     );
     assert!(!controller.note_structural(
+        StructuralChange::Roster,
         crate::utils::time::unix_now_ms(),
         Some(80),
         &crate::diag::DiagSink::disabled(),
@@ -1101,7 +1102,7 @@ fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
 
     let structural_at_ms = controller.started_at_ms.saturating_add(10);
     write_zellij_topology_panes(&runtime, 80, Some(319), structural_at_ms, false);
-    controller.note_structural(structural_at_ms, Some(64), &diag);
+    controller.note_structural(StructuralChange::Roster, structural_at_ms, Some(64), &diag);
 
     assert_eq!(controller.convergence.target(), None);
     assert!(!controller.convergence.in_flight());
@@ -1121,7 +1122,7 @@ fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
     );
 
     write_zellij_topology_for_view_at(&runtime, 319, structural_at_ms);
-    controller.note_structural(structural_at_ms, Some(32), &diag);
+    controller.note_structural(StructuralChange::Roster, structural_at_ms, Some(32), &diag);
 
     assert_eq!(controller.current_view_cols, Some(319));
     assert_eq!(controller.convergence.target(), Some(target(72)));
@@ -1302,7 +1303,7 @@ fn structural_event_converges_without_resize_feedback() {
     controller.backstop(Some(50), Some(3), None, &diag);
     let structural_at_ms = crate::utils::time::unix_now_ms();
     write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
-    controller.note_structural(structural_at_ms, Some(80), &diag);
+    controller.note_structural(StructuralChange::Roster, structural_at_ms, Some(80), &diag);
 
     assert_eq!(controller.structural_at_ms, Some(structural_at_ms));
     assert_eq!(controller.convergence.target(), Some(target(50)));
@@ -1343,6 +1344,79 @@ fn stalled_structural_resize_is_not_adopted_on_later_feedback() {
     assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert_eq!(controller.convergence.target(), Some(target(50)));
     assert!(controller.convergence.in_flight());
+}
+
+#[cfg(unix)]
+#[test]
+fn topology_change_keeps_the_step_budget_park_on_both_backends() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        let (_dir, runtime, mut controller) = controller(mux);
+        let (_shim, memo) = tmux_width_memo("%1 @1 83 200 1\n");
+        controller.tmux_geometry = Arc::new(Mutex::new(memo));
+        write_zellij_topology(&runtime);
+        let diag = DiagSink::disabled();
+        controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+        controller.convergence.steps_issued = MAX_STEPS;
+        controller.observe(83, SidebarWidthControlTrigger::Backstop, &diag);
+        assert_eq!(
+            controller.convergence.idle.unwrap().reason,
+            WidthIdleReason::StepBudget
+        );
+
+        let observed_at_ms = crate::utils::time::unix_now_ms();
+        write_zellij_topology_for_view_at(&runtime, 200, observed_at_ms);
+        controller.note_structural(StructuralChange::Topology, observed_at_ms, Some(83), &diag);
+
+        assert!(!controller.convergence.in_flight(), "{mux:?}");
+        assert_eq!(
+            controller.convergence.idle.unwrap().reason,
+            WidthIdleReason::StepBudget
+        );
+        assert_eq!(controller.convergence.steps_issued, MAX_STEPS);
+        assert_eq!(controller.structural_at_ms, Some(observed_at_ms));
+    }
+}
+
+#[test]
+fn topology_change_preserves_drag_classification_until_settle() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = DiagSink::disabled();
+    controller.backstop(Some(50), Some(1), None, &diag);
+    controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    let classification = controller.classification_deadline;
+    assert!(classification.is_some());
+
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    write_zellij_topology_for_view_at(&runtime, 200, observed_at_ms);
+    controller.note_structural(StructuralChange::Topology, observed_at_ms, Some(83), &diag);
+
+    assert!(!controller.convergence.in_flight());
+    assert_eq!(controller.classification_deadline, classification);
+    assert_eq!(controller.structural_at_ms, Some(observed_at_ms));
+
+    controller.classification_deadline = Some(Instant::now());
+    controller.backstop(Some(83), Some(1), Some(observed_at_ms), &diag);
+    assert!(controller.convergence.in_flight());
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
+    assert_eq!(controller.convergence.target(), Some(target(50)));
+}
+
+#[test]
+fn roster_event_releases_unacknowledged_park() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = DiagSink::disabled();
+    controller.backstop(Some(83), Some(1), None, &diag);
+    park_after_silent_backend(&mut controller, 83, &diag);
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    write_zellij_topology_for_view_at(&runtime, 200, observed_at_ms);
+
+    controller.note_structural(StructuralChange::Roster, observed_at_ms, Some(83), &diag);
+
+    assert!(!controller.convergence.is_unacknowledged());
+    assert!(controller.convergence.in_flight());
+    assert_eq!(controller.convergence.no_progress_cycles, 0);
 }
 
 #[test]

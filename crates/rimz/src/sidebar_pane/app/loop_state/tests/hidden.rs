@@ -49,6 +49,56 @@ fn advance_wakeup(rig: &mut Rig, wakeup: Wakeup) -> bool {
 }
 
 #[test]
+fn stamped_birth_topology_waits_for_a_real_viewport() {
+    let mut rig = zellij_width_rig(crate::utils::time::unix_now_ms());
+    rig.terminal = Terminal::new(PaneBackend::captured(12, 24)).unwrap();
+    let observed_at_ms = crate::utils::time::unix_now_ms() + 1;
+    write_zellij_width_topology(&rig, 12, 50, observed_at_ms);
+    let envelope = width_event(
+        &rig,
+        SidebarEvent::PaneOpened {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+            command: None,
+        },
+        observed_at_ms,
+    );
+
+    rig.state.on_event(&mut rig.terminal, envelope);
+
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 72);
+    assert!(width_nudge_triggers(&rig).is_empty());
+    let pending_baseline = rig.state.pane.width_control.feedback_deadline().unwrap();
+
+    write_zellij_width_topology(&rig, 12, 120, observed_at_ms + 1);
+    let envelope = width_event(&rig, SidebarEvent::PanesChanged, observed_at_ms + 1);
+    advance_wakeup(&mut rig, Wakeup::Event(envelope));
+
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 30);
+    assert_eq!(
+        width_nudge_triggers(&rig),
+        vec![crate::diag::record::SidebarWidthControlTrigger::Structural],
+    );
+    assert!(rig.state.pane.width_control.feedback_deadline().unwrap() > pending_baseline);
+}
+
+#[test]
+fn stamped_topology_event_proves_pending_width_before_the_next_wait() {
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    let mut rig = zellij_width_rig(observed_at_ms);
+    let envelope = width_event(&rig, SidebarEvent::PanesChanged, observed_at_ms);
+    let baseline_deadline = rig.state.pane.width_control.feedback_deadline().unwrap();
+
+    advance_wakeup(&mut rig, Wakeup::Event(envelope));
+
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 50);
+    assert_eq!(
+        width_nudge_triggers(&rig),
+        vec![crate::diag::record::SidebarWidthControlTrigger::Structural],
+    );
+    assert!(rig.state.pane.width_control.feedback_deadline().unwrap() > baseline_deadline);
+}
+
+#[test]
 fn settled_hidden_advances_take_no_views_lock_on_both_backends() {
     for mux in [MuxName::Zellij, MuxName::Tmux] {
         for cause in 0..4 {
