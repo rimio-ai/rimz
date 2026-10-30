@@ -105,16 +105,15 @@ pub(super) fn bar_row(
 /// the bar keeps that room and the stats line pins the age instead. The age
 /// appears from five minutes quiet, filling over an hour ([`hour_age_glyph`])
 /// and staying full past it unless the cache expires. Its continuous tone is
-/// muted until half the known TTL, or the last ten
-/// minutes if earlier, and never before the last hour
-/// ([`CACHE_WARNING_MAX_SECS`]), then warn through caution to alarm at the
-/// ceiling. Past the ceiling it wears the fixed expired-cache tone and ringed
-/// over face.
-/// Unknown lifetimes stay muted. A keep-warm horizon uses the steady held tone
-/// ([`cache_age_pin`]). Finished cards follow the same ramp. The clock reads
-/// the agent's own quiet time ([`SidebarRow::own_last_activity`]) or last cache
-/// request, not child-folded activity: a parent waiting on children makes no
-/// model call, so its cache keeps cooling.
+/// muted until half the known TTL, or the last ten minutes if earlier, and
+/// never before the last hour ([`CACHE_WARNING_MAX_SECS`]), then warn through
+/// caution to alarm at the ceiling. Past the ceiling it wears the fixed
+/// expired-cache tone and ringed over face. Unknown lifetimes stay muted. A
+/// keep-warm horizon uses the steady held tone ([`cache_age_pin`]). Finished
+/// cards follow the same ramp. The clock reads the agent's own quiet time
+/// ([`SidebarRow::own_last_activity`]) or last cache request, not child-folded
+/// activity: a parent waiting on children makes no model call, so its cache
+/// keeps cooling.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
