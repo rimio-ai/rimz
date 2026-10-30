@@ -1,6 +1,7 @@
 use super::*;
 mod git_install;
 mod git_sources;
+mod inspection;
 mod layout;
 use std::fs;
 use std::os::unix::fs::symlink;

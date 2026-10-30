@@ -769,6 +769,7 @@ fn report_fixture() -> DoctorReport {
         machine_config: MachineConfigHealth {
             broken_files: Vec::new(),
         },
+        packs: Probe::Ready(rimz::packs::CheckoutReport::default()),
         sandbox: super::super::model::Sandbox {
             mode: rimz::config::Isolation::Host,
             path: None,
@@ -906,6 +907,129 @@ fn terminal_section_renders_depth_signals_and_fix() {
     assert!(
         out.contains("mode = \"truecolor\""),
         "fix command is present:\n{out}"
+    );
+}
+
+#[test]
+fn packs_section_counts_modified_and_unreadable_checkouts_but_not_clean_ones() {
+    use rimz::packs::{Checkout, CheckoutReport, CheckoutState};
+    let commit = "a".repeat(40);
+    let cases = [
+        "modified",
+        "many",
+        "clean",
+        "empty",
+        "unreadable",
+        "record",
+        "duplicate-record",
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|case| {
+            let mut config = MachineConfigHealth {
+                broken_files: Vec::new(),
+            };
+            let packs = if matches!(*case, "record" | "duplicate-record") {
+                if *case == "duplicate-record" {
+                    config.broken_files.push(MachineConfigProblem {
+                        path: "/home/u/.rimz/packs/installed.json".into(),
+                        error: "broken record".into(),
+                        diagnosis: None,
+                        kind: MachineConfigProblemKind::Definition,
+                    });
+                }
+                Probe::Unavailable {
+                    error: "/home/u/.rimz/packs/installed.json: broken record".into(),
+                    diagnosis: None,
+                }
+            } else {
+                Probe::Ready(CheckoutReport {
+                    checkouts: if *case == "empty" {
+                        Vec::new()
+                    } else {
+                        vec![Checkout {
+                            packs: vec!["crew".parse().unwrap()],
+                            source: "crew".into(),
+                            commit: commit.clone(),
+                            path: "/home/u/pack checkout".into(),
+                            reinstall: "crew@v1".into(),
+                            state: match *case {
+                                "modified" => CheckoutState::Modified {
+                                    head: None,
+                                    changed: vec!["agents/coder.md".into()],
+                                },
+                                "many" => CheckoutState::Modified {
+                                    head: Some("b".repeat(40)),
+                                    changed: (0..50).map(|i| format!("agents/{i}.md")).collect(),
+                                },
+                                "unreadable" => CheckoutState::Unreadable {
+                                    error: "missing .git".into(),
+                                },
+                                _ => CheckoutState::Clean,
+                            },
+                        }]
+                    },
+                })
+            };
+            let mut tally = Tally::default();
+            let text = strip(|w| render_packs(w, &packs, &config, "/home/u/.rimz", &mut tally));
+            let closing = strip(|w| render_tally(w, &tally));
+            let expected_count = usize::from(matches!(
+                *case,
+                "modified" | "many" | "unreadable" | "record"
+            ));
+            let valid = text.contains("PACKS") == (*case != "empty")
+                && tally.warns.len() == expected_count
+                && tally.alarms.is_empty()
+                && match *case {
+                    "modified" => {
+                        text.contains("crew")
+                            && text.contains("agents/coder.md")
+                            && text.contains("lost when the pack's commit moves")
+                            && !text.contains("reset --hard")
+                            && tally.warns.first().is_some_and(|finding| {
+                                finding.fix.contains("/home/u/.rimz")
+                                    && finding.fix.contains("overrides")
+                                    && finding.fix.contains("git -C '")
+                                    && finding.fix.contains("reset --hard")
+                                    && finding.fix.contains("clean -fd")
+                            })
+                    }
+                    "many" => {
+                        let json = serde_json::to_value(&packs).unwrap();
+                        [&text, &closing].iter().all(|output| {
+                            output.contains("HEAD bbbbbbbbbbbb differs from aaaaaaaaaaaa, ")
+                                && output
+                                    .contains("agents/0.md, agents/1.md, agents/2.md, and 47 more")
+                                && !output.contains("agents/3.md")
+                        }) && json["ready"]["checkouts"][0]["head"] == "b".repeat(40)
+                            && json["ready"]["checkouts"][0]["changed"]
+                                == serde_json::json!(
+                                    (0..50)
+                                        .map(|i| format!("agents/{i}.md"))
+                                        .collect::<Vec<_>>()
+                                )
+                    }
+                    "unreadable" => {
+                        text.contains("missing .git")
+                            && tally.warns.first().is_some_and(|finding| {
+                                finding.fix.contains("delete")
+                                    && finding.fix.contains("rimz packs install crew@v1")
+                            })
+                    }
+                    "record" | "duplicate-record" => text.contains("broken record"),
+                    _ => true,
+                };
+            (valid, text, closing)
+        })
+        .collect();
+    assert_eq!(
+        actual
+            .iter()
+            .map(|(valid, _, _)| *valid)
+            .collect::<Vec<_>>(),
+        [true; 7],
+        "{actual:#?}"
     );
 }
 

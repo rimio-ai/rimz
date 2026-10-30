@@ -217,6 +217,74 @@ impl Record {
     }
 }
 
+#[derive(Debug, Default, Serialize)]
+pub struct CheckoutReport {
+    pub checkouts: Vec<Checkout>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Checkout {
+    pub packs: Vec<PackName>,
+    pub source: String,
+    pub commit: String,
+    pub path: PathBuf,
+    #[serde(flatten)]
+    pub state: CheckoutState,
+    #[serde(skip)]
+    pub reinstall: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum CheckoutState {
+    Clean,
+    Modified {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        head: Option<String>,
+        changed: Vec<String>,
+    },
+    Unreadable {
+        error: String,
+    },
+}
+
+/// Inspect recorded Git checkouts without refreshing indexes or reading linked sources.
+pub fn inspect_checkouts(agents_home: &Path) -> Result<CheckoutReport> {
+    let record = Record::read(agents_home)?;
+    let root = paths::packs_dir(agents_home);
+    let client = git::Client {
+        timeout: std::time::Duration::from_secs(10),
+        ..git::Client::default()
+    };
+    let mut checkouts = Vec::new();
+    for source in record.sources.iter().filter(|source| !source.linked) {
+        let path = layout::checkout(&root, source)?;
+        // layout::checkout rejects missing or malformed recorded commits.
+        let commit = source.commit.clone().expect("validated checkout commit");
+        let mut reinstall = source.spelling();
+        if source.pinned
+            && let Some(reference) = &source.reference
+        {
+            reinstall.push('@');
+            reinstall.push_str(reference);
+        }
+        let state = client
+            .inspect(&path, &commit, &source.source)
+            .unwrap_or_else(|error| CheckoutState::Unreadable {
+                error: error.to_string(),
+            });
+        checkouts.push(Checkout {
+            packs: source.packs.iter().map(|pack| pack.name.clone()).collect(),
+            source: source.source.clone(),
+            commit,
+            path,
+            state,
+            reinstall,
+        });
+    }
+    Ok(CheckoutReport { checkouts })
+}
+
 fn read_record(root: &Path) -> std::result::Result<Record, Problem> {
     #[derive(Deserialize)]
     struct Version {

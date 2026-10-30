@@ -102,6 +102,7 @@ fn collect_report(
         });
         let terminal = progress.spawn(scope, "terminal", runtime::collect_terminal);
         let machine_config = progress.spawn(scope, "machine config", collect_machine_config);
+        let packs = progress.spawn(scope, "packs", collect_packs);
         let sandbox = progress.spawn(scope, "sandbox", runtime::collect_sandbox);
         let hibernate = progress.spawn(scope, "hibernate", || {
             rimz::harness::hibernate::inspect(&crate::cli::machine_config().agents.hibernate)
@@ -168,6 +169,7 @@ fn collect_report(
             terminal: collected(terminal),
             home: collect_home(),
             machine_config: collected(machine_config),
+            packs: collected(packs),
             sandbox: collected(sandbox),
             hibernate: collected(hibernate),
             hooks,
@@ -352,6 +354,16 @@ fn collect_home() -> model::Home {
             .iter()
             .map(|root| root.display().to_string())
             .collect(),
+    }
+}
+
+fn collect_packs() -> model::Probe<rimz::packs::CheckoutReport> {
+    match rimz::packs::inspect_checkouts(&rimz::disk::paths::agents_home()) {
+        Ok(report) => model::Probe::Ready(report),
+        Err(error) => model::Probe::Unavailable {
+            error: error.to_string(),
+            diagnosis: None,
+        },
     }
 }
 

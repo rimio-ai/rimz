@@ -40,6 +40,7 @@ pub(super) struct DoctorReport {
     pub(super) terminal: Terminal,
     pub(super) home: Home,
     pub(super) machine_config: MachineConfigHealth,
+    pub(super) packs: Probe<rimz::packs::CheckoutReport>,
     pub(super) sandbox: Sandbox,
     pub(super) hibernate: rimz::harness::hibernate::PreflightReport,
     pub(super) hooks: Vec<HookRow>,
