@@ -1,6 +1,6 @@
 use super::panel::{kv, two_column};
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rimz::harness::assist_log::{self, Assist, AssistRecord, AssistWindowReset};
 use rimz::harness::auto_redeem::RedeemReason;
@@ -1116,7 +1116,6 @@ pub(super) fn render_full(stats: &AssistStats, limit: usize, all: bool, json: bo
         let as_of = Timestamp::now().to_zoned(crate::cli::machine_config().time_zone());
         return render::json_pretty(&super::json::assists_value(stats, limit, all, &as_of));
     }
-    let (events, older) = stats.timeline(limit, all);
     let mut out = render::out();
     if stats.is_empty() {
         writeln!(out, "no assists recorded")?;
@@ -1133,13 +1132,331 @@ pub(super) fn render_full(stats: &AssistStats, limit: usize, all: bool, json: bo
     }
     writeln!(out)?;
     let zone = MachineConfig::load_lenient().time_zone();
-    for event in events {
-        writeln!(out, "{}", forensic_line(event, &zone))?;
+    let (lines, older) = timeline_lines(stats, limit, all, &zone);
+    for line in lines {
+        writeln!(out, "{line}")?;
     }
     if older > 0 {
         writeln!(out, "… {older} older; rimz stats --assists -n 0 for all")?;
     }
     Ok(())
+}
+
+fn timeline_lines(
+    stats: &AssistStats,
+    limit: usize,
+    all: bool,
+    zone: &jiff::tz::TimeZone,
+) -> (Vec<String>, usize) {
+    let mut rows = Vec::<AssistRow>::new();
+    let mut by_stream = HashMap::<_, usize>::new();
+    for event in stats.timeline(0, all).0 {
+        let stream = (std::mem::discriminant(event), event.repeat_subject());
+        let row = AssistRow::new(event);
+        // Adjacency belongs to the subject's history of this kind, not the merged timeline.
+        if let Some(&index) = by_stream.get(&stream)
+            && let Some(key) = event.repeat_key()
+            && rows[index].event.repeat_key() == Some(key)
+        {
+            rows[index].merge(row);
+            continue;
+        }
+        by_stream.insert(stream, rows.len());
+        rows.push(row);
+    }
+    let shown = if limit == 0 {
+        rows.len()
+    } else {
+        limit.min(rows.len())
+    };
+    let older = rows.iter().skip(shown).map(|row| row.count).sum();
+    (
+        rows.into_iter()
+            .take(shown)
+            .map(|row| row.line(zone))
+            .collect(),
+        older,
+    )
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum RepeatSubject<'a> {
+    Agent(&'a AgentKind, &'a AgentSessionId),
+    Retry(&'a AgentKind, &'a str, Option<&'a rimz::RunId>),
+    Loop(&'a str, &'a Path),
+    Workflow(&'a rimz::ids::WorkflowRunId),
+    Forward(&'a str, u16),
+    Account(&'a AgentKind, &'a rimz::ids::LoginKey),
+    Alias(&'a AgentKind, &'a rimz::ids::LoginKey, &'a str),
+    Redeem(&'a str, Option<&'a rimz::ids::LoginName>),
+    Workspace(&'a rimz::WorkspaceId, &'a str),
+    Gc(
+        &'a rimz::WorkspaceId,
+        std::mem::Discriminant<rimz::harness::auto_gc::GcScope>,
+    ),
+}
+
+#[derive(PartialEq, Eq)]
+enum RepeatKey<'a> {
+    Plain,
+    Hibernated,
+    Deepened,
+    Held,
+    Keepalive(bool),
+    Continue(&'a str),
+    Compact(AutoCompact),
+    IdleCompact(Option<u64>),
+    IdleStop(u64, Option<&'a str>),
+    Flip(Option<&'a str>, &'a str, u64),
+    Tier(&'a str, &'a str),
+    Molt(&'a AgentSessionId),
+    Stall(&'a str, bool),
+    Retry(Option<i32>),
+    Judge(&'a str),
+    Step(&'a str),
+    Route(&'a str, &'a str, &'a str),
+    Park(&'a str, rimz::store::workflow::ParkReason),
+    End(rimz::store::workflow::RunState),
+    Forward(Option<u16>),
+    Redeem(RedeemReason, Option<&'a str>),
+    Alias(&'a str, &'a str),
+    Grant(&'a Path, Option<&'a str>),
+    Resume(Option<SessionDeathCause>),
+}
+
+impl AssistEvent {
+    fn repeat_subject(&self) -> RepeatSubject<'_> {
+        match self {
+            Self::Continue { kind, agent_id, .. }
+            | Self::Compact { kind, agent_id, .. }
+            | Self::CacheKeepalive { kind, agent_id, .. }
+            | Self::IdleCompact { kind, agent_id, .. }
+            | Self::FlipCompact { kind, agent_id, .. }
+            | Self::IdleStop { kind, agent_id, .. }
+            | Self::IdleStopWithdrawn { kind, agent_id, .. }
+            | Self::Hibernate { kind, agent_id, .. }
+            | Self::TierFallback { kind, agent_id, .. }
+            | Self::Molt { kind, agent_id, .. }
+            | Self::StallNotice { kind, agent_id, .. } => RepeatSubject::Agent(kind, agent_id),
+            Self::LaunchRetry {
+                kind,
+                label,
+                run_id,
+                ..
+            } => RepeatSubject::Retry(kind, label, run_id.as_ref()),
+            Self::JudgeDecline { task, checkout, .. }
+            | Self::ResidentLaunch { task, checkout, .. } => RepeatSubject::Loop(task, checkout),
+            Self::WorkflowStart { run, .. }
+            | Self::WorkflowStep { run, .. }
+            | Self::WorkflowRoute { run, .. }
+            | Self::WorkflowPark { run, .. }
+            | Self::WorkflowEnd { run, .. } => RepeatSubject::Workflow(run),
+            Self::PortForward { host, remote, .. } => RepeatSubject::Forward(host, *remote),
+            Self::EmptyDirGrant { kind, login, .. } => RepeatSubject::Account(kind, login),
+            Self::ModelAlias {
+                kind, login, alias, ..
+            } => RepeatSubject::Alias(kind, login, alias),
+            Self::Redeem { kind, login, .. } => RepeatSubject::Redeem(kind, login.as_ref()),
+            Self::Resume {
+                workspace_id,
+                session_name,
+                ..
+            } => RepeatSubject::Workspace(workspace_id, session_name),
+            Self::TmpEvict {
+                workspace_id,
+                handle,
+                ..
+            } => RepeatSubject::Workspace(workspace_id, handle),
+            Self::Gc {
+                workspace_id,
+                scope,
+                ..
+            } => RepeatSubject::Gc(workspace_id, std::mem::discriminant(scope)),
+        }
+    }
+
+    fn repeat_key(&self) -> Option<(bool, RepeatKey<'_>)> {
+        let key = match self {
+            Self::Hibernate { frozen: true, .. } => RepeatKey::Hibernated,
+            Self::Hibernate {
+                reclaimed_bytes: Some(_),
+                ..
+            } => RepeatKey::Deepened,
+            Self::Hibernate { .. } => RepeatKey::Held,
+            Self::CacheKeepalive { capped, .. } => RepeatKey::Keepalive(*capped),
+            Self::Continue { park, .. } => RepeatKey::Continue(park),
+            Self::Compact { threshold, .. } => RepeatKey::Compact(*threshold),
+            Self::IdleCompact {
+                idle_after_secs, ..
+            } => RepeatKey::IdleCompact(*idle_after_secs),
+            Self::IdleStop {
+                idle_after_secs,
+                requested_by,
+                ..
+            }
+            | Self::IdleStopWithdrawn {
+                idle_after_secs,
+                requested_by,
+                ..
+            } => RepeatKey::IdleStop(*idle_after_secs, requested_by.as_deref()),
+            Self::FlipCompact {
+                from,
+                to,
+                threshold,
+                ..
+            } => RepeatKey::Flip(from.as_deref(), to, *threshold),
+            Self::TierFallback { profile, stamp, .. } => RepeatKey::Tier(profile, &stamp.model),
+            Self::Molt { successor_id, .. } => RepeatKey::Molt(successor_id),
+            Self::StallNotice {
+                parent, delivered, ..
+            } => RepeatKey::Stall(parent, *delivered),
+            Self::LaunchRetry { exit_code, .. } => RepeatKey::Retry(*exit_code),
+            Self::JudgeDecline { profile, .. } => RepeatKey::Judge(profile),
+            Self::WorkflowStep { step, .. } => RepeatKey::Step(step),
+            Self::WorkflowRoute { count: Some(_), .. } => return None,
+            Self::WorkflowRoute {
+                node, outcome, to, ..
+            } => RepeatKey::Route(node, outcome, to),
+            Self::WorkflowPark { node, reason, .. } => RepeatKey::Park(node, *reason),
+            Self::WorkflowEnd { state, .. } => RepeatKey::End(*state),
+            Self::PortForward { local, .. } => RepeatKey::Forward(*local),
+            Self::Redeem {
+                reason, outcome, ..
+            } => RepeatKey::Redeem(*reason, outcome.as_deref()),
+            Self::ModelAlias { from, to, .. } => RepeatKey::Alias(from, to),
+            Self::EmptyDirGrant { key, profile, .. } => RepeatKey::Grant(key, profile.as_deref()),
+            Self::Resume { cause, .. } => RepeatKey::Resume(*cause),
+            Self::ResidentLaunch { .. }
+            | Self::WorkflowStart { .. }
+            | Self::TmpEvict { .. }
+            | Self::Gc { .. } => RepeatKey::Plain,
+        };
+        Some((self.took_effect(), key))
+    }
+}
+
+struct AssistRow {
+    event: AssistEvent,
+    count: usize,
+    oldest: Timestamp,
+    duration: Option<(u64, u64)>,
+    recovered_secs: Option<u64>,
+}
+
+impl AssistRow {
+    fn new(event: &AssistEvent) -> Self {
+        let duration = match event {
+            AssistEvent::CacheKeepalive { idle_secs, .. }
+            | AssistEvent::IdleCompact { idle_secs, .. }
+            | AssistEvent::IdleStop { idle_secs, .. } => Some(*idle_secs),
+            AssistEvent::StallNotice { silent_secs, .. } => Some(*silent_secs),
+            AssistEvent::LaunchRetry { startup_ms, .. } => Some(*startup_ms),
+            _ => None,
+        };
+        Self {
+            event: event.clone(),
+            count: 1,
+            oldest: event.at(),
+            duration: duration.map(|value| (value, value)),
+            recovered_secs: match event {
+                AssistEvent::Continue {
+                    at, parked_since, ..
+                } => parked_since.map(|parked| recovered_secs(Some(parked), *at)),
+                _ => None,
+            },
+        }
+    }
+
+    fn merge(&mut self, previous: Self) {
+        self.count += previous.count;
+        self.oldest = self.oldest.min(previous.oldest);
+        self.duration = match (self.duration, previous.duration) {
+            (Some((min, max)), Some((older_min, older_max))) => {
+                Some((min.min(older_min), max.max(older_max)))
+            }
+            (duration, None) | (None, duration) => duration,
+        };
+        self.recovered_secs = self
+            .recovered_secs
+            .into_iter()
+            .chain(previous.recovered_secs)
+            .reduce(u64::saturating_add);
+        match (&mut self.event, previous.event) {
+            (
+                AssistEvent::Hibernate {
+                    reclaimed_bytes, ..
+                },
+                AssistEvent::Hibernate {
+                    reclaimed_bytes: older,
+                    ..
+                },
+            ) => {
+                *reclaimed_bytes = (*reclaimed_bytes)
+                    .into_iter()
+                    .chain(older)
+                    .reduce(u64::saturating_add);
+            }
+            (
+                AssistEvent::JudgeDecline { cost_usd, .. },
+                AssistEvent::JudgeDecline {
+                    cost_usd: older, ..
+                },
+            ) => {
+                *cost_usd = (*cost_usd).into_iter().chain(older).reduce(|a, b| a + b);
+            }
+            (
+                AssistEvent::TmpEvict {
+                    reclaimed_bytes, ..
+                },
+                AssistEvent::TmpEvict {
+                    reclaimed_bytes: older,
+                    ..
+                },
+            ) => *reclaimed_bytes = reclaimed_bytes.saturating_add(older),
+            (
+                AssistEvent::Gc {
+                    reclaimed_bytes,
+                    worktrees_removed,
+                    workspaces_pruned,
+                    files_removed,
+                    messages_archived,
+                    problems,
+                    ..
+                },
+                AssistEvent::Gc {
+                    reclaimed_bytes: older_bytes,
+                    worktrees_removed: older_worktrees,
+                    workspaces_pruned: older_workspaces,
+                    files_removed: older_files,
+                    messages_archived: older_messages,
+                    problems: older_problems,
+                    ..
+                },
+            ) => {
+                *problems = problems.saturating_add(older_problems);
+                *reclaimed_bytes = reclaimed_bytes.saturating_add(older_bytes);
+                *worktrees_removed = worktrees_removed.saturating_add(older_worktrees);
+                *workspaces_pruned = workspaces_pruned.saturating_add(older_workspaces);
+                *files_removed = files_removed.saturating_add(older_files);
+                *messages_archived = messages_archived.saturating_add(older_messages);
+            }
+            _ => {}
+        }
+    }
+
+    fn line(&self, zone: &jiff::tz::TimeZone) -> String {
+        if self.count == 1 {
+            return forensic_line(&self.event, zone);
+        }
+        let benefit = row_benefit_line(&self.event, zone, self.duration, self.recovered_secs);
+        let span = self.event.at().duration_since(self.oldest).as_secs().max(0) as u64;
+        let benefit = format!(
+            "{benefit} · ×{} over {}",
+            self.count,
+            render::age_label(span)
+        );
+        forensic_row_line(&self.event, zone, &benefit)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1281,6 +1598,15 @@ pub(super) fn category_entries(
 }
 
 pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> String {
+    row_benefit_line(event, zone, None, None)
+}
+
+fn row_benefit_line(
+    event: &AssistEvent,
+    zone: &jiff::tz::TimeZone,
+    duration: Option<(u64, u64)>,
+    recovered: Option<u64>,
+) -> String {
     let at = event.at().to_zoned(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
@@ -1350,8 +1676,9 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             ..
         } => {
             let agent = label.as_deref().unwrap_or(kind.as_str());
-            let silence =
-                rimz::utils::time::format_duration_compact(Duration::from_secs(*silent_secs));
+            let silence = repeat_duration_range(*silent_secs, duration, |secs| {
+                rimz::utils::time::format_duration_compact(Duration::from_secs(secs))
+            });
             let error = error
                 .as_deref()
                 .map(|error| format!(" ({})", first_line(error)))
@@ -1436,14 +1763,18 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
         } => {
             let agent = label.as_deref().unwrap_or(kind.as_str());
             let action = if *delivered { "resumed" } else { "resume held" };
-            let span = parked_since.map(|parked| {
-                format!(
-                    ", {}→{} ({} recovered)",
-                    parked.to_zoned(zone.clone()).strftime("%H:%M"),
-                    at.to_zoned(zone.clone()).strftime("%H:%M"),
-                    format_hours(recovered_secs(Some(parked), *at))
-                )
-            });
+            let span = if let Some(recovered) = recovered {
+                Some(format!(", {} recovered", format_hours(recovered)))
+            } else {
+                parked_since.map(|parked| {
+                    format!(
+                        ", {}→{} ({} recovered)",
+                        parked.to_zoned(zone.clone()).strftime("%H:%M"),
+                        at.to_zoned(zone.clone()).strftime("%H:%M"),
+                        format_hours(recovered_secs(Some(parked), *at))
+                    )
+                })
+            };
             format!(
                 "{time} ▶ {agent} {action} — {}{}",
                 park_label(park),
@@ -1480,7 +1811,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             let agent = label.as_deref().unwrap_or(kind.as_str());
             let compact =
                 |secs| rimz::utils::time::format_duration_compact(Duration::from_secs(secs));
-            let idle = compact(*idle_secs);
+            let idle = repeat_duration_range(*idle_secs, duration, compact);
             let holding = horizon_secs
                 .map(|horizon| format!(", holding warm ({})", compact(horizon)))
                 .unwrap_or_default();
@@ -1519,7 +1850,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .unwrap_or_default();
             format!(
                 "{time} ■ {label} idle {outcome} after {} (threshold {}){requester}{error}",
-                compact(*idle_secs),
+                repeat_duration_range(*idle_secs, duration, compact),
                 compact(*idle_after_secs),
             )
         }
@@ -1578,11 +1909,13 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 || "on a signal".to_owned(),
                 |code| format!("with code {code}"),
             );
-            let startup = if *startup_ms < 1000 {
-                "<1s".to_owned()
-            } else {
-                rimz::utils::time::format_duration_compact(Duration::from_secs(startup_ms / 1000))
-            };
+            let startup = repeat_duration_range(*startup_ms, duration, |ms| {
+                if ms < 1000 {
+                    "<1s".to_owned()
+                } else {
+                    rimz::utils::time::format_duration_compact(Duration::from_secs(ms / 1000))
+                }
+            });
             let outcome = if *relaunched {
                 format!("relaunched, attempt {attempt}")
             } else {
@@ -1616,19 +1949,19 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .as_deref()
                 .map(|error| format!(" ({})", first_line(error)))
                 .unwrap_or_default();
+            let compact =
+                |secs| rimz::utils::time::format_duration_compact(Duration::from_secs(secs));
             let (idle, threshold) = idle_after_secs.map_or_else(
-                || (format_hours(*idle_secs), String::new()),
+                || {
+                    (
+                        repeat_duration_range(*idle_secs, duration, format_hours),
+                        String::new(),
+                    )
+                },
                 |threshold| {
                     (
-                        rimz::utils::time::format_duration_compact(std::time::Duration::from_secs(
-                            *idle_secs,
-                        )),
-                        format!(
-                            " (threshold {})",
-                            rimz::utils::time::format_duration_compact(
-                                std::time::Duration::from_secs(threshold)
-                            )
-                        ),
+                        repeat_duration_range(*idle_secs, duration, compact),
+                        format!(" (threshold {})", compact(threshold)),
                     )
                 },
             );
@@ -1730,10 +2063,12 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
 }
 
 pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> String {
+    forensic_row_line(event, zone, &benefit_line(event, zone))
+}
+
+fn forensic_row_line(event: &AssistEvent, zone: &jiff::tz::TimeZone, benefit: &str) -> String {
     let at = event.at().to_zoned(zone.clone()).strftime("%Y-%m-%d %H:%M");
-    let benefit = benefit_line(event, zone)
-        .split_once(' ')
-        .map_or_else(|| benefit_line(event, zone), |(_, rest)| rest.to_owned());
+    let benefit = benefit.split_once(' ').map_or(benefit, |(_, rest)| rest);
     match event {
         AssistEvent::PortForward { .. } => format!("{at} {benefit}"),
         AssistEvent::WorkflowStart { run, .. }
@@ -1806,12 +2141,6 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             delivered,
             ..
         }
-        | AssistEvent::Continue {
-            agent_id,
-            message_id,
-            delivered,
-            ..
-        }
         | AssistEvent::CacheKeepalive {
             agent_id,
             message_id,
@@ -1829,9 +2158,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             "{at} {benefit} · agent {agent_id} · message {message_id} · threshold {}",
             compact_threshold(*threshold),
         ),
-        AssistEvent::IdleStop {
-            agent_id, stopped, ..
-        } => format!("{at} {benefit} · agent {agent_id} · stopped {stopped}"),
+        AssistEvent::IdleStop { agent_id, .. } => format!("{at} {benefit} · agent {agent_id}"),
         AssistEvent::IdleStopWithdrawn {
             agent_id,
             requested_at,
@@ -1839,37 +2166,36 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         } => {
             format!("{at} {benefit} · agent {agent_id} · requested at {requested_at}")
         }
-        AssistEvent::Hibernate {
-            agent_id, frozen, ..
-        } => format!("{at} {benefit} · agent {agent_id} · frozen {frozen}"),
-        AssistEvent::LaunchRetry {
-            run_id, relaunched, ..
-        } => {
+        AssistEvent::Hibernate { agent_id, .. } => format!("{at} {benefit} · agent {agent_id}"),
+        AssistEvent::LaunchRetry { run_id, .. } => {
             let run = run_id
                 .as_ref()
                 .map(|run_id| format!(" · run {run_id}"))
                 .unwrap_or_default();
-            format!("{at} {benefit}{run} · relaunched {relaunched}")
+            format!("{at} {benefit}{run}")
         }
-        AssistEvent::IdleCompact {
+        AssistEvent::Continue {
             agent_id,
             message_id,
-            delivered,
             ..
-        } => format!(
-            "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
-        ),
+        }
+        | AssistEvent::IdleCompact {
+            agent_id,
+            message_id,
+            ..
+        } => {
+            format!("{at} {benefit} · agent {agent_id} · message {message_id}")
+        }
         AssistEvent::FlipCompact {
             agent_id,
             message_id,
-            delivered,
             ..
         } => {
             let message = message_id
                 .as_deref()
                 .map(|id| format!(" · message {id}"))
                 .unwrap_or_default();
-            format!("{at} {benefit} · agent {agent_id}{message} · delivered {delivered}")
+            format!("{at} {benefit} · agent {agent_id}{message}")
         }
         AssistEvent::Resume {
             workspace_id,
@@ -1899,6 +2225,24 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             "{at} {benefit} · workspace {workspace_id} · cutoff {}",
             rimz::utils::time::format_duration_compact(Duration::from_secs(*older_than_secs))
         ),
+    }
+}
+
+fn repeat_duration_range(
+    value: u64,
+    range: Option<(u64, u64)>,
+    format: impl Fn(u64) -> String,
+) -> String {
+    let (min, max) = range.unwrap_or((value, value));
+    if min == max {
+        return format(min);
+    }
+    let min = format(min);
+    let max = format(max);
+    if min == max {
+        min
+    } else {
+        format!("{min}–{max}")
     }
 }
 

@@ -196,7 +196,7 @@ The final hint is `←/→ range · t/w/m/y jump · r reload · q quit`. `--hold
 
 Every array is present even when empty, and every `share` is a fleet-dollar share. With an explicit view, `--json` emits `{as_of, window, agents|teams|subagents, roles_since?, effort_since?}` with only the selected array and the same admission (`json::roles_value`).
 
-`--assists` prints the timeline instead (`assists::render_full`), and `--window` conflicts with it. It reads both retained log generations with no date cutoff, filters through `AssistEvent::took_effect`, and limits the newest-first list to 50 (`-n 0` shows all retained, `--all` adds the attempts that did not take effect). `--assists --json` emits the same selection as `{as_of, rollup, events, older}`, where `as_of` is the read time in `MachineConfig::time_zone`, the zone spend history uses, and the rollup covers every retained record, not just the page.
+`--assists` prints the timeline instead (`assists::render_full`), and `--window` conflicts with it. It reads both retained log generations with no date cutoff, filters through `AssistEvent::took_effect`, and folds repeated outcomes within each subject's history of an assist kind before limiting the newest-first list to 50 lines (`-n 0` shows all retained, `--all` adds the attempts that did not take effect). Each repeated line carries `×N over span`; `older` counts records outside the shown lines. `--assists --json` keeps one event per record and applies its limit to records, emitting `{as_of, rollup, events, older}`, where `as_of` is the read time in `MachineConfig::time_zone`, the zone spend history uses, and the rollup covers every retained record, not just the page.
 
 ### The assist rollup
 
