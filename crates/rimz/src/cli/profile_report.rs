@@ -708,6 +708,7 @@ mod tests {
             model_reminder: None,
             keep_warm: None,
             idle_compact: None,
+            smart_compact: None,
             mode: None,
             model: None,
             effort: None,

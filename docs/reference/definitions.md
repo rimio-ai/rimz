@@ -67,6 +67,7 @@ Bare parents, kind bases, traits, child allowlists, and team seats all use the m
 | `effort` | Provider-specific absolute effort (YAML integer or string), or omit for the selected model's default. OpenCode checks the chosen model's live variants; without a model it warns and launches without effort. Relative `+N` / `-N` values are refused. |
 | `fast` | Boolean requesting the provider's [fast mode](./agent-support.md#fast-mode). Off by default; a kind with no fast switch warns at launch and runs without it. |
 | `auto-compact` | Native compaction window: integer or string token count from `100k` through `1M`, inclusive; no percentages or decimals. |
+| `smart-compact` | RimZ [smart compaction](#smart-compaction) threshold: a token count such as `200k`, a percentage such as `70%`, or `off`. Accepted on agents and subagents. |
 | `budget` | Dollar cap as string or number; a string such as `20/day` selects a daily cap. |
 | `keep-warm` | Prompt-cache [keep-warm](#keep-warm) maximum for a solo seat: `off`, a duration such as `2h`, or a block with `max` only. |
 | `idle-compact` | [Idle compaction](#idle-compaction) token floor: `off` or a positive token count such as `100k`. Refused on a subagent definition. |
@@ -87,7 +88,7 @@ The nearest definition setting `tier:`, `model:`, or a registered `agent:` kind 
 
 `agent:` follows only definitions in its own namespace: an agent cannot inherit a subagent or vice versa. Without `agent:`, a recognized model alias, model ID, or prefix determines the kind: Claude's roster and `claude-` prefix, and Codex's roster and `gpt-` prefix. Unknown models use the chain's kind or require `agent:` when none exists. Except on Pi and OpenCode, a model implying a different kind from a registered `agent:` in the same definition is an error, and a child model may change its ancestor's kind. Pi and OpenCode chains keep their engine under concrete models, including a team role's explicit `model:`; use `agent:` or `--agent` to select another engine. OpenCode resolves against its configured catalog in [full-name, first-ID, then nearest-name order](../internals/agents/adapter_opencode.md#model-selection), announcing non-unique and near-miss picks, and a `provider/model` name read as another provider's model ID, on the card. A `tier:` still walks the tier table's families.
 
-Children inherit `tier` or `model`, `mode`, `isolation`, `empty-dir`, `effort`, `fast`, `auto-compact`, `budget`, `keep-warm`, `idle-compact`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
+Children inherit `tier` or `model`, `mode`, `isolation`, `empty-dir`, `effort`, `fast`, `auto-compact`, `smart-compact`, `budget`, `keep-warm`, `idle-compact`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
 `agent: crew:coder` selects the installed pack `crew`'s `coder`, including a copy hidden by a home override or a pack conflict. This keeps the same namespace boundary: an agent selects the pack's agent, a subagent its subagent. A home `agents/coder.md` can inherit the shipped parent this way and replace only its chosen fields; [`rimz packs customize`](cli/packs.md#customize-an-item) creates that layer. The parent's own bare parent, kind base, traits, child names, and skills still use the merged chains, not an own-pack-first lookup. Qualified keys never become launchable profiles; launch specs and team role `agent:` fields take bare profile names, not `crew:coder`.
 
@@ -196,6 +197,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `signals` | Optional nonempty signal-binding list. |
 | `flip-compact` | Stage-handoff compaction threshold or `off`. |
 | `idle-compact` | [Idle compaction](#idle-compaction) token floor for this seat: `off` or a token count; inherited from the definition when omitted. |
+| `smart-compact` | [Smart compaction](#smart-compaction) threshold or `off`; inherited from the definition when omitted. |
 | `keep-warm` | [Keep-warm](#keep-warm) shorthand or `{ max, while }` block. Inherits each field from the team, never the definition. |
 
 Role fields override inherited definition fields. Unlike standalone chains, a seat's recognized model may select a different runtime kind; an unrecognized model keeps the original kind. That kind needs its own base. Tools are rendered again for the selected kind. Traits combine leaf-definition → role → team, deduplicated; ancestor crafts remain unchanged. Added traits require `${traits}` in the leaf body. Nonleaders lose `AskUserQuestion`. Every nonempty seat skill list gains `reflect`, which must pass the same library checks. Empty and omitted skill lists stay unchanged.
@@ -227,6 +229,12 @@ signals:
 ```
 
 A selector is `family.event` or `family.*`: the family begins with a lowercase ASCII letter, and words contain only lowercase ASCII letters, digits, `_`, or `-`. No multi-dot or partial-wildcard selectors are accepted. Mapping entries accept only `signal`, `match`, and `prompt`. `match` maps payload field names to nonempty strings; all fields must match. An `agent.*` binding requires `handle` or `session`. A supplied prompt must be nonblank and is trimmed. An omitted signals field has no bindings; a supplied field must be a nonempty list, so null and `[]` are refused. Launch also validates event scope. See [team signal delivery](../guide/teams.md#send-events-to-the-responsible-role).
+
+### Smart compaction
+
+`smart-compact` accepts a nonnegative token count (`200k`, `120000`, `1m`), a percentage from `0%` through `100%`, or `off`. TOML profiles and team roles take strings, for example `smart-compact = "200k"`; Markdown agent, subagent, and role frontmatter also accepts bare token counts and `off`.
+
+Resolution follows the team role's TOML override, then the first setting in the seat's profile chain, then [`harness.smart_compact`](../guide/configuration.md#smart-compaction), whose default is `258k`. A Markdown role's override belongs to its generated seat profile. A supervised child uses its launch profile's namespace, normally the subagent table. An explicit `off` stops inheritance. Unlike `auto-compact`, this field controls RimZ's compaction policy, not the provider's native window.
 
 ### Idle compaction
 

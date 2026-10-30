@@ -372,6 +372,21 @@ pub enum LaunchPlacement {
 #[serde(transparent)]
 pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 
+impl ProfilesConfig {
+    /// The nearest declared value; explicit off values stop the walk. Markdown chains arrive
+    /// resolved, while TOML chains follow `agent` references within this table.
+    pub(crate) fn setting<T>(&self, name: &str, pick: impl Fn(&Profile) -> Option<T>) -> Option<T> {
+        let mut profile = self.0.get(name)?;
+        for _ in 0..self.0.len() {
+            if let Some(setting) = pick(profile) {
+                return Some(setting);
+            }
+            profile = self.0.get(&profile.agent)?;
+        }
+        None
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Isolation {
@@ -436,8 +451,9 @@ impl std::str::FromStr for Isolation {
 /// kind or another profile that resolves to one.
 /// Also deserialized from trusted repository TOML: a new deserializable field must enter
 /// `crate::trust::ExecutableProfile` with a hash test, be `#[serde(skip)]`, or shape no command
-/// at all (`budget` and `keep_warm` gate RimZ's own notices, `idle_compact` its compaction;
-/// `empty_dir` selects the cwd and consents to folder trust only on RimZ's clean empty root).
+/// at all (`budget` and `keep_warm` gate RimZ's own notices, `idle_compact` and `smart_compact`
+/// its compaction; `empty_dir` selects the cwd and consents to folder trust only on RimZ's
+/// clean empty root).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
@@ -503,6 +519,13 @@ pub struct Profile {
         skip_serializing_if = "Option::is_none"
     )]
     pub idle_compact: Option<super::IdleCompact>,
+    /// RimZ's compaction threshold; unset inherits up the `agent` chain, then the harness.
+    #[serde(
+        default,
+        rename = "smart-compact",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub smart_compact: Option<FlipCompact>,
     /// The agent's native auto-compaction window as a token count; unsupported
     /// adapters warn and launch without it. Invalid counts still refuse.
     #[serde(
@@ -776,6 +799,13 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub idle_compact: Option<super::IdleCompact>,
+    /// Override the smart-compaction threshold from this member's profile or the harness.
+    #[serde(
+        default,
+        rename = "smart-compact",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub smart_compact: Option<FlipCompact>,
     /// Keep-warm maximum and stage condition; each unset field inherits the team's, never the profile's.
     #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
     pub keep_warm: Option<super::KeepWarmPolicy>,

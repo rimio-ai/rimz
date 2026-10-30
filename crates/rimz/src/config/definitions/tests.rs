@@ -789,6 +789,98 @@ fn idle_compact_rides_definitions_and_role_overlays_with_inheritance() {
 }
 
 #[test]
+fn smart_compact_rides_definitions_roles_and_subagents_with_inheritance() {
+    let actual: Vec<_> = [
+        ("200k", "200000"),
+        ("70%", "70%"),
+        ("off", "off"),
+        ("false", "off"),
+        ("250000", "250000"),
+    ]
+    .map(|(raw, expected)| {
+        let root = team_fixture();
+        definition(
+            root.path(),
+            "agents/worker.md",
+            &format!("agent: pi\nsmart-compact: {raw}"),
+            "Craft.",
+        );
+        definition(
+            root.path(),
+            "agents/derived.md",
+            "agent: worker",
+            "Derived.",
+        );
+        definition(
+            root.path(),
+            "subagents/base.md",
+            &format!("agent: pi\nsmart-compact: {raw}"),
+            "Base.",
+        );
+        definition(root.path(), "subagents/child.md", "agent: base", "Child.");
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    smart-compact: 50k"),
+            "Pipeline.",
+        );
+        let loaded = load_checked(root.path());
+        let values: Vec<_> =
+            ["worker", "derived", "probe.lead", "probe.judge"]
+                .map(|name| {
+                    loaded.agent_profiles.0.get(name).map(|profile| {
+                        serde_json::to_value(profile).unwrap()["smart-compact"].clone()
+                    })
+                })
+                .into_iter()
+                .chain(["base", "child"].map(|name| {
+                    loaded.subagent_profiles.0.get(name).map(|profile| {
+                        serde_json::to_value(profile).unwrap()["smart-compact"].clone()
+                    })
+                }))
+                .collect();
+        (raw, expected, values)
+    })
+    .into();
+    let expected: Vec<_> = actual
+        .iter()
+        .map(|(raw, expected, _)| {
+            (
+                *raw,
+                *expected,
+                [
+                    *expected, *expected, *expected, "50000", *expected, *expected,
+                ]
+                .map(|value| Some(serde_json::json!(value)))
+                .to_vec(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn smart_compact_invalid_definitions_name_the_setting_and_grammar() {
+    let actual: Vec<_> = ["true", "2h", "-1", "101%", "nonsense"]
+        .map(|raw| {
+            let root = fixture();
+            definition(
+                root.path(),
+                "agents/bad.md",
+                &format!("agent: pi\nsmart-compact: {raw}"),
+                "Bad.",
+            );
+            let loaded = load_checked(root.path());
+            loaded
+                .errors
+                .iter()
+                .any(|error| error.message.contains("smart-compact takes"))
+        })
+        .into();
+    assert_eq!(actual, [true; 5]);
+}
+
+#[test]
 fn idle_compact_refuses_modes_durations_and_subagents() {
     for value in ["on", "true", "2h", "25m", "70%", "0"] {
         let root = team_fixture();

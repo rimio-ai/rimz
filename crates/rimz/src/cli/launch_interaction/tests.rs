@@ -275,6 +275,7 @@ fn team_launch_receipt_is_compact() {
                         owns: Vec::new(),
                         flip_compact: None,
                         idle_compact: None,
+                        smart_compact: None,
                         keep_warm: None,
                         role: "coder".to_owned(),
                         profile: "codex".to_owned(),

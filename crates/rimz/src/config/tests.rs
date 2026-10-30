@@ -6,6 +6,39 @@ use crate::ids::MuxName;
 use std::num::NonZeroU16;
 use tempfile::tempdir;
 
+#[test]
+fn smart_compact_toml_fields_round_trip_and_reject_invalid_values() {
+    let actual: Vec<_> = ["200k", "70%", "off"]
+        .map(|raw| {
+            let profile: Profile =
+                toml::from_str(&format!("agent = 'pi'\nsmart-compact = '{raw}'")).unwrap();
+            let role: RoleBinding = toml::from_str(&format!(
+                "role = 'lead'\nprofile = 'pi'\nsmart-compact = '{raw}'"
+            ))
+            .unwrap();
+            let profile = serde_json::to_value(profile).unwrap();
+            let role = serde_json::to_value(role).unwrap();
+            (
+                profile["smart-compact"].clone(),
+                role["smart-compact"].clone(),
+            )
+        })
+        .into();
+    assert_eq!(
+        actual,
+        ["200000", "70%", "off"].map(|raw| (serde_json::json!(raw), serde_json::json!(raw)))
+    );
+    for raw in ["-1", "101%", "true", "2h"] {
+        let result = toml::from_str::<Profile>(&format!("agent = 'pi'\nsmart-compact = '{raw}'"));
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("smart-compact")),
+            "{raw}: {result:?}"
+        );
+    }
+}
+
 mod pack_failures {
     use super::*;
 

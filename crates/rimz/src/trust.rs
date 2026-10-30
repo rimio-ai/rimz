@@ -979,7 +979,8 @@ struct ExecutableTeam<'a> {
     append_system_prompt_files: Vec<String>,
 }
 
-// `owns` and `flip-compact` deliberately stay outside the executable projection.
+// `owns`, `flip-compact`, and profile/role `smart_compact` deliberately stay outside the
+// executable projection: they shape RimZ policy, not a launched command.
 #[derive(Serialize)]
 struct ExecutableRole<'a> {
     role: &'a str,

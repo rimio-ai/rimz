@@ -6,6 +6,63 @@ use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
+fn smart_compact_resolves_role_profile_scope_and_explicit_off() {
+    use crate::store::message::AutoCompact;
+    let profiles: ProfilesConfig = toml::from_str(
+        "[base]\nagent = 'claude'\nsmart-compact = '200k'\n\
+         [worker]\nagent = 'base'\n[off]\nagent = 'base'\nsmart-compact = 'off'\n\
+         [cycle]\nagent = 'cycle'\n[solo]\nagent = 'claude'\nsmart-compact = '70%'",
+    )
+    .unwrap();
+    let children: ProfilesConfig =
+        toml::from_str("[base]\nagent = 'claude'\nsmart-compact = '50k'\n[worker]\nagent = 'base'")
+            .unwrap();
+    let teams: TeamsConfig = toml::from_str(
+        "[forge]\nroles = [\
+         {role = 'lead', profile = 'worker', smart-compact = '80%'},\
+         {role = 'quiet', profile = 'worker', smart-compact = 'off'}]",
+    )
+    .unwrap();
+    let harness = crate::config::HarnessConfig::default();
+    let actual: Vec<_> = [
+        (None, "worker", ProfileScope::Agents),
+        (Some("lead"), "worker", ProfileScope::Agents),
+        (Some("quiet"), "worker", ProfileScope::Agents),
+        (None, "off", ProfileScope::Agents),
+        (None, "worker", ProfileScope::Subagents),
+        (None, "solo", ProfileScope::Subagents),
+        (None, "missing", ProfileScope::Agents),
+        (None, "cycle", ProfileScope::Agents),
+    ]
+    .map(|(role, profile, scope)| {
+        let seat = SmartCompactSeat {
+            team: Some("forge"),
+            role,
+            profile: Some(profile),
+            scope,
+        };
+        (
+            seat.resolve(&teams, &profiles, &children, &harness),
+            seat.explicit(&teams, &profiles, &children).is_some(),
+        )
+    })
+    .into();
+    assert_eq!(
+        actual,
+        [
+            (Some(AutoCompact::Tokens(200_000)), true),
+            (Some(AutoCompact::Percent(80)), true),
+            (None, true),
+            (None, true),
+            (Some(AutoCompact::Tokens(50_000)), true),
+            (Some(AutoCompact::Percent(70)), true),
+            (harness.smart_compact, false),
+            (harness.smart_compact, false),
+        ]
+    );
+}
+
+#[test]
 fn failed_profile_gate_follows_the_supplied_table_without_replacing_resolution_errors() {
     let root = tempdir().unwrap();
     let mut launch = super::load_with_roots(
@@ -1007,6 +1064,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         model_reminder: None,
         keep_warm: None,
         idle_compact: None,
+        smart_compact: None,
         mode: None,
         model: None,
         effort: None,
@@ -1062,6 +1120,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         owns: Vec::new(),
         flip_compact: None,
         idle_compact: None,
+        smart_compact: None,
         keep_warm: None,
         role: role.to_owned(),
         profile: profile.to_owned(),
