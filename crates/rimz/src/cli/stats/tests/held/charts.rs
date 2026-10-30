@@ -24,6 +24,41 @@ fn forecast_fixture(spent: f64, forecast: f64, peak: f64) -> (Stats, TabAssists)
 }
 
 #[test]
+fn dashboard_chart_titles_keep_the_comparison_figures_at_narrow_widths() {
+    let (mut stats, assists) = fixture();
+    for width in [60, 85, 119] {
+        for (tab, comparison) in [
+            (Window::Today, "~$1,265 by midnight · ░ yesterday $1,293"),
+            (Window::Week, "↓11% vs prior 7 days"),
+            (Window::Month, "↑186% vs prior 30 days"),
+        ] {
+            let output = strip_ansi(&frame(&stats, &assists, tab, width, None).text);
+            let title = output
+                .lines()
+                .find(|line| line.contains("Spend per"))
+                .unwrap();
+            assert!(title.ends_with(comparison), "{width} {tab:?}: {title}");
+            if tab == Window::Today {
+                assert_eq!(title.contains("today $1,024 so far · "), width == 119);
+            }
+        }
+    }
+    stats.chart.weeks = BTreeMap::from([(
+        TODAY,
+        BTreeMap::from([("opus-5.5".into(), 52_000_000_000_000_000.0)]),
+    )]);
+    let output = strip_ansi(&frame(&stats, &assists, Window::Year, 60, None).text);
+    let title = output
+        .lines()
+        .find(|line| line.contains("Spend per"))
+        .unwrap();
+    assert!(
+        title.ends_with("┄ avg $1,040,000,000,000,000 a week"),
+        "{title}"
+    );
+}
+
+#[test]
 fn dashboard_plot_has_seven_rows_and_each_ranges_bar_count() {
     let (mut stats, assists) = fixture();
     stats.chart.weeks = (0..52)
@@ -215,7 +250,7 @@ fn dashboard_forecast_preserves_spent_eighths_over_its_background() {
 }
 
 #[test]
-fn dashboard_without_color_omits_marks_and_scales_only_drawn_spend() {
+fn dashboard_without_color_keeps_the_ghost_but_omits_the_forecast_extension() {
     let (stats, assists) = forecast_fixture(1.0, 200.0, 0.0);
     let frames = [Window::Today, Window::Week].map(|tab| {
         strip_ansi(
@@ -241,23 +276,28 @@ fn dashboard_without_color_omits_marks_and_scales_only_drawn_spend() {
                 .collect::<Vec<_>>(),
         )
     });
-    assert_eq!(
-        plots,
-        [
-            ("$1.00".to_owned(), vec!["███".to_owned(); 7]),
-            ("$1.00".to_owned(), vec!["█████████████".to_owned(); 7]),
-        ],
+    assert_eq!(plots[0].0, "$1,500", "{frames:?}");
+    assert!(
+        plots[0].1.iter().all(|row| row.ends_with("░░░")),
+        "{frames:?}"
+    );
+    assert_eq!(plots[1].0, "$1.00", "{frames:?}");
+    assert!(
+        plots[1]
+            .1
+            .iter()
+            .all(|row| row.contains('█') && !row.contains('░')),
         "{frames:?}"
     );
     assert!(
-        frames[0].contains("~$200 by midnight · yesterday"),
+        frames[0].contains("~$200 by midnight · ░ yesterday"),
         "{}",
         frames[0]
     );
 }
 
 #[test]
-fn dashboard_yesterday_overlay_shares_a_partial_spend_cell_as_background() {
+fn dashboard_yesterday_ghost_never_tints_a_partial_spend_cell() {
     let (mut stats, assists) = fixture();
     stats.chart.hours = BTreeMap::from([
         (TODAY * 24, BTreeMap::from([("opus-5.5".into(), 1.0)])),
@@ -268,14 +308,17 @@ fn dashboard_yesterday_overlay_shares_a_partial_spend_cell_as_background() {
         ),
     ]);
     let rows = plot(&stats, &assists, Window::Today, 119);
-    let style = render::palette::model_styles(&["claude"], |_, _| true).0[0]
-        .mark
-        .bg_color(render::palette::faint().get_fg_color());
+    let style = render::palette::model_styles(&["claude"], |_, _| true).0[0].mark;
     assert!(rows[6].contains(&format!("{style}▁")), "{}", rows[6]);
+    assert!(!rows[6].contains(&format!(
+        "{}▁",
+        style.bg_color(render::palette::muted().get_fg_color())
+    )));
+    assert!(!rows.iter().any(|row| row.contains('░')), "{rows:?}");
 }
 
 #[test]
-fn dashboard_yesterday_overlay_is_faint_above_actual_and_in_future_hours() {
+fn dashboard_yesterday_ghost_uses_whole_muted_cells_above_spend_and_in_future_hours() {
     let (mut stats, assists) = fixture();
     stats.chart.hours.clear();
     for (ago, hour, usd) in [
@@ -291,17 +334,17 @@ fn dashboard_yesterday_overlay_is_faint_above_actual_and_in_future_hours() {
         );
     }
     let rows = plot(&stats, &assists, Window::Today, 119);
-    let faint = render::paint(render::palette::faint(), "███");
+    let ghost = render::paint(render::palette::muted(), "░░░");
     let model = render::paint(
         render::palette::model_styles(&["claude"], |_, _| true).0[0].mark,
         "███",
     );
     let gap = render::paint(render::palette::faint(), " ");
     assert!(
-        rows[0].contains(&format!("{faint}{gap}{model}")),
+        rows[0].contains(&format!("{ghost}{gap}{model}")),
         "{:?}",
         rows[0]
     );
-    assert!(rows[0].ends_with(&faint), "{:?}", rows[0]);
-    assert_eq!(rows.last().unwrap().matches(&faint).count(), 1);
+    assert!(rows[0].ends_with(&ghost), "{:?}", rows[0]);
+    assert_eq!(rows.last().unwrap().matches(&ghost).count(), 1);
 }

@@ -150,7 +150,7 @@ impl Dashboard<'_> {
             section(&mut lines, vec![hint]);
             return lines;
         }
-        if step < 6 {
+        if step < 3 {
             section(&mut lines, self.heatmap(width));
         }
         let tab_labels = Window::TABS.map(|tab| {
@@ -190,8 +190,8 @@ impl Dashboard<'_> {
             7 => 4,
             _ => 2,
         };
-        let limit = if step >= 4 { 2 } else { 4 };
-        let models = self.model_rows(active, limit);
+        let limit = if step >= 5 { 2 } else { 4 };
+        let models = self.model_rows(active, if step >= 5 { 2 } else { 7 });
         section(
             &mut lines,
             self.chart_lines(active, width, chart_height, &models, styles),
@@ -211,8 +211,8 @@ impl Dashboard<'_> {
                     )
                 })
                 .collect(),
-            limit,
-            false,
+            3,
+            true,
         );
         let half = if width >= 112 { 54 } else { width };
         let totals = role_rows
@@ -228,18 +228,23 @@ impl Dashboard<'_> {
         );
         let [agents, subagents, teams] =
             role_rows.map(|rows| fold(rows.into_iter().collect(), limit, true));
-        if step < 3 {
+        if step < 6 && totals[2] > 0.0 {
+            section(&mut lines, self.team_lines(&teams, width));
+        }
+        if step < 4 {
             section(
                 &mut lines,
                 pair(
-                    self.profile_lines(RoleView::Agents, &agents, half),
-                    self.profile_lines(RoleView::Subagents, &subagents, half),
+                    self.profile_lines(RoleView::Agents, &agents, half, render::palette::meta()),
+                    self.profile_lines(
+                        RoleView::Subagents,
+                        &subagents,
+                        half,
+                        render::palette::cool(),
+                    ),
                     width,
                 ),
             );
-        }
-        if step < 5 && totals[2] > 0.0 {
-            section(&mut lines, self.team_lines(&teams, width));
         }
         section(&mut lines, self.assist_lines(active, width, step >= 2));
         section(&mut lines, vec![hint]);
@@ -329,6 +334,7 @@ impl Dashboard<'_> {
             "Models",
             columns,
             ["HIT", if show_rate { "TOK/S" } else { "" }, "TOKENS"],
+            12,
         )];
         let total = active.select(&self.stats.total).usd;
         for row in rows {
@@ -345,22 +351,37 @@ impl Dashboard<'_> {
                     .tokens_per_sec()
                     .map_or_else(|| "–".into(), |rate| rate.to_string())
             };
-            lines.push(format!(
-                "{}{}{}{}",
-                self.spend_row(&name, row.value.spend.usd, total, columns, style, "█"),
-                pad_left(&hit(&row.value.spend), 13),
+            let cache_hit = hit(&row.value.spend, row.key.is_some());
+            let metrics = format!(
+                "{}{}{}",
+                pad_left(&cache_hit, 13),
                 if show_rate {
                     pad_left(&rate, 12)
                 } else {
                     String::new()
                 },
                 pad_left(&fmt_tokens(row.value.spend.display_tokens()), 8)
+            );
+            lines.push(format!(
+                "{}{}",
+                self.spend_row(&name, row, total, columns, (style, style), "█"),
+                if row.key.is_none() {
+                    render::paint(render::palette::muted(), &metrics)
+                } else {
+                    metrics
+                },
             ));
         }
         lines
     }
 
-    fn profile_lines(&self, role: RoleView, rows: &[Row], width: usize) -> Vec<String> {
+    fn profile_lines(
+        &self,
+        role: RoleView,
+        rows: &[Row],
+        width: usize,
+        style: anstyle::Style,
+    ) -> Vec<String> {
         if rows.is_empty() {
             return Vec::new();
         }
@@ -378,10 +399,10 @@ impl Dashboard<'_> {
         lines.extend(rows.iter().map(|row| {
             self.spend_row(
                 row.name(),
-                row.value.spend.usd,
+                row,
                 total,
                 columns,
-                render::palette::muted(),
+                (style, render::palette::body()),
                 "●",
             )
         }));
@@ -390,26 +411,42 @@ impl Dashboard<'_> {
 
     fn team_lines(&self, rows: &[Row], width: usize) -> Vec<String> {
         let total = rows.iter().map(|row| row.value.spend.usd).sum();
-        let columns = SpendColumns::new(rows, width.saturating_sub(63).min(48));
+        let messages_width = rows
+            .iter()
+            .map(|row| display_width(&panel::messages_label(&row.value)))
+            .max()
+            .unwrap_or(0)
+            .max(panel::MESSAGES_HEADER.len())
+            + 2;
+        let columns = SpendColumns::new(rows, width.saturating_sub(51 + messages_width).min(48));
         let mut lines = vec![columns_header(
             &total_header("Teams", total, columns.dollars),
             columns,
-            ["AGENT-TIME", "MESSAGES", "TOKENS"],
+            ["AGENT-TIME", panel::MESSAGES_HEADER, "TOKENS"],
+            messages_width,
         )];
         for row in rows {
+            let metrics = format!(
+                "{}{}{}",
+                pad_left(&active_duration(row.value.effort.active_ms / 1_000), 13),
+                pad_left(&panel::messages_label(&row.value), messages_width),
+                pad_left(&fmt_tokens(row.value.spend.display_tokens()), 8)
+            );
             lines.push(format!(
-                "{}{}{}{}",
+                "{}{}",
                 self.spend_row(
                     row.name(),
-                    row.value.spend.usd,
+                    row,
                     total,
                     columns,
-                    render::palette::muted(),
+                    (render::palette::accent(), render::palette::body()),
                     "●"
                 ),
-                pad_left(&active_duration(row.value.effort.active_ms / 1_000), 13),
-                pad_left(&panel::messages_label(&row.value), 12),
-                pad_left(&fmt_tokens(row.value.spend.display_tokens()), 8)
+                if row.key.is_none() {
+                    render::paint(render::palette::muted(), &metrics)
+                } else {
+                    metrics
+                }
             ));
         }
         lines
@@ -418,35 +455,45 @@ impl Dashboard<'_> {
     fn spend_row(
         &self,
         name: &str,
-        usd: f64,
+        row: &Row,
         total: f64,
         columns: SpendColumns,
-        style: anstyle::Style,
+        (style, name_style): (anstyle::Style, anstyle::Style),
         marker: &str,
     ) -> String {
         let SpendColumns { dollars, bar } = columns;
+        let usd = row.value.spend.usd;
         let share = ratio(usd, total);
         let filled = (share * bar as f64).round().clamp(0.0, bar as f64) as usize;
-        format!(
+        let paint = |style, text: &str| {
+            if row.key.is_none() {
+                text.to_owned()
+            } else {
+                render::paint(style, text)
+            }
+        };
+        let line = format!(
             "{} {}{}  {}{} {}",
-            render::paint(style, marker),
-            pad_to(&render::paint(style, &ellipsize(name, 14)), 14),
-            pad_left(
-                &render::paint(render::palette::money(), &fmt_usd(usd)),
-                dollars
-            ),
-            render::paint(style, &self.glyphs.bar_filled.repeat(filled)),
-            render::paint(
+            paint(style, marker),
+            pad_to(&paint(name_style, &ellipsize(name, 14)), 14),
+            pad_left(&paint(render::palette::money(), &fmt_usd(usd)), dollars),
+            paint(style, &self.glyphs.bar_filled.repeat(filled)),
+            paint(
                 render::palette::faint(),
                 &self.glyphs.bar_track.repeat(bar - filled)
             ),
             pad_left(&percent(share), 4)
-        )
+        );
+        if row.key.is_none() {
+            render::paint(render::palette::muted(), &line)
+        } else {
+            line
+        }
     }
 
     fn provider_lines(&self, rows: &[Row], active: Window, width: usize) -> Vec<String> {
         let total = active.select(&self.stats.total).usd;
-        let mut lines = vec![render::paint(render::palette::header(), "Providers")];
+        let mut lines = vec![render::paint(title_style(), "Providers")];
         let parts: Vec<_> = rows
             .iter()
             .map(|row| {
@@ -475,19 +522,31 @@ impl Dashboard<'_> {
                 percent(share)
             };
             let cache_hit = if share >= 0.01 {
-                format!("{} hit", hit(&row.value.spend))
+                let hit = hit(&row.value.spend, kind.is_some());
+                format!("{hit} hit")
             } else {
                 String::new()
             };
-            lines.push(format!(
+            let name = ellipsize(&name, 8);
+            let (marker, name) = if kind.is_some() {
+                (render::paint(style, "█"), render::paint(style, &name))
+            } else {
+                ("█".into(), name)
+            };
+            let line = format!(
                 "{} {}{}{}{}{} {noun}",
-                render::paint(style, "█"),
-                pad_to(&render::paint(style, &ellipsize(&name, 8)), 8),
+                marker,
+                pad_to(&name, 8),
                 pad_left(&fmt_usd(row.value.spend.usd), 10),
                 pad_left(&share_label, 6),
                 pad_left(&cache_hit, 10),
                 pad_left(&group_thousands(u64::from(sessions)), 8)
-            ));
+            );
+            lines.push(if kind.is_none() {
+                render::paint(render::palette::muted(), &line)
+            } else {
+                line
+            });
         }
         lines
     }
@@ -499,7 +558,7 @@ impl Dashboard<'_> {
         let glyphs = ["█", "▒", "░"];
         let styles = [
             render::palette::accent(),
-            render::palette::muted(),
+            render::palette::meta(),
             render::palette::faint(),
         ];
         let mut title = "Where it went".to_owned();
@@ -513,7 +572,7 @@ impl Dashboard<'_> {
                 since.strftime("%b %d")
             ));
         }
-        let mut lines = vec![render::paint(render::palette::header(), &title)];
+        let mut lines = vec![render::paint(title_style(), &title)];
         let parts: Vec<_> = (0..values.len())
             .map(|i| (values[i], glyphs[i], styles[i]))
             .collect();
@@ -535,13 +594,7 @@ impl Dashboard<'_> {
                 )
             })
             .collect::<Vec<_>>();
-        for pair in entries.chunks(2) {
-            lines.push(if let Some(right) = pair.get(1) {
-                format!("{}  {}", pad_to(&pair[0], 25), right)
-            } else {
-                pair[0].clone()
-            });
-        }
+        lines.extend(entries);
         lines
     }
 
@@ -553,6 +606,7 @@ impl Dashboard<'_> {
             self.today,
             weeks_for_terminal(width),
             self.dollars,
+            title_style(),
         );
         lines.retain(|line| !line.is_empty());
         if let Some(header) = lines.first_mut() {
@@ -597,7 +651,7 @@ impl Dashboard<'_> {
         if compact {
             return vec![format!(
                 "{}  {} kind{} · rimz stats --assists for the timeline",
-                render::paint(render::palette::header(), "Assists"),
+                render::paint(title_style(), "Assists"),
                 entries.len(),
                 if entries.len() == 1 { "" } else { "s" }
             )];
@@ -614,7 +668,13 @@ impl Dashboard<'_> {
             ));
         }
         let mut lines = Vec::new();
-        assists::panel_lines(&mut lines, &self.assists.tabs[index], width, &title);
+        assists::panel_lines(
+            &mut lines,
+            &self.assists.tabs[index],
+            width,
+            &title,
+            title_style(),
+        );
         lines
     }
 
@@ -622,7 +682,7 @@ impl Dashboard<'_> {
         let selected = active.select(&self.stats.total).usd;
         if active == Window::Today {
             return format!(
-                "today {} so far · ~{} by midnight · yesterday {}",
+                "today {} so far · ~{} by midnight · ░ yesterday {}",
                 fmt_usd(selected),
                 fmt_usd(self.forecast()),
                 fmt_usd(
@@ -633,24 +693,15 @@ impl Dashboard<'_> {
                 )
             );
         }
-        let average = fmt_usd(panel::per_active_day(
-            &self.stats.by_day,
-            self.today,
-            active,
-        ));
-        if active == Window::Year {
-            return format!("{average} per active day");
-        }
-        let trend = panel::spend_trend(&self.stats.by_day, self.today, active)
+        panel::spend_trend(&self.stats.by_day, self.today, active)
             .map(|trend| {
                 format!(
-                    "{} vs prior {} days · ",
+                    "{} vs prior {} days",
                     panel::trend_label(trend),
                     active.span_days()
                 )
             })
-            .unwrap_or_default();
-        format!("{trend}{average} a day")
+            .unwrap_or_default()
     }
 
     fn forecast(&self) -> f64 {
@@ -712,7 +763,7 @@ impl Dashboard<'_> {
         let yesterday: Vec<_> = dates
             .iter()
             .map(|hour| {
-                if hourly && self.color {
+                if hourly {
                     data.get(&(hour - 24))
                         .map_or(0.0, |cells| cells.values().sum::<f64>())
                 } else {
@@ -733,26 +784,21 @@ impl Dashboard<'_> {
                 totals.last().copied().unwrap_or(0.0) + extension,
             ))
             .fold(0.0, f64::max);
-        let typical = if weekly || hourly {
+        let average = if hourly {
             0.0
         } else {
-            self.stats
-                .by_day
-                .range((self.today - 30)..self.today)
-                .map(|(_, day)| day.usd)
-                .sum::<f64>()
-                / 30.0
+            totals.iter().sum::<f64>() / count as f64
         };
-        let ceiling = round_ceiling(max.max(typical));
+        let ceiling = round_ceiling(max);
         // The y labels' convention: plot row k from the bottom (k counted from 1) stands for
         // k/height of the ceiling, so the line takes the row nearest the mean, never below row 1.
-        let typical_row = (typical > 0.0)
-            .then(|| ((typical / ceiling * height as f64).round() as usize).clamp(1, height) - 1);
-        // Keep the typical label while daily bars can remain at least two columns wide.
-        let figure = typical_row.map(|_| fmt_usd(typical));
+        let average_row = (average > 0.0)
+            .then(|| ((average / ceiling * height as f64).round() as usize).clamp(1, height) - 1);
+        // Keep the average label while daily bars can remain at least two columns wide.
+        let figure = average_row.filter(|_| !weekly).map(|_| fmt_usd(average));
         let reserve = figure.as_deref().map_or(0, |figure| {
             let short = 2 + display_width(figure);
-            let worded = short + "typical ".len();
+            let worded = short + "avg ".len();
             if (width.saturating_sub(10 + worded) + 1) / count >= 3 {
                 worded
             } else {
@@ -769,7 +815,7 @@ impl Dashboard<'_> {
         let gap = stride - bar_width;
         let plot_width = count * stride - gap;
         let caption = figure.map(|figure| {
-            let worded = format!("typical {figure}");
+            let worded = format!("avg {figure}");
             if 10 + plot_width + 2 + display_width(&worded) <= width {
                 worded
             } else {
@@ -782,22 +828,34 @@ impl Dashboard<'_> {
             Window::Month => "Spend per day · last 30 days".into(),
             Window::Year => format!("Spend per week · last {count} weeks"),
         };
-        let right = self.chart_title(active);
+        let mut right = if weekly {
+            if average > 0.0 {
+                format!("┄ avg {} a week", fmt_usd(average))
+            } else {
+                String::new()
+            }
+        } else {
+            self.chart_title(active)
+        };
+        if hourly
+            && display_width(&left) + 2 + display_width(&right) > width
+            && let Some((_, comparison)) = right.split_once(" · ")
+        {
+            right = comparison.to_owned();
+        }
+        let left = clip(&left, width.saturating_sub(display_width(&right) + 2));
         let mut lines = vec![format!(
             "{}{}",
             pad_to(
-                &render::paint(render::palette::header(), &left),
-                width
-                    .saturating_sub(display_width(&right))
-                    .max(display_width(&left) + 2)
+                &render::paint(title_style(), &left),
+                width.saturating_sub(display_width(&right))
             ),
             render::paint(render::palette::muted(), &right)
         )];
         let bars = dates
             .iter()
             .zip(&totals)
-            .zip(&yesterday)
-            .map(|((day, total), yesterday)| {
+            .map(|(day, total)| {
                 let extra = if *day == last_day { extension } else { 0.0 };
                 let projected = *total + extra;
                 if projected <= 0.0 {
@@ -843,7 +901,6 @@ impl Dashboard<'_> {
                     )
                 };
                 let forecast_style = styles.get(top_id).forecast;
-                let overlay_units = eighths(*yesterday, ceiling, height);
                 (0..units.div_ceil(8))
                     .map(|cell| {
                         let projected = (units - cell * 8).min(8);
@@ -856,8 +913,6 @@ impl Dashboard<'_> {
                         let style = styles.get(segment_at(&segments, at)).mark;
                         let background = if projected > spent {
                             forecast_style.get_fg_color()
-                        } else if overlay_units.saturating_sub(cell * 8).min(8) > spent {
-                            render::palette::faint().get_fg_color()
                         } else {
                             None
                         };
@@ -875,21 +930,21 @@ impl Dashboard<'_> {
                 String::new()
             };
             let mut line = render::paint(render::palette::muted(), &format!("{label:>7} ┤ "));
-            let baseline = if typical_row == Some(row) { "┄" } else { " " };
+            let baseline = if average_row == Some(row) { "┄" } else { " " };
             for (index, bar) in bars.iter().enumerate() {
                 if let Some(&(glyph, style)) = bar.get(row) {
                     line.push_str(&render::paint(style, &glyph.to_string().repeat(bar_width)));
                 } else {
-                    let units = eighths(yesterday[index], ceiling, height)
-                        .saturating_sub(row * 8)
-                        .min(8);
-                    let glyph = if units > 0 {
-                        BLOCKS[units - 1].to_string()
-                    } else {
-                        baseline.into()
-                    };
+                    let ghost_height =
+                        (yesterday[index] / ceiling * height as f64).round() as usize;
+                    let ghost = row < ghost_height;
+                    let glyph = if ghost { "░" } else { baseline };
                     line.push_str(&render::paint(
-                        render::palette::faint(),
+                        if ghost {
+                            render::palette::muted()
+                        } else {
+                            render::palette::faint()
+                        },
                         &glyph.repeat(bar_width),
                     ));
                 }
@@ -900,7 +955,7 @@ impl Dashboard<'_> {
                     ));
                 }
             }
-            if let Some(caption) = caption.as_deref().filter(|_| typical_row == Some(row)) {
+            if let Some(caption) = caption.as_deref().filter(|_| average_row == Some(row)) {
                 line.push_str(&render::paint(render::palette::faint(), "┄"));
                 line.push(' ');
                 line.push_str(&render::paint(render::palette::muted(), caption));
@@ -1052,39 +1107,53 @@ fn percent(share: f64) -> String {
     }
 }
 
-fn hit(spend: &SpendWindow) -> String {
+fn hit(spend: &SpendWindow, color: bool) -> String {
     use rimz::agents::CacheHealth;
     let Some(hit) = spend.cache_hit_percent() else {
         return "–".into();
     };
+    let label = format!("{hit}%");
+    if !color {
+        return label;
+    }
     let style = match CacheHealth::classify(hit) {
         CacheHealth::Good => render::palette::good(),
         CacheHealth::Caution => render::palette::warn(),
         CacheHealth::Alarm => render::palette::alarm(),
     };
-    render::paint(style, &format!("{hit}%"))
+    render::paint(style, &label)
+}
+
+/// Dashboard section titles read as content, unlike the muted headers of other commands.
+fn title_style() -> anstyle::Style {
+    render::palette::body().bold()
 }
 
 fn total_header(label: &str, usd: f64, dollars: usize) -> String {
     format!(
         "{}{}",
-        pad_to(&render::paint(render::palette::header(), label), 15),
+        pad_to(&render::paint(title_style(), label), 15),
         pad_left(&fmt_usd(usd), dollars + 1)
     )
 }
 
-fn columns_header(label: &str, spend: SpendColumns, columns: [&str; 3]) -> String {
+fn columns_header(
+    label: &str,
+    spend: SpendColumns,
+    columns: [&str; 3],
+    middle_width: usize,
+) -> String {
     format!(
         "{}{}{}{}",
         pad_to(
-            &render::paint(render::palette::header(), label),
+            &render::paint(title_style(), label),
             18 + spend.dollars + spend.bar + 5
         ),
         pad_left(columns[0], 13),
         if columns[1].is_empty() {
             String::new()
         } else {
-            pad_left(columns[1], 12)
+            pad_left(columns[1], middle_width)
         },
         pad_left(columns[2], 8)
     )

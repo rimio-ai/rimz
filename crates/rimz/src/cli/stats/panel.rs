@@ -356,7 +356,14 @@ pub(super) fn render_spend(
     if role.is_none() {
         lines.push(String::new());
         let weeks = weeks_for_terminal(render::terminal_columns(80));
-        let grid = heatmap_lines(&mut lines, stats, today_day, weeks, dollars);
+        let grid = heatmap_lines(
+            &mut lines,
+            stats,
+            today_day,
+            weeks,
+            dollars,
+            render::palette::meta(),
+        );
         let summary = grid_activity_summary(&stats.by_day, &grid);
         lines.extend(
             render::wrap_words(&summary, COLUMN_EDGES[3] - 2)
@@ -509,7 +516,7 @@ fn spend_section(
             " {:>11}{}",
             "AGENT-TIME",
             if role == RoleView::Teams {
-                format!(" {:>messages_width$}", "MESSAGES")
+                format!(" {:>messages_width$}", MESSAGES_HEADER)
             } else {
                 String::new()
             }
@@ -614,11 +621,13 @@ fn spend_section(
     true
 }
 
+pub(super) const MESSAGES_HEADER: &str = "MSGS (YOU)";
+
 pub(super) fn messages_label(row: &RoleWindow) -> String {
     match (row.messages(), row.effort.from_user) {
         (0, _) => "-".into(),
         (total, 0) => total.to_string(),
-        (total, from_user) => format!("{total} ({from_user} you)"),
+        (total, from_user) => format!("{total} ({from_user})"),
     }
 }
 
@@ -707,6 +716,7 @@ pub(super) fn heatmap_lines(
     today_day: i64,
     weeks: usize,
     dollars: bool,
+    title: anstyle::Style,
 ) -> Grid {
     let grid = Grid::build(&stats.by_day, today_day, weeks, dollars);
     let header = if dollars {
@@ -714,10 +724,7 @@ pub(super) fn heatmap_lines(
     } else {
         "Token activity"
     };
-    lines.push(format!(
-        "  {}",
-        render::paint(render::palette::meta(), header)
-    ));
+    lines.push(format!("  {}", render::paint(title, header)));
     lines.push(String::new());
     lines.push(render::paint(render::palette::muted(), &month_row(&grid)));
 
