@@ -26,6 +26,11 @@ pub(crate) fn canonical_tool_name(name: &str) -> &str {
 }
 
 /// Parsed definition tools, rendered for the final launch provider.
+///
+/// Restriction text inside `Base(...)` is dropped at parse: only the bases and the `Agent(...)`
+/// type list reach a launch, and `restrictions` only records which bases carried one, for the
+/// notice that says it was dropped. A pack update's widening review compares those two lists
+/// alone, so a restriction that changes grants nothing it can see.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolSet {
     bases: Vec<String>,
