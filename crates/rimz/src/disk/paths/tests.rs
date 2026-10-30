@@ -2,6 +2,31 @@ use super::*;
 use crate::ids::WorkspaceId;
 
 #[test]
+fn is_under_root_accepts_linked_and_resolved_paths_and_missing_lexical_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    let link = dir.path().join("link");
+    let real_root = real.join("empty");
+    let linked_root = link.join("empty");
+    let real_child = real_root.join("child");
+    let linked_child = linked_root.join("child");
+    fs::create_dir_all(&real_child).unwrap();
+    fs::create_dir(real.join("sibling")).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    for root in [&linked_root, &real_root] {
+        for path in [&real_child, &linked_child] {
+            assert!(is_under_root(path, root), "{path:?} is under {root:?}");
+        }
+        assert!(!is_under_root(&real.join("sibling"), root));
+        assert!(!is_under_root(&link.join("sibling"), root));
+    }
+    let missing = dir.path().join("missing");
+    assert!(is_under_root(&missing.join("child"), &missing));
+    assert!(!is_under_root(&real_child, &missing));
+}
+
+#[test]
 fn explicit_home_checkpoints_bind_only_to_the_supplied_runtime() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");

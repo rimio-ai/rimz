@@ -889,11 +889,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let sandbox =
         if let (Some(bwrap), AgentProcessStage::Ready(process)) = (inputs.bwrap, &mut stage) {
             let empty_root = inputs.state.empty_dir_root();
-            let in_empty_root = inputs.cwd.starts_with(&empty_root)
-                || matches!(
-                    (inputs.cwd.canonicalize(), empty_root.canonicalize()),
-                    (Ok(cwd), Ok(root)) if cwd.starts_with(&root)
-                );
+            let in_empty_root = crate::disk::paths::is_under_root(inputs.cwd, &empty_root);
             let checkout = if in_empty_root {
                 None
             } else {

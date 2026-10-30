@@ -1238,7 +1238,8 @@ allowed-dependencies = [
 # SpendingHistoryPaths and exact-mode publication/locking share account-history disk mechanics (+16).
 # The cursor-coupled ledger accessors become migration-only legacy accessors (+0).
 # atomic::sync_tree makes staged Git trees durable before entry publication (+1).
-surface-budget = 315
+# paths::is_under_root shares empty-root containment across preflights and sandbox planning (+1).
+surface-budget = 316
 
 [[verdict]]
 kind = "item"
@@ -9732,6 +9733,11 @@ reason = "Machine trust and diagnostics locate the empty root through the classe
 kind = "item"
 key = "disk::paths::empty_dir_root_under"
 reason = "Machine GC and StatePaths resolve the empty root under the same explicit home."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::is_under_root"
+reason = "Folder-trust preflights and sandbox planning share lexical-or-canonical empty-root containment."
 
 [[verdict]]
 kind = "item"

@@ -54,23 +54,50 @@ fn empty_dir_fix_keeps_non_grantable_reason_and_prompt() {
 
 #[test]
 fn empty_dir_launch_refusal_names_the_machine_wide_grant() {
+    if std::env::var_os("RIMZ_TEST_LAUNCH_DIR_LINKED_HOME").is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        let link = dir.path().join("link");
+        std::fs::create_dir_all(real.join("empty/child")).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "agents::folder_trust::tests::empty_dir_launch_refusal_names_the_machine_wide_grant",
+                "--nocapture",
+            ])
+            .env("RIMZ_HOME", &link)
+            .env("RIMZ_TEST_LAUNCH_DIR_LINKED_HOME", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let login_env = BTreeMap::from([(
         "RIMZ_CLAUDE_GLOBAL_CONFIG".into(),
         dir.path().join(".claude.json").display().to_string(),
     )]);
-    let error = crate::agents::preflight_launch_dir(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        &crate::disk::paths::empty_dir_root().join("child"),
-        None,
-        &login_env,
-        crate::agents::LaunchDirMode::Supervised,
-    )
-    .unwrap_err();
-    let crate::agents::LaunchDirRefusal::Untrusted(refusal) = error else {
-        panic!("expected an undecided folder, got {error:?}");
-    };
-    assert_eq!(refusal.fix, "run `rimz trust grant --empty-dir`");
+    let cwd = crate::disk::paths::empty_dir_root().join("child");
+    let resolved = cwd.canonicalize().unwrap();
+    for cwd in [&cwd, &resolved] {
+        let error = crate::agents::preflight_launch_dir(
+            crate::agents::definition_by_kind("claude").unwrap(),
+            cwd,
+            None,
+            &login_env,
+            crate::agents::LaunchDirMode::Supervised,
+        )
+        .unwrap_err();
+        let crate::agents::LaunchDirRefusal::Untrusted(refusal) = error else {
+            panic!("expected an undecided folder, got {error:?}");
+        };
+        assert_eq!(refusal.fix, "run `rimz trust grant --empty-dir`");
+    }
 }
 
 #[test]
