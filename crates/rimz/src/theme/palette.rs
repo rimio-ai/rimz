@@ -11,7 +11,7 @@ use crate::config::{
 };
 
 use super::raw::RawPalette;
-use super::{Identity, Tone, oklab};
+use super::{BrandColor, Identity, Tone, oklab};
 
 /// Stops on the context **health** ramp, ordered calm → alarm:
 /// `[good, warn, caution, alarm]` — green → gold → orange → rose-red. Prepending
@@ -47,12 +47,11 @@ const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 const CACHE_EXPIRED_GREY: f32 = 0.5;
 
 /// Step the fast-mode amber away from the background to separate it from `warn`.
-/// Levers: `LIGHTNESS_STEP` is that first step; `CONTRAST_STEP` repeats in the
-/// same direction until the emitted color, truecolor or indexed cell, clears
-/// `MIN_CONTRAST` against the background.
+/// `LIGHTNESS_STEP` is the first step; the shared readability floor then checks
+/// the emitted color, truecolor or indexed cell, against the background.
 const FAST_MODE_LIGHTNESS_STEP: f32 = 0.04;
-const FAST_MODE_CONTRAST_STEP: f32 = 0.01;
-const FAST_MODE_MIN_CONTRAST: f32 = 3.0;
+const READABLE_CONTRAST_STEP: f32 = 0.01;
+const MIN_READABLE_CONTRAST: f32 = 3.0;
 
 /// The active palette, one named slot per semantic tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,25 +156,10 @@ impl Palette {
             ),
             depth,
         );
-        let direction = if oklab::contrast_ratio((255, 255, 255), raw.background)
-            >= oklab::contrast_ratio((0, 0, 0), raw.background)
-        {
-            1.0
-        } else {
-            -1.0
-        };
-        let mut fast_mode = oklab::lift_lightness(
+        let fast_mode = oklab::lift_lightness(
             oklab::warm_toward(heat_ramp[1], raw.red, 0.10, 1.15),
-            direction * FAST_MODE_LIGHTNESS_STEP,
+            contrast_direction(raw.background) * FAST_MODE_LIGHTNESS_STEP,
         );
-        // At most one unit of lightness: lift_lightness clamps at either endpoint.
-        for _ in 0..100 {
-            let emitted = emitted_rgb(rgb_color(fast_mode, depth));
-            if oklab::contrast_ratio(emitted, raw.background) >= FAST_MODE_MIN_CONTRAST {
-                break;
-            }
-            fast_mode = oklab::lift_lightness(fast_mode, direction * FAST_MODE_CONTRAST_STEP);
-        }
         Palette {
             depth,
             raw,
@@ -188,7 +172,7 @@ impl Palette {
             expense,
             cache_expired,
             accent: slot(theme.accent, tones.accent),
-            fast_mode: rgb_color(fast_mode, depth),
+            fast_mode: readable_rgb(fast_mode, depth, raw.background),
             cool: slot(theme.cool, tones.cool),
             meta: slot(theme.meta, tones.meta),
             body: slot(theme.body, tones.body),
@@ -262,7 +246,132 @@ impl Palette {
         Tone::from_rgb(rgb, self.depth)
     }
 
-    /// Fade a model shade toward the scheme background for projected spend. Start halfway;
+    /// Assign readable model tones in rank order, reserving each brand for its own models.
+    /// Scheme hues nearest the brand are used before a second tier blended toward foreground.
+    /// Colliding hues and second-tier candidates search blends from halfway to foreground,
+    /// then below halfway toward the source, keeping the first unused emitted color.
+    /// Emitted colors stay distinct until the eligible candidates in both tiers are exhausted.
+    /// Reused tones first avoid models marked co-visible by the index predicate. Muted is reserved.
+    pub fn model_tones(
+        &self,
+        brands: &[BrandColor],
+        co_visible: impl Fn(usize, usize) -> bool,
+    ) -> Vec<Tone> {
+        let readable = |tone| {
+            if oklab::contrast_ratio(emitted_rgb(tone), self.raw.background)
+                >= MIN_READABLE_CONTRAST
+            {
+                tone
+            } else {
+                readable_rgb(emitted_rgb(tone), self.depth, self.raw.background)
+            }
+        };
+        let muted = emitted_rgb(self.muted());
+        let distinct_blend = |tone, pool: &[(Tone, Option<BrandColor>)]| {
+            (50..=100)
+                .chain((0..50).rev())
+                .map(|amount| {
+                    readable(self.rgb_tone(oklab::blend(
+                        emitted_rgb(tone),
+                        self.raw.foreground,
+                        amount as f32 / 100.0,
+                    )))
+                })
+                .find(|tone| {
+                    emitted_rgb(*tone) != muted
+                        && !pool
+                            .iter()
+                            .any(|(other, _)| emitted_rgb(*other) == emitted_rgb(*tone))
+                })
+        };
+        let mut pool = Vec::new();
+        for &brand in brands {
+            if pool.iter().any(|(_, owner)| *owner == Some(brand)) {
+                continue;
+            }
+            let mut tone = readable(brand.tone(self));
+            if emitted_rgb(tone) == muted {
+                let Some(distinct) = distinct_blend(tone, &pool) else {
+                    continue;
+                };
+                tone = distinct;
+            }
+            pool.push((tone, Some(brand)));
+        }
+        let raw = self.raw;
+        for rgb in [
+            raw.red,
+            raw.green,
+            raw.yellow,
+            raw.blue,
+            raw.magenta,
+            raw.cyan,
+        ] {
+            let mut tone = readable(self.rgb_tone(rgb));
+            if emitted_rgb(tone) == muted
+                || pool
+                    .iter()
+                    .any(|(other, _)| emitted_rgb(*other) == emitted_rgb(tone))
+            {
+                let Some(distinct) = distinct_blend(tone, &pool) else {
+                    continue;
+                };
+                tone = distinct;
+            }
+            pool.push((tone, None));
+        }
+        let tier0_len = pool.len();
+        for index in 0..tier0_len {
+            let (tone, owner) = pool[index];
+            if let Some(distinct) = distinct_blend(tone, &pool) {
+                pool.push((distinct, owner));
+            }
+        }
+        let tiers = [&pool[..tier0_len], &pool[tier0_len..]];
+        let mut tones = Vec::with_capacity(brands.len());
+        for (index, &brand) in brands.iter().enumerate() {
+            let base = brand.tone(self);
+            let nearest = |candidates: &[(Tone, Option<BrandColor>)], taken: &[Tone]| {
+                candidates
+                    .iter()
+                    .filter(|(tone, owner)| {
+                        owner.is_none_or(|owner| owner == brand)
+                            && ((*owner == Some(brand) && emitted_rgb(*tone) == emitted_rgb(base))
+                                || !brands.iter().any(|other| {
+                                    *other != brand
+                                        && emitted_rgb(other.tone(self)) == emitted_rgb(*tone)
+                                }))
+                            && !taken
+                                .iter()
+                                .any(|other| emitted_rgb(*other) == emitted_rgb(*tone))
+                    })
+                    .min_by(|(left, _), (right, _)| {
+                        oklab::chromatic_distance(emitted_rgb(base), emitted_rgb(*left)).total_cmp(
+                            &oklab::chromatic_distance(emitted_rgb(base), emitted_rgb(*right)),
+                        )
+                    })
+                    .map(|&(tone, _)| tone)
+            };
+            let tone = tiers
+                .iter()
+                .find_map(|tier| nearest(tier, &tones))
+                .or_else(|| {
+                    let shown_together = tones
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| co_visible(index, *other))
+                        .map(|(_, tone)| *tone)
+                        .collect::<Vec<_>>();
+                    tiers.iter().find_map(|tier| nearest(tier, &shown_together))
+                })
+                .or_else(|| nearest(tiers[0], &[]))
+                .unwrap_or_else(|| readable(base));
+            tones.push(tone);
+        }
+        tones
+    }
+
+    /// Fade a model tone toward the scheme background for projected spend. Start halfway;
     /// advance when depth quantization would erase the distinction or increase its contrast.
     pub fn forecast_tone(&self, tone: Tone) -> Tone {
         let base = emitted_rgb(tone);
@@ -321,6 +430,37 @@ impl Palette {
     pub fn selection_bg(&self) -> Tone {
         self.selection_bg
     }
+}
+
+fn contrast_direction(background: (u8, u8, u8)) -> f32 {
+    if oklab::contrast_ratio((255, 255, 255), background)
+        >= oklab::contrast_ratio((0, 0, 0), background)
+    {
+        1.0
+    } else {
+        -1.0
+    }
+}
+
+fn readable_rgb(mut rgb: (u8, u8, u8), depth: ColorDepth, background: (u8, u8, u8)) -> Tone {
+    let direction = contrast_direction(background);
+    let mut step = READABLE_CONTRAST_STEP;
+    let mut tone = rgb_color(rgb, depth);
+    // At most one unit of lightness: lift_lightness clamps at either endpoint.
+    for _ in 0..100 {
+        if oklab::contrast_ratio(emitted_rgb(tone), background) >= MIN_READABLE_CONTRAST {
+            break;
+        }
+        let next = oklab::lift_lightness(rgb, direction * step);
+        if next == rgb {
+            step += READABLE_CONTRAST_STEP;
+            continue;
+        }
+        rgb = next;
+        step = READABLE_CONTRAST_STEP;
+        tone = rgb_color(rgb, depth);
+    }
+    tone
 }
 
 /// Position along the warm tail (`warn → caution → alarm`) for a value crossing
@@ -458,8 +598,243 @@ pub(crate) fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
 mod tests {
     use super::*;
 
+    fn model_brands() -> Vec<BrandColor> {
+        let brand = |kind| super::super::resolve_provider_brand(kind, &Default::default());
+        let mut brands = vec![brand("claude"); 5];
+        brands.extend([brand("codex"); 4]);
+        brands.extend([
+            brand("grok"),
+            brand("unregistered"),
+            BrandColor::Rgb(10, 80, 30),
+            BrandColor::Rgb(0, 0, 0),
+            BrandColor::Indexed(0),
+            BrandColor::Indexed(16),
+        ]);
+        brands
+    }
+
     #[test]
-    fn forecast_tone_fades_model_shades_toward_each_schemes_background_at_both_depths() {
+    fn model_tones_are_readable_across_bundled_schemes_at_both_depths() {
+        let brands = model_brands();
+        let mut failures = Vec::new();
+        let mut moved_brands = Vec::new();
+        for scheme in crate::config::scheme_swatches() {
+            let config = ThemeConfig {
+                scheme: Some(scheme.name.clone()),
+                ..Default::default()
+            };
+            for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+                let palette = Palette::resolve(&config, depth);
+                let tones = palette.model_tones(&brands, |_, _| true);
+                assert_eq!(tones.len(), brands.len());
+                assert_eq!(tones, palette.model_tones(&brands, |_, _| true));
+                for (index, brand) in brands.iter().enumerate() {
+                    let authored = brand.tone(&palette);
+                    if !brands[..index]
+                        .iter()
+                        .any(|earlier| emitted_rgb(earlier.tone(&palette)) == emitted_rgb(authored))
+                        && emitted_rgb(authored) != emitted_rgb(palette.muted())
+                        && oklab::contrast_ratio(emitted_rgb(authored), palette.raw.background)
+                            >= 3.0
+                        && emitted_rgb(tones[index]) != emitted_rgb(authored)
+                    {
+                        moved_brands.push((
+                            scheme.name.clone(),
+                            depth,
+                            index,
+                            authored,
+                            tones[index],
+                        ));
+                    }
+                }
+                for (index, tone) in tones.into_iter().enumerate() {
+                    let contrast = oklab::contrast_ratio(emitted_rgb(tone), palette.raw.background);
+                    if contrast < 3.0 {
+                        failures.push((scheme.name.clone(), depth, index, tone, contrast));
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty() && moved_brands.is_empty(),
+            "contrast: {failures:?}; moved brands: {moved_brands:?}"
+        );
+    }
+
+    #[test]
+    fn model_tones_make_each_black_brand_readable() {
+        for scheme in crate::config::scheme_swatches() {
+            for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+                let palette = Palette::resolve(
+                    &ThemeConfig {
+                        scheme: Some(scheme.name.clone()),
+                        ..Default::default()
+                    },
+                    depth,
+                );
+                for brand in [
+                    BrandColor::Rgb(0, 0, 0),
+                    BrandColor::Indexed(0),
+                    BrandColor::Indexed(16),
+                ] {
+                    let tone = palette.model_tones(&[brand], |_, _| true)[0];
+                    let contrast = oklab::contrast_ratio(emitted_rgb(tone), palette.raw.background);
+                    assert!(
+                        contrast >= 3.0,
+                        "{} {depth:?} {brand:?}: {tone:?} {contrast}",
+                        scheme.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn model_tones_keep_nine_distinct_colours_across_bundled_schemes_at_both_depths() {
+        let mut failures = Vec::new();
+        for scheme in crate::config::scheme_swatches() {
+            let config = ThemeConfig {
+                scheme: Some(scheme.name.clone()),
+                ..Default::default()
+            };
+            for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+                let palette = Palette::resolve(&config, depth);
+                let raw = palette.raw;
+                let mut hues = [
+                    raw.red,
+                    raw.green,
+                    raw.yellow,
+                    raw.blue,
+                    raw.magenta,
+                    raw.cyan,
+                ]
+                .map(|rgb| emitted_rgb(palette.rgb_tone(rgb)))
+                .to_vec();
+                hues.sort_unstable();
+                hues.dedup();
+                if hues.len() != 6 {
+                    continue;
+                }
+                let mut tones = palette.model_tones(&model_brands(), |_, _| true)[..9]
+                    .iter()
+                    .copied()
+                    .map(emitted_rgb)
+                    .collect::<Vec<_>>();
+                tones.sort_unstable();
+                tones.dedup();
+                if tones.len() != 9 {
+                    failures.push((scheme.name.clone(), depth, tones.len()));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    #[test]
+    fn model_tones_preserve_brands_and_choose_the_nearest_scheme_hues() {
+        let palette = Palette::resolve(
+            &ThemeConfig {
+                scheme: Some("TokyoNight Night".into()),
+                ..Default::default()
+            },
+            ColorDepth::Truecolor,
+        );
+        let brand = |kind| super::super::resolve_provider_brand(kind, &Default::default());
+        let tones = palette.model_tones(
+            &[
+                brand("claude"),
+                brand("claude"),
+                brand("claude"),
+                brand("codex"),
+                brand("codex"),
+                brand("codex"),
+            ],
+            |_, _| true,
+        );
+        assert_eq!(tones[0], Tone::Rgb(0xd9, 0x77, 0x57));
+        assert_eq!(tones[3], Tone::Rgb(0x2f, 0xb1, 0xd1));
+        let mut claude_hues = tones[1..3]
+            .iter()
+            .copied()
+            .map(emitted_rgb)
+            .collect::<Vec<_>>();
+        claude_hues.sort_unstable();
+        let mut expected = [palette.raw.red, palette.raw.yellow];
+        expected.sort_unstable();
+        assert_eq!(claude_hues, expected);
+        assert_eq!(emitted_rgb(tones[4]), palette.raw.cyan);
+        assert_eq!(emitted_rgb(tones[5]), palette.raw.blue);
+        assert!(palette.model_tones(&[], |_, _| true).is_empty());
+        let indexed = Palette::resolve(
+            &ThemeConfig {
+                scheme: Some("TokyoNight Night".into()),
+                ..Default::default()
+            },
+            ColorDepth::Indexed,
+        );
+        for pair in [
+            [brand("kimi"), brand("muse")],
+            [brand("antigravity"), brand("kimi")],
+            [brand("cursor"), brand("amp")],
+            [BrandColor::Rgb(128, 128, 128), BrandColor::Indexed(244)],
+        ] {
+            let tones = indexed.model_tones(&pair, |_, _| true);
+            assert_eq!(
+                emitted_rgb(tones[0]),
+                emitted_rgb(pair[0].tone(&indexed)),
+                "{pair:?}"
+            );
+            assert_ne!(emitted_rgb(tones[0]), emitted_rgb(tones[1]), "{pair:?}");
+        }
+    }
+
+    #[test]
+    fn model_tones_never_emit_muted_across_bundled_schemes_at_both_depths() {
+        let mut failures = Vec::new();
+        for scheme in crate::config::scheme_swatches() {
+            let config = ThemeConfig {
+                scheme: Some(scheme.name.clone()),
+                ..Default::default()
+            };
+            for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+                let palette = Palette::resolve(&config, depth);
+                for tone in palette.model_tones(&model_brands(), |_, _| true) {
+                    if emitted_rgb(tone) == emitted_rgb(palette.muted()) {
+                        failures.push((scheme.name.clone(), depth, tone));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    #[test]
+    fn model_tones_reuse_colours_only_between_models_not_shown_together() {
+        let claude = super::super::resolve_provider_brand("claude", &Default::default());
+        for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+            let palette = Palette::resolve(
+                &ThemeConfig {
+                    scheme: Some("TokyoNight Night".into()),
+                    ..Default::default()
+                },
+                depth,
+            );
+            let tones = palette.model_tones(&[claude; 16], |left, right| left / 8 == right / 8);
+            for group in tones.chunks(8) {
+                let mut colours = group.iter().copied().map(emitted_rgb).collect::<Vec<_>>();
+                colours.sort_unstable();
+                colours.dedup();
+                assert_eq!(colours.len(), 8, "{depth:?}: {group:?}");
+            }
+            assert_eq!(
+                tones,
+                palette.model_tones(&[claude; 16], |left, right| left / 8 == right / 8)
+            );
+        }
+    }
+
+    #[test]
+    fn forecast_tone_fades_model_tones_toward_each_schemes_background_at_both_depths() {
         let mut cases = Vec::new();
         for depth in [ColorDepth::Indexed, ColorDepth::Truecolor] {
             for scheme in ["Tokyo Night", "Catppuccin Latte"] {
@@ -471,8 +846,11 @@ mod tests {
                 let background = oklab::lightness(palette.raw.background);
                 for kind in ["claude", "codex"] {
                     let brand = super::super::resolve_provider_brand(kind, &Default::default());
-                    for rank in 0..4 {
-                        let model = brand.shade(&palette, rank);
+                    for (rank, model) in palette
+                        .model_tones(&[brand; 4], |_, _| true)
+                        .into_iter()
+                        .enumerate()
+                    {
                         let forecast = palette.forecast_tone(model);
                         let before = (oklab::lightness(emitted_rgb(model)) - background).abs();
                         let after = (oklab::lightness(emitted_rgb(forecast)) - background).abs();

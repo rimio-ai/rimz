@@ -109,7 +109,7 @@ Beside the flat slots, `Palette` carries two ramps and three derived tones. None
 | `cache_expired` | the ramp's `alarm` stop blended halfway to `muted` (`CACHE_EXPIRED_GREY`, 0.5), then depth-quantized | `Component::CacheExpired`: the context meter's expired-cache fill and lead glyph, its age clock, the stale line's age past the lifetime, and the card's expired-cache notice |
 | `fast_mode` | `warm_toward(warn, raw red, 0.10, 1.15)`, then the contrast walk below | `Component::FastMode` and the CLI's bold fast-mode badge (`crates/rimz/src/cli/render/palette.rs::fast_mode`) |
 
-The fast-mode walk keeps the amber readable on any background. It steps `FAST_MODE_LIGHTNESS_STEP` (0.04) in OKLab lightness toward whichever of white or black contrasts more with the scheme background, with white winning ties. It then repeats `FAST_MODE_CONTRAST_STEP` (0.01) steps until the emitted color clears WCAG `FAST_MODE_MIN_CONTRAST` (3:1) against that background. At indexed depth the check reads the quantized cell's RGB, and the walk stops at lightness 0 or 1.
+The fast-mode amber first steps `FAST_MODE_LIGHTNESS_STEP` (0.04) in OKLab lightness toward whichever of white or black contrasts more with the scheme background, with white winning ties. It then uses the readability walk shared with model tones: `READABLE_CONTRAST_STEP` (0.01) lifts until the emitted color clears WCAG `MIN_READABLE_CONTRAST` (3:1). When a lift rounds back to the same 8-bit RGB, the next attempt accumulates another step instead of stalling. The walk makes at most 100 attempts, with lightness clamped to 0 or 1; at indexed depth the contrast check reads the quantized cell's RGB.
 
 The ramps reach the screen through five accessors, and nothing else reads them:
 
