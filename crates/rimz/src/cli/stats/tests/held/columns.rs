@@ -14,11 +14,45 @@ fn lines_at(active: Window, rows: Option<usize>) -> Vec<String> {
 
 #[test]
 fn spend_columns_match_the_mock() {
+    let (stats, assists) = fixture();
+    let dollar_end = |line: &str| {
+        let start = line.rfind('$').unwrap();
+        let amount = line[start..].split_whitespace().next().unwrap();
+        display_width(&line[..start]) + display_width(amount)
+    };
+    for cols in [60, 64, 70, 74, 75, 80, 100, 111, 112, 113, 119, 160] {
+        for tab in Window::TABS {
+            let output = frame(&stats, &assists, tab, cols, None).text;
+            let text = strip_ansi(&output);
+            let lines = text.lines().collect::<Vec<_>>();
+            let title = lines
+                .iter()
+                .position(|line| line.contains("Subagents"))
+                .unwrap();
+            let row = lines[title + 1..]
+                .iter()
+                .find(|line| line.contains("implementer"))
+                .unwrap();
+            assert_eq!(
+                dollar_end(lines[title]),
+                dollar_end(row),
+                "{cols} {tab:?}:\n{}\n{row}",
+                lines[title]
+            );
+            assert!(
+                output.contains(&render::paint(
+                    render::palette::muted(),
+                    "(already counted)"
+                )),
+                "{cols} {tab:?}: {text}"
+            );
+        }
+    }
     let month = lines(Window::Month);
     for expected in [
         "Models                                                                                  HIT       TOK/S  TOKENS",
         "█ Opus 5.5       $9,371  ━━━━━━━━━━━━━━━━━━──────────────────────────────  38%          96%          85   15.4B",
-        "Agents             $904                                   Subagents        $1,681",
+        "Agents             $904                                   Subagents        $1,681  (already counted)",
         "● brainstormer     $266  ━━━━━━━─────────────────  29%    ● implementer    $1,060  ━━━━━━━━━━━━━━━─────────  63%",
         "Teams            $3,148                                                          AGENT-TIME    MESSAGES  TOKENS",
         "● recon          $2,621  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────  83%       18h10m          34    4.5B",
@@ -36,8 +70,13 @@ fn spend_columns_match_the_mock() {
 #[test]
 fn provider_and_role_columns_match_the_mock() {
     let month = lines(Window::Month);
-    assert!(month.iter().any(|line| line == "█ Claude     $13,232   54%   96% hit     877 sessions     █ Teams     $3,148  13%    ▓ Subagents $1,681   7%"), "{}", month.join("\n"));
-    assert!(month.iter().any(|line| line == "█ Codex      $11,340   46%   97% hit   5,995 sessions     ▒ Agents      $904   4%    ░ No role  $18,839  77%"));
+    assert!(month.iter().any(|line| line == "█ Claude     $13,232   54%   96% hit     877 sessions     █ Teams     $3,148  13%    ▒ Agents      $904   4%"), "{}", month.join("\n"));
+    assert!(
+        month.iter().any(|line| line
+            == "█ Codex      $11,340   46%   97% hit   5,995 sessions     ░ No owner $20,520  84%"),
+        "{}",
+        month.join("\n")
+    );
     assert!(
         month
             .iter()

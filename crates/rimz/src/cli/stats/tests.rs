@@ -222,7 +222,7 @@ fn one_shot_combines_independent_coverage_dates_above_the_first_role() {
         (
             Some(since),
             Some(midnight),
-            "roles recorded since Oct 04, earlier spend counts as No role",
+            "roles recorded since Oct 04, earlier spend counts as No owner recorded",
         ),
         (
             Some(midnight),
@@ -232,7 +232,7 @@ fn one_shot_combines_independent_coverage_dates_above_the_first_role() {
         (
             Some(since),
             Some(since),
-            "roles recorded since Oct 04, earlier spend counts as No role · agent-time and messages since Oct 04",
+            "roles recorded since Oct 04, earlier spend counts as No owner recorded · agent-time and messages since Oct 04",
         ),
         (None, None, ""),
     ] {
@@ -255,44 +255,93 @@ fn one_shot_combines_independent_coverage_dates_above_the_first_role() {
                 continue;
             }
             assert_eq!(notes.len(), 1, "{text}");
-            assert_eq!(notes[0].trim(), expected);
             let section = format!("{} (today)", role.unwrap_or(RoleView::Agents).label());
-            assert!(
-                text.find(expected).unwrap() < text.find(&section).unwrap(),
-                "{text}"
+            let start = text.find(notes[0].trim()).unwrap();
+            let end = text.find(&section).unwrap();
+            assert!(start < end, "{text}");
+            assert_eq!(
+                text[start..end]
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                expected,
+                "{text}",
             );
         }
     }
 }
 
 #[test]
-fn one_shot_reports_only_a_positive_cent_of_unassigned_spend() {
+fn one_shot_reports_only_a_positive_cent_of_no_owner_spend() {
     let mut stats = Stats::from_provider(team_cache());
-    for (total, expected) in [
-        (150.0, true),
-        (100.0, false),
-        (50.0, false),
-        (100.009, false),
-    ] {
+    let cases = [(150.0, true), (80.0, false), (50.0, false), (80.009, false)];
+    let rendered = cases.map(|(total, _)| {
         stats.total.day.usd = total;
-        let text = spend_text(&stats, None, Window::Today);
-        assert_eq!(text.contains("No role recorded"), expected, "{text}");
+        spend_text(&stats, None, Window::Today)
+    });
+    assert_eq!(
+        rendered.each_ref().map(|text| text
+            .lines()
+            .any(|line| line.trim_start().starts_with("No owner recorded"))),
+        cases.map(|(_, expected)| expected)
+    );
+    for ((total, expected), text) in cases.into_iter().zip(rendered) {
+        stats.total.day.usd = total;
+        let row = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("No owner recorded"));
         if expected {
-            let row = text
-                .lines()
-                .find(|line| line.contains("No role recorded"))
-                .unwrap();
+            let row = row.unwrap();
             assert_eq!(
                 row.split_whitespace().collect::<Vec<_>>(),
-                ["No", "role", "recorded", "$50", "33.3%"]
+                ["No", "owner", "recorded", "$70", "46.7%"]
             );
-            assert!(text.find("Subagents (today)").unwrap() < text.find(row).unwrap());
+            assert!(text.find(row).unwrap() < text.find("Subagents (today)").unwrap());
             assert!(text.find(row).unwrap() < text.find("Token activity").unwrap());
         }
         for role in [RoleView::Agents, RoleView::Teams, RoleView::Subagents] {
-            assert!(!spend_text(&stats, Some(role), Window::Today).contains("No role recorded"));
+            assert!(
+                !spend_text(&stats, Some(role), Window::Today)
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("No owner recorded"))
+            );
         }
+        assert!(
+            text.contains("Agents + Teams + No owner recorded each sum to fleet dollars"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Already counted in Agents and Teams"),
+            "{text}"
+        );
     }
+}
+
+#[test]
+fn one_shot_keeps_provider_named_agents_in_the_owner_partition() {
+    let stats = role_stats(
+        BTreeMap::from([("removed-plugin".into(), every_window(tally(100, 10.0, 1)))]),
+        BTreeMap::new(),
+    );
+    let text = spend_text(&stats, None, Window::Today);
+    assert!(text.contains("Agents (today)"), "{text}");
+    assert!(
+        text.contains("Agents + Teams + No owner recorded each sum to fleet dollars"),
+        "{text}"
+    );
+}
+
+#[test]
+fn ownerless_subagent_coverage_has_its_own_cent_floor() {
+    let observed = [0.009, 0.01, 12.0].map(|usd| {
+        let mut cache = team_cache();
+        cache.roles.ownerless_subagents = every_window(tally(1, usd, 0));
+        let stats = Stats::from_provider(cache);
+        let text = spend_text(&stats, None, Window::Today);
+        text.lines()
+            .any(|line| line.contains("subagent spend with no recorded owner"))
+    });
+    assert_eq!(observed, [false, true, true]);
 }
 
 #[test]
@@ -340,7 +389,7 @@ fn one_shot_fresh_machine_replaces_zero_tables_and_heatmap() {
 }
 
 #[test]
-fn one_shot_groups_session_and_run_counts_in_compact_and_explicit_views() {
+fn one_shot_groups_session_counts_in_compact_and_explicit_views() {
     let mut cache = team_cache();
     let tally = every_window(tally(100, 10.0, 1_111));
     cache
@@ -734,6 +783,7 @@ fn teams_cap_compact_rows_and_keep_coverage_above_the_first_section() {
             assert!(text.contains("Where it went · roles recorded since Oct 04"));
             continue;
         }
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let note = text
             .find("agent-time and messages since Oct 04")
             .expect(&text);
@@ -746,7 +796,7 @@ fn teams_cap_compact_rows_and_keep_coverage_above_the_first_section() {
 }
 
 #[test]
-fn agent_sections_show_only_real_profiles_in_the_selected_window() {
+fn agent_sections_keep_provider_profiles_and_scope_other_profiles_to_the_window() {
     let bare = every_window(tally(100, 10.0, 1));
     for (profile, show_one_shot, show_held_profile) in [
         (tally(100, 20.0, 1), false, false),
@@ -769,26 +819,23 @@ fn agent_sections_show_only_real_profiles_in_the_selected_window() {
                 continue;
             }
             let agents = "Agents (";
-            let show = show_one_shot;
-            assert_eq!(text.contains(agents), show, "{text}");
+            assert!(text.contains(agents), "{text}");
             assert!(text.contains("Providers"), "{text}");
             assert!(
                 text.contains("Subagents"),
                 "CLI-named subagents stay visible: {text}"
             );
-            if show {
-                let section = text
-                    .split(agents)
-                    .nth(1)
-                    .unwrap()
-                    .split("Subagents")
-                    .next()
-                    .unwrap();
-                assert!(section.contains("removed-plugin"), "{section}");
-                assert!(section.contains("builder"), "{section}");
-                for column in ["SESSIONS", "TOKENS", "HIT", "TOK/S"] {
-                    assert!(section.contains(column), "{section}");
-                }
+            let section = text
+                .split(agents)
+                .nth(1)
+                .unwrap()
+                .split("Subagents")
+                .next()
+                .unwrap();
+            assert!(section.contains("removed-plugin"), "{section}");
+            assert_eq!(section.contains("builder"), show_one_shot, "{section}");
+            for column in ["SESSIONS", "TOKENS", "HIT", "TOK/S"] {
+                assert!(section.contains(column), "{section}");
             }
         }
     }
@@ -819,13 +866,16 @@ fn role_note_precedes_first_visible_profile_section() {
                 if let Some(last) = last {
                     assert!(note < text.rfind(last).unwrap(), "{text}");
                 }
-                assert!(!text.contains("earlier spend counts as No role"));
+                assert!(!text.contains("earlier spend counts as No owner recorded"));
                 continue;
             }
             if let Some(last) = last {
                 let note = text.find("roles recorded since Oct 04").expect(&text);
                 assert!(note < text.find(last).unwrap(), "{text}");
-                assert!(text.contains("earlier spend counts as No role"), "{text}");
+                assert!(
+                    text.contains("earlier spend counts as No owner recorded"),
+                    "{text}"
+                );
                 assert!(!text.contains("subagent roles recorded"), "{text}");
             } else {
                 assert!(!text.contains("recorded since"), "{text}");
@@ -923,7 +973,7 @@ fn explicit_role_views_are_unfolded_and_keep_provider_named_rows() {
     assert!(panel.contains("1 other subagent "), "{panel}");
     for (role, key, count) in [
         (RoleView::Agents, "agents", "sessions"),
-        (RoleView::Subagents, "subagents", "runs"),
+        (RoleView::Subagents, "subagents", "sessions"),
     ] {
         let value = json::roles_value(&stats, Window::Today, role);
         let mut expected = ["as_of", key, "roles_since", "window"];
@@ -976,10 +1026,12 @@ fn explicit_role_views_are_unfolded_and_keep_provider_named_rows() {
 
     let bare = BTreeMap::from([("removed-plugin".into(), every_window(tally(100, 10.0, 1)))]);
     let stats = role_stats(bare, BTreeMap::new());
-    for held in [false, true] {
-        let heading = if held { "Agents\n" } else { "Agents (" };
-        assert!(!full_panel_text(&stats, held).contains(heading));
-    }
+    assert_eq!(
+        [false, true].map(|held| full_panel_text(&stats, held)
+            .lines()
+            .any(|line| line.trim_start().starts_with("Agents"))),
+        [true, true]
+    );
     let value = json::stats_json_value(
         &stats,
         &AssistStats::default(),
@@ -1280,6 +1332,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
             2_000_000, 40.0, 1_500_000, 500_000, 3_000_000,
         ))),
     );
+    cache.roles.ownerless_subagents = every_window(tally(1, 40.0, 0));
     for index in 0..5 {
         cache.models.insert(
             format!("model-{index}"),
@@ -1313,6 +1366,12 @@ fn spend_first_publication_has_compact_json_and_panel() {
     assert_eq!(value["subagents"][0]["profile"], "fast");
     assert_eq!(value["subagents"][0]["share"], 0.4);
     assert_eq!(
+        value["no_owner"],
+        serde_json::json!({
+            "usd":100.0, "share":1.0, "subagent_usd":40.0,
+        })
+    );
+    assert_eq!(
         keys(&value),
         [
             "active_days_28",
@@ -1324,6 +1383,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
             "longest_streak",
             "models",
             "most_active_day",
+            "no_owner",
             "providers",
             "roles_since",
             "sessions",
@@ -1344,7 +1404,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
             "input",
             "output",
             "profile",
-            "runs",
+            "sessions",
             "share",
             "tokens",
             "usd"
@@ -1372,7 +1432,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
         "SHARE",
         "2 other models",
         "TOK/S",
-        "RUNS",
+        "SESSIONS",
         "as of",
     ] {
         assert!(panel.contains(label), "missing {label}: {panel}");
@@ -1405,7 +1465,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
     assert!(today.contains("1.5M"));
     assert!(!today.contains("as of Oct"));
     assert!(!today.contains("Models (year)"));
-    assert!(today.contains("RUNS"));
+    assert!(today.contains("SESSIONS"));
     assert!(!today.contains("MODEL"));
     let held = held_frame(&stats, &assists, Window::Year, 20_011);
     assert!(held.contains(TAGLINE));
@@ -2209,6 +2269,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         refreshed_at_ms: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
+        ownerless_subagents: SpendTally::default(),
         recorded_since_secs: None,
         effort_since_secs: None,
         teams: BTreeMap::new(),
@@ -2264,6 +2325,7 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
                 refreshed_at_ms: 0,
                 agents: BTreeMap::new(),
                 subagents: BTreeMap::new(),
+                ownerless_subagents: SpendTally::default(),
                 recorded_since_secs: None,
                 effort_since_secs: None,
                 teams: BTreeMap::new(),
@@ -2336,6 +2398,7 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
         refreshed_at_ms: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
+        ownerless_subagents: SpendTally::default(),
         recorded_since_secs: None,
         effort_since_secs: None,
         teams: BTreeMap::new(),
@@ -2376,6 +2439,7 @@ fn refresh_result_carries_success_error_and_panic() {
             refreshed_at_ms: 0,
             agents: BTreeMap::new(),
             subagents: BTreeMap::new(),
+            ownerless_subagents: SpendTally::default(),
             recorded_since_secs: None,
             effort_since_secs: None,
             teams: BTreeMap::new(),
@@ -2453,6 +2517,7 @@ fn heatmap_cells_render_spaced() {
         refreshed_at_ms: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
+        ownerless_subagents: SpendTally::default(),
         recorded_since_secs: None,
         effort_since_secs: None,
         teams: BTreeMap::new(),
@@ -2527,6 +2592,7 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
         refreshed_at_ms: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
+        ownerless_subagents: SpendTally::default(),
         recorded_since_secs: None,
         effort_since_secs: None,
         teams: BTreeMap::new(),
@@ -2676,6 +2742,7 @@ fn today_dashboard_uses_day_breakdowns_and_grid_activity_without_a_trend() {
         refreshed_at_ms: today as u64 * 86_400_000,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
+        ownerless_subagents: SpendTally::default(),
         recorded_since_secs: None,
         effort_since_secs: None,
         teams: BTreeMap::new(),
@@ -3456,6 +3523,7 @@ fn today_index_uses_the_publications_zone() {
         refreshed_at_ms: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
+        ownerless_subagents: SpendTally::default(),
         recorded_since_secs: None,
         effort_since_secs: None,
         teams: BTreeMap::new(),

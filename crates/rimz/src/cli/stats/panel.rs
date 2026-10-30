@@ -2,6 +2,8 @@ use super::fmt::*;
 use super::*;
 use rimz::theme::theme_glyphs;
 
+const COLUMN_EDGES: [usize; 4] = [35, 52, 69, 86];
+
 pub(super) struct PanelGlyphs {
     pub(super) bar_filled: String,
     pub(super) bar_track: String,
@@ -146,7 +148,7 @@ impl SpendSection {
         match self {
             Self::Models => None,
             Self::Providers => Some("SESSIONS"),
-            Self::Profiles(role) => Some(role.count_header()),
+            Self::Profiles(_) => Some("SESSIONS"),
         }
     }
 }
@@ -191,7 +193,6 @@ pub(super) fn render_spend(
         });
         // Each figure right-aligns to its column's edge, so a Week or Month trend runs into
         // the next column's padding without moving any figure.
-        const COLUMN_EDGES: [usize; 4] = [35, 52, 69, 86];
         for (label, values, row_trends) in [
             (
                 "Spend",
@@ -282,11 +283,42 @@ pub(super) fn render_spend(
         if role.is_some_and(|role| role != profile_role) {
             continue;
         }
-        if role.is_none()
-            && profile_role == RoleView::Agents
-            && !show_agents(stats, active, has_spend)
-        {
-            continue;
+        if role.is_none() && profile_role == RoleView::Subagents {
+            let total = active.select(&stats.total).usd;
+            let unassigned = stats.no_owner(active);
+            if unassigned >= 0.01 {
+                lines.push(String::new());
+                lines.push(format!(
+                    "  {} {} {:>6.1}%",
+                    pad_to(
+                        &render::paint(render::palette::muted(), "No owner recorded"),
+                        20
+                    ),
+                    render::paint(
+                        render::palette::money(),
+                        &format!("{:>10}", fmt_usd(unassigned))
+                    ),
+                    share_of(unassigned, total) * 100.0,
+                ));
+                let ownerless = active.select(&stats.ownerless_subagents).usd;
+                if ownerless >= 0.01 {
+                    lines.push(render::paint(
+                        render::palette::muted(),
+                        &format!(
+                            "  Of this, {} is subagent spend with no recorded owner.",
+                            fmt_usd(ownerless),
+                        ),
+                    ));
+                }
+            }
+            lines.push(String::new());
+            lines.push(render::paint(
+                render::palette::muted(),
+                concat!(
+                    "  Models, Providers, and Agents + Teams + No owner recorded ",
+                    "each sum to fleet dollars.",
+                ),
+            ));
         }
         let rows = profile_role.rows(stats, active).into_iter().collect();
         let mut section_lines = Vec::new();
@@ -317,30 +349,14 @@ pub(super) fn render_spend(
                 active.label().to_ascii_lowercase(),
             ));
         }
-    }
-    if role.is_none() {
-        let total = active.select(&stats.total).usd;
-        let assigned: f64 = [RoleView::Agents, RoleView::Teams, RoleView::Subagents]
-            .into_iter()
-            .flat_map(|role| role.rows(stats, active).into_values())
-            .map(|row| row.spend.usd)
-            .sum();
-        let unassigned = (total - assigned).max(0.0);
-        if unassigned >= 0.01 {
-            lines.push(String::new());
-            lines.push(format!(
-                "  {} {} {:>6.1}%",
-                pad_to(
-                    &render::paint(render::palette::muted(), "No role recorded"),
-                    20
-                ),
-                render::paint(
-                    render::palette::money(),
-                    &format!("{:>10}", fmt_usd(unassigned))
-                ),
-                share_of(unassigned, total) * 100.0,
+        if profile_role == RoleView::Subagents && (shown || role.is_some()) {
+            lines.push(render::paint(
+                render::palette::muted(),
+                "  Already counted in Agents and Teams, or in No owner recorded when ownerless.",
             ));
         }
+    }
+    if role.is_none() {
         lines.push(String::new());
         heatmap_lines(
             &mut lines,
@@ -422,15 +438,6 @@ fn has_usage(window: &SpendWindow) -> bool {
     window.usd > 0.0 || window.tokens > 0
 }
 
-/// Agents shows when the asking panel would list a profile not named for a
-/// provider; `admits` is that panel's row admission.
-fn show_agents(stats: &Stats, active: Window, admits: fn(&SpendWindow) -> bool) -> bool {
-    stats.agents.iter().any(|(profile, tally)| {
-        let row = active.select_role(tally);
-        (admits(&row.spend) || row.has_effort()) && !stats.by_provider.contains_key(profile)
-    })
-}
-
 fn recording_notes(stats: &Stats, today_day: i64, active: Window) -> Vec<String> {
     let date = |since: Option<jiff::Zoned>| {
         let since = since?;
@@ -450,18 +457,19 @@ fn recording_notes(stats: &Stats, today_day: i64, active: Window) -> Vec<String>
     };
     let note = match (date(stats.recorded_since()), date(stats.effort_since())) {
         (Some(roles), Some(effort)) => format!(
-            "roles recorded since {roles}, earlier spend counts as No role · agent-time and messages since {effort}"
+            "roles recorded since {roles}, earlier spend counts as No owner recorded · \
+             agent-time and messages since {effort}"
         ),
         (Some(roles), None) => {
-            format!("roles recorded since {roles}, earlier spend counts as No role")
+            format!("roles recorded since {roles}, earlier spend counts as No owner recorded")
         }
         (None, Some(effort)) => format!("agent-time and messages recorded since {effort}"),
         (None, None) => return Vec::new(),
     };
-    vec![render::paint(
-        render::palette::muted(),
-        &format!("  {note}"),
-    )]
+    render::wrap_words(&note, COLUMN_EDGES[3] - 2)
+        .into_iter()
+        .map(|line| render::paint(render::palette::muted(), &format!("  {line}")))
+        .collect()
 }
 
 fn spend_section(

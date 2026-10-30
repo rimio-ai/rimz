@@ -23,6 +23,7 @@ struct StatsJson<'a> {
     agents: Vec<RoleJson>,
     teams: Vec<TeamJson>,
     subagents: Vec<RoleJson>,
+    no_owner: NoOwnerJson,
     days: Vec<DayJson>,
     assists: &'a assists::AssistRollup,
 }
@@ -36,17 +37,16 @@ struct WindowsJson {
 }
 
 #[derive(Serialize)]
-#[serde(untagged)]
-enum RoleCount {
-    Sessions { sessions: u32 },
-    Runs { runs: u32 },
+struct NoOwnerJson {
+    usd: f64,
+    share: f64,
+    subagent_usd: f64,
 }
 
 #[derive(Serialize)]
 struct RoleJson {
     profile: String,
-    #[serde(flatten)]
-    count: RoleCount,
+    sessions: u32,
     active_secs: u64,
     #[serde(flatten)]
     spend: SpendJson,
@@ -87,14 +87,7 @@ fn role_rows(stats: &Stats, active: Window, role: RoleView) -> Vec<RoleJson> {
         .filter(|(_, row)| row.has_usage())
         .map(|(profile, row)| RoleJson {
             profile,
-            count: match role {
-                RoleView::Agents | RoleView::Teams => RoleCount::Sessions {
-                    sessions: row.spend.sessions,
-                },
-                RoleView::Subagents => RoleCount::Runs {
-                    runs: row.spend.sessions,
-                },
-            },
+            sessions: row.spend.sessions,
             active_secs: row.effort.active_ms / 1000,
             spend: spend_json(&row.spend, total_usd),
         })
@@ -366,6 +359,7 @@ fn stats_json<'a>(
         })
         .collect();
 
+    let no_owner = stats.no_owner(active);
     StatsJson {
         as_of: stamp(&stats.as_of()),
         window: active,
@@ -415,6 +409,15 @@ fn stats_json<'a>(
         agents: role_rows(stats, active, RoleView::Agents),
         teams: team_rows(stats, active),
         subagents: role_rows(stats, active, RoleView::Subagents),
+        no_owner: NoOwnerJson {
+            usd: no_owner,
+            share: if total_usd > 0.0 {
+                no_owner / total_usd
+            } else {
+                0.0
+            },
+            subagent_usd: active.select(&stats.ownerless_subagents).usd,
+        },
         days,
         assists: &assists.rollup,
     }
