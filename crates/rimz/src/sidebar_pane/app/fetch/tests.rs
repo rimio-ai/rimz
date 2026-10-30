@@ -8,6 +8,330 @@ use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use std::path::PathBuf;
 
 #[test]
+fn pacer_backstops_and_attention_deadlines_obey_the_floor() {
+    let clock = super::super::clock::LoopClock::play("2026-06-01T00:00:00Z".parse().unwrap());
+    let returned = clock.now();
+    let second = Duration::from_secs(1);
+    let started = returned - second / 10;
+    let next = |tick, watched, due| {
+        next_cycle(
+            span(started, returned),
+            tick,
+            watched,
+            due,
+            None,
+            FOLD_FLOOR,
+        )
+        .map(|at| at.duration_since(returned))
+    };
+    assert_eq!(
+        [
+            next(Some(second), true, None),
+            next(Some(second), false, None),
+            next(Some(10 * second), false, None),
+            next(Some(second), true, Some(returned + second / 2)),
+            next(Some(second), false, Some(returned + second / 2)),
+            next(Some(second), true, Some(returned + second / 10)),
+            next(Some(second), false, Some(returned + second / 10)),
+            next(Some(second), false, Some(returned - second)),
+            next(Some(second), false, Some(started)),
+            next(Some(second), false, Some(returned)),
+            next(None, false, Some(returned + second / 2)),
+            next_cycle(None, Some(second), true, None, None, FOLD_FLOOR)
+                .map(|at| at.duration_since(returned)),
+        ],
+        [
+            Some(second),
+            Some(5 * second),
+            Some(10 * second),
+            Some(second / 2),
+            Some(second / 2),
+            Some(FOLD_FLOOR),
+            Some(FOLD_FLOOR),
+            Some(second),
+            Some(second),
+            Some(FOLD_FLOOR),
+            None,
+            None,
+        ]
+    );
+}
+
+fn span(started: Instant, returned: Instant) -> Option<CycleSpan> {
+    Some(CycleSpan { started, returned })
+}
+
+#[test]
+fn pacer_requests_stay_prompt_at_every_phase_and_without_subscribers() {
+    let returned = Instant::now();
+    for watched in [false, true] {
+        for tick in [None, Some(Duration::from_secs(1))] {
+            for elapsed_ms in [0, 100, 250, 750, 6_000] {
+                let arrival = returned + Duration::from_millis(elapsed_ms);
+                assert_eq!(
+                    next_cycle(
+                        span(returned, returned),
+                        tick,
+                        watched,
+                        None,
+                        Some(arrival),
+                        FOLD_FLOOR
+                    ),
+                    Some(arrival.max(returned + FOLD_FLOOR))
+                );
+            }
+        }
+    }
+    assert_eq!(
+        next_cycle(None, None, false, None, Some(returned), FOLD_FLOOR),
+        Some(returned)
+    );
+}
+
+#[test]
+fn pacer_timeout_rechecks_from_the_same_previous_return() {
+    let clock = super::super::clock::LoopClock::play("2026-06-01T00:00:00Z".parse().unwrap());
+    let returned = clock.now();
+    let tick = Duration::from_secs(1);
+    assert_eq!(
+        next_cycle(
+            span(returned, returned),
+            Some(tick),
+            true,
+            None,
+            None,
+            FOLD_FLOOR
+        ),
+        Some(returned + tick)
+    );
+    clock.advance(tick);
+    let next = next_cycle(
+        span(returned, returned),
+        Some(tick),
+        false,
+        None,
+        None,
+        FOLD_FLOOR,
+    );
+    assert_eq!(next, Some(returned + 5 * tick));
+    assert!(
+        next.is_some_and(|at| at > clock.now()),
+        "wait again, do not fold"
+    );
+}
+
+#[test]
+fn idle_cadence_composes_worker_watchdogs_and_refresher_over_sixty_seconds() {
+    let fixture = FetchFixture::new();
+    let frame = crate::testkit::fleet::seed_scale_room(
+        &fixture.state,
+        &fixture.runtime,
+        crate::testkit::fleet::ScaleRoom {
+            agents: 200,
+            panes: 100,
+            ended_sessions: 0,
+            orphan_contexts: 0,
+        },
+    )
+    .unwrap();
+    let mut seeded = IdleCycleFixture::new(fixture.state, fixture.runtime, frame, 100);
+    seeded.run_cycle();
+    let fold = seeded
+        .sink
+        .host_data
+        .lock()
+        .unwrap()
+        .views
+        .lock()
+        .fold
+        .clone()
+        .unwrap();
+    assert_eq!(fold.workspace.snapshot().agents.len(), 200);
+    let counts = [(false, 1), (true, 1), (true, 10)].map(|(watched, seconds)| {
+        let clock = super::super::clock::LoopClock::play("2026-06-01T00:00:00Z".parse().unwrap());
+        let tick = Duration::from_secs(seconds);
+        let mut returned = clock.now();
+        let mut completed = [returned; 100];
+        let views = super::super::views::ViewsHandle::default();
+        if watched {
+            views.lock().presentation(
+                &PaneId::from_parts(MuxName::Zellij, "watcher"),
+                returned,
+                true,
+            );
+        }
+        let publish = |at| {
+            views.lock().fold = Some(Arc::new(WorkspaceFold {
+                sampled_at: at,
+                workspace: fold.workspace.clone(),
+                frame: None,
+            }));
+        };
+        publish(returned);
+        let mut cycles = 0_u64;
+        for elapsed_ms in (250..=60_000_u64).step_by(250) {
+            clock.advance(FOLD_FLOOR);
+            let now = clock.now();
+            let watchdog = super::super::timing::self_close_interval(
+                false,
+                views.read().watched(),
+                false,
+                tick,
+            );
+            let watchdog_request = completed
+                .iter()
+                .any(|stamp| now.duration_since(*stamp) >= watchdog);
+            let refresher_request = u128::from(elapsed_ms).is_multiple_of(tick.as_millis())
+                && views
+                    .lock()
+                    .fresh_fold(now, tick, views.read().watched())
+                    .is_none();
+            let requested = (watchdog_request || refresher_request).then_some(now);
+            if next_cycle(
+                span(returned, returned),
+                Some(tick),
+                views.read().watched(),
+                None,
+                requested,
+                FOLD_FLOOR,
+            )
+            .is_some_and(|at| at <= now)
+            {
+                cycles += 1;
+                returned = now;
+                completed.fill(now);
+                publish(now);
+            }
+        }
+        cycles
+    });
+    assert_eq!(
+        counts,
+        [12, 60, 30],
+        "unwatched, watched, watched with a 10 s tick"
+    );
+}
+
+#[test]
+fn coalesced_attention_reaches_the_sink_at_its_due_while_unwatched() {
+    assert_unwatched_attention_delivery(false);
+}
+
+#[test]
+fn room_reminder_reaches_the_sink_at_its_due_while_unwatched() {
+    assert_unwatched_attention_delivery(true);
+}
+
+fn assert_unwatched_attention_delivery(reminder: bool) {
+    let fixture = FetchFixture::new();
+    let mut worker = fixture.worker();
+    let mut snapshot = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    let row = &mut Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[0];
+    row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    row.unread = true;
+    snapshot.viewed_panes.clear();
+    worker.clock = super::super::clock::LoopClock::play(snapshot.now);
+    worker.config.notification_prefs.coalesce_ms = if reminder { 0 } else { 1_000 };
+    worker.config.notification_prefs.remind_secs = if reminder { 2 } else { 0 };
+    if !reminder {
+        UnreadEpisodes::default().persist(&fixture.runtime).unwrap();
+    }
+    let (wake, events) = wake_channel();
+    let (mut sink, _reader) = single_sink(fixture.host_data.clone(), wake);
+    let started = worker.clock.now();
+    let epoch_ms = worker.clock.now_ms();
+    worker.publish_fold(
+        &fixture.state,
+        frameless(snapshot.clone()),
+        FetchPhase::Final,
+        SnapshotSource::Cached,
+        &mut sink,
+    );
+    assert!(
+        events
+            .try_iter()
+            .all(|event| !matches!(event, Wakeup::Event(_)))
+    );
+    assert!(!fixture.host_data.lock().unwrap().views.read().watched());
+    let published = fixture
+        .host_data
+        .lock()
+        .unwrap()
+        .views
+        .lock()
+        .fold
+        .clone()
+        .unwrap();
+    let prefs = &worker.config.notification_prefs;
+    if reminder {
+        assert!(
+            worker
+                .remind
+                .clone()
+                .evaluate(u64::MAX, published.workspace.snapshot(), prefs)
+                .is_some()
+        );
+    } else {
+        assert_eq!(
+            worker
+                .notifications
+                .clone()
+                .evaluate(published.workspace.snapshot(), &[], prefs, u64::MAX)
+                .len(),
+            1
+        );
+    }
+    let delay = Duration::from_secs(if reminder { 2 } else { 1 });
+    assert_eq!(
+        worker.attention_due_ms(),
+        Some(epoch_ms + delay.as_millis() as u64)
+    );
+    let due = worker.clock.instant_at(
+        jiff::Timestamp::from_millisecond(worker.attention_due_ms().unwrap() as i64).unwrap(),
+    );
+    let next = next_cycle(
+        span(started, started),
+        Some(Duration::from_secs(1)),
+        false,
+        Some(due),
+        None,
+        FOLD_FLOOR,
+    );
+    assert!(
+        next.is_some(),
+        "a pending attention deadline must schedule a cycle"
+    );
+    worker.clock.advance(next.unwrap().duration_since(started));
+    let fold_time = Duration::from_millis(17);
+    worker.clock.advance(fold_time);
+    snapshot.now = worker.clock.timestamp();
+    worker.publish_fold(
+        &fixture.state,
+        frameless(snapshot),
+        FetchPhase::Final,
+        SnapshotSource::Cached,
+        &mut sink,
+    );
+    let delivered: Vec<_> = events
+        .try_iter()
+        .filter_map(|event| match event {
+            Wakeup::Event(event) => match event.event {
+                SidebarEvent::Notify {
+                    notification_kind, ..
+                } => notification_kind,
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivered, [if reminder { "reminder" } else { "waiting" }]);
+    assert_eq!(
+        worker.clock.now().duration_since(started),
+        delay + fold_time
+    );
+}
+
+#[test]
 fn room_reminder_delivery_fans_out_once_with_the_room_count() {
     let fixture = FetchFixture::new();
     let mut worker = fixture.worker();
@@ -2844,6 +3168,8 @@ fn fetch_floor_merges_requests_after_the_previous_cycle_returns() {
                 &rx,
                 floor,
                 || None,
+                || true,
+                || None,
                 |request| {
                     cycles.push((Instant::now(), request));
                     if let Some(gap_tx) = gap_tx.take() {
@@ -2887,6 +3213,8 @@ fn fetch_floor_does_not_delay_a_request_after_a_long_idle() {
                 &rx,
                 floor,
                 || None,
+                || true,
+                || None,
                 |request| {
                     cycles.push((Instant::now(), request));
                     if cycles.len() == 1 {
@@ -2926,6 +3254,8 @@ fn fetch_floor_has_no_mode_bypass() {
             &rx,
             floor,
             || None,
+            || true,
+            || None,
             |cycle| {
                 cycles.push((Instant::now(), cycle));
                 if let Some(tx) = sender.take() {
@@ -2954,6 +3284,8 @@ fn fetch_floor_finishes_the_batch_when_senders_disconnect_during_the_gap() {
             drive(
                 &rx,
                 floor,
+                || None,
+                || true,
                 || None,
                 |request| {
                     cycles.push((Instant::now(), request));
@@ -2993,6 +3325,8 @@ fn drive_backstop_runs_an_ordinary_cycle_after_an_idle_tick() {
         &rx,
         Duration::ZERO,
         || Some(tick),
+        || true,
+        || None,
         |request| {
             cycles.push((Instant::now(), request));
             if cycles.len() == 1 {
@@ -3024,6 +3358,8 @@ fn drive_backstop_waits_without_subscribers() {
             &rx,
             Duration::ZERO,
             || None,
+            || true,
+            || None,
             |_| {
                 cycles += 1;
                 if cycles == 1 {
@@ -3045,6 +3381,8 @@ fn drive_backstop_waits_on_an_unrepresentable_tick() {
         &rx,
         Duration::ZERO,
         || Some(Duration::MAX),
+        || true,
+        || None,
         |_| {
             cycles += 1;
             drop(sender.take());
@@ -3080,6 +3418,8 @@ fn drive_backstop_restarts_after_each_cycle() {
             }
             Some(tick)
         },
+        || true,
+        || None,
         |request| {
             cycles.push((Instant::now(), request));
             completed.set(cycles.len());
@@ -3118,6 +3458,8 @@ fn drive_backstop_rereads_membership_after_a_timeout() {
                 waits += 1;
                 (waits == 1).then_some(tick)
             },
+            || true,
+            || None,
             |_| {
                 cycles += 1;
                 if cycles == 1 {
@@ -3128,6 +3470,78 @@ fn drive_backstop_rereads_membership_after_a_timeout() {
         assert_eq!(cycles, 1, "a stale deadline must not fold an empty room");
         assert!(waits >= 2, "membership is read again at the timeout");
     });
+}
+
+#[test]
+fn drive_rechecks_the_watched_verdict_at_the_old_timeout() {
+    let tick = Duration::from_millis(30);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (timeout, reached) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            reached.recv().unwrap();
+            drop(tx);
+        });
+        let reads = std::cell::Cell::new(0);
+        let mut cycles = 0;
+        drive(
+            &rx,
+            Duration::ZERO,
+            || {
+                reads.set(reads.get() + 1);
+                if reads.get() == 2 {
+                    timeout.send(()).unwrap();
+                }
+                Some(tick)
+            },
+            || reads.get() < 2,
+            || None,
+            |_| cycles += 1,
+        );
+        assert!(reads.get() >= 2, "the wait reached its old deadline");
+        assert_eq!(
+            cycles, 1,
+            "an unwatched room must wait again, not fold at the old tick"
+        );
+    });
+}
+
+#[test]
+fn drive_runs_a_due_that_lands_mid_cycle_at_the_floor() {
+    let tick = Duration::from_secs(5);
+    let floor = Duration::from_millis(30);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    let mut sender = Some(tx);
+    let due = std::cell::Cell::new(None);
+    let mut returned_at = None;
+    let mut cycles = Vec::new();
+    drive(
+        &rx,
+        floor,
+        || Some(tick),
+        || true,
+        || due.get(),
+        |_| {
+            cycles.push(Instant::now());
+            if cycles.len() == 1 {
+                // The cycle has decided; its due lands before it returns.
+                due.set(Some(Instant::now() + floor / 3));
+                std::thread::sleep(floor);
+                returned_at = Some(Instant::now());
+            } else {
+                due.set(None);
+                drop(sender.take());
+            }
+        },
+    );
+    assert_eq!(cycles.len(), 2);
+    let gap = cycles[1].duration_since(returned_at.unwrap());
+    assert!(
+        gap >= floor && gap < tick,
+        "next cycle {gap:?} after return"
+    );
 }
 
 #[test]

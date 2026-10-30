@@ -1,6 +1,6 @@
 //! Host cache refresher: heavy enrichment lanes off the fetch worker.
 //!
-//! The fetch worker still publishes room folds each data tick.
+//! The fetch worker publishes on requests, attention dues and the room backstop.
 //! This thread consumes those sampled folds for TTL-gated spending, account,
 //! usage, auto-continue and diff-stats refreshes. Timers and daemon repair run
 //! even when no fresh fold arrives, so a status flip never waits behind them.
@@ -33,15 +33,16 @@ fn acquire_fold(
         .views
         .clone();
     let (receiver, requested_at) = {
-        let mut views = views.lock();
-        if let Some(fold) = views.fresh_fold(Instant::now(), tick) {
+        let mut locked = views.lock();
+        let watched = views.read().watched();
+        if let Some(fold) = locked.fresh_fold(Instant::now(), tick, watched) {
             return Ok(fold);
         }
         let requested_at = Instant::now();
         requests
             .send(FetchRequest::default())
             .map_err(|error| error.to_string())?;
-        let receiver = views.wait_for_fold(requested_at);
+        let receiver = locked.wait_for_fold(requested_at);
         (receiver, requested_at)
     };
     receiver

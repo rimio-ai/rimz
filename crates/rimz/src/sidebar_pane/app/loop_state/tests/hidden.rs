@@ -463,6 +463,7 @@ fn timeout_source_tracks_the_winning_deadline_without_counting_a_wake() {
     rig.state.frame_timing();
     assert_eq!(host_pass::timeout_source(), Counter::TimeoutIdle);
     rig.state.pane.config.tick_seconds = 60;
+    clock.advance(Duration::from_secs(3));
     rig.state.frame_timing();
     assert_eq!(host_pass::timeout_source(), Counter::TimeoutWatchdog);
     rig.state.pane.caps_refresh_deadline = Some(clock.now() + Duration::from_millis(300));
@@ -643,10 +644,10 @@ fn retained_hidden_content_does_not_postpone_the_watchdog() {
     rig.state.pane.config.tick_seconds = 60;
     defer_name(&mut rig, "pending");
     let projections = rig.state.pane.projections;
-    clock.advance(SELF_CLOSE_WATCHDOG / 2);
+    clock.advance(Duration::from_secs(31));
     rig.maintenance();
     assert!(rig.next_request().is_none(), "watchdog is not due yet");
-    clock.advance(SELF_CLOSE_WATCHDOG / 2);
+    clock.advance(Duration::from_secs(31));
     rig.maintenance();
     assert!(
         rig.next_request().is_some(),
@@ -656,6 +657,64 @@ fn retained_hidden_content_does_not_postpone_the_watchdog() {
         rig.state.pane.projections, projections,
         "content stays deferred"
     );
+}
+
+#[test]
+fn settled_hidden_watchdog_waits_seven_seconds_on_both_backends() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        let mut rig = settled_shared_hidden(mux);
+        rig.state.pane.config.tick_seconds = 1;
+        let clock = LoopClock::play(Timestamp::now());
+        rig.state.pane.clock = clock.clone();
+        rig.maintenance();
+        assert!(rig.next_request().is_none(), "the fixture is settled");
+        rig.state.pane.last_self_close_check = clock.now();
+        clock.advance(Duration::from_millis(6_999));
+        rig.maintenance();
+        assert!(
+            rig.next_request().is_none(),
+            "{mux}: not due before seven seconds"
+        );
+        clock.advance(Duration::from_millis(1));
+        rig.maintenance();
+        assert!(
+            rig.next_request().is_some(),
+            "{mux}: a missing completion needs a fold"
+        );
+        assert!(rig.next_request().is_none(), "one latched request");
+    }
+}
+
+#[test]
+fn another_watched_pane_keeps_the_hidden_watchdog_at_two_seconds_on_both_backends() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        let mut rig = settled_shared_hidden(mux);
+        let clock = LoopClock::play(Timestamp::now());
+        rig.state.pane.clock = clock.clone();
+        rig.maintenance();
+        assert!(rig.next_request().is_none(), "the fixture is settled");
+        rig.state.pane.last_self_close_check = clock.now();
+        rig.views.lock().presentation(
+            &PaneId::from_parts(
+                mux,
+                if mux == MuxName::Tmux {
+                    "%999"
+                } else {
+                    "other"
+                },
+            ),
+            clock.now(),
+            true,
+        );
+        assert!(rig.views.read().watched());
+        assert!(!rig.state.watched());
+        clock.advance(SELF_CLOSE_WATCHDOG - Duration::from_millis(1));
+        rig.maintenance();
+        assert!(rig.next_request().is_none());
+        clock.advance(Duration::from_millis(1));
+        rig.maintenance();
+        assert!(rig.next_request().is_some(), "{mux}: the room is watched");
+    }
 }
 
 #[test]

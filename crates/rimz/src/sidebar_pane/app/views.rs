@@ -101,7 +101,6 @@ pub(super) struct ViewsRecord {
 }
 
 impl ViewsRecord {
-    #[allow(dead_code, reason = "The cadence consumers land in the next commit.")]
     pub(super) fn watched(&self) -> bool {
         !self.mapped_panes.is_empty() || !self.resolved_panes.is_empty()
     }
@@ -343,10 +342,16 @@ struct ClientRoute {
 }
 
 impl Views {
-    pub(super) fn fresh_fold(&self, now: Instant, tick: Duration) -> Option<Arc<WorkspaceFold>> {
+    pub(super) fn fresh_fold(
+        &self,
+        now: Instant,
+        tick: Duration,
+        watched: bool,
+    ) -> Option<Arc<WorkspaceFold>> {
+        let max_age = super::timing::fold_interval(watched, tick).saturating_add(tick);
         self.fold
             .as_ref()
-            .filter(|fold| now.saturating_duration_since(fold.sampled_at) < tick)
+            .filter(|fold| now.saturating_duration_since(fold.sampled_at) < max_age)
             .cloned()
     }
 

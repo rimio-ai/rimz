@@ -110,9 +110,7 @@ impl PaintHold {
     }
 }
 
-pub(super) use crate::sidebar::timing::{
-    RESIZE_PAINT_HOLD_CEILING, SELF_CLOSE_EMPTY_CONFIRM, SELF_CLOSE_WATCHDOG,
-};
+pub(super) use crate::sidebar::timing::{RESIZE_PAINT_HOLD_CEILING, SELF_CLOSE_EMPTY_CONFIRM};
 
 #[cfg(test)]
 mod tests;

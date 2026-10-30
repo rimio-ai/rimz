@@ -30,7 +30,7 @@ use super::RoomConfig;
 #[cfg(feature = "testkit")]
 use super::ServeConfig;
 use super::input::Wakeup;
-use super::timing::tick_for;
+use super::timing::{fold_interval, tick_for};
 
 #[cfg(feature = "testkit")]
 mod concurrent;
@@ -743,6 +743,15 @@ fn fixture_renderer(
 }
 
 impl FetchWorker {
+    fn attention_due_ms(&self) -> Option<u64> {
+        let prefs = &self.config.notification_prefs;
+        self.notifications
+            .next_due_ms(prefs)
+            .into_iter()
+            .chain(self.remind.next_due_ms(prefs))
+            .min()
+    }
+
     fn new(
         config: RoomConfig,
         runtime: RuntimePaths,
@@ -1021,6 +1030,7 @@ impl FetchWorker {
                 &mut self.link_notifications,
                 &self.diag,
                 &mut fold.workspace.0,
+                self.clock.now_ms(),
             )
         } else {
             Vec::new()
@@ -1093,8 +1103,8 @@ fn evaluate_notifications(
     link_state: &mut LinkNotificationState,
     diag: &crate::diag::DiagSink,
     snapshot: &mut SidebarSnapshot,
+    now_ms: u64,
 ) -> Vec<NotificationDelivery> {
-    let now_ms = crate::utils::time::unix_now_ms();
     let unread = reconcile_snapshot(runtime, snapshot);
     emit_unread_reconcile_trace(diag, &unread.opened, &unread.cleared);
 
@@ -1463,6 +1473,14 @@ impl FetchWorker {
             -> std::result::Result<StatePaths, crate::disk::paths::PathErr>,
     ) {
         let subscribers = sink.subscribers.clone();
+        let views = sink
+            .host_data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .views
+            .clone();
+        let attention_due_ms = std::cell::Cell::new(self.attention_due_ms());
+        let clock = self.clock.clone();
         drive(
             &request_rx,
             FOLD_FLOOR,
@@ -1473,6 +1491,14 @@ impl FetchWorker {
                     .values()
                     .map(|subscriber| tick_for(subscriber.tick_seconds))
                     .min()
+            },
+            || views.read().watched(),
+            || {
+                attention_due_ms
+                    .get()
+                    .and_then(|due| i64::try_from(due).ok())
+                    .and_then(|due| jiff::Timestamp::from_millisecond(due).ok())
+                    .map(|due| clock.instant_at(due))
             },
             |request| {
                 // Re-resolved every cycle so `workspace migrate` repoints reads
@@ -1494,6 +1520,7 @@ impl FetchWorker {
                         sink.publish(Err(format!("resolving workspace state paths: {err}")));
                     }
                 }
+                attention_due_ms.set(self.attention_due_ms());
             },
         );
     }
@@ -1522,44 +1549,104 @@ pub(super) fn spawn_fetch_worker(
     })
 }
 
-/// Run one cycle per batch, starting none sooner than `fold_floor` after the
-/// previous one returned, whatever the request's mode. Every request waiting
-/// at the drain joins the batch; later arrivals run the next cycle. A batch
-/// in hand still runs after every sender disconnects. After the first cycle,
-/// an idle backstop tick runs an ordinary cycle. No subscribers (`None`), or a
-/// tick no `Instant` can reach, means blocking for a request; timeouts re-read
-/// membership before firing.
+/// When the previous cycle started and returned. A cycle decides attention
+/// after its start, so only a due at or before `started` is one it passed.
+#[derive(Clone, Copy)]
+struct CycleSpan {
+    started: Instant,
+    returned: Instant,
+}
+
+fn next_cycle(
+    last: Option<CycleSpan>,
+    tick: Option<Duration>,
+    watched: bool,
+    attention_due: Option<Instant>,
+    requested_at: Option<Instant>,
+    fold_floor: Duration,
+) -> Option<Instant> {
+    if let Some(arrival) = requested_at {
+        return Some(last.map_or(arrival, |span| arrival.max(span.returned + fold_floor)));
+    }
+    let CycleSpan { started, returned } = last?;
+    let tick = tick?;
+    let backstop = returned.checked_add(fold_interval(watched, tick));
+    let attention = attention_due.and_then(|due| {
+        if due <= started {
+            returned.checked_add(tick)
+        } else {
+            Some(due)
+        }
+    });
+    backstop
+        .into_iter()
+        .chain(attention)
+        .min()
+        .map(|at| at.max(returned + fold_floor))
+}
+
+/// Run one cycle per merged batch, resting after each return regardless of mode.
+/// After the first cycle, requests, the watched-aware backstop and attention dues
+/// compete for the next start. Timeouts re-read all three inputs against the
+/// same cycle span; no subscribers means waiting for a request. A held batch
+/// still runs after all senders disconnect.
 fn drive(
     requests: &Receiver<FetchRequest>,
     fold_floor: Duration,
     mut backstop: impl FnMut() -> Option<Duration>,
+    mut watched: impl FnMut() -> bool,
+    mut attention_due: impl FnMut() -> Option<Instant>,
     mut cycle: impl FnMut(FetchRequest),
 ) {
-    let mut returned_at: Option<Instant> = None;
+    let mut last: Option<CycleSpan> = None;
     loop {
-        let received =
-            match returned_at.and_then(|last| backstop().and_then(|tick| last.checked_add(tick))) {
-                Some(deadline) => {
-                    requests.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                }
-                None => requests.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            };
+        let mut idle_deadline = || {
+            next_cycle(
+                last,
+                backstop(),
+                watched(),
+                attention_due(),
+                None,
+                fold_floor,
+            )
+        };
+        let received = match last.and_then(|_| idle_deadline()) {
+            Some(deadline) => {
+                requests.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            }
+            None => requests.recv().map_err(|_| RecvTimeoutError::Disconnected),
+        };
         let mut request = match received {
             Ok(request) => request,
             Err(RecvTimeoutError::Disconnected) => return,
-            Err(RecvTimeoutError::Timeout) if backstop().is_none() => continue,
+            Err(RecvTimeoutError::Timeout)
+                if idle_deadline().is_none_or(|at| at > Instant::now()) =>
+            {
+                continue;
+            }
             Err(RecvTimeoutError::Timeout) => FetchRequest::default(),
         };
-        if let Some(rest) =
-            returned_at.and_then(|last| (last + fold_floor).checked_duration_since(Instant::now()))
+        if let Some(rest) = next_cycle(
+            last,
+            None,
+            watched(),
+            None,
+            Some(Instant::now()),
+            fold_floor,
+        )
+        .and_then(|at| at.checked_duration_since(Instant::now()))
         {
             std::thread::sleep(rest);
         }
         for waiting in requests.try_iter() {
             request.merge(waiting);
         }
+        let started = Instant::now();
         cycle(request);
-        returned_at = Some(Instant::now());
+        last = Some(CycleSpan {
+            started,
+            returned: Instant::now(),
+        });
     }
 }
 

@@ -1188,7 +1188,7 @@ fn maintenance_watchdog_requests_one_unwatched_fetch() {
     let mut rig = Rig::with_own_pane(own_pane);
     rig.hide();
 
-    rig.state.pane.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
+    rig.state.pane.last_self_close_check = Instant::now() - Duration::from_secs(7);
     rig.maintenance();
 
     assert!(
