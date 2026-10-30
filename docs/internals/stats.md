@@ -34,7 +34,7 @@ When the service call fails, the held dashboard falls back to any current-versio
 
 ## Windows
 
-`Window` has four variants, in tab order: Today (the local calendar day in the publication's timezone), Week, Month, and Year (the last 7, 30, and 364 local calendar days, including today). `--window` selects the window for every breakdown, the insights, and the held dashboard's first tab, and defaults to Today. Today selects `SpendTally.day`, which is independent of the sidebar's configured headline window. The heatmap and the four-window totals ignore the selection.
+`Window` has four variants, in tab order: `Today`, `Week`, `Month`, and `Year`, displayed as Today, 7 days, 30 days, and 52 weeks. They cover the local calendar day in the publication's timezone and the last 7, 30, and 364 local calendar days, including today. The serialized keys remain `today`, `week`, `month`, and `year`. `--window` selects every breakdown, sessions and assists, and the held dashboard's first tab, defaulting to Today. Today selects `SpendTally.day`, independently of the sidebar's configured headline window. The heatmap, its activity summary, and the four-window totals ignore the selection.
 
 Two token measures appear on the panel, and the difference is a trap:
 
@@ -57,7 +57,7 @@ Shading is relative to the visible grid (`Grid::build`, `shade`, and `level` in 
 
 Under `--dollars` the value is dollars, so a token-active day with no priced usage reads `·` although it counts as active everywhere else.
 
-The month row groups the columns by the month of each column's Monday and labels a group only when it spans at least two columns. A month that begins midweek is therefore labelled one column late, and a one-column fragment at either edge goes unlabelled. The `Less · ░ ▒ ▓ █ More` key closes the block beside the activity count, current full-history streak, and busiest date. One-shot spacing keeps blank lines inside the heatmap, and the held dashboard removes them.
+The month row groups the columns by the month of each column's Monday and labels a group only when it spans at least two columns. A month that begins midweek is therefore labelled one column late, and a one-column fragment at either edge goes unlabelled. The `Less · ░ ▒ ▓ █ More` key closes the grid ([activity summary](#insights)). One-shot spacing keeps blank lines inside the heatmap, and the held dashboard removes them.
 
 ## The breakdowns
 
@@ -89,7 +89,7 @@ Each section ranks by dollars, then name, keeps three rows, and merges the rest 
 
 AGENT-TIME formats seconds with `theme::fmt::active_duration`, the formatter attribution uses. MESSAGES is incoming human prompts plus received agent messages, with the human count in parentheses when nonzero (`12 (3 you)`). Outgoing messages stay in role-level JSON and do not inflate it. A zero effort cell reads `-`. No surface unfolds a team into its roles except JSON. Session counts use grouped thousands.
 
-The remainder and already-counted notes come from `panel::render_spend`. The footer takes sessions from the selected fleet window, labels them `today`, `this week`, `this month`, or `this year`, and divides window dollars by sessions with two decimal places. Zero sessions omit that clause. Explicit views omit both the remainder and the footer's session clause.
+The remainder and already-counted notes come from `panel::render_spend`. Section headings use the lowercase `Window::label`: `(today)`, `(7 days)`, `(30 days)`, or `(52 weeks)`. Empty-view lines keep `Window::scope`: `today`, `last 7 days`, `last 30 days`, or `last 52 weeks`. The footer takes sessions from the selected fleet window, labels them `today`, `in the last 7 days`, `in the last 30 days`, or `in the last 52 weeks`, and divides window dollars by sessions with two decimal places. Zero sessions omit that clause. Explicit views omit both the remainder and the footer's session clause.
 
 ### Held dashboard rows
 
@@ -117,26 +117,19 @@ The one-shot coverage line prints above the first visible profile section, and a
 
 ## Insights
 
-The one-shot activity summary and JSON's `active_days_28` keep `panel::Activity::of`. The one-shot heatmap key follows this table:
-
-| Figure | Today and Year | Week and Month |
-| --- | --- | --- |
-| Active days | active days of the last 28 (`RECENT_ACTIVITY_DAYS`) | active days in the window |
-| Busiest date | the whole cached history | days in the window |
-| Current streak on both text surfaces | the whole cached history | the whole cached history |
-| Spend trend | none | the change against the preceding equal span, when that span has dollars |
+Both heatmap summaries use `crates/rimz/src/cli/stats/panel.rs::grid_activity_summary`: active days and the busiest date come from the drawn span, beginning at `Grid::col_monday(0)` and ending today, independently of the selected window. The legend is `N active days since Mon D · streak N days · busiest Mon D`, with singular `day` for one and `–` when no day is active. Both dates print `Mon D YYYY` in earlier calendar years, keeping the day unpadded. The one-shot summary sits below the ramp key and wraps to 86 columns. The held summary sits beside the key when it fits; otherwise it moves below and wraps to the frame width.
 
 The current streak counts back from today, or from yesterday when today has no activity yet, so a quiet morning does not break a streak.
 
-The held heatmap instead counts active days and chooses the busiest within its drawn span, beginning at `Grid::col_monday(0)` and ending today. Its footer is identical on every tab: `N active days since Mon D · streak N days · busiest Mon D`, with singular `day` for one and `–` when no day is active. Both dates print `Mon D YYYY` when they fall in an earlier calendar year than today, keeping the day unpadded. The one-shot legend's date format is unchanged. The streak still reads the full history. A summary too wide beside the ramp key moves below it and wraps to the frame width.
+The streak and JSON activity fields keep `panel::Activity::of`. JSON still uses its `Year` computation: `active_days_28` counts the recent 28 days (`RECENT_ACTIVITY_DAYS`), while busiest date and streaks read the whole cached history.
 
-Both text surfaces use `panel::per_active_day`: dollars and days with tokens cover the same last 7, 30, or 364 local calendar days, today included. The one-shot average prints a U+2013 placeholder for Today. Chart titles compare Today with yesterday and show the shared average for Week, Month, and Year. One-shot Spend figures right-align to fixed column edges, so Week and Month trends run into the next column's padding without moving any figure. `panel::trend_label` caps changes above 999% as `↑999%+` so they fit those slots. Today and Year have no spend trend.
+Both text surfaces use `panel::per_active_day`: dollars and days with tokens cover the same 1, 7, 30, or 364 local calendar days, today included. The one-shot row labels are `dollars (vs prior)`, `tokens + cache reads`, and `per active day`, and Today has a computed average. Chart titles compare Today with yesterday and show the shared average for the other windows. One-shot Spend figures right-align to fixed column edges, so 7-day and 30-day trends run into the next column's padding without moving any figure. `panel::trend_label` prints `±0%` when the change rounds to zero and caps changes above 999% as `↑999%+`. The 7-day and 30-day trends compare the preceding equal span when it had dollars; Today and 52 weeks have no spend trend.
 
 ## Fitting the terminal
 
 The dashboard is a pure string renderer over published stats, per-tab assists, the active tab, and supplied terminal dimensions (`dashboard::Dashboard::frame`). crossterm appears only at the held loop's terminal edge (`tui::TerminalModeGuard`, `tui::replace_frame`, and key events), and the sidebar pane's ratatui widget stack is not on this path, so tests assert on rendered text.
 
-Width is `min(cols, 113)`, centred independently of the heatmap week count. Below 112 columns pairs stack and bars shrink. Every line is clipped by display width while preserving ANSI styles. On a tty, top padding is `(rows − tallest_tab_height) / 2` at the chosen fit step, shared across tabs. The final frame joins lines without a trailing newline, so replacing a frame of exactly the terminal height cannot scroll its first row offscreen.
+Width is `min(cols, 113)`, centred independently of the heatmap week count. Below 112 columns pairs stack and bars shrink. When the full tab rail exceeds that width, inactive tabs omit their totals and the active tab keeps its bracketed label and total. Every line is clipped by display width while preserving ANSI styles. On a tty, top padding is `(rows − tallest_tab_height) / 2` at the chosen fit step, shared across tabs. The final frame joins lines without a trailing newline, so replacing a frame of exactly the terminal height cannot scroll its first row offscreen.
 
 The fitter renders all four tabs at each cumulative step and picks the first whose tallest frame fits. All tabs share that step:
 
@@ -173,7 +166,7 @@ A history with no usage and no profile activity paints the wordmark while it fit
 | Key | Outcome |
 | --- | --- |
 | `←` / `→`, `h` / `l` | move one range without wrapping and repaint from the stats in hand |
-| `t` / `w` / `m` / `y` (either case) | jump to Today / Week / Month / Year |
+| `t` / `w` / `m` / `y` (either case) | jump to Today / 7 days / 30 days / 52 weeks |
 | `Tab` / `Shift-Tab` | cycle the window with wrap and repaint from the stats in hand |
 | `r` / `R` | reload the binary in place |
 | `q`, `Ctrl-C` | quit, unless `--hold` is set |

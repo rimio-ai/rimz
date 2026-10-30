@@ -181,17 +181,14 @@ pub(super) fn render_spend(
     if role.is_none() {
         let [_, week, month, year] = Window::TABS.map(|window| window.select(&stats.total));
         let today = stats.by_day.get(&today_day).cloned().unwrap_or_default();
-        let averages = Window::TABS.map(|window| {
-            per_active_day(&stats.by_day, today_day, window)
-                .map(fmt_usd)
-                .unwrap_or_else(|| "–".into())
-        });
+        let averages =
+            Window::TABS.map(|window| fmt_usd(per_active_day(&stats.by_day, today_day, window)));
         let trends = Window::TABS.map(|window| {
             spend_trend(&stats.by_day, today_day, window)
                 .map(|trend| format!(" {}", trend_label(trend)))
                 .unwrap_or_default()
         });
-        // Each figure right-aligns to its column's edge, so a Week or Month trend runs into
+        // Each figure right-aligns to its column's edge, so a 7-day or 30-day trend runs into
         // the next column's padding without moving any figure.
         for (label, values, row_trends) in [
             (
@@ -200,12 +197,12 @@ pub(super) fn render_spend(
                 None,
             ),
             (
-                "dollars",
+                "dollars (vs prior)",
                 [today.usd, week.usd, month.usd, year.usd].map(fmt_usd),
                 Some(&trends),
             ),
             (
-                "tokens",
+                "tokens + cache reads",
                 [
                     today.tokens,
                     week.display_tokens(),
@@ -346,7 +343,7 @@ pub(super) fn render_spend(
             lines.push(format!(
                 "  No {} spend recorded ({}).",
                 profile_role.noun(),
-                active.label().to_ascii_lowercase(),
+                active.scope(),
             ));
         }
         if profile_role == RoleView::Subagents && (shown || role.is_some()) {
@@ -358,32 +355,14 @@ pub(super) fn render_spend(
     }
     if role.is_none() {
         lines.push(String::new());
-        heatmap_lines(
-            &mut lines,
-            stats,
-            today_day,
-            weeks_for_terminal(render::terminal_columns(80)),
-            dollars,
+        let weeks = weeks_for_terminal(render::terminal_columns(80));
+        let grid = heatmap_lines(&mut lines, stats, today_day, weeks, dollars);
+        let summary = grid_activity_summary(&stats.by_day, &grid);
+        lines.extend(
+            render::wrap_words(&summary, COLUMN_EDGES[3] - 2)
+                .into_iter()
+                .map(|line| render::paint(render::palette::muted(), &format!("  {line}"))),
         );
-        let activity = Activity::of(&stats.by_day, today_day, active);
-        let streak = Activity::of(&stats.by_day, today_day, Window::Year).current_streak;
-        let busiest = activity
-            .most_active
-            .map(fmt_day)
-            .unwrap_or_else(|| "–".into());
-        let summary = format!(
-            "{} of last {} days active · streak {} · busiest {busiest}",
-            activity.active_count,
-            activity.window_days,
-            plural_days(streak)
-        );
-        if let Some(key) = lines.last_mut() {
-            *key = format!(
-                "{}{}",
-                pad_to(key, 40),
-                render::paint(render::palette::muted(), &summary)
-            );
-        }
     }
     lines.push(spend_footer(
         stats,
@@ -407,9 +386,9 @@ fn spend_footer(stats: &Stats, today_day: i64, window: Option<Window>) -> String
     }
     let period = match window {
         Window::Today => "today",
-        Window::Week => "this week",
-        Window::Month => "this month",
-        Window::Year => "this year",
+        Window::Week => "in the last 7 days",
+        Window::Month => "in the last 30 days",
+        Window::Year => "in the last 52 weeks",
     };
     line.push_str(&format!(
         " · {} {} {period} at {} each",
@@ -501,11 +480,17 @@ fn spend_section(
             spend,
         ));
     }
+    let heading = format!(
+        "{} ({})",
+        section.label(),
+        active.label().to_ascii_lowercase()
+    );
     let width = rows
         .iter()
         .map(|(name, _)| display_width(name))
         .max()
         .unwrap_or(0)
+        .max(display_width(&heading))
         .max(20);
     let messages_width = rows
         .iter()
@@ -556,14 +541,7 @@ fn spend_section(
         render::palette::header(),
         &format!(
             "  {} {:>10} {:>7}  {detail_header}",
-            pad_to(
-                &format!(
-                    "{} ({})",
-                    section.label(),
-                    active.label().to_ascii_lowercase()
-                ),
-                width
-            ),
+            pad_to(&heading, width),
             "SPEND",
             "SHARE",
         ),
@@ -729,7 +707,7 @@ pub(super) fn heatmap_lines(
     today_day: i64,
     weeks: usize,
     dollars: bool,
-) {
+) -> Grid {
     let grid = Grid::build(&stats.by_day, today_day, weeks, dollars);
     let header = if dollars {
         "Spend activity"
@@ -772,6 +750,7 @@ pub(super) fn heatmap_lines(
     }
     lines.push(String::new());
     lines.push(format!("  {}", ramp_key(&styles)));
+    grid
 }
 
 /// The compact `Less · ░ ▒ ▓ █ More` key in the cool ramp.
@@ -783,6 +762,38 @@ pub(super) fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
     }
     s.push_str(&render::paint(render::palette::muted(), "More"));
     s
+}
+
+pub(super) fn grid_activity_summary(by_day: &BTreeMap<i64, DaySpend>, grid: &Grid) -> String {
+    let start = grid.col_monday(0);
+    let today_year = Timestamp::from_second(grid.today_day * DAY_SECS)
+        .ok()
+        .map(|today| jiff::tz::TimeZone::UTC.to_datetime(today).year());
+    let date_label = |day| {
+        if let Ok(timestamp) = Timestamp::from_second(day * DAY_SECS) {
+            let date = jiff::tz::TimeZone::UTC.to_datetime(timestamp);
+            if today_year.is_some_and(|year| date.year() < year) {
+                return format!("{} {}", fmt_day(day), date.strftime("%Y"));
+            }
+        }
+        fmt_day(day)
+    };
+    let active_days = by_day
+        .range(start..=grid.today_day)
+        .filter(|(_, day)| day.tokens > 0)
+        .collect::<Vec<_>>();
+    let streak = Activity::of(by_day, grid.today_day, Window::Year).current_streak;
+    let busiest = active_days
+        .iter()
+        .max_by_key(|(_, day)| day.tokens)
+        .map(|(day, _)| date_label(**day))
+        .unwrap_or_else(|| "–".into());
+    format!(
+        "{} active days since {} · streak {} · busiest {busiest}",
+        active_days.len(),
+        date_label(start),
+        plural_days(streak)
+    )
 }
 
 pub(super) struct SpendBreakdown<'a> {
@@ -822,10 +833,7 @@ pub(super) fn per_active_day(
     by_day: &BTreeMap<i64, DaySpend>,
     today_day: i64,
     window: Window,
-) -> Option<f64> {
-    if window == Window::Today {
-        return None;
-    }
+) -> f64 {
     let mut usd = 0.0;
     let mut count = 0;
     for day in by_day
@@ -835,10 +843,13 @@ pub(super) fn per_active_day(
         usd += day.usd;
         count += usize::from(day.tokens > 0);
     }
-    Some(if count == 0 { 0.0 } else { usd / count as f64 })
+    if count == 0 { 0.0 } else { usd / count as f64 }
 }
 
 pub(super) fn trend_label(trend: f64) -> String {
+    if trend.abs().round_ties_even() == 0.0 {
+        return "±0%".into();
+    }
     let arrow = if trend >= 0.0 { '↑' } else { '↓' };
     if trend.abs() > 999.0 {
         format!("{arrow}999%+")
@@ -985,11 +996,10 @@ pub(super) fn display_width(s: &str) -> usize {
 
 // ── Trailing windows and activity ──────────────────────────────────────────────
 
-/// Cadence read from the per-day history: the selected-window active ratio, the
+/// Cadence read from the per-day history: the selected-window active count, the
 /// heaviest single day, and the longest and current active-day streaks.
 pub(super) struct Activity {
     pub(super) active_count: u32,
-    pub(super) window_days: u32,
     pub(super) most_active: Option<i64>,
     pub(super) longest_streak: u32,
     pub(super) current_streak: u32,
@@ -1016,7 +1026,6 @@ impl Activity {
             let (longest_streak, current_streak) = streaks(&active, today_day);
             return Activity {
                 active_count,
-                window_days: RECENT_ACTIVITY_DAYS,
                 most_active,
                 longest_streak,
                 current_streak,
@@ -1040,7 +1049,6 @@ impl Activity {
 
         Self {
             active_count,
-            window_days: span,
             most_active,
             longest_streak,
             current_streak,

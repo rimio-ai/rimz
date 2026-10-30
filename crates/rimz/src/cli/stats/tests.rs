@@ -103,6 +103,57 @@ fn spend_text(stats: &Stats, role: Option<RoleView>, window: Window) -> String {
 }
 
 #[test]
+fn one_shot_section_columns_align_and_fit_every_window() {
+    let mut stats = Stats::from_provider(team_cache());
+    stats.by_model = model_map([("gpt-5".into(), every_window(tally(100, 20.0, 1)))]);
+    stats.by_provider = BTreeMap::from([("codex".into(), every_window(tally(100, 20.0, 1)))]);
+    for window in Window::TABS {
+        let text = spend_text(&stats, None, window);
+        let lines = text.lines().collect::<Vec<_>>();
+        for section in ["Models", "Providers", "Agents", "Teams", "Subagents"] {
+            let index = lines
+                .iter()
+                .position(|line| line.trim_start().starts_with(&format!("{section} (")))
+                .expect(&text);
+            let header = lines[index];
+            let row = lines[index + 1];
+            let dollars = row
+                .split_whitespace()
+                .find(|cell| cell.starts_with('$'))
+                .unwrap();
+            assert_eq!(
+                display_width(&header[..header.find("SPEND").unwrap()]) + "SPEND".len(),
+                display_width(&row[..row.find(dollars).unwrap()]) + display_width(dollars),
+                "{window:?} {section}:\n{header}\n{row}"
+            );
+            assert!(
+                header.contains(&format!(
+                    "{section} ({})",
+                    window.label().to_ascii_lowercase()
+                )),
+                "{window:?}: {header}"
+            );
+            assert!(
+                display_width(header) <= display_width(row),
+                "{header}\n{row}"
+            );
+            if section != "Teams" {
+                assert!(display_width(header) <= 86, "{window:?}: {header}");
+            }
+        }
+        for note in text
+            .split("\n\n")
+            .filter(|block| block.contains("recorded since") || block.contains("Already counted"))
+        {
+            assert!(
+                note.lines().all(|line| display_width(line) <= 86),
+                "{window:?}: {note}"
+            );
+        }
+    }
+}
+
+#[test]
 fn one_shot_averages_spend_over_active_days() {
     let mut stats = Stats::from_provider(team_cache());
     stats.by_day = [0, 1, 7, 29, 30, 364, 365]
@@ -119,7 +170,7 @@ fn one_shot_averages_spend_over_active_days() {
         .expect(&text);
     assert_eq!(
         row.split_whitespace().collect::<Vec<_>>(),
-        ["per", "active", "day", "–", "$11", "$10", "$10"]
+        ["per", "active", "day", "$10", "$11", "$10", "$10"]
     );
 }
 
@@ -162,6 +213,9 @@ fn one_shot_single_day_streak_is_singular() {
 
 #[test]
 fn one_shot_trends_preserve_right_aligned_dollar_columns() {
+    for trend in [-0.5, -0.4, -0.0, 0.0, 0.4, 0.5] {
+        assert_eq!(trend_label(trend), "±0%", "{trend}");
+    }
     let mut stats = Stats::from_provider(team_cache());
     stats.by_day = (0..60)
         .map(|ago| {
@@ -200,7 +254,7 @@ fn one_shot_trends_preserve_right_aligned_dollar_columns() {
     let end_column = |line: &str, needle: &str| {
         display_width(&line[..line.find(needle).unwrap() + needle.len()])
     };
-    for (label, amount, edge) in [("Week", "$35", 52), ("Month", "$265", 69)] {
+    for (label, amount, edge) in [("7 days", "$35", 52), ("30 days", "$265", 69)] {
         let end = end_column(dollars, amount);
         assert_eq!(
             end,
@@ -211,7 +265,7 @@ fn one_shot_trends_preserve_right_aligned_dollar_columns() {
         assert_eq!(end, edge, "the mock's column edge: {with_trends}");
     }
     assert_eq!(end_column(header, "Today"), 35);
-    assert_eq!(end_column(header, "Year"), 86);
+    assert_eq!(end_column(header, "52 weeks"), 86);
 }
 
 #[test]
@@ -356,9 +410,9 @@ fn one_shot_footer_scopes_sessions_and_omits_the_clause_without_them() {
     };
     for (window, label, sessions, cost) in [
         (Window::Today, "today", "1,111", "$3.00"),
-        (Window::Week, "this week", "2,222", "$4.00"),
-        (Window::Month, "this month", "3,333", "$5.00"),
-        (Window::Year, "this year", "4,444", "$6.00"),
+        (Window::Week, "in the last 7 days", "2,222", "$4.00"),
+        (Window::Month, "in the last 30 days", "3,333", "$5.00"),
+        (Window::Year, "in the last 52 weeks", "4,444", "$6.00"),
     ] {
         let text = spend_text(&stats, None, window);
         assert_eq!(
@@ -434,29 +488,30 @@ fn one_shot_groups_session_counts_in_compact_and_explicit_views() {
 }
 
 #[test]
-fn one_shot_heatmap_key_combines_window_activity_with_the_full_streak() {
+fn one_shot_heatmap_key_combines_grid_activity_with_the_full_streak() {
     let mut stats = Stats::from_provider(team_cache());
     stats.by_day = (0..40).map(|ago| (20_000 - ago, day(1, 1.0))).collect();
     stats.by_day.insert(19_999, day(10, 1.0));
     stats.by_day.insert(19_940, day(100, 1.0));
-    for (window, days, busiest) in [
-        (Window::Today, 28, 19_940),
-        (Window::Week, 7, 19_999),
-        (Window::Month, 30, 19_999),
-        (Window::Year, 28, 19_940),
-    ] {
+    stats.by_day.insert(18_000, day(1_000, 1.0));
+    for window in Window::TABS {
         let text = spend_text(&stats, None, window);
-        let key = text.lines().find(|line| line.contains("Less")).unwrap();
-        let summary = format!(
-            "{days} of last {days} days active · streak 40 days · busiest {}",
-            fmt_day(busiest)
+        let lines = text
+            .lines()
+            .skip_while(|line| !line.contains("active days since"))
+            .take_while(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>();
+        let summary = lines
+            .iter()
+            .flat_map(|line| line.split_whitespace())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(summary.starts_with("41 active days since "), "{text}");
+        assert!(
+            summary.ends_with("streak 40 days · busiest Aug 5"),
+            "{text}"
         );
-        let at = key.find(&summary).expect(&text);
-        assert_eq!(
-            display_width(&key[..at]),
-            40,
-            "the mock's summary column: {key}"
-        );
+        assert!(lines.iter().all(|line| display_width(line) <= 86), "{text}");
     }
 }
 
@@ -1084,7 +1139,7 @@ fn empty_explicit_role_views_name_the_window_and_keep_the_recording_date() {
         .unwrap();
         let text = strip_ansi(std::str::from_utf8(&out).unwrap());
         assert!(
-            text.contains(&format!("No {noun} spend recorded (week).")),
+            text.contains(&format!("No {noun} spend recorded (last 7 days).")),
             "{text}"
         );
         assert!(text.contains("roles recorded since Oct 04"), "{text}");
@@ -1423,9 +1478,9 @@ fn spend_first_publication_has_compact_json_and_panel() {
     for label in [
         "Spend",
         "Today",
-        "Week",
-        "Month",
-        "Year",
+        "7 days",
+        "30 days",
+        "52 weeks",
         "Models (today)",
         "Providers (today)",
         "Subagents (today)",
@@ -1464,7 +1519,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
     let today = String::from_utf8(today).unwrap();
     assert!(today.contains("1.5M"));
     assert!(!today.contains("as of Oct"));
-    assert!(!today.contains("Models (year)"));
+    assert!(!today.contains("Models (52 weeks)"));
     assert!(today.contains("SESSIONS"));
     assert!(!today.contains("MODEL"));
     let held = held_frame(&stats, &assists, Window::Year, 20_011);
@@ -1497,7 +1552,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
     .unwrap();
     assert!(
         strip_ansi(std::str::from_utf8(&explicit).unwrap())
-            .contains("No subagent spend recorded (year).")
+            .contains("No subagent spend recorded (last 52 weeks).")
     );
     assert!(
         strip_ansi(std::str::from_utf8(&explicit).unwrap()).contains("recorded since Oct 14 2024")
@@ -1560,7 +1615,11 @@ fn week_scopes_plain_and_json_breakdowns_and_shares() {
     let mut out = Vec::new();
     panel::render_spend(&mut out, &stats, 20_000, false, None, Window::Week, "\n").unwrap();
     let text = strip_ansi(std::str::from_utf8(&out).unwrap());
-    for label in ["Models (week)", "Providers (week)", "Subagents (week)"] {
+    for label in [
+        "Models (7 days)",
+        "Providers (7 days)",
+        "Subagents (7 days)",
+    ] {
         assert!(text.contains(label), "{text}");
     }
     for name in ["GPT 5", "Codex", "fast"] {
@@ -1966,7 +2025,7 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
 }
 
 #[test]
-fn activity_reads_streaks_active_ratio_and_busiest_day() {
+fn activity_reads_streaks_active_count_and_busiest_day() {
     let today = 20_000;
     let mut by_day = BTreeMap::new();
     // A 5-day run ending today, then a gap, then an older 2-day run.
@@ -1979,11 +2038,7 @@ fn activity_reads_streaks_active_ratio_and_busiest_day() {
     let a = Activity::of(&by_day, today, Window::Year);
     assert_eq!(a.current_streak, 5);
     assert_eq!(a.longest_streak, 5);
-    assert_eq!(
-        (a.active_count, a.window_days),
-        (7, 28),
-        "all seven active days fall inside 28"
-    );
+    assert_eq!(a.active_count, 7, "all seven active days fall inside 28");
     assert_eq!(a.most_active, Some(today - 10));
 }
 
@@ -2013,7 +2068,7 @@ fn activity_week_scopes_active_count_and_streaks() {
 
     let a = Activity::of(&by_day, today, Window::Week);
 
-    assert_eq!((a.active_count, a.window_days), (6, 7));
+    assert_eq!(a.active_count, 6);
     assert_eq!(a.longest_streak, 5);
     assert_eq!(a.current_streak, 5);
     assert_eq!(a.most_active, Some(today - 6));
@@ -2060,7 +2115,7 @@ fn cold_spinner_requires_human_stdout_and_stderr_ttys() {
 fn windows_wrap_forward_and_back() {
     assert_eq!(
         Window::TABS.map(Window::label).as_slice(),
-        ["Today", "Week", "Month", "Year"]
+        ["Today", "7 days", "30 days", "52 weeks"]
     );
     for (index, window) in Window::TABS.into_iter().enumerate() {
         assert_eq!(window.next(), Window::TABS[(index + 1) % 4]);
@@ -2152,7 +2207,9 @@ fn held_stats_applies_window_keys_without_a_current_frame() {
     let mut out = Vec::new();
 
     assert_eq!(state.active(), Window::Today);
-    for expected in ["Week", "Month", "Year", "Today", "Week", "Month"] {
+    for expected in [
+        "7 days", "30 days", "52 weeks", "Today", "7 days", "30 days",
+    ] {
         assert_eq!(
             state
                 .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out,)
@@ -2175,7 +2232,7 @@ fn held_stats_applies_window_keys_without_a_current_frame() {
             .unwrap(),
         KeyOutcome::PrevWindow
     );
-    assert_eq!(state.active().label(), "Week");
+    assert_eq!(state.active().label(), "7 days");
     assert!(out.is_empty());
     assert_eq!(
         HeldStats::new(false, panel_glyphs(), false, Window::Month).active(),
@@ -2291,7 +2348,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
     assert!(state.has_frame());
     assert!(state.has_refresh_failure());
     let frame = String::from_utf8(out.clone()).unwrap();
-    assert!(frame.contains("Year $42"), "frame was {frame:?}");
+    assert!(frame.contains("52 weeks $42"), "frame was {frame:?}");
     assert!(
         !frame.contains("Spending refresh unavailable"),
         "held frame must outrank the failure: {frame:?}"
@@ -2302,7 +2359,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out)
         .unwrap();
     let frame = String::from_utf8(out).unwrap();
-    assert!(frame.contains("Year $42"), "frame was {frame:?}");
+    assert!(frame.contains("52 weeks $42"), "frame was {frame:?}");
 }
 
 #[test]
@@ -2415,7 +2472,7 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
     assert!(state.has_frame());
     assert!(!state.has_refresh_failure());
     let frame = String::from_utf8(out).unwrap();
-    assert!(frame.contains("Year $42"), "frame was {frame:?}");
+    assert!(frame.contains("52 weeks $42"), "frame was {frame:?}");
     assert!(!frame.contains("Spending refresh unavailable"));
 }
 

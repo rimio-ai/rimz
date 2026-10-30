@@ -36,7 +36,7 @@ fn stats_reads_spend_under_an_unnamed_system_zone() {
         .lines()
         .find(|line| line.trim_start().starts_with("dollars "))
         .expect("the report's spending row");
-    assert_eq!(spend.split_whitespace().nth(2), Some("$0.25"), "{stdout}");
+    assert_eq!(spend.split_whitespace().nth(4), Some("$0.25"), "{stdout}");
     let stderr = String::from_utf8_lossy(&output.get_output().stderr);
     assert!(stderr.contains("no IANA name"), "{stderr}");
 }
@@ -188,7 +188,10 @@ fn stats_teams_envelope_is_uncapped_and_empty_view_names_the_window() {
         .assert()
         .success();
     let text = String::from_utf8_lossy(&output.get_output().stdout);
-    assert!(text.contains("No team spend recorded (week)."), "{text}");
+    assert!(
+        text.contains("No team spend recorded (last 7 days)."),
+        "{text}"
+    );
     assert!(
         text.split_whitespace()
             .collect::<Vec<_>>()
