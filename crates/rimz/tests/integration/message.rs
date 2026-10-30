@@ -11650,6 +11650,111 @@ fn smart_compact_types_the_slash_token_apart_from_its_instruction() {
 }
 
 #[test]
+fn codex_compact_first_rebinds_queued_prompts_to_the_compaction_continuation() {
+    let (env, panes) = interrupt_fixture("codex");
+    let kind = AgentKind::new_unchecked("codex");
+    let pane = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
+    append_lifecycle(
+        &env,
+        "codex",
+        "Stop",
+        "sess-interrupt",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        |observation| {
+            observation.pane_id = Some(pane.clone());
+            observation.usage.total_tokens = Some(120_000);
+        },
+    );
+    let store = env.store();
+    let agent = store
+        .agent_with_context(&kind, &"sess-interrupt".into(), rimz::RuntimeScope::Runtime)
+        .unwrap()
+        .unwrap();
+    let mut first = MessageRecord::new(
+        env.workspace_id.clone(),
+        &agent,
+        "ordinary compact-first prompt".into(),
+        DeliveryGate::Done,
+    );
+    first.auto_compact = Some(AutoCompact::Tokens(100_000));
+    store.queue_message(&first, "rimz-test").unwrap();
+    let second = MessageRecord::new(
+        env.workspace_id.clone(),
+        &agent,
+        "next ordinary prompt".into(),
+        DeliveryGate::Done,
+    );
+    store.queue_message(&second, "rimz-test").unwrap();
+    let deliver = || {
+        run_success(
+            traced_rimz(&env, "compact-continuation.log")
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+                .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+                .args([
+                    "message",
+                    "deliver",
+                    "--message-id",
+                    first.message_id.as_str(),
+                ]),
+            "compact-first boundary delivery",
+        );
+    };
+    deliver();
+    let trace = env.project_root.join("compact-continuation.log");
+    assert!(
+        trace_lines(&trace)
+            .iter()
+            .any(|line| is_compact_command(line))
+    );
+    assert!(
+        !trace_lines(&trace)
+            .iter()
+            .any(|line| is_paste(line, &first.text))
+    );
+    let mut observation = AgentLifecycleObservation::new(
+        Some("continued-compact".into()),
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        },
+    );
+    observation.compacted_from = Some(agent.agent_id.clone());
+    observation.pane_id = Some(pane);
+    observation.usage.total_tokens = Some(20_000);
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: "rimz-test",
+            agent_kind: kind.clone(),
+            event_name: "PostCompact",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    deliver();
+    for original in [&first, &second] {
+        let record = message_by_id(&env, &original.message_id);
+        assert_eq!(record.status, MessageStatus::Sent, "{}", original.text);
+        assert_eq!(record.agent_id.as_str(), "continued-compact");
+        assert_eq!(record.enqueued_at, original.enqueued_at);
+    }
+    let delivered = store
+        .confirm_delivered_for_card(
+            &kind,
+            &"continued-compact".into(),
+            None,
+            rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+            "rimz-test",
+        )
+        .unwrap();
+    assert_eq!(delivered.len(), 2);
+}
+
+#[test]
 fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
     let env = Env::new();
     env.record(&env.project_root);

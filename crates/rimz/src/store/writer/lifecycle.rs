@@ -295,6 +295,19 @@ impl Store {
                 .iter()
                 .map(|staged| staged.envelope.clone())
                 .collect::<Vec<_>>();
+            if matches!(
+                intent.observation.signal,
+                LifecycleSignal::CompactionEnded { failed: false, .. }
+            ) && let Some((predecessor, successor)) = intent
+                .observation
+                .compacted_from
+                .as_ref()
+                .and_then(|id| agents.find(&intent.agent_kind, id))
+                .zip(intent.observation.agent_id.as_ref())
+                && predecessor.agent_id != *successor
+            {
+                self.rebind_queued_messages(txn, predecessor, successor, intent.session_name)?;
+            }
             txn.append_batch(&envelopes)?;
             let pending_bytes = if txn.staged {
                 let mut pending = self.pending_hook_events();
