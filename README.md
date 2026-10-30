@@ -116,7 +116,7 @@ rimz remote connect dev-box:~/code/query-engine
 ```sh
 brew install rimio-ai/rimz/rimz     # Homebrew
 cargo install --locked rimz         # Cargo, from crates.io
-rimz update                         # later: update in place, whichever way you installed
+rimz update                         # later: update RimZ and unpinned packs
 ```
 
 On macOS, the install script's default latest-release install uses Homebrew automatically when `brew` is available. Prebuilt binaries, building from source, and uninstalling are in the [installation guide](./docs/guide/installation.md). For a self-contained room with RimZ, both multiplexers, ttyd, and the priority agent CLIs preinstalled, [run the Docker image](./docs/guide/installation.md#run-in-docker).

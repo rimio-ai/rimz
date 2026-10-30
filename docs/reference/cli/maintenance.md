@@ -8,7 +8,7 @@ These commands inspect, upgrade, repair, clean up, and remove RimZ. Which ones w
 | [`workspace resolve`](#resolve-a-workspace) | One path | Nothing | No |
 | [`workspace migrate`](#move-a-store-after-the-project-moves) | One workspace store | Moves and rewrites the store | No |
 | [`workspace rotate-events`](#rotate-the-event-log) | The current workspace | Archives the event log, prunes old archives | No |
-| [`update`](#update-rimz) | The installed binary | Replaces the binary, then reloads | No |
+| [`update`](#update-rimz) | The installed binary and unpinned pack sources | Replaces the binary, reloads, then updates unpinned packs | Widening pack updates, on a terminal |
 | [`reload`](#reload-running-sidebars) | The whole machine | Publishes build targets and retires outdated language-server brokers | No |
 | [`sidebar repair`](#repair-sidebars) | Every live room on the machine | Adds, closes, or replaces sidebar panes, and reopens a closed `rimzd` tab | No |
 | [`reset`](#reset-a-wedged-room) | The current workspace's room | Tears the room down, archives its records, rebuilds | Yes |
@@ -142,9 +142,15 @@ rimz update [--version <TAG>]
 | --- | --- |
 | Homebrew (the binary lives under a `Cellar` directory) | `brew update`, then `brew upgrade rimio-ai/rimz/rimz`. |
 | Cargo (the binary is in Cargo's bin directory) | `cargo install --locked rimz`. A source build (a version containing `+g`) prints a warning that the crates.io release will replace it. |
-| The install script or a downloaded binary | Resolves the latest release, downloads the archive for this platform, verifies it against the release's `SHA256SUMS`, runs the extracted binary's `--version`, and atomically replaces the running binary in place. If the running version already matches, it prints `rimz VERSION is up to date.` and stops. |
+| The install script or a downloaded binary | Resolves the latest release, downloads the archive for this platform, verifies it against the release's `SHA256SUMS`, runs the extracted binary's `--version`, and atomically replaces the running binary in place. If the running version already matches, it prints `rimz VERSION is up to date.` without replacing the binary, then continues to packs. |
 
 When the binary changed, `update` runs the new build's [`rimz reload`](#reload-running-sidebars), so live sidebars and dashboards move to it and outdated language-server brokers retire without interrupting their servers. If that reload fails, `update` exits 1 with ``RimZ updated, but `PATH` reload exited with STATUS; rerun `rimz reload` ``.
+
+After the binary step and any reload succeed, the active binary runs [`rimz packs update`](./packs.md#update-git-sources), even when RimZ was already current. Unpinned official packs follow that binary's `v<version>` tag; unpinned third-party sources follow their remote default branch. Pinned and linked sources do not move. With no recorded sources, the pack step prints nothing. If the agents home's `packs/` directory belongs to another user, the step is skipped with a notice to run `rimz packs update` as its owner, without changing the exit code; this keeps `sudo rimz update` from leaving root-owned checkouts in a user's home. An unreadable installation record is reported by the pack step rather than silently skipped.
+
+Pack reviews and permission holds are the same as for `rimz packs update`: non-widening updates apply without asking, and widening updates ask on a terminal or are held with exit 1 without one. `rimz update` has no `--yes`; use `rimz packs update --yes` to approve a held update explicitly. A failed or non-terminal-held pack step makes `update` exit 1, saying RimZ itself is updated or current but pack updates did not complete and naming `rimz packs update` as the retry. The binary is not rolled back, nor are successful earlier pack updates. A binary or reload failure stops before packs.
+
+An official pack without the binary's `v<version>` tag, possible on `latest-main`, fails the pack step with the missing-tag error. Rolling back with `--version` to a binary that predates `packs` likewise fails that step with the older binary's usage error.
 
 `--version <TAG>` picks the release:
 
