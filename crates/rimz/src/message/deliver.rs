@@ -338,7 +338,7 @@ fn attempt_delivery(
                 tracing::warn!(
                     %message_id,
                     %error,
-                    "deferring message: cannot check or cancel obsolete notice"
+                    "deferring message: cannot check or cancel obsolete message"
                 );
                 return Ok(DeliveryReport::Stopped);
             }
@@ -378,9 +378,13 @@ fn attempt_delivery(
                 tracing::warn!(
                     message_id = %message.message_id,
                     %error,
-                    "deferring message: cannot check or cancel obsolete notice"
+                    "deferring message: cannot check or cancel obsolete message"
                 );
-                let reason = if message.about_run.is_some() {
+                let reason = if message.soft_compact
+                    == Some(crate::store::message::SoftCompactStep::Continue)
+                {
+                    "deferred: cannot check soft-compaction cycle"
+                } else if message.about_run.is_some() {
                     "deferred: cannot cancel ended run notice"
                 } else {
                     "deferred: cannot check or settle joined runs"
@@ -429,7 +433,14 @@ fn cancel_moot_message(
     store: &Store,
     message: &MessageRecord,
 ) -> crate::store::Result<bool> {
-    let reason = if matches!(
+    let reason = if message.soft_compact == Some(crate::store::message::SoftCompactStep::Continue)
+        && !store.audit_rows()?.iter().any(|agent| {
+            message.same_agent_card(agent)
+                && agent.ended_at.is_none()
+                && agent.soft_compact.is_some()
+        }) {
+        "soft-compaction cycle cleared before delivery".to_owned()
+    } else if matches!(
         &message.sender,
         MessageSender::Harness { notice } if notice.is_fleet_digest()
     ) && crate::harness::run::report::digest_fully_joined(

@@ -208,7 +208,7 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 | Assist | Takes effect when |
 | --- | --- |
 | stall notice | it has no error once queued for the parent, including a notice later withdrawn because its child run ended before delivery |
-| auto-continue, cache keepalive, idle compaction, flip compaction | it was delivered |
+| auto-continue, cache keepalive, soft compaction, idle compaction, flip compaction | it was delivered |
 | idle stop | the agent's pane closed, even with a cleanup error |
 | hibernation | it froze, or a deepening step reclaimed bytes |
 | launch retry | the relaunch spawned |
@@ -224,6 +224,8 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 `port_forward` events count under `port_forwards`, with failed opens under `held.port_forwards`. They are written on the laptop, so only that RimZ home's stats include them. A listener returning after a close counts as a new forward; reopening an existing forward after a master replacement does not ([forward lifecycle](./remote.md#port-auto-forwarding)).
 
 `empty_dir_grant` events count under `empty_dir_grants` and the `Empty-dir trust:` category. The benefit names the provider, account, trusted folder, and profile when present; the forensic line adds the provider file. Failed writes and a concurrent writer's completed grant produce no assist.
+
+`soft_compact` counts the wrap-up steer under `soft_compacts` (`Soft compact:`), only when delivered. A miss remains in `held.soft_compacts` and the forensic timeline. Its later compact-first command counts separately under `compacts` (`Auto-compact:`); a continue record adds no assist.
 
 An attempt that did not take effect increments `held` under the count it would have joined (`AssistEvent::count_key`), and the timeline header prints it beside that count: `Auto-compact: N (M held)`. Four projections are easy to get wrong:
 

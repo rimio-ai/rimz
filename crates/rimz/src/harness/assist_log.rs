@@ -188,6 +188,19 @@ pub enum Assist {
         occupied_tokens: Option<u64>,
         message_id: String,
     },
+    SoftCompact {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        threshold: crate::store::message::AutoCompact,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        occupied_tokens: Option<u64>,
+        message_id: String,
+        delivered: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     CacheKeepalive {
         kind: AgentKind,
         agent_id: AgentSessionId,
@@ -512,6 +525,29 @@ mod tests {
             let record = serde_json::from_value::<AssistRecord>(json.clone());
             assert!(record.is_ok(), "empty-dir grant must decode: {record:?}");
             assert_eq!(serde_json::to_value(record.unwrap()).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn soft_compaction_attempts_round_trip_with_delivery_evidence() {
+        for delivered in [true, false] {
+            let mut wire = serde_json::json!({
+                "at": ts(20), "assist": "soft_compact", "kind": "claude",
+                "agent_id": "session-1", "threshold": crate::store::message::AutoCompact::Tokens(100_000),
+                "message_id": "msg_1", "delivered": delivered,
+            });
+            if delivered {
+                wire["label"] = serde_json::json!("@worker");
+                wire["occupied_tokens"] = serde_json::json!(120_000);
+            } else {
+                wire["error"] = serde_json::json!("agent is waiting on input");
+            }
+            let decoded = serde_json::from_value::<AssistRecord>(wire.clone());
+            assert!(
+                decoded.is_ok(),
+                "soft-compaction attempts are durable assists: {decoded:?}"
+            );
+            assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), wire);
         }
     }
 

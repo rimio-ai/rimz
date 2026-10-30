@@ -303,7 +303,7 @@ rimz agents forge -w restore-living-team --fresh   # new sessions, same checkout
 
 `-p` (`--print`) launches exactly one agent in a real pane, waits until the work ends, prints the result, and exits with the run's status, so a script branches on the outcome. The pane stays watchable and steerable while the script waits. The [scripting guide](../../guide/scripting.md) teaches the workflow.
 
-A clean turn end keeps the run `running` while a one-shot wait, a harness wake in flight, or a live or unreported child result is owed. `agents show` adds the parked age; run JSON and live NDJSON status include `parked_at`. The next turn resumes the same run. If nothing remains to wake a parked run, it fails with exit `1` and the reason `parked on a wake that never arrived: no armed wait, no wake in flight, no live subagents` (or an earlier captured failure). `--timeout` still applies while parked; background receipts and `agents wait` joins are unchanged.
+A clean turn end keeps the run `running` while a one-shot wait, a harness wake in flight, a live or unreported child result, a launched team's report, or a soft-compaction continuation is owed. `agents show` adds the parked age; run JSON and live NDJSON status include `parked_at`. The next turn resumes the same run. If nothing remains to wake a parked run, it fails with exit `1` and the reason `parked on a wake that never arrived: no armed wait, no wake in flight, no live subagents` (or an earlier captured failure). `--timeout` still applies while parked; background receipts and `agents wait` joins are unchanged.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
@@ -964,7 +964,7 @@ Stopping a parent first stops its live children launched with `rimz subagents`, 
 The agent stops only when all of this holds at one check:
 
 - its turn has ended cleanly, and it is not waiting on your input, parked on a budget or provider limit, compacting, or running background work;
-- nothing is owed to it: no armed wait, no subagent or launched team still to report, no message queued or scheduled for it, and no open supervised run or peer turn, so a soft stop never cancels a run;
+- nothing is owed to it: no armed wait, no subagent or launched team still to report, no soft-compaction continuation, no message queued or scheduled for it, and no open supervised run or peer turn, so a soft stop never cancels a run;
 - every live `rimz subagents` child the stop would close with it, at any depth, passes those same two checks. A child needs no rest of its own, but a message queued for a child you kept holds its parent until the message lands. A provider's own subagent is not checked: its row can read as working after it finished;
 - stopping it and those children would not cancel a run that is still open;
 - for a team seat, the team's board reads `Done`, or a molt successor stands in its place. Without a successor, a seat whose checkout has no board is held;

@@ -21,6 +21,8 @@ use crate::common::{
     trust_codex_preflight_hooks, wait_for_text_then_enter, zellij_trace_shim,
 };
 
+mod soft_compact;
+
 #[test]
 fn role_send_crosses_an_ended_molt_intermediate() {
     let env = Env::new();
