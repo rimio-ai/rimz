@@ -115,7 +115,7 @@ impl ToolSet {
         &self.bases
     }
 
-    pub(super) fn agent_types(&self) -> &[String] {
+    pub(crate) fn agent_types(&self) -> &[String] {
         &self.agent_types
     }
 

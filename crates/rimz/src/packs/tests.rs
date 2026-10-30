@@ -1,4 +1,5 @@
 use super::*;
+mod git_install;
 mod git_sources;
 mod layout;
 use std::fs;
@@ -83,7 +84,7 @@ fn manifest_reads_all_fields_and_reports_unknown_keys() {
     assert_eq!(pack.name, name("crew"));
     assert_eq!(pack.description, "Crew");
     assert_eq!(pack.path, Path::new("."));
-    assert!(pack._default);
+    assert!(pack.default);
     assert_eq!(pack.requires, ["skills/essentials"]);
     assert_eq!(pack.rimz.as_deref(), Some(">=0.43"));
     assert_eq!(manifest.warnings.len(), 2);
@@ -130,7 +131,6 @@ fn manifest_refusals_name_the_path_and_field() {
         (format!("{base}default = 'yes'"), "default"),
         (format!("{base}requires = 'crew'"), "requires"),
         (format!("{base}requires = [1]"), "requires"),
-        (format!("{base}requires = [' ']"), "requires"),
         (format!("{base}rimz = 43"), "rimz"),
         (format!("{base}rimz = ' '"), "rimz"),
     ];

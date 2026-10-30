@@ -196,7 +196,7 @@ Agent hibernation spans `harness/hibernate.rs` (read-only selection and wake-hel
 - Process and config — `config`, `observability`, `agent_activity`, `lane`, `proc` user-shell selection and process inspection, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
 - Start preconditions — `blocker` typed problems and user-run fixes, including privacy and security surfaces; the CLI owns their presentation.
 - Install lifecycle — `update` install-origin detection, release verification, and atomic binary replacement; `uninstall` machine-wide removal mechanics.
-- Pack sources: `packs/` linked-source manifests, durable install records, exclusions, and shared namespace claims; definition and skill readers own item scanning.
+- Pack sources: `packs/` source grammar and manifests, Git staging into owned checkouts, durable install records, exclusions, and shared namespace claims; definition and skill readers own item scanning.
 - Shared language servers — `lsp/` admission, process leases, registry, cost history, broker, editor attachment, saved-file watching, memory watchdog, and read-only queries.
 
 ## Documentation map

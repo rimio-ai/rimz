@@ -22,7 +22,13 @@ pub struct PackView {
     pub name: PackName,
     pub description: Option<String>,
     pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub linked: bool,
+    #[serde(rename = "ref")]
+    pub reference: Option<String>,
+    pub pinned: bool,
+    pub commit: Option<String>,
     pub entry: String,
     pub excluded: Exclusions,
     pub counts: BTreeMap<ItemType, usize>,
@@ -69,9 +75,17 @@ impl PackInventory {
             native_auto_compact,
             &resolved,
         );
-        let chain = SkillChain::from_resolved(home, &resolved);
-        let mut problems = resolved.problems;
-        let mut pack_problems = resolved.pack_problems;
+        Self::from_loaded(home, &resolved, loaded)
+    }
+
+    pub(super) fn from_loaded(
+        home: &Path,
+        resolved: &packs::ResolvedPacks,
+        loaded: super::LoadedDefinitions,
+    ) -> Self {
+        let chain = SkillChain::from_resolved(home, resolved);
+        let mut problems = resolved.problems.clone();
+        let mut pack_problems = resolved.pack_problems.clone();
         for (name, errors) in loaded.pack_problems {
             pack_problems.entry(name).or_default().extend(errors);
         }
@@ -186,7 +200,12 @@ impl PackInventory {
                     name: installed.name.clone(),
                     description: resolved_pack.map(|pack| pack.description.clone()),
                     source: source.source.clone(),
+                    url: (!source.linked)
+                        .then(|| source.url.clone().unwrap_or_else(|| source.source.clone())),
                     linked: source.linked,
+                    reference: source.reference.clone(),
+                    pinned: source.pinned,
+                    commit: source.commit.clone(),
                     entry: source.entry.clone(),
                     excluded: installed.excluded.clone(),
                     counts,
@@ -199,7 +218,7 @@ impl PackInventory {
         Self {
             packs,
             problems,
-            warnings: resolved.warnings,
+            warnings: resolved.warnings.clone(),
         }
     }
 

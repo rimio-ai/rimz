@@ -9,6 +9,8 @@ use serde_json::Value;
 
 use crate::common::Env;
 
+mod git;
+
 fn write(path: impl AsRef<Path>, text: &str) {
     let path = path.as_ref();
     fs::create_dir_all(path.parent().unwrap()).unwrap();

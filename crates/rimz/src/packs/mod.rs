@@ -1,4 +1,4 @@
-//! Linked pack sources, durable installation records, and namespace claims.
+//! Git and linked pack sources, durable installation records, and namespace claims.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -10,16 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::disk::{atomic, lock::WorkspaceLock, paths};
 use crate::utils::path::normalize_path_lexical;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "The next commit connects the install transaction."
-    )
-)]
 mod git;
 mod layout;
 mod source;
+pub mod transaction;
 
 #[cfg(test)]
 mod tests;
@@ -261,8 +255,8 @@ struct PackManifest {
     name: PackName,
     description: String,
     path: PathBuf,
-    #[serde(default, rename = "default")]
-    _default: bool,
+    #[serde(default)]
+    default: bool,
     #[serde(default)]
     requires: Vec<String>,
     rimz: Option<String>,
@@ -309,7 +303,7 @@ fn read_manifest(source: &Path) -> std::result::Result<Manifest, Problem> {
     let deserializer =
         toml::Deserializer::parse(&text).map_err(|error| invalid(error.to_string()))?;
     let mut warnings = Vec::new();
-    let file: ManifestFile = serde_ignored::deserialize(deserializer, |key| {
+    let mut file: ManifestFile = serde_ignored::deserialize(deserializer, |key| {
         warnings.push(problem(&path, format!("unknown manifest key `{key}`")));
     })
     .map_err(|error| invalid(error.to_string()))?;
@@ -320,8 +314,8 @@ fn read_manifest(source: &Path) -> std::result::Result<Manifest, Problem> {
     let absolute = normalize_path_lexical(&absolute);
     let mut names = BTreeSet::new();
     let mut pack_paths = BTreeSet::new();
-    for pack in &file.pack {
-        if !names.insert(&pack.name) {
+    for pack in &mut file.pack {
+        if !names.insert(pack.name.clone()) {
             return Err(invalid(format!("duplicate pack name {}", pack.name)));
         }
         if pack.description.trim().is_empty() {
@@ -343,16 +337,20 @@ fn read_manifest(source: &Path) -> std::result::Result<Manifest, Problem> {
                 pack.path.display()
             )));
         }
-        if pack
-            .requires
-            .iter()
-            .any(|required| required.trim().is_empty())
-        {
-            return Err(invalid(format!(
-                "pack {} requires entries must not be empty",
-                pack.name
-            )));
-        }
+        pack.requires.retain(|required| {
+            if source::requirement(required, "").is_some() {
+                return true;
+            }
+            warnings.push(problem(
+                &path,
+                format!(
+                    "pack {} ignores malformed requires entry {required:?}; use a sibling name, \
+                     crew/pack, skills/pack or github:owner/repo/pack, without refs or URLs",
+                    pack.name
+                ),
+            ));
+            false
+        });
         if pack
             .rimz
             .as_ref()
@@ -471,12 +469,23 @@ fn resolve_dir(root: &Path) -> ResolvedPacks {
             };
         }
     };
+    resolve_record(root, record, &BTreeMap::new())
+}
+
+fn resolve_record(
+    root: &Path,
+    record: Record,
+    overrides: &BTreeMap<String, PathBuf>,
+) -> ResolvedPacks {
     let mut packs = Vec::new();
     let mut problems = Vec::new();
     let mut warnings = Vec::new();
     let mut pack_problems = BTreeMap::<PackName, Vec<Problem>>::new();
     for source in &record.sources {
-        let entry = root.join(&source.entry);
+        let entry = overrides
+            .get(&source.entry)
+            .cloned()
+            .unwrap_or_else(|| root.join(&source.entry));
         let manifest = match read_manifest(&entry) {
             Ok(manifest) => manifest,
             Err(error) => {
@@ -658,6 +667,8 @@ pub enum PackErr {
     NotPath { argument: String },
     #[error("Git source {source_url}: {message}")]
     Git { source_url: String, message: String },
+    #[error("pack installation changed while staging; nothing changed; run the command again")]
+    RecordChanged,
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
@@ -812,13 +823,46 @@ pub fn install(agents_home: &Path, source: &Path) -> Result<InstallOutcome> {
             InstallStatus::Installed
         }
     };
+    let mut warnings = manifest.warnings;
+    for pack in &manifest.packs {
+        for required in pack
+            .requires
+            .iter()
+            .filter_map(|value| source::requirement(value, source_text))
+        {
+            if record
+                .sources
+                .iter()
+                .flat_map(|source| &source.packs)
+                .any(|pack| Some(&pack.name) == required.pack.as_ref())
+            {
+                continue;
+            }
+            let argument = if required.url == source_text {
+                source_text.to_owned()
+            } else {
+                required.spelling()
+            };
+            // Parsed requirements always name a pack; neither they nor OS paths contain NUL.
+            let command = shlex::try_join(["rimz", "packs", "install", &argument])
+                .expect("paths and requirements carry no NUL byte");
+            warnings.push(problem(
+                &source_path.join("rimz-packs.toml"),
+                format!(
+                    "pack {} has an unmet requirement {}; run `{command}`",
+                    pack.name,
+                    required.pack.as_ref().expect("requirements name a pack")
+                ),
+            ));
+        }
+    }
     Ok(InstallOutcome {
         status,
         entry,
         packs: next.packs.into_iter().map(|pack| pack.name).collect(),
         added,
         dropped,
-        warnings: manifest.warnings,
+        warnings,
     })
 }
 
