@@ -260,8 +260,11 @@ struct CollapsedTimelineRow<'a> {
 fn collapsed_timeline_rows(timeline: &[MessageTimelineRow]) -> Vec<CollapsedTimelineRow<'_>> {
     let mut rows = Vec::<CollapsedTimelineRow<'_>>::new();
     for event in timeline {
+        // Only requeues repeat one fact: the reasons of other events name which condition
+        // was met or which fields were edited, so those events keep a row each.
         if let Some(row) = rows.last_mut()
-            && row.latest.method == event.method
+            && row.latest.method == MessageEventMethod::Queued
+            && event.method == MessageEventMethod::Queued
             && row.latest.attempts == event.attempts
             && row.latest.reason.is_some() == event.reason.is_some()
         {
@@ -854,14 +857,28 @@ mod tests {
     }
 
     #[test]
+    fn timeline_events_whose_reason_names_a_subject_never_fold() {
+        for (method, reasons) in [
+            (MessageEventMethod::AfterMet, ["@a finished", "@b finished"]),
+            (MessageEventMethod::Edited, ["text", "gate, force"]),
+        ] {
+            let events = reasons.map(|reason| timeline_event(method, 0, 0, Some(reason)));
+            let output = timeline_output(&events);
+            assert!(!output.contains('×'), "{output}");
+            assert!(output.contains(reasons[0]), "{output}");
+            assert!(output.contains(reasons[1]), "{output}");
+        }
+    }
+
+    #[test]
     fn timeline_fold_alone_adds_a_note_column() {
         let events = [
-            timeline_event(MessageEventMethod::Edited, 0, 0, None),
-            timeline_event(MessageEventMethod::Edited, 60, 0, None),
+            timeline_event(MessageEventMethod::Queued, 0, 0, None),
+            timeline_event(MessageEventMethod::Queued, 60, 0, None),
         ];
         let output = timeline_output(&events);
         assert!(output.contains("NOTE"), "{output}");
-        assert!(output.contains("edited ×2"), "{output}");
+        assert!(output.contains("queued ×2"), "{output}");
         assert!(output.contains("over 1m"), "{output}");
         assert!(
             output.contains(&time_with_absolute(events[1].at, timeline_now())),
