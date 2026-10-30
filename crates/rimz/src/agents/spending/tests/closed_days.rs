@@ -584,14 +584,50 @@ fn closed_days_keep_a_deleted_subagents_spend_beside_its_parent() {
     std::fs::write(&parent, "").unwrap();
     std::fs::create_dir_all(other_child.parent().unwrap()).unwrap();
     std::fs::write(&other_child, "").unwrap();
+    for (session, role) in [
+        (
+            SESSION,
+            json!({
+                "role":"agent", "profile":"coder", "seat":{"team":"forge", "role":"coder"},
+            }),
+        ),
+        (
+            "22345678-1234-4234-8234-123456789abc",
+            json!({
+                "role":"subagent", "profile":"reviewer", "owner":{"team":"forge", "role":"coder"},
+            }),
+        ),
+    ] {
+        session_roles::record(
+            &a.runtime,
+            &session_roles::SessionRoleRecord {
+                kind: AgentKind::new_unchecked("claude"),
+                session: session.into(),
+                role: serde_json::from_value(role).unwrap(),
+                at: "2026-06-10T12:00:00Z".parse().unwrap(),
+            },
+        )
+        .unwrap();
+    }
     a.seed(vec![
-        (parent, vec![row("2026-06-10T12:00:00Z", 2.0)]),
+        (parent.clone(), vec![row("2026-06-10T12:00:00Z", 2.0)]),
         (child, vec![row("2026-06-10T13:00:00Z", 3.0)]),
-        (other_child, vec![row("2026-06-10T14:00:00Z", 4.0)]),
+        (other_child.clone(), vec![row("2026-06-10T14:00:00Z", 4.0)]),
     ]);
     let recorded = a.walk(seconds("2026-06-30T12:00:00Z"), true);
     assert_eq!(recorded.spending.total.month.usd, 9.0);
     assert_eq!(recorded.spending.total.month.sessions, 2);
+    assert_eq!(recorded.roles.teams["forge"]["coder"].tally.month.usd, 9.0);
+    assert_eq!(
+        recorded.roles.teams["forge"]["coder"].tally.month.sessions,
+        1
+    );
+    assert_eq!(recorded.roles.subagents["reviewer"].tally.month.usd, 4.0);
+    std::fs::remove_file(parent).unwrap();
+    std::fs::remove_file(other_child).unwrap();
+    a.seed(Vec::new());
+    let absent = a.walk(seconds("2026-06-30T12:00:00Z"), true);
+    assert_eq!(absent.roles, recorded.roles);
 }
 
 #[test]

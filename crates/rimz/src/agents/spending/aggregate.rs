@@ -476,6 +476,20 @@ pub(crate) fn aggregate_counted_rollups(
                     cutoffs.total,
                     window_starts,
                 );
+                let owner_tally = match role.owner_placement() {
+                    Some(owner) => Some(&mut roles.entry(owner).tally),
+                    None if matches!(
+                        placement,
+                        super::session_roles::Placement::Subagent { .. }
+                    ) =>
+                    {
+                        Some(&mut roles.ownerless_subagents)
+                    }
+                    None => None,
+                };
+                if let Some(tally) = owner_tally {
+                    accum(tally, entry, now_secs, cutoffs.total, window_starts);
+                }
                 role_sessions
                     .entry((placement, session))
                     .and_modify(|youngest: &mut u64| *youngest = (*youngest).max(entry.ts_secs))

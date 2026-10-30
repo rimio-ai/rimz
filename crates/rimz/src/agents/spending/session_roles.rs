@@ -96,6 +96,20 @@ pub(super) enum Placement<'a> {
 }
 
 impl SessionRole {
+    pub(super) fn owner_placement(&self) -> Option<Placement<'_>> {
+        match self {
+            Self::Subagent {
+                owner: Some(SubagentOwner::Team { team, role }),
+                ..
+            } => Some(Placement::Team { team, role }),
+            Self::Subagent {
+                owner: Some(SubagentOwner::Solo { profile }),
+                ..
+            } => Some(Placement::Solo { profile }),
+            _ => None,
+        }
+    }
+
     pub(super) fn placement<'a>(&'a self, provider: &'a str) -> Placement<'a> {
         match self {
             Self::Agent {

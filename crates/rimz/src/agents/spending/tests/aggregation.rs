@@ -51,7 +51,7 @@ fn utc_month_publication_counts_raw_and_compacted_pool_spend() {
         second("2026-10-01T00:00:00Z")
     );
     assert_eq!(publication["month_by_login"].as_object().unwrap().len(), 1);
-    assert_eq!(publication["version"], 25);
+    assert_eq!(publication["version"], 26);
 }
 
 #[test]
@@ -617,6 +617,7 @@ fn model_identity_uses_year_spend_then_tokens_then_kind() {
             [
                 "agents",
                 "effort_since_secs",
+                "ownerless_subagents",
                 "recorded_since_secs",
                 "subagents",
                 "teams"
@@ -812,7 +813,7 @@ fn effort_uses_spend_windows_and_shared_placement_without_requiring_spend() {
 
 #[test]
 fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
-    use super::super::session_roles::SessionRole;
+    use super::super::session_roles::{SessionRole, SubagentOwner};
     let parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     let child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     let named = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -845,6 +846,10 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         request_id: None,
         cost_usd: 3.0,
         model: Some("child-model".into()),
+        input: 20,
+        output: 30,
+        cache_write: 40,
+        cache_read: 50,
         ..root.clone()
     };
     let files = vec![
@@ -864,6 +869,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
                 vec![
                     cached_entry(NOW_SECS - 10 * 86_400, 4.0, "peer"),
                     cached_entry(NOW_SECS - 40 * 86_400, 5.0, "unseen"),
+                    cached_entry(NOW_SECS, 7.0, "ownerless"),
                 ],
             ),
             cached_file(
@@ -900,19 +906,31 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
                 child.into(),
                 SessionRole::Subagent {
                     profile: "fast".into(),
-                    owner: None,
+                    owner: Some(SubagentOwner::Team {
+                        team: "forge".into(),
+                        role: "coder".into(),
+                    }),
                 },
             )]),
         ),
         (
             crate::ids::AgentKind::new_unchecked("opencode"),
-            BTreeMap::from([(
-                "peer".into(),
-                SessionRole::Agent {
-                    profile: Some("peer-profile".into()),
-                    seat: None,
-                },
-            )]),
+            BTreeMap::from([
+                (
+                    "peer".into(),
+                    SessionRole::Agent {
+                        profile: Some("peer-profile".into()),
+                        seat: None,
+                    },
+                ),
+                (
+                    "ownerless".into(),
+                    SessionRole::Subagent {
+                        profile: "unknown-owner".into(),
+                        owner: None,
+                    },
+                ),
+            ]),
         ),
     ]);
     let dir = tempfile::tempdir().unwrap();
@@ -939,7 +957,31 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
             .unwrap();
         }
     }
-    let roles = super::super::session_roles::load(&runtime.spending_history, NOW_SECS);
+    let mut roles = super::super::session_roles::load(&runtime.spending_history, NOW_SECS);
+    roles.effort.push(std::sync::Arc::new(vec![
+        super::super::session_effort::SessionEffortRecord {
+            kind: crate::ids::AgentKind::new_unchecked("codex"),
+            session: child.into(),
+            at: Timestamp::from_second(NOW_SECS as i64).unwrap(),
+            event: super::super::session_effort::SessionEffortEvent::Totals {
+                active_ms: 3_000,
+                from_user: 1,
+                from_teammates: 2,
+                to_teammates: 3,
+            },
+        },
+        super::super::session_effort::SessionEffortRecord {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: parent.into(),
+            at: Timestamp::from_second(NOW_SECS as i64).unwrap(),
+            event: super::super::session_effort::SessionEffortEvent::Totals {
+                active_ms: 1_000,
+                from_user: 4,
+                from_teammates: 5,
+                to_teammates: 6,
+            },
+        },
+    ]));
     let locations = dedup_cached_entry_locations(&files, &cache);
     let counted = indexed_counted_entries(&files, &cache, &locations);
     let result = aggregate_counted_rollups(
@@ -972,12 +1014,16 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         published_roles["teams"]["forge"].as_object().unwrap().len(),
         1
     );
+    let windows = ["today", "day", "week", "month", "year"];
+    assert_eq!(
+        windows.map(|window| (
+            published_roles["teams"]["forge"]["coder"][window]["usd"].clone(),
+            published_roles["ownerless_subagents"][window]["usd"].clone(),
+        )),
+        [6.0, 6.0, 12.0, 12.0, 12.0].map(|usd| (serde_json::json!(usd), serde_json::json!(7.0)))
+    );
     for window in ["today", "day", "week", "month", "year"] {
         let recent = matches!(window, "today" | "day");
-        assert_eq!(
-            published_roles["teams"]["forge"]["coder"][window]["usd"],
-            if recent { 3.0 } else { 9.0 }
-        );
         assert_eq!(
             published_roles["teams"]["forge"]["coder"][window]["sessions"],
             if recent { 1 } else { 2 }
@@ -991,11 +1037,30 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
             published_roles["agents"]["peer-profile"][window]["sessions"],
             u32::from(peer_in_window)
         );
+        let owner = &published_roles["teams"]["forge"]["coder"][window];
+        assert_eq!(owner["input"], if recent { 80 } else { 90 });
+        assert_eq!(owner["output"], if recent { 40 } else { 45 });
+        assert_eq!(owner["cache_write"], 40);
+        assert_eq!(owner["cache_read"], 50);
     }
-    assert_eq!(published_roles["subagents"].as_object().unwrap().len(), 1);
+    assert_eq!(published_roles["subagents"].as_object().unwrap().len(), 2);
     for window in ["today", "day", "week", "month", "year"] {
         assert_eq!(published_roles["subagents"]["fast"][window]["usd"], 3.0);
         assert_eq!(published_roles["subagents"]["fast"][window]["sessions"], 1);
+    }
+    for window in ["day", "week", "month", "year"] {
+        assert_eq!(
+            published_roles["teams"]["forge"]["coder"]["effort"][window],
+            serde_json::json!({
+                "active_ms":4_000, "from_user":4, "from_teammates":5, "to_teammates":6,
+            })
+        );
+        assert_eq!(
+            published_roles["subagents"]["fast"]["effort"][window],
+            serde_json::json!({
+                "active_ms":3_000, "from_user":1, "from_teammates":2, "to_teammates":3,
+            })
+        );
     }
     let windows: [fn(&SpendTally) -> &SpendWindow; 5] = [
         |t| &t.headline,
@@ -1004,14 +1069,14 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         |t| &t.month,
         |t| &t.year,
     ];
-    for (window, expected_sessions) in windows.into_iter().zip([2, 2, 3, 4, 5]) {
+    // The remainder is the ownerless subagent's $7, plus the unrecorded $5 a year back.
+    for (window, (expected_sessions, expected_remainder)) in
+        windows
+            .into_iter()
+            .zip([(3, 7.0), (3, 7.0), (4, 7.0), (5, 7.0), (6, 12.0)])
+    {
         let mut sum = SpendWindow::default();
-        for tally in result
-            .roles
-            .agents
-            .values()
-            .chain(result.roles.subagents.values())
-        {
+        for tally in result.roles.agents.values() {
             sum.merge(window(&tally.tally));
         }
         for team in published_roles["teams"].as_object().unwrap().values() {
@@ -1021,6 +1086,17 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
             }
         }
         assert!(sum.usd <= window(&result.spending.total).usd);
+        assert_eq!(
+            window(&result.spending.total).usd - sum.usd,
+            expected_remainder
+        );
+        let subagents_usd: f64 = result
+            .roles
+            .subagents
+            .values()
+            .map(|row| window(&row.tally).usd)
+            .sum();
+        assert!(subagents_usd <= window(&result.spending.total).usd);
         assert!(sum.tokens <= window(&result.spending.total).tokens);
         assert!(sum.cache_read <= window(&result.spending.total).cache_read);
         assert!(sum.sessions <= window(&result.spending.total).sessions);
@@ -1050,6 +1126,80 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     assert!(empty["subagents"].as_object().unwrap().is_empty());
     assert!(empty["teams"].as_object().unwrap().is_empty());
     assert!(empty["recorded_since_secs"].is_null());
+}
+
+#[test]
+fn owned_subagents_credit_resolved_solo_profiles_without_legacy_splitting() {
+    use super::super::{session_effort, session_roles};
+    let child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let path = PathBuf::from(format!("/x/rollout-2026-01-01T00-00-00-{child}.jsonl"));
+    let files = vec![spending_file(codex_adapter(), path.clone())];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&path, vec![cached_entry(NOW_SECS, 5.0, child)])]),
+        ..Default::default()
+    };
+    let kind = crate::ids::AgentKind::new_unchecked("codex");
+    let roles = session_roles::RoleIndex {
+        roles: BTreeMap::from([(
+            kind.clone(),
+            BTreeMap::from([(
+                child.into(),
+                serde_json::from_value(serde_json::json!({
+                    "role":"subagent", "profile":"fast", "owner":{"profile":"solo.dotted"},
+                }))
+                .unwrap(),
+            )]),
+        )]),
+        effort: vec![std::sync::Arc::new(vec![
+            session_effort::SessionEffortRecord {
+                kind,
+                session: child.into(),
+                at: Timestamp::from_second(NOW_SECS as i64).unwrap(),
+                event: session_effort::SessionEffortEvent::Totals {
+                    active_ms: 1_000,
+                    from_user: 2,
+                    from_teammates: 3,
+                    to_teammates: 4,
+                },
+            },
+        ])],
+        ..Default::default()
+    };
+    let locations = dedup_cached_entry_locations(&files, &cache);
+    let counted = indexed_counted_entries(&files, &cache, &locations);
+    let result = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        &[],
+        None,
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs: NOW_SECS,
+            spec: &HeadlineSpec::default(),
+        },
+        HistoryContext {
+            roles: Some(&roles),
+            ..Default::default()
+        },
+    );
+    let published = serde_json::to_value(result.roles).unwrap();
+    assert_eq!(published["agents"]["solo.dotted"]["day"]["usd"], 5.0);
+    assert_eq!(published["agents"]["solo.dotted"]["day"]["sessions"], 0);
+    assert_eq!(published["subagents"]["fast"]["day"]["sessions"], 1);
+    assert_eq!(
+        published["agents"]["solo.dotted"]["effort"]["day"],
+        serde_json::json!({
+            "active_ms":1_000, "from_user":0, "from_teammates":0, "to_teammates":0,
+        })
+    );
+    assert_eq!(
+        published["subagents"]["fast"]["effort"]["day"],
+        serde_json::json!({
+            "active_ms":1_000, "from_user":2, "from_teammates":3, "to_teammates":4,
+        })
+    );
+    assert!(published["teams"].as_object().unwrap().is_empty());
 }
 
 #[test]

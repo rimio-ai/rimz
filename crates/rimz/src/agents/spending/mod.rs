@@ -171,6 +171,8 @@ pub struct RoleTallies {
     pub teams: BTreeMap<String, BTreeMap<String, RoleTally>>,
     #[serde(default)]
     pub subagents: BTreeMap<String, RoleTally>,
+    #[serde(default)]
+    pub ownerless_subagents: SpendTally,
     pub recorded_since_secs: Option<u64>,
     pub effort_since_secs: Option<u64>,
 }
