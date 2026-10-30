@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::common::Env;
 
+mod customize;
 mod git;
 
 fn write(path: impl AsRef<Path>, text: &str) {
@@ -1237,7 +1238,14 @@ fn show_reports_definition_and_skill_fates_and_broken_recorded_packs() {
 
 #[test]
 fn every_mutation_prunes_actual_links_in_native_and_named_roots_without_adding() {
-    for verb in ["install", "remove", "exclude", "include"] {
+    for verb in [
+        "install",
+        "remove",
+        "exclude",
+        "include",
+        "customize",
+        "reset",
+    ] {
         let env = Env::new();
         let source = installed(&env);
         let target = ExclusionTarget::Item(ItemKey {
@@ -1246,6 +1254,9 @@ fn every_mutation_prunes_actual_links_in_native_and_named_roots_without_adding()
         });
         if verb == "include" {
             packs::exclude(&env.agents_home(), &"crew".parse().unwrap(), &target).unwrap();
+        }
+        if verb == "reset" {
+            write(env.agents_home().join("skills/coder/SKILL.md"), "# Home");
         }
         let account = env.home_root.join("account");
         write(
@@ -1263,7 +1274,11 @@ fn every_mutation_prunes_actual_links_in_native_and_named_roots_without_adding()
         for root in &roots {
             fs::create_dir_all(root).unwrap();
             symlink(
-                env.agents_home().join("packs/source/crew/skills/coder"),
+                env.agents_home().join(if verb == "reset" {
+                    "skills/coder"
+                } else {
+                    "packs/source/crew/skills/coder"
+                }),
                 root.join("coder"),
             )
             .unwrap();
@@ -1285,6 +1300,9 @@ fn every_mutation_prunes_actual_links_in_native_and_named_roots_without_adding()
             }
             _ => {
                 command.args(["crew:coder", "--type", "skills"]);
+                if verb == "customize" {
+                    command.arg("--copy");
+                }
             }
         }
         let output = command.output().unwrap();

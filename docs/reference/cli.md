@@ -17,7 +17,7 @@ This page indexes every command and states the rules that hold across all of the
 | Worktrees and schedules | `worktree`, `loop`, `workflow` | [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) · [Workflow](./cli/workflow.md) |
 | Hooks and trust | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
 | Configure appearance and behavior | `config`, `list-themes`, `list-pets` | [Config](./cli/config.md) |
-| Load definition and skill packs | `packs` | [Packs](./cli/packs.md) |
+| Load and customize definition and skill packs | `packs` | [Packs](./cli/packs.md) |
 | Find RimZ's files | `paths` | [Paths](./cli/paths.md) |
 | Read the sidebar | `sidebar frame` | [Sidebar frames](./cli/pane.md#render-a-sidebar-frame) |
 | Maintain and recover | `coverage`, `workspace`, `update`, `reload`, `sidebar repair`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |

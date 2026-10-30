@@ -323,6 +323,7 @@ fn routine_rimz_settings_union_and_idempotence() {
             "loop logs",
             "packs list",
             "packs show",
+            "packs diff",
             "lsp def",
             "lsp refs",
             "lsp hover",

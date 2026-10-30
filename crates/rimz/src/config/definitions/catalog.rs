@@ -51,13 +51,7 @@ impl Item {
     }
 
     pub(super) fn namespace(&self) -> &str {
-        if self.kind == ItemType::Agents
-            && self
-                .path
-                .file_stem()
-                .is_some_and(|stem| stem == self.name.as_str())
-            && crate::agents::find_definition(&self.name).is_some()
-        {
+        if kind_base(self.kind, &self.path, &self.name) {
             return "bases";
         }
         match self.kind {
@@ -65,6 +59,12 @@ impl Item {
             _ => self.kind.as_str(),
         }
     }
+}
+
+pub(super) fn kind_base(kind: ItemType, path: &Path, name: &str) -> bool {
+    kind == ItemType::Agents
+        && path.file_stem().is_some_and(|stem| stem == name)
+        && crate::agents::find_definition(name).is_some()
 }
 
 pub(super) struct Catalog {

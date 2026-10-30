@@ -299,6 +299,9 @@ pub fn remove(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> std::io::Re
     .map_err(|error| match error {
         atomic::AtomicErr::Io { source, .. } => source,
         atomic::AtomicErr::Json(source) => std::io::Error::other(source),
+        error @ atomic::AtomicErr::Exists { .. } => {
+            std::io::Error::new(std::io::ErrorKind::AlreadyExists, error)
+        }
     })
 }
 
