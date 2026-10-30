@@ -18,6 +18,7 @@ pub struct Edge {
 pub struct NodeRow {
     pub workflow: String,
     pub node: String,
+    pub summary: Option<String>,
     pub kind: String,
     pub runner: String,
     pub run: Option<String>,
@@ -117,6 +118,7 @@ pub(super) fn validate_spec(
     for (node, check) in &spec.checks {
         let path = format!("checks.{node}");
         report.node_name(&path, node);
+        report.summary(&path, check.summary.as_deref());
         if spec.steps.contains_key(node) {
             report.error(&path, "name is also used by a step");
         }
@@ -257,6 +259,7 @@ pub(super) fn validate_spec(
         report.rows.push(NodeRow {
             workflow: name.into(),
             node: node.clone(),
+            summary: check.summary.clone(),
             kind: "check".into(),
             runner: match check.kind() {
                 Some(CheckKind::Run(_)) => "run",
@@ -275,6 +278,7 @@ pub(super) fn validate_spec(
     for (node, step) in &spec.steps {
         let path = format!("steps.{node}");
         report.node_name(&path, node);
+        report.summary(&path, step.summary.as_deref());
         if step.kind().is_none() {
             report.error(&path, "set exactly one of agent, run, or shell");
         }
@@ -462,6 +466,7 @@ pub(super) fn validate_spec(
         report.rows.push(NodeRow {
             workflow: name.into(),
             node: node.clone(),
+            summary: step.summary.clone(),
             kind: "step".into(),
             runner: match step.kind() {
                 Some(StepKind::Run(_)) => "run",
@@ -552,6 +557,12 @@ impl Validation {
     fn node_name(&mut self, path: &str, node: &str) {
         if let Err(err) = crate::harness::schedule::validate_name(node) {
             self.error(path, err);
+        }
+    }
+
+    fn summary(&mut self, path: &str, summary: Option<&str>) {
+        if summary.is_some_and(|text| text.trim().is_empty() || text.contains(['\n', '\r'])) {
+            self.error(&format!("{path}.summary"), "a summary is one nonempty line");
         }
     }
 

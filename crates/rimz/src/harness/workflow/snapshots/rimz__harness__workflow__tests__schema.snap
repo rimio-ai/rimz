@@ -98,6 +98,12 @@ expression: value
             "null"
           ]
         },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "timeout": {
           "type": [
             "string",
@@ -239,6 +245,12 @@ expression: value
           ]
         },
         "shell": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
           "type": [
             "string",
             "null"

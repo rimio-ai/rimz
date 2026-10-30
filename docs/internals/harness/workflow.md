@@ -64,7 +64,7 @@ Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Every table reject
 | judge | `agent`, with a required `prompt-file` | `window`, `wake`, `timeout`, `on` | Its own outcomes, plus `timeout` and `invalid`. The profile's adapter must have a headless launch. |
 | condition | nonempty `cases` | required `else`, `provider`, `account`, `timeout`, `on` | Every case outcome and `else` must be routed. Any other route is refused, except `unknown`, `timeout`, and `invalid`. |
 
-Every field outside a kind's row is refused on that kind. A `window` holds provider-window terms only. A condition takes `provider` exactly when a case reads a `window.*` term, and `account` only with `provider`.
+Every kind accepts an optional `summary`: one nonempty line describing what the node does. Omission never warns. Other fields outside a kind's row are refused on that kind. A `window` holds provider-window terms only. A condition takes `provider` exactly when a case reads a `window.*` term, and `account` only with `provider`.
 
 A condition's cases are ordered `[[checks.<name>.cases]]` tables:
 
@@ -79,7 +79,7 @@ A condition's cases are ordered `[[checks.<name>.cases]]` tables:
 
 ### Steps
 
-`[steps.<name>]` selects exactly one of `agent`, `run`, or `shell` (`crates/rimz/src/harness/workflow/spec.rs::Step::kind`), and requires `then` naming a check, never a step or a special target. Common optional fields are `timeout`, `max-visits`, `max-visits-per-key`, and `on.cap`. A run or shell step requires `timeout` and refuses the agent-only `prompt-file`, `lifecycle`, `window`, `takeover`, `throttle`, `capacity-wait`, `on.capacity`, and `on.asked`, including explicit default values. Run argv resolution is the same as for run checks; shell text is nonempty and unconfined.
+`[steps.<name>]` selects exactly one of `agent`, `run`, or `shell` (`crates/rimz/src/harness/workflow/spec.rs::Step::kind`), and requires `then` naming a check, never a step or a special target. Common optional fields are `summary` (one nonempty line), `timeout`, `max-visits`, `max-visits-per-key`, and `on.cap`. A run or shell step requires `timeout` and refuses the agent-only `prompt-file`, `lifecycle`, `window`, `takeover`, `throttle`, `capacity-wait`, `on.capacity`, and `on.asked`, including explicit default values. Run argv resolution is the same as for run checks; shell text is nonempty and unconfined.
 
 An agent step requires `prompt-file`. `agent` takes the fresh-launch layout grammar: kinds, profiles, virtual cells, and mixed agent/command layouts. Teams, command-only layouts and ambiguous prompt leaders refuse; judges still take one profile. Agent-only optional fields are `lifecycle` (`turn` by default, `stay`, or `until`), `window`, `takeover`, `throttle`, `capacity-wait`, `on.capacity`, and `on.asked`. Staying steps (`stay` and `until`) refuse `timeout` and `on.asked`. Turn and until steps warn when their leader adapter cannot report background work; staying steps skip the auto-continue warning.
 
@@ -147,6 +147,8 @@ The record, the sealed spec, and the journal sit outside the node-writable `work
 Soft reset keeps run homes, and hard reset removes them, unlike supervised-run records. Garbage collection removes a terminal run's whole home once `record.json` is older than the seven-day owned grace. A home without `record.json` is a crash during creation, which every reader skips, and it goes once the home directory itself passes the same grace.
 
 The record stores the scope, project root, sealed-spec digest and original definition directory, prompt, current node and entry time, state and park, routed input and key, open wait and recheck time, per-step totals and per-key visits, the visit grant, deadline state, the sequence allocator, the live attempt, an optional held session, the previous step attempt, and the terminal time. Its optional `task` names the starting loop task. `manual` is true only for a run created by `rimz loop fire`, whose steps bypass capacity; false defaults on old records and is omitted on write, so existing records and JSON stay unchanged. Older binaries ignore the field. Keys keep integer versus string identity. A sealed spec containing any `until` step uses version 2, even before that step is reached; other runs remain version 1. The loader accepts both. Older binaries refuse version 2 and skip it in lists, preventing a rewrite that drops the held session while leaving its layout open. Such binaries also miss that run's scope claim, the same mixed-version exposure as pre-stay binaries with stay runs.
+
+Binaries that predate `summary` reject a sealed spec containing it as an unknown field when reloading the spec for an advance or wake. Existing sealed specs without `summary` remain valid.
 
 A journal entry carries its time, node, optional attempt sequence, and one event: evaluation, attempt, turn-end decision, closed wait, engine route, park, terminal, cancel, resume, or signal wake. An evaluation keeps the routed object and its `origin` (`check` or `engine`, defaulting to `check` when absent). An invalid answer also keeps a stderr tail. Script and judge evaluations keep the digests published with the attempt's child, whichever process ends the attempt, and an evaluation whose child never spawned has none.
 
