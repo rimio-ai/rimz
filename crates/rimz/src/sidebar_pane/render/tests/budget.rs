@@ -229,6 +229,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 commits_behind: Some(1),
                 trunk: Some("main".to_owned()),
                 worktree_backed: false,
+                root_lane: false,
                 finished: false,
                 clean: None,
                 landed: None,

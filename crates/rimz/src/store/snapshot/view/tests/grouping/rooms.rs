@@ -67,6 +67,7 @@ fn directory_room_groups_git_backed_rows_by_resolved_worktree() {
 
 #[test]
 fn non_repo_room_variants_share_the_root_pod_rule() {
+    let mut root_lanes = Vec::new();
     for (label, root_class, root, worktree_roots, panes, expect_label, expect_rows) in [
         (
             "non-git nested cwd folds into directory root",
@@ -111,7 +112,9 @@ fn non_repo_room_variants_share_the_root_pod_rule() {
         assert_eq!(group.key, root, "{label}");
         assert_eq!(group.label, expect_label, "{label}");
         assert_eq!(group.rows.len(), expect_rows, "{label}");
+        root_lanes.push(group.root_lane);
     }
+    assert_eq!(root_lanes, [true, true, true]);
 }
 
 #[test]

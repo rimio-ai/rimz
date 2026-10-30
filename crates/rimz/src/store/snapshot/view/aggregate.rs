@@ -170,7 +170,7 @@ impl SidebarSnapshot {
             }),
         );
 
-        let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
+        let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, bool, Vec<SidebarRow>)> =
             BTreeMap::new();
         for row in rows {
             let identity = resolver.resolve(GroupEntry {
@@ -180,13 +180,13 @@ impl SidebarSnapshot {
             });
             by_group
                 .entry(identity.key)
-                .and_modify(|(_, _, rows)| rows.push(row.clone()))
-                .or_insert_with(|| (identity.label, identity.kind, vec![row]));
+                .and_modify(|(_, _, _, rows)| rows.push(row.clone()))
+                .or_insert_with(|| (identity.label, identity.kind, identity.root_lane, vec![row]));
         }
 
         let mut groups = by_group
             .into_iter()
-            .map(|(key, (label, kind, mut rows))| {
+            .map(|(key, (label, kind, root_lane, mut rows))| {
                 sort_rows(&mut rows);
                 // Prefer a branch label over the path-basename seed for worktree
                 // pods. Root pods keep the room name; external keeps its catch-all
@@ -219,6 +219,7 @@ impl SidebarSnapshot {
                     commits_behind: None,
                     trunk: None,
                     worktree_backed: false,
+                    root_lane,
                     finished: false,
                     clean: None,
                     landed: None,

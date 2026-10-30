@@ -215,6 +215,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         commits_behind: None,
         trunk: None,
         worktree_backed: false,
+        root_lane: false,
         finished: false,
         clean: None,
         landed: None,

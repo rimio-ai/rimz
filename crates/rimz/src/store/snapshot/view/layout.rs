@@ -33,6 +33,7 @@ pub(super) struct GroupIdentity {
     pub kind: SidebarWorktreeKind,
     pub key: String,
     pub label: String,
+    pub root_lane: bool,
 }
 
 pub(super) struct GroupResolver<'a> {
@@ -93,7 +94,10 @@ impl<'a> GroupResolver<'a> {
         }
         let matched = self.deepest_root(cwd);
         if self.groups_per_path(matched) {
-            return worktree_group(path, cwd, branch, self.multi_branch_paths.contains(path));
+            return GroupIdentity {
+                root_lane: self.project_root == Some(cwd),
+                ..worktree_group(path, cwd, branch, self.multi_branch_paths.contains(path))
+            };
         }
         if let Some(root) = matched {
             return self.matched_root_group(root, branch, self.multi_branch_paths.contains(path));
@@ -137,6 +141,7 @@ impl<'a> GroupResolver<'a> {
                 kind: SidebarWorktreeKind::Root,
                 key: root_key,
                 label: "main".to_owned(),
+                root_lane: true,
             };
         }
         worktree_group(&root_key, root, branch, split_by_branch)
@@ -148,6 +153,7 @@ fn channel_group(channel: &str) -> GroupIdentity {
         kind: SidebarWorktreeKind::Channel,
         key: format!("channel:{channel}"),
         label: channel.to_owned(),
+        root_lane: false,
     }
 }
 
@@ -166,6 +172,7 @@ fn worktree_group(
         label: branch
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| path_basename(label_path)),
+        root_lane: false,
     }
 }
 
@@ -174,6 +181,7 @@ fn branch_group(branch: &str) -> GroupIdentity {
         kind: SidebarWorktreeKind::Worktree,
         key: format!("branch:{branch}"),
         label: branch.to_owned(),
+        root_lane: false,
     }
 }
 
@@ -182,6 +190,7 @@ fn external_group() -> GroupIdentity {
         kind: SidebarWorktreeKind::External,
         key: "external".to_owned(),
         label: "external".to_owned(),
+        root_lane: false,
     }
 }
 
@@ -654,15 +663,18 @@ pub(super) fn compare_groups(
     // The `external` catch-all always tails: out-of-project residue never
     // displaces project work, so it sorts below every project group — below even
     // archived groups, and regardless of any `waiting`/`failed` member it holds.
-    // Finished project groups follow all unfinished work. Within each
-    // partition the same macro bands apply, read off the liveliest
-    // member: hot work, warm work, archive. Urgency decides attention inside the
-    // winning band, then calm activity orders working, successful, idle, and
-    // process-only groups before git, pane creation, and label settle ties.
+    // Finished project groups follow all unfinished work. A root-lane group
+    // holding an agent card is never finished. Actionable groups lead, followed
+    // by that root group, then the rest. Within each tier the same macro bands
+    // apply, read off the liveliest member: hot work, warm work, archive. Urgency
+    // decides attention inside the winning band, then calm activity orders
+    // working, successful, idle, and process-only groups before git, pane
+    // creation, and label settle ties.
     group_sort_key(
         left.rows.iter().map(row_rank_facts),
         left.kind,
         left.finished,
+        left.root_lane,
         group_git_rung(left),
         &left.label,
     )
@@ -670,6 +682,7 @@ pub(super) fn compare_groups(
         right.rows.iter().map(row_rank_facts),
         right.kind,
         right.finished,
+        right.root_lane,
         group_git_rung(right),
         &right.label,
     ))
@@ -679,6 +692,7 @@ pub(super) fn compare_groups(
 struct GroupRankKey {
     external: bool,
     finished: bool,
+    tier: u8,
     band: u8,
     urgency: Reverse<u32>,
     calm: GroupCalm,
@@ -691,6 +705,7 @@ fn group_sort_key<'a>(
     facts: impl Iterator<Item = RankFacts<'a>>,
     kind: SidebarWorktreeKind,
     finished: bool,
+    root_lane: bool,
     git: GitRung,
     label: &str,
 ) -> GroupRankKey {
@@ -701,7 +716,11 @@ fn group_sort_key<'a>(
     let mut urgency = 0;
     let mut calm = GroupCalm::Processes;
     let mut earliest_ordinal: Option<u64> = None;
+    let mut has_agent = false;
+    let mut actionable = false;
     for facts in facts {
+        has_agent |= !facts.is_process;
+        actionable |= facts.status.is_some_and(AgentStatus::is_actionable);
         let facts_band = facts_band(&facts);
         if facts_band < band {
             band = facts_band;
@@ -718,6 +737,13 @@ fn group_sort_key<'a>(
     GroupRankKey {
         external: kind == SidebarWorktreeKind::External,
         finished,
+        tier: if actionable {
+            0
+        } else if root_lane && has_agent {
+            1
+        } else {
+            2
+        },
         band,
         urgency: Reverse(urgency),
         calm,
@@ -741,6 +767,9 @@ fn group_git_rung(group: &SidebarWorktreeGroup) -> GitRung {
 }
 
 pub(super) fn group_finished(group: &SidebarWorktreeGroup) -> bool {
+    if group.root_lane && group.rows.iter().any(SidebarRow::is_agent) {
+        return false;
+    }
     !group.rows.is_empty()
         && group_git_rung(group) == GitRung::Done
         && !group
@@ -800,9 +829,11 @@ impl AgentWorktreeGroup<'_> {
 }
 
 /// Group root agents by worktree and rank them the way the sidebar ranks rows
-/// and groups: attention agents first (longest-overdue), calm agents in stable
-/// spawn order, the `external` catch-all last. The `rimz agents list` roster
-/// reuses this so the CLI and the room agree on order.
+/// and groups: actionable groups first, then the root-lane group, then the rest,
+/// with the `external` catch-all last. The roster has no finished partition.
+/// Within groups, attention agents lead (longest-overdue), with calm agents in
+/// stable spawn order. The `rimz agents list` roster reuses this so the CLI
+/// and the room agree on order.
 pub fn group_live_agents_by_worktree<'a>(
     agents: &[&'a AgentState],
     snapshot: &SidebarSnapshot,
@@ -816,7 +847,7 @@ pub fn group_live_agents_by_worktree<'a>(
             branch: agent.worktree_branch.as_deref(),
         }),
     );
-    let mut by_key: BTreeMap<String, AgentWorktreeGroup<'a>> = BTreeMap::new();
+    let mut by_key: BTreeMap<String, (bool, AgentWorktreeGroup<'a>)> = BTreeMap::new();
     for &agent in agents {
         let identity = resolver.resolve(GroupEntry {
             channel: agent.channel.as_deref(),
@@ -825,20 +856,26 @@ pub fn group_live_agents_by_worktree<'a>(
         });
         by_key
             .entry(identity.key.clone())
-            .or_insert_with(|| AgentWorktreeGroup {
-                key: identity.key,
-                label: identity.label,
-                kind: identity.kind,
-                agents: Vec::new(),
+            .or_insert_with(|| {
+                (
+                    identity.root_lane,
+                    AgentWorktreeGroup {
+                        key: identity.key,
+                        label: identity.label,
+                        kind: identity.kind,
+                        agents: Vec::new(),
+                    },
+                )
             })
+            .1
             .agents
             .push(agent);
     }
-    let mut groups: Vec<AgentWorktreeGroup<'a>> = by_key.into_values().collect();
-    for group in &mut groups {
+    let mut groups: Vec<_> = by_key.into_values().collect();
+    for (_, group) in &mut groups {
         sort_listing_agents(&mut group.agents, snapshot.now, windows);
     }
-    groups.sort_by_cached_key(|group| {
+    groups.sort_by_cached_key(|(root_lane, group)| {
         group_sort_key(
             group
                 .agents
@@ -847,11 +884,12 @@ pub fn group_live_agents_by_worktree<'a>(
                 .map(|agent| agent_rank_facts(agent, snapshot.now, windows)),
             group.kind,
             false,
+            *root_lane,
             GitRung::Unknown,
             &group.label,
         )
     });
-    groups
+    groups.into_iter().map(|(_, group)| group).collect()
 }
 
 /// The agent's pane creation ordinal — the calm tiebreak the `rimz agents list`
