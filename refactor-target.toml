@@ -1311,7 +1311,13 @@ allowed-dependencies = ["disk", "proc", "utils"]
 # RetiredCheckouts retains replaced trees through a multi-source command (+1).
 # Transaction::stage_update preserves and validates the installed selection (+1).
 # CheckoutReport, Checkout, CheckoutState and inspect_checkouts share read-only health (+4).
-surface-budget = 51
+# expectation_warnings checks non-executing project metadata at room entry (+1).
+surface-budget = 52
+
+[[verdict]]
+kind = "item"
+key = "packs::expectation_warnings"
+reason = "Room entry checks expected-pack grammar and installed names without executing or installing project content."
 
 [[verdict]]
 kind = "item"
@@ -3602,7 +3608,13 @@ surface-budget = 27
 path = "crates/rimz/src/trust.rs"
 upward-dependencies = ["agents"]
 # The live resolver shares the project-account refusal with birth and display readers (+1).
-surface-budget = 36
+# project_packs reads non-executing pack metadata before the trust gate (+1).
+surface-budget = 37
+
+[[verdict]]
+kind = "item"
+key = "trust::project_packs"
+reason = "Room entry reads lenient pack expectations in every trust state through the existing project reader."
 
 [[module]]
 path = "crates/rimz/src/tui.rs"

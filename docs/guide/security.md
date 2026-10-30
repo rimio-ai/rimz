@@ -32,7 +32,7 @@ Default-on [agent hibernation](./configuration.md#agent-hibernation) freezes pro
 
 ## What can run a command
 
-Inside a workspace, plenty already runs as you: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves. Same-user isolation is no real boundary there, so RimZ does not lean on it. Instead it makes command execution an explicit choice, and three things in your configuration can make that choice for you: a repository's config, which stays inert until you trust it, and your own notification handlers and worktree hooks, which a repository cannot supply.
+Inside a workspace, plenty already runs as you: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves. Same-user isolation is no real boundary there, so RimZ does not lean on it. Instead it makes command execution an explicit choice, and three things in your configuration can make that choice for you: a repository's command-running config, which stays inert until you trust it, and your own notification handlers and worktree hooks, which a repository cannot supply.
 
 RimZ also gives Claude and Codex a curated permission list for [routine coordination](./fleet.md#set-a-permission-mode), on by default: launch settings for Claude, and `$CODEX_HOME/rules/rimz.rules` installed by `rimz hooks install` for Codex. A matching Codex command runs unsandboxed, skipping Guardian and permission hooks unless a stricter user or managed rule applies. That list lets an agent widen what other agents may do, with no prompt:
 
@@ -48,7 +48,7 @@ A Markdown definition's `allowed-tools` is a standing grant, not a skill's per-i
 
 ### Project trust
 
-A cloned repository can ship a `.rimz/config.toml` that declares agents, profiles, teams, loop tasks, hooks, environment variables, and which provider account an unpinned room follows. Each of those can run a command or redirect your credentials, so RimZ keeps the whole file inert until you trust the workspace. On an untrusted clone nothing the file declares can launch; RimZ parses it only far enough to tell you what it is asking for.
+A cloned repository can ship a `.rimz/config.toml` that declares agents, profiles, teams, loop tasks, hooks, environment variables, and which provider account an unpinned room follows. Each of those can run a command or redirect your credentials, so RimZ keeps those settings inert until you trust the workspace. On an untrusted clone nothing the file declares can launch. Non-executing [pack expectations](./configuration.md#expected-packs) are read in every trust state; they only tell you what is missing and never install anything.
 
 A first interactive `rimz start` in an untrusted workspace offers the grant and names what the config declares. The interactive `rimz loop fire` and the project-task edit commands offer it inline when they meet the closed gate, with the field-level diff when a grant has gone stale. Declining leaves the workspace inert and suppresses only the first-start offer; the inline offers keep coming, and the first-start offer returns as soon as a command-running field in `.rimz/config.toml` changes.
 
@@ -56,7 +56,7 @@ A first interactive `rimz start` in an untrusted workspace offers the grant and 
 
 Edits outside RimZ's own project-task commands, a direct file edit by an agent in the room included, make that hash drift. The workspace flips to `stale`, command execution turns back off, and `rimz trust status` prints a field-level diff of what changed before you re-grant. `rimz loop add`, `remove`, and `rename` are the exception: when they make the edit from an already-trusted workspace, or when they create the first config, they re-pin the grant themselves, whether you run them by hand, from a script, or from an agent. From an untrusted or stale workspace they leave the review to you.
 
-`rimz trust revoke` drops the grant. The project config is inert again at the next read; panes already running keep what they launched with until they stop.
+`rimz trust revoke` drops the grant. Command-running project settings are inert again at the next read; panes already running keep what they launched with until they stop.
 
 Room layout stays out of a repository's reach. A project config carrying a `[layout]` table is refused outright, and the error names what replaced the table: `placement` under `[agents]`, and a team definition for a whole room shape. The table goes rather than moves, because per-machine config has no `[layout]` either.
 

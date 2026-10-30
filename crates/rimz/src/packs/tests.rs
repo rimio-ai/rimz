@@ -71,6 +71,111 @@ fn item(kind: ItemType, value: &str) -> ExclusionTarget {
 }
 
 #[test]
+fn project_expectations_match_installed_names_and_deduplicate_missing_packs() {
+    let record = Record {
+        version: 1,
+        sources: [("linked", true), ("git", false), ("excluded", true)]
+            .into_iter()
+            .map(|(pack, linked)| InstalledSource {
+                entry: pack.into(),
+                source: format!("/sources/{pack}"),
+                url: None,
+                linked,
+                reference: None,
+                pinned: false,
+                commit: None,
+                packs: vec![InstalledPack {
+                    name: name(pack),
+                    excluded: Exclusions {
+                        types: [ItemType::Agents, ItemType::Skills].into(),
+                        ..Default::default()
+                    },
+                }],
+            })
+            .collect(),
+    };
+    let packs: toml::Value = toml::from_str(
+        "expect = ['crew/linked', 'skills/git', 'github:acme/tools/excluded', 'crew/missing', 'github:other/repo/missing', 'skills/absent']",
+    )
+    .unwrap();
+    let warnings = expectation_warnings(&packs, &record);
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    for (message, (pack, spelling)) in warnings
+        .iter()
+        .zip([("missing", "crew/missing"), ("absent", "skills/absent")])
+    {
+        assert!(message.contains("project expects"), "{message}");
+        assert!(message.contains(pack), "{message}");
+        assert!(
+            message.contains(&format!("rimz packs install {spelling}")),
+            "{message}"
+        );
+    }
+    let packs: toml::Value = toml::from_str("expect = ['github:acme/tools/lint']").unwrap();
+    assert!(
+        expectation_warnings(&packs, &record)[0]
+            .contains("rimz packs install github:acme/tools/lint")
+    );
+    for text in ["", "future = true", "expect = []"] {
+        let packs: toml::Value = toml::from_str(text).unwrap();
+        assert!(expectation_warnings(&packs, &record).is_empty());
+    }
+}
+
+#[test]
+fn project_expectations_reject_unsupported_sources_and_malformed_shapes() {
+    for text in [
+        "packs = 5",
+        "packs = ['crew/crew']",
+        "[packs]\nexpect = 5",
+        "[packs]\nexpect = ['crew/crew', false]",
+    ] {
+        let config: toml::Value = toml::from_str(text).unwrap();
+        let warnings = expectation_warnings(&config["packs"], &Record::default());
+        assert_eq!(warnings.len(), 1, "{text}: {warnings:?}");
+        assert!(warnings[0].contains("packs.expect"), "{warnings:?}");
+        for spelling in [
+            "crew/<pack>",
+            "skills/<pack>",
+            "github:<owner>/<repo>/<pack>",
+        ] {
+            assert!(warnings[0].contains(spelling), "{warnings:?}");
+        }
+        assert!(
+            warnings[0].contains('5')
+                || warnings[0].contains("crew/crew")
+                || warnings[0].contains("false"),
+            "{warnings:?}"
+        );
+    }
+    let invalid = [
+        "crew",
+        "sibling",
+        "https://github.com/acme/tools",
+        "crew/crew@main",
+        "github:acme/tools/lint@main",
+        "github:acme/tools",
+    ];
+    let packs = toml::Value::Table(toml::Table::from_iter([(
+        "expect".into(),
+        toml::Value::try_from(invalid).unwrap(),
+    )]));
+    let warnings = expectation_warnings(&packs, &Record::default());
+    assert_eq!(warnings.len(), invalid.len(), "{warnings:?}");
+    for (message, entry) in warnings.iter().zip(invalid) {
+        for text in [
+            entry,
+            "crew/<pack>",
+            "skills/<pack>",
+            "github:<owner>/<repo>/<pack>",
+        ] {
+            assert!(message.contains(text), "{message}");
+        }
+        assert!(!message.contains("rimz packs install"), "{message}");
+    }
+}
+
+#[test]
 fn manifest_reads_all_fields_and_reports_unknown_keys() {
     let temp = tempfile::tempdir().unwrap();
     let source = source(temp.path(), "source", &[("crew", ".")]);

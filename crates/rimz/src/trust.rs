@@ -1,7 +1,7 @@
 //! Project trust — the executable-surface hash and the grant record.
 //!
-//! Project config at `<project_root>/.rimz/config.toml` is inert until the
-//! workspace is trusted. A trust grant pins a SHA-256 of every command-running
+//! Command-running config at `<project_root>/.rimz/config.toml` is inert until
+//! the workspace is trusted. A trust grant pins a SHA-256 of every command-running
 //! field; every later [`status`] call re-hashes the live config and demotes
 //! the state to `stale` when the hash drifts. That re-hash is the
 //! "auto-revoke" half of the contract — no separate sweep is required.
@@ -627,6 +627,10 @@ fn read_project_config_at(
     read_project_config(&project_root.join(CONFIG_REL))
 }
 
+pub(crate) fn project_packs(project_root: &Path) -> Result<Option<toml::Value>> {
+    Ok(read_project_config_at(project_root, &rimz_home())?.and_then(|config| config.packs))
+}
+
 fn read_project_config(path: &Path) -> Result<Option<ProjectConfig>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
@@ -770,6 +774,7 @@ struct BirthPromptDismissal {
 #[serde(default)]
 pub struct ProjectConfig {
     lsp: ProjectLsp,
+    packs: Option<toml::Value>,
     pub agents: ProjectAgents,
     pub profiles: BTreeMap<String, ProjectProfile>,
     pub subagents: ProjectSubagents,

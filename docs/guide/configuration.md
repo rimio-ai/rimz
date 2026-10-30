@@ -1019,6 +1019,21 @@ Because the file can name commands to run, every command-running field enters th
 
 A trusted repo profile, team, or task overlays your machine config and wins a name collision. To keep that surface closed and machine-independent, a repo profile may inherit only another repo profile or a built-in kind, and a repo team role may bind only a repo profile. The threat model is [security and trust](./security.md), and the hash contract and launch-time enforcement are in [trust.md](../internals/harness/trust.md).
 
+### Expected packs
+
+A teammate cloning your project may not have the packs its workflow uses. Declare them in project config so the next `rimz start` or `rimz attach` tells them what is missing:
+
+```toml
+[packs]
+expect = ["crew/crew", "skills/essentials", "github:acme/tools/lint"]
+```
+
+Each entry names one pack: `crew/<pack>`, `skills/<pack>`, or `github:<owner>/<repo>/<pack>`. Bare source names, URLs, and refs are not accepted. Any installed pack with that name satisfies the expectation, whether linked or Git-installed, even if its items are excluded.
+
+Room entry prints one warning per missing pack with its `rimz packs install <spelling>` command, and keeps the warning for `rimz doctor`. Review and run the install yourself; RimZ installs nothing automatically. Remove an entry when the project no longer expects that pack. Malformed entries warn and are skipped; an `expect` value that is not an array of strings is skipped as a whole, with a warning, without preventing the room from opening.
+
+Expectations are read even before project trust is granted, because they run no commands. Editing them does not change the trust hash or revoke an existing grant.
+
 ## Moving from the XDG roots
 
 Earlier releases split RimZ across four XDG directories. RimZ reads only `~/.rimz/` now and does not move the old roots for you. `rimz doctor` lists all four old roots when present: config, state, data, and cache. Its fix says to move the contents of the first three into the home and delete the obsolete cache. `rimz start` and `rimz attach` warn and open the room when a config, state, or data root exists but `~/.rimz/config.toml` does not; they write no template and run no first-run setup. Account-following launches refuse until the move is completed, rather than silently selecting the default account; an explicit default pin can still launch. A leftover cache alone blocks neither command. Setting `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, or `XDG_CACHE_HOME` no longer moves any RimZ file; `RIMZ_HOME` does.

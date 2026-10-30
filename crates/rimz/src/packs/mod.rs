@@ -217,6 +217,51 @@ impl Record {
     }
 }
 
+pub(crate) fn expectation_warnings(packs: &toml::Value, installed: &Record) -> Vec<String> {
+    let invalid = |value| {
+        format!(
+            "invalid packs.expect {value}; use an array of strings naming \
+             crew/<pack>, skills/<pack>, or github:<owner>/<repo>/<pack>"
+        )
+    };
+    let Some(table) = packs.as_table() else {
+        return vec![invalid(packs.to_string())];
+    };
+    let Some(expect) = table.get("expect") else {
+        return Vec::new();
+    };
+    let Some(entries) = expect.as_array().and_then(|entries| {
+        entries
+            .iter()
+            .map(toml::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+    }) else {
+        return vec![invalid(expect.to_string())];
+    };
+    let mut checked = BTreeSet::new();
+    let mut warnings = Vec::new();
+    for entry in entries {
+        let Some(source) = source::requirement(entry, "").filter(|_| entry.contains('/')) else {
+            warnings.push(invalid(format!("{entry:?}")));
+            continue;
+        };
+        if let Some(pack) = &source.pack
+            && checked.insert(pack.clone())
+            && !installed
+                .sources
+                .iter()
+                .flat_map(|source| &source.packs)
+                .any(|installed| &installed.name == pack)
+        {
+            warnings.push(format!(
+                "project expects pack `{pack}`; install it with `rimz packs install {}`",
+                source.spelling()
+            ));
+        }
+    }
+    warnings
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct CheckoutReport {
     pub checkouts: Vec<Checkout>,

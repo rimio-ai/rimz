@@ -218,6 +218,108 @@ fn start_records_an_unsupported_pack_version_and_keeps_its_profiles() {
 }
 
 #[test]
+fn start_and_attach_record_missing_expected_packs_before_project_trust() {
+    let env = Env::new();
+    let source = env.home_root.join("expected-pack");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("rimz-packs.toml"),
+        "[[pack]]\nname = 'crew'\ndescription = 'Crew'\npath = '.'\n",
+    )
+    .unwrap();
+    rimz::packs::install(&env.agents_home(), &source).unwrap();
+    env.write_config(
+        &env.project_root,
+        "[packs]\nexpect = ['crew/crew', 'skills/expected-tools', 'github:acme/tools/expected-tools', 'github:acme/tools/expected-lint']\n",
+    );
+    for attach in [false, true] {
+        let output = if attach {
+            let bin = seed_actionable_agent(&env);
+            let trace = env.project_root.join("zellij-expect-attach.log");
+            let _room = ShimRoom::watch(&env, &trace);
+            env.rimz()
+                .args(["--mux", "zellij", "attach", "--print"])
+                .env("PATH", &bin)
+                .env("TERM", "dumb")
+                .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+                .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+                .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
+                .bounded_output()
+                .unwrap()
+        } else {
+            start_with_accounts(&env, "", &[], None)
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        let record: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(env.state_path_for(&env.project_root).workspace_record).unwrap(),
+        )
+        .unwrap();
+        let warnings: Vec<_> = record["skipped"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry["setting"] == "packs.expect")
+            .collect();
+        assert_eq!(warnings.len(), 2, "{record}");
+        for (entry, spelling) in warnings
+            .iter()
+            .zip(["skills/expected-tools", "github:acme/tools/expected-lint"])
+        {
+            let message = entry["message"].as_str().unwrap();
+            assert!(message.contains("project expects"), "{message}");
+            assert!(
+                message.contains(&format!("rimz packs install {spelling}")),
+                "{message}"
+            );
+            assert_eq!(
+                stderr.matches(&format!("rimz: warning: {message}")).count(),
+                1,
+                "{stderr}"
+            );
+        }
+    }
+    let trust = env
+        .rimz()
+        .args(["trust", "status", "--json"])
+        .bounded_output()
+        .unwrap();
+    let trust: serde_json::Value = serde_json::from_slice(&trust.stdout).unwrap();
+    assert_eq!(trust["state"], "untrusted", "{trust}");
+}
+
+#[test]
+fn start_records_malformed_pack_expectations_without_revoking_trust() {
+    let env = Env::new();
+    env.write_config(&env.project_root, "[packs]\nexpect = 5\n");
+    let grant = env
+        .rimz()
+        .args(["trust", "grant"])
+        .bounded_output()
+        .unwrap();
+    assert!(grant.status.success(), "{grant:?}");
+    let started = start_with_accounts(&env, "", &[], None);
+    let stderr = String::from_utf8_lossy(&started.stderr);
+    assert!(started.status.success(), "{stderr}");
+    assert!(stderr.contains("packs.expect"), "{stderr}");
+    assert_skipped(&env, &stderr, "packs.expect", "5");
+    for spelling in [
+        "crew/<pack>",
+        "skills/<pack>",
+        "github:<owner>/<repo>/<pack>",
+    ] {
+        assert!(stderr.contains(spelling), "{stderr}");
+    }
+    let trust = env
+        .rimz()
+        .args(["trust", "status", "--json"])
+        .bounded_output()
+        .unwrap();
+    let trust: serde_json::Value = serde_json::from_slice(&trust.stdout).unwrap();
+    assert_eq!(trust["state"], "trusted", "{trust}");
+}
+
+#[test]
 fn birth_saves_the_shell_before_panes_and_live_reentry_keeps_it() {
     let env = Env::new();
     write_machine_config(&env, "[agents]\nshell = 'bash'\n");
