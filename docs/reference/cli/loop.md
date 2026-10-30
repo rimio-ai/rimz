@@ -636,11 +636,13 @@ Without a configured limit or a run waiting in the start throttle, there are no 
 
 In the human table, a condition key used by multiple terms shows a present reading without a truth glyph; single-term keys keep their glyph. If the owned worktree list cannot be read, the table prints one explanatory note instead of rows. If the room's subscription catalog cannot be read, both the screen and `--json` print what they have, with every `armed` count at zero, and then exit nonzero with the error.
 
+Run records refused at the run lock carry `holder` when the lock names one, in the shape `{"pid": 42424, "started_at": "2026-01-01T00:00:00Z"}`. Older records and records without a known holder omit it. Their stored `error` names the policy outcome without a pid or an age.
+
 A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind).
 
 ### `loop logs`
 
-`loop logs <name>` prints the full record of the latest fires, oldest first, so the newest ends the output. Each block holds the status, age, trigger (`manual` for a hand fire, `signal <name>` for a signal, `scheduled` otherwise), exit information, check output, error chains, run ids, pane output tails, cost and tokens, and transcript links when recorded. Agent messages render as [agent prose](../cli.md#agent-prose); check output and errors stay literal. While the task is running, the last line is the running text `loop show` opens with; `--failed` leaves it out. Empty history uses the same delivery-target line or clock-only fire hint as `show`; `--failed` instead says `no failed runs recorded`. A removed task whose retained history holds only heard signals points at `--heard` instead.
+`loop logs <name>` prints the full record of the latest fires, oldest first, so the newest ends the output. Each block holds the status, age, trigger (`manual` for a hand fire, `signal <name>` for a signal, `scheduled` otherwise), exit information, check output, error chains, a `holder: pid N · started <D> before this fire` line for a known run-lock holder, run ids, pane output tails, cost and tokens, and transcript links when recorded. The holder line measures the interval from the holder's start to that fire, never to now. Agent messages render as [agent prose](../cli.md#agent-prose); check output and errors stay literal. While the task is running, the last line is the running text `loop show` opens with; `--failed` leaves it out. Empty history uses the same delivery-target line or clock-only fire hint as `show`; `--failed` instead says `no failed runs recorded`. A removed task whose retained history holds only heard signals points at `--heard` instead.
 
 | Flag | Effect |
 | --- | --- |

@@ -9331,12 +9331,6 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     assert!(read_loop_instances(&env).0.contains_key("busy"));
     let record = last_loop_record(&env);
     assert_eq!(record.result, LoopRunResult::Overlapped);
-    assert!(
-        record
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("pid 42424"))
-    );
     let show = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
         show.starts_with("busy · one-off · once at 07:00 · ▸ running 25m · pid 42424\n")
@@ -9351,9 +9345,7 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     );
     let logs = loop_ok(&env, &["loop", "logs", "busy"]);
     assert!(
-        logs.contains("○ overlapped")
-            && logs.contains("previous run still active (pid 42424, started 25m ago) — skipped")
-            && logs.ends_with("\n\n▸ running 25m · pid 42424\n"),
+        logs.contains("○ overlapped") && logs.ends_with("\n\n▸ running 25m · pid 42424\n"),
         "{logs}"
     );
     let failed = loop_ok(&env, &["loop", "logs", "busy", "--failed"]);
@@ -9361,6 +9353,21 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     let json = loop_ok(&env, &["loop", "show", "busy", "--json"]);
     assert!(json.contains("\"result\": \"overlapped\""), "{json}");
     let json: serde_json::Value = serde_json::from_str(&json).expect("show json");
+    assert_eq!(
+        (
+            record.error.as_deref(),
+            logs.contains("previous run still active — skipped"),
+            logs.contains("holder: pid 42424 · started 25m before this fire"),
+            &json["runs"][0]["holder"]["pid"],
+        ),
+        (
+            Some("previous run still active — skipped"),
+            true,
+            true,
+            &json!(42424),
+        ),
+        "{logs}\n{json}"
+    );
     assert_eq!(
         json["running"],
         json!({ "pid": 42_424, "started_at": holder.started_at, "run_id": null })
