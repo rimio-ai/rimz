@@ -2,6 +2,32 @@ use super::*;
 use crate::config::MachineConfigFileKind as Kind;
 
 #[test]
+fn get_refuses_a_broken_theme_even_for_core_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    );
+    let path = files.path(Kind::Theme);
+    std::fs::write(&path, "[tokens").unwrap();
+    let editor = ConfigEditor::new(files);
+
+    for key in [None, Some("sidebar.focus_key")] {
+        let error = editor.get(key).expect_err("get must refuse a broken theme");
+        let ConfigEditErr::Load { source } = error else {
+            panic!("expected a config load error, got {error:?}");
+        };
+        let crate::config::ConfigErr::Parse {
+            path: error_path, ..
+        } = &*source
+        else {
+            panic!("expected a theme parse error, got {source:?}");
+        };
+        assert_eq!(error_path, &path);
+    }
+}
+
+#[test]
 fn spend_order_round_trips_with_config_set_and_get() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(

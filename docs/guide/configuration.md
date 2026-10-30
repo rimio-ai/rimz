@@ -95,7 +95,9 @@ The project layer also overrides one `[agents]` scalar: [`env-reminder`](#enviro
 
 ### When a file is broken
 
-Per-machine TOML loads leniently: a missing file uses defaults, an unknown key warns, and a malformed file falls back to defaults with a warning at startup. Markdown definitions are strict about keys and types instead. A broken definition refuses only the launches that select it, every other profile keeps working, and read-only views still show the definitions that loaded. `rimz doctor` reports both kinds of failure and points at `rimz agents validate`, which names the file and the error; fixing the named source restores the launch.
+A missing per-machine TOML file uses defaults, and unknown keys warn. A broken `theme.toml` warns, and every command that reads it runs on the built-in theme except `rimz config get`, which remains strict. A broken `config.toml` or `loop.toml` falls back to defaults with a warning in the room and the sidebar, and a broken `loop.toml` does the same in interactive agent launches. A broken `config.toml` refuses any launch whose account it would decide ([details](./troubleshooting.md#rimz-cannot-parse-a-config-file)), and commands that read the whole per-machine config (profile and team listings, subagent launches, `rimz accounts add`, `remove`, `redeem`, and `use --global`, and `rimz config get`) refuse with the error for either file. For any of the three files, `rimz config get` shows the strict error, `rimz config set` refuses to edit a broken one, and `rimz doctor` reports the failure.
+
+Markdown definitions are strict about keys and types instead. A broken definition refuses only the launches that select it, every other profile keeps working, and read-only views still show the definitions that loaded. `rimz doctor` reports these failures and points at `rimz agents validate`, which names the file and the error; fixing the named source restores the launch.
 
 ## Generate and refresh the files
 

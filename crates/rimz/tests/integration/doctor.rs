@@ -1760,14 +1760,7 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
         ),
         "classified parse error: {broken:?}",
     );
-    assert_eq!(report["remote_control"]["state"], "unavailable");
-    assert_eq!(
-        report["remote_control"]["error"],
-        format!(
-            "line 3: `max_cols` is defined more than once in the same table; fix: remove the extra `max_cols` at {}:3, then re-run",
-            path.display()
-        )
-    );
+    assert_eq!(report["remote_control"]["state"], "off");
 
     let output = env.rimz().arg("doctor").output().expect("spawn doctor");
     assert!(
@@ -1781,17 +1774,48 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
         stdout.contains("line 3: `max_cols` is defined more than once"),
         "{stdout}",
     );
-    let remote = stdout
-        .lines()
-        .find(|line| line.contains("config unavailable"))
-        .expect("remote-control config failure");
-    assert!(!remote.contains("fix:"), "{remote}");
     let (body, closing) = stdout.split_at(stdout.rfind("\n✗ ").unwrap());
     assert!(!body.contains("fix:"), "{body}");
     assert!(
         closing.contains("fix: remove the extra `max_cols`"),
         "{closing}"
     );
+}
+
+#[test]
+fn doctor_reports_remote_control_unavailable_with_a_broken_core_config() {
+    let env = Env::new();
+    let path = env.rimz_home().join("config.toml");
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config");
+    std::fs::write(&path, "[remote_control]\nclaude = true\nclaude = false\n")
+        .expect("write broken core config");
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+    assert_eq!(report["remote_control"]["state"], "unavailable");
+    assert_eq!(
+        report["remote_control"]["error"],
+        format!(
+            "line 3: `claude` is defined more than once in the same table; fix: remove the extra `claude` at {}:3, then re-run",
+            path.display()
+        )
+    );
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor succeeds with broken config"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 human report");
+    let remote = stdout
+        .lines()
+        .find(|line| line.contains("config unavailable"))
+        .expect("remote-control config failure");
+    assert!(!remote.contains("fix:"), "{remote}");
 }
 
 #[test]
