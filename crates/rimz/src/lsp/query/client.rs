@@ -239,7 +239,7 @@ fn uri(root: &Path, path: &Path) -> Result<String> {
         .map_err(|()| LspErr::Protocol("invalid file URI".into()))
 }
 
-/// Fetch a test-classification outline with a short readiness wait.
+/// Fetch an outline for test classification and find names with a short readiness wait.
 pub fn classification_outline(entry: &Entry, path: &Path) -> std::result::Result<Value, QueryErr> {
     let uri = uri(&entry.root, path)?;
     request_with_wait(
@@ -464,10 +464,14 @@ pub fn execute(
             };
             let mut unresolved = 0;
             let resolution = match resolution {
-                SymbolResolution::Missing { candidates } => {
+                SymbolResolution::Missing { mut candidates } => {
                     if let Some(recovered) = recover_outline(entry, name, &mut outlines)? {
                         recovered
                     } else {
+                        for symbol in &mut candidates {
+                            let outline = outlines.get(&symbol.location.uri);
+                            enrich_available_container(symbol, outline);
+                        }
                         let (resolution, unresolved) =
                             collapse_ranked(&entry.root, name, candidates, definition)?;
                         return Ok(Output::NotFound {

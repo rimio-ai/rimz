@@ -1854,7 +1854,58 @@ fn lsp_queries_prefer_written_containers_and_list_reusable_twins() {
     let env = Env::new();
     std::fs::create_dir_all(env.project_root.join("scope")).unwrap();
     std::fs::write(env.project_root.join("scope/show.rs"), "line\n".repeat(217)).unwrap();
-    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    let (mut broker, directory, _) = start_stub_broker(&env, env.project_root.clone());
+    let output = env.rimz().args(["lsp", "find", "child"]).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        text,
+        "function scope::show::child  scope/show.rs:208:4\ntests:\nfunction scope::show::tests::child  scope/show.rs:210:4\n"
+    );
+    for line in text
+        .lines()
+        .filter_map(|line| line.strip_prefix("function "))
+    {
+        let (name, position) = line.split_once("  ").unwrap();
+        env.rimz()
+            .args(["lsp", "def", name])
+            .assert()
+            .success()
+            .stdout(format!("{position}  line\n"));
+    }
+    env.rimz()
+        .args(["lsp", "def", "nosuch::child"])
+        .assert()
+        .code(5)
+        .stdout("not found: nosuch::child; 2 other symbols named child:\nfunction scope::show::child  scope/show.rs:208:4\nfunction scope::show::tests::child  scope/show.rs:210:4\n");
+    let outline_requests = || {
+        editor_query(&directory, "requests")["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|request| request["method"] == "textDocument/documentSymbol")
+            .count()
+    };
+    let outlines_before = outline_requests();
+    let output = env
+        .rimz()
+        .args(["lsp", "def", "nosuch::child", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "outcome":"not-found", "name":"nosuch::child", "total":2, "truncated":false,
+            "candidates":[
+                {"name":"scope::show::child", "kind":"function", "position":"scope/show.rs:208:4"},
+                {"name":"scope::show::tests::child", "kind":"function",
+                    "position":"scope/show.rs:210:4"}
+            ]
+        })
+    );
+    assert_eq!(outline_requests() - outlines_before, 1);
     for name in ["scope/show.rs::child", "show::child", "scope::show::child"] {
         env.rimz()
             .args(["lsp", "def", name])

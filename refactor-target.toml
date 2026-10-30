@@ -9538,7 +9538,7 @@ reason = "The CLI resolves column-less positions through the same typed-path rea
 [[verdict]]
 kind = "item"
 key = "lsp::query::classification_outline"
-reason = "The CLI's test-classification outlines use a short readiness wait without changing main queries."
+reason = "The CLI's outlines for test classification and find names use a short readiness wait without changing main queries."
 
 [[verdict]]
 kind = "item"
