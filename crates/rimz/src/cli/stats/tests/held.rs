@@ -459,7 +459,7 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
         }
     }
     let output = frame(&stats, &assists, Window::Month, 119, Some(40));
-    assert_eq!(output.text.lines().count(), 39);
+    assert_eq!(output.text.lines().count(), 38);
     let mut terminal = Vec::new();
     rimz::tui::replace_frame(&mut terminal, output.text.as_bytes()).unwrap();
     let mut parser = vt100::Parser::new(40.try_into().unwrap(), 119.try_into().unwrap(), 0);
@@ -482,7 +482,7 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
 #[test]
 fn dashboard_mock_heights_and_snapshots() {
     let (stats, assists) = fixture();
-    for (rows, today_height, month_height) in [(76, 65, 73), (40, 38, 39)] {
+    for (rows, today_height, month_height) in [(76, 64, 72), (40, 37, 38)] {
         for tab in Window::TABS {
             let output = frame(&stats, &assists, tab, 119, Some(rows));
             let expected = if tab == Window::Today {
@@ -569,7 +569,7 @@ fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
     );
     assert!(output.contains("5,995 sessions"));
     assert!(!output.contains("agent-time and messages"));
-    let short = strip_ansi(&frame(&stats, &assists, Window::Month, 119, Some(45)).text);
+    let short = strip_ansi(&frame(&stats, &assists, Window::Month, 119, Some(44)).text);
     let other = short
         .lines()
         .find(|line| line.contains("Other") && line.contains("1h40m"))
@@ -617,17 +617,6 @@ fn dashboard_charts_use_per_range_publication_cells() {
     // The fixture's Year is sparse; use a complete publication for its bar count below.
     assert_eq!(&counts[..3], &[24, 7, 30]);
     let month = frame(&stats, &assists, Window::Month, 119, None).text;
-    let plain = strip_ansi(&month);
-    let legend = plain.lines().find(|line| line.contains("Other")).unwrap();
-    for name in [
-        "Opus 5.5",
-        "GPT 6 Astra",
-        "Fable 5.1",
-        "GPT 6.1 Sol",
-        "Other",
-    ] {
-        assert!(legend.contains(name), "{legend}");
-    }
     assert!(month.contains(&render::paint(render::palette::accent(), "today")));
 }
 
@@ -752,21 +741,84 @@ fn dashboard_weekly_chart_survives_a_later_local_day() {
 }
 
 #[test]
-fn dashboard_model_shades_follow_year_rank_on_every_tab() {
-    let (stats, assists) = fixture();
-    assert_ne!(
-        render::palette::model_shade("claude", 0),
-        render::palette::model_shade("claude", 1)
+fn dashboard_model_tones_follow_month_rank_and_stay_distinct_on_every_tab() {
+    let (mut stats, assists) = fixture();
+    stats.by_model.get_mut("fable-5.1").unwrap().tally.year.usd = 100_000.0;
+    let expected = render::paint(
+        render::palette::model_styles(&["claude"], |_, _| true).0[0].mark,
+        "█",
     );
-    let expected = render::paint(render::palette::model_shade("claude", 1), "█");
-    for tab in [Window::Month, Window::Year] {
+    let mut previous = BTreeMap::new();
+    for tab in Window::TABS {
         let output = frame(&stats, &assists, tab, 119, None).text;
-        let row = output
+        let models = output
+            .split("Models")
+            .nth(1)
+            .unwrap()
+            .split("Providers")
+            .next()
+            .unwrap();
+        let opus = models
             .lines()
-            .find(|line| line.contains("Fable 5.1") && !line.contains("Opus"))
-            .expect("model row");
-        assert!(row.contains(&expected), "{row}");
+            .find(|line| line.contains("Opus 5.5"))
+            .unwrap();
+        assert!(opus.contains(&expected), "{opus}");
+        let mut styles = Vec::new();
+        for row in models
+            .lines()
+            .filter(|line| line.contains('█') && !line.contains("Other"))
+        {
+            let (style, rest) = row.split_once('█').unwrap();
+            let name = strip_ansi(rest)
+                .split('$')
+                .next()
+                .unwrap()
+                .trim()
+                .to_owned();
+            if let Some(before) = previous.insert(name, style.to_owned()) {
+                assert_eq!(style, before, "{tab:?}: {row}");
+            }
+            assert!(!styles.contains(&style), "{tab:?}: {models}");
+            styles.push(style);
+        }
     }
+}
+
+#[test]
+fn dashboard_chart_folds_the_same_models_as_the_table() {
+    let (mut stats, assists) = fixture();
+    for model in stats.by_model.values_mut() {
+        model.tally.day.usd = 0.0;
+        model.tally.day.tokens = 0;
+    }
+    stats.by_model.get_mut("opus-5.5").unwrap().tally.day.usd = 100.0;
+    stats.by_model.get_mut("fable-5.1").unwrap().tally.day.usd = 0.1;
+    stats.by_model.get_mut("small").unwrap().tally.day.usd = 0.1;
+    stats.chart.hours = BTreeMap::from([(
+        TODAY * 24,
+        BTreeMap::from([("fable-5.1".into(), 50.0), ("small".into(), 50.0)]),
+    )]);
+    let output = frame(&stats, &assists, Window::Today, 119, None).text;
+    let models = output
+        .split("Models")
+        .nth(1)
+        .unwrap()
+        .split("Providers")
+        .next()
+        .unwrap();
+    assert!(!models.contains("Fable 5.1"), "{models}");
+    assert!(models.contains("Other"), "{models}");
+    for row in output.lines().filter(|line| line.contains('┤')) {
+        assert!(
+            row.contains(&render::paint(render::palette::muted(), "███")),
+            "{row}"
+        );
+    }
+    let axis = output.lines().find(|line| line.contains("└─")).unwrap();
+    assert!(
+        !axis.contains(&render::palette::accent().to_string()),
+        "{axis}"
+    );
 }
 
 #[test]
@@ -786,7 +838,6 @@ fn dashboard_weekly_chart_uses_the_published_history_anchor() {
             .any(|line| line.contains('┤') && line.contains('█')),
         "{chart}"
     );
-    assert!(chart.contains("Opus 5.5"), "{chart}");
 }
 
 #[test]
@@ -901,8 +952,12 @@ fn dashboard_narrow_weekly_chart_keeps_the_newest_weeks_and_now() {
     assert!(chart.contains("last 50 weeks"), "{chart}");
     let axis = chart.lines().find(|line| line.contains("└─")).unwrap();
     assert!(axis.ends_with("now"), "{axis}");
-    assert!(chart.contains("█ Newest"), "{chart}");
-    assert!(!chart.contains("Oldest"), "{chart}");
+    assert!(
+        chart
+            .lines()
+            .any(|line| line.contains('┤') && line.ends_with('█')),
+        "{chart}"
+    );
 }
 
 #[test]

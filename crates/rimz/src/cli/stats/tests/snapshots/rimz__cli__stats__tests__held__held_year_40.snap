@@ -25,7 +25,6 @@ expression: text
            ┤                                                                           █                     ▅ ▅ ▅ ▄
            ┤                                                                           █         ▁ ▅ ▅ ▅ ▅ ▆ █ █ █ █
         $0 └─Oct 31                    Jan 30                    May 1                     Jul 31                now
-             █ Opus 5.5    █ GPT 6 Astra    █ Fable 5.1    █ GPT 6.1 Sol    █ Other
 
    Models                                                                                  HIT       TOK/S  TOKENS
    █ Opus 5.5      $21,471  ━━━━━━━━━━━━━━━━━━──────────────────────────────  38%          96%          50   46.2B

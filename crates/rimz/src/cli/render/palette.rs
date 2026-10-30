@@ -142,16 +142,33 @@ pub(crate) fn identity(kind: &str) -> anstyle::Style {
     THEME.identity(kind)
 }
 
-pub(crate) fn model_shade(kind: &str, step: usize) -> anstyle::Style {
-    THEME.style(resolve_provider_brand(kind, &THEME.providers).shade(&THEME.palette, step))
+#[derive(Clone, Copy)]
+pub(crate) struct ModelStyle {
+    pub(crate) mark: anstyle::Style,
+    pub(crate) forecast: anstyle::Style,
 }
 
-pub(crate) fn model_forecast(model: Option<(&str, usize)>) -> anstyle::Style {
-    let tone = model.map_or_else(
-        || THEME.palette.muted(),
-        |(kind, step)| resolve_provider_brand(kind, &THEME.providers).shade(&THEME.palette, step),
-    );
-    THEME.style(THEME.palette.forecast_tone(tone))
+pub(crate) fn model_styles(
+    kinds: &[&str],
+    co_visible: impl Fn(usize, usize) -> bool,
+) -> (Vec<ModelStyle>, ModelStyle) {
+    let brands = kinds
+        .iter()
+        .map(|kind| resolve_provider_brand(kind, &THEME.providers))
+        .collect::<Vec<_>>();
+    let style = |tone| ModelStyle {
+        mark: THEME.style(tone),
+        forecast: THEME.style(THEME.palette.forecast_tone(tone)),
+    };
+    (
+        THEME
+            .palette
+            .model_tones(&brands, co_visible)
+            .into_iter()
+            .map(style)
+            .collect(),
+        style(THEME.palette.muted()),
+    )
 }
 
 pub(crate) fn identity_name(kind: &str) -> String {

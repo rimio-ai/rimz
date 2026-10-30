@@ -4,6 +4,7 @@ use super::panel::{display_width, ellipsize, header_lines, pad_left, pad_to};
 use super::*;
 use rimz::harness::assist_log::AssistRecord;
 use rimz::theme::fmt::{active_duration, group_thousands};
+use std::collections::BTreeSet;
 
 #[derive(Default)]
 pub(super) struct TabAssists {
@@ -47,15 +48,29 @@ pub(super) struct Frame {
     pub(super) step: usize,
 }
 
+struct ModelStyles<'a> {
+    named: BTreeMap<&'a str, render::palette::ModelStyle>,
+    other: render::palette::ModelStyle,
+}
+
+impl ModelStyles<'_> {
+    fn get(&self, id: Option<&str>) -> render::palette::ModelStyle {
+        id.and_then(|id| self.named.get(id))
+            .copied()
+            .unwrap_or(self.other)
+    }
+}
+
 impl Dashboard<'_> {
     pub(super) fn frame(&self, active: Window, cols: usize, rows: Option<usize>) -> Frame {
         let width = cols.min(113);
+        let models = self.model_styles();
         let (step, tallest) = rows.map_or((0, 0), |rows| {
             (0..=8)
                 .map(|step| {
                     let tallest = Window::TABS
                         .into_iter()
-                        .map(|tab| self.lines(tab, width, step).len())
+                        .map(|tab| self.lines(tab, width, step, &models).len())
                         .max()
                         .unwrap_or(0);
                     (step, tallest)
@@ -64,7 +79,7 @@ impl Dashboard<'_> {
                 .unwrap_or((8, rows))
         });
         let margin = " ".repeat(cols.saturating_sub(width) / 2);
-        let mut lines = self.lines(active, width, step);
+        let mut lines = self.lines(active, width, step, &models);
         if let Some(rows) = rows {
             if lines.len() > rows {
                 let hint = lines.pop();
@@ -98,7 +113,13 @@ impl Dashboard<'_> {
         }
     }
 
-    fn lines(&self, active: Window, width: usize, step: usize) -> Vec<String> {
+    fn lines(
+        &self,
+        active: Window,
+        width: usize,
+        step: usize,
+        styles: &ModelStyles<'_>,
+    ) -> Vec<String> {
         let mut lines = Vec::new();
         let hint = render::paint(
             render::palette::muted(),
@@ -169,26 +190,13 @@ impl Dashboard<'_> {
             7 => 4,
             _ => 2,
         };
-        section(&mut lines, self.chart_lines(active, width, chart_height));
         let limit = if step >= 4 { 2 } else { 4 };
-        let models = fold(
-            self.stats
-                .by_model
-                .iter()
-                .map(|(id, model)| {
-                    (
-                        id.clone(),
-                        RoleWindow {
-                            spend: active.select(&model.tally),
-                            ..Default::default()
-                        },
-                    )
-                })
-                .collect(),
-            limit,
-            true,
+        let models = self.model_rows(active, limit);
+        section(
+            &mut lines,
+            self.chart_lines(active, width, chart_height, &models, styles),
         );
-        section(&mut lines, self.model_lines(&models, active, width));
+        section(&mut lines, self.model_lines(&models, active, width, styles));
         let providers = fold(
             self.stats
                 .by_provider
@@ -238,35 +246,73 @@ impl Dashboard<'_> {
         lines
     }
 
-    fn model_rank(&self, id: &str) -> Option<(&str, usize)> {
-        let model = self.stats.by_model.get(id)?;
-        let rank = self
+    fn model_styles(&self) -> ModelStyles<'_> {
+        let named = Window::TABS.map(|tab| {
+            self.model_rows(tab, 7)
+                .into_iter()
+                .filter_map(|row| row.key)
+                .collect::<BTreeSet<_>>()
+        });
+        let mut models = self
             .stats
             .by_model
             .iter()
-            .filter(|(other_id, other)| {
-                other.kind == model.kind
-                    && other
-                        .tally
-                        .year
-                        .usd
-                        .total_cmp(&model.tally.year.usd)
-                        .then_with(|| other.tally.year.tokens.cmp(&model.tally.year.tokens))
-                        .then_with(|| id.cmp(other_id.as_str()))
-                        .is_gt()
-            })
-            .count();
-        Some((&model.kind, rank))
+            .filter(|(id, _)| named.iter().any(|group| group.contains(*id)))
+            .collect::<Vec<_>>();
+        models.sort_by(|(a_id, a), (b_id, b)| {
+            b.tally
+                .month
+                .usd
+                .total_cmp(&a.tally.month.usd)
+                .then_with(|| b.tally.year.usd.total_cmp(&a.tally.year.usd))
+                .then_with(|| a_id.cmp(b_id))
+        });
+        let kinds = models
+            .iter()
+            .map(|(_, model)| model.kind.as_str())
+            .collect::<Vec<_>>();
+        let (styles, other) = render::palette::model_styles(&kinds, |left, right| {
+            named
+                .iter()
+                .any(|group| group.contains(models[left].0) && group.contains(models[right].0))
+        });
+        ModelStyles {
+            named: models
+                .into_iter()
+                .map(|(id, _)| id.as_str())
+                .zip(styles)
+                .collect(),
+            other,
+        }
     }
 
-    fn model_style(&self, id: &str) -> anstyle::Style {
-        self.model_rank(id)
-            .map_or_else(render::palette::muted, |(kind, rank)| {
-                render::palette::model_shade(kind, rank)
-            })
+    fn model_rows(&self, active: Window, limit: usize) -> Vec<Row> {
+        fold(
+            self.stats
+                .by_model
+                .iter()
+                .map(|(id, model)| {
+                    (
+                        id.clone(),
+                        RoleWindow {
+                            spend: active.select(&model.tally),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+            limit,
+            true,
+        )
     }
 
-    fn model_lines(&self, rows: &[Row], active: Window, width: usize) -> Vec<String> {
+    fn model_lines(
+        &self,
+        rows: &[Row],
+        active: Window,
+        width: usize,
+        styles: &ModelStyles<'_>,
+    ) -> Vec<String> {
         if rows.is_empty() {
             return Vec::new();
         }
@@ -286,10 +332,7 @@ impl Dashboard<'_> {
         )];
         let total = active.select(&self.stats.total).usd;
         for row in rows {
-            let style = row
-                .key
-                .as_deref()
-                .map_or_else(render::palette::muted, |id| self.model_style(id));
+            let style = styles.get(row.key.as_deref()).mark;
             let name = row
                 .key
                 .as_deref()
@@ -627,7 +670,14 @@ impl Dashboard<'_> {
         (so_far + remaining).max(so_far)
     }
 
-    fn chart_lines(&self, active: Window, width: usize, height: usize) -> Vec<String> {
+    fn chart_lines(
+        &self,
+        active: Window,
+        width: usize,
+        height: usize,
+        models: &[Row],
+        styles: &ModelStyles<'_>,
+    ) -> Vec<String> {
         let weekly = active == Window::Year;
         let hourly = active == Window::Today;
         let (count, span, data) = match active {
@@ -648,20 +698,10 @@ impl Dashboard<'_> {
         let dates = (0..count)
             .map(|index| last_day - (count - 1 - index) as i64 * span)
             .collect::<Vec<_>>();
-        let mut sums = BTreeMap::<&str, f64>::new();
-        for cells in dates.iter().filter_map(|day| data.get(day)) {
-            for (id, usd) in cells {
-                *sums.entry(id).or_default() += usd;
-            }
-        }
-        let mut top: Vec<_> = sums.into_iter().collect();
-        top.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let has_other = top.len() > 4;
-        top.truncate(4);
-        let styles: BTreeMap<_, _> = top
+        let top = models
             .iter()
-            .map(|(id, _)| (*id, self.model_style(id)))
-            .collect();
+            .filter_map(|row| row.key.as_deref())
+            .collect::<Vec<_>>();
         let totals = dates
             .iter()
             .map(|day| {
@@ -766,7 +806,7 @@ impl Dashboard<'_> {
                 let cells = data.get(day);
                 let segments = top
                     .iter()
-                    .map(|(id, _)| {
+                    .map(|id| {
                         (
                             Some(*id),
                             cells
@@ -780,7 +820,7 @@ impl Dashboard<'_> {
                         (*total
                             - top
                                 .iter()
-                                .map(|(id, _)| {
+                                .map(|id| {
                                     cells
                                         .and_then(|cells| cells.get(*id))
                                         .copied()
@@ -802,8 +842,7 @@ impl Dashboard<'_> {
                             * total,
                     )
                 };
-                let forecast_style =
-                    render::palette::model_forecast(top_id.and_then(|id| self.model_rank(id)));
+                let forecast_style = styles.get(top_id).forecast;
                 let overlay_units = eighths(*yesterday, ceiling, height);
                 (0..units.div_ceil(8))
                     .map(|cell| {
@@ -814,8 +853,7 @@ impl Dashboard<'_> {
                         }
                         let at =
                             (cell as f64 * 8.0 + spent as f64 / 2.0) / spent_units as f64 * total;
-                        let style = segment_at(&segments, at)
-                            .map_or_else(render::palette::muted, |id| styles[id]);
+                        let style = styles.get(segment_at(&segments, at)).mark;
                         let background = if projected > spent {
                             forecast_style.get_fg_color()
                         } else if overlay_units.saturating_sub(cell * 8).min(8) > spent {
@@ -907,16 +945,15 @@ impl Dashboard<'_> {
             "{}{}{}",
             render::paint(render::palette::muted(), "     $0 └─"),
             pad_to(&axis, final_start),
-            render::paint(render::palette::accent(), final_label)
+            render::paint(
+                if hourly {
+                    render::palette::muted()
+                } else {
+                    render::palette::accent()
+                },
+                final_label
+            )
         ));
-        let mut legend = top
-            .iter()
-            .map(|(id, _)| format!("{} {}", render::paint(styles[id], "█"), model_name(id)))
-            .collect::<Vec<_>>();
-        if has_other {
-            legend.push(render::paint(render::palette::muted(), "█ Other"));
-        }
-        lines.push(format!("          {}", legend.join("    ")));
         lines
     }
 }
