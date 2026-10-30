@@ -251,6 +251,21 @@ fn prepare(
         adapter.manual_skill(),
     )?;
     let prompt = supervised_prompt(request, adapter);
+    let logins = crate::agents::room_accounts(
+        &store.paths().workspace_record,
+        Some(&workspace.project_root),
+        &machine_config,
+    )?;
+    let requested_login = if run_layout.is_some() {
+        agent_cell.launch.login.clone().map_or(
+            crate::store::writer::LaunchLogin::RoomDefault,
+            crate::store::writer::LaunchLogin::Pinned,
+        )
+    } else {
+        launch_login(request, caller, &agent_cell.kind)
+    };
+    let login = requested_login.resolve(&agent_cell.kind, &logins, &machine_config.accounts)?;
+    login.preflight(&crate::agents::ambient_env())?;
     let mut companion_logins = Vec::new();
     if let Some((args, _)) = &run_layout {
         let mut prospective = cwd
@@ -343,22 +358,7 @@ fn prepare(
     }
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
-    let logins = crate::agents::room_accounts(
-        &store.paths().workspace_record,
-        Some(&workspace.project_root),
-        &machine_config,
-    )?;
-    let requested_login = if run_layout.is_some() {
-        agent_cell.launch.login.clone().map_or(
-            crate::store::writer::LaunchLogin::RoomDefault,
-            crate::store::writer::LaunchLogin::Pinned,
-        )
-    } else {
-        launch_login(request, caller, &agent_cell.kind)
-    };
-    let login = requested_login.resolve(&agent_cell.kind, &logins, &machine_config.accounts)?;
     preflight_launch.login = (!login.is_default()).then(|| login.name().clone());
-    login.preflight(&crate::agents::ambient_env())?;
     let mut checkout = None;
     let mut empty_dir_name = None;
     if let Some(prepared) = prepare_empty_dir(

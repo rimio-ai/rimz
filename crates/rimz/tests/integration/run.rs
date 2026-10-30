@@ -2475,7 +2475,11 @@ fn supervised_codex_without_project_trust_refuses_before_launch() {
 #[cfg(unix)]
 #[test]
 fn supervised_launch_refuses_its_own_unusable_named_account() {
+    if crate::common::git::git_missing() {
+        return;
+    }
     let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, &env.project_root);
@@ -2492,8 +2496,19 @@ fn supervised_launch_refuses_its_own_unusable_named_account() {
     let trace_path = env.project_root.join("own-account.log");
     let output = env
         .rimz()
-        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "codex",
+            "fix it",
+            "-p",
+            "--bg",
+            "-w",
+            "account-refusal",
+        ])
         .env("PATH", path_with_front(&agent_bin))
+        .env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
         .bounded_output()
@@ -2513,6 +2528,12 @@ fn supervised_launch_refuses_its_own_unusable_named_account() {
             .is_empty()
     );
     assert!(!trace_path.exists(), "preflight must not invoke the mux");
+    assert!(
+        !env.home_root
+            .join("project-worktrees/account-refusal")
+            .exists(),
+        "account preflight must not create a worktree"
+    );
 }
 
 #[test]
