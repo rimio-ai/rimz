@@ -31,6 +31,17 @@ pub struct FolderTrustPreview {
 }
 
 impl FolderTrustGap {
+    /// The fix for a gap on the machine-wide empty root. Its grant reads no
+    /// workspace and, without `--agents`, takes every undecided account, so the
+    /// fix names neither a folder to run it in nor a kind.
+    pub fn empty_dir_fix(&self, kind: &str) -> String {
+        const GRANT: &str = "rimz trust grant --empty-dir";
+        match &self.grant {
+            Ok(_) => format!("run `{GRANT}`"),
+            Err(_) => self.fix(kind, GRANT),
+        }
+    }
+
     pub fn fix(&self, kind: &str, subject: &str) -> String {
         match &self.grant {
             Ok(_) => format!(

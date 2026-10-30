@@ -199,12 +199,7 @@ fn doctor_empty_dir_warns_only_for_configured_profiles_and_ungranted_accounts() 
         assert_eq!(row["kind"], "claude");
         assert_eq!(row["profiles"], json!(["research"]));
         assert_eq!(row["state"], "undecided");
-        assert!(
-            row["fix"]
-                .as_str()
-                .unwrap()
-                .contains("rimz trust grant --empty-dir --agents claude")
-        );
+        assert_eq!(row["fix"], "run `rimz trust grant --empty-dir`");
     }
     let output = env.rimz().arg("doctor").output().unwrap();
     let text = String::from_utf8_lossy(&output.stdout);

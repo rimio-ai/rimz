@@ -24,6 +24,56 @@ fn gap(kind: &str, config: &Path, cwd: &Path, root: Option<&Path>) -> FolderTrus
 }
 
 #[test]
+fn empty_dir_fix_names_only_the_machine_wide_grant() {
+    let gap = FolderTrustGap {
+        path: "/config".into(),
+        key: "/empty".into(),
+        grant: Ok(FolderTrustPreview {
+            original: None,
+            candidate: String::new(),
+        }),
+    };
+    assert_eq!(
+        gap.empty_dir_fix("claude"),
+        "run `rimz trust grant --empty-dir`"
+    );
+}
+
+#[test]
+fn empty_dir_fix_keeps_non_grantable_reason_and_prompt() {
+    let gap = FolderTrustGap {
+        path: "/config".into(),
+        key: "/empty".into(),
+        grant: Err("cannot read /config".into()),
+    };
+    assert_eq!(
+        gap.empty_dir_fix("claude"),
+        "cannot read /config; or answer claude's folder-trust prompt once in `/empty`"
+    );
+}
+
+#[test]
+fn empty_dir_launch_refusal_names_the_machine_wide_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let login_env = BTreeMap::from([(
+        "RIMZ_CLAUDE_GLOBAL_CONFIG".into(),
+        dir.path().join(".claude.json").display().to_string(),
+    )]);
+    let error = crate::agents::preflight_launch_dir(
+        crate::agents::definition_by_kind("claude").unwrap(),
+        &crate::disk::paths::empty_dir_root().join("child"),
+        None,
+        &login_env,
+        crate::agents::LaunchDirMode::Supervised,
+    )
+    .unwrap_err();
+    let crate::agents::LaunchDirRefusal::Untrusted(refusal) = error else {
+        panic!("expected an undecided folder, got {error:?}");
+    };
+    assert_eq!(refusal.fix, "run `rimz trust grant --empty-dir`");
+}
+
+#[test]
 fn codex_preview_preserves_config_and_uses_main_root() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");

@@ -266,10 +266,7 @@ pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::
                 trust,
             };
             rows.push(EmptyDirRow {
-                trust: crate::cli::folder_trust::Row::for_subject(
-                    &row,
-                    "rimz trust grant --empty-dir",
-                ),
+                trust: crate::cli::folder_trust::Row::for_empty_dir(&row),
                 profiles: profiles.clone(),
             });
         }
