@@ -10238,6 +10238,7 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
     assert_eq!(record.result, LoopRunResult::Canceled);
     assert_eq!(record.error.as_deref(), Some("stopped by rimz loop stop"));
     assert_eq!(record.kind, Some(rimz::harness::schedule::TaskKind::OneOff));
+    assert_eq!(record.run_lock, Some(info));
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
         list.contains("DONE") && list.contains("stuck") && list.contains("canceled"),

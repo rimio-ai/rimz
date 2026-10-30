@@ -1836,6 +1836,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         duration_ms: None,
         throttle_wait_ms: None,
         holder: None,
+        run_lock: None,
         absorbed: 0,
         error: None,
         check: None,

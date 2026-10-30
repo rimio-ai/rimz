@@ -509,6 +509,7 @@ A record carries:
 - the last message, cost, and fresh input and output tokens;
 - `throttle_wait_ms`, how long the start throttle held a fire it then admitted.
 - optional `holder` on fires refused at the run lock, with the holder's `pid` and `started_at`; their stored error names the policy outcome without a pid or a frozen age.
+- optional `run_lock` on records for fires that held the run lock, with that tenure's `pid` and `started_at`, including records the stop/replace ladder writes on the holder's behalf.
 
 Append caps stored copies: 4 KiB each of shell output and every judge reason and error, 2 KiB each of run error text and last message, and a signal payload over 4 KiB collapses to `_truncated`. The verdict reader tails reasons to 4 KiB at a UTF-8 boundary before decline memory, assists, or prompts consume them.
 
