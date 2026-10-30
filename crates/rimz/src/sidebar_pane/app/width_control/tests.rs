@@ -59,6 +59,7 @@ fn forty_width_backstops_share_topology_but_keep_pane_inputs() {
             template.iter().cloned().map(move |mut pane| {
                 pane.id += 2 * n;
                 pane.tab_position = n;
+                pane.stable_tab_id = Some(n);
                 if pane.id % 2 == 0 {
                     pane.pane_columns = pane.pane_columns.map(|cols| cols + n);
                     pane.is_fullscreen = n == 39;
@@ -67,6 +68,14 @@ fn forty_width_backstops_share_topology_but_keep_pane_inputs() {
             })
         })
         .collect();
+    // Distinct view widths exercise the multi-client latch rule.
+    cache.clients = Some(
+        serde_json::from_value(serde_json::json!({"views": [
+            {"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}},
+            {"client_id": 2, "pane_id": {"kind": "plugin", "id": 9}}
+        ]}))
+        .unwrap(),
+    );
     pane_topology::write_pane_topology_cache(&runtime, &cache).unwrap();
     let geometry = Arc::new(Mutex::new(crate::mux::zellij::WidthMemo::default()));
     let diag = DiagSink::disabled();
@@ -435,7 +444,9 @@ fn write_zellij_topology_panes(
     produced_at_ms: u64,
     tab_viewed: bool,
 ) {
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+    use crate::mux::zellij::pane_topology::{
+        PaneTopologyCache, PaneTopologyPane, TopologyClientView, TopologyClients, ZellijPaneId,
+    };
 
     let pane = |id, pane_x, pane_columns, title: &str| PaneTopologyPane {
         id,
@@ -447,7 +458,7 @@ fn write_zellij_topology_panes(
         is_floating: false,
         tab_position: 0,
         tab_viewed,
-        stable_tab_id: None,
+        stable_tab_id: Some(0),
         tab_name: None,
         pane_columns: Some(pane_columns),
         pane_x: Some(pane_x),
@@ -465,7 +476,18 @@ fn write_zellij_topology_panes(
             writer: None,
             focused_pane: None,
             clients_withheld: false,
-            clients: None,
+            clients: Some(TopologyClients {
+                human_clients: None,
+                viewed_panes: None,
+                views: if tab_viewed {
+                    vec![TopologyClientView {
+                        client_id: 1,
+                        pane_id: ZellijPaneId::Terminal(if view_cols.is_some() { 2 } else { 1 }),
+                    }]
+                } else {
+                    Vec::new()
+                },
+            }),
             panes: std::iter::once(pane(1, 0, u64::from(sidebar_cols), "rimz-sidebar"))
                 .chain(view_cols.map(|view_cols| {
                     pane(
@@ -727,16 +749,12 @@ fn zellij_uses_live_step_and_clamps_floor_crossing() {
             .expect("pin prior target");
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     controller.adjust(30, WidthAdjust::Narrower);
-    assert_eq!(controller.convergence.target(), Some(target(24)));
-    controller.backstop_at(Some(24), None, None, &diag, burst_deadline(&controller));
+    assert_eq!(controller.convergence.target(), Some(target(30)));
+    controller.backstop_at(Some(30), None, None, &diag, burst_deadline(&controller));
     assert_eq!(
         crate::mux::width_target::pinned(&runtime),
-        Some(crate::mux::WidthPermille::from_percent(12)),
-        "the inexact step pins the 24-column floor instead of being ignored",
-    );
-    assert_ne!(
-        crate::mux::width_target::pinned(&runtime),
-        Some(prior_share)
+        Some(prior_share),
+        "the first grid step reaching the floor rejects a narrower key",
     );
 }
 
@@ -752,7 +770,7 @@ fn width_key_burst_reprobes_a_view_resized_since_the_last_proof() {
     write_zellij_topology_for_view_at(&runtime, 49, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
     assert_eq!(controller.current_view_cols, Some(49));
-    assert_eq!(controller.convergence.target(), Some(target(24)));
+    assert_eq!(controller.convergence.target(), Some(target(25)));
 
     write_zellij_topology_for_view(&runtime, 320);
     controller.adjust(121, WidthAdjust::Wider);
@@ -766,7 +784,7 @@ fn width_key_burst_reprobes_a_view_resized_since_the_last_proof() {
 
     assert_eq!(
         width_intents(&diag),
-        vec![(121, Some(137), SidebarWidthIntentVerdict::Accepted)]
+        vec![(121, Some(144), SidebarWidthIntentVerdict::Accepted)]
     );
     assert_eq!(
         crate::mux::width_target::pinned(&runtime),
@@ -823,11 +841,7 @@ fn width_key_burst_narrower_steps_from_the_target_resolved_on_the_live_view() {
 
     assert_eq!(
         width_intents(&diag),
-        vec![(
-            own_cols,
-            Some(expected_target.get()),
-            SidebarWidthIntentVerdict::Accepted,
-        )]
+        vec![(own_cols, Some(144), SidebarWidthIntentVerdict::Accepted,)]
     );
     assert_eq!(
         crate::mux::width_target::pinned(&runtime),
@@ -850,7 +864,7 @@ fn width_key_burst_keeps_the_last_proven_view_when_the_probe_fails() {
     write_zellij_topology_for_view_at(&runtime, 49, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
     assert_eq!(controller.current_view_cols, Some(49));
-    assert_eq!(controller.convergence.target(), Some(target(24)));
+    assert_eq!(controller.convergence.target(), Some(target(25)));
 
     std::fs::remove_file(crate::mux::zellij::pane_topology::pane_topology_cache_path(
         &runtime,
@@ -858,7 +872,7 @@ fn width_key_burst_keeps_the_last_proven_view_when_the_probe_fails() {
     .unwrap();
     controller.adjust(121, WidthAdjust::Wider);
     assert_eq!(controller.current_view_cols, Some(49));
-    assert_eq!(controller.convergence.target(), Some(target(24)));
+    assert_eq!(controller.convergence.target(), Some(target(25)));
     controller.backstop_at(Some(121), None, None, &diag, burst_deadline(&controller));
 
     assert_eq!(
@@ -1039,7 +1053,7 @@ fn sidebar_only_startup_never_latches_the_floor_as_the_view_basis() {
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(96), &diag);
 
     assert_eq!(controller.current_view_cols, Some(320));
-    assert_eq!(controller.convergence.target(), Some(target(72)));
+    assert_eq!(controller.convergence.target(), Some(target(64)));
 }
 
 #[test]
@@ -1114,7 +1128,7 @@ fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
     assert_eq!(
         controller.convergence.target(),
         None,
-        "a fresh unviewed tab still cannot prove a viewport",
+        "a fresh zero-client sample still cannot prove a viewport",
     );
     assert!(
         !controller.convergence.in_flight(),
@@ -1125,7 +1139,7 @@ fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
     controller.note_structural(StructuralChange::Roster, structural_at_ms, Some(32), &diag);
 
     assert_eq!(controller.current_view_cols, Some(319));
-    assert_eq!(controller.convergence.target(), Some(target(72)));
+    assert_eq!(controller.convergence.target(), Some(target(64)));
     assert!(controller.convergence.in_flight(), "the correction grows");
 }
 
@@ -1136,7 +1150,7 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
     write_zellij_topology_for_view_at(&runtime, 49, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
     assert_eq!(controller.current_view_cols, Some(49));
-    assert_eq!(controller.convergence.target(), Some(target(24)));
+    assert_eq!(controller.convergence.target(), Some(target(25)));
     let adopted_share =
         crate::mux::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None)
             .share;
@@ -1151,7 +1165,7 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
     controller.backstop(Some(32), Some(1), None, &diag);
 
     assert_eq!(controller.current_view_cols, Some(319));
-    assert_eq!(controller.convergence.target(), Some(target(72)));
+    assert_eq!(controller.convergence.target(), Some(target(64)));
     assert!(controller.convergence.in_flight());
     assert_eq!(
         crate::mux::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None,)
@@ -1197,6 +1211,7 @@ fn settled_drag_pins_once_after_the_debounce() {
     controller.classification_deadline = Some(Instant::now());
     controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
 
+    assert_eq!(controller.convergence.target(), Some(target(80)));
     assert_eq!(
         crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_cols(
@@ -1221,6 +1236,101 @@ fn settled_drag_pins_once_after_the_debounce() {
         !controller.convergence.in_flight(),
         "the next backstop must leave the adopted width parked",
     );
+    let mut peer = WidthController::new(
+        runtime,
+        "rimz-test".to_owned(),
+        controller.pane.clone(),
+        MuxName::Zellij,
+        controller.width,
+    );
+    peer.reload_target(&crate::config::ThemeConfig::default(), Some(50), &diag);
+    assert_eq!(peer.convergence.target(), Some(target(80)));
+    assert!(
+        peer.convergence.in_flight(),
+        "a peer converges to the room's step"
+    );
+}
+
+#[test]
+fn capped_zellij_controller_targets_the_grid_and_keys_keep_it() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology_for_view(&runtime, 300);
+    let mut theme = crate::config::ThemeConfig::default();
+    theme.display.width_percent = Some(25);
+    theme.display.max_cols = target(64);
+    let diag = DiagSink::disabled();
+    controller.reload_target(&theme, Some(60), &diag);
+    assert_eq!(controller.convergence.target(), Some(target(60)));
+    assert!(!controller.convergence.in_flight());
+    controller.adjust(60, WidthAdjust::Wider);
+    controller.commit_key_burst(&diag);
+    assert_eq!(controller.convergence.target(), Some(target(75)));
+}
+
+#[test]
+fn floor_excluded_drag_keeps_the_pin_but_targets_the_first_allowed_step() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
+    let diag = DiagSink::disabled();
+    controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    controller.observe(24, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    controller.classification_deadline = Some(Instant::now());
+    controller.backstop(Some(24), Some(1), Some(u64::MAX), &diag);
+
+    assert_eq!(controller.convergence.target(), Some(target(30)));
+    assert_eq!(
+        crate::mux::width_target::pinned(&runtime),
+        Some(crate::mux::WidthPermille::from_cols(
+            target(24),
+            target(200)
+        ))
+    );
+    assert!(controller.convergence.in_flight());
+}
+
+#[test]
+fn zellij_width_keys_reject_steps_past_the_bounded_grid() {
+    for (view, cols, maximum, direction, verdict) in [
+        (
+            200,
+            30,
+            50,
+            WidthAdjust::Narrower,
+            SidebarWidthIntentVerdict::RejectedFloor,
+        ),
+        (
+            300,
+            120,
+            44,
+            WidthAdjust::Wider,
+            SidebarWidthIntentVerdict::RejectedCeiling,
+        ),
+    ] {
+        let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+        let mut theme = crate::config::ThemeConfig::default();
+        theme.display.max_percent = maximum;
+        write_zellij_topology_for_view(&runtime, view);
+        crate::mux::width_target::pin(
+            &runtime,
+            crate::mux::SidebarWidth::from_config(&theme),
+            target(cols),
+            view,
+        )
+        .unwrap();
+        controller.reload_target(&theme, Some(cols), &DiagSink::disabled());
+
+        controller.adjust(cols, direction);
+
+        let burst = controller.key_burst.as_ref().unwrap();
+        assert_eq!(
+            burst.verdict, verdict,
+            "view {view}, width {cols}, maximum {maximum}"
+        );
+        assert_eq!(burst.target, None);
+        assert_eq!(controller.convergence.target(), Some(target(cols)));
+    }
 }
 
 #[test]
@@ -1239,7 +1349,7 @@ fn broadcast_reload_uses_the_seeded_native_band() {
     .expect("pin external target");
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
 
-    assert_eq!(controller.convergence.target(), Some(target(83)));
+    assert_eq!(controller.convergence.target(), Some(target(80)));
     assert_eq!(controller.convergence.stop_step(), 10);
     assert!(!controller.convergence.in_flight());
 }
@@ -1986,7 +2096,7 @@ fn stale_step_memory_is_consumed_once_after_retargeted_settlement() {
     .expect("pin new target");
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
 
-    assert_eq!(controller.convergence.target(), Some(target(83)));
+    assert_eq!(controller.convergence.target(), Some(target(80)));
     assert!(controller.convergence.unacknowledged.is_some());
     controller.observe(70, SidebarWidthControlTrigger::ResizeFeedback, &diag);
     assert_eq!(controller.classification_deadline, None);

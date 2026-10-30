@@ -99,6 +99,87 @@ fn stamped_topology_event_proves_pending_width_before_the_next_wait() {
 }
 
 #[test]
+fn withheld_structural_event_uses_the_hosts_last_client_sample() {
+    use crate::mux::zellij::pane_topology;
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    let mut rig = zellij_width_rig(observed_at_ms);
+    let mut cache = pane_topology::read_pane_topology_cache(&rig.runtime, "rimz-test").unwrap();
+    cache.clients = serde_json::from_value(
+        serde_json::json!({"views": [{"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}}]}),
+    )
+    .unwrap();
+    for pane in &mut cache.panes {
+        pane.stable_tab_id = Some(10);
+    }
+    pane_topology::write_pane_topology_cache(&rig.runtime, &cache).unwrap();
+    rig.state.pane.width_control.reload_target(
+        &crate::config::ThemeConfig::default(),
+        None,
+        &rig.state.pane.diag,
+    );
+    cache.clients = None;
+    cache.clients_withheld = true;
+    cache.produced_at_ms += 1;
+    for pane in &mut cache.panes {
+        pane.tab_viewed = false;
+    }
+    pane_topology::write_pane_topology_cache(&rig.runtime, &cache).unwrap();
+    let envelope = width_event(
+        &rig,
+        SidebarEvent::PaneClosed {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_99"),
+        },
+        cache.produced_at_ms,
+    );
+    advance_wakeup(&mut rig, Wakeup::Event(envelope));
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 50);
+    assert_eq!(
+        width_nudge_triggers(&rig),
+        vec![crate::diag::record::SidebarWidthControlTrigger::Structural]
+    );
+}
+
+#[test]
+fn hidden_equal_width_tab_converges_on_the_room_width_event() {
+    use crate::mux::zellij::pane_topology;
+    let observed_at_ms = crate::utils::time::unix_now_ms();
+    let mut rig = zellij_width_rig(observed_at_ms);
+    rig.hide();
+    let mut cache = pane_topology::read_pane_topology_cache(&rig.runtime, "rimz-test").unwrap();
+    for pane in &mut cache.panes {
+        pane.stable_tab_id = Some(10);
+        pane.tab_viewed = false;
+    }
+    let mut visible = cache.panes.clone();
+    for pane in &mut visible {
+        pane.id += 10;
+        pane.stable_tab_id = Some(20);
+        pane.tab_position = 1;
+    }
+    cache.panes.extend(visible);
+    cache.clients = serde_json::from_value(
+        serde_json::json!({"views": [{"client_id": 1, "pane_id": {"kind": "terminal", "id": 12}}]}),
+    )
+    .unwrap();
+    pane_topology::write_pane_topology_cache(&rig.runtime, &cache).unwrap();
+    crate::mux::width_target::pin(
+        &rig.runtime,
+        crate::mux::SidebarWidth::default(),
+        std::num::NonZeroU16::new(60).unwrap(),
+        200,
+    )
+    .unwrap();
+    let envelope = width_event(&rig, SidebarEvent::WidthTargetChanged, observed_at_ms);
+    advance_wakeup(&mut rig, Wakeup::Event(envelope));
+    assert!(!rig.state.watched());
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 60);
+    assert_eq!(
+        width_nudge_triggers(&rig),
+        vec![crate::diag::record::SidebarWidthControlTrigger::Retarget]
+    );
+}
+
+#[test]
 fn settled_hidden_advances_take_no_views_lock_on_both_backends() {
     for mux in [MuxName::Zellij, MuxName::Tmux] {
         for cause in 0..4 {

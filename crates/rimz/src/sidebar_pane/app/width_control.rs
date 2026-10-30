@@ -513,13 +513,27 @@ impl WidthController {
         } else {
             own_cols
         };
+        let (min_cols, max_cols) = if self.mux == MuxName::Zellij {
+            let bound = |percent| {
+                crate::mux::SidebarTarget {
+                    share: crate::mux::WidthPermille::from_percent(percent),
+                    max_cols: self.width.max_cols,
+                    pinned: true,
+                }
+                .zellij_step(Some(view_cols), self.width.max_percent)
+                .1
+                .get()
+            };
+            (bound(1), bound(self.width.max_percent.clamp(10, 90)))
+        } else {
+            (
+                crate::mux::width::MIN_ADJUSTABLE_WIDTH,
+                (u32::from(view_cols) * u32::from(self.width.max_percent.clamp(10, 90)))
+                    .div_ceil(100) as u16,
+            )
+        };
         let target = crate::mux::width::adjust_target_cols(
-            base_cols,
-            dir,
-            step,
-            crate::mux::width::MIN_ADJUSTABLE_WIDTH,
-            (u32::from(view_cols) * u32::from(self.width.max_percent.clamp(10, 90))).div_ceil(100)
-                as u16,
+            base_cols, dir, step, min_cols, max_cols,
         )
         .map(|target| match (step.exact, self.convergence.target()) {
             // A relative step from a pane still converging toward a broadcast
@@ -556,7 +570,14 @@ impl WidthController {
             match crate::mux::width_target::pin(&self.runtime, self.width, target, view_cols.get())
             {
                 Ok(permille) => {
-                    let target = permille.cols(view_cols);
+                    let target = self.render_target(
+                        crate::mux::SidebarTarget {
+                            share: permille,
+                            max_cols: self.width.max_cols,
+                            pinned: true,
+                        },
+                        view_cols,
+                    );
                     self.convergence.retarget(Some(target));
                     burst.target = Some(target);
                     spawn_width_default_record(self.mux, &self.session_name, target.get());
@@ -936,7 +957,14 @@ impl WidthController {
                 return;
             }
         };
-        let target = permille.cols(view_cols);
+        let target = self.render_target(
+            crate::mux::SidebarTarget {
+                share: permille,
+                max_cols: self.width.max_cols,
+                pinned: true,
+            },
+            view_cols,
+        );
         diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
             trigger: SidebarWidthIntentTrigger::MouseAdopt,
             own_cols: measured_cols,
@@ -1031,14 +1059,28 @@ impl WidthController {
             _ => {
                 crate::mux::width_target::resolve(&self.runtime, self.width, Some(view_cols.get()))
             }
-        }
-        .cols(Some(view_cols.get()));
+        };
+        let target = self.render_target(target, view_cols);
         let changed = self.convergence.target() != Some(target);
         self.convergence.retarget(Some(target));
         if changed && remember_default {
             spawn_width_default_record(self.mux, &self.session_name, target.get());
         }
         Some((step, view_cols))
+    }
+
+    fn render_target(
+        &self,
+        target: crate::mux::SidebarTarget,
+        view_cols: NonZeroU16,
+    ) -> NonZeroU16 {
+        if self.mux == MuxName::Zellij {
+            target
+                .zellij_step(Some(view_cols.get()), self.width.max_percent)
+                .1
+        } else {
+            target.cols(Some(view_cols.get()))
+        }
     }
 }
 

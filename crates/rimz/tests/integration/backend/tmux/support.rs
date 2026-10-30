@@ -79,6 +79,7 @@ pub(super) fn sidebar_opts(
             max_cols: width.max_cols,
             pinned: false,
         },
+        max_percent: width.max_percent,
         detected_view_size: detected_cols.map(|cols| (cols, 50)),
         rimz_bin: stub,
         pristine_birth: false,

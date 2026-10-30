@@ -238,6 +238,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
             max_cols: std::num::NonZeroU16::new(40).expect("nonzero test width"),
             pinned: false,
         },
+        max_percent: 50,
         detected_view_size: None,
         rimz_bin: stub,
         pristine_birth: false,

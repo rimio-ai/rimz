@@ -1121,6 +1121,7 @@ impl MuxBackend for TmuxBackend {
                         session_name: opts.session_name.clone(),
                         workspace_id: opts.workspace_id.clone(),
                         target: opts.target,
+                        max_percent: opts.max_percent,
                     };
                     report.redocked +=
                         self.converge_live_sidebar_geometries(&sync, &geometries, &survivors);

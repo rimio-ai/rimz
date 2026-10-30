@@ -518,10 +518,11 @@ fn write_zellij_width_topology(rig: &Rig, own_cols: u16, view_cols: u16, observe
     let topology = serde_json::from_value(serde_json::json!({
         "session_name": "rimz-test",
         "produced_at_ms": observed_at_ms,
+        "clients": {"views": [{"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}}]},
         "panes": [
-            {"id": 1, "tab_position": 0, "tab_viewed": true,
+            {"id": 1, "stable_tab_id": 0, "tab_position": 0, "tab_viewed": true,
              "pane_x": 0, "pane_columns": own_cols, "title": "rimz-sidebar"},
-            {"id": 2, "tab_position": 0, "tab_viewed": true,
+            {"id": 2, "stable_tab_id": 0, "tab_position": 0, "tab_viewed": true,
              "pane_x": own_cols, "pane_columns": view_cols - own_cols, "title": "work"}
         ]
     }))
@@ -601,7 +602,7 @@ fn roster_event_batch_keeps_one_step_until_feedback() {
     .unwrap();
     let envelope = width_event(&rig, SidebarEvent::WidthTargetChanged, observed_at_ms);
     rig.state.on_event(&mut rig.terminal, envelope);
-    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 48);
+    assert_eq!(rig.state.pane.width_control.max_legit_cols(), 45);
     assert_eq!(width_nudge_triggers(&rig).len(), 1);
 
     rig.state.pane.width_control.observe(

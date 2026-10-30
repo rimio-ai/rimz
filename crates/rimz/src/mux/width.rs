@@ -127,11 +127,6 @@ impl WidthPermille {
             .max(u64::from(MIN_ADJUSTABLE_WIDTH));
         NonZeroU16::new(u16::try_from(cols).unwrap_or(u16::MAX)).unwrap_or(NonZeroU16::MAX)
     }
-
-    /// Spell this share as a whole percentage for Zellij layout KDL.
-    fn to_percent_rounded(self) -> u16 {
-        ((self.0 + 5) / 10).clamp(1, 100)
-    }
 }
 
 impl TryFrom<u16> for WidthPermille {
@@ -156,7 +151,8 @@ impl<'de> Deserialize<'de> for WidthPermille {
     }
 }
 
-/// One resolved room-wide share rendered against each backend view.
+/// One resolved room-wide share rendered as exact columns on tmux or the nearest
+/// bounded 5% step on Zellij, without changing the stored measured share.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarTarget {
     pub share: WidthPermille,
@@ -208,22 +204,19 @@ impl SidebarTarget {
         let cols = NonZeroU16::new(estimate(percent)).expect("positive Zellij step estimate");
         (percent, cols)
     }
-
-    /// Spell the resolved share as a whole percentage for Zellij layout KDL.
-    pub(super) fn percent(self) -> u16 {
-        self.share.to_percent_rounded()
-    }
 }
 
 /// Sidebar pane width: the configured percentage policy for each live view,
-/// capped at `max_cols` columns (`theme.display.max_cols`) and `max_percent` of the view.
+/// capped at `max_cols` columns (`theme.display.max_cols`) and `max_percent` of the view
+/// before backend rendering. Zellij's nearest bounded 5% step can sit on either
+/// side of the column cap; tmux retains the exact column target.
 /// A `width_percent` or `max_cols` edit applies on the next unpinned
 /// room-target resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarWidth {
     /// Percentage policy for the view width — tracks terminal size below the cap.
     pub percent: WidthPercent,
-    /// Column cap the percentage never exceeds (`theme.display.max_cols`).
+    /// Column cap on the unpinned target, before backend rendering (`theme.display.max_cols`).
     pub max_cols: NonZeroU16,
     /// Maximum share, including pins; clamped to 10-90 when used.
     pub max_percent: u16,
@@ -486,7 +479,6 @@ mod tests {
             ..target
         };
         assert_eq!(pinned.cols(Some(400)), NonZeroU16::new(100).unwrap());
-        assert_eq!(pinned.percent(), 25);
 
         let below_floor = SidebarTarget {
             max_cols: NonZeroU16::new(3).unwrap(),

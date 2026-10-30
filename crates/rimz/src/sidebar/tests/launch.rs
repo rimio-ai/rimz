@@ -16,6 +16,7 @@ fn sidebar_opts(harness: &Harness) -> SidebarPaneOptions {
             max_cols: std::num::NonZeroU16::new(72).expect("nonzero test width"),
             pinned: false,
         },
+        max_percent: 50,
         detected_view_size: None,
         rimz_bin: std::env::current_exe().expect("test executable"),
         pristine_birth: false,

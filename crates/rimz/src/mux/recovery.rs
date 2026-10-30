@@ -890,6 +890,7 @@ mod tests {
                 max_cols: std::num::NonZeroU16::new(72).expect("nonzero test width"),
                 pinned: false,
             },
+            max_percent: 50,
             detected_view_size: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             pristine_birth: false,

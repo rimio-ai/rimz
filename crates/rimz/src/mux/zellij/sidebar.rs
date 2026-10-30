@@ -544,7 +544,7 @@ impl ZellijBackend {
 
     /// Read native geometry without a cached-roster fallback. Width judgment
     /// uses exactly the live client-view snapshot's stable tabs, never a latch
-    /// carried over from the presence cache.
+    /// carried over from the presence cache or the renderer's equal-width rule.
     pub(super) fn structural_geometry_listing(
         &self,
         session: &str,
@@ -626,7 +626,7 @@ impl ZellijBackend {
 
     /// Repair a kept sidebar in place. Moves must reduce live x, and the tiled
     /// pane count bounds them. A narrow nested row can be stacked into the right
-    /// column. Width is judged only after a verified dock, on a viewed tab.
+    /// column. Width is judged only after a verified dock, on a tab viewed now.
     /// Returns whether any repair action succeeded; live read failures propagate.
     pub(super) fn converge_sidebar_geometry(
         &self,
@@ -732,12 +732,13 @@ impl ZellijBackend {
             session_name: opts.session_name.clone(),
             workspace_id: opts.workspace_id.clone(),
             target: opts.target,
+            max_percent: opts.max_percent,
         };
         changed |= self.converge_sidebar_width(&sync, tab_id, raw_id, viewed_tabs)?;
         Ok(changed)
     }
 
-    /// Converge one sidebar to its current viewed tab's width target.
+    /// Converge one sidebar to its currently viewed tab's bounded step target.
     /// Returns whether a resize action succeeded.
     pub(super) fn converge_sidebar_width(
         &self,
@@ -970,7 +971,8 @@ impl ZellijBackend {
         Ok(parse_new_pane_id(&String::from_utf8_lossy(&output.stdout)))
     }
 
-    /// Converge one sidebar with live geometry feedback between resize steps.
+    /// Converge one currently viewed sidebar to its bounded step, with live
+    /// geometry feedback between resize steps. Hidden tabs belong to renderers.
     /// Returns whether a resize succeeded.
     pub(super) fn converge_sidebar_widths_stepwise(
         &self,
@@ -1018,7 +1020,11 @@ impl ZellijBackend {
             };
             let target_cols = u64::from(
                 opts.target
-                    .cols(Some(u16::try_from(view_cols).unwrap_or(u16::MAX)))
+                    .zellij_step(
+                        Some(u16::try_from(view_cols).unwrap_or(u16::MAX)),
+                        opts.max_percent,
+                    )
+                    .1
                     .get(),
             );
             if !sidebar_width_off_spec(cols, target_cols, zellij_resize_stop_step_cols(view_cols)) {

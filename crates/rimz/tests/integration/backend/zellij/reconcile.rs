@@ -948,7 +948,12 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     wait_for_sidebar_width_at_most(
         &xdg,
         &name,
-        u64::from(opts.target.cols(Some(view_cols)).get()),
+        u64::from(
+            opts.target
+                .zellij_step(Some(view_cols), opts.max_percent)
+                .1
+                .get(),
+        ),
     );
     assert_sidebar_identity(
         &xdg,
@@ -1474,7 +1479,7 @@ fn assert_replacement_preserves_work_rectangles(daemon: bool) {
     assert_eq!(sidebars[0].pane_rows, old.pane_rows);
     assert_eq!(
         sidebars[0].pane_columns,
-        u64::from(opts.target.cols(Some(240)).get())
+        u64::from(opts.target.zellij_step(Some(240), opts.max_percent).1.get())
     );
 }
 
@@ -1556,6 +1561,7 @@ fn reconcile_opts(
         )]),
         cwd: cwd.to_path_buf(),
         target,
+        max_percent: 50,
         detected_view_size: None,
         rimz_bin: stub,
         pristine_birth: false,

@@ -189,7 +189,6 @@ mod tests {
                 let resolved = resolve(&runtime, width, geometry);
                 assert_eq!(resolved.share, WidthPermille::from_percent(cap));
                 assert!(resolved.pinned);
-                assert_eq!(resolved.percent(), cap);
             }
             assert_eq!(fs::read(runtime.sidebar_width_path()).unwrap(), original);
             let adopted = adopt(&runtime, width, NonZeroU16::new(239).unwrap());
@@ -352,7 +351,7 @@ mod tests {
         theme.display.width_percent = Some(40);
         let target = resolve(&runtime, SidebarWidth::from_config(&theme), None);
         assert_eq!(target.cols(None), theme.display.max_cols);
-        assert_eq!(target.percent(), 40);
+        assert_eq!(target.share, WidthPermille::from_percent(40));
         assert_eq!(
             load_file(&runtime),
             None,
@@ -364,7 +363,7 @@ mod tests {
         theme.pets.enabled = true;
         let target = resolve(&runtime, SidebarWidth::from_config(&theme), None);
         assert_eq!(target.cols(None), theme.display.max_cols);
-        assert_eq!(target.percent(), 30);
+        assert_eq!(target.share, WidthPermille::from_percent(30));
     }
 
     #[test]

@@ -6,7 +6,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rimz::ids::WorkspaceId;
-use rimz::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+use rimz::mux::zellij::pane_topology::{
+    PaneTopologyCache, PaneTopologyPane, TopologyClientView, TopologyClients, ZellijPaneId,
+};
 
 use super::panes::{ListedPane, PaneSnapshot, list_panes};
 
@@ -57,7 +59,20 @@ fn topology_cache(session: &str, snapshot: &PaneSnapshot) -> PaneTopologyCache {
         writer: None,
         focused_pane: None,
         clients_withheld: false,
-        clients: None,
+        clients: snapshot
+            .panes
+            .iter()
+            .find(|pane| {
+                !pane.is_plugin && !pane.is_floating && !pane.is_suppressed && !pane.exited
+            })
+            .map(|pane| TopologyClients {
+                human_clients: None,
+                viewed_panes: None,
+                views: vec![TopologyClientView {
+                    client_id: 1,
+                    pane_id: ZellijPaneId::Terminal(pane.id),
+                }],
+            }),
         panes: snapshot
             .panes
             .iter()

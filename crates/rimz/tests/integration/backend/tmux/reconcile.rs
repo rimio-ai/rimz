@@ -562,6 +562,7 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
             pinned: true,
         },
         // The attach probe includes the status row; the existing panes do not.
+        max_percent: 50,
         detected_view_size: Some((80, 25)),
         ..sidebar_opts(server._tempdir.path(), session, stub, Some(80))
     };
