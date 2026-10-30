@@ -166,6 +166,7 @@ scope = "worktree"
 start = "pr"
 
 [checks.pr]
+summary = "Wait for merge or sustained CI trouble"
 else = "pending"
 on = { merged = "@done", red = "sweep", pending = "@wait" }
 timeout = "2d"
@@ -181,6 +182,7 @@ key = "ci"
 for = "2m"
 
 [steps.sweep]
+summary = "Repair CI and re-arm the PR"
 agent = "claude"
 prompt-file = "prompts/sweep.md"
 takeover = true
@@ -324,6 +326,8 @@ This condition task starts its workflow once per checkout. An active, parked, or
 Some work is project-wide: a monthly dependency sweep, or a loop that takes the next item off a shared backlog. Set `[workflow] scope = "project"` for it. Every node then runs at the project root, and the workflow holds one active or parked run for the whole project. Starting it from a worktree still selects the root, and `-w` prints a notice that says so. A loop task with `each-worktree` starts one run and skips the other worktrees.
 
 ## Rules for writing nodes
+
+Add an optional `summary` to a check or step to describe what it does for readers of the workflow. It must be one nonempty line, not instructions to the runner. Leaving it out produces no validation warning.
 
 The engine stays simple because nodes follow four rules.
 

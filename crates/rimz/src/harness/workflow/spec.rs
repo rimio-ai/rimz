@@ -76,6 +76,7 @@ pub struct StepEdges {
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Check {
+    pub summary: Option<String>,
     pub run: Option<String>,
     pub shell: Option<String>,
     pub agent: Option<String>,
@@ -199,6 +200,7 @@ pub(super) const RESERVED_OUTCOMES: [&str; 7] = [
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Step {
+    pub summary: Option<String>,
     pub agent: Option<String>,
     pub run: Option<String>,
     pub shell: Option<String>,

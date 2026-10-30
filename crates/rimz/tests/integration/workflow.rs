@@ -1310,7 +1310,7 @@ fn validate_json_shape_errors_and_exit_status() {
     assert_eq!(
         report["rows"],
         json!([{
-            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "do_background": false,
+            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "summary": null, "do_background": false,
             "edges": [
                 {"outcome":"deadline", "target":"@user", "source":"default"},
                 {"outcome":"invalid", "target":"@user", "source":"default"},
@@ -1352,7 +1352,7 @@ fn validate_json_shape_errors_and_exit_status() {
             "warnings": [], "errors": [],
             "rows": [{
                 "workflow":"review", "node":"pr", "kind":"check", "runner":"shell",
-                "run":null, "shell":"printf shell", "agent":null, "do_background":false,
+                "run":null, "shell":"printf shell", "agent":null, "summary":null, "do_background":false,
                 "edges":[
                     {"outcome":"deadline", "target":"@user", "source":"default"},
                     {"outcome":"fail", "target":"@user", "source":"explicit"},
@@ -1385,7 +1385,7 @@ fn validate_json_shape_errors_and_exit_status() {
             json!({
                 "workflow":"review", "node":"merge", "kind":"step", "runner":runner,
                 "run":run, "shell":shell,
-                "agent":null, "do_background":false,
+                "agent":null, "summary":null, "do_background":false,
                 "edges":[
                     {"outcome":"cap", "target":"@user", "source":"default"},
                     {"outcome":"deadline", "target":"@user", "source":"default"},

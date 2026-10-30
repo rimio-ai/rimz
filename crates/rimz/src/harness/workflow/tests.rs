@@ -195,6 +195,65 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
+fn validation_carries_check_and_step_summaries() {
+    let (home, dir) = fixture();
+    let text = VALID
+        .replace(
+            "[checks.pick]",
+            "[checks.pick]\nsummary = 'Choose the next item'",
+        )
+        .replace(
+            "[steps.build]",
+            "[steps.build]\nsummary = ' Build the chosen item '",
+        );
+    fs::write(dir.join("workflow.toml"), text).unwrap();
+    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    assert!(report.errors.is_empty(), "{report:?}");
+    let rows = serde_json::to_value(&report.rows).unwrap();
+    assert_eq!(rows[0]["summary"], "Choose the next item");
+    assert_eq!(rows[1]["summary"], " Build the chosen item ");
+}
+
+#[test]
+fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
+    let (home, dir) = fixture();
+    let mut actual = Vec::new();
+    for (kind, node) in [("checks", "pick"), ("steps", "build")] {
+        for summary in [
+            "",
+            " \t ",
+            "first\nsecond",
+            "first\rsecond",
+            "first\r\nsecond",
+            "line\n",
+        ] {
+            let mut text: toml::Value = toml::from_str(VALID).unwrap();
+            text[kind][node]
+                .as_table_mut()
+                .unwrap()
+                .insert("summary".into(), summary.into());
+            fs::write(dir.join("workflow.toml"), toml::to_string(&text).unwrap()).unwrap();
+            let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+            let path = format!("{kind}.{node}.summary");
+            let refused = report.errors.len() == 1
+                && report.errors[0].path == path
+                && report.errors[0]
+                    .message
+                    .contains("a summary is one nonempty line");
+            actual.push((path, summary, refused, format!("{report:?}")));
+        }
+    }
+    assert_eq!(
+        actual
+            .iter()
+            .map(|(_, _, refused, _)| *refused)
+            .collect::<Vec<_>>(),
+        vec![true; 12],
+        "{actual:#?}"
+    );
+}
+
+#[test]
 fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
     let cases = [
         (
@@ -714,6 +773,10 @@ fn validation_accepts_command_steps_without_agent_warnings() {
             let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
             let valid = report.errors.is_empty()
                 && report.warnings.is_empty()
+                && report.rows.iter().all(|row| {
+                    serde_json::to_value(row).unwrap().get("summary")
+                        == Some(&serde_json::Value::Null)
+                })
                 && report.rows.iter().any(|row| {
                     row.node == "build"
                         && row.runner == runner
@@ -945,5 +1008,16 @@ fn schema_is_derived_from_the_loader_types() {
         value["$defs"]["Step"]["properties"]["max-visits-per-key"]["minimum"],
         1
     );
+    for node in ["Check", "Step"] {
+        assert_eq!(
+            value["$defs"][node]["properties"]["summary"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert!(
+            !value["$defs"][node]["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|field| field == "summary"))
+        );
+    }
     insta::assert_json_snapshot!("schema", value);
 }
