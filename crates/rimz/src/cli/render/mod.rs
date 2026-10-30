@@ -690,6 +690,10 @@ pub(crate) fn age_short(ts: Timestamp, now: Timestamp) -> String {
     age_label(age.as_secs().max(0) as u64)
 }
 
+pub(super) fn folded_span(earliest: Timestamp, latest: Timestamp) -> String {
+    format!("over {}", age_short(earliest, latest))
+}
+
 pub(crate) struct NeedsYouRow {
     pub handle: String,
     pub kind: Option<String>,

@@ -2926,8 +2926,7 @@ impl<'a> CollapsedRunRow<'a> {
             ));
         } else {
             if self.count > 1 {
-                let span = self.latest.at.duration_since(self.oldest).as_secs().max(0) as u64;
-                parts.push(format!("over {}", ui::age_label(span)));
+                parts.push(ui::folded_span(self.oldest, self.latest.at));
             }
             parts.extend(record_note(self.latest));
         }
