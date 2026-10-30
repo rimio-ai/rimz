@@ -5544,7 +5544,7 @@ reason = "Pass 27c: timing only; kind() is the one public reader."
 [[verdict]]
 kind = "item"
 key = "message::dispatch::dispatch"
-reason = "Pass 13: one memoized config read inherits the smart-compact default for loop waits (9000c0f24)."
+reason = "Every dispatch caller inherits the recipient's smart-compact seat line at enqueue; bare seats keep the core-only harness default read."
 
 [[verdict]]
 kind = "item"
