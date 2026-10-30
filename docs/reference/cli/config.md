@@ -57,7 +57,7 @@ $ rimz config path
 
 ## Read a value
 
-`rimz config get` loads the effective config (the three files layered over built-in defaults, plus profiles and teams from `~/.rimz/`) and prints it. It reads strictly: a file with a TOML or validation error fails the command with that error instead of falling back to defaults.
+`rimz config get` loads the effective config (the three files layered over built-in defaults, plus profiles and teams from `~/.rimz/`) and prints it. It reads strictly: a TOML error or an invalid value in `config.toml`, `theme.toml`, or `loop.toml` fails the command with that error instead of falling back to defaults. An unknown `scheme` or a malformed inline `[colors]` palette in `theme.toml` does not fail it: the value loads as written, and `rimz start` and `rimz doctor` report it. A broken Markdown definition does not fail it either; `rimz agents validate` names it.
 
 | Form | Prints |
 | --- | --- |
