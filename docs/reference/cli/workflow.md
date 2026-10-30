@@ -132,6 +132,8 @@ A parked run waits for you under NEEDS YOU in `rimz loop list`, in the sidebar c
 | `asked` | A turn step's leader or child blocked on a question or permission prompt and `on.asked` routes to `@user`; the text is the prompt. |
 | `check` | A check evaluation failed twice. |
 
+Script process failures say `<script> exited N` or `<script> killed by SIGTERM` (using the signal's name when known). `<script>` is the first `run` word containing `/`, or its first word when none does. Judge process failures say `judge exited N` or `judge killed by SIGKILL`; provider errors or invalid provider output take precedence over the exit status. Existing runs retain their recorded text.
+
 Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./stats.md#the-assist-timeline)). A merged wait appends one route assist when it closes, with its final `count`; an open wait has no route assist yet. Stats renders a closed wait as `workflow <workflow> <node> waited <outcome> ×<count>`.
 
 ## JSON shapes

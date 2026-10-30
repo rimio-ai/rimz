@@ -46,6 +46,20 @@ pub(super) fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+fn exit_failure(label: &str, status: std::process::ExitStatus) -> String {
+    use std::os::unix::process::ExitStatusExt;
+
+    if let Some(code) = status.code() {
+        return format!("{label} exited {code}");
+    }
+    if let Some(raw) = status.signal() {
+        let signal = nix::sys::signal::Signal::try_from(raw)
+            .map_or_else(|_| format!("signal {raw}"), |signal| signal.to_string());
+        return format!("{label} killed by {signal}");
+    }
+    format!("{label} {status}")
+}
+
 fn command_words(
     record: &RunRecord,
     run: &str,
@@ -128,7 +142,13 @@ pub(super) fn evaluate(
             result.object = if output.timed_out {
                 Err("evaluation timed out".into())
             } else if !output.status.success() {
-                Err(format!("script exited {}", output.status))
+                // command_words resolved this exact, nonempty argv successfully.
+                let words = shlex::split(run).expect("resolved workflow argv");
+                let label = words
+                    .iter()
+                    .find(|word| word.contains('/'))
+                    .unwrap_or(&words[0]);
+                Err(exit_failure(label, output.status))
             } else {
                 serde_json::from_slice(&output.stdout)
                     .map_err(|e| format!("invalid check stdout: {e}"))
