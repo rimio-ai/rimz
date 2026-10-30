@@ -1,7 +1,7 @@
 //! `rimz stats` — account-global spend, local-day activity, and model,
 //! provider, solo-profile, team, and subagent-profile breakdowns, readable in or out
 //! of a room or project.
-//! The held dashboard adds per-range model spend charts, a forecast, and grid-span activity.
+//! The held dashboard adds per-range model spend charts and a forecast.
 //! Internals: `docs/internals/stats.md`.
 //!
 //! Account-global: it reads the producer's published provider aggregate when
@@ -11,7 +11,7 @@
 //! published history zone.
 //!
 //! Windows cover 1, 7, 30, and 364 local calendar days, including today. The heatmap
-//! reads the full retained history. `--window` scopes model, provider, and profile breakdowns
+//! summary follows its drawn grid, with the full-history streak. `--window` scopes breakdowns
 //! in every mode, defaulting to today. It sets the held dashboard's initial tab.
 //! `--refresh` recomputes on a background thread, retries an unavailable first
 //! frame after five seconds, then repaints in place every minute and re-centres
@@ -225,9 +225,18 @@ impl Window {
     fn label(self) -> &'static str {
         match self {
             Self::Today => "Today",
-            Self::Week => "Week",
-            Self::Month => "Month",
-            Self::Year => "Year",
+            Self::Week => "7 days",
+            Self::Month => "30 days",
+            Self::Year => "52 weeks",
+        }
+    }
+
+    fn scope(self) -> &'static str {
+        match self {
+            Self::Today => "today",
+            Self::Week => "last 7 days",
+            Self::Month => "last 30 days",
+            Self::Year => "last 52 weeks",
         }
     }
 

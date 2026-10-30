@@ -427,6 +427,37 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
             }
         }
     }
+    let labels = Window::TABS
+        .map(|tab| format!("{} {}", tab.label(), fmt_usd(tab.select(&stats.total).usd)));
+    let full_width = labels
+        .iter()
+        .map(|label| display_width(label))
+        .sum::<usize>()
+        + 3 * display_width("  ·  ")
+        + 4;
+    for cols in [60, 64, 70, 74, 75, 80, 100, 111, 112, 113, 119, 160] {
+        for (tab, active) in Window::TABS.into_iter().zip(&labels) {
+            let frame = frame(&stats, &assists, tab, cols, Some(90));
+            assert!(
+                frame.text.lines().all(|line| display_width(line) <= cols),
+                "{cols}"
+            );
+            let text = strip_ansi(&frame.text);
+            let rail = text.lines().find(|line| line.contains("[ ")).expect(&text);
+            assert!(
+                rail.contains(&format!("[ {active} ]")),
+                "{cols} {tab:?}: {rail}"
+            );
+            for (other, label) in Window::TABS.into_iter().zip(&labels) {
+                assert!(rail.contains(other.label()), "{cols}: {rail}");
+                if full_width <= cols.min(113) {
+                    assert!(rail.contains(label), "{cols}: {rail}");
+                } else if other != tab {
+                    assert!(!rail.contains(label), "{cols}: {rail}");
+                }
+            }
+        }
+    }
     let output = frame(&stats, &assists, Window::Month, 119, Some(40));
     assert_eq!(output.text.lines().count(), 39);
     let mut terminal = Vec::new();
@@ -473,10 +504,8 @@ fn dashboard_mock_heights_and_snapshots() {
                     .unwrap()
                     .starts_with("   ")
             );
-            insta::assert_snapshot!(
-                format!("held_{}_{}", tab.label().to_lowercase(), rows),
-                text
-            );
+            let key = serde_json::to_value(tab).unwrap();
+            insta::assert_snapshot!(format!("held_{}_{}", key.as_str().unwrap(), rows), text);
         }
     }
 }

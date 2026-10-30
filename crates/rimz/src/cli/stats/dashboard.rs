@@ -1,6 +1,6 @@
 use super::fmt::*;
 use super::panel::PanelGlyphs;
-use super::panel::{Activity, display_width, ellipsize, header_lines, pad_left, pad_to};
+use super::panel::{display_width, ellipsize, header_lines, pad_left, pad_to};
 use super::*;
 use rimz::harness::assist_log::AssistRecord;
 use rimz::theme::fmt::{active_duration, group_thousands};
@@ -132,19 +132,30 @@ impl Dashboard<'_> {
         if step < 6 {
             section(&mut lines, self.heatmap(width));
         }
+        let tab_labels = Window::TABS.map(|tab| {
+            format!(
+                "{} {}",
+                tab.label(),
+                fmt_usd(tab.select(&self.stats.total).usd)
+            )
+        });
+        let full_rail_width = tab_labels
+            .iter()
+            .map(|label| display_width(label))
+            .sum::<usize>()
+            + 3 * display_width("  ·  ")
+            + 4;
         section(
             &mut lines,
             vec![
                 Window::TABS
                     .into_iter()
-                    .map(|tab| {
-                        let label = format!(
-                            "{} {}",
-                            tab.label(),
-                            fmt_usd(tab.select(&self.stats.total).usd)
-                        );
+                    .zip(tab_labels)
+                    .map(|(tab, label)| {
                         if tab == active {
                             render::paint(render::palette::accent().bold(), &format!("[ {label} ]"))
+                        } else if full_rail_width > width {
+                            render::paint(render::palette::body(), tab.label())
                         } else {
                             render::paint(render::palette::body(), &label)
                         }
@@ -493,7 +504,7 @@ impl Dashboard<'_> {
 
     fn heatmap(&self, width: usize) -> Vec<String> {
         let mut lines = Vec::new();
-        panel::heatmap_lines(
+        let grid = panel::heatmap_lines(
             &mut lines,
             self.stats,
             self.today,
@@ -509,43 +520,7 @@ impl Dashboard<'_> {
                 line.insert(0, ' ');
             }
         }
-        let grid = panel::Grid::build(
-            &self.stats.by_day,
-            self.today,
-            weeks_for_terminal(width),
-            self.dollars,
-        );
-        let start = grid.col_monday(0);
-        let today_year = Timestamp::from_second(self.today * DAY_SECS)
-            .ok()
-            .map(|today| jiff::tz::TimeZone::UTC.to_datetime(today).year());
-        let date_label = |day| {
-            if let Ok(timestamp) = Timestamp::from_second(day * DAY_SECS) {
-                let date = jiff::tz::TimeZone::UTC.to_datetime(timestamp);
-                if today_year.is_some_and(|year| date.year() < year) {
-                    return format!("{} {}", fmt_day(day), date.strftime("%Y"));
-                }
-            }
-            fmt_day(day)
-        };
-        let active_days = self
-            .stats
-            .by_day
-            .range(start..=self.today)
-            .filter(|(_, day)| day.tokens > 0)
-            .collect::<Vec<_>>();
-        let streak = Activity::of(&self.stats.by_day, self.today, Window::Year).current_streak;
-        let busiest = active_days
-            .iter()
-            .max_by_key(|(_, day)| day.tokens)
-            .map(|(day, _)| date_label(**day))
-            .unwrap_or_else(|| "–".into());
-        let summary = format!(
-            "{} active days since {} · streak {} · busiest {busiest}",
-            active_days.len(),
-            date_label(start),
-            panel::plural_days(streak)
-        );
+        let summary = panel::grid_activity_summary(&self.stats.by_day, &grid);
         if 40 + display_width(&summary) <= width {
             if let Some(key) = lines.last_mut() {
                 *key = format!(
@@ -615,9 +590,11 @@ impl Dashboard<'_> {
                 )
             );
         }
-        let average = panel::per_active_day(&self.stats.by_day, self.today, active)
-            .map(fmt_usd)
-            .unwrap_or_default();
+        let average = fmt_usd(panel::per_active_day(
+            &self.stats.by_day,
+            self.today,
+            active,
+        ));
         if active == Window::Year {
             return format!("{average} per active day");
         }
