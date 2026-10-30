@@ -22,11 +22,15 @@ pub fn condition_stages(
 }
 
 /// Human-readable explanation shared by loop inspection and workflow condition answers.
-pub fn unread_reason(reason: Option<UnreadReason>, now: Timestamp) -> String {
+/// Pass a read-time timestamp to include probe ages, or `None` for ageless stored text.
+pub fn unread_reason(reason: Option<UnreadReason>, now: Option<Timestamp>) -> String {
     match reason {
         None | Some(UnreadReason::NotChecked) => "not checked yet".into(),
         Some(UnreadReason::NoForge) => "no supported forge for this checkout".into(),
         Some(UnreadReason::LookupFailing { last_tried }) => {
+            let Some(now) = now else {
+                return "forge lookup failing".into();
+            };
             let age = i64::try_from(last_tried)
                 .ok()
                 .and_then(|at| Timestamp::from_millisecond(at).ok())
@@ -60,5 +64,23 @@ pub fn unread_reason(reason: Option<UnreadReason>, now: Timestamp) -> String {
             || "not reported for this checkout's open PR".into(),
             |branch| format!("not reported for branch {branch}'s open PR"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unread_reason_keeps_ages_only_at_read_time() {
+        let now = "2026-10-30T19:04:00Z".parse::<Timestamp>().unwrap();
+        let reason = Some(UnreadReason::LookupFailing {
+            last_tried: (now.as_millisecond() - 180_000) as u64,
+        });
+        assert_eq!(
+            unread_reason(reason.clone(), Some(now)),
+            "forge lookup failing, last tried 3m ago"
+        );
+        assert_eq!(unread_reason(reason, None), "forge lookup failing");
     }
 }

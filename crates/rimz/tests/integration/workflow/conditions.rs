@@ -263,10 +263,7 @@ fn condition_unknown_waits_for_a_successful_post_entry_forge_probe() {
     let failed = show(&env, &id);
     assert_eq!(failed["record"]["wait"]["outcome"], "unknown");
     let reason = failed["record"]["input"]["reason"].as_str().unwrap();
-    assert!(
-        reason.starts_with("pr (forge lookup failing, last tried "),
-        "{reason}"
-    );
+    assert_eq!(reason, "pr (forge lookup failing)");
     forge(&env, jiff::Timestamp::now(), true);
     success(command(
         &env,

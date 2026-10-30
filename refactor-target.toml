@@ -10201,7 +10201,7 @@ reason = "Loop and workflow admission share the effective team's stage names."
 [[verdict]]
 kind = "item"
 key = "harness::schedule::unread_reason"
-reason = "Loop inspection and workflow condition answers share byte-identical unread-reason prose."
+reason = "Loop inspection adds a read-time age to shared unread reasons; workflow answers store ageless prose."
 
 [[verdict]]
 kind = "item"

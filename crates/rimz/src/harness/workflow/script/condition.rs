@@ -67,7 +67,7 @@ pub(super) fn evaluate(
         checked_at,
         (entered_at, stale_reason),
         ci_unread,
-        |key| schedule::unread_reason(source.probe_unread_reason(key, &record.scope.path), now),
+        |key| schedule::unread_reason(source.probe_unread_reason(key, &record.scope.path), None),
     ))
 }
 

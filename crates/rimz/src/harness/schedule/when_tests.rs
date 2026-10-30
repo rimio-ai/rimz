@@ -240,7 +240,7 @@ fn unread_pr_facts_name_the_open_pr_not_ci() {
                 };
                 let reason = super::super::condition::unread_reason(
                     source.probe_unread_reason(&key, scope),
-                    Timestamp::from_millisecond(1_000).unwrap(),
+                    Some(Timestamp::from_millisecond(1_000).unwrap()),
                 );
                 reasons.push((key.clone(), state, reason));
                 let reason = match (state, branch) {
