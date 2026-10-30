@@ -20,13 +20,13 @@ rimz events list --signal 'ci.*' --since 2h -n 10
 rimz events list --signal deploy.finished --json
 ```
 
-`list` prints signals newest first, with columns `WHEN`, `SIGNAL`, `SOURCE`, and `SUBJECT`. The subject is the same text that follows the signal name in a delivered notification, or `-` when empty. Lifecycle records are not listed.
+`list` prints signals newest first, with columns `WHEN`, `SIGNAL`, `SOURCE`, and `SUBJECT`. The subject is the same text that follows the signal name in a delivered notification, or `-` when empty on a single-record row. Text output folds adjacent listed signals with the same name, source, and subject into one row. Payload fields outside the subject never split a row, so custom signals with an empty subject fold even when their payloads differ. A folded row appends `×N` after the signal name and ` · over <span>` after the subject, or just `over <span>` when the subject is empty. `WHEN` is the age of the latest member, and the span runs from the earliest to the latest member timestamp. Lifecycle records and the `agent.*` signals derived from them are not listed.
 
 | Flag | Effect |
 | --- | --- |
 | `--signal <NAME\|FAMILY.*>` | Keep an exact name or every name in one family, using the [subscription selector grammar](./loop.md#signals). |
 | `--since <DUR>` | Keep records within this duration of now; integer `s`, `m`, `h`, or `d`. |
-| `-n, --limit <N>` | Maximum records after filtering; default `20`. |
+| `-n, --limit <N>` | Maximum rows after filtering and folding in text, or records after filtering with `--json`; default `20`. A folded row is never split. |
 | `--json` | One [signal line](#signal-lines) per record, the same schema as `follow`, newest first. |
 
 Only the active event-log generation is searched, never archives, even when `--since` reaches farther back. When no signal matches, text output names the age of the active log's first record (or says the active log is empty). JSON output is empty.

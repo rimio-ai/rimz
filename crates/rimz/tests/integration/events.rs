@@ -440,7 +440,20 @@ fn events_list_filters_bounds_and_shares_follow_signal_lines() {
 
     store.rotate_event_log(1, None).unwrap();
     assert!(list(&["--json"]).is_empty(), "archives must not be listed");
-    for _ in 0..22 {
+    store
+        .append_signal(
+            "rimz-test",
+            SignalEventPayload {
+                name: "deploy.finished".parse().unwrap(),
+                payload: Default::default(),
+                source: SignalSource::Cli,
+            },
+        )
+        .unwrap();
+    for index in 0..22 {
+        if index == 11 {
+            append(&env, LifecycleSignal::Registered);
+        }
         store
             .append_signal(
                 "rimz-test",
@@ -452,6 +465,37 @@ fn events_list_filters_bounds_and_shares_follow_signal_lines() {
             )
             .unwrap();
     }
-    assert_eq!(rows(&list(&["--json"])).len(), 20);
-    assert_eq!(rows(&list(&["--json", "--limit", "30"])).len(), 22);
+    let json = rows(&list(&["--json"]));
+    assert_eq!(json.len(), 20, "{json:?}");
+    assert!(
+        json.iter().all(|row| row["name"] == "deploy.done"),
+        "{json:?}"
+    );
+    assert_eq!(rows(&list(&["--json", "--limit", "30"])).len(), 23);
+    for args in [&[][..], &["-n", "2"][..]] {
+        let text = list(args);
+        assert!(text.contains("deploy.done ×22"), "{text}");
+        assert!(text.contains("deploy.finished"), "{text}");
+        assert_eq!(text.lines().count(), 3, "{text}");
+    }
+    let text = list(&["-n", "1"]);
+    assert!(text.contains("deploy.done ×22"), "{text}");
+    assert!(!text.contains("deploy.finished"), "{text}");
+    assert_eq!(text.lines().count(), 2, "{text}");
+
+    for name in ["ci.passed", "deploy.done"] {
+        store
+            .append_signal(
+                "rimz-test",
+                SignalEventPayload {
+                    name: name.parse().unwrap(),
+                    payload: Default::default(),
+                    source: SignalSource::Cli,
+                },
+            )
+            .unwrap();
+    }
+    let text = list(&["--signal", "deploy.*", "-n", "1"]);
+    assert!(text.contains("deploy.done ×23"), "{text}");
+    assert_eq!(text.lines().count(), 2, "{text}");
 }

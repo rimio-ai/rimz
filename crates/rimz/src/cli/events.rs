@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use jiff::Timestamp;
 use rimz::harness::schedule::signal::SignalSelector;
+use rimz::store::event::{SignalName, SignalSource};
 use rimz::store::follow::{FollowEvent, SignalEvent};
 use serde_json::{Map, Value};
 
@@ -24,7 +26,7 @@ pub struct EventsArgs {
 
 #[derive(Debug, Subcommand)]
 enum EventsSubcmd {
-    /// List recent signals from the active event log, newest first.
+    /// List recent signals from the active event log, newest first; repeats fold into one row.
     List {
         /// Keep an exact signal name or a family such as ci.*.
         #[arg(long)]
@@ -32,7 +34,7 @@ enum EventsSubcmd {
         /// Keep signals within this duration, such as 2h.
         #[arg(long, value_parser = rimz::harness::schedule::runner::parse_task_timeout)]
         since: Option<Duration>,
-        /// Maximum signals after filtering.
+        /// Maximum rows after filtering and folding, or records with --json.
         #[arg(short = 'n', long, default_value_t = 20)]
         limit: usize,
         /// Print signal JSON Lines, as in events follow.
@@ -91,7 +93,7 @@ fn list(
     json: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let now = jiff::Timestamp::now();
+    let now = Timestamp::now();
     let since = since
         .map(|duration| now.checked_sub(duration))
         .transpose()
@@ -100,24 +102,23 @@ fn list(
         .context("resolving current workspace")?;
     let store = super::require_existing_store(&workspace)?;
     let events = store.read_events().context("reading active event log")?;
-    let signals: Vec<_> = events
+    let signals = events
         .iter()
         .rev()
         .filter(|event| since.is_none_or(|since| event.timestamp >= since))
         .filter_map(SignalEvent::from_envelope)
-        .filter(|event| selector.is_none_or(|selector| selector.matches(&event.name)))
-        .take(limit)
-        .collect();
+        .filter(|event| selector.is_none_or(|selector| selector.matches(&event.name)));
     let mut out = render::out();
     if json {
-        for signal in signals {
+        for signal in signals.take(limit) {
             if !write_json_line(&mut out, &FollowEvent::Signal(signal))? {
                 break;
             }
         }
         return Ok(());
     }
-    if signals.is_empty() {
+    let rows = signal_rows(signals, limit, now);
+    if rows.is_empty() {
         match events.first() {
             Some(first) => writeln!(
                 out,
@@ -129,9 +130,25 @@ fn list(
         return Ok(());
     }
     let mut table = render::Table::new(["WHEN", "SIGNAL", "SOURCE", "SUBJECT"]);
-    for signal in signals {
-        use rimz::store::event::SignalSource;
-        let source = match signal.source {
+    for row in rows {
+        table.row(row.map(render::cell));
+    }
+    table.render(&mut out)?;
+    Ok(())
+}
+
+struct SignalRow {
+    name: SignalName,
+    source: SignalSource,
+    subject: String,
+    earliest: Timestamp,
+    latest: Timestamp,
+    count: usize,
+}
+
+impl SignalRow {
+    fn cells(self, now: Timestamp) -> [String; 4] {
+        let source = match self.source {
             SignalSource::Cli => "cli",
             SignalSource::Watch => "watch",
             SignalSource::Lifecycle => "lifecycle",
@@ -140,21 +157,62 @@ fn list(
             SignalSource::Worktree => "worktree",
             SignalSource::Team => "team",
         };
+        let name = if self.count > 1 {
+            format!("{} ×{}", self.name, self.count)
+        } else {
+            self.name.to_string()
+        };
+        let mut subject = self.subject;
+        if self.count > 1 {
+            if !subject.is_empty() {
+                subject.push_str(" · ");
+            }
+            subject.push_str(&render::folded_span(self.earliest, self.latest));
+        }
+        if subject.is_empty() {
+            subject.push('-');
+        }
+        [
+            render::age_short(self.latest, now),
+            name,
+            source.to_owned(),
+            subject,
+        ]
+    }
+}
+
+fn signal_rows(
+    signals: impl IntoIterator<Item = SignalEvent>,
+    limit: usize,
+    now: Timestamp,
+) -> Vec<[String; 4]> {
+    let mut rows = Vec::<SignalRow>::new();
+    for signal in signals {
         let subject =
             rimz::harness::schedule::runner::signal_subject(&signal.name, &signal.payload);
-        table.row([
-            render::cell(render::age_short(signal.at, now)),
-            render::cell(signal.name.to_string()),
-            render::cell(source),
-            render::cell(if subject.is_empty() {
-                "-".to_owned()
-            } else {
-                subject
-            }),
-        ]);
+        if let Some(row) = rows.last_mut()
+            && row.name == signal.name
+            && row.source == signal.source
+            && row.subject == subject
+        {
+            row.earliest = row.earliest.min(signal.at);
+            row.latest = row.latest.max(signal.at);
+            row.count += 1;
+            continue;
+        }
+        if rows.len() == limit {
+            break;
+        }
+        rows.push(SignalRow {
+            name: signal.name,
+            source: signal.source,
+            subject,
+            earliest: signal.at,
+            latest: signal.at,
+            count: 1,
+        });
     }
-    table.render(&mut out)?;
-    Ok(())
+    rows.into_iter().map(|row| row.cells(now)).collect()
 }
 
 fn follow(replay: bool, selector: Option<&SignalSelector>, globals: &GlobalFlags) -> Result<()> {
@@ -209,9 +267,7 @@ fn poll_interval() -> Duration {
 }
 
 fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFlags) -> Result<()> {
-    let name = name
-        .parse::<rimz::store::event::SignalName>()
-        .map_err(anyhow::Error::msg)?;
+    let name = name.parse::<SignalName>().map_err(anyhow::Error::msg)?;
     let source = validate_emit_source(&name, source)?;
     let payload = parse_payload(raw_payload)?;
     let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
@@ -249,12 +305,7 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
     Ok(())
 }
 
-fn validate_emit_source(
-    name: &rimz::store::event::SignalName,
-    source: &str,
-) -> Result<rimz::store::event::SignalSource> {
-    use rimz::store::event::SignalSource;
-
+fn validate_emit_source(name: &SignalName, source: &str) -> Result<SignalSource> {
     match source {
         "git" => {
             let names = rimz::store::event::GitSignal::ALL
@@ -324,6 +375,179 @@ fn write_json_line(
 mod tests {
     use super::*;
 
+    fn now() -> Timestamp {
+        "2026-06-01T12:00:00Z".parse().unwrap()
+    }
+
+    fn signal(name: &str, source: SignalSource, seconds_ago: i64, payload: Value) -> SignalEvent {
+        SignalEvent {
+            v: 1,
+            event_id: rimz::ids::EventId::parse("evt_018f47a2c00070008000000000000000").unwrap(),
+            at: now() - jiff::SignedDuration::from_secs(seconds_ago),
+            workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            name: name.parse().unwrap(),
+            payload: payload.as_object().unwrap().clone(),
+            source,
+        }
+    }
+
+    #[test]
+    fn adjacent_signals_fold_with_timestamp_extrema() {
+        let signals = [70, 10, 130].map(|seconds| {
+            signal(
+                "ci.passed",
+                SignalSource::Forge,
+                seconds,
+                serde_json::json!({"branch": "main", "number": 12, "head": "abc1234def"}),
+            )
+        });
+        assert_eq!(
+            signal_rows(signals, 20, now()),
+            vec![
+                [
+                    "10s",
+                    "ci.passed ×3",
+                    "forge",
+                    "on main #12 @abc1234 · over 2m"
+                ]
+                .map(str::to_owned)
+            ]
+        );
+    }
+
+    #[test]
+    fn custom_payloads_fold_with_only_the_span_as_subject() {
+        let signals = [(130, 1), (10, 2)].map(|(seconds, revision)| {
+            signal(
+                "deploy.done",
+                SignalSource::Cli,
+                seconds,
+                serde_json::json!({"revision": revision}),
+            )
+        });
+        assert_eq!(
+            signal_rows(signals, 20, now()),
+            vec![["10s", "deploy.done ×2", "cli", "over 2m"].map(str::to_owned)]
+        );
+    }
+
+    #[test]
+    fn team_rewakes_fold_despite_unshown_payload_fields() {
+        let signals = [
+            (130, "2026-06-01T11:57:50Z", "owner"),
+            (10, "2026-06-01T11:59:50Z", "rimz"),
+        ]
+        .map(|(seconds, at, by)| {
+            signal(
+                "team.stage",
+                SignalSource::Team,
+                seconds,
+                serde_json::json!({
+                    "instance": "forge#feat", "from": "Plan", "to": "Plan", "at": at, "by": by
+                }),
+            )
+        });
+        assert_eq!(
+            signal_rows(signals, 20, now()),
+            vec![
+                [
+                    "10s",
+                    "team.stage ×2",
+                    "team",
+                    "forge#feat · Plan -> Plan · over 2m"
+                ]
+                .map(str::to_owned)
+            ]
+        );
+    }
+
+    #[test]
+    fn names_subjects_sources_and_non_adjacent_repeats_keep_separate_rows() {
+        let first = signal(
+            "ci.passed",
+            SignalSource::Forge,
+            10,
+            serde_json::json!({"head": "abc1234def"}),
+        );
+        let mut other_subject = first.clone();
+        other_subject
+            .payload
+            .insert("head".into(), serde_json::json!("def5678abc"));
+        let mut other_source = first.clone();
+        other_source.source = SignalSource::Cli;
+        let mut other_name = other_source.clone();
+        other_name.name = "ci.failed".parse().unwrap();
+        assert_eq!(
+            signal_rows(
+                [
+                    first.clone(),
+                    other_subject,
+                    first,
+                    other_source,
+                    other_name
+                ],
+                20,
+                now()
+            ),
+            vec![
+                ["10s", "ci.passed", "forge", "@abc1234"].map(str::to_owned),
+                ["10s", "ci.passed", "forge", "@def5678"].map(str::to_owned),
+                ["10s", "ci.passed", "forge", "@abc1234"].map(str::to_owned),
+                ["10s", "ci.passed", "cli", "@abc1234"].map(str::to_owned),
+                ["10s", "ci.failed", "cli", "@abc1234"].map(str::to_owned),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_limits_keep_the_whole_burst_and_older_distinct_signals() {
+        let signals: Vec<_> = (0..25)
+            .map(|seconds| {
+                signal(
+                    "deploy.done",
+                    SignalSource::Cli,
+                    seconds,
+                    serde_json::json!({}),
+                )
+            })
+            .chain([signal(
+                "deploy.finished",
+                SignalSource::Cli,
+                3600,
+                serde_json::json!({}),
+            )])
+            .collect();
+        let burst = ["0s", "deploy.done ×25", "cli", "over 24s"].map(str::to_owned);
+        let older = ["1h", "deploy.finished", "cli", "-"].map(str::to_owned);
+        assert_eq!(
+            [0, 1, 2].map(|limit| signal_rows(signals.clone(), limit, now())),
+            [vec![], vec![burst.clone()], vec![burst, older]]
+        );
+    }
+
+    #[test]
+    fn single_member_rows_keep_the_original_cells() {
+        assert_eq!(
+            signal_rows(
+                [
+                    signal("deploy.done", SignalSource::Cli, 10, serde_json::json!({})),
+                    signal(
+                        "ci.passed",
+                        SignalSource::Forge,
+                        120,
+                        serde_json::json!({"branch": "main", "number": 12, "head": "abc1234def"})
+                    )
+                ],
+                20,
+                now()
+            ),
+            vec![
+                ["10s", "deploy.done", "cli", "-"].map(str::to_owned),
+                ["2m", "ci.passed", "forge", "on main #12 @abc1234"].map(str::to_owned),
+            ]
+        );
+    }
+
     #[test]
     fn git_source_accepts_only_trunk_moved() {
         let name = "trunk.moved".parse().unwrap();
@@ -343,8 +567,6 @@ mod tests {
 
     #[test]
     fn reserved_families_reject_custom_emit_but_accept_internal_forge() {
-        use rimz::store::event::SignalSource;
-
         for raw in [
             "ci.passed",
             "ci.failed",
