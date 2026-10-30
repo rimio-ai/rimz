@@ -879,8 +879,11 @@ fn render_packs(
                     Severity::Warning,
                     &text,
                     format!(
-                        "copy changes worth keeping into the matching tree under {home}, \
-                         where each home file overrides the pack; \
+                        "preserve item edits with \
+                         `rimz packs customize <pack>:<name> --type <type> --copy` \
+                         in the matching tree under {home} \
+                         (merge into existing home overrides instead); \
+                         preserve other checkout changes separately; \
                          then restore with `{reset} && {clean}`"
                     ),
                 )?;
