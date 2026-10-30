@@ -3336,7 +3336,7 @@ fn trailing_at_lock_fires_take_no_row_and_keep_the_stale_verdict() {
         };
         assert_eq!(
             clause(&[overlap(10), completed(20), refused(30)], false),
-            "fires skipped during the last run, nothing has run since"
+            "a fire skipped during the last run, nothing has run since"
         );
         assert_eq!(clause(&[overlap(10), completed(20), refused(30)], true), "");
         assert_eq!(
