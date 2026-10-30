@@ -452,9 +452,13 @@ pub struct SidebarWorktreeGroup {
     /// the first git read.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worktree_backed: bool,
+    /// The resolved project-root group, independent of branch or label. With an
+    /// agent card it pins below actionable groups and never becomes finished.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub root_lane: bool,
     /// Terminal line of work: git verdict `Done` with no attention or running
-    /// member. Forces the archive band and collapses multi-agent rosters in
-    /// renderers.
+    /// member, except a root-lane group holding an agent card is never finished.
+    /// Follows all unfinished groups and collapses agent rosters in renderers.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub finished: bool,
     /// Whether the working tree is clean.
@@ -835,6 +839,7 @@ mod tests {
             commits_behind: None,
             trunk: None,
             worktree_backed: false,
+            root_lane: false,
             finished: true,
             clean: None,
             landed: None,

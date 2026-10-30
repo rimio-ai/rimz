@@ -2,7 +2,11 @@ use super::*;
 use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::store::snapshot::{RowCard, WorktreeTrunkSync};
 
-fn ranked_snapshot(mut agents: Vec<AgentState>) -> SidebarSnapshot {
+fn ranked_snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
+    ranked_snapshot_in(agents, None)
+}
+
+fn ranked_snapshot_in(mut agents: Vec<AgentState>, project_root: Option<&str>) -> SidebarSnapshot {
     let mut panes = Vec::new();
     for (idx, agent) in agents.iter_mut().enumerate() {
         let raw = format!("%tier-{idx}");
@@ -18,7 +22,9 @@ fn ranked_snapshot(mut agents: Vec<AgentState>) -> SidebarSnapshot {
         panes.push(live);
     }
 
-    room(agents).with_live_panes(panes, None)
+    room(agents)
+        .with_project_root(project_root.map(PathBuf::from))
+        .with_live_panes(panes, None)
 }
 
 fn labels(snapshot: &SidebarSnapshot) -> Vec<String> {
@@ -27,6 +33,207 @@ fn labels(snapshot: &SidebarSnapshot) -> Vec<String> {
         .iter()
         .map(|group| group.label.clone())
         .collect()
+}
+
+#[test]
+fn root_group_pins_calm_and_archived_agents_above_working_groups() {
+    let orders = [
+        (AgentStatus::Success, 0),
+        (AgentStatus::Idle, 0),
+        (AgentStatus::Sleeping, 0),
+        (AgentStatus::Paused, 0),
+        (AgentStatus::Idle, 25 * 60 * 60),
+        (AgentStatus::Success, 25 * 60 * 60),
+    ]
+    .map(|(status, age)| {
+        let snapshot = ranked_snapshot_in(
+            vec![
+                agent_in("desk", "/repo", status, 0).active_ago(age),
+                agent_in("working", "/repo/working", AgentStatus::Running, 0),
+            ],
+            Some("/repo"),
+        );
+        labels(&snapshot)
+    });
+
+    assert_eq!(orders, std::array::from_fn(|_| vec!["repo", "working"]));
+}
+
+#[test]
+fn actionable_groups_lead_the_pin_and_hot_parks_follow_it() {
+    let snapshot = ranked_snapshot_in(
+        vec![
+            agent_in("desk", "/repo", AgentStatus::Success, 0),
+            agent_in("parked", "/repo/paused", AgentStatus::Paused, 0).active_ago(59 * 60),
+            agent_in("working", "/repo/working", AgentStatus::Running, 0),
+            agent_in("ask", "/repo/waiting", AgentStatus::Waiting, 0).active_ago(0),
+            agent_in("failure", "/repo/failed", AgentStatus::Failed, 0).active_ago(0),
+        ],
+        Some("/repo"),
+    );
+
+    assert_eq!(
+        labels(&snapshot),
+        ["waiting", "failed", "repo", "paused", "working"]
+    );
+}
+
+#[test]
+fn fresh_ask_group_outranks_hot_park_without_a_root_group() {
+    let snapshot = ranked_snapshot(vec![
+        agent_in("parked", "/repo/paused", AgentStatus::Paused, 0).active_ago(59 * 60),
+        agent_in("ask", "/repo/waiting", AgentStatus::Waiting, 0).active_ago(0),
+    ]);
+
+    assert_eq!(labels(&snapshot), ["waiting", "paused"]);
+}
+
+#[test]
+fn native_child_attention_outranks_the_pinned_root_group() {
+    let snapshot = room(vec![
+        agent_in("desk", "/repo", AgentStatus::Success, 0).in_pane("%1"),
+        agent_in("parent", "/repo/child", AgentStatus::Success, 0).in_pane("%2"),
+        child_state("parent", "ask", AgentStatus::Waiting, 0),
+        agent_in("working", "/repo/working", AgentStatus::Running, 0).in_pane("%3"),
+    ])
+    .with_project_root(Some(PathBuf::from("/repo")))
+    .with_live_panes(
+        vec![
+            pane("%1", "claude", "/repo"),
+            pane("%2", "claude", "/repo/child"),
+            pane("%3", "claude", "/repo/working"),
+        ],
+        None,
+    );
+
+    assert_eq!(labels(&snapshot), ["child", "repo", "working"]);
+}
+
+#[test]
+fn process_only_root_group_is_not_pinned_and_can_finish() {
+    let mut snapshot = room(vec![
+        agent_in("working", "/repo/working", AgentStatus::Running, 0).in_pane("%1"),
+    ])
+    .with_project_root(Some(PathBuf::from("/repo")))
+    .with_live_panes(
+        vec![
+            pane("%1", "claude", "/repo/working"),
+            pane("%2", "zsh", "/repo"),
+        ],
+        None,
+    );
+    let before = labels(&snapshot);
+    let root = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .find(|group| group.key == "/repo")
+        .expect("root group");
+    root.clean = Some(true);
+    root.trunk_sync = Some(WorktreeTrunkSync::Merged);
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(
+        (
+            before,
+            labels(&snapshot),
+            snapshot.worktree_groups[1].root_lane,
+            snapshot.worktree_groups[1].finished,
+        ),
+        (
+            vec!["working".to_owned(), "repo".to_owned()],
+            vec!["working".to_owned(), "repo".to_owned()],
+            true,
+            true,
+        )
+    );
+}
+
+#[test]
+fn root_group_with_an_agent_never_finishes_on_a_landed_branch() {
+    let results = [false, true].map(|merged_pr| {
+        let mut snapshot = ranked_snapshot_in(
+            vec![
+                agent_in("desk", "/repo", AgentStatus::Success, 0),
+                agent_in("working", "/repo/working", AgentStatus::Running, 0),
+            ],
+            Some("/repo"),
+        );
+        let root = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+            .iter_mut()
+            .find(|group| group.key == "/repo")
+            .expect("root group");
+        root.clean = Some(true);
+        if merged_pr {
+            root.pr_state = Some(WorktreePrState::Merged);
+        } else {
+            root.trunk_sync = Some(WorktreeTrunkSync::Merged);
+        }
+        snapshot.sort_groups_for_presentation();
+        let root = snapshot
+            .worktree_groups
+            .iter()
+            .find(|group| group.key == "/repo")
+            .expect("root group");
+        (labels(&snapshot), root.finished, root.collapses())
+    });
+
+    assert_eq!(
+        results,
+        std::array::from_fn(|_| (vec!["repo".to_owned(), "working".to_owned()], false, false))
+    );
+}
+
+#[test]
+fn root_group_with_own_attention_keeps_urgency_order() {
+    let snapshot = ranked_snapshot_in(
+        vec![
+            agent_in("desk", "/repo", AgentStatus::Waiting, 0).active_ago(5 * 60),
+            agent_in("failure", "/repo/failed", AgentStatus::Failed, 0).active_ago(50 * 60),
+            agent_in("ask", "/repo/waiting", AgentStatus::Waiting, 0).active_ago(0),
+        ],
+        Some("/repo"),
+    );
+
+    assert_eq!(
+        (labels(&snapshot), snapshot.worktree_groups[1].root_lane),
+        (
+            vec!["failed".to_owned(), "repo".to_owned(), "waiting".to_owned()],
+            true
+        )
+    );
+}
+
+#[test]
+fn root_pin_survives_snapshot_json_and_presentation_sort() {
+    let snapshot = ranked_snapshot_in(
+        vec![
+            agent_in("desk", "/repo", AgentStatus::Idle, 0).active_ago(25 * 60 * 60),
+            agent_in("working", "/repo/working", AgentStatus::Running, 0),
+        ],
+        Some("/repo"),
+    );
+    let json = serde_json::to_value(&snapshot).unwrap();
+    let markers = json["worktree_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|group| (group["key"].as_str().unwrap(), group.get("root_lane")))
+        .collect::<BTreeMap<_, _>>();
+    let mut restored: SidebarSnapshot = serde_json::from_value(json.clone()).unwrap();
+    restored.sort_groups_for_presentation();
+
+    assert_eq!(
+        (labels(&snapshot), labels(&restored), markers),
+        (
+            vec!["repo".to_owned(), "working".to_owned()],
+            vec!["repo".to_owned(), "working".to_owned()],
+            BTreeMap::from([
+                ("/repo", Some(&serde_json::Value::Bool(true))),
+                ("/repo/working", None),
+            ]),
+        )
+    );
+    assert!(restored.worktree_groups[0].root_lane);
+    assert!(!restored.worktree_groups[1].root_lane);
 }
 
 #[test]

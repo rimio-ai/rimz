@@ -11,10 +11,13 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
         expect_key: &'static str,
         expect_label: &'static str,
         expect_rows: usize,
+        expect_root_lane: bool,
     }
 
     let root = "/repo/rimz";
     let external = "/elsewhere/feature-wt";
+    let mut root_lanes = Vec::new();
+    let mut expected_root_lanes = Vec::new();
     for case in [
         Case {
             label: "main checkout is a repo worktree pod",
@@ -25,6 +28,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
             expect_key: root,
             expect_label: "rimz",
             expect_rows: 1,
+            expect_root_lane: true,
         },
         Case {
             label: "in-project worktree path keeps its own pod",
@@ -35,6 +39,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
             expect_key: "/repo/rimz/.claude/worktrees/featureX",
             expect_label: "featureX",
             expect_rows: 1,
+            expect_root_lane: false,
         },
         Case {
             label: "shared string prefix is external",
@@ -45,6 +50,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
             expect_key: "external",
             expect_label: "external",
             expect_rows: 1,
+            expect_root_lane: false,
         },
         Case {
             label: "enumerated external worktree owns nested panes",
@@ -58,6 +64,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
             expect_key: external,
             expect_label: "feature-wt",
             expect_rows: 2,
+            expect_root_lane: false,
         },
         Case {
             label: "known roots leave unrelated cwd as external",
@@ -68,6 +75,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
             expect_key: "external",
             expect_label: "external",
             expect_rows: 1,
+            expect_root_lane: false,
         },
         Case {
             label: "no project root preserves per-path grouping",
@@ -78,6 +86,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
             expect_key: "/home/user",
             expect_label: "user",
             expect_rows: 1,
+            expect_root_lane: false,
         },
     ] {
         let snapshot = room(Vec::new())
@@ -91,7 +100,65 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
         assert_eq!(group.key, case.expect_key, "{}", case.label);
         assert_eq!(group.label, case.expect_label, "{}", case.label);
         assert_eq!(group.rows.len(), case.expect_rows, "{}", case.label);
+        root_lanes.push((case.label, group.root_lane));
+        expected_root_lanes.push((case.label, case.expect_root_lane));
     }
+    assert_eq!(root_lanes, expected_root_lanes);
+}
+
+#[test]
+fn root_lane_identity_excludes_stamped_main_channel() {
+    let root = "/repo/rimz";
+    let mut stamped = agent_in("stamped", root, AgentStatus::Running, 0).in_pane("%1");
+    stamped.channel = Some("main".to_owned());
+    let snapshot = room(vec![
+        stamped,
+        agent_in("desk", root, AgentStatus::Idle, 0).in_pane("%2"),
+    ])
+    .with_project_root(Some(PathBuf::from(root)))
+    .with_live_panes(
+        vec![pane("%1", "claude", root), pane("%2", "claude", root)],
+        None,
+    );
+
+    assert_eq!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| (group.key.as_str(), group.root_lane))
+            .collect::<Vec<_>>(),
+        [(root, true), ("channel:main", false)]
+    );
+}
+
+#[test]
+fn every_branch_split_at_the_project_root_is_root_lane() {
+    let root = "/repo/shared";
+    let snapshot = room(vec![
+        agent_in("feature", root, AgentStatus::Idle, 0)
+            .branch("feature")
+            .in_pane("%1"),
+        agent_in("main", root, AgentStatus::Idle, 0)
+            .branch("main")
+            .in_pane("%2"),
+    ])
+    .with_project_root(Some(PathBuf::from(root)))
+    .with_live_panes(
+        vec![pane("%1", "claude", root), pane("%2", "claude", root)],
+        None,
+    );
+
+    assert_eq!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| (group.key.as_str(), group.label.as_str(), group.root_lane))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            ("/repo/shared\nfeature", "feature", true),
+            ("/repo/shared\nmain", "main", true),
+        ])
+    );
 }
 
 #[test]

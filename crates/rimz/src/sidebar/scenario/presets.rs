@@ -317,6 +317,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
         commits_behind: spec.commits_behind,
         trunk: Some("main".to_owned()),
         worktree_backed: false,
+        root_lane: false,
         finished: false,
         clean: spec.clean,
         landed: spec.landed,
@@ -589,6 +590,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         AgentRowSpec {
             id: "agent:pi:zellij",
             name: "pi",
+            handle: Some("pi-2".to_owned()),
             pane: "terminal_35",
             cwd: "/srv/code/query-engine/.rimz/worktrees/zellij-health",
             branch: "zellij-health",
@@ -644,6 +646,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         AgentRowSpec {
             id: "agent:opencode:theme",
             name: "opencode",
+            handle: Some("opencode-2".to_owned()),
             pane: "terminal_40",
             cwd: "/srv/code/query-engine/.rimz/worktrees/theme-tune",
             branch: "theme-tune",
@@ -661,6 +664,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         AgentRowSpec {
             id: "agent:claude:theme",
             name: "claude",
+            handle: Some("claude-5".to_owned()),
             pane: "terminal_46",
             cwd: "/srv/code/query-engine/.rimz/worktrees/theme-tune",
             branch: "theme-tune",
@@ -1077,7 +1081,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             task: "patch rollout smoke harness",
             model: "GPT-5.5",
             context: Some((142_260, 2.93)),
-            handle: Some("coder".to_owned()),
+            handle: Some("coder-2".to_owned()),
             age_secs: Some(5 * 60),
             ..AgentRowSpec::default()
         },
@@ -1095,7 +1099,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             task: "approve staged migration",
             model: "Opus 4.8",
             context: Some((347_890, 9.04)),
-            handle: Some("reviewer".to_owned()),
+            handle: Some("reviewer-2".to_owned()),
             age_secs: Some(52 * 60),
             compaction_count: 1,
             ..AgentRowSpec::default()
@@ -1421,6 +1425,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         AgentRowSpec {
             id: "agent:opencode:limit",
             name: "opencode",
+            handle: Some("opencode-2".to_owned()),
             pane: "terminal_56",
             cwd: "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
             branch: "usage-alerts",
@@ -1438,6 +1443,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         AgentRowSpec {
             id: "agent:claude:limit-paused",
             name: "claude",
+            handle: Some("claude-2".to_owned()),
             pane: "terminal_57",
             cwd: "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
             branch: "usage-alerts",
@@ -1457,6 +1463,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         AgentRowSpec {
             id: "agent:claude:limit",
             name: "claude",
+            handle: Some("claude-3".to_owned()),
             pane: "terminal_58",
             cwd: "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
             branch: "usage-alerts",
@@ -1776,6 +1783,7 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         AgentRowSpec {
             id: "agent:claude:netcheck-paused",
             name: "claude",
+            handle: Some("claude-2".to_owned()),
             pane: "terminal_65",
             cwd: "/srv/code/query-engine/.rimz/worktrees/network-check",
             branch: "network-check",
@@ -1794,6 +1802,7 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         AgentRowSpec {
             id: "agent:claude:netcheck",
             name: "claude",
+            handle: Some("claude-3".to_owned()),
             pane: "terminal_66",
             cwd: "/srv/code/query-engine/.rimz/worktrees/network-check",
             branch: "network-check",

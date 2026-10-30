@@ -160,12 +160,15 @@ A pristine fork reads `≡ <trunk>`, and a merged PR shows the merge marker alon
 | Carries a channel | That channel's pod. |
 | Has no worktree path | A group named by its branch if it has one, otherwise `external`. |
 | Path inside the repo's RimZ-owned worktree home | That worktree's `#channel` pod, matching message addressing. |
-| Path inside a group root | The deepest containing root: a checkout in a repo room, a name-only root pod for the root of a directory room. |
+| Path whose deepest containing root is the project root of a repo room | Its own group per path. Only rows at the project root itself share that root's group. |
+| Path inside another group root, or the project root of a non-repo room | The deepest containing root: a checkout pod, or the name-only root pod in a directory or marker room. |
 | Path outside every root, in a room with no roots at all | Its own group per path. |
 | Path outside every root, with a branch | A group named by the branch. |
 | Anything else | `external`. |
 
 Group roots are the repo's checkouts from `git worktree list` in a repo room. A directory room does not scan its tree. Every row that reports both a path and a branch also adds its path as a root, and rows on several branches at one path split by branch. The `external` group (a home shell, `/tmp`, CI) renders as a dim divider, always sorts last, and keeps an attention-only tally so an out-of-project ask still surfaces. The rules are pinned in [`view/tests/grouping/`](../../../crates/rimz/src/store/snapshot/view/tests/grouping).
+
+The resolver stamps `SidebarWorktreeGroup::root_lane` on the repo room's project-root path group, every branch split included, and on the non-repo root pod. Subdirectory groups, stamped channels (including `main`), other checkouts, and `external` never carry it. The marker persists as `root_lane: true` in the snapshot and is omitted when false.
 
 ### Team units and pipelines
 
@@ -201,13 +204,14 @@ Groups rank in this order ([`compare_groups`](../../../crates/rimz/src/store/sna
 
 1. `external` groups last, whatever they hold.
 2. Finished project groups after all unfinished project groups, including archived ones.
-3. The band of the group's liveliest member.
-4. The highest attention score among members in that band. Calm members add nothing here.
-5. The group's calm activity in that band: working if any member runs, else finished if any member succeeded, else idle if any agent remains, else process-only.
-6. Git: dirty, clean, unknown, then done. Done needs a merged or closed PR or a `WorktreeTrunkSync::Merged` verdict, so a pristine fork whose merge-base equals `HEAD` stays clean.
-7. The earliest member's pane creation order, then the label.
+3. Groups holding an actionable `?` or `!` row, then a root-lane group holding an agent card, then every other group. A current child's actionable status counts through `attention_status()`. A root group with its own actionable row competes in the first tier; process-only roots get no pin. Park-only groups follow actionable groups even in a room without a pinned root.
+4. The band of the group's liveliest member.
+5. The highest attention score among members in that band. Calm members add nothing here.
+6. The group's calm activity in that band: working if any member runs, else finished if any member succeeded, else idle if any agent remains, else process-only.
+7. Git: dirty, clean, unknown, then done. Done needs a merged or closed PR or a `WorktreeTrunkSync::Merged` verdict, so a pristine fork whose merge-base equals `HEAD` stays clean.
+8. The earliest member's pane creation order, then the label.
 
-A done group with no attention or running member enters the finished partition, and a revived member restores its unfinished rank. The presentation sort and each live overlay refresh stamp that verdict into `SidebarWorktreeGroup::finished`, so ranking and rendering agree. The seams are `sort_rows`, `compare_groups`, and the rank key in [`layout.rs`](../../../crates/rimz/src/store/snapshot/view/layout.rs), pinned in [`view/tests/ranking/`](../../../crates/rimz/src/store/snapshot/view/tests/ranking). The user-facing account is [the sidebar guide](../../guide/sidebar.md#how-the-column-is-ordered).
+A done group with no attention or running member enters the finished partition, except a root-lane group holding an agent card is never finished. A revived member restores an ordinary group's unfinished rank. The presentation sort and each live overlay refresh stamp that verdict into `SidebarWorktreeGroup::finished`, so ranking and rendering agree; overlays leave group order to the next presentation sort. The live-agent CLI roster shares the same ranking key and root identity, reading `AgentState::status` for actionable attention and treating every member as an agent card, without a finished partition. The seams are `sort_rows`, `compare_groups`, and the rank key in [`layout.rs`](../../../crates/rimz/src/store/snapshot/view/layout.rs), pinned in [`view/tests/ranking/`](../../../crates/rimz/src/store/snapshot/view/tests/ranking). The user-facing account is [the sidebar guide](../../guide/sidebar.md#how-the-column-is-ordered).
 
 The cap is renderer-local and protects visible work. The snapshot carries every row. In the resting body each renderer shows at most `WORKTREE_ROW_CAP` (6) rows of a group ([`VisibleRoster`](../../../crates/rimz/src/sidebar_pane/view.rs)). Exempt rows always show: unread rows, agent rows in any status but `idle`, the focused row, rows the layout freeze holds, and the process row that is the group's only live member. They count toward the six, and the idle and process rows fill what is left in rank order. Six running cards therefore leave no room for an idle tail. The rest fold behind a dim `+K more`, and expanding the group shows every row plus `− less`. A lens or a search query lifts the cap.
 

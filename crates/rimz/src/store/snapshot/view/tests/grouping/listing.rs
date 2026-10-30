@@ -6,6 +6,51 @@ use super::*;
 use crate::store::snapshot::group_live_agents_by_worktree;
 
 #[test]
+fn listing_roster_mirrors_sidebar_root_pin_and_actionable_tier() {
+    let agents = [
+        ("desk", "/repo", AgentStatus::Idle, 25 * 60 * 60),
+        ("parked", "/repo/paused", AgentStatus::Paused, 59 * 60),
+        ("working", "/repo/working", AgentStatus::Running, 0),
+        ("ask", "/repo/waiting", AgentStatus::Waiting, 0),
+        ("failure", "/repo/failed", AgentStatus::Failed, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(idx, (id, path, status, age))| {
+        let mut agent = agent_in(id, path, status, 0).active_ago(age);
+        agent.pane = Some(pane(&format!("%{idx}"), "claude", path));
+        agent
+    })
+    .collect::<Vec<_>>();
+    let panes = agents
+        .iter()
+        .filter_map(|agent| agent.pane.clone())
+        .collect();
+    let snapshot = room(agents)
+        .with_project_root(Some(PathBuf::from("/repo")))
+        .with_live_panes(panes, None);
+    let refs = snapshot.agents.iter().collect::<Vec<_>>();
+    let groups = group_live_agents_by_worktree(&refs, &snapshot);
+    let roster = groups
+        .iter()
+        .flat_map(|group| group.agents.iter().map(|agent| agent.agent_id.as_str()))
+        .collect::<Vec<_>>();
+    let sidebar = snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter().map(|row| row.id.as_str()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (roster, sidebar),
+        (
+            vec!["ask", "failure", "desk", "parked", "working"],
+            vec!["ask", "failure", "desk", "parked", "working"],
+        )
+    );
+}
+
+#[test]
 fn groups_by_worktree_attention_first_external_last_uncapped() {
     let mut agents = vec![
         agent("claude", "main-idle", AgentStatus::Idle, 10).worktree("/repo/main"),

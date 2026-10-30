@@ -628,7 +628,7 @@ A group shows at most six idle and process rows. The rest fold behind a dim `+K 
    +3 more
 ```
 
-A group is finished when its pull request merged or closed, or the trunk contains its work, its tree is clean, and no member is working or blocked. Every finished group with an agent collapses to its header and a two-line receipt, unread results included:
+A group is finished when its tree is clean, no member is working or blocked, and its pull request merged or closed or the trunk contains its work. The main checkout's group (`#main`) is never finished while it holds a live agent card. Every finished group with an agent collapses to its header and a two-line receipt, unread results included:
 
 ```
  ↩ merged-work                                   ✓ main
@@ -670,7 +670,7 @@ A folded finished group hides its pipeline line and puts the stage after the tea
  ▸ forge · Done  ✓ planner  ✓ coder
 ```
 
-Expanding the group restores the pipeline line. The order of cards and groups follows status and age, and read state never moves a card. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
+Expanding the group restores the pipeline line. Cards rank by status and age; groups do too, except the main checkout's group stays below groups holding asks or failures and above the rest while it holds a live agent card. Its own ask or failure ranks among the attention groups instead. Read state never moves a card. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
 
 ## The provider dashboard
 
