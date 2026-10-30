@@ -252,7 +252,7 @@ pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::
         profiles.dedup();
         for login in logins.declared(kind.as_str()) {
             let empty_dir::Verdict::Fallback(trust) =
-                empty_dir::verdict(true, &kind, &logins.env(&login))
+                empty_dir::verdict(&kind, &logins.env(&login))
             else {
                 continue;
             };

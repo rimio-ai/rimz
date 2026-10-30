@@ -26,17 +26,13 @@ fn account_verdict_uses_the_empty_root_and_its_git_ancestry() {
     let claude = AgentKind::new_unchecked("claude");
     let codex = AgentKind::new_unchecked("codex");
     assert!(
-        matches!(verdict_at(&root, true, &claude, &env), Verdict::Fallback(FolderTrust::Undecided(gap)) if gap.grant.is_ok() && gap.key == root)
+        matches!(verdict_at(&root, &claude, &env), Verdict::Fallback(FolderTrust::Undecided(gap)) if gap.grant.is_ok() && gap.key == root)
     );
     fs::write(&config, serde_json::to_vec(&serde_json::json!({"projects": {root.display().to_string(): {"hasTrustDialogAccepted": true}}})).unwrap()).unwrap();
-    assert_eq!(verdict_at(&root, true, &claude, &env), Verdict::Applies);
+    assert_eq!(verdict_at(&root, &claude, &env), Verdict::Applies);
+    assert_eq!(verdict_at(&root, &codex, &env), Verdict::Applies);
     assert_eq!(
-        verdict_at(&root, false, &claude, &env),
-        Verdict::NotApplicable
-    );
-    assert_eq!(verdict_at(&root, true, &codex, &env), Verdict::Applies);
-    assert_eq!(
-        verdict_at(&root, true, &AgentKind::new_unchecked("pi"), &env),
+        verdict_at(&root, &AgentKind::new_unchecked("pi"), &env),
         Verdict::Applies
     );
     fs::write(
@@ -48,7 +44,7 @@ fn account_verdict_uses_the_empty_root_and_its_git_ancestry() {
     )
     .unwrap();
     assert!(
-        matches!(verdict_at(&root, true, &codex, &env), Verdict::Fallback(FolderTrust::Restricted { key }) if key == root)
+        matches!(verdict_at(&root, &codex, &env), Verdict::Fallback(FolderTrust::Restricted { key }) if key == root)
     );
     assert!(
         std::process::Command::new("git")
@@ -59,9 +55,38 @@ fn account_verdict_uses_the_empty_root_and_its_git_ancestry() {
             .success()
     );
     assert!(
-        matches!(verdict_at(&root, true, &claude, &env), Verdict::Fallback(FolderTrust::Undecided(gap)) if gap.grant.is_err() && gap.key == temp.path())
+        matches!(verdict_at(&root, &claude, &env), Verdict::Fallback(FolderTrust::Undecided(gap)) if gap.grant.is_err() && gap.key == temp.path())
     );
     assert_eq!(paths.empty_dir_root(), root);
+}
+
+#[test]
+fn root_under_symlinked_home_keeps_one_trust_key_before_and_after_creation() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(&home, &link).unwrap();
+    let root = link.join("missing/empty");
+    let env = BTreeMap::from([
+        ("HOME".into(), home.display().to_string()),
+        (
+            "RIMZ_CLAUDE_GLOBAL_CONFIG".into(),
+            home.join("claude.json").display().to_string(),
+        ),
+    ]);
+    let trust = trust_at(&root, &AgentKind::new_unchecked("claude"), &env);
+    assert!(
+        matches!(&trust, Some(FolderTrust::Undecided(gap)) if gap.key == home.join("missing/empty")),
+        "missing roots must use the key that later reads resolve: {trust:?}"
+    );
+    assert!(!root.exists());
+    fs::create_dir_all(&root).unwrap();
+    assert_eq!(
+        resolved_root(&root).as_os_str(),
+        root.canonicalize().unwrap().as_os_str(),
+        "an existing root resolves to its canonical path, with no trailing separator"
+    );
 }
 
 #[test]
