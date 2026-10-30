@@ -774,7 +774,7 @@ fn write_worktrees(
         }
         if has_launch {
             let launch = if let Some(run) = row.run {
-                let mut text = format!("{}  {}", run.id, run.state);
+                let mut text = format!("{}  {}", run.name(), run.state);
                 if !run.node.is_empty() {
                     text.push_str(&format!(" · {}", run.node));
                 }
@@ -914,7 +914,8 @@ fn fold_launched(rows: &[WorktreeRow<'_>], now: Timestamp) -> Option<String> {
             ),
             CheckoutState::Workflow { at, run } => (
                 *at,
-                run.to_string(),
+                row.run
+                    .map_or_else(|| run.to_string(), |run| run.name().to_owned()),
                 row.run.map_or("gone", |run| run.state),
             ),
             _ => continue,
@@ -1689,14 +1690,18 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let workflow_runs = if entry.workflow.is_some() {
         let paths = StatePaths::for_project_root(&root)?;
+        let records = rimz::store::workflow::list(&paths)?;
+        let specs = crate::cli::workflow_view::sealed_specs(&paths, &records);
         list::WorkflowRunRow::for_show(
-            &rimz::store::workflow::list(&paths)?,
+            &records,
             &args.name,
             &root,
             workflow_ledger
                 .tasks
                 .get(&args.name)
                 .unwrap_or(&BTreeMap::new()),
+            &specs,
+            now_zoned.timestamp(),
         )
     } else {
         Vec::new()
@@ -1812,7 +1817,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 /// One line per run not already named by a worktree, folded rows included:
-/// `<id> <checkout-name> <state> <node> <waiting line | park reason> <age>`.
+/// `<address or id> <checkout-name> <state> <node> <detail> <age>`.
 fn write_workflow_runs(out: &mut impl Write, view: &ShowView, now: Timestamp) -> Result<()> {
     let mut runs = view
         .workflow_runs
@@ -1831,7 +1836,7 @@ fn write_workflow_runs(out: &mut impl Write, view: &ShowView, now: Timestamp) ->
     let mut table = ui::Table::new(["RUN", "CHECKOUT", "STATE", "NODE", "DETAIL", "AGE"]).indent(2);
     for run in runs {
         table.row([
-            ui::cell(run.id.as_str()),
+            ui::cell(run.name()),
             ui::cell(display_path(&run.checkout)),
             ui::cell(run.state),
             ui::cell(&run.node),

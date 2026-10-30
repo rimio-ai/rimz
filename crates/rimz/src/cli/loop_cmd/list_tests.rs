@@ -54,13 +54,14 @@ fn launched_counts_select_the_tasks_own_ledger() {
 fn workflow_run_json_includes_only_nonempty_detail() {
     let mut row = WorkflowRunRow {
         id: rimz::ids::WorkflowRunId::new(),
+        address: Some("review#repo".into()),
         checkout: "/repo".into(),
         state: "parked",
         node: "gate".into(),
         since: Timestamp::from_second(100).unwrap(),
         reason: Some("user"),
         text: Some("review the probe".into()),
-        workflow: "review".into(),
+        parked_at: None,
         detail: "user: review the probe".into(),
     };
     assert_eq!(
@@ -229,13 +230,14 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
     row.reason = "disabled after 3 strikes".into();
     row.workflow_runs = vec![WorkflowRunRow {
         id: rimz::ids::WorkflowRunId::new(),
+        address: Some("live#probe".into()),
         checkout: "/repo-worktrees/probe".into(),
         state: "parked",
         node: "gate".into(),
         since: now,
         reason: Some("user"),
         text: Some("review the probe".into()),
-        workflow: "live".into(),
+        parked_at: None,
         detail: String::new(),
     }];
     let model = ListModel {
@@ -264,9 +266,69 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
     .unwrap();
     let rendered = String::from_utf8(out).unwrap();
     assert!(
-        rendered.contains("  live gate user: review the probe"),
+        rendered.contains("  live#probe gate user: review the probe"),
         "{rendered}"
     );
+}
+
+#[test]
+fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let records = ["first", "second"].map(|lane| {
+        serde_json::from_value(serde_json::json!({
+            "version":1, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
+            "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
+            "scope":{"kind":"worktree", "path":format!("/repo/{lane}")},
+            "created_at":now, "entered_at":Timestamp::from_second(100).unwrap(),
+            "state":"parked", "node":"gate", "task":"babysit",
+            "park":{
+                "reason":"user", "text":"review this", "at":Timestamp::from_second(880).unwrap(),
+            },
+            "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
+        }))
+        .unwrap()
+    });
+    let mut row = TaskRow::rowless("babysit".into(), None, None);
+    row.attach_workflow_runs(
+        WorkflowRunRow::of_task(
+            &records,
+            "babysit",
+            Path::new("/repo"),
+            &BTreeMap::new(),
+            now,
+        ),
+        now,
+    );
+    let room = Room {
+        root: "/repo".into(),
+        open: true,
+        here: true,
+        spend_today_usd: 0.0,
+        tasks: vec![row],
+        retired: Vec::new(),
+    };
+    let model = ListModel {
+        rooms: vec![room],
+        caller_root: Some("/repo".into()),
+        now,
+        warnings: Vec::new(),
+    };
+    let mut out = Vec::new();
+    text::write(
+        &mut out,
+        &model,
+        &[&model.rooms[0]],
+        false,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    for lane in ["first", "second"] {
+        let summary = format!("review#{lane} gate user: review this 2m");
+        assert_eq!(text.matches(&summary).count(), 1, "{text}");
+    }
 }
 
 #[test]

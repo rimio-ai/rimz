@@ -8218,8 +8218,19 @@ fn loop_rename_moves_live_workflow_runs() {
     }
     let shown = loop_ok(&env, &["loop", "show", "new"]);
     assert!(shown.contains("RUNS"), "{shown}");
-    for (record, _) in &records[..2] {
-        assert!(shown.contains(record.id.as_str()), "{shown}");
+    let json: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "new", "--json"])).unwrap();
+    for (index, (record, _)) in records[..2].iter().enumerate() {
+        let address = format!("review#{index}");
+        assert!(shown.contains(&address), "{shown}");
+        assert!(
+            json["workflow_runs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| { row["id"] == json!(record.id) && row["address"] == address }),
+            "{json:#}"
+        );
     }
     let listed = loop_ok(&env, &["loop", "list"]);
     assert!(listed.contains("NEEDS YOU"), "{listed}");

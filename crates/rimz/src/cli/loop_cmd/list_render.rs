@@ -162,11 +162,11 @@ fn needs_you(
             .iter()
             .filter(|run| run.reason.is_some())
             .collect();
-        // A lone parked run is already the row's reason.
-        if row.attention == Some(Attention::Parked) && parked.len() == 1 {
-            continue;
-        }
-        for run in parked {
+        // The first parked run is already the row's reason.
+        for run in parked
+            .into_iter()
+            .skip(usize::from(row.attention == Some(Attention::Parked)))
+        {
             writeln!(out, "  {}", run.summary(now))?;
         }
     }

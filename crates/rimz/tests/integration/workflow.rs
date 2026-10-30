@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 mod attempts;
 mod commands;
 mod conditions;
+mod inspection;
 mod judges;
 mod scope;
 mod shells;
@@ -768,7 +769,7 @@ fn deadline_routes_once_and_can_be_rearmed() {
     );
     success(command(&env, &["workflow", "advance", &id]));
     assert_eq!(events(&show(&env, &id), "route").len(), 1);
-    success(command(
+    let receipt = command(
         &env,
         &[
             "workflow",
@@ -777,7 +778,18 @@ fn deadline_routes_once_and_can_be_rearmed() {
             "--extend",
             "deadline=2001-01-01T00:00:00Z",
         ],
-    ));
+    );
+    let warning = String::from_utf8_lossy(&receipt.stderr).into_owned();
+    let receipt = success(receipt);
+    assert!(
+        receipt.starts_with("extended review#project · deadline "),
+        "{receipt}"
+    );
+    assert!(
+        warning.contains("goes to report at once")
+            && warning.contains("--extend 'deadline=<when>'"),
+        "{warning}"
+    );
     let value = until(&env, &id, |v| {
         v["record"]["deadline"] == "2001-01-01T00:00:00Z"
             && v["record"]["deadline_fired"] == true
@@ -1209,21 +1221,30 @@ fn human_show_wait_and_journal_are_readable() {
     assert!(text.contains("evaluation"));
     assert!(text.contains("CI pending"));
     assert!(text.contains("Review this"));
+    let zone = jiff::tz::TimeZone::system();
+    let today = jiff::Timestamp::now().to_zoned(zone.clone()).date();
     let local_time = |at: &Value| {
-        at.as_str()
+        let at = at
+            .as_str()
             .unwrap()
             .parse::<jiff::Timestamp>()
             .unwrap()
-            .to_zoned(jiff::tz::TimeZone::system())
-            .strftime("%H:%M")
-            .to_string()
+            .to_zoned(zone.clone());
+        let format = if at.date() == today {
+            "%H:%M"
+        } else {
+            "%a %H:%M"
+        };
+        at.strftime(format).to_string()
     };
     let wait = &value["record"]["wait"];
-    assert!(text.contains(&format!(
-        "waiting: pr, said pending, since {}, recheck {}",
-        local_time(&wait["first"]),
-        local_time(&wait["recheck_at"])
-    )));
+    assert!(
+        text.contains(&format!(
+            "waiting: pr, said pending, recheck {}",
+            local_time(&wait["recheck_at"])
+        )),
+        "{text}"
+    );
     let mut normalized = text
         .replace(value["dir"].as_str().unwrap(), "<work>")
         .replace(env.project_root.to_str().unwrap(), "<checkout>");
@@ -1236,9 +1257,7 @@ fn human_show_wait_and_journal_are_readable() {
     ] {
         normalized = normalized.replace(at.as_str().unwrap(), "<time>");
     }
-    normalized = normalized
-        .replace(&local_time(&wait["first"]), "<clock>")
-        .replace(&local_time(&wait["recheck_at"]), "<clock>");
+    normalized = normalized.replace(&local_time(&wait["recheck_at"]), "<clock>");
     insta::assert_snapshot!("show_wait", normalized);
     for _ in 0..2 {
         success(command(&env, &["workflow", "advance", &id]));
@@ -1384,16 +1403,10 @@ fn human_window_wait_includes_evidence_and_omits_missing_recheck() {
         .workflow(&id.parse().unwrap());
     fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
     let text = success(command(&env, &["workflow", "show", &id]));
-    let clock = "2026-01-01T15:02:00Z"
-        .parse::<jiff::Timestamp>()
-        .unwrap()
-        .to_zoned(jiff::tz::TimeZone::system())
-        .strftime("%H:%M")
-        .to_string();
-    let line = format!("waiting: pr, window 5h.left=12<42, since {clock}, ×40");
+    let line = "waiting: pr, window 5h.left=12<42, ×40";
     assert!(text.lines().any(|shown| shown == line), "{text}");
     let listed = success(command(&env, &["workflow", "list"]));
-    assert!(listed.contains(&line), "{listed}");
+    assert!(listed.contains("window 5h.left=12<42, ×40"), "{listed}");
     success(command(&env, &["workflow", "cancel", &id]));
 }
 

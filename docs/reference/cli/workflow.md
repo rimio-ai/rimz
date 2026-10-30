@@ -9,12 +9,17 @@ rimz workflow validate ~/.rimz/workflows/babysit-pr --json
 rimz workflow run babysit-pr                      # in the current checkout
 rimz workflow run babysit-pr -w feat-x --prompt 'merge before Friday'
 rimz workflow list                                # active and parked runs, every room
-rimz workflow show wf_0192...
-rimz workflow resume wf_0192... --at pr --extend visits=+2
-rimz workflow cancel wf_0192...
+rimz workflow show 'babysit-pr#feat-x'
+rimz workflow show babysit-pr                      # live runs of this workflow
+rimz workflow resume 'babysit-pr#feat-x' --at pr --extend visits=+1
+rimz workflow cancel 'babysit-pr#feat-x'
 ```
 
 The [global flags](../cli.md#global-flags) apply. Every subcommand except `run` works from any directory: a run id resolves across every room on the machine.
+
+`show`, `resume`, and `cancel` accept a run address `<workflow>#<lane>`, a workflow name, or a full run id (`wf_` and 32 hexadecimal digits). The lane is the basename of the recorded scope path, even after that checkout is removed. Root-checkout and project-scoped runs use the project directory's name. A requested `feat/x` also matches `feat-x`. When a target begins with `-`, put options before `--` and the target after it.
+
+An address selects its live run; `show` falls back to the newest finished run when none is live. Two live runs sharing an address refuse and list their ids and checkouts. A workflow name in `show` always lists that workflow's live runs, never one run's detail; a known workflow with none prints `no active or parked runs of <name>`. For `resume` and `cancel`, a workflow name prefers the caller's checkout or its project's project-scoped run, then the only live run, otherwise lists commands to choose one. Matching runs in the caller's room take precedence; without a local match, several rooms refuse with `--root` commands. Each command a refusal lists names its run by address, or by id where another candidate in the same room shares that address, and carries `--root` when the run is outside the current directory's room. The global `--root` chooses the caller's room. Run ids remain unambiguous across rooms.
 
 ## Run a workflow
 
@@ -26,7 +31,7 @@ The [global flags](../cli.md#global-flags) apply. Every subcommand except `run` 
 | `-w, --worktree <WORKTREE>` | Select an existing RimZ-owned worktree instead of the current checkout. It never creates one. Project scope overrides this selection. |
 | `--prompt <TEXT>` | Stored unchanged, appended to every agent step's prompt, and exposed as `prompt` in `context.json`. |
 
-Before creating a run, the command validates the definition and refuses on any error. It needs an existing room (`rimz start` creates one). With `scope = "worktree"`, nodes run in the selected checkout; with `scope = "project"`, they run at the project root, even when invoked from an owned worktree. One active or parked run holds each `(workflow, scope path)` pair; a second start refuses and names the existing run before reading the definition or prompt. On success it prints the run id, then the run's work directory (`RIMZ_WORKFLOW_DIR`), and the first advance starts in the background. The work directory includes `notes/` for node-owned cross-node scratch and `signs/` for step guidance. Every evaluation and attempt takes a new `seq`, a retry included, so name a scratch write after the item it records to make a repeat overwrite it.
+Before creating a run, the command validates the definition and refuses on any error. It needs an existing room (`rimz start` creates one). With `scope = "worktree"`, nodes run in the selected checkout; with `scope = "project"`, they run at the project root, even when invoked from an owned worktree. One active or parked run holds each `(workflow, scope path)` pair; a second start refuses and names the existing run. The CLI validates before it asks for that slot, so a broken definition still refuses on validation first. On success it prints the run id, then the run's work directory (`RIMZ_WORKFLOW_DIR`), then a `workflow show` hint for that run. The first two lines keep their scripting format. The first advance starts in the background. The work directory includes `notes/` for node-owned cross-node scratch and `signs/` for step guidance. Every evaluation and attempt takes a new `seq`, a retry included, so name a scratch write after the item it records to make a repeat overwrite it.
 
 When `-w` selects a project-scoped workflow, stderr prints `note: <workflow> has scope = project; the run is at <project root>, not <worktree path>`. The command still exits 0 and stdout is unchanged.
 
@@ -38,7 +43,16 @@ Agent steps of automatically loop-started runs also ask the [start throttle](./l
 
 ## Inspect runs
 
-`rimz workflow list [--json]` prints every active and parked run across rooms: `RUN`, `WORKFLOW`, `CHECKOUT`, `STATE`, `NODE`, `SINCE` (when the run entered its node), and `DETAIL`. A live session's DETAIL is `asking you: <handle> (<kind>): <text>` when a blocking ask is open; otherwise it is `with you`, followed by `; checking <check>` while an `until` check runs, then `; <waiting line>` when a wait is open. Other runs keep this precedence: [waiting line](#the-waiting-line), [park reason](#park-reasons), asking, with you. Asking text is collapsed to one line, and the active state uses the waiting color while asking. JSON `detail` uses the same text. Finished runs are omitted. `show` prints `active (asking you)` while asking, otherwise `active (with you)` for a live staying attempt. The session attempt is `held.attempt` while checking, otherwise `attempt`; its `lifecycle` is `stay` or `until`. Turn attempts omit that field. An open blocking ask is stored in the session attempt's `asking`; `asked_ms` is the total closed pause time in milliseconds. Both are omitted when empty or zero. While held, NODE names the check, and `show` adds a `check` row but keeps the session's handle and sequence in its `attempt` row.
+`rimz workflow list [--json]` prints every active and parked run across rooms, without column headers. NEEDS YOU holds parked runs and active runs with a blocking ask, longest waiting first. ACTIVE holds the rest, sorted by address. Rows are `<glyph> <address>  <node>  <detail>  <age>`: `?` for parked or asking, `☾` for an active wait, `⢿` for other active work, from the configured glyph set. Age starts at the park, at the opening of an ask, or at node entry otherwise. Detail truncates before age at narrow terminal widths. NEEDS YOU ends with a `workflow show` hint for its first run. Several rooms get headings, the caller's room first, and hints for other rooms carry `--root`. Finished runs are omitted.
+
+Detail is `asking you: <handle> (<kind>): <one-line text>` for a blocking ask; otherwise a live staying session reads `with you`, with `; checking <check>` while held and `; <wait phrase>` when waiting. Other runs print the [park phrase](#park-reasons), [wait phrase](#the-waiting-line), `running` (with ` · visit <n> of <max>` when capped), or `checking`. JSON `detail` uses the same phrase, without node or age. `show` prints `active (asking you)` while asking, otherwise `active (with you)` for a live staying attempt. Its session attempt is `held.attempt` while checking, otherwise `attempt`; its `lifecycle` is `stay` or `until`, omitted for turn attempts. An open blocking ask is stored in `asking`; `asked_ms` is the total closed pause time in milliseconds. Both are omitted when empty or zero. While held, NODE names the check, and `show` adds a `check` row but keeps the session's handle and sequence in its `attempt` row.
+
+```console
+$ rimz workflow show repair
+NEEDS YOU
+  ? repair#feat-x  work  cap: 2 of 2 visits  0s
+  → rimz workflow show 'repair#feat-x'
+```
 
 `rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope worktree` or `scope project`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live agent step's handle and sequence), `check` (the check evaluating a held session), `ask` (handle, kind, and text, while active and asking or parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the scope path when a step waits on takeover (`blockers unavailable` when the agent roster or the project's worktrees cannot be read), one `step <name>: N visits of <max> + <grant> grant` line per recorded step, and the history. An unbounded step prints `unbounded` instead of the limit and grant. A step declaring `max-visits-per-key` adds one indented `  key <json>: N visits of <max-visits-per-key> + <grant> grant` row per recorded key, in record order; unkeyed visits print `key null`. Steps without that field print no key rows. Each unfolded history line is time, `#seq` (`#—` without a sequence), node, event, any turn-end action, outcome, target, and the routed object; an agent attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
 
@@ -46,32 +60,29 @@ Adjacent evaluations with the same node, origin, outcome, and condition case ind
 
 ### The waiting line
 
-A run at a wait carries one line, in local time:
+A run at a wait carries a shared phrase without node or `since`; `show` prefixes it with `waiting: <node>, `. Recheck and deadline clocks use local `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that. Capacity waits retain the shared sidebar clock format.
 
-```text
-waiting: pick, said in-flight, since 14:02, recheck 14:40
-waiting: triage, window 5h.left=12<42, since 15:02, ×40
-waiting: sweep, takeover, since 09:10, ×3
-waiting for capacity (claude) since 15:02, gives up at 21:02 · build, no capacity for claude, ×40
+```console
+$ rimz workflow show ci-watch
+ACTIVE
+  ☾ ci-watch#feat-x  review  said pending, ×1, recheck 16:09  0s
 ```
 
 | Part | Meaning |
 | --- | --- |
-| node | Where the run waits. |
 | `said <outcome>` | A check answered an outcome routed to `@wait`. |
 | `holding <outcome> <elapsed>/<for>` | A condition case keeps winning while its hold duration runs. |
 | `unknown: <keys and reasons>` | A condition cannot read enough data to choose its first matching case. Bare `ci` can name a local HEAD not on the PR or CI read at a different PR head; see [JSON shapes](#json-shapes) for the reason forms. |
 | `window <term>` | An agent step or judge whose provider `window` is closed, with the failing term and its reading. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot evict it yet. |
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
-| `waiting for capacity (<kinds>)` | A loop-started agent step is held by the start throttle. Its give-up time is absent for `forever`; node, reason, and count follow ` · `. |
-| `since` | First time the run waited here. |
+| `waiting for capacity (<kinds>)` | A loop-started agent step is held by the start throttle. Its give-up time is absent for `forever`; reason and count follow ` · `. |
 | `×N` | How many advances found it still waiting. `show` omits this count only when exactly one history row states the wait with the same count. `workflow list` and the loop commands always retain it. |
 | `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal matching that check's subscription clears it. For a `for` hold it is when the hold completes, and subscribed signals and the minute tick re-sample the case before then. |
 
 ## Cancel and resume
 
-`rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell, judge, or step attempt. A run already finished prints `already terminal; unchanged`.
+`rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell, judge, or step attempt. It prints `canceled <address>`. An already-finished run id prints `<address> is already <state>; unchanged` and still exits 0. Both receipts end with a `workflow show` hint.
 
 `rimz workflow resume <RUN> [--at <NODE>] [--extend <GRANT>]...` puts a parked run back to work, at its current node or at `--at <NODE>`, with a fresh timeout clock and a cleared check retry. `--extend` repeats:
 
@@ -81,6 +92,14 @@ waiting for capacity (claude) since 15:02, gives up at 21:02 · build, no capaci
 | `deadline=<WHEN>` | Replaces the run's deadline and arms it again. `WHEN` is an RFC 3339 instant or a local date or date-time; a bare date is local midnight. |
 
 An active run accepts `--extend` alone; `--at` needs a parked run. A finished run refuses. The definition stays sealed: grants live on the run record.
+
+The receipt says `resumed <address> at <node>`, with the current step's used and granted visit limit when capped, any added visit grant, and its armed deadline. Extending an active run says `extended <address>` instead. Both end with a `workflow show` hint. Stderr warns when a parked run re-enters a step with an exhausted visit bound; an active run's admitted attempt does not trigger that warning. Either receipt warns about an armed deadline already past. Each warning names the immediate destination and suggests the matching `--extend`. A fired deadline stays disarmed on plain resume; use `--extend deadline=<WHEN>` to arm it again.
+
+```console
+$ rimz workflow resume 'repair#feat-x' --extend 'visits=+1'
+resumed repair#feat-x at work · work 2 of 3 visits, every capped step +1
+→ rimz workflow show 'repair#feat-x'
+```
 
 ## Validate and schema
 
@@ -122,6 +141,8 @@ An unrecorded checkout retries a sustained-true condition every five minutes. A 
 
 A parked run waits for you under NEEDS YOU in `rimz loop list`, in the sidebar cockpit, and in `list` and `show`.
 
+The list's park phrase is `<reason>[: <text>]`. Cap, timeout, and deadline phrases derive `cap: <used> of <max> visits`, `timeout: waited <timeout>`, and `deadline: passed <clock>` from the sealed spec and record; other reasons keep the recorded text on one line.
+
 | Reason | Cause |
 | --- | --- |
 | `user` | An edge routed to `@user`; the text is the check's `reason`. |
@@ -138,7 +159,7 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 
 ## JSON shapes
 
-`list --json` prints an array of `{id, workflow, scope, state, node, since, detail}`, where `scope` is the scope path: the checkout, or the project root for `scope = "project"`; `detail` is the waiting line, park reason, `asking you: …`, or `with you` with its checking/waiting suffixes as printed, otherwise empty. The human column remains `CHECKOUT` for both kinds.
+`list --json` and `show <workflow> --json` print arrays of `{id, address, workflow, scope, state, node, since, detail}`. `scope` is the scope path: the checkout, or the project root for `scope = "project"`. `since` remains node entry, not the human row's state-specific age. `detail` is the human phrase above. No existing key is removed, but consumers matching the old `waiting: <node>,` prefix must use the separate `node` and `since` fields instead.
 
 `show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries. An active attempt's optional `asking` is `{since, text, kind, handle}`, with `kind` one of `question`, `permission`, or `plan_approval`; `asked_ms` accumulates closed pauses. These fields pause a turn step's timeout, not the run deadline. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
 
@@ -169,9 +190,9 @@ The bare-`ci` commit fence sets `readings.ci` to null. When that makes the answe
 
 The local-HEAD reason takes precedence over the CI-commit reason; the pre-entry-probe reason takes precedence over both. The same text follows `unknown: ` in the waiting line and JSON `detail`, and remains in the journaled evaluation answer printed by `show` history.
 
-`rimz loop list --json` carries `workflow_runs` for a workflow task: one object per active or parked run the task started in that room, `{id, checkout, state, node, since}` plus `reason` and `text` on a parked run. Both list and show add `detail` when the waiting line or park label is nonempty. `since` is when the run entered its node.
+`rimz loop list --json` carries `workflow_runs` for a workflow task: one object per active or parked run the task started in that room, `{id, address, checkout, state, node, since}` plus `reason` and `text` on a parked run. Both list and show add the shared `detail` when nonempty. `since` stays node entry; a human parked summary's age starts at the park.
 
-`rimz loop show --json` also includes every run named by the task's condition launch memory, each once, including terminal runs whose task was renamed. A run whose record is gone has only `id`, `checkout` (the launch entry's key), `state: "gone"`, and `since` (the launch time). Fan-out `worktrees[].run` repeats the matching `workflow_runs` object; project-scoped launches share one run across checkout rows. The human WORKTREES table names those runs, and RUNS lists only runs no worktree row names, folded rows included.
+`rimz loop show --json` also includes every run named by the task's condition launch memory, each once, including terminal runs whose task was renamed. A run canceled while parked keeps its recorded `reason` and `text` in JSON, without appearing as parked in human output. A run whose record is gone has only `id`, `checkout` (the launch entry's key), `state: "gone"`, and `since` (the launch time). Fan-out `worktrees[].run` repeats the matching `workflow_runs` object; project-scoped launches share one run across checkout rows. The human WORKTREES table names those runs, and RUNS lists only runs no worktree row names, folded rows included.
 
 ## Exit codes
 

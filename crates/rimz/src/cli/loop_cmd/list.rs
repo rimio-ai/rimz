@@ -539,6 +539,9 @@ fn load(
             .ok()
             .and_then(|paths| rimz::store::workflow::list(&paths).ok())
             .unwrap_or_default();
+        let workflow_specs = StatePaths::for_project_root(&root)
+            .map(|state| crate::cli::workflow_view::sealed_specs(&state, &workflows))
+            .unwrap_or_default();
         let capacity = runtime
             .as_ref()
             .map(|runtime| {
@@ -655,7 +658,10 @@ fn load(
                     None => run_dir == workspace.worktree_root,
                 });
             row.launched_count = launched_count(task.entry(), name, &ledger, &workflow_ledger);
-            row.attach_workflow_runs(WorkflowRunRow::of_task(&workflows, name, &root), now);
+            row.attach_workflow_runs(
+                WorkflowRunRow::of_task(&workflows, name, &root, &workflow_specs, now),
+                now,
+            );
             tasks.push(row);
         }
         if let Some(locks) = locks {
@@ -1114,6 +1120,8 @@ fn launched_count(
 #[derive(Serialize)]
 pub(super) struct WorkflowRunRow {
     pub(super) id: rimz::ids::WorkflowRunId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    address: Option<String>,
     pub(super) checkout: PathBuf,
     pub(super) state: &'static str,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -1124,7 +1132,7 @@ pub(super) struct WorkflowRunRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) text: Option<String>,
     #[serde(skip)]
-    workflow: String,
+    parked_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub(super) detail: String,
 }
@@ -1135,6 +1143,8 @@ impl WorkflowRunRow {
         task: &str,
         root: &Path,
         launches: &BTreeMap<PathBuf, launch_ledger::WorkflowLaunchRecord>,
+        specs: &BTreeMap<rimz::ids::WorkflowRunId, rimz::harness::workflow::WorkflowSpec>,
+        now: Timestamp,
     ) -> Vec<Self> {
         let mut runs = Vec::new();
         for (checkout, launch) in launches {
@@ -1145,21 +1155,22 @@ impl WorkflowRunRow {
                 records
                     .iter()
                     .find(|record| record.id == launch.run)
-                    .map(Self::of_record)
+                    .map(|record| Self::of_record(record, specs.get(&record.id), now))
                     .unwrap_or_else(|| Self {
                         id: launch.run.clone(),
+                        address: None,
                         checkout: checkout.clone(),
                         state: "gone",
                         node: String::new(),
                         since: launch.at,
                         reason: None,
                         text: None,
-                        workflow: String::new(),
+                        parked_at: None,
                         detail: String::new(),
                     }),
             );
         }
-        for run in Self::of_task(records, task, root) {
+        for run in Self::of_task(records, task, root, specs, now) {
             if !runs.iter().any(|listed| listed.id == run.id) {
                 runs.push(run);
             }
@@ -1171,44 +1182,55 @@ impl WorkflowRunRow {
         records: &[rimz::store::workflow::RunRecord],
         task: &str,
         root: &Path,
+        specs: &BTreeMap<rimz::ids::WorkflowRunId, rimz::harness::workflow::WorkflowSpec>,
+        now: Timestamp,
     ) -> Vec<Self> {
         records
             .iter()
             .filter(|record| record.started_by(task) && record.project_root == root)
-            .map(Self::of_record)
+            .map(|record| Self::of_record(record, specs.get(&record.id), now))
             .collect()
     }
 
-    fn of_record(record: &rimz::store::workflow::RunRecord) -> Self {
+    fn of_record(
+        record: &rimz::store::workflow::RunRecord,
+        spec: Option<&rimz::harness::workflow::WorkflowSpec>,
+        now: Timestamp,
+    ) -> Self {
+        let park = record.park.as_ref();
         Self {
             id: record.id.clone(),
+            address: Some(record.address().to_string()),
             checkout: record.scope.path.clone(),
             state: record.state.as_str(),
             node: record.node.clone(),
             since: record.entered_at,
-            reason: record.park.as_ref().map(|park| park.reason.as_str()),
-            text: record.park.as_ref().and_then(|park| park.text.clone()),
-            workflow: record.workflow.clone(),
-            detail: crate::cli::workflow::waiting(record)
-                .or_else(|| record.park.as_ref().map(rimz::store::workflow::Park::label))
-                .unwrap_or_default(),
+            reason: park.map(|park| park.reason.as_str()),
+            text: park.and_then(|park| park.text.clone()),
+            parked_at: park
+                .filter(|_| record.state == rimz::store::workflow::RunState::Parked)
+                .map(|park| park.at),
+            detail: crate::cli::workflow_view::detail(record, spec, now),
         }
     }
 
-    /// `<workflow> <node> <reason>[: <text>] <age> <checkout-name>`.
+    pub(super) fn name(&self) -> &str {
+        self.address.as_deref().unwrap_or(self.id.as_str())
+    }
+
+    /// `<address> <node> <reason>[: <text>] <age>`.
     pub(super) fn summary(&self, now: Timestamp) -> String {
         let text = self
             .text
             .as_ref()
-            .map(|text| format!(": {text}"))
+            .map(|text| format!(": {}", ui::one_line(text)))
             .unwrap_or_default();
         format!(
-            "{} {} {}{text} {} {}",
-            self.workflow,
+            "{} {} {}{text} {}",
+            self.name(),
             self.node,
             self.reason.unwrap_or(self.state),
-            elapsed(self.since, now),
-            checkout_name(&self.checkout)
+            elapsed(self.parked_at.unwrap_or(self.since), now),
         )
     }
 }

@@ -224,7 +224,7 @@ The `⑃ N` colour reads each worktree's own pull request, since stacked pull re
 
 ### Parked workflow runs
 
-A [workflow run](../guide/workflows.md) that parks for you adds one line under the spend line, oldest park first, and the line goes when you resume or cancel the run. The top zone does not scroll, so it shows at most three such lines; past three, a fourth line `? +N parked` counts the rest, and `rimz workflow list` names them:
+A [workflow run](../guide/workflows.md) that parks for you adds one line under the spend line, oldest park first, and the line goes when you resume or cancel the run. The top zone does not scroll, so it shows at most three such lines; past three, a fourth line `? +N parked` counts the rest, and `rimz workflow list` names them with addresses such as `review#feat-x` for `show`, `resume`, or `cancel`:
 
 ```
  ◎ 0                                                            ◇ 0 ↘ 0 ↗ 0 ◌ 0

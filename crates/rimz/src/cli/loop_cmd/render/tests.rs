@@ -272,8 +272,14 @@ fn workflow_view() -> ShowView {
             state: CheckoutState::Workflow { run: id, at },
         });
     }
-    view.workflow_runs =
-        list::WorkflowRunRow::for_show(&records, "sweep", Path::new("/repo"), &launches);
+    view.workflow_runs = list::WorkflowRunRow::for_show(
+        &records,
+        "sweep",
+        Path::new("/repo"),
+        &launches,
+        &BTreeMap::new(),
+        view.now_zoned.timestamp(),
+    );
     view
 }
 
@@ -312,13 +318,10 @@ fn workflow_worktrees_keep_attention_and_unfold_finished_runs() {
     let mut view = workflow_view();
     let text = show_text(&view);
     assert!(text.contains("RUN") && !text.contains("LEADER"), "{text}");
-    for (index, state) in ["active", "parked", "failed"].into_iter().enumerate() {
-        let CheckoutState::Workflow { run, .. } = &view.worktrees[index].state else {
-            panic!("workflow fixture");
-        };
+    for state in ["active", "parked", "failed"] {
         assert!(
             text.lines()
-                .any(|line| line.contains(&format!("{run}  {state} · gate"))),
+                .any(|line| line.contains(&format!("review#{state}  {state} · gate"))),
             "{text}"
         );
     }
@@ -338,9 +341,14 @@ fn workflow_worktrees_keep_attention_and_unfold_finished_runs() {
         let CheckoutState::Workflow { run, .. } = &view.worktrees[index + 3].state else {
             panic!("workflow fixture");
         };
+        let subject = if state == "gone" {
+            run.to_string()
+        } else {
+            format!("review#{state}")
+        };
         assert!(
             all.lines()
-                .any(|line| line.contains(&format!("{run}  {state}"))),
+                .any(|line| line.contains(&format!("{subject}  {state}"))),
             "{all}"
         );
     }
@@ -390,7 +398,12 @@ fn workflow_runs_table_omits_worktree_runs_including_folded_rows() {
     let text = show_text(&view);
     assert!(text.contains("\nRUNS\n"), "{text}");
     for run in &view.workflow_runs {
-        assert_eq!(text.matches(run.id.as_str()).count(), 1, "{text}");
+        let subject = if run.state == "gone" {
+            run.id.to_string()
+        } else {
+            format!("review#{}", run.state)
+        };
+        assert_eq!(text.matches(&subject).count(), 1, "{text}");
     }
     assert!(text.contains("gone"), "{text}");
 }
