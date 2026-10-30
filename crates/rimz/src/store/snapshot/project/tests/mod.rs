@@ -386,6 +386,7 @@ mod compaction;
 mod pane_binding;
 mod phase_status;
 mod prompt_task;
+mod soft_compact;
 mod subagents;
 mod timestamps;
 mod tool_stats;

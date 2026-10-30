@@ -538,6 +538,8 @@ pub struct MessageRecord {
     /// against a fresh window instead of racing the agent's own auto-compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<AutoCompact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_compact: Option<SoftCompactStep>,
     /// For a smart-compact command, the occupied-context-token reading the
     /// trigger fired on. While a carried-forward stale gauge still equals this
     /// baseline, the send path suppresses duplicate `/compact` commands; a new
@@ -548,6 +550,13 @@ pub struct MessageRecord {
     /// Set at send time, cleared when the reconciler requeues an unconfirmed send.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<MessageId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftCompactStep {
+    WrapUp,
+    Continue,
 }
 
 impl MessageRecord {
@@ -663,6 +672,7 @@ impl MessageRecord {
             retry_after: None,
             queued_notice_at: None,
             auto_compact: None,
+            soft_compact: None,
             compacted_context_tokens: None,
             batch_id: None,
         }
@@ -671,7 +681,7 @@ impl MessageRecord {
     /// Fresh `Queued` copy of a terminal record for `message requeue`. The
     /// reply-wake stamp resets because a requeue has no waiting CLI behind it.
     pub fn requeue_from(record: &MessageRecord) -> MessageRecord {
-        Self::new_for_card(
+        let mut message = Self::new_for_card(
             record.workspace_id.clone(),
             record.kind.clone(),
             record.agent_id.clone(),
@@ -711,7 +721,9 @@ impl MessageRecord {
                     condition
                 })
                 .collect(),
-        )
+        );
+        message.soft_compact = record.soft_compact;
+        message
     }
 
     #[must_use]
@@ -853,7 +865,10 @@ impl MessageRecord {
     }
 
     pub fn is_deliverable(&self, now: Timestamp) -> bool {
-        self.is_ready(now) && self.conditions_met() && !self.expired(now)
+        self.soft_compact != Some(SoftCompactStep::WrapUp)
+            && self.is_ready(now)
+            && self.conditions_met()
+            && !self.expired(now)
     }
 
     pub fn perishable(&self) -> bool {
@@ -906,8 +921,12 @@ impl MessageRecord {
     /// Next time the elder should sweep this record, or `None` if it arms nothing.
     ///
     /// Queued [`DeliveryGate::Resume`] records arm nothing: [`queue_head`] excludes their control lane, so auto-continue owns their re-drive. Claimed and sent resume records still arm recovery.
+    /// Steer-only wrap-ups arm cleanup after the claim TTL, including while queued.
     pub fn wake_deadline(&self, now: Timestamp) -> Option<Timestamp> {
         match self.status {
+            MessageStatus::Queued if self.soft_compact == Some(SoftCompactStep::WrapUp) => {
+                Some(self.updated_at + CLAIM_TTL)
+            }
             MessageStatus::Queued if self.gate == DeliveryGate::Resume => None,
             MessageStatus::Queued => {
                 let deadline = self
@@ -1026,10 +1045,11 @@ pub(super) fn queue_wake_deadline(pending: &[MessageRecord], now: Timestamp) -> 
 }
 
 fn holds_boundary(message: &MessageRecord, now: Timestamp) -> bool {
-    message.status.is_open()
-        || (message.status == MessageStatus::Sent
-            && message.body == MessageBody::Prompt
-            && !message.sent_hold_expired(now))
+    message.soft_compact != Some(SoftCompactStep::WrapUp)
+        && (message.status.is_open()
+            || (message.status == MessageStatus::Sent
+                && message.body == MessageBody::Prompt
+                && !message.sent_hold_expired(now)))
 }
 
 pub(crate) fn fresh_boundary_blocker<'a>(

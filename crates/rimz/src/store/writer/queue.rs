@@ -10,7 +10,8 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::message::{
     AutoCompact, DeliveryGate, HarnessNotice, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord,
-    MessageStatus, claim_expired, delivery_batch_indices, fresh_boundary_blocker, sender_notice,
+    MessageStatus, SoftCompactStep, claim_expired, delivery_batch_indices, fresh_boundary_blocker,
+    sender_notice,
 };
 
 use super::super::{Result, Store, ingress, message};
@@ -1188,6 +1189,9 @@ impl Store {
     /// window of the write also holds it until applied. A prompt written since its
     /// receiver's resume stays held until the next lifecycle observation or ten
     /// delivery windows from the resume, whichever comes first.
+    /// Steer-only wrap-ups instead cancel after their claim or unclaimed queue
+    /// time reaches the claim TTL, hold during an open turn once sent, and settle
+    /// from the receiver's turn end without ever requeueing.
     #[must_use = "durability barrier; check the result"]
     pub fn reconcile_stale_messages(
         &self,
@@ -1226,6 +1230,22 @@ impl Store {
             };
             let mut report = ReconcileReport::default();
             let updated = queue.apply_all(session_name, now, |message| {
+                if message.soft_compact == Some(SoftCompactStep::WrapUp)
+                    && message.status.is_open()
+                {
+                    let lease_start = if message.status == MessageStatus::Claimed {
+                        message.last_attempt_at
+                    } else {
+                        Some(message.updated_at)
+                    };
+                    if !claim_expired(lease_start, now) {
+                        return MessageUpdate::Keep;
+                    }
+                    return MessageUpdate::Finalize {
+                        status: MessageStatus::Canceled,
+                        reason: Some("soft-compaction wrap-up was not sent; not retried".to_owned()),
+                    };
+                }
                 if message.expired(now) {
                     report.expired += 1;
                     return MessageUpdate::Finalize {
@@ -1274,6 +1294,9 @@ impl Store {
                 };
                 if now < deadline {
                     return MessageUpdate::Keep;
+                }
+                if message.soft_compact == Some(SoftCompactStep::WrapUp) {
+                    return settle_wrap_up(message, &agents, now, &mut report);
                 }
                 if agents
                     .iter()
@@ -1629,6 +1652,44 @@ impl Store {
             Ok(archived)
         })?;
         Ok(archived.len())
+    }
+}
+
+fn settle_wrap_up(
+    message: &mut MessageRecord,
+    agents: &[AgentState],
+    now: Timestamp,
+    report: &mut ReconcileReport,
+) -> MessageUpdate {
+    if agents
+        .iter()
+        .any(|agent| message.same_agent_card(agent) && agent.holds_open_turn())
+    {
+        message.retry_after = Some(now + message.body.delivery_window());
+        return MessageUpdate::SilentRewrite;
+    }
+    let last_sent_at = message.last_sent_at.unwrap_or(message.updated_at);
+    let ended = agents.iter().any(|agent| {
+        message.same_agent_card(agent)
+            && agent
+                .turn_ended_at
+                .is_some_and(|ended_at| ended_at >= last_sent_at)
+    });
+    let (status, reason) = if ended {
+        (
+            MessageStatus::Delivered,
+            "soft-compaction wrap-up settled after turn end",
+        )
+    } else {
+        report.timed_out += 1;
+        (
+            MessageStatus::TimedOut,
+            "soft-compaction wrap-up unconfirmed; not resent",
+        )
+    };
+    MessageUpdate::Finalize {
+        status,
+        reason: Some(reason.to_owned()),
     }
 }
 

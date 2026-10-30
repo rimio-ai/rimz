@@ -14,7 +14,7 @@ use crate::ids::{
 };
 use crate::pane::RuntimeOwner;
 use crate::store::message::{
-    DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
+    DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus, SoftCompactStep,
 };
 
 // v2: `agent.lifecycle` params carry a `signal` (the agent-agnostic lifecycle
@@ -415,6 +415,8 @@ pub struct MessageEventPayload {
     pub delivered_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_context_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_compact: Option<SoftCompactStep>,
 }
 
 impl MessageEventPayload {
@@ -440,6 +442,7 @@ impl MessageEventPayload {
             enqueued_at: Some(message.enqueued_at),
             delivered_at: message.delivered_at,
             compacted_context_tokens: message.compacted_context_tokens,
+            soft_compact: message.soft_compact,
         }
     }
 
@@ -473,6 +476,7 @@ impl MessageEventPayload {
             enqueued_at: Some(at),
             delivered_at: None,
             compacted_context_tokens: None,
+            soft_compact: None,
         }
     }
 }

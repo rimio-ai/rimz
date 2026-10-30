@@ -10,6 +10,7 @@ use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
 use crate::agents::petname::valid_agent_name;
+use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
 use crate::agents::{AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
@@ -18,7 +19,7 @@ use crate::store::event::{
     self, AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, AgentLifecyclePayload,
     EventEnvelope, EventKind, MessageEventPayload,
 };
-use crate::store::message::{MessageBody, MessageStatus};
+use crate::store::message::{MessageBody, MessageStatus, SoftCompactStep};
 
 mod identity;
 
@@ -301,7 +302,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 state.reduce_lifecycle_event(envelope, payload);
             }
             EventKind::Message { payload, .. } => {
-                stamp_compact_command(&mut state.map, payload, envelope.timestamp);
+                stamp_message(&mut state.map, payload, envelope.timestamp);
             }
             EventKind::SessionDeath(_) => {}
             EventKind::Signal(_) => {}
@@ -509,6 +510,18 @@ impl ReducerState {
                     .get(&(kind.clone(), predecessor.clone()))?
                     .compacted_awaiting_prompt
             });
+            state.soft_compact = observation
+                .compacted_from
+                .as_ref()
+                .and_then(|predecessor| {
+                    self.map
+                        .get(&(kind.clone(), predecessor.clone()))?
+                        .soft_compact
+                })
+                .map(|mark| SoftCompactMark {
+                    compactions: None,
+                    ..mark
+                });
         }
         inherit_compaction_registration(&self.map, &mut state);
         inherit_launch_identity(&self.map, &self.launch_identity, &mut state);
@@ -661,16 +674,21 @@ fn quarantine_reason(
     }
 }
 
-pub(super) fn compact_command_agent_key<'a>(
+pub(super) fn message_agent_key<'a>(
     agents: impl Iterator<Item = &'a AgentState> + Clone,
     payload: &MessageEventPayload,
 ) -> Option<(AgentKind, AgentSessionId)> {
-    if payload.body != MessageBody::Command
-        || !matches!(
+    let compact_command = payload.body == MessageBody::Command
+        && matches!(
             payload.status,
             MessageStatus::Sent | MessageStatus::Delivered
-        )
-    {
+        );
+    let soft_compact = matches!(
+        (payload.soft_compact, payload.status),
+        (Some(SoftCompactStep::WrapUp), MessageStatus::Sent)
+            | (Some(SoftCompactStep::Continue), MessageStatus::Queued)
+    );
+    if !compact_command && !soft_compact {
         return None;
     }
     let mut agents = agents;
@@ -686,18 +704,36 @@ pub(super) fn compact_command_agent_key<'a>(
     Some((agent.kind.clone(), agent.agent_id.clone()))
 }
 
-fn stamp_compact_command(
+fn stamp_message(
     agents: &mut BTreeMap<AgentKey, Arc<AgentState>>,
     payload: &MessageEventPayload,
     timestamp: Timestamp,
 ) {
-    let Some(key) = compact_command_agent_key(agents.values().map(Arc::as_ref), payload) else {
+    let Some(key) = message_agent_key(agents.values().map(Arc::as_ref), payload) else {
         return;
     };
     let Some(agent) = agents.get_mut(&key) else {
         return;
     };
     let agent = agent_mut(agent);
+    match (payload.soft_compact, payload.status) {
+        (Some(SoftCompactStep::WrapUp), MessageStatus::Sent) => {
+            agent.soft_compact = Some(SoftCompactMark {
+                steered_at: timestamp,
+                compactions: Some(agent.compaction_count),
+                progress: SoftCompactProgress::WrappingUp,
+            });
+        }
+        (Some(SoftCompactStep::Continue), MessageStatus::Queued) => {
+            if let Some(mark) = &mut agent.soft_compact {
+                mark.progress = SoftCompactProgress::Continued;
+            }
+        }
+        _ => {}
+    }
+    if payload.body != MessageBody::Command {
+        return;
+    }
     if let Some(tokens) = payload.compacted_context_tokens {
         agent.last_compact_command_tokens = Some(tokens);
     }
@@ -766,6 +802,7 @@ fn carried_base(
         state.budget = prior.budget.clone();
         state.usage = prior.usage.clone();
         state.compaction_count = prior.compaction_count;
+        state.soft_compact = prior.soft_compact;
         state.tool_calls = prior.tool_calls.clone();
         state.background_shells = prior.background_shells.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
@@ -1214,6 +1251,12 @@ fn fold_lifecycle(
             lifecycle::LifecycleSignal::CompactionEnded { failed: true, .. }
         );
     state.compaction_count += u32::from(completed_compaction);
+    if matches!(
+        signal,
+        lifecycle::LifecycleSignal::TurnInterrupted { .. } | lifecycle::LifecycleSignal::Registered
+    ) {
+        state.soft_compact = None;
+    }
     match &signal {
         // A close that lands at rest compacted a context no prompt has used
         // since; an automatic one that resumed a turn is mid-request. A
@@ -1271,6 +1314,17 @@ fn fold_lifecycle(
                 | lifecycle::LifecycleSignal::TurnInterrupted { .. }
                 | lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
         );
+    if closes_request
+        && matches!(
+            signal,
+            lifecycle::LifecycleSignal::TurnEnded { errored: false, .. }
+        )
+        && let Some(mark) = &mut state.soft_compact
+        && timestamp >= mark.steered_at
+        && mark.progress == SoftCompactProgress::WrappingUp
+    {
+        mark.progress = SoftCompactProgress::TurnEnded;
+    }
     state.turn_ended_at = if closes_request {
         Some(timestamp)
     } else {

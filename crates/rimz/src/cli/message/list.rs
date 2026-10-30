@@ -73,6 +73,8 @@ pub(super) struct MessageListRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) auto_compact: Option<AutoCompact>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) soft_compact: Option<rimz::store::message::SoftCompactStep>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) compacted_context_tokens: Option<u64>,
 }
 
@@ -124,6 +126,7 @@ impl MessageListRow {
             when: message.when,
             retry_after: message.retry_after,
             auto_compact: message.auto_compact,
+            soft_compact: message.soft_compact,
             compacted_context_tokens: message.compacted_context_tokens,
         }
     }
@@ -167,6 +170,7 @@ impl MessageListRow {
             when: Vec::new(),
             retry_after: None,
             auto_compact: None,
+            soft_compact: payload.soft_compact,
             compacted_context_tokens: payload.compacted_context_tokens,
         })
     }

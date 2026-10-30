@@ -1,5 +1,54 @@
 use super::*;
 
+#[test]
+fn soft_compact_events_hydrate_and_update_carried_receivers() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+    let receiver = agent("claude", "receiver", AgentStatus::Running, 0);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![receiver.clone()],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    let mut record = MessageRecord::new(
+        workspace,
+        &receiver,
+        "wrap up".to_owned(),
+        DeliveryGate::Any,
+    );
+    let mut outcomes = Vec::new();
+    for (step, status, method) in [
+        ("wrap_up", MessageStatus::Sent, MessageEventMethod::Sent),
+        (
+            "continue",
+            MessageStatus::Queued,
+            MessageEventMethod::Queued,
+        ),
+    ] {
+        record.status = status;
+        let mut event = EventEnvelope::message_event(&record, "session", method, None);
+        event.timestamp = epoch();
+        let mut params = event.params_value();
+        params["soft_compact"] = serde_json::json!(step);
+        event.params = serde_json::value::to_raw_value(&params).unwrap();
+        event_log::append(&paths.events_log, &event).unwrap();
+        let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
+        write_rollup_cache(&paths, &cache).unwrap();
+        outcomes.push(serde_json::to_value(&agents[0]).unwrap()["soft_compact"].clone());
+    }
+    assert_eq!(
+        outcomes,
+        vec![
+            serde_json::json!({"steered_at": epoch(), "compactions": 0, "progress": "wrapping_up"}),
+            serde_json::json!({"steered_at": epoch(), "compactions": 0, "progress": "continued"}),
+        ]
+    );
+}
+
 fn compact_event(
     workspace: &WorkspaceId,
     id: u64,
