@@ -39,7 +39,7 @@ These are the promises the product is built on. A change to one is a product dec
 - **Transcript origin is explicit.** RimZ-introduced text never renders as the user merely because it lacks a header: one write-side classifier and one read-side projection preserve its recorded author ([contract and remaining launch gap](./docs/internals/harness/transcript.md#writing-entries)). `rimz pane send` is the boundary: it is the raw keystroke primitive, carries no record by design, and its caller is the author.
 - **Sidebar is read-only on the store.** Store-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
-- **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, provider folder-trust grants, and privacy settings are product behaviour.
+- **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, provider folder-trust grants, pack install summaries and update holds, and privacy settings are product behaviour.
 
 ## Room quick reference
 
@@ -212,7 +212,7 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 
 **Reference** — `docs/reference/` answers a specific flag or field, and [its README](./docs/reference/README.md) indexes the pages by topic. [cli.md](./docs/reference/cli.md) is the command map and indexes a page per scene under `docs/reference/cli/`; [agent-support.md](./docs/reference/agent-support.md) carries per-agent status, integration surface, and permission-mode mapping for every built-in adapter, and [agent-plugins.md](./docs/reference/agent-plugins.md) the external bundle, canonical wire, and probe contracts.
 
-- [packs.md](./docs/reference/cli/packs.md): linked local definition and skill packs, item fates and exclusions, the manifest, and the installation record.
+- [packs.md](./docs/reference/cli/packs.md): Git and linked definition and skill packs, install reviews and update holds, item fates and exclusions, the manifest, and the installation record.
 
 **Internals** — `docs/internals/` documents each subsystem for people who read the code; [README.md](./docs/internals/README.md) is the index: a page table per area, and a table from each source tree to the page that documents it. The three multi-doc subsystems (`agents/`, `harness/`, `sidebar/`) keep a folder; every other subsystem is one flat file. The experimental OMP mapping is [adapter_omp.md](./docs/internals/agents/adapter_omp.md).
 
