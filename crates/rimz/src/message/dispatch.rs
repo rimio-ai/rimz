@@ -7,6 +7,7 @@
 //! caller after address resolution, before any fan-out work begins.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use super::DeliveryKind;
 use jiff::Timestamp;
@@ -14,6 +15,8 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::address::{AddressContext, TargetErr};
 use crate::agents::{AgentState, AgentStatus};
+use crate::config::effective::SmartCompactSeat;
+use crate::config::{HarnessConfig, MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
@@ -89,7 +92,7 @@ pub struct DispatchRequest {
     pub enter: bool,
     pub force: bool,
     /// An explicit threshold for this dispatch; `None` inherits the
-    /// `[harness] smart_compact` machine default in [`dispatch`].
+    /// recipient's seat line at enqueue, falling back to `[harness] smart_compact`.
     pub auto_compact: Option<AutoCompact>,
     pub mode: DispatchMode,
     pub resuming_recipient: Option<AgentState>,
@@ -253,11 +256,8 @@ pub enum DispatchErr {
 pub fn dispatch(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    mut request: DispatchRequest,
+    request: DispatchRequest,
 ) -> Result<DispatchResult> {
-    request.auto_compact = request
-        .auto_compact
-        .or_else(crate::config::HarnessConfig::load_smart_compact_lenient);
     let resuming = request.resuming_recipient.is_some();
     let boundary = request.mode.kind() == DeliveryKind::Boundary || resuming;
     let pending = if boundary {
@@ -265,8 +265,7 @@ pub fn dispatch(
     } else {
         Vec::new()
     };
-    let needs_context = request.auto_compact.is_some()
-        || request.mode.needs_agent_context()
+    let needs_context = request.mode.needs_agent_context()
         || matches!(request.sender, MessageSender::Agent { .. })
         || request.reply.is_some();
     let agent_context =
@@ -354,6 +353,10 @@ pub fn dispatch(
         });
     }
 
+    let compact_defaults = request
+        .auto_compact
+        .is_none()
+        .then(|| CompactDefaults::load(&workspace.project_root, &snapshot, &targets));
     let mode = prepare_mode(&request, &resolution, &targets, &pending)?;
     let reply_preparation = request
         .reply
@@ -386,6 +389,7 @@ pub fn dispatch(
         scope_channel: request.current_channel.channel.as_deref(),
         reply_wait: reply_preparation.is_some(),
         in_reply_to: &in_reply_to,
+        compact_defaults: compact_defaults.as_ref(),
     };
     let (outcomes, compacted) = dispatch_targets(&state, &targets, &text, &mode)?;
     let reply = reply_preparation
@@ -820,6 +824,37 @@ fn resolve_when(
         .collect()
 }
 
+#[derive(Default)]
+struct CompactDefaults {
+    harness: HarnessConfig,
+    teams: TeamsConfig,
+    profiles: ProfilesConfig,
+    subagent_profiles: ProfilesConfig,
+}
+
+impl CompactDefaults {
+    fn load(root: &Path, snapshot: &SidebarSnapshot, targets: &[ResolvedTarget]) -> Self {
+        let named_seat = targets
+            .iter()
+            .filter_map(|target| target.agent.as_ref().or_else(|| target.bound(snapshot)))
+            .any(|agent| agent.team.is_some() || agent.profile.is_some());
+        if !named_seat {
+            let mut defaults = Self::default();
+            defaults.harness.smart_compact = HarnessConfig::load_smart_compact_lenient();
+            return defaults;
+        }
+        let machine = MachineConfig::load_lenient();
+        let (teams, profiles, subagent_profiles) =
+            crate::config::effective::load_seat_tables(&machine, Some(root));
+        Self {
+            harness: machine.harness.clone(),
+            teams,
+            profiles,
+            subagent_profiles,
+        }
+    }
+}
+
 struct DispatchState<'a> {
     workspace: &'a ResolvedWorkspace,
     store: &'a Store,
@@ -828,6 +863,7 @@ struct DispatchState<'a> {
     scope_channel: Option<&'a str>,
     reply_wait: bool,
     in_reply_to: &'a [MessageId],
+    compact_defaults: Option<&'a CompactDefaults>,
 }
 
 impl DispatchState<'_> {
@@ -862,6 +898,20 @@ impl DispatchState<'_> {
             )
             .with_reply_wait(self.reply_wait)
             .with_in_reply_to(self.in_reply_to.to_vec());
+        if let Some(defaults) = self.compact_defaults {
+            message.auto_compact = target
+                .agent
+                .as_ref()
+                .or_else(|| target.bound(self.snapshot))
+                .map_or(defaults.harness.smart_compact, |agent| {
+                    SmartCompactSeat::from(agent).resolve(
+                        &defaults.teams,
+                        &defaults.profiles,
+                        &defaults.subagent_profiles,
+                        &defaults.harness,
+                    )
+                });
+        }
         if mode.resuming {
             message.register_by = Some(
                 message.enqueued_at

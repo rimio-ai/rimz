@@ -173,13 +173,13 @@ When an agent sends `@all`, RimZ drops that caller and sends to its peers; with 
 
 ## Compact before the message lands
 
-A long turn can hit the context limit mid-message. An agent compacts by itself only once it hits its ceiling, so a prompt delivered just under that can be cut in half by a compaction firing around it. `--smart-compact` sends the agent's compact command ahead of your text once its context is full enough, including the configured summary brief where the command accepts one, so the prompt runs against a fresh window.
+A long turn can hit the context limit mid-message. An agent compacts by itself only once it hits its ceiling, so a prompt delivered just under that can be cut in half by a compaction firing around it. When the agent is resting, `--smart-compact` sends its compact command ahead of your text once its context is full enough, including the configured summary brief where the command accepts one, so the prompt runs against a fresh window.
 
 ```sh
 rimz message --smart-compact 70% @claude "now write the migration guide"   # compact first if context ≥ 70% full
 ```
 
-Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `180k`). Omit the flag and RimZ uses `[harness] smart_compact`, which defaults to `258k`; set it to `"off"` to disable compact-first sends. The flag overrides that machine value ([loops → smart compaction](./loops.md#smart-compaction), [configuration → smart compaction](./configuration.md#smart-compaction)).
+Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `180k`). Omit the flag and RimZ uses the recipient's role or profile-chain `smart-compact`, falling back to `[harness] smart_compact`, which defaults to `258k`. An explicit `off` stops inheritance. The flag overrides the recipient's line; queued messages keep the line selected at enqueue ([loops → smart compaction](./loops.md#smart-compaction), [configuration → smart compaction](./configuration.md#smart-compaction)).
 
 ## Ask and wait for the reply
 

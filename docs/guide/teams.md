@@ -158,6 +158,8 @@ A role that hands off can compact its own context on the way out, so it comes ba
 
 Between stages, [idle compaction](./configuration.md#idle-compaction) can keep a resting member's context small before its prompt cache expires. A role's [`idle-compact`](../reference/definitions.md#idle-compaction) sets its token floor; leave it absent to inherit from the role's agent definition or the machine setting, or set it to `off` or a floor such as `50k`. This is independent of the hand-off threshold.
 
+A role's [`smart-compact`](../reference/definitions.md#smart-compaction) sets the threshold for compact-first messages to that member at rest. It accepts a token count such as `200k`, a percentage such as `70%`, or `off`. Omission inherits the member's profile chain, then `harness.smart_compact`; an explicit `off` stops inheritance. This is separate from both idle and hand-off compaction.
+
 ## Define your own team
 
 A team puts a repeatable division of work in one file, `teams/<name>.md`: YAML frontmatter declares the roster, and the Markdown body is the pipeline every member reads. The shipped `forge` definition is the one to copy from:

@@ -695,7 +695,7 @@ fn execute_prepared_delivery(
             mux: globals.mux,
             enter: true,
             force: false,
-            // Domain dispatch resolves this from [harness] smart_compact.
+            // Domain dispatch resolves the recipient's seat line, then the harness default.
             auto_compact: None,
             mode,
         },

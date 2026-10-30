@@ -214,7 +214,7 @@ A condition is met for delivery only once its `met_at` stamp is written (`Messag
 
 [`dispatch()`](../../../crates/rimz/src/message/dispatch.rs) is the one entry point for an owned send.
 
-1. **Load what the decision needs.** Pending records (boundary mode or an explicit resuming recipient), plus agent-context sidecars when a smart-compact threshold, a condition, an agent sender, or `--wait` needs them.
+1. **Load what the decision needs.** Pending records (boundary mode or an explicit resuming recipient), plus agent-context sidecars for interrupt mode, a condition, an agent sender, or `--wait`. Compact-first reads only its recipient's context after taking the pane lock.
 2. **Choose a snapshot.** A full resolution snapshot costs a multiplexer round trip. When every target parks without a live pane (no lazy-registering kind, no provisional id), `targets_all_park_without_live` proves the cached rollup is enough and dispatch skips the mux. This `rollup_only` path is a latency optimization, and correctness never depends on it.
 3. **Resolve targets.** Live agents and live panes combine, so an agent with a bound pane yields one target. When the live view finds nothing, the durable audit rollup is the fallback, with pane-shadowed co-resident sessions filtered out first. For intrinsic `@all`, dispatch removes an agent caller from the resolved set before anything else runs, and no remaining peer is an error.
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card. A condition already satisfied gets `met_at` at once.
@@ -566,7 +566,7 @@ Delivery re-checks the marker after claiming a command and before writing its pa
 
 A provider compacts on its own near its context ceiling, so a prompt sent close to it can be cut in half by a compaction that fires mid-turn. `--smart-compact` compacts a resting agent first, so the prompt lands against a fresh window.
 
-Thresholds parse as `70%` (a fraction of the window), `120000` (absolute occupied tokens), or `180k` and `1m` (suffixed counts). Dispatch fills an omitted threshold from the [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) default for every caller, scheduled loop waits included: `258k` when unset, none for `"off"`. An explicit per-send threshold overrides the setting. An unknown fill never triggers, and the text sends untouched.
+Thresholds parse as `70%` (a fraction of the window), `120000` (absolute occupied tokens), or `180k` and `1m` (suffixed counts). Every dispatch caller, scheduled loop waits included, fills an omitted threshold per recipient at enqueue through `crates/rimz/src/config/effective.rs::SmartCompactSeat::resolve`: TOML role, then the selected profile chain, then [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) (`258k` when unset). An explicit `off` stops the walk; an explicit per-send threshold wins. Named seats load the effective tables once per dispatch, with the machine tables as fallback; a bare seat reads only the core harness default. Queued records keep their stored threshold when configuration changes. An unknown fill never triggers, and the text sends untouched.
 
 A percent threshold reads the same fill gauge the sidebar card renders (`context_fill_pct`). A token threshold reads `occupied_context_tokens`, which prefers the folded statusline breakdown, then the per-call split (cache reads plus cache writes plus fresh input), then the carried `total_tokens` gauge.
 

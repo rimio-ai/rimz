@@ -10452,6 +10452,100 @@ fn message_inherits_smart_compact_default() {
 }
 
 #[test]
+fn message_to_bare_pane_keeps_the_harness_smart_compact_line() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    run_success(
+        env.rimz()
+            .args(["config", "set", "harness.smart_compact", "70%"]),
+        "set bare-pane line",
+    );
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    run_success(
+        traced_rimz(&env, "bare-seat-line.log")
+            .env("RIMZ_TEST_PANE_LIST", panes)
+            .args(["message", "--steer", "@claude", "--", "bare pane"]),
+        "send bare-pane line",
+    );
+    let messages = env.store().list_messages().unwrap();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0].auto_compact, Some(AutoCompact::Percent(70)));
+}
+
+#[test]
+fn message_stores_the_recipients_smart_compact_line() {
+    let actual: Vec<_> = [
+        ("worker", None, false, None),
+        ("worker", Some("lead"), false, None),
+        ("worker", None, true, None),
+        ("worker", Some("lead"), false, Some("90%")),
+        ("off", None, false, None),
+    ]
+    .map(|(profile, role, child, explicit)| {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        env.write_config(
+            &env.project_root,
+            "[profiles.base]\nagent = 'claude'\nsmart-compact = '200k'\n\
+             [profiles.worker]\nagent = 'base'\n\
+             [profiles.off]\nagent = 'worker'\nsmart-compact = 'off'\n\
+             [subagents.profiles.base]\nagent = 'claude'\nsmart-compact = '50k'\n\
+             [subagents.profiles.worker]\nagent = 'base'\n\
+             [agents.teams.forge]\nroles = [{role = 'lead', profile = 'worker', \
+             smart-compact = '80%'}]",
+        );
+        run_success(env.rimz().args(["trust", "grant"]), "trust seat policy");
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            "seat",
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.agent_name = Some("seat".into());
+                observation.launch.profile = Some(profile.into());
+                if let Some(role) = role {
+                    observation.launch.team = Some("forge".into());
+                    observation.launch.role = Some(role.into());
+                }
+                if child {
+                    observation.launch.parent_agent_id = Some("parent".into());
+                    observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+                    observation.launch.launch_depth = Some(1);
+                }
+            },
+        );
+        let mut command = env.rimz();
+        command.args(["message", "@claude"]);
+        if let Some(line) = explicit {
+            command.args(["--smart-compact", line]);
+        }
+        run_success(command.args(["--", "carry this line"]), "queue seat line");
+        let before = env.store().list_pending_messages().unwrap();
+        assert_eq!(before.len(), 1, "{before:?}");
+        env.write_config(&env.project_root, "");
+        let after = env.store().list_pending_messages().unwrap();
+        assert_eq!(
+            after[0].auto_compact, before[0].auto_compact,
+            "queued lines must not change with config"
+        );
+        before[0].auto_compact
+    })
+    .into();
+    assert_eq!(
+        actual,
+        [
+            Some(AutoCompact::Tokens(200_000)),
+            Some(AutoCompact::Percent(80)),
+            Some(AutoCompact::Tokens(50_000)),
+            Some(AutoCompact::Percent(90)),
+            None,
+        ]
+    );
+}
+
+#[test]
 fn synthetic_compaction_reports_another_senders_unacknowledged_send() {
     let env = Env::new();
     env.record(&env.project_root);
