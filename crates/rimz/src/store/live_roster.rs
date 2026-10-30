@@ -8,9 +8,11 @@
 //! clears it at the rebirth boundary.
 //!
 //! It lives in the records class because nothing rebuilds it and a reset must
-//! not drop it before the rebirth that parks it. The producer still writes
-//! it with the cache write: it is rewritten on every final fetch from the
-//! sidebar graph, and a write lost to a crash only narrows one recovery.
+//! not drop it before the rebirth that parks it. The room host's fetch worker
+//! still writes it from the sidebar graph, on every final fold of a fresh
+//! production; a cached final leaves it as it is, and a write lost to a crash
+//! only narrows one recovery. Room teardown restores the roster it read before
+//! its sweep, since a dying producer can publish after the session is gone.
 
 use std::collections::BTreeSet;
 use std::path::Path;
