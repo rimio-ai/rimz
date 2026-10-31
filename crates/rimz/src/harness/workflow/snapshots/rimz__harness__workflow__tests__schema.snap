@@ -145,6 +145,12 @@ expression: value
         },
         "start": {
           "type": "string"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

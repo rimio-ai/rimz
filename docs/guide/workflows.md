@@ -327,7 +327,7 @@ Some work is project-wide: a monthly dependency sweep, or a loop that takes the 
 
 ## Rules for writing nodes
 
-Add an optional `summary` to a check or step to describe what it does for readers of the workflow. It must be one nonempty line, not instructions to the runner. Leaving it out produces no validation warning.
+An optional `summary` can describe the whole graph in `[workflow]`, or one check or step in its own table. It must be one nonempty line, not instructions to the runner. Leaving it out produces no validation warning.
 
 The engine stays simple because nodes follow four rules.
 
