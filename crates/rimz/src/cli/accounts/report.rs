@@ -428,9 +428,12 @@ fn build_report(
             .filter(|_| !undecided)
             .and_then(|panel| panel.plan.clone())
             .or_else(|| {
-                raw_plan
-                    .as_deref()
-                    .map(|plan| definition.plan_label.format(plan))
+                raw_plan.as_deref().map(|plan| {
+                    definition.plan_label.format(
+                        plan,
+                        account.and_then(|account| account.plan_name.as_deref()),
+                    )
+                })
             }),
         plan: raw_plan,
         account_id: account.and_then(|account| account.account_id.clone()),

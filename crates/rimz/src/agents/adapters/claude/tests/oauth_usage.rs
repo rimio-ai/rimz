@@ -35,14 +35,20 @@ fn profile_plan_is_strict_bound_and_requires_a_well_formed_identity() {
             "subscription_status":"inactive","has_claude_pro":false,
         });
         actual.push(parse_profile_plan(&body.to_string(), &owner));
-        expected.push(Answered(plan.map(str::to_owned)));
+        expected.push(Answered {
+            plan: plan.map(str::to_owned),
+            display_name: None,
+        });
     }
     for (body, result) in [
         (
             r#"{"account":{"email":"other@example.test"},
                 "organization":{"uuid":"00000000-0000-0000-0000-000000000001",
                 "organization_type":"claude_pro"}}"#,
-            Answered(None),
+            Answered {
+                plan: None,
+                display_name: None,
+            },
         ),
         (
             r#"{"organization":{"uuid":"00000000-0000-0000-0000-000000000001",
@@ -62,6 +68,120 @@ fn profile_plan_is_strict_bound_and_requires_a_well_formed_identity() {
     ] {
         actual.push(parse_profile_plan(body, &owner));
         expected.push(result);
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn profile_plan_names_are_cleaned_bound_and_independent_of_tier_recognition() {
+    use crate::agents::capabilities::AccountProfileProbe::Answered;
+    let owner = super::super::account::profile_fingerprint("work@example.test", "org").unwrap();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (family, tier, name, email, org, plan, plan_name) in [
+        (
+            "claude_max",
+            "default_claude_max_20x",
+            Some("Ultra"),
+            "work@example.test",
+            "org",
+            Some("max_20x"),
+            Some("Ultra"),
+        ),
+        (
+            "claude_max",
+            "default_claude_max_5x",
+            Some("Max"),
+            "work@example.test",
+            "org",
+            Some("max_5x"),
+            Some("Max"),
+        ),
+        (
+            "claude_pro",
+            "default_claude_ai",
+            Some("Pro"),
+            "work@example.test",
+            "org",
+            Some("pro"),
+            Some("Pro"),
+        ),
+        (
+            "future",
+            "future_tier",
+            Some("Next"),
+            "work@example.test",
+            "org",
+            None,
+            Some("Next"),
+        ),
+        (
+            "claude_max",
+            "default_claude_max_20x",
+            Some(" \tUl\u{7}tra\n  plan "),
+            "work@example.test",
+            "org",
+            Some("max_20x"),
+            Some("Ultra plan"),
+        ),
+        (
+            "claude_max",
+            "default_claude_max_20x",
+            None,
+            "work@example.test",
+            "org",
+            Some("max_20x"),
+            None,
+        ),
+        (
+            "claude_max",
+            "default_claude_max_20x",
+            Some(""),
+            "work@example.test",
+            "org",
+            Some("max_20x"),
+            None,
+        ),
+        (
+            "claude_max",
+            "default_claude_max_20x",
+            Some(" \t\n "),
+            "work@example.test",
+            "org",
+            Some("max_20x"),
+            None,
+        ),
+        (
+            "claude_max",
+            "default_claude_max_20x",
+            Some("Ultra"),
+            "other@example.test",
+            "org",
+            None,
+            None,
+        ),
+        (
+            "claude_max",
+            "default_claude_max_20x",
+            Some("Ultra"),
+            "work@example.test",
+            "other",
+            None,
+            None,
+        ),
+    ] {
+        let body = serde_json::json!({
+            "account": {"email": email},
+            "organization": {
+                "uuid": org, "organization_type": family, "rate_limit_tier": tier,
+                "plan_display_name": name, "plan_display_label": "Not the name plan"
+            }
+        });
+        actual.push(parse_profile_plan(&body.to_string(), &owner));
+        expected.push(Answered {
+            plan: plan.map(str::to_owned),
+            display_name: plan_name.map(str::to_owned),
+        });
     }
     assert_eq!(actual, expected);
 }

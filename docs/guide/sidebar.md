@@ -75,7 +75,7 @@ Panes outside every project checkout fold into a dim `external` divider at the v
 
 ### The provider dashboard
 
-Budgets belong to an account, so they live in a pinned panel at the bottom rather than on the cards. Each provider block names the account and plan (`Claude Max 20x`, `ChatGPT Pro 200`), titles itself with a [named account's](./accounts.md#declare-an-account) display label when valid or its name otherwise (`Claude · work`), and drains its budget-window bars toward their resets, so a glance reads how much of the plan is left. The block also carries that provider's spend, and totals rows below sum this machine's whole fleet across the last 7 and 30 local calendar days, including today.
+Budgets belong to an account, so they live in a pinned panel at the bottom rather than on the cards. Each provider block names the account and plan (`Claude Ultra`, `ChatGPT Pro 200`), titles itself with a [named account's](./accounts.md#declare-an-account) display label when valid or its name otherwise (`Claude · work`), and drains its budget-window bars toward their resets, so a glance reads how much of the plan is left. The block also carries that provider's spend, and totals rows below sum this machine's whole fleet across the last 7 and 30 local calendar days, including today.
 
 Three or more providers share the panel under a tab rail, which follows the provider of whichever card you have selected; `←`, `→`, or a click picks one by hand. One or two providers stack instead. With [pets enabled](./pets.md), the companion rides the panel's right edge.
 

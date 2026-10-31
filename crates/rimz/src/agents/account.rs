@@ -96,6 +96,8 @@ pub struct AccountProfileAnswer {
     pub basis: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_name: Option<String>,
     pub read_at_ms: u64,
 }
 
@@ -105,6 +107,7 @@ impl std::fmt::Debug for AccountProfileAnswer {
             .field("owner", &"<redacted>")
             .field("basis", &self.basis)
             .field("plan", &self.plan)
+            .field("plan_name", &self.plan_name)
             .field("read_at_ms", &self.read_at_ms)
             .finish()
     }

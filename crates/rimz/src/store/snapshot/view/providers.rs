@@ -158,7 +158,15 @@ impl SidebarSnapshot {
                 .as_ref()
                 .and_then(|account| account.plan.clone())
                 .filter(|plan| !plan.is_empty())
-                .map(|raw| format_plan_label(&kind, &raw));
+                .map(|raw| {
+                    format_plan_label(
+                        &kind,
+                        &raw,
+                        account
+                            .as_ref()
+                            .and_then(|account| account.plan_name.as_deref()),
+                    )
+                });
 
             let identity = resolve_provider_identity(&kind, &self.theme.providers);
             let (color, color_rgb, color_role) = match identity.brand {
@@ -256,7 +264,13 @@ impl SidebarSnapshot {
                     alternate.plan = credential
                         .and_then(|account| account.plan.as_deref())
                         .filter(|plan| !plan.is_empty())
-                        .map(|plan| format_plan_label(&alternate.kind, plan));
+                        .map(|plan| {
+                            format_plan_label(
+                                &alternate.kind,
+                                plan,
+                                credential.and_then(|account| account.plan_name.as_deref()),
+                            )
+                        });
                     alternate.metered = credential
                         .and_then(|account| account.metered)
                         .unwrap_or(false);
@@ -516,13 +530,12 @@ pub(crate) fn sort_windows(windows: &mut [RateLimitWindow]) {
     });
 }
 
-/// Format a raw provider plan tier into its brand label, per the adapter's
-/// [`crate::agents::PlanLabel`]: Claude's tiers prefix `Claude` (`max` →
-/// `Claude Max`), Codex names its Pro subtiers (`pro` → `ChatGPT Pro 200`);
-/// unknown kinds just title-case the tier.
-pub(crate) fn format_plan_label(kind: &str, raw: &str) -> String {
+/// Format a provider display name or raw tier per the adapter's [`crate::agents::PlanLabel`].
+/// A name wins verbatim (`Ultra` → `Claude Ultra`); without one, the tier vocabulary
+/// applies (`pro` → `ChatGPT Pro 200`). Unknown kinds just title-case the tier.
+pub(crate) fn format_plan_label(kind: &str, raw: &str, name: Option<&str>) -> String {
     match crate::agents::spec_by_kind(kind).map(|definition| &definition.plan_label) {
-        Some(label) => label.format(raw),
+        Some(label) => label.format(raw, name),
         None => provider_title_case(raw),
     }
 }
