@@ -124,6 +124,7 @@ impl AttemptHost for FakeHost {
 mod attempts;
 mod commands;
 mod conditions;
+mod graph;
 mod inspection;
 mod turns;
 
@@ -883,10 +884,10 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     assert_eq!(serde_json::to_value(row).unwrap()["do_background"], true);
     assert!(row.edges.iter().any(|edge| edge.outcome == "invalid"
         && edge.target == "@user"
-        && edge.source == "default"));
+        && edge.source == EdgeSource::Default));
     assert!(row.edges.iter().any(|edge| edge.outcome == "ready"
         && edge.target == "build"
-        && edge.source == "explicit"));
+        && edge.source == EdgeSource::Explicit));
     let cases = [
         ("", None),
         ("lifecycle='stay'", None),
@@ -906,7 +907,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
                 .edges
                 .iter()
                 .filter(|edge| edge.outcome == "asked")
-                .map(|edge| (edge.target.clone(), edge.source.clone()))
+                .map(|edge| (edge.target.clone(), edge.source))
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -915,7 +916,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
         .map(|(_, target)| {
             target
                 .iter()
-                .map(|target| (target.to_string(), "explicit".to_owned()))
+                .map(|target| (target.to_string(), EdgeSource::Explicit))
                 .collect::<Vec<_>>()
         })
         .collect();

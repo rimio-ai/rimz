@@ -1453,10 +1453,10 @@ fn validate_json_shape_errors_and_exit_status() {
         json!([{
             "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "summary": null, "do_background": false,
             "edges": [
-                {"outcome":"deadline", "target":"@user", "source":"default"},
-                {"outcome":"invalid", "target":"@user", "source":"default"},
-                {"outcome":"ok", "target":"missing", "source":"explicit"},
-                {"outcome":"timeout", "target":"@user", "source":"default"}
+                {"outcome":"ok", "target":"missing", "source":"explicit", "fires":"yes"},
+                {"outcome":"timeout", "target":"@user", "source":"default", "fires":"never", "because":"no-timeout"},
+                {"outcome":"invalid", "target":"@user", "source":"default", "fires":"yes"},
+                {"outcome":"deadline", "target":"@user", "source":"default", "fires":"with-deadline"}
             ]
         }])
     );
@@ -1495,17 +1495,25 @@ fn validate_json_shape_errors_and_exit_status() {
                 "workflow":"review", "node":"pr", "kind":"check", "runner":"shell",
                 "run":null, "shell":"printf shell", "agent":null, "summary":null, "do_background":false,
                 "edges":[
-                    {"outcome":"deadline", "target":"@user", "source":"default"},
-                    {"outcome":"fail", "target":"@user", "source":"explicit"},
-                    {"outcome":"invalid", "target":"@user", "source":"default"},
-                    {"outcome":"pass", "target":"@done", "source":"explicit"},
-                    {"outcome":"timeout", "target":"@user", "source":"default"}
+                    {"outcome":"fail", "target":"@user", "source":"explicit", "fires":"yes"},
+                    {"outcome":"pass", "target":"@done", "source":"explicit", "fires":"yes"},
+                    {"outcome":"timeout", "target":"@user", "source":"default", "fires":"never", "because":"no-timeout"},
+                    {"outcome":"invalid", "target":"@user", "source":"default", "fires":"yes"},
+                    {"outcome":"deadline", "target":"@user", "source":"default", "fires":"with-deadline"}
                 ]
             }]
         })
     );
     let text = success(command(&env, &["workflow", "validate"]));
     assert!(text.contains("printf shell"), "{text}");
+    assert!(
+        text.contains("timeout → @user (default, never: no timeout)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("deadline → @user (default, only with a deadline)"),
+        "{text}"
+    );
     for runner in ["run", "shell"] {
         fs::write(dir.join("workflow.toml"), format!(
             "{HEADER}[checks.pr]\nshell='true'\non={{pass='@done',fail='@user'}}\n[steps.merge]\n{runner}='gh pr merge --auto'\nthen='pr'\ntimeout='1m'\nmax-visits=2\n"
@@ -1528,9 +1536,9 @@ fn validate_json_shape_errors_and_exit_status() {
                 "run":run, "shell":shell,
                 "agent":null, "summary":null, "do_background":false,
                 "edges":[
-                    {"outcome":"cap", "target":"@user", "source":"default"},
-                    {"outcome":"deadline", "target":"@user", "source":"default"},
-                    {"outcome":"then", "target":"pr", "source":"explicit"}
+                    {"outcome":"then", "target":"pr", "source":"explicit", "fires":"yes"},
+                    {"outcome":"cap", "target":"@user", "source":"default", "fires":"yes"},
+                    {"outcome":"deadline", "target":"@user", "source":"default", "fires":"with-deadline"}
                 ]
             })
         );

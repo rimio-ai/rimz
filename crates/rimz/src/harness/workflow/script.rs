@@ -14,6 +14,8 @@ use crate::store::workflow::{self, RunRecord, RunState};
 mod condition;
 mod judge;
 
+pub use condition::{CaseMark, CaseMarks, case_marks, unread_reasons};
+
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ChildError {
     #[error("evaluation interrupted")]

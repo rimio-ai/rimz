@@ -63,12 +63,12 @@ Validate the definition first. The command prints every node with the edges it r
 ```console
 $ rimz workflow validate ~/.rimz/workflows/fix-tests
 WORKFLOW   NODE   KIND   RUNNER      BACKGROUND  EDGES
-fix-tests  tests  check  cargo test  —           deadline → @user (default), fail → fix (explicit), invalid → @user (default), pass → @done (explicit), timeout → @user (default)
-fix-tests  fix    step   claude      yes         cap → @user (default), capacity → @failed (default), deadline → @user (default), then → tests (explicit)
+fix-tests  tests  check  cargo test  —           fail → fix (explicit), pass → @done (explicit), timeout → @user (default, never: no timeout), invalid → @user (default), deadline → @user (default, only with a deadline)
+fix-tests  fix    step   claude      yes         then → tests (explicit), cap → @user (default), capacity → @failed (default, never: capacity-wait is forever), deadline → @user (default, only with a deadline)
 warning: fix-tests: steps.fix: auto-continue is off; a provider limit mid-attempt ends the attempt as limited
 ```
 
-Every `(default)` edge to `@user` parks the run for you. The `tests` row says a command that cannot start or a log that cannot open (`invalid`) parks. The `fix` row says the cap (`cap`) parks too; a question stays live in the agent's pane. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
+A default edge to `@user` parks the run only when it can fire. The `tests` row says a command that cannot start or a log that cannot open (`invalid`) parks, but its timeout cannot fire because this check has no timeout. A deadline needs a grant on the run. The `fix` row says the cap (`cap`) parks too; a question stays live in the agent's pane. Its capacity wait never gives up by default. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
 
 The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A turn step whose leader or its subagent parks on a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A script check can wait for the reset instead; [the PR example](#wait-on-the-outside-world) links one. A staying step remains open on provider limits.
 

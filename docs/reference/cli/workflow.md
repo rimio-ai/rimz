@@ -110,9 +110,23 @@ resumed repair#feat-x at work · work 2 of 3 visits, every capped step +1
 
 ## Validate and schema
 
-`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, step layout, judge profile, or `condition`), `BACKGROUND` (whether the step's leader reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. A step's `asked` edge appears only when `on.asked` is set, always as explicit; staying steps have none. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `runner = "run" | "shell" | "agent" | "condition"`, nullable `summary`, `run`, `shell`, and `agent` fields, `workflow`, `node`, `kind`, `do_background`, and resolved `edges`. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
+`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, step layout, judge profile, or `condition`), `BACKGROUND` (whether the step's leader reports background work), and `EDGES`. An edge prints `outcome → target (source)`, or `outcome → target (source, mark)` when conditional or unable to fire; `source` is `explicit` or `default`. A step's `asked` edge appears only when `on.asked` is set, always as explicit; staying steps have none. Errors and `warning:` lines follow. Any error exits 1. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
 
-Command-step validation rows have `kind = "step"`, `runner = "run" | "shell"`, the command in the corresponding field, `agent = null`, and `do_background = false`. Their edges are `then`, `cap`, and `deadline`, never `asked` or `capacity`; `BACKGROUND` prints `—`. Agent-step rows include `capacity → @failed (default)` unless `on.capacity` overrides it. Agent-only warnings do not apply to commands.
+Rows follow the graph from `start`, with a returning step immediately below the earlier check that sends it. Nodes reachable only through `workflow.on.deadline` follow the start component; unreachable nodes come last in name order. Edges follow case order without repeats, then `else`, then other explicit outcomes in name order, then engine triggers: `unknown`, `timeout`, `invalid`, `deadline` for checks; `then`, `asked`, `cap`, `capacity`, `deadline` for steps. These row and edge orders also apply to JSON.
+
+| Mark | Meaning |
+| --- | --- |
+| `never: no timeout` | The check has no timeout clock. |
+| `never: no max-visits` | The step has neither visit bound. |
+| `never: capacity-wait is forever` | Capacity admission never gives up. |
+| `never: throttle is off` | The step bypasses capacity admission. |
+| `never: a judge retries once, then parks at @user` | A judge never follows its `invalid` edge, even an explicit one. |
+| `only with a deadline` | No deadline is sealed; a run needs a deadline grant. |
+| `only when a loop task starts the run` | Capacity can give up in an automatic loop-started run, not a by-hand run or `loop fire`. |
+
+`--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `runner = "run" | "shell" | "agent" | "condition"`, nullable `summary`, `run`, `shell`, and `agent` fields, `workflow`, `node`, `kind`, `do_background`, and resolved `edges`. Each edge keeps `outcome`, `target`, and `source`, and adds `fires`: `"yes"`, `"never"`, `"with-deadline"`, or `"in-loop-runs"`. Only `"never"` edges carry `because`: `"no-timeout"`, `"no-max-visits"`, `"capacity-wait-forever"`, `"throttle-off"`, or `"judge-retries"`. Marks explain edges; they do not add validation warnings or relax admission rules.
+
+Command-step validation rows have `kind = "step"`, `runner = "run" | "shell"`, the command in the corresponding field, `agent = null`, and `do_background = false`. Their edges are `then`, `cap`, and `deadline`, never `asked` or `capacity`; `BACKGROUND` prints `—`. Agent-step rows include a `capacity` edge to `@failed` by default, marked according to `throttle` and `capacity-wait`. Agent-only warnings do not apply to commands.
 
 Turn and `until` steps warn when the leader adapter has no background reporting: a turn end may finish the attempt while provider background work remains. Staying steps skip the auto-continue warning; live provider limits do not end their sessions.
 
