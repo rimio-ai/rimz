@@ -29,24 +29,23 @@ Without a name, RimZ uses the account a launch here would use. It shows that log
 
 ```console
 $ rimz accounts add claude work
-linked to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles, projects
-✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
-claude account `work` lives at ~/.rimz/accounts/claude/work
-  log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
-  use at birth  rimz start --account claude@work
-  this room     rimz accounts use claude work
-  new rooms     rimz accounts use --global claude work
+✓ claude account work created at ~/.rimz/accounts/claude/work
+  shares sessions, history, and settings with ~/.claude
+  RimZ hooks installed
+
+Finish setup: log in when claude starts.
+  CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
 ```
 
 What it does on your machine:
 
 1. Writes `[accounts.claude.work]` to the per-machine config, `~/.rimz/config.toml`.
 2. Creates the home directory, `~/.rimz/accounts/<kind>/<name>`.
-3. Links the account home to the provider's own home, as `default` resolves it: every top-level entry of either home except the provider's credentials, its per-install state, and its lock and temp files. The line above is a provider home that holds nothing yet; yours also lists any other shared entries your own `~/.claude` holds.
+3. Links the account home to the provider's own home, as `default` resolves it: every top-level entry of either home except the provider's credentials, its per-install state, and its lock and temp files. The receipt summarizes what is shared rather than listing every linked file.
 4. Installs the RimZ reporting hooks through the links into the shared config, so the provider's own home gains the hooks too.
-5. Prints the account home, login command, and commands to select it.
+5. Prints the account home, what it shares, and whether setup needs finishing. In a project with a running room, the setup command launches the provider in that room under the new account. Otherwise, it runs the provider directly with the account's home set. Log in when the provider opens; for Codex, also run `/hooks` and trust the RimZ hooks. A rerun asks only for hook trust if still needed, and omits the setup section when nothing remains.
 
-For Pi, run the printed `PI_CODING_AGENT_DIR=<home> pi` command and type `/login` inside Pi to log into each backing provider you need.
+For Pi, run the printed setup command and type `/login` inside Pi to log into each backing provider you need.
 
 `--home <path>` adopts a directory you already keep, such as `~/.claude-work`, instead of creating one under `~/.rimz/accounts/`.
 
@@ -69,7 +68,7 @@ To keep an account's sessions and transcripts in its own home, declare it with `
 
 An exported `PI_CODING_AGENT_SESSION_DIR`, or a `sessionDir` in Pi's shared `settings.json`, pins every account's sessions to that directory regardless of history mode. RimZ follows the environment override but does not read `sessionDir` for spend discovery.
 
-Rerunning `add` also migrates accounts you already declared: it leaves the config entry alone unless `--history` or `--label` updates a field, creates the home if missing, brings the links up to date, and refreshes hooks. Every agent launch on a named account brings them up to date the same way, so an entry the provider creates later is linked by the next launch. No file or directory contents are deleted. An entry only the account has, such as the transcripts of an account you used before it was shared, moves into the provider's own home. An entry both homes have stays where the provider's own home keeps it, and the account's copy moves aside to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, with each move printed; the two are not merged, except Codex hook-trust entries. Merge what you need out of `.rimz-aside` by hand: sessions in there cannot be resumed, and live spend is left out of `rimz stats`, the spend totals, and today's budget count until you move them. Already recorded closed days remain in spend history, and moving transcripts aside does not start an automatic spend rebuild. A rebuild of such a day, by `rimz stats --rebuild` or after restored or synced usage reaches it, follows the remaining transcripts, so a partial day may fall while a day with none keeps its saved figure. A link whose text matches what RimZ writes stays in place and the output says `already linked to <home>`. A link reaching the same existing file or directory by other text is rewritten in place and reported as linked, without setting anything aside or waiting for other agents or a daemon. If a Claude release saves settings by replacing a link, the next `add` or launch moves the copy aside, relinks it, and says so. A session whose directory was set aside is no longer where the provider looks for it, so its first relaunch fails once at the provider; the launch warning names where the directory went, and the relaunch after that starts fresh.
+Rerunning `add` also migrates accounts you already declared: it leaves the config entry alone unless `--history` or `--label` updates a field, creates the home if missing, brings the links up to date, and refreshes hooks. Every agent launch on a named account brings them up to date the same way, so an entry the provider creates later is linked by the next launch. No file or directory contents are deleted. An entry only the account has, such as the transcripts of an account you used before it was shared, moves into the provider's own home. An entry both homes have stays where the provider's own home keeps it, and the account's copy moves aside to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, with each move printed; the two are not merged, except Codex hook-trust entries. Merge what you need out of `.rimz-aside` by hand: sessions in there cannot be resumed, and live spend is left out of `rimz stats`, the spend totals, and today's budget count until you move them. Already recorded closed days remain in spend history, and moving transcripts aside does not start an automatic spend rebuild. A rebuild of such a day, by `rimz stats --rebuild` or after restored or synced usage reaches it, follows the remaining transcripts, so a partial day may fall while a day with none keeps its saved figure. A link whose text matches what RimZ writes stays in place. A link reaching the same existing file or directory by other text is rewritten in place, without setting anything aside or waiting for other agents or a daemon. If a Claude release saves settings by replacing a link, the next `add` or launch moves the copy aside, relinks it, and says so. A session whose directory was set aside is no longer where the provider looks for it, so its first relaunch fails once at the provider; the launch warning names where the directory went, and the relaunch after that starts fresh.
 
 Moving a directory out from under an agent that is writing into it would split its session, so RimZ refuses to set a directory aside, or to remove the link to one after a switch to standalone, while any other agent runs on the account. The refusal names the fix: end those agents, or set the account's `history` back. A Codex remote-control daemon on the account blocks the same way only while it holds a conversation; an idle daemon does not, and keeps running. Close the conversations in the remote client and rerun about a minute later, once the daemon has unloaded them (Codex before 0.154.0 keeps a closed conversation loaded for thirty minutes), or turn the daemon off with `rimz config set remote_control.codex false`, rerun, then turn it back on. A daemon that does not report its conversations, or has conversations saved for restoration on its next start, blocks too, and the same toggle is its fix. A daemon that was running when a switch went through may keep writing history the old mode's way until it restarts, so after changing `history` on such an account, turn remote control off and back on the same way. A switch made with `rimz accounts add --history` that is refused leaves the account's mode as it was. An account home on another filesystem cannot have its entries moved; they stay in the account home with a warning. Its history then stays local too: no other account can resume it, and it is left out of the pool's spend totals and daily budget.
 

@@ -141,7 +141,7 @@ pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
             home,
             history,
             label,
-        } => add(&account_kind(&kind)?, name, home, history, label),
+        } => add(globals, &account_kind(&kind)?, name, home, history, label),
         AccountsSubcmd::List(args) => report::list(args, None, globals),
         AccountsSubcmd::Show {
             account,
@@ -440,6 +440,7 @@ fn append_manual_report(
 }
 
 fn add(
+    globals: &GlobalFlags,
     kind: &AgentKind,
     name: LoginName,
     home: Option<PathBuf>,
@@ -544,16 +545,53 @@ fn add(
         })?;
     }
     let mut out = render::out();
-    if let Some(shared) = shared {
-        writeln!(out, "{shared}")?;
-    }
-    crate::cli::hooks::install_hooks_into(definition, &login.env(&ambient), &mut out)?;
-    render::finish(writeln!(
+    writeln!(
         out,
-        "{kind} account `{name}` lives at {}\n  log in once   {}\n  use at birth  rimz start --account {kind}@{name}\n  this room     rimz accounts use {kind} {name}\n  new rooms     rimz accounts use --global {kind} {name}",
+        "{} {kind} account {name} {} {}",
+        render::paint(render::palette::good().bold(), "✓"),
+        if declaring { "created at" } else { "at" },
         render::home_relative(&home.display().to_string()),
+    )?;
+    if let Some(shared) = shared {
+        for line in shared.to_string().lines() {
+            writeln!(out, "  {line}")?;
+        }
+        let home = render::home_relative(&shared.default_home().display().to_string());
+        if shared.shares_history() {
+            writeln!(out, "  shares sessions, history, and settings with {home}")?;
+        } else {
+            writeln!(
+                out,
+                "  shares settings with {home}; keeps its own sessions and history"
+            )?;
+        }
+    }
+    let (_, untrusted) =
+        crate::cli::hooks::install_hooks_quietly(definition, &login.env(&ambient))?;
+    writeln!(out, "  RimZ hooks installed")?;
+    let setup = match (declaring, untrusted.is_empty()) {
+        (true, true) => format!("log in when {kind} starts"),
+        (true, false) => {
+            format!(
+                "log in when {kind} starts, then {}",
+                rimz::agents::hook_trust_fix(kind.as_str())
+            )
+        }
+        (false, false) => rimz::agents::hook_trust_fix(kind.as_str()),
+        (false, true) => return Ok(()),
+    };
+    writeln!(out, "\nFinish setup: {setup}.")?;
+    // Choosing a setup hint must not gate account creation on room runtime health.
+    let in_room =
+        rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+            .ok()
+            .is_some_and(|workspace| rimz::room::require_live_mux(globals.mux, &workspace).is_ok());
+    let command = if in_room {
+        format!("rimz agents {kind} --account {name}")
+    } else {
         login_command(&login, &ambient)
-    ))
+    };
+    render::finish(writeln!(out, "  {command}"))
 }
 
 /// The command that logs `login` in: its home overrides, then the kind. The
