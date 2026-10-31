@@ -698,8 +698,11 @@ pub(crate) fn age_short(ts: Timestamp, now: Timestamp) -> String {
     age_label(age.as_secs().max(0) as u64)
 }
 
-pub(super) fn folded_span(earliest: Timestamp, latest: Timestamp) -> String {
-    format!("over {}", age_short(earliest, latest))
+/// A burst inside one second has no span worth naming; reporting it as
+/// "over 0s" reads as a broken clock rather than a tight cluster.
+pub(super) fn folded_span(earliest: Timestamp, latest: Timestamp) -> Option<String> {
+    let seconds = u64::try_from(latest.duration_since(earliest).as_secs()).ok()?;
+    (seconds > 0).then(|| format!("over {}", age_label(seconds)))
 }
 
 pub(crate) struct NeedsYouRow {

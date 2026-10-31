@@ -163,11 +163,13 @@ impl SignalRow {
             self.name.to_string()
         };
         let mut subject = self.subject;
-        if self.count > 1 {
+        if self.count > 1
+            && let Some(span) = render::folded_span(self.earliest, self.latest)
+        {
             if !subject.is_empty() {
                 subject.push_str(" · ");
             }
-            subject.push_str(&render::folded_span(self.earliest, self.latest));
+            subject.push_str(&span);
         }
         if subject.is_empty() {
             subject.push('-');
@@ -428,6 +430,33 @@ mod tests {
         assert_eq!(
             signal_rows(signals, 20, now()),
             vec![["10s", "deploy.done ×2", "cli", "over 2m"].map(str::to_owned)]
+        );
+    }
+
+    #[test]
+    fn sub_second_signals_fold_without_a_span() {
+        let rows = [
+            (
+                "ci.passed",
+                SignalSource::Forge,
+                serde_json::json!({"branch": "main", "number": 12, "head": "abc1234def"}),
+            ),
+            ("deploy.done", SignalSource::Cli, serde_json::json!({})),
+        ]
+        .map(|(name, source, payload)| {
+            let signals = [100, 999].map(|millis| {
+                let mut event = signal(name, source, 0, payload.clone());
+                event.at = now() - jiff::SignedDuration::from_millis(millis);
+                event
+            });
+            signal_rows(signals, 20, now())
+        });
+        assert_eq!(
+            rows,
+            [
+                vec![["0s", "ci.passed ×2", "forge", "on main #12 @abc1234"].map(str::to_owned)],
+                vec![["0s", "deploy.done ×2", "cli", "-"].map(str::to_owned)],
+            ]
         );
     }
 

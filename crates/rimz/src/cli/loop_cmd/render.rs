@@ -3068,7 +3068,7 @@ impl<'a> CollapsedRunRow<'a> {
             ));
         } else {
             if self.count > 1 {
-                parts.push(ui::folded_span(self.oldest, self.latest.at));
+                parts.extend(ui::folded_span(self.oldest, self.latest.at));
             }
             parts.extend(record_note(self.latest));
         }

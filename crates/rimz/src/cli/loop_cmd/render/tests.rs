@@ -2817,6 +2817,28 @@ fn runs_table_shows_tokens_only_when_present() {
 }
 
 #[test]
+fn sub_second_run_folds_keep_counts_without_a_note_column() {
+    let first = scheduled(10, LoopRunResult::Completed);
+    let mut latest = first.clone();
+    latest.at += jiff::SignedDuration::from_millis(999);
+    let table = runs_table(&[first.clone(), latest.clone()], 10);
+    assert!(table.contains("✓ completed ×2"), "{table}");
+    assert!(!table.contains("NOTE"), "{table}");
+    assert!(!table.contains("over"), "{table}");
+
+    let mut failed = scheduled(9, LoopRunResult::Failed);
+    failed.error = Some("boom".into());
+    let table = runs_table(&[failed, first, latest], 10);
+    assert!(table.contains("NOTE"), "{table}");
+    assert!(
+        table
+            .lines()
+            .any(|line| line.contains("✓ completed ×2") && line.ends_with('-')),
+        "{table}"
+    );
+}
+
+#[test]
 fn collapsed_run_rows_ignore_reason_text_and_keep_the_newest_note() {
     let mut first = record(10, LoopRunResult::Failed);
     first.mode = Some(LoopRunMode::Scheduled);
@@ -2842,7 +2864,7 @@ fn collapsed_run_rows_ignore_reason_text_and_keep_the_newest_note() {
         timed_out: false,
         output: "different".to_owned(),
     });
-    let records = vec![first, second, third];
+    let mut records = vec![first, second, third];
 
     let rows = collapsed_run_rows(&records);
 
@@ -2855,6 +2877,19 @@ fn collapsed_run_rows_ignore_reason_text_and_keep_the_newest_note() {
             ))
             .collect::<Vec<_>>(),
         [(3, 30, Some("different".into()))]
+    );
+
+    for (record, millis) in records.iter_mut().zip([10_000, 10_400, 10_999]) {
+        record.at = Timestamp::from_millisecond(millis).unwrap();
+    }
+    let table = runs_table(&records, 10);
+    assert!(table.contains("✗ failed (exit 1) ×3"), "{table}");
+    assert!(!table.contains("over"), "{table}");
+    assert!(
+        table
+            .lines()
+            .any(|line| line.ends_with("10ms–20ms  different")),
+        "{table}"
     );
 }
 

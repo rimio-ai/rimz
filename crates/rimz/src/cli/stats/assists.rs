@@ -1449,12 +1449,11 @@ impl AssistRow {
             return forensic_line(&self.event, zone);
         }
         let benefit = row_benefit_line(&self.event, zone, self.duration, self.recovered_secs);
-        let span = self.event.at().duration_since(self.oldest).as_secs().max(0) as u64;
-        let benefit = format!(
-            "{benefit} · ×{} over {}",
-            self.count,
-            render::age_label(span)
-        );
+        let mut benefit = format!("{benefit} · ×{}", self.count);
+        if let Some(span) = render::folded_span(self.oldest, self.event.at()) {
+            benefit.push(' ');
+            benefit.push_str(&span);
+        }
         forensic_row_line(&self.event, zone, &benefit)
     }
 }
