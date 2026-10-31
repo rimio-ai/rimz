@@ -133,21 +133,33 @@ fn git_build_version(manifest: &Path, package_version: &str) -> Option<String> {
     }
 }
 
+/// Watches the file that holds HEAD's commit. Under the files backend that is
+/// `HEAD` itself when detached, and the branch's loose ref on a branch. A packed
+/// or unborn branch has no such file, nor does reftable, whose `HEAD` is a fixed
+/// stub, so there the index stands in: every commit that changes files rewrites
+/// it, and `gc --auto` leaves it alone. HEAD's reflog and the reftable stacks stay
+/// unwatched because `gc --auto` rewrites them in every worktree, in a busy
+/// repository about once a minute, and `packed-refs` because it moves on other
+/// worktrees' housekeeping. Every rerun recompiles `rimz`, and git rewrites the
+/// index whenever a status refreshes stale stat data, so outside those states the
+/// index stays unwatched and `.dirty` reflects the tree at the last HEAD move.
 fn emit_git_rerun_paths(manifest: &Path) {
     let Some(head) = git_path(manifest, "HEAD") else {
         return;
     };
     emit_rerun_if_exists(&head);
-    if let Some(branch) = git_stdout(manifest, &["symbolic-ref", "-q", "HEAD"])
-        && let Some(branch_ref) = git_path(manifest, &branch)
-    {
-        emit_rerun_if_exists(&branch_ref);
+    let reftable = git_path(manifest, "reftable/tables.list").is_some_and(|path| path.exists());
+    if !reftable {
+        let Some(branch) = git_stdout(manifest, &["symbolic-ref", "-q", "HEAD"]) else {
+            return;
+        };
+        if let Some(branch_ref) = git_path(manifest, &branch)
+            && branch_ref.exists()
+        {
+            emit_rerun_if_exists(&branch_ref);
+            return;
+        }
     }
-    if let Some(packed_refs) = git_path(manifest, "packed-refs") {
-        emit_rerun_if_exists(&packed_refs);
-    }
-    // Keep the `.dirty` suffix fresh across staged-state changes now that the
-    // build script no longer re-runs unconditionally.
     if let Some(index) = git_path(manifest, "index") {
         emit_rerun_if_exists(&index);
     }
@@ -177,9 +189,8 @@ fn git_stdout(manifest: &Path, args: &[&str]) -> Option<String> {
         .arg("-C")
         .arg(manifest)
         .args(args)
-        // `git status` must not rewrite the index we fingerprint above: on a
-        // fresh checkout that self-invalidates Cargo's build-script fingerprint
-        // and forces one spurious `rimz` leaf-crate rebuild.
+        // `git status` must not take `index.lock` or rewrite the index under the
+        // user's concurrent git commands.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()?;
