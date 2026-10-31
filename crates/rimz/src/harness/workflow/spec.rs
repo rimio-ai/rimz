@@ -53,6 +53,7 @@ impl WorkflowSpec {
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Header {
+    pub summary: Option<String>,
     pub scope: ScopeKind,
     pub start: String,
     pub deadline: Option<String>,

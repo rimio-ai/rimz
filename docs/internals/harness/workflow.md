@@ -52,6 +52,7 @@ Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Every table reject
 | --- | --- |
 | `scope` | Required. `worktree` runs every node in the selected checkout, and `project` runs every node at the room's project root. |
 | `start` | Required. Names a check. |
+| `summary` | Optional. One nonempty line describing the workflow. Omission never warns. |
 | `deadline` | Optional. An RFC 3339 instant, or a local civil date or datetime. A bare date is local midnight. The record stores the resolved instant. |
 | `on.deadline` | The one header edge. Defaults to `@user`. |
 
@@ -158,7 +159,7 @@ Soft reset keeps run homes, and hard reset removes them, unlike supervised-run r
 
 The record stores the scope, project root, sealed-spec digest and original definition directory, prompt, current node and entry time, state and park, routed input and key, open wait and recheck time, per-step totals and per-key visits, the visit grant, deadline state, the sequence allocator, the live attempt, an optional held session, the previous step attempt, and the terminal time. Its optional `task` names the starting loop task. `manual` is true only for a run created by `rimz loop fire`, whose steps bypass capacity; false defaults on old records and is omitted on write, so existing records and JSON stay unchanged. Older binaries ignore the field. Keys keep integer versus string identity. A sealed spec containing any `until` step uses version 2, even before that step is reached; other runs remain version 1. The loader accepts both. Older binaries refuse version 2 and skip it in lists, preventing a rewrite that drops the held session while leaving its layout open. Such binaries also miss that run's scope claim, the same mixed-version exposure as pre-stay binaries with stay runs.
 
-Binaries that predate `summary` reject a sealed spec containing it as an unknown field when reloading the spec for an advance or wake. Existing sealed specs without `summary` remain valid.
+Binaries that predate node `summary` reject a sealed spec containing it as an unknown field when reloading the spec for an advance or wake. Header summaries have the same constraint: even a binary that understands node summaries rejects `[workflow] summary` until it supports that header field. Existing sealed specs without the new header field remain valid.
 
 A journal entry carries its time, node, optional attempt sequence, and one event: evaluation, attempt, turn-end decision, closed wait, engine route, park, terminal, cancel, resume, or signal wake. An evaluation keeps the routed object and its `origin` (`check` or `engine`, defaulting to `check` when absent). An invalid answer also keeps a stderr tail. Script and judge evaluations keep the digests published with the attempt's child, whichever process ends the attempt, and an evaluation whose child never spawned has none.
 

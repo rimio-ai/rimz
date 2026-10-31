@@ -217,10 +217,31 @@ fn validation_carries_check_and_step_summaries() {
 }
 
 #[test]
+fn validation_carries_workflow_summary() {
+    let (home, dir) = fixture();
+    let summary = " Build the next item, then check it ";
+    let text = VALID.replace("[workflow]", &format!("[workflow]\nsummary = '{summary}'"));
+    fs::write(dir.join("workflow.toml"), text).unwrap();
+    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    assert!(
+        report.errors.is_empty(),
+        "workflow summaries must load: {report:?}"
+    );
+    assert_eq!(
+        load(&dir).unwrap().workflow.summary.as_deref(),
+        Some(summary)
+    );
+}
+
+#[test]
 fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
     let (home, dir) = fixture();
     let mut actual = Vec::new();
-    for (kind, node) in [("checks", "pick"), ("steps", "build")] {
+    for (kind, node) in [
+        ("workflow", None),
+        ("checks", Some("pick")),
+        ("steps", Some("build")),
+    ] {
         for summary in [
             "",
             " \t ",
@@ -230,13 +251,20 @@ fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
             "line\n",
         ] {
             let mut text: toml::Value = toml::from_str(VALID).unwrap();
-            text[kind][node]
+            let table = match node {
+                Some(node) => &mut text[kind][node],
+                None => &mut text[kind],
+            };
+            table
                 .as_table_mut()
                 .unwrap()
                 .insert("summary".into(), summary.into());
             fs::write(dir.join("workflow.toml"), toml::to_string(&text).unwrap()).unwrap();
             let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
-            let path = format!("{kind}.{node}.summary");
+            let path = match node {
+                Some(node) => format!("{kind}.{node}.summary"),
+                None => format!("{kind}.summary"),
+            };
             let refused = report.errors.len() == 1
                 && report.errors[0].path == path
                 && report.errors[0]
@@ -250,7 +278,7 @@ fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
             .iter()
             .map(|(_, _, refused, _)| *refused)
             .collect::<Vec<_>>(),
-        vec![true; 12],
+        vec![true; 18],
         "{actual:#?}"
     );
 }
@@ -1035,13 +1063,13 @@ fn schema_is_derived_from_the_loader_types() {
         value["$defs"]["Step"]["properties"]["max-visits-per-key"]["minimum"],
         1
     );
-    for node in ["Check", "Step"] {
+    for item in ["Header", "Check", "Step"] {
         assert_eq!(
-            value["$defs"][node]["properties"]["summary"]["type"],
+            value["$defs"][item]["properties"]["summary"]["type"],
             serde_json::json!(["string", "null"])
         );
         assert!(
-            !value["$defs"][node]["required"]
+            !value["$defs"][item]["required"]
                 .as_array()
                 .is_some_and(|required| required.iter().any(|field| field == "summary"))
         );

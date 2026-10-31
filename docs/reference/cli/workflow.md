@@ -130,7 +130,7 @@ Command-step validation rows have `kind = "step"`, `runner = "run" | "shell"`, t
 
 Turn and `until` steps warn when the leader adapter has no background reporting: a turn end may finish the attempt while provider background work remains. Staying steps skip the auto-continue warning; live provider limits do not end their sessions.
 
-`rimz workflow schema` prints the JSON Schema of `workflow.toml`.
+`rimz workflow schema` prints the JSON Schema of `workflow.toml`. The `[workflow]` header accepts an optional `summary`: one nonempty line describing the graph. Blank or multiline values refuse at `workflow.summary`; omission never warns. Checks and steps accept their own summaries under the same rule.
 
 ## Loop tasks
 

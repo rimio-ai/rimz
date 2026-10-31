@@ -95,6 +95,7 @@ pub(super) fn validate_spec(
     if let Err(err) = crate::harness::schedule::validate_name(name) {
         report.error("workflow", err);
     }
+    report.summary("workflow", spec.workflow.summary.as_deref());
     if !spec.checks.contains_key(&spec.workflow.start) {
         report.error(
             "workflow.start",
