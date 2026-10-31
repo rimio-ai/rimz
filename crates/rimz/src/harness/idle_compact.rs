@@ -50,7 +50,7 @@ pub struct IdleWindow {
 
 /// The seat's token floor (`None` is off) and resolved cache lifetime less the margin.
 /// Lifetimes at or below the margin never compact; the ping floor does not apply.
-pub fn fire_point(
+fn fire_point(
     agent: &AgentState,
     floor: Option<u64>,
     harness: &HarnessConfig,
@@ -71,7 +71,6 @@ fn eligible_seat(agent: &AgentState, floor: u64) -> bool {
         && agent.compacting_since.is_none()
         && !agent.compacted_since_prompt()
         && agent.budget_park.is_none()
-        && agent.hibernation.is_none()
         && !agent.is_awaiting_input()
         && matches!(
             agent.effective_status(),
@@ -82,8 +81,7 @@ fn eligible_seat(agent: &AgentState, floor: u64) -> bool {
         })
 }
 
-/// Shared producer/helper decision; spawn pacing is separate from delivery.
-pub fn should_compact(
+fn should_compact(
     agent: &AgentState,
     command: Option<&str>,
     window: Option<IdleWindow>,
@@ -97,6 +95,21 @@ pub fn should_compact(
         && command.is_some()
         && idle >= window.fire_after.as_secs().min(i64::MAX as u64) as i64
         && idle < window.cache_expires.as_secs().min(i64::MAX as u64) as i64
+}
+
+/// The due seat's idle window and native compact command, unless keep-warm holds it.
+pub fn due_compaction(
+    agent: &AgentState,
+    policy: &SeatPolicy,
+    harness: &HarnessConfig,
+    now: Timestamp,
+) -> Option<(IdleWindow, String)> {
+    let floor = policy.idle_compact_floor(agent, harness);
+    let window = fire_point(agent, floor, harness)?;
+    let command = crate::agents::compact_command(agent, harness)?;
+    (should_compact(agent, Some(&command), Some(window), now)
+        && policy.holding(agent, harness, now).is_none())
+    .then_some((window, command))
 }
 
 /// Compact each eligible seat whose floor and idle window are due; a keep-warm hold defers it until its maximum or stage condition lets go.
@@ -119,18 +132,10 @@ fn compact_idle_agents_with(
     mut spawn: impl FnMut(&IdleCompactRequest) -> bool,
 ) {
     for agent in snapshot.agents.iter() {
-        let floor = policy.idle_compact_floor(agent, &config.harness);
-        let Some(window) = fire_point(agent, floor, &config.harness) else {
+        let Some((_, command)) = due_compaction(agent, policy, &config.harness, snapshot.now)
+        else {
             continue;
         };
-        let command = crate::agents::compact_command(agent, &config.harness);
-        if !should_compact(agent, command.as_deref(), Some(window), snapshot.now)
-            || policy
-                .holding(agent, &config.harness, snapshot.now)
-                .is_some()
-        {
-            continue;
-        }
         let record_path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
         if !spawn_due(agent, snapshot.now, read_fire_record(&record_path).as_ref()) {
             continue;
@@ -138,11 +143,9 @@ fn compact_idle_agents_with(
         let Some(pane_id) = snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
             continue;
         };
-        let (Some(command), Some(occupied_tokens), Some(last_request_at)) = (
-            command,
-            agent.occupied_context_tokens(),
-            agent.last_request_at(),
-        ) else {
+        let (Some(occupied_tokens), Some(last_request_at)) =
+            (agent.occupied_context_tokens(), agent.last_request_at())
+        else {
             continue;
         };
         let peers = crate::address::addressable_agents(snapshot);

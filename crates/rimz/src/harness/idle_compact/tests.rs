@@ -320,6 +320,15 @@ fn producer_fires_at_each_seats_own_floor_with_its_brief() {
     );
     assert!(requests[0].command.contains("This seat is a team member"));
 
+    let mut frozen = toml_role.clone();
+    frozen.hibernation = Some(crate::agents::state::Hibernation {
+        frozen_at: ts(9_000),
+        step: 0,
+        reclaimed_bytes: 200,
+        wake_error: None,
+    });
+    assert_eq!(fire(&frozen).len(), 1, "a hibernated seat still compacts");
+
     let mut markdown_role = candidate.clone();
     markdown_role.role = Some("lead".to_owned());
     markdown_role.profile = Some("probe.lead".to_owned());
@@ -350,7 +359,7 @@ fn producer_fires_at_each_seats_own_floor_with_its_brief() {
 }
 
 #[test]
-fn frozen_seats_never_receive_idle_compaction() {
+fn frozen_seats_remain_eligible_for_idle_compaction() {
     let mut candidate = agent(AgentStatus::Idle, 6_000, 50_000);
     assert!(due(&candidate));
     candidate.hibernation = Some(crate::agents::state::Hibernation {
@@ -359,9 +368,7 @@ fn frozen_seats_never_receive_idle_compaction() {
         reclaimed_bytes: 200,
         wake_error: None,
     });
-    assert!(!due(&candidate));
-    candidate.hibernation = None;
-    assert!(due(&candidate));
+    assert!(due(&candidate), "a frozen seat is still due");
 }
 
 #[test]

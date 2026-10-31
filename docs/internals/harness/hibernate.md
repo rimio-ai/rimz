@@ -158,7 +158,7 @@ Each transaction holds `hibernate.lock` for one reclaim. Input that arrives duri
 
 ## What a frozen row shows
 
-`crates/rimz/src/harness/hibernate.rs::project_hibernation` attaches a `Hibernation` (`frozen_at`, `step`, `reclaimed_bytes`, `wake_error`) to each open row that has an entry of the same kind and session id. Read-only folds reuse the atomic record's cached parse; locked record updates remain uncached. The projection drives the [hibernated sidebar cadence](../sidebar/state.md#cadences), not lifecycle: a frozen row keeps its displayed status and glyph, ranking, unread episodes, notifications, and turn-completion behaviour. A pending wait keeps its working or sleeping classification, and idle-stop reads the real state, so an armed wait still holds a frozen agent as sleeping. Cache keepalive and idle compaction skip rows with an entry.
+`crates/rimz/src/harness/hibernate.rs::project_hibernation` attaches a `Hibernation` (`frozen_at`, `step`, `reclaimed_bytes`, `wake_error`) to each open row that has an entry of the same kind and session id. Read-only folds reuse the atomic record's cached parse; locked record updates remain uncached. The projection drives the [hibernated sidebar cadence](../sidebar/state.md#cadences), not lifecycle: a frozen row keeps its displayed status and glyph, ranking, unread episodes, notifications, and turn-completion behaviour. A pending wait keeps its working or sleeping classification, and idle-stop reads the real state, so an armed wait still holds a frozen agent as sleeping. Cache keepalive skips rows with an entry; idle compaction wakes eligible frozen rows.
 
 `rimz agents list --json` and `show --json` carry `hibernation` whenever the row carries the projection. An entry with no matching live row shows nowhere. `rimz agents show` renders `hibernating since <frozen_at>, step <n> of <final>, <bytes> reclaimed`, and appends `, wake failed: <error>` when `wake_error` is set. [stats.md](../stats.md) counts freezes and keeps reclaimed memory apart from GC disk recovery.
 
@@ -182,6 +182,7 @@ A later successful wake withdraws the entry and its `wake_error` together, so a 
 | `rimz answer` | `crates/rimz/src/cli/answer.rs::run` | writes the answer keys |
 | `rimz pane send` in a managed room | `crates/rimz/src/cli/pane.rs::send` | writes the keys |
 | Budget park helper | `crates/rimz/src/cli/agents_cmd/budget_park.rs::run_budget_park` | sends Esc. A wake failure ends the helper. |
+| Idle compaction helper | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact` | rechecks the cache window, then queues the compact command. A wake failure ends the helper. |
 | `rimz pane focus` | `crates/rimz/src/cli/pane.rs::focus` | focuses the pane |
 | `rimz agents focus`, `rimz teams focus` | `crates/rimz/src/cli/agents_cmd/show.rs::focus_resolved` | focuses the pane |
 | A resume that finds the agent live | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_lane`, `crates/rimz/src/launcher/reconcile.rs::focus_existing` | focuses the pane |

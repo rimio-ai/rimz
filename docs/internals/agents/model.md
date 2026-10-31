@@ -368,7 +368,7 @@ Enrichment also reads the runs directory when launched fleet members or agent-la
 
 Delivery and maintenance read the operational status. The `Done` and `Any` delivery gates open for an operationally sleeping agent, even when its card displays working, so a message can start a turn without consuming the armed wait. `Resume` does not open, and reply waits do not treat sleep as completed. Operationally sleeping agents are not idle-compacted, and eligible unfrozen sleepers receive prompt-cache keepalive pings instead. `--when` still reads the raw lifecycle status and does not accept `sleeping`, and `agent.idle` stays a turn-boundary event.
 
-[Hibernation](../harness/hibernate.md) attaches metadata without changing displayed status, ranking, unread episodes, notifications, or turn-completion waits. A frozen resting row with a sleeping wait still reads `sleeping`, and frozen rows receive neither cache keepalive pings nor idle compaction.
+[Hibernation](../harness/hibernate.md) attaches metadata without changing displayed status, ranking, unread episodes, notifications, or turn-completion waits. A frozen resting row with a sleeping wait still reads `sleeping`. Frozen rows receive no cache keepalive pings; idle compaction wakes eligible frozen rows.
 
 ## Activity clocks
 
