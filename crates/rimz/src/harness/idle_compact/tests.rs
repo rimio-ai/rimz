@@ -307,8 +307,13 @@ fn producer_fires_at_each_seats_own_floor_with_its_brief() {
 
     let mut toml_role = candidate.clone();
     toml_role.role = Some("coder".to_owned());
+    toml_role.launch_depth = Some(1);
     let requests = fire(&toml_role);
-    assert_eq!(requests.len(), 1, "a TOML role override");
+    assert_eq!(
+        requests.len(),
+        1,
+        "an agent-launched team peer's role override"
+    );
     assert_eq!(
         requests[0].command,
         crate::agents::compact_command(&toml_role, &config.harness).unwrap()

@@ -46,9 +46,12 @@ impl SeatPolicy {
         }
     }
 
-    /// The role-over-team maximum (or solo profile's), admitted by the TTL floor and the current stage condition. Unknown board readings permit a hold; a while-only hold takes the ping cap. A `rimz subagents` child never resolves one.
+    /// The role-over-team maximum (or solo profile's), admitted by the TTL floor and the
+    /// current stage condition. Unknown board readings permit a hold; a while-only hold
+    /// takes the ping cap. A `rimz subagents` child never resolves one; an agent-launched
+    /// peer resolves like any other seat.
     pub fn horizon(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<Duration> {
-        if agent.launch_depth.is_some() {
+        if agent.is_launched_child() {
             return None;
         }
         let setting = match &agent.team {
@@ -93,9 +96,10 @@ impl SeatPolicy {
     /// The token floor at which this seat is compacted while idle (`None` is off): a TOML team
     /// role's override, else the first value up the seat's profile chain (a Markdown role's
     /// value lives on its `<team>.<role>` profile), else `harness.idle_compact`. A
-    /// `rimz subagents` child never resolves one.
+    /// `rimz subagents` child never resolves one; an agent-launched peer resolves like any
+    /// other seat.
     pub fn idle_compact_floor(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<u64> {
-        if agent.launch_depth.is_some() {
+        if agent.is_launched_child() {
             return None;
         }
         let role = agent.team.as_ref().and_then(|team| {
