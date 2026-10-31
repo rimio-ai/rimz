@@ -3233,7 +3233,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("@planner idle compacted after 1.0h — 180k ctx"))
+            .any(|line| line.contains("@planner idle compacted after 59m — 180k ctx"))
     );
     assert!(lines.iter().any(|line| {
         line.contains("rebirth recovery — 2 agents restored after crash (@coder, @reviewer)")
