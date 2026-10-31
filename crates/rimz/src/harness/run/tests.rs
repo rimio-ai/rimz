@@ -1066,7 +1066,7 @@ fn stranded_park_requires_two_checks_and_preserves_racing_turns() {
 }
 
 #[test]
-fn overdue_sent_wake_releases_a_clean_park_without_reconciliation() {
+fn overdue_sent_wake_releases_a_clean_park_without_reconciliation_once_compaction_closes() {
     use crate::store::message::{
         DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
     };
@@ -1117,12 +1117,11 @@ fn overdue_sent_wake_releases_a_clean_park_without_reconciliation() {
             turn_id: None,
         },
     );
-    let adapter = crate::agents::definition_by_kind("claude").unwrap();
     assert!(
         settle_lifecycle(
             &store,
             &record.run_id,
-            adapter,
+            crate::agents::definition_by_kind("claude").unwrap(),
             &ended,
             Some("answer".into())
         )
@@ -1130,13 +1129,50 @@ fn overdue_sent_wake_releases_a_clean_park_without_reconciliation() {
         .is_none()
     );
     let parked = load(store.paths(), &record.run_id).unwrap();
+    let at = parked.parked_at.unwrap();
+    let compacting =
+        AgentLifecycleObservation::new(record.agent_id.clone(), LifecycleSignal::Compacting);
+    store
+        .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+            session_name: "park-test",
+            agent_kind: record.kind.clone(),
+            event_name: "PreCompact",
+            observation: &compacting,
+            spawned_subagents: &[],
+        })
+        .unwrap();
     wake.updated_at = Timestamp::now() - wake.body.delivery_window() - Duration::from_secs(60);
     wake.last_sent_at = Some(wake.updated_at);
     store.queue_message(&wake, "park-test").unwrap();
-    let ParkCheck::Stranded(at) = settle_stranded_park(&store, &parked, None).unwrap() else {
-        panic!("the overdue wake must release the park");
-    };
-    assert_eq!(Some(at), parked.parked_at);
+    for previous in [None, Some(at)] {
+        assert_eq!(
+            settle_stranded_park(&store, &parked, previous).unwrap(),
+            ParkCheck::Live
+        );
+    }
+    assert_eq!(load(store.paths(), &record.run_id).unwrap(), parked);
+    assert_eq!(store.list_messages().unwrap(), vec![wake]);
+
+    let closed = AgentLifecycleObservation::new(
+        record.agent_id.clone(),
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+        },
+    );
+    store
+        .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+            session_name: "park-test",
+            agent_kind: record.kind.clone(),
+            event_name: "PostCompact",
+            observation: &closed,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    assert_eq!(
+        settle_stranded_park(&store, &parked, None).unwrap(),
+        ParkCheck::Stranded(at)
+    );
     assert_eq!(
         settle_stranded_park(&store, &parked, Some(at)).unwrap(),
         ParkCheck::Settled
@@ -1146,6 +1182,50 @@ fn overdue_sent_wake_releases_a_clean_park_without_reconciliation() {
     assert_eq!(settled.failure_tail.as_deref(), Some(STRANDED_PARK_REASON));
     assert_eq!(settled.last_message.as_deref(), Some("answer"));
     assert_eq!(settled.parked_at, None);
+}
+
+#[test]
+fn compaction_without_a_wake_does_not_hold_a_stranded_park() {
+    let (dir, paths, mut record) = setup();
+    let runtime =
+        crate::RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    record.status = RunStatus::Running;
+    record.agent_id = Some("session".into());
+    let at = Timestamp::now();
+    record.parked_at = Some(at);
+    create(store.paths(), &record).unwrap();
+    for signal in [LifecycleSignal::Registered, LifecycleSignal::Compacting] {
+        let observation = AgentLifecycleObservation::new(record.agent_id.clone(), signal);
+        store
+            .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+                session_name: "park-test",
+                agent_kind: record.kind.clone(),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    let snapshot = store.snapshot_cached().unwrap();
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| Some(&agent.agent_id) == record.agent_id.as_ref())
+        .unwrap();
+    assert!(agent.compacting_since.is_some());
+    assert!(store.list_messages().unwrap().is_empty());
+    assert_eq!(
+        settle_stranded_park(&store, &record, None).unwrap(),
+        ParkCheck::Stranded(at)
+    );
+    assert_eq!(
+        settle_stranded_park(&store, &record, Some(at)).unwrap(),
+        ParkCheck::Settled
+    );
+    let settled = load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(settled.status, RunStatus::Failed);
+    assert_eq!(settled.failure_tail.as_deref(), Some(STRANDED_PARK_REASON));
 }
 
 /// A park whose turn end carried no transcript path is woken by a turn start

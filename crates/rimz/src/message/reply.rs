@@ -581,7 +581,9 @@ impl TurnWaitView {
 
     /// A harness wake between its publication and the turn it opens. Reply
     /// waits count `Wait` and `Signal`; a supervised run also counts the
-    /// fleet digest or team report a launcher is owed.
+    /// fleet digest or team report a launcher is owed. A `Sent` wake remains in
+    /// flight throughout its receiver's open compaction bracket, regardless of
+    /// its deadline or the bounded display/delivery window.
     pub(crate) fn wake_in_flight(&self, agent: &AgentState, digest: bool) -> bool {
         self.messages.iter().any(|message| {
             let wake = match &message.sender {
@@ -595,7 +597,7 @@ impl TurnWaitView {
                 _ => false,
             };
             wake && !message.status.is_terminal()
-                && !message.sent_hold_expired(self.now)
+                && (!message.sent_hold_expired(self.now) || message.held_by_compaction(agent))
                 && message.same_agent_card(agent)
         })
     }

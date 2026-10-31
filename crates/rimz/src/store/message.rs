@@ -879,9 +879,18 @@ impl MessageRecord {
     }
 
     /// Read-side mirror of the reconciler's deadline, including any hold's deferral.
+    /// FIFO and acknowledgement selection use this deadline alone; wake-in-flight
+    /// readers also honour [`Self::held_by_compaction`].
     pub(crate) fn sent_hold_expired(&self, now: Timestamp) -> bool {
         self.sent_reconcile_deadline()
             .is_some_and(|deadline| now >= deadline)
+    }
+
+    /// Whether the receiver's open compaction bracket holds this `Sent` write.
+    pub(crate) fn held_by_compaction(&self, agent: &AgentState) -> bool {
+        self.status == MessageStatus::Sent
+            && agent.compacting_since.is_some()
+            && self.same_agent_card(agent)
     }
 
     /// Whether a prior unconfirmed pane write can still be acknowledged.

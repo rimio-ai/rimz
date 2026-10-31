@@ -1156,7 +1156,9 @@ impl Store {
     /// including any prior deferral. An open receiver compaction bracket holds
     /// a `Sent` record without a time limit because the composer queues the
     /// original write and submits it when compaction ends; resending would
-    /// duplicate the turn. Pending same-kind ingress stamped within one body
+    /// duplicate the turn. Wake-in-flight readers honour the same bracket
+    /// independently of the deadline; FIFO and acknowledgement selection still
+    /// use the deadline alone. Pending same-kind ingress stamped within one body
     /// window of the write also holds it until applied. A prompt written since its
     /// receiver's resume stays held until the next lifecycle observation or ten
     /// delivery windows from the resume, whichever comes first.
@@ -1249,7 +1251,7 @@ impl Store {
                 }
                 if agents
                     .iter()
-                    .any(|agent| agent.compacting_since.is_some() && message.same_agent_card(agent))
+                    .any(|agent| message.held_by_compaction(agent))
                 {
                     message.retry_after = Some(now + message.body.delivery_window());
                     return MessageUpdate::SilentRewrite;

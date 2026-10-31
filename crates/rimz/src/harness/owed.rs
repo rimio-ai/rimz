@@ -297,15 +297,32 @@ mod tests {
         });
         message.status = MessageStatus::Sent;
         let overdue = now - message.body.delivery_window() - std::time::Duration::from_secs(60);
-        for (sent_at, retry_after, expected) in [
-            (overdue, None, None),
-            (now, None, Some(OwedWake::WakeInFlight)),
+        for (sent_at, retry_after, compacting, expected) in [
+            (overdue, None, false, None),
+            (now, None, false, Some(OwedWake::WakeInFlight)),
             (
                 overdue,
                 Some(now + message.body.delivery_window()),
+                false,
                 Some(OwedWake::WakeInFlight),
             ),
+            (overdue, None, true, Some(OwedWake::WakeInFlight)),
         ] {
+            if compacting {
+                let observation = AgentLifecycleObservation::new(
+                    Some(agent.agent_id.clone()),
+                    LifecycleSignal::Compacting,
+                );
+                store
+                    .append_agent_lifecycle(AgentLifecycleIntent {
+                        session_name: "owed-test",
+                        agent_kind: agent.kind.clone(),
+                        event_name: "PreCompact",
+                        observation: &observation,
+                        spawned_subagents: &[],
+                    })
+                    .unwrap();
+            }
             message.updated_at = sent_at;
             message.last_sent_at = Some(sent_at);
             message.retry_after = retry_after;
