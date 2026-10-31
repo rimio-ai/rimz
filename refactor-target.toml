@@ -2057,6 +2057,7 @@ path = "crates/rimz/src/harness"
 # hold_until shares the condition hold instant with workflow inspection (+1).
 # next_bound shares first-bound forecasting and engine recheck limits (+1).
 # evaluation_target shares routed-evaluation provenance across inspection views (+1).
+# WorkflowSpec::edges replaces Check::edges as the shared routing table (net 0).
 surface-budget = 1043
 
 [[verdict]]
@@ -10396,8 +10397,8 @@ reason = "Workflow validation and execution share one agent/run/shell step decis
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::Check::edges"
-reason = "Routing, admission, and cycle checks use the same explicit and default edges."
+key = "harness::workflow::WorkflowSpec::edges"
+reason = "Routing and inspection share node edges and engine defaults from the graph resolver."
 
 [[verdict]]
 kind = "item"

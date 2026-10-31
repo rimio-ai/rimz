@@ -644,7 +644,7 @@ fn prepare(
                     "outcome":"cap", "step":t.record.node, "bound":bound,
                     "visits":visits, "max":max
                 }),
-                step.on.cap.as_deref().unwrap_or("@user"),
+                &spec.engine_target(&t.record.node, "cap"),
                 ParkReason::Cap,
             )?;
             admission.capacity = None;
@@ -843,7 +843,7 @@ fn prepare_capacity(
         t.engine_route(
             "capacity",
             object,
-            step.on.capacity.as_deref().unwrap_or("@failed"),
+            &t.spec.engine_target(&t.record.node, "capacity"),
             ParkReason::User,
         )?;
         admission.capacity = None;

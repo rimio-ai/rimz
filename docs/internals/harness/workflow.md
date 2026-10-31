@@ -10,8 +10,9 @@ Paths are under `crates/rimz/src/`.
 
 | Path | Owns |
 | --- | --- |
-| `harness/workflow/spec.rs` | `WorkflowSpec` and the serde types `rimz workflow schema` derives from, plus check- and step-kind selection (`Check::kind`, `Step::kind`), default edges (`Check::edges`), `run` argv resolution, deadline and window parsing. In the sidebar import graph. |
-| `harness/workflow/inspect.rs` | Read-only journal hops and the timeout instant shared by inspection and transitions. `WorkflowSpec::target` and `Step`'s visit-bound methods live beside the spec. |
+| `harness/workflow/spec.rs` | `WorkflowSpec` and the serde types `rimz workflow schema` derives from, plus check- and step-kind selection (`Check::kind`, `Step::kind`), visit bounds, `run` argv resolution, deadline and window parsing. In the sidebar import graph. |
+| `harness/workflow/graph.rs` | The shared edge table (`WorkflowSpec::edges`) and routing lookup (`WorkflowSpec::target`), including engine defaults. |
+| `harness/workflow/inspect.rs` | Read-only journal hops and the timeout instant shared by inspection and transitions. |
 | `harness/workflow/validate.rs` | `validate` and `validate_spec`: every definition rule and the `rimz workflow validate` rows. |
 | `harness/workflow/engine.rs` | Run control: `create`, `advance` and its locked `prepare`, `cancel`, `resume`, `wake`, `wake_run`, `reassign_task`, and `persist`, the one publication path. |
 | `harness/workflow/engine/agent.rs` | The agent-attempt protocol: `compose`, `launch`, `prepare_end` (admits the off-lock stop), `finish` (settles it). |
@@ -90,7 +91,7 @@ Both visit bounds must be at least 1. When both are set, `max-visits-per-key` mu
 
 ### Edges and the graph
 
-An edge names another node, `@wait`, `@done`, `@failed`, or `@user`. Checks and steps share one name namespace, and a node or workflow name is nonempty ASCII letters, digits, `-`, and `_` (`crates/rimz/src/harness/schedule.rs::validate_name`). One edge resolver, `Check::edges`, supplies the defaults: `timeout` and `invalid` go to `@user`, and a condition's `unknown` goes to `@wait`. An explicit `on` entry overrides a default. Validation rows, routing, timeout admission, and cycle detection all read the resolved edges, so a default can never route differently from what `validate` printed.
+An edge names another node, `@wait`, `@done`, `@failed`, or `@user`. Checks and steps share one name namespace, and a node or workflow name is nonempty ASCII letters, digits, `-`, and `_` (`crates/rimz/src/harness/schedule.rs::validate_name`). The resolver in `crates/rimz/src/harness/workflow/graph.rs::WorkflowSpec::edges` supplies check and step edges and the header deadline: `timeout`, `invalid`, `cap`, and `deadline` default to `@user`, capacity to `@failed`, and a condition's `unknown` to `@wait`. An explicit entry overrides a default. Engine routing, validation rows, timeout admission, cycle detection, and inspection read that resolver. A step's turn-ending outcomes resolve through `then`; an absent `on.asked` keeps the question live and is not a displayed edge. The routing lookup retains an `@user` fallback for a forced `asked` settlement or a missing `then` in an unvalidated spec.
 
 | Rule | Why |
 | --- | --- |

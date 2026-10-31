@@ -1,18 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::path::Path;
 
+use super::Edge;
 use super::spec::{self, CheckKind, RESERVED_OUTCOMES, StepKind, WorkflowSpec};
 use crate::config::definitions::LoadedDefinitions;
 use crate::store::workflow::StepLifecycle;
 use serde::Serialize;
-
-#[derive(Debug, Serialize)]
-pub struct Edge {
-    pub outcome: String,
-    pub target: String,
-    pub source: String,
-}
 
 #[derive(Debug, Serialize)]
 pub struct NodeRow {
@@ -212,11 +206,19 @@ pub(super) fn validate_spec(
             }
         }
         report.timeout(&path, check.timeout.as_deref());
-        let edges = check.edges();
-        if edges.values().any(|target| target == "@wait") && check.timeout.is_none() {
+        let edges = spec.edges(node);
+        let unknown_waits = condition
+            && edges
+                .iter()
+                .any(|edge| edge.outcome == "unknown" && edge.target == "@wait");
+        if edges
+            .iter()
+            .any(|edge| edge.outcome != "deadline" && edge.target == "@wait")
+            && check.timeout.is_none()
+        {
             report.error(
                 &format!("{path}.timeout"),
-                if condition && edges.get("unknown").is_some_and(|target| target == "@wait") {
+                if unknown_waits {
                     "a waiting check requires timeout; set timeout or route on.unknown away from @wait (and any other waiting outcomes)"
                 } else {
                     "a waiting check requires timeout"
@@ -257,7 +259,7 @@ pub(super) fn validate_spec(
             shell: check.shell.clone(),
             agent: check.agent.clone(),
             do_background: do_background(check.agent.as_deref(), definitions).unwrap_or(false),
-            edges: resolved_edges(spec, edges, |outcome| check.on.contains_key(outcome)),
+            edges,
         });
     }
     for (node, step) in &spec.steps {
@@ -438,16 +440,6 @@ pub(super) fn validate_spec(
                 }
             }
         }
-        let step_edges = step.edges();
-        let edges = step_edges
-            .iter()
-            .filter(|(outcome, _)| match **outcome {
-                "asked" => agent && step.lifecycle.unwrap_or_default().is_turn(),
-                "capacity" => agent,
-                _ => true,
-            })
-            .map(|(&outcome, &(target, _))| (outcome.to_owned(), target.to_owned()))
-            .collect();
         report.rows.push(NodeRow {
             workflow: name.into(),
             node: node.clone(),
@@ -463,11 +455,7 @@ pub(super) fn validate_spec(
             shell: step.shell.clone(),
             agent: step.agent.clone(),
             do_background: do_background.unwrap_or(false),
-            edges: resolved_edges(spec, edges, |outcome| {
-                step_edges
-                    .get(outcome)
-                    .is_some_and(|(_, explicit)| *explicit)
-            }),
+            edges: spec.edges(node),
         });
     }
     if !crate::config::MachineConfig::load_lenient()
@@ -510,12 +498,17 @@ pub(super) fn validate_spec(
             );
         }
     }
-    for (node, check) in &spec.checks {
-        if !check.edges().values().any(|target| target == "@wait")
+    for node in spec.checks.keys() {
+        if !spec
+            .edges(node)
+            .iter()
+            .any(|edge| edge.outcome != "deadline" && edge.target == "@wait")
             && cycles_to(spec, node, |name| {
-                spec.checks
-                    .get(name)
-                    .is_some_and(|check| !check.edges().values().any(|target| target == "@wait"))
+                spec.checks.contains_key(name)
+                    && !spec
+                        .edges(name)
+                        .iter()
+                        .any(|edge| edge.outcome != "deadline" && edge.target == "@wait")
             })
         {
             report.error(&format!("checks.{node}"), "check-only cycle has no @wait");
@@ -809,36 +802,6 @@ fn do_background(agent: Option<&str>, definitions: &LoadedDefinitions) -> Option
     )
 }
 
-fn resolved_edges(
-    spec: &WorkflowSpec,
-    mut edges: BTreeMap<String, String>,
-    explicit: impl Fn(&str) -> bool,
-) -> Vec<Edge> {
-    edges.insert(
-        "deadline".into(),
-        spec.workflow
-            .on
-            .deadline
-            .clone()
-            .unwrap_or_else(|| "@user".into()),
-    );
-    edges
-        .into_iter()
-        .map(|(outcome, target)| {
-            let is_explicit = if outcome == "deadline" {
-                spec.workflow.on.deadline.is_some()
-            } else {
-                explicit(&outcome)
-            };
-            Edge {
-                outcome,
-                target,
-                source: if is_explicit { "explicit" } else { "default" }.into(),
-            }
-        })
-        .collect()
-}
-
 fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -> bool {
     let mut pending = vec![start.to_owned()];
     let mut seen = BTreeSet::new();
@@ -846,18 +809,10 @@ fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -
         if !seen.insert(node.clone()) {
             continue;
         }
-        let targets = if let Some(check) = spec.checks.get(&node) {
-            check.edges().into_values().collect::<Vec<_>>()
-        } else if let Some(step) = spec.steps.get(&node) {
-            step.edges()
-                .into_values()
-                .filter(|(_, explicit)| *explicit)
-                .map(|(target, _)| target.to_owned())
-                .collect()
-        } else {
-            continue;
-        };
-        for target in targets {
+        for (outcome, (target, explicit)) in spec.node_edges(&node).unwrap_or_default() {
+            if outcome == "deadline" || (spec.steps.contains_key(&node) && !explicit) {
+                continue;
+            }
             if !allowed(&target) {
                 continue;
             }
