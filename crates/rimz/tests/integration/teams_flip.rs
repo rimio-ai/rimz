@@ -2623,6 +2623,79 @@ fn same_role_and_foreign_stage_do_not_compact_or_enqueue() {
 }
 
 #[test]
+fn queued_flip_compaction_survives_a_later_turn() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.running("reviewer", None);
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    fixture.context_tokens("coder", 150_000);
+    let output = success(fixture.flip("Review", Some("coder"), Some("handoff")));
+    assert!(output.contains("compact  queued"), "{output}");
+    let store = fixture.env.store();
+    let command = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.body == MessageBody::Command)
+        .unwrap();
+    assert_eq!(command.idle_since, None);
+    // Close the original turn without running boundary delivery before the next prompt.
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            fixture.env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "test",
+            &AgentLifecycleObservation::new(
+                Some("coder".into()),
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+        ))
+        .unwrap();
+    fixture.hook("coder", "UserPromptSubmit", Some("terminal_3"));
+    let receiver = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "coder")
+        .unwrap()
+        .clone();
+    assert!(receiver.turn_started_at > Some(command.enqueued_at));
+    fixture.hook("coder", "Stop", Some("terminal_3"));
+    fixture.sweep_until(&command.message_id, MessageStatus::Sent);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let lines = crate::common::trace_lines(&fixture.trace);
+        if lines.iter().any(|line| crate::common::is_enter_key(line)) {
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|line| line.ends_with("\t/compact "))
+                    .count(),
+                1,
+                "trace={lines:?}"
+            );
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|line| crate::common::is_enter_key(line))
+                    .count(),
+                1,
+                "trace={lines:?}"
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "trace={lines:?}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
 fn pending_compaction_does_not_repeat_or_prevent_owner_handoff() {
     let fixture = Fixture::new();
     fixture.running("coder", Some("terminal_3"));

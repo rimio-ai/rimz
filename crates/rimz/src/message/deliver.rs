@@ -380,15 +380,7 @@ fn attempt_delivery(
                     %error,
                     "deferring message: cannot check or cancel obsolete message"
                 );
-                let reason = if message.soft_compact
-                    == Some(crate::store::message::SoftCompactStep::Continue)
-                {
-                    "deferred: cannot check soft-compaction cycle"
-                } else if message.about_run.is_some() {
-                    "deferred: cannot cancel ended run notice"
-                } else {
-                    "deferred: cannot check or settle joined runs"
-                };
+                let reason = moot_check_failure_reason(message);
                 store.release_message_claims(&claimed, reason, &workspace.session_name)?;
                 return Ok(DeliveryReport::Stopped);
             }
@@ -428,6 +420,18 @@ fn attempt_delivery(
     })
 }
 
+fn moot_check_failure_reason(message: &MessageRecord) -> &'static str {
+    if message.soft_compact == Some(crate::store::message::SoftCompactStep::Continue) {
+        "deferred: cannot check soft-compaction cycle"
+    } else if message.idle_since.is_some() {
+        "deferred: cannot check idle-compaction turn"
+    } else if message.about_run.is_some() {
+        "deferred: cannot cancel ended run notice"
+    } else {
+        "deferred: cannot check or settle joined runs"
+    }
+}
+
 fn cancel_moot_message(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -440,6 +444,13 @@ fn cancel_moot_message(
                 && agent.soft_compact.is_some()
         }) {
         "soft-compaction cycle cleared before delivery".to_owned()
+    } else if message.idle_since.is_some()
+        && store
+            .audit_rows()?
+            .iter()
+            .any(|agent| agent.ended_at.is_none() && message.idle_compaction_lapsed(agent))
+    {
+        "agent took a turn after this idle compaction was queued".to_owned()
     } else if matches!(
         &message.sender,
         MessageSender::Harness { notice } if notice.is_fleet_digest()

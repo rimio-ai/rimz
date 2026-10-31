@@ -86,6 +86,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         workspace,
         store,
         CompactRequest {
+            idle: true,
             message_id: message_id.clone(),
             agent,
             pane_id: request.pane_id,

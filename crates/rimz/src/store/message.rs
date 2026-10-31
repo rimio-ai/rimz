@@ -546,6 +546,12 @@ pub struct MessageRecord {
     /// reading re-enables compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_context_tokens: Option<u64>,
+    /// The later of `turn_started_at` and `turn_ended_at` on the idle decision row.
+    /// Delivery and standalone-compaction repeat refusal detect a later turn edge.
+    /// Tagged cancels retain their reason in `last_error` through
+    /// `store::writer::queue::normalize_terminal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_since: Option<Timestamp>,
     /// Shared stamp for records sent in one batched paste; the head's message id.
     /// Set at send time, cleared when the reconciler requeues an unconfirmed send.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -674,6 +680,7 @@ impl MessageRecord {
             auto_compact: None,
             soft_compact: None,
             compacted_context_tokens: None,
+            idle_since: None,
             batch_id: None,
         }
     }
@@ -846,6 +853,14 @@ impl MessageRecord {
                 })
     }
 
+    pub(crate) fn idle_compaction_lapsed(&self, agent: &AgentState) -> bool {
+        matches!(self.status, MessageStatus::Queued | MessageStatus::Claimed)
+            && self.same_agent_card(agent)
+            && self.idle_since.is_some_and(|idle_since| {
+                idle_compaction_edge(agent).is_some_and(|edge| edge > idle_since)
+            })
+    }
+
     pub fn is_ready(&self, now: Timestamp) -> bool {
         self.not_before.is_none_or(|not_before| not_before <= now)
     }
@@ -968,6 +983,14 @@ impl MessageRecord {
                 MessageSender::Harness { notice } if notice.is_fleet_digest()
             )
     }
+}
+
+/// Idle-compaction edge shared by stamping and lapse checks, excluding keepalive pings.
+/// A reset at rest advances it: a re-registration moves `turn_started_at` alone, and a
+/// compaction closing its bracket stamps both turn stamps at the close.
+/// A prompt resuming a parked row advances neither field until its Stop.
+pub(crate) fn idle_compaction_edge(agent: &AgentState) -> Option<Timestamp> {
+    agent.turn_started_at.max(agent.turn_ended_at)
 }
 
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {

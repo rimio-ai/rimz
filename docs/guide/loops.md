@@ -503,7 +503,7 @@ The Codex block in the sidebar shows what auto-redeem would do if the longest us
 
 An idle agent can outlive its provider's warm prompt cache, so its next prompt pays to cache the whole accumulated conversation again. Idle compaction submits the agent's native compact command with its seat's brief (solo or team), with no new prompt behind it, once its context has reached its token floor. The agent summarizes its conversation and carries on from that smaller context; details not preserved in the summary are lost.
 
-The [configuration rules](./configuration.md#idle-compaction) define the provider timing, eligible agents, and the per-profile and per-role floors. Each attempt leaves a durable command for boundary delivery and an assist record visible in `rimz stats --assists`, including the idle threshold it fired at. Set `harness.idle_compact` to `off` to disable the machine default; a profile or role that sets its own floor still applies.
+The [configuration rules](./configuration.md#idle-compaction) define the provider timing, eligible agents, and the per-profile and per-role floors. Each attempt leaves a durable command for boundary delivery and an assist record visible in `rimz stats --assists`, including the idle threshold it fired at. If the agent takes another turn after that idle decision while the command is still queued, RimZ drops the command instead of compacting after the new turn; a turn resumed from background work counts when it ends. `rimz message show` keeps the reason. Set `harness.idle_compact` to `off` to disable the machine default; a profile or role that sets its own floor still applies.
 
 ### Stop when idle
 

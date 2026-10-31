@@ -420,7 +420,8 @@ fn normalize_terminal(
     debug_assert!(status.is_terminal());
     message.status = status;
     message.updated_at = now;
-    if matches!(status, MessageStatus::Archived | MessageStatus::Expired)
+    if (matches!(status, MessageStatus::Archived | MessageStatus::Expired)
+        || (status == MessageStatus::Canceled && message.idle_since.is_some()))
         && let Some(reason) = reason
     {
         message.last_error = Some(reason.to_owned());

@@ -68,13 +68,14 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `auto_compact` | Context-fill threshold that fires a `/compact` ahead of the text |
 | `soft_compact` | Optional `wrap_up` (steer-only) or `continue` (ordinary boundary FIFO), mirrored in the event payload and omitted when absent |
 | `compacted_context_tokens` | The context reading a compaction fired on, so a stale gauge cannot fire it twice |
+| `idle_since` | Optional decision-row turn edge: the later of the receiver's `turn_started_at` and `turn_ended_at`. Delivery cancels the command after a later edge; omitted when absent and cleared by operator requeue |
 | `batch_id` | Shared by records written in one paste. A turn start without prompt text confirms the batch together |
 | `retry_after` | Wake hint set by the sweep. On a `Sent` record held for compaction, ingress, or provider start, the shared reconciliation and read-side deadline |
 | `attempts`, `last_attempt_at` | Claim bookkeeping. The claim stamp is the hold a sender must still match |
 | `last_sent_at` | Last pane write. Survives a prompt requeue so a late acknowledgement can still settle it |
 | `unconfirmed_sends` | Prompt requeues after a write no hook confirmed |
 | `queued_notice_at` | When the [still-queued notice](#sender-notices) went to the sender. Never cleared on the same message |
-| `last_error` | The latest delivery or reconciliation failure, a refused synthetic attempt's verdict, or a `NoPane` blocker |
+| `last_error` | The latest delivery or reconciliation failure, a refused synthetic attempt's verdict, a `NoPane` blocker, or the terminal reason for an archived, expired, or tagged idle-canceled record |
 | `enqueued_at`, `updated_at`, `delivered_at` | Timestamps |
 
 `MessageSender::is_conversation()` splits senders by variant alone. `Human` and `Agent` are conversation traffic. `Harness`, `Subagent`, and `System` are system traffic, which covers nudges, compaction commands, and deliberately unattributed `--no-from` text. The split is a read-side filter for `message list` and other conversation surfaces, and `automated` plays no part in it.
@@ -130,7 +131,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
    │          └──► Errored    (repeat compaction, or a send failure with no retry path)
    │
    ├──► Delivered  (late acknowledgement of an earlier unconfirmed write)
-   ├──► Canceled   (user, or a joined digest)
+   ├──► Canceled   (user, or a moot record)
    ├──► Expired    (automatic command's validity window, or absent child's registration deadline)
    ├──► Archived   (receiver or watched session ended, channel torn down)
    └──► Errored    (no receiver, or a send failure with no retry path)
@@ -167,7 +168,7 @@ The seven terminal states are final. A terminal transition removes the record fr
 | The address resolved to no agent, after the durable fallback | `Errored` |
 | A send failure with no retry path: a live pane target with no durable card, a failed compact-first command write, or a fresh steer to an agent waiting on input (a self wait's wake stays `Queued` instead) | `Errored` |
 | A queued compaction command would follow an unprompted compaction ([the repeat guards](#the-repeat-guards)) | `Errored` |
-| `message cancel`, `message clear`, the [join guard](#the-subagent-digest-join-guard), or the [run-link guard](#the-run-linked-notice-guard) | `Canceled` |
+| `message cancel`, `message clear`, the [join guard](#the-subagent-digest-join-guard), the [run-link guard](#the-run-linked-notice-guard), a cleared soft-compaction cycle, or the [idle-compaction turn guard](#the-idle-compaction-turn-guard) | `Canceled` |
 | A retryable failure with `attempts` at its cap | `Abandoned` |
 | The receiver session ended, a watched `when` session ended, or the channel was torn down | `Archived` |
 
@@ -380,6 +381,18 @@ Linked notices remain batchable. Moot members are canceled, and the survivors fo
 
 The link names a run, not a park episode. A child that resumes while its run stays open can still produce a notice, and an ended run reopened by a follow-up before the check reads open again. Neither case withdraws the old notice. A transition after the final check can still race external pane I/O, as with the digest guard above; a `Sent` notice is never retracted. An older binary can also drop the link on a queue rewrite ([mixed binaries](#mixed-binaries)).
 
+### The idle-compaction turn guard
+
+The idle helper passes its pre-wake decision row and an idle flag to `send_compact`, which stamps `MessageRecord.idle_since` with that row's turn edge: the later of `turn_started_at` and `turn_ended_at`. `MessageRecord::idle_compaction_lapsed` compares a `Queued` or `Claimed` record with the same card's live edge, using the same edge function. A strictly later edge lapses the decision; ties keep the command. A newly opened turn counts from its start, including harness or agent prompts. A prompt resuming a row parked on background work counts at that turn's Stop. A context reset at rest also advances the edge; a reset before the decision is already included in the stamp. Keepalive pings carry both stamps unchanged.
+
+`cancel_moot_message` reads the live card through `Store::audit_rows` before candidacy on the head, even with a closed gate, and after claim on every member. A lapsed record settles `Canceled` with `agent took a turn after this idle compaction was queued`, without a pane write; `rimz message show` and `message.canceled` keep that reason. Tagged idle cancellations also keep the terminal reason in the history record's `last_error`, so the helper's `CompactErr::Settled` carries it into the assist. Other cancellations retain their existing error-field semantics. A failed read or cancellation stops before candidacy, or releases the claimed batch to `Queued` with an idle-compaction check reason. A turn after the final check can still race pane I/O, and an undrained turn-opening hook is not yet visible to this guard.
+
+Flip, compact-first, manual, and older untagged commands retain their delivery rules. An ended receiver supplies no live row to this guard. Operator requeue deliberately clears `idle_since`, making the new record the operator's choice rather than the helper's stale decision.
+
+Two gaps remain. During a resumed parked turn, the boundary gate is closed but the edge has not advanced yet, so `refuse_repeat` still refuses a manual or flip compaction as `Pending`; the idle record then cancels at Stop, and neither command compacts.
+
+A reset at rest after the decision also cancels the idle record, and the two kinds of reset stamp differently. A compaction that closes its bracket also closes a request: it stamps `turn_started_at` and `turn_ended_at` both at the close, `last_request_at()` moves there too, and the context the idle command meant to compact has been compacted. A re-registration, or a compaction close whose bracket open was missed (`lifecycle::step` marks it `Ignored`), moves `turn_started_at` alone. The producer keys its next attempt on `last_request_at()`, not on this edge, and throttles helper respawns for ten minutes. A reset of this second kind moves `last_request_at()` to the previous turn's Stop when that turn's start and last tool activity were earlier and no keepalive ping closed after that Stop. The producer can then fire again after the throttle, if the cache window is still open. Otherwise no new idle attempt fires until the next request.
+
 ### Batching
 
 When a queued head delivers, the helper extends the claim through the contiguous ready prefix of the head's lane, so messages that piled up during one turn arrive as one interaction. A record joins the batch only if it:
@@ -566,6 +579,8 @@ A close that resumes a turn leaves the marker alone, and so does a triggerless c
 
 Delivery re-checks the marker after claiming a command and before writing its pane. When the marker is set and the agent is still compacting, the command returns to `Queued`. When the compaction already finished while the command was parked, the record settles `Errored` with the no-repeat reason.
 
+Standalone callers also refuse an open compaction bracket or a non-terminal command in the card's queue, except a queued idle compaction whose decision lapsed after a later turn. `refuse_repeat` leaves that record alone for the delivery guard to cancel; a claimed one remains pending until its post-claim check.
+
 ### Smart compaction
 
 A provider compacts on its own near its context ceiling, possibly mid-edit. Smart compaction uses one seat line at two moments: ask a busy agent to wrap up, then compact before continuing; or compact a resting agent before a message lands. Native auto-compaction remains the backstop, with its own unchanged window.
@@ -633,12 +648,12 @@ Request anchoring leaves final generation out of the margin. `cache_timing_reach
 
 The host requires a bound pane and spawns a detached `rimz agents idle-compact`, which keeps store writes out of the sidebar's import graph. The request carries `agents::compact_command` for the seat, with the solo or team brief where supported.
 
-The helper re-resolves the workspace, session, and pane, applies the shared decision to `Ctx::published_snapshot` (which folds pending waits and the activity heartbeat), and validates the command against the adapter and its configured instruction. After checking repeat guards, it synchronously wakes the requested pane even if the published row shows no hibernation, since a freeze helper from the same producer pass can publish later. It repeats the shared decision on a clock read after the wake returns. A wake error ends the helper; a failed re-decision returns without queuing a command or appending an assist. Through `message::compact` it then queues one automated `System` command with the `Done` gate, pins the pane, stamps `compacted_context_tokens` from its context reading, attempts boundary delivery, and appends an `IdleCompact` assist record. The optional `idle_after_secs` records the resolved threshold, and `rimz stats` shows it when present. A closed boundary leaves the command queued through the ordinary retry path.
+The helper re-resolves the workspace, session, and pane, applies the shared decision to `Ctx::published_snapshot` (which folds pending waits and the activity heartbeat), and validates the command against the adapter and its configured instruction. After checking repeat guards, it synchronously wakes the requested pane even if the published row shows no hibernation, since a freeze helper from the same producer pass can publish later. It repeats the shared decision on the same row with a clock read after the wake returns. A wake error ends the helper; a failed re-decision returns without queuing a command or appending an assist. Through `message::compact` it then queues one automated `System` command with the `Done` gate, pins the pane, stamps `compacted_context_tokens` from its context reading and `idle_since` from the pre-wake decision row's turn edge, attempts boundary delivery, and appends an `IdleCompact` assist record. The optional `idle_after_secs` records the resolved threshold, and `rimz stats` shows it when present. A closed boundary leaves the command queued through the ordinary retry path. The [turn guard](#the-idle-compaction-turn-guard) cancels it if the edge advances after the decision, including during the wake; a resumed parked turn advances it at Stop. When the helper's own attempt cancels it, the assist records `delivered: false` and the cancellation reason.
 
 Three layers make it once per idle stretch:
 
 1. The producer's cache-class `(kind, agent_id)` record suppresses the same `last_request_at()` and throttles helper respawns for ten minutes. This pacing is producer-only: the helper must not veto its own spawn record.
-2. The live queue refuses a second outstanding command, and `last_compact_command_tokens` suppresses the same occupied reading.
+2. The live queue refuses a second outstanding command, excluding a queued idle compaction whose decision lapsed after a new turn, and `last_compact_command_tokens` suppresses the same occupied reading.
 3. For adapters with native turn-start hooks, the unprompted marker stops the helper until the next turn opens, whether from a queued prompt or text typed into the pane.
 
 Adapters without durable turn starts keep only the context-baseline guard.
@@ -647,7 +662,7 @@ Adapters without durable turn starts keep only the context-baseline guard.
 
 `rimz agents compact @handle [INSTRUCTION]` resolves one agent with a bound pane and a native compaction command, renders the configured brief or the positional override, and calls `message::compact`. An explicit instruction is refused when the adapter does not accept trailing text, and without one those adapters get the bare command. The verb refuses adapters without native turn-start hooks (plugins that declare no `turn_start`), since the strict no-repeat guard cannot work for them.
 
-`message::compact::refuse_repeat` refuses when any of three states holds: `is_compacting(now)`, a non-terminal `Command` record in the card's live queue, or `compaction_unprompted`. `send_compact` then queues the command and attempts delivery. A closed gate records a retry, so a lifecycle checkpoint or the host sweep delivers it later. When occupied context is known it also stamps `compacted_context_tokens`. The record carries the human or calling-agent sender with `automated: false`, so it leaves a durable message and audit event but no assist record, and it never expires.
+`message::compact::refuse_repeat` refuses when any of three states holds: `is_compacting(now)`, a non-terminal `Command` record in the card's live queue other than a queued lapsed idle compaction, or `compaction_unprompted`. A claimed idle compaction still refuses until delivery checks it. `send_compact` then queues the command and attempts delivery. A closed gate records a retry, so a lifecycle checkpoint or the host sweep delivers it later. When occupied context is known it also stamps `compacted_context_tokens`. The record carries the human or calling-agent sender with `automated: false`, so it leaves a durable message and audit event but no assist record, and it never expires.
 
 ## Prompt-cache keepalive
 
@@ -836,11 +851,12 @@ The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `
 
 ### Mixed binaries
 
-A room can be shared by binaries of different versions, and four record changes have a compatibility edge:
+A room can be shared by binaries of different versions, and five record changes have a compatibility edge:
 
 - `Expired` is a status an older binary cannot decode. Once an expired record is in `audit/messages/`, older binaries fail the history reads behind `message list`, `message show`, `message requeue`, and `send_compact`'s settled lookup. The terminal commit removes the record from the live queue, so older queue transactions never meet the status. Event-log readers keep unknown methods through their catch-all.
 - `queued_notice_at` is dropped by an older binary that rewrites the queue, so a later sweep by a newer binary can send a second still-queued notice. No status or event method marks this.
 - `about_run` is dropped by an older binary that rewrites the queue, so a linked notice can then deliver even after its child run has ended. Records written without a link retain their existing JSON shape.
+- `idle_since` is dropped by an older binary that rewrites the queue, so an idle compaction can then deliver after the agent has taken a turn. Untagged records retain their existing JSON shape.
 - Harness notice strings a binary does not know survive its queue rewrites as `HarnessNotice::Other`.
 
 ## The inbox verbs
