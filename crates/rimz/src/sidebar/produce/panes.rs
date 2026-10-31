@@ -38,6 +38,18 @@ use super::metrics::{MetricsSampleCache, read_metrics_sample_cache, write_metric
 
 type SettledResumes = HashMap<PaneId, (u32, jiff::Timestamp, String)>;
 
+/// The published pane frame a producer starts from, or none while a pane-list fixture stands in
+/// for the mux.
+pub(super) fn published_prior(
+    runtime: &crate::RuntimePaths,
+    session: &str,
+) -> Option<Arc<PaneFrame>> {
+    if super::pane_fixture_active() {
+        return None;
+    }
+    read_snapshot_cache(&runtime.pane_frame_path(), session)
+}
+
 pub(crate) struct PaneProducer {
     pub(super) prior: Option<Arc<PaneFrame>>,
     pub(super) hibernated_panes: HashSet<PaneId>,
@@ -58,9 +70,7 @@ impl PaneProducer {
     pub(crate) fn seeded(runtime: &crate::RuntimePaths, session: &str) -> Self {
         let fixture = super::pane_fixture_active();
         Self {
-            prior: (!fixture)
-                .then(|| read_snapshot_cache(&runtime.pane_frame_path(), session))
-                .flatten(),
+            prior: published_prior(runtime, session),
             metrics: if fixture {
                 MetricsSampleCache::default()
             } else {

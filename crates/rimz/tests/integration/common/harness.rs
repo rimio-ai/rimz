@@ -53,7 +53,10 @@ impl Harness {
     /// subprocess, and no transcript walk: the pane frame (the single-flight
     /// cache's fast path serves it), the provider-spending stamp, and a
     /// retry-fresh unavailable accounts stamp. Re-call right before each
-    /// produce under test — the pane frame rides the short poll-mode TTL.
+    /// produce under test: a producer reuses the unwatched pane frame for
+    /// `EVENT_PANE_TTL` (10 s) from this call, and reads it only when built,
+    /// so a producer that already produced also needs
+    /// `SnapshotProducer::adopt_published_frame` after the re-call.
     pub fn publish_fresh_produce_inputs(&self, session: &str, panes: Vec<rimz::pane::PaneRef>) {
         let now_ms = rimz::utils::time::unix_now_ms();
         let frame = rimz::sidebar::frame::assemble_frame(panes, now_ms, session);

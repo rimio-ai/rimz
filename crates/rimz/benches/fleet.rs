@@ -141,6 +141,7 @@ impl ProduceFixture {
             - log_len;
         rimz::testkit::fleet::publish_fresh_produce_inputs(&runtime, fleet)
             .expect("publish produce inputs");
+        producer.adopt_published_frame(&runtime, rimz::testkit::fleet::SESSION_NAME);
         Self {
             _tempdir: tempdir,
             paths,

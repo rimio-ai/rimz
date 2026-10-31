@@ -222,7 +222,8 @@ impl Fixture {
     /// Publishes the fixture's panes as a one-shot pane frame and returns its
     /// session. Nothing republishes it, and it carries no viewed panes, so a
     /// seeded produce reuses it for `EVENT_PANE_TTL` (10 s) from this call: a
-    /// caller that does heavy work first republishes right before producing.
+    /// caller that does heavy work first republishes right before
+    /// `SnapshotProducer::seeded`, which reads the frame only when built.
     pub(crate) fn publish_pane_frame(&self) -> String {
         let panes: Vec<PaneRef> =
             serde_json::from_slice(&std::fs::read(&self.panes_path).expect("read panes"))

@@ -138,8 +138,9 @@ fn runtime_projection_uses_persisted_rollup_delta() {
 /// exactly the bytes appended since the first — the elder fetch worker's
 /// steady state, where one warm cursor serves the fast lane and the produce
 /// alike. Every fork-bearing enrichment input is pre-published fresh
-/// ([`Harness::publish_fresh_produce_inputs`]), so the produce pays no mux
-/// and no subprocess, and the byte counter isolates the rollup read.
+/// ([`Harness::publish_fresh_produce_inputs`]) and the retained producer
+/// adopts the republished pane frame, so the produce pays no mux and no
+/// subprocess, and the byte counter isolates the rollup read.
 #[test]
 fn warm_produce_folds_o_new_bytes() {
     let h = Harness::new();
@@ -191,6 +192,7 @@ fn warm_produce_folds_o_new_bytes() {
         - log_len;
 
     h.publish_fresh_produce_inputs(SESSION_NAME, synthetic_panes(1));
+    producer.adopt_published_frame(&h.runtime_paths, SESSION_NAME);
     let warm_before = bytes_read();
     let warm = rimz::sidebar::produce::produce_snapshot(
         &mut cursor,
