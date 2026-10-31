@@ -490,20 +490,25 @@ fn bench_concurrent_fanout(
             let hidden_locks: u64 = report.hidden.iter().map(|thread| thread.views_locks).sum();
             let events: u64 = report.hidden.iter().map(|thread| thread.events_takes).sum();
             let hidden_paints: usize = report.hidden.iter().map(|thread| thread.paints).sum();
-            let mut latency = report.paint_latency;
-            latency.sort_unstable();
-            let mut lateness = report.paint_lateness;
-            lateness.sort_unstable();
-            let millis = |value: std::time::Duration| value.as_secs_f64() * 1000.0;
+            let paint_label = if report.last_mirror_latency.is_some() {
+                "watched_paint_ms"
+            } else {
+                "paint_ms"
+            };
+            let latency = fanout_latency(paint_label, report.paint_latency);
+            let mirrors = report
+                .last_mirror_latency
+                .map(|latency| format!(" {}", fanout_latency("last_mirror_ms", latency)))
+                .unwrap_or_default();
+            let lateness = fanout_latency("paint_late_ms", report.paint_lateness);
             let publications = report.publications as f64;
             writeln!(
                 std::io::stderr(),
                 concat!(
                     "{}: publications={} ",
                     "attach_cpu_us_per_publication={:.1} hidden_cpu_us_per_publication={:.1} ",
-                    "watched_cpu_us_per_publication={:.1} paint_ms_p50={:.3} paint_ms_p99={:.3} ",
-                    "paint_ms_max={:.3} paint_late_ms_p50={:.3} paint_late_ms_p99={:.3} ",
-                    "paint_late_ms_max={:.3} reveal_ms={:.3} views_locks_hidden={} ",
+                    "watched_cpu_us_per_publication={:.1} {}{} {} ",
+                    "reveal_ms={:.3} views_locks_hidden={} ",
                     "views_locks_total={} events_takes_hidden={} hidden_paints={}",
                 ),
                 label,
@@ -511,13 +516,10 @@ fn bench_concurrent_fanout(
                 (hidden_cpu + report.watched.cpu_us) as f64 / publications,
                 hidden_cpu as f64 / publications,
                 report.watched.cpu_us as f64 / publications,
-                millis(latency[latency.len().div_ceil(2) - 1]),
-                millis(latency[(latency.len() * 99).div_ceil(100) - 1]),
-                millis(*latency.last().unwrap()),
-                millis(lateness[lateness.len().div_ceil(2) - 1]),
-                millis(lateness[(lateness.len() * 99).div_ceil(100) - 1]),
-                millis(*lateness.last().unwrap()),
-                millis(report.reveal_latency),
+                latency,
+                mirrors,
+                lateness,
+                report.reveal_latency.as_secs_f64() * 1000.0,
                 hidden_locks,
                 report.total_views_locks,
                 events,
@@ -525,6 +527,20 @@ fn bench_concurrent_fanout(
             )
             .expect("concurrent fanout figures");
         });
+}
+
+#[cfg(target_os = "linux")]
+fn fanout_latency(label: &str, mut values: Vec<std::time::Duration>) -> String {
+    values.sort_unstable();
+    if values.is_empty() {
+        return format!("{label}_p50=absent {label}_p99=absent {label}_max=absent");
+    }
+    format!(
+        "{label}_p50={:.3} {label}_p99={:.3} {label}_max={:.3}",
+        values[values.len().div_ceil(2) - 1].as_secs_f64() * 1000.0,
+        values[(values.len() * 99).div_ceil(100) - 1].as_secs_f64() * 1000.0,
+        values.last().unwrap().as_secs_f64() * 1000.0,
+    )
 }
 
 fn bench_idle_cycle(bencher: Bencher, orphans: usize, apply: bool) {

@@ -31,6 +31,7 @@ pub struct ConcurrentFanout {
     pub total_views_locks: u64,
     pub generations: u64,
     pub paint_latency: Vec<Duration>,
+    pub last_mirror_latency: Option<Vec<Duration>>,
     pub paint_lateness: Vec<Duration>,
     pub reveal_latency: Duration,
 }
@@ -301,6 +302,7 @@ impl IdleCycleFixture {
                     let generation = views.generation();
                     barrier.wait();
                     let mut latency = Vec::new();
+                    let mut last_mirror_latency = (change == CycleChange::Structure).then(Vec::new);
                     let mut lateness = Vec::new();
                     let mut removed = None;
                     for _ in 0..publications {
@@ -313,14 +315,18 @@ impl IdleCycleFixture {
                         }
                         std::thread::sleep(FOLD_FLOOR);
                         let painted = wait_for_paints(&acknowledgments, threads);
-                        let (visible, late) = painted
-                            .values()
-                            .flatten()
-                            .max_by_key(|(latency, _)| *latency)
-                            .copied()
-                            .expect("at least the watched paint");
+                        let (visible, late) = painted[&watched].expect("watched paint");
                         latency.push(visible);
                         lateness.push(late);
+                        if let Some(mirrors) = &mut last_mirror_latency
+                            && let Some(last) = painted
+                                .iter()
+                                .filter(|(index, _)| **index != watched)
+                                .filter_map(|(_, paint)| paint.map(|(latency, _)| latency))
+                                .max()
+                        {
+                            mirrors.push(last);
+                        }
                     }
                     wait_for_passes(&backstops, threads);
                     let event = SidebarEventEnvelope::new(
@@ -370,6 +376,7 @@ impl IdleCycleFixture {
                         total_views_locks,
                         generations,
                         paint_latency: latency,
+                        last_mirror_latency,
                         paint_lateness: lateness,
                         reveal_latency,
                     }
