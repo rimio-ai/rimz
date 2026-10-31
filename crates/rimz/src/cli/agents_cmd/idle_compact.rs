@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::cache_keepalive::SeatPolicy;
-use rimz::harness::idle_compact::{IdleCompactRequest, fire_point, should_compact};
+use rimz::harness::idle_compact::{IdleCompactRequest, due_compaction};
 use rimz::ids::MessageId;
 use rimz::message::compact::{
     CompactErr, CompactOutcome, CompactRequest, refuse_repeat, send_compact,
@@ -29,17 +29,11 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let agent = find_agent(&snapshot.agents, &request.kind, &request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
     let policy = SeatPolicy::load(&config, Some(&workspace.project_root));
-    let floor = policy.idle_compact_floor(agent, &config.harness);
-    let window = fire_point(agent, floor, &config.harness);
-    let command = rimz::agents::compact_command(agent, &config.harness);
-    let now = Timestamp::now();
-    if !should_compact(agent, command.as_deref(), window, now)
-        || policy.holding(agent, &config.harness, now).is_some()
-    {
+    let Some((_, expected_command)) =
+        due_compaction(agent, &policy, &config.harness, Timestamp::now())
+    else {
         return Ok(());
-    }
-    let expected_command =
-        command.context("idle-compaction target adapter has no compact command")?;
+    };
     if request.command != expected_command {
         bail!(
             "idle-compaction command `{}` does not match {} adapter command `{expected_command}`",
@@ -62,7 +56,6 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     else {
         return Ok(());
     };
-    let idle_secs = now.as_second() - last_request_at.as_second();
     if request.occupied_tokens != occupied_tokens {
         tracing::debug!(
             producer_occupied = request.occupied_tokens,
@@ -80,6 +73,14 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         }
         Err(err) => return Err(err).context("checking idle-compaction eligibility"),
     }
+    // A freeze can race the snapshot; waking may also outlast the cache window.
+    rimz::harness::hibernate::wake_pane(store, &request.pane_id)?;
+    let now = Timestamp::now();
+    let Some((window, expected_command)) = due_compaction(agent, &policy, &config.harness, now)
+    else {
+        return Ok(());
+    };
+    let idle_secs = now.as_second() - last_request_at.as_second();
     let message_id = MessageId::new();
     let outcome = send_compact(
         workspace,
@@ -103,7 +104,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         request.kind,
         request.agent_id,
         idle_secs,
-        window.map(|window| window.fire_after.as_secs()),
+        Some(window.fire_after.as_secs()),
         occupied_tokens,
         &message_id,
         matches!(outcome, Ok(CompactOutcome::Sent)),

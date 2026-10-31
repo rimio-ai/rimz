@@ -1872,7 +1872,7 @@ path = "crates/rimz/src/harness"
 # Rebirth checkout roots feed pre-pane language-server admission.
 # Response paths, publication errors and publication serve CLI receipts/reports; fleet exposes settled rows.
 # `ancestry::check_launch_room` lets both CLI launch entries refuse before opening a store.
-# fire_point and should_compact share one idle-compaction decision between producer and detached CLI helper.
+# due_compaction shares one idle-compaction decision between producer and detached CLI helper.
 # IdleWindow carries the seat floor and the cache-expiry bound through that shared decision.
 # Deadline rungs, channel policy and locked claims serve the CLI and producer.
 # Locked board records expose their section, request, receipt, and typed errors to the CLI.
