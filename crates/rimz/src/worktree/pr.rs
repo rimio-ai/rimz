@@ -13,8 +13,8 @@ use crate::forge;
 use super::{
     Checkout, CreatedWorktree, FreshWorktree, MarkerProvenance, PushDestination, Result,
     WorktreeCreateTarget, WorktreeErr, add_worktree, ensure_repo, git_network_output, git_run,
-    git_stdout, is_ancestor, parse_worktree_list, read_marker_for_worktree, resolve_base_commit,
-    resolve_branch, resolve_fresh_worktree, trunk_ref, write_marker,
+    git_stdout, is_ancestor, merge_tree, parse_worktree_list, read_marker_for_worktree,
+    resolve_base_commit, resolve_branch, resolve_fresh_worktree, trunk_ref, write_marker,
 };
 
 const PR_HEAD_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -80,7 +80,7 @@ fn classify_divergence(repo: &Path, local: &str, remote: &str) -> Result<PrBranc
     if patches.is_empty() {
         return Ok(PrBranchDivergence::Rebased { ahead, behind });
     }
-    let conflicts = git_stdout(repo, ["merge-tree", "--write-tree", local, remote]).is_err();
+    let conflicts = merge_tree(repo, local, remote).is_err();
     Ok(PrBranchDivergence::Diverged {
         ahead,
         behind,
@@ -752,6 +752,7 @@ mod tests {
         git_run(repo, ["add", "."]).unwrap();
         git_run(repo, ["commit", "-m", "other"]).unwrap();
         let local = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
+        let before_clean = super::super::tests::object_files(repo);
         assert_eq!(
             classify_divergence(repo, &local, &remote).unwrap(),
             PrBranchDivergence::Diverged {
@@ -760,6 +761,7 @@ mod tests {
                 conflicts: false
             }
         );
+        let after_clean = super::super::tests::object_files(repo);
         git_run(repo, ["cherry-pick", &remote]).unwrap();
         let rebased = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
         assert_eq!(
@@ -774,6 +776,7 @@ mod tests {
         git_run(repo, ["add", "."]).unwrap();
         git_run(repo, ["commit", "-m", "conflict"]).unwrap();
         let local = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
+        let before_conflict = super::super::tests::object_files(repo);
         assert_eq!(
             classify_divergence(repo, &local, &remote).unwrap(),
             PrBranchDivergence::Diverged {
@@ -781,6 +784,12 @@ mod tests {
                 behind: 1,
                 conflicts: true
             }
+        );
+        let after_conflict = super::super::tests::object_files(repo);
+        assert_eq!(
+            [before_clean, before_conflict],
+            [after_clean, after_conflict],
+            "PR divergence checks must not add repository objects"
         );
     }
 

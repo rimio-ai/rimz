@@ -815,6 +815,145 @@ fn holders_count_own_panes_only_when_not_exempt() {
     );
 }
 
+pub(super) fn object_files(cwd: &Path) -> HashSet<PathBuf> {
+    let objects = git_stdout(
+        cwd,
+        [
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects",
+        ],
+    )
+    .unwrap();
+    std::fs::read_dir(objects)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_name().len() == 2 || entry.file_name() == "pack")
+        .flat_map(|entry| std::fs::read_dir(entry.path()).unwrap())
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_type().unwrap().is_file())
+        .map(|entry| entry.path())
+        .collect()
+}
+
+fn commit_merge_file(repo: &Path, name: &str, contents: &str) {
+    std::fs::write(repo.join(name), contents).unwrap();
+    git_run(repo, ["add", name]).unwrap();
+    git_run(repo, ["commit", "-m", name]).unwrap();
+}
+
+fn merge_test_worktree(parent: &Path, contents: &str) -> (PathBuf, PathBuf) {
+    let repo = init_test_repo(&parent.join("with:colon"));
+    commit_merge_file(&repo, "f.txt", contents);
+    let worktree = parent.join("linked");
+    git_run(
+        &repo,
+        [
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            worktree.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    (repo, worktree)
+}
+
+#[test]
+fn merge_tree_preserves_objects_and_cleans_scratch_after_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let (repo, worktree) = merge_test_worktree(dir.path(), "base\n");
+    commit_merge_file(&repo, "trunk.txt", "trunk\n");
+    commit_merge_file(&worktree, "feature.txt", "feature\n");
+
+    let before = object_files(&worktree);
+    let merged = merge_tree_in(&worktree, "main", "HEAD", scratch.path()).unwrap();
+    let after = object_files(&worktree);
+    assert!(std::fs::read_dir(scratch.path()).unwrap().next().is_none());
+    let plain = git_stdout(&worktree, ["merge-tree", "--write-tree", "main", "HEAD"]).unwrap();
+    assert_eq!(merged, plain);
+    assert_ne!(Some(&merged), tree_id(&worktree, "main").as_ref());
+    assert_ne!(Some(&merged), tree_id(&worktree, "HEAD").as_ref());
+    assert_eq!(before, after, "merge-tree must not add repository objects");
+}
+
+#[test]
+fn merge_tree_preserves_objects_and_cleans_scratch_after_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let (repo, worktree) = merge_test_worktree(dir.path(), "base\n");
+    commit_merge_file(&repo, "f.txt", "trunk\n");
+    commit_merge_file(&worktree, "f.txt", "feature\n");
+
+    let before = object_files(&worktree);
+    assert!(merge_tree_in(&worktree, "main", "HEAD", scratch.path()).is_err());
+    assert!(std::fs::read_dir(scratch.path()).unwrap().next().is_none());
+    assert_eq!(
+        before,
+        object_files(&worktree),
+        "conflicting merge-tree must not add repository objects"
+    );
+}
+
+#[test]
+fn content_landed_preserves_objects_with_shifted_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, worktree) = merge_test_worktree(dir.path(), "l1\nl2\nl3\nl4\nl5\nl6\nl7\n");
+    commit_merge_file(&worktree, "f.txt", "l1\nl2\nl3\nl4-feature\nl5\nl6\nl7\n");
+    commit_merge_file(&repo, "f.txt", "l1\nl2\nl3\nl4\nl5\nl6-trunk\nl7\n");
+    commit_merge_file(&repo, "f.txt", "l1\nl2\nl3\nl4-feature\nl5\nl6-trunk\nl7\n");
+    assert_ne!(tree_id(&worktree, "main"), tree_id(&worktree, "HEAD"));
+    assert_ne!(rev_list_count(&worktree, "main..HEAD"), Some(0));
+    assert!(
+        !git_stdout(
+            &worktree,
+            [
+                "log",
+                "--right-only",
+                "--cherry-pick",
+                "--no-merges",
+                "--format=%H",
+                "main...HEAD",
+            ],
+        )
+        .unwrap()
+        .is_empty()
+    );
+
+    let before = object_files(&worktree);
+    assert_eq!(
+        content_landed(&worktree, "main", "HEAD"),
+        LandedVerdict::Landed
+    );
+    assert_eq!(
+        before,
+        object_files(&worktree),
+        "merge absorption must not add repository objects"
+    );
+}
+
+#[test]
+fn content_landed_preserves_objects_when_the_merge_builds_a_new_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, worktree) = merge_test_worktree(dir.path(), "base\n");
+    commit_merge_file(&repo, "trunk.txt", "trunk\n");
+    commit_merge_file(&worktree, "feature.txt", "feature\n");
+
+    let before = object_files(&worktree);
+    assert_eq!(
+        content_landed(&worktree, "main", "HEAD"),
+        LandedVerdict::Unlanded
+    );
+    assert_eq!(
+        before,
+        object_files(&worktree),
+        "an unabsorbed merge must not add repository objects"
+    );
+}
+
 #[test]
 fn landed_memo_serves_oid_pairs_and_never_caches_unknown() {
     let dir = tempfile::tempdir().unwrap();

@@ -148,7 +148,7 @@ When the tips differ, `crates/rimz/src/worktree/pr.rs::classify_divergence` coun
 | --- | --- |
 | `Behind` | The local tip is an ancestor of the PR head. |
 | `Rebased` | `git log --cherry-pick --right-only --no-merges remote...local` lists nothing: no local-only non-merge patch remains. A branch ahead only by merge commits lands here. |
-| `Diverged` | Local patches remain. `conflicts` records whether `git merge-tree --write-tree` fails. A branch ahead by non-merge commits is `Diverged`, never a fast-forward candidate. |
+| `Diverged` | Local patches remain. `conflicts` records whether `git merge-tree --write-tree` fails. The merge uses a throwaway object directory and adds nothing to the repository's object store. A branch ahead by non-merge commits is `Diverged`, never a fast-forward candidate. |
 
 Without a choice, the domain returns `PrBranchDiverged` before it moves the local ref or sets upstream. `crates/rimz/src/cli/mod.rs::resolve_pr_branch_choice` owns the warning and the choice for both launch and `worktree new`. At a terminal it defaults to remote for `Behind` and `Rebased` and local for `Diverged`, and EOF aborts. Non-terminal stdin advances only `Behind`, with a warning, and otherwise returns the domain error with its alignment commands. The caller (`crates/rimz/src/launcher/checkout.rs::settle_launch_checkout` for a launch, `rimz worktree new` itself) then retries the domain call with a `PrBranchChoice`, which repeats the head query and fetch:
 
@@ -244,13 +244,13 @@ No usable comparison ref means `Unknown`.
 
 ### The content-landed ladder
 
-`content_landed(cwd, comparison, head)` tries cheap proofs before expensive ones. A failed `rev-list` or `log` call returns `Unknown`, so a broken repository keeps its trees.
+`content_landed(cwd, comparison, head)` tries cheap proofs before expensive ones. A failed `rev-list` or `log` call returns `Unknown`, so a broken repository keeps its trees. A rung 3 that cannot run, including a failed scratch-directory setup, proves nothing and falls through to rung 4.
 
 | Rung | Check | Verdict |
 | --- | --- | --- |
 | 1 | `rev-list --count <comparison>..<head>` is zero | Landed: nothing was committed past the comparison. |
 | 2 | Both refs have the same tree object | Landed: identical content, whatever the history. |
-| 3 | `merge-tree --write-tree <comparison> <head>` produces the comparison's own tree | Landed: the branch adds nothing, even when patch context drifted. |
+| 3 | `merge-tree --write-tree <comparison> <head>`, using a throwaway object directory that adds nothing to the repository's object store, produces the comparison's own tree | Landed: the branch adds nothing, even when patch context drifted. |
 | 4 | `log --right-only --cherry-pick --no-merges <comparison>...<head>` lists commits | Landed if the head's tree appears in `log <head>..<comparison>`, otherwise Unlanded. |
 | 5 | Rung 4 lists nothing and the head side has no merge commits | Landed. |
 | 6 | Rung 4 lists nothing and every head-side merge commit's tree appears in the comparison's last `LANDED_BASE_SCAN_CAP` (500) commits | Landed: a merge-back landing. Otherwise Unlanded. |

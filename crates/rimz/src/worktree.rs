@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -2350,7 +2351,10 @@ pub(crate) fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -
         return LandedVerdict::Landed;
     }
 
-    if merge_absorbed(cwd, comparison_ref, head_ref) {
+    if comparison_tree
+        .as_deref()
+        .is_some_and(|tree| merge_absorbed(cwd, comparison_ref, head_ref, tree))
+    {
         return LandedVerdict::Landed;
     }
 
@@ -2457,14 +2461,59 @@ fn tree_id(cwd: &Path, ref_name: &str) -> Option<String> {
 /// True when a three-way merge of `head_ref` into `comparison_ref` produces
 /// `comparison_ref`'s own tree. The branch adds nothing, so its changes are
 /// already present even when patch context drift makes `--cherry-pick` miss it.
-fn merge_absorbed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> bool {
-    let Some(comparison_tree) = tree_id(cwd, comparison_ref) else {
-        return false;
-    };
+fn merge_absorbed(cwd: &Path, comparison_ref: &str, head_ref: &str, comparison_tree: &str) -> bool {
     matches!(
-        git_stdout(cwd, ["merge-tree", "--write-tree", comparison_ref, head_ref]),
+        merge_tree(cwd, comparison_ref, head_ref),
         Ok(merged_tree) if merged_tree == comparison_tree
     )
+}
+
+struct MergeObjectDir(PathBuf);
+
+impl Drop for MergeObjectDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Merge into a throwaway object store so repeated checks do not accumulate
+/// unreferenced objects in the repository. Read the real store through
+/// `info/alternates`: `GIT_ALTERNATE_OBJECT_DIRECTORIES` splits paths on `:`.
+fn merge_tree(cwd: &Path, ours: &str, theirs: &str) -> Result<String> {
+    merge_tree_in(cwd, ours, theirs, &std::env::temp_dir())
+}
+
+fn merge_tree_in(cwd: &Path, ours: &str, theirs: &str, scratch_parent: &Path) -> Result<String> {
+    let objects = git_stdout(
+        cwd,
+        [
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects",
+        ],
+    )?;
+    let path =
+        std::path::absolute(scratch_parent)?.join(format!("rimz-merge-tree-{}", Uuid::now_v7()));
+    std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+    let scratch = MergeObjectDir(path);
+    std::fs::create_dir(scratch.0.join("info"))?;
+    std::fs::write(scratch.0.join("info/alternates"), format!("{objects}\n"))?;
+
+    let args = ["merge-tree", "--write-tree", ours, theirs];
+    let output = crate::proc::git_command(cwd)
+        .args(args)
+        .env("LC_ALL", "C")
+        .env("GIT_OBJECT_DIRECTORY", &scratch.0)
+        .output()?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    }
+    Err(WorktreeErr::Git {
+        cwd: cwd.to_path_buf(),
+        args: args.join(" "),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
 }
 
 fn rev_list_count(cwd: &Path, range: &str) -> Option<u32> {
