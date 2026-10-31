@@ -207,6 +207,12 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         "diff-stats TTL serves the second refresh without re-publishing"
     );
 
+    // The seeded produce reuses the published frame only within EVENT_PANE_TTL
+    // of its publish, and two refreshes under gate load can outlast that, after
+    // which the produce reads a multiplexer this fixture never started.
+    // Republish the frame so this test measures the produce, not the
+    // refreshes' wall-clock duration.
+    fixture.publish_pane_frame();
     let project_opts = rimz::sidebar::produce::ProduceOptions {
         mux: rimz::MuxName::Zellij,
         session_name: session.clone(),
