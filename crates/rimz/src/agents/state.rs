@@ -1182,7 +1182,13 @@ impl AgentState {
     }
 
     /// Request-start estimate shared by cache-aligned timers: the last real
-    /// request of a closed turn, or a later closed ping.
+    /// request of a closed turn, or a later closed ping. A re-registration at
+    /// rest (`/clear`, a restart), or a compaction close with no open bracket,
+    /// moves `turn_started_at` past `turn_ended_at` without closing a request,
+    /// so this then returns the turn end: it rises from the last turn's start
+    /// or tool activity to that turn's Stop, unless a later ping close
+    /// dominates. A compaction that closes its bracket at rest also closes a
+    /// request, stamping both turn stamps, so this moves to the close.
     pub fn last_request_at(&self) -> Option<Timestamp> {
         let real = self.turn_ended_at.and_then(|end| {
             self.turn_started_at
