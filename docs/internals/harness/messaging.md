@@ -603,7 +603,7 @@ Accepted races: observation costs at least the producer tick plus one base-snaps
 
 ### Idle compaction
 
-Idle compaction sends a compact command to a resting seat, solo or team, with no prompt behind it. The point is to compact while the prompt cache is still warm, shortly before it expires. [`harness/idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs) owns the decision the producer and the helper share: `SeatPolicy::idle_compact_floor` ([`harness/cache_keepalive.rs`](../../../crates/rimz/src/harness/cache_keepalive.rs)) resolves the seat's token floor, `fire_point` turns it and the provider TTL into an `IdleWindow`, and `should_compact` checks eligibility.
+Idle compaction sends a compact command to a resting seat, solo or team, with no prompt behind it. The point is to compact while the prompt cache is still warm, shortly before it expires. [`harness/idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs) owns `due_compaction`, the one decision the producer and the helper share: `SeatPolicy::idle_compact_floor` ([`harness/cache_keepalive.rs`](../../../crates/rimz/src/harness/cache_keepalive.rs)) resolves the seat's token floor, `fire_point` turns it and the provider TTL into an `IdleWindow`, `should_compact` checks eligibility, and a [keep-warm](#prompt-cache-keepalive) hold defers it.
 
 The floor resolves along one path, and an explicit `off` anywhere on it ends the walk:
 
@@ -611,9 +611,9 @@ The floor resolves along one path, and an explicit `off` anywhere on it ends the
 2. The first `idle-compact` up the seat's profile chain. A Markdown role's value rides its role overlay into the synthetic `<team>.<role>` profile, so `RoleBinding.idle_compact` stays `None` there.
 3. `[harness] idle_compact`.
 
-A `rimz subagents` child (`launch_depth` set) resolves no floor.
+A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) resolves no floor. An agent-launched peer resolves like any other seat.
 
-A seat is eligible when it is not a provider subagent, has a nonempty session id, and is effectively `Idle` or `Success` with no pending wait, input request, budget park, hibernation, or compaction marker (`AgentState::compacted_since_prompt`). Occupied context must reach the floor and differ from `last_compact_command_tokens`, and the adapter must expose a compact command. The board stage, PR state, and teammate activity play no part, so a team seat compacts after `Done` like any idle seat. A seat [keep-warm](#prompt-cache-keepalive) holds is skipped, on both the producer pass and the helper recheck, so the two reflexes never race on one cache window.
+A seat is eligible when it is not a provider subagent, has a nonempty session id, and is effectively `Idle` or `Success` with no pending wait, input request, budget park, or compaction marker (`AgentState::compacted_since_prompt`). Occupied context must reach the floor and differ from `last_compact_command_tokens`, and the adapter must expose a compact command. The board stage, PR state, and teammate activity play no part, so a team seat compacts after `Done` like any idle seat. A seat [keep-warm](#prompt-cache-keepalive) holds is skipped, on both the producer pass and the helper recheck, so the two reflexes never race on one cache window.
 
 The marker and the resting-row close rule ([model.md](../agents/model.md)) guard RimZ's own compaction and any provider's automatic one.
 
@@ -625,7 +625,7 @@ The machine-config fold stamps `AgentState.sign_in` on producer and consumer rea
 
 The `IdleWindow` opens at TTL minus `prompt_cache_margin` and closes, exclusive, at the TTL. Both timers and the helper measure from `AgentState::last_request_at()` ([activity clocks](../agents/model.md#activity-clocks)). A seat found past its cache lifetime is left alone instead of compacted cold. A missing anchor never qualifies, rows without a completed turn included.
 
-Request anchoring leaves final generation out of the margin. `cache_timing_reaches_the_request_before_expiry` tests the consumer decision exactly at and one second before both the fire point and the TTL, assuming a 1-second producer tick, a 10-second helper spawn, and a 10-second keystroke-to-request delay. Those 21 seconds fit inside the default margin. They are runtime premises, not measured latency guarantees. A slow pass or early eviction costs a cache write, never correctness.
+Request anchoring leaves final generation out of the margin. `cache_timing_reaches_the_request_before_expiry` tests the consumer decision exactly at and one second before both the fire point and the TTL, assuming a 1-second producer tick, a 10-second helper spawn, and a 10-second keystroke-to-request delay. Those 21 seconds fit inside the default margin. A frozen agent's wake also consumes the margin. The helper checks the window again after thaw, but the claim, delivery's own wake lock-and-stamp, pane lock, and provider swap-in still consume the remainder. These are runtime premises, not measured latency guarantees. A slow pass or early eviction costs a cache write, never correctness.
 
 `refresh_heavy_lanes` loads one `SeatPolicy` per pass when any agent row has a team or a profile, and shares it with idle compaction, keep-warm, hibernation, and the pipeline lane. Otherwise it passes the empty policy, under which every seat reads the machine floor. `SeatPolicy::load`, which the helper also uses, falls back to the machine teams and profiles when the project root is absent or loading fails.
 
@@ -633,7 +633,7 @@ Request anchoring leaves final generation out of the margin. `cache_timing_reach
 
 The host requires a bound pane and spawns a detached `rimz agents idle-compact`, which keeps store writes out of the sidebar's import graph. The request carries `agents::compact_command` for the seat, with the solo or team brief where supported.
 
-The helper re-resolves the workspace, session, and pane, applies the shared decision to `Ctx::published_snapshot` (which folds pending waits and the activity heartbeat), and validates the command against the adapter and its configured instruction. Through `message::compact` it queues one automated `System` command with the `Done` gate, pins the pane, stamps `compacted_context_tokens` from its context reading, attempts boundary delivery, and appends an `IdleCompact` assist record. The optional `idle_after_secs` records the resolved threshold, and `rimz stats` shows it when present. A closed boundary leaves the command queued through the ordinary retry path.
+The helper re-resolves the workspace, session, and pane, applies the shared decision to `Ctx::published_snapshot` (which folds pending waits and the activity heartbeat), and validates the command against the adapter and its configured instruction. After checking repeat guards, it synchronously wakes the requested pane even if the published row shows no hibernation, since a freeze helper from the same producer pass can publish later. It repeats the shared decision on a clock read after the wake returns. A wake error ends the helper; a failed re-decision returns without queuing a command or appending an assist. Through `message::compact` it then queues one automated `System` command with the `Done` gate, pins the pane, stamps `compacted_context_tokens` from its context reading, attempts boundary delivery, and appends an `IdleCompact` assist record. The optional `idle_after_secs` records the resolved threshold, and `rimz stats` shows it when present. A closed boundary leaves the command queued through the ordinary retry path.
 
 Three layers make it once per idle stretch:
 
@@ -669,7 +669,7 @@ Keep-warm extends the same reflex to an agent with nothing pending, for a config
 
 - A team seat resolves `max` and `while` per field through `Team::keep_warm`, role over team, where `off` cancels.
 - A solo seat takes its profile's `max`. A TOML profile with no `keep-warm` of its own takes the nearest one up its `agent` base chain, and an explicit `off` stops the walk. Markdown definitions arrive with inheritance resolved.
-- A `rimz subagents` child (`launch_depth` set) never resolves a horizon.
+- A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) never resolves a horizon. An agent-launched peer resolves like any other seat.
 
 The horizon is admitted only when `ping_lifetime` admits the agent's lifetime, under the same margin and floor as sleeping pings. `SeatPolicy::horizon` evaluates a resolved `while` with the shared `WhenExpr` evaluator against the seat's `lane_path`. Only `team.stage` is admitted, at load in `prepare_team`. A false known reading returns no horizon, and an unknown reading passes. A while-only hold takes `harness.cache_keepalive_max` as its horizon, and has none when that cap is off.
 

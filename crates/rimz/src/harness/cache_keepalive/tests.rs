@@ -654,8 +654,13 @@ fn keep_warm_follows_a_toml_base_chain_and_skips_launched_children() {
         assert_eq!(held.horizon(&agent, &config), expected, "{profile}");
     }
     agent.profile = Some("warm".into());
-    agent.parent_agent_id = Some("parent".into());
     agent.launch_depth = Some(1);
+    assert_eq!(
+        held.horizon(&agent, &config),
+        Some(TWO_HOURS),
+        "an agent-launched peer resolves its horizon"
+    );
+    agent.parent_agent_id = Some("parent".into());
     assert_eq!(
         held.horizon(&agent, &config),
         None,
@@ -703,6 +708,12 @@ fn idle_compact_floor_follows_role_then_profile_chain_then_harness() {
         Some(200_000),
         "a TOML role override outranks the profile"
     );
+    agent.launch_depth = Some(1);
+    assert_eq!(
+        policy.idle_compact_floor(&agent, &harness),
+        Some(200_000),
+        "an agent-launched team peer resolves its role override"
+    );
     agent.role = Some("judge".into());
     assert_eq!(
         policy.idle_compact_floor(&agent, &harness),
@@ -710,7 +721,6 @@ fn idle_compact_floor_follows_role_then_profile_chain_then_harness() {
         "a role without an override reads its profile"
     );
 
-    agent.launch_depth = Some(1);
     agent.parent_agent_id = Some("parent".into());
     assert_eq!(
         policy.idle_compact_floor(&agent, &harness),
