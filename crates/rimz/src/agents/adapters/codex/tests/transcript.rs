@@ -1811,6 +1811,39 @@ fn rollout_header_excludes_the_observed_guardian_thread() {
 }
 
 #[test]
+fn rollout_spending_helper_decision_matches_only_the_excluded_source_labels() {
+    for (source, excluded) in [
+        (json!({"subagent":"review"}), true),
+        (json!({"subagent":"memory_consolidation"}), true),
+        (json!({"subagent":{"other":"guardian"}}), true),
+        (json!({"subagent":{"other":"memory_consolidation"}}), true),
+        (json!({"internal":"guardian"}), true),
+        (json!({"internal":"memory_consolidation"}), true),
+        (json!("cli"), false),
+        (json!("vscode"), false),
+        (json!("exec"), false),
+        (json!("mcp"), false),
+        (json!("unknown"), false),
+        (json!({"custom":"future"}), false),
+        (json!(null), false),
+        (
+            json!({"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}),
+            false,
+        ),
+        (json!({"subagent":"compact"}), false),
+        (json!({"subagent":{"other":"future"}}), false),
+        (json!({"internal":"future"}), false),
+    ] {
+        let line = json!({"type":"session_meta","payload":{"source":source}}).to_string();
+        let record = super::super::rollout::decode_line(line.as_bytes()).unwrap();
+        let super::super::rollout::RolloutKind::SessionMeta(payload) = record.kind else {
+            panic!("session_meta must decode");
+        };
+        assert_eq!(payload.is_spending_helper(), excluded, "{source}");
+    }
+}
+
+#[test]
 fn rollout_header_non_root_source_keys_accept_any_value() {
     for key in ["subagent", "internal"] {
         for value in [

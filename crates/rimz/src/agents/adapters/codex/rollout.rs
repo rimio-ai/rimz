@@ -622,6 +622,26 @@ pub(crate) struct CodexSessionMetaPayload<'a> {
     source: Option<CodexSessionSource<'a>>,
 }
 
+impl CodexSessionMetaPayload<'_> {
+    pub(super) fn is_spending_helper(&self) -> bool {
+        let Some(source) = self.source.as_ref() else {
+            return false;
+        };
+        matches!(
+            raw_string(source.internal.raw()).as_deref(),
+            Some("guardian" | "memory_consolidation")
+        ) || matches!(
+            raw_string(source.subagent.raw()).as_deref(),
+            Some("review" | "memory_consolidation")
+        ) || matches!(
+            parse_raw::<CodexSubagentSource<'_>>(source.subagent.raw())
+                .and_then(|subagent| raw_string(subagent.other.raw()))
+                .as_deref(),
+            Some("guardian" | "memory_consolidation")
+        )
+    }
+}
+
 #[derive(Default, Deserialize)]
 struct CodexSessionSource<'a> {
     #[serde(borrow, default)]
@@ -634,6 +654,8 @@ struct CodexSessionSource<'a> {
 struct CodexSubagentSource<'a> {
     #[serde(borrow, default)]
     thread_spawn: Option<CodexThreadSpawnSource<'a>>,
+    #[serde(borrow, default)]
+    other: RawField<'a>,
 }
 
 #[derive(Default, Deserialize)]

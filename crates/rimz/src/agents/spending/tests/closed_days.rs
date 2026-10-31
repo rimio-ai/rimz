@@ -539,6 +539,82 @@ fn closed_days_keep_provider_dedup_keys_through_a_prior_local_walk() {
 }
 
 #[test]
+fn codex_helpers_leave_no_spend_or_model_rows_after_a_cold_or_old_cache_walk() {
+    for old_cache in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let mut a = Fixture::new(dir.path(), "a");
+        a.adapter = codex_adapter();
+        a.prices = gpt4o_book();
+        let sessions = a.home.join("sessions/2026/06/30");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let root = sessions.join(format!("rollout-2026-06-30T15-00-00-{SESSION}.jsonl"));
+        let guardian =
+            sessions.join("rollout-2026-06-30T15-00-00-01a167ae-849a-78b1-817c-64c998a0e63b.jsonl");
+        for (path, source, model, tool) in [
+            (&root, json!("cli"), "gpt-4o", "shell"),
+            (
+                &guardian,
+                json!({"subagent":{"other":"guardian"}}),
+                "codex-auto-review",
+                "guardian_tool",
+            ),
+        ] {
+            std::fs::write(
+                path,
+                format!(
+                    "{}\n{}\n{}\n{}\n",
+                    json!({"type":"session_meta","payload":{"source":source,"cwd":a.home}}),
+                    json!({"type":"turn_context","payload":{"model":model}}),
+                    json!({"type":"response_item","payload":{"type":"function_call","name":tool}}),
+                    codex_token_line("2026-06-30", 2_000_000, 0, 1_000_000),
+                ),
+            )
+            .unwrap();
+        }
+        if old_cache {
+            let mut stale = row("2026-06-30T15:00:00Z", 7.0);
+            stale.model = Some("codex-auto-review".into());
+            a.seed(vec![(guardian.clone(), vec![stale])]);
+            let cache_path = a.runtime.shared_spending_cursor_path();
+            let mut cache = read_spending_cache(&cache_path);
+            cache.version = SPENDING_CACHE_VERSION - 1;
+            // The cache writer refuses an in-place version downgrade.
+            std::fs::remove_file(&cache_path).unwrap();
+            assert!(write_spending_cache(&cache_path, &cache));
+        }
+        let result = a.walk(seconds("2026-06-30T15:01:00Z"), true);
+        assert_eq!(
+            result.spending.total.month.sessions, 1,
+            "old cache: {old_cache}"
+        );
+        assert_eq!(result.spending.total.month.usd, 4.0);
+        assert_eq!(result.spending.total.month.display_tokens(), 3_000_000);
+        assert_eq!(
+            result.models.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["gpt-4o"]
+        );
+        for chart in [&result.chart.days, &result.chart.weeks, &result.chart.hours] {
+            assert!(
+                chart
+                    .values()
+                    .all(|models| !models.contains_key("codex-auto-review"))
+            );
+        }
+        assert_eq!(result.login_day.values().next().unwrap().usd, 4.0);
+        assert_eq!(result.login_month.values().next().unwrap().usd, 4.0);
+        let cached = &a.walker.cache.files[guardian.to_str().unwrap()];
+        assert!(cached.entries.is_empty());
+        assert!(cached.unknown_models.is_empty());
+        assert_eq!(
+            a.walker.cache.files[root.to_str().unwrap()].entries[0]
+                .tool_calls
+                .get("shell"),
+            Some(&1)
+        );
+    }
+}
+
+#[test]
 fn closed_days_count_a_compacted_codex_rollout_once_after_archiving() {
     let dir = TempDir::new().unwrap();
     let mut a = Fixture::new(dir.path(), "a");

@@ -84,7 +84,8 @@ use super::aggregate::{
 /// v28 records per-entry fast mode; finalized sessions rebuild once to backfill the flag.
 /// v29 prices Codex ChatGPT-plan turns as plan burn from each `token_count`'s
 /// `rate_limits`, so finalized Codex sessions reprice once.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 29;
+/// v30 drops cached rows from finalized Codex helper-thread rollouts once.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 30;
 
 /// Output tokens and elapsed milliseconds for timed responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
