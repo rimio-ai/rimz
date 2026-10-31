@@ -7,6 +7,7 @@ use super::*;
 
 mod history;
 mod park;
+mod rail;
 
 struct View<'a> {
     record: &'a RunRecord,
@@ -52,6 +53,7 @@ pub(super) fn render(
     if run.record.state == RunState::Parked {
         view.park(&mut out)?;
     }
+    view.rail(&mut out)?;
     view.visits(&mut out)?;
     view.trail(&mut out)?;
     writeln!(
@@ -76,10 +78,10 @@ impl View<'_> {
         self.commands.command(verb, at, extend, flags)
     }
 
-    fn headline(&self, out: &mut impl Write, history: bool) -> Result<()> {
+    fn presentation(&self, history: bool) -> Result<(GlyphRole, String)> {
         let record = self.record;
         let asking = workflow_view::asking(record);
-        let (role, phrase) = if record.state.is_terminal() {
+        Ok(if record.state.is_terminal() {
             let role = match record.state {
                 RunState::Done => GlyphRole::StatusDone,
                 RunState::Failed => GlyphRole::StatusAttention,
@@ -151,7 +153,13 @@ impl View<'_> {
             (GlyphRole::StatusSleeping, phrase)
         } else {
             (GlyphRole::StatusWorking, self.running())
-        };
+        })
+    }
+
+    fn headline(&self, out: &mut impl Write, history: bool) -> Result<()> {
+        let record = self.record;
+        let asking = workflow_view::asking(record);
+        let (role, phrase) = self.presentation(history)?;
         let glyph = rimz::theme::theme_glyphs(&super::super::machine_config().theme)(role);
         writeln!(
             out,
@@ -311,7 +319,12 @@ impl View<'_> {
             writeln!(out, "  {hold}")?;
             return Ok(());
         }
-        if let Some((_, object)) = self.evaluation()
+        if !self
+            .spec
+            .checks
+            .get(&self.record.node)
+            .is_some_and(|check| !check.cases.is_empty())
+            && let Some((_, object)) = self.evaluation()
             && let Some(readings) = object
                 .get("readings")
                 .and_then(serde_json::Value::as_object)

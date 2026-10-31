@@ -171,6 +171,35 @@ fn history_hint_keeps_flags_before_a_hyphen_leading_target() {
 }
 
 #[test]
+fn copied_park_options_accept_a_hyphen_leading_node() {
+    let results = ["review", "-review"].map(|name| {
+        let (env, mut record) = fixture("parked", Some("user"), vec![]);
+        record.workflow = name.into();
+        save(&env, &record);
+        sealed_spec(&env, &record, &SPEC.replace("build", "-build"));
+        let text = human(&env, &record, false);
+        let hint = text
+            .lines()
+            .find(|line| line.ends_with("continue at -build"))
+            .unwrap()
+            .trim()
+            .split_once("  ")
+            .unwrap()
+            .0;
+        let output = copied(&env, hint, false);
+        (
+            output.status.code(),
+            text,
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    });
+    assert!(
+        results.iter().all(|(code, ..)| *code == Some(0)),
+        "{results:#?}"
+    );
+}
+
+#[test]
 fn cap_evidence_names_the_engine_route_that_entered_the_step() {
     let (env, _) = super::super::fixture(
         &format!(
@@ -667,6 +696,355 @@ fn terminal_headline_uses_terminal_time_and_ignores_a_stale_park() {
         );
         assert!(
             !text.contains("you can") && !text.contains("parked at"),
+            "{text}"
+        );
+    }
+}
+
+const CONDITION_RAIL: &str = r#"
+[workflow]
+scope = 'worktree'
+start = 'gate'
+[checks.gate]
+else = 'pending'
+on = { merged = '@done', red = 'build', ready = 'build', pending = '@wait', queued = '@wait' }
+[[checks.gate.cases]]
+when = ['pr=merged']
+outcome = 'merged'
+[[checks.gate.cases]]
+when = ['ci=failed']
+outcome = 'red'
+[[checks.gate.cases]]
+when = ['ci=passed']
+outcome = 'ready'
+for = '10m'
+[[checks.gate.cases]]
+when = ['ci=pending']
+outcome = 'pending'
+[[checks.gate.cases]]
+when = ['pr.queue=queued']
+outcome = 'queued'
+[steps.build]
+shell = 'true'
+then = 'gate'
+max-visits = 2
+"#;
+
+fn sealed_spec(env: &Env, record: &RunRecord, spec: &str) {
+    let paths = env
+        .state_path_for(&record.project_root)
+        .workflow(&record.id);
+    fs::write(paths.spec, spec).unwrap();
+}
+
+#[test]
+fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
+    let mut step = attempt(2, Value::Null);
+    step["handle"] = json!("@builder");
+    step["head_start"] = json!("123456789abcdef");
+    step["head_end"] = json!("abcdef123456789");
+    let (env, mut record) = fixture(
+        "active",
+        None,
+        vec![
+            evaluation("ok", json!({"outcome":"ok"})),
+            attempt(1, Value::Null),
+            evaluation("ok", json!({"outcome":"ok"})),
+            step,
+        ],
+    );
+    record.visits = serde_json::from_value(json!({"build":{"total":2,"keys":[]}})).unwrap();
+    save(&env, &record);
+    let dir = env.rimz_home().join("workflows/review");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("workflow.toml"),
+        SPEC.replace("build", "replacement"),
+    )
+    .unwrap();
+    let text = human(&env, &record, false);
+    contains(
+        &text,
+        &[
+            "● build",
+            "@builder ended",
+            "1m",
+            "$1.25",
+            "HEAD 12345678 → abcdef12",
+            "×2",
+            "visit 2 of 2",
+        ],
+    );
+    assert!(!text.contains("replacement"), "{text}");
+    let rail = text
+        .split_once("● build")
+        .unwrap()
+        .1
+        .split_once("trail")
+        .unwrap()
+        .0;
+    assert!(rail.contains(&historical_clock(AT)), "{text}");
+    assert!(
+        text.find("● build").unwrap() < text.find("visits  ").unwrap(),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_past_steps_per_key_visit_uses_its_last_attempt_not_the_current_key() {
+    let (env, _) = super::super::fixture(
+        &format!(
+            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='build'\n\
+             [steps.build]\nshell='true'\ntimeout='1h'\nthen='next'\nmax-visits-per-key=2\n\
+             [checks.next]\nrun='sh checks/pr.sh'\non.other='finish'\n\
+             [steps.finish]\nshell='true'\ntimeout='1h'\nthen='waiting'\n\
+             [checks.waiting]\nrun='sh checks/pr.sh'\non.pending='@wait'\ntimeout='1h'\n"
+        ),
+        "n=0; count=\"$RIMZ_WORKFLOW_DIR/count\"\n\
+         if [ -f \"$count\" ]; then read -r n < \"$count\"; fi\n\
+         printf '%s\\n' \"$((n+1))\" > \"$count\"\n\
+         case $n in\n\
+           0) printf '{\"outcome\":\"ok\",\"key\":\"lint\"}';;\n\
+           1) printf '{\"outcome\":\"other\",\"key\":\"other\"}';;\n\
+           *) printf '{\"outcome\":\"pending\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}';;\n\
+         esac\n",
+    );
+    let id = start(&env);
+    let value = until(&env, &id, |value| {
+        value["record"]["wait"]["outcome"] == "pending"
+    });
+    assert_eq!(value["record"]["key"], "other", "{value:#}");
+    assert_eq!(value["record"]["visits"]["build"]["keys"][0]["key"], "lint");
+    let text = success(command(&env, &["workflow", "show", &id]));
+    contains(&text, &["visit 1 of 2"]);
+}
+
+#[test]
+fn folded_self_routes_count_every_check_entry() {
+    let (env, _) = super::super::fixture(
+        &format!(
+            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\n\
+             on={{pass='pr',fail='@wait'}}\ntimeout='1h'\n"
+        ),
+        "n=0; count=\"$RIMZ_WORKFLOW_DIR/count\"\n\
+         if [ -f \"$count\" ]; then read -r n < \"$count\"; fi\n\
+         printf '%s\\n' \"$((n+1))\" > \"$count\"\n\
+         if [ \"$n\" -lt 3 ]; then printf '{\"outcome\":\"pass\"}';\n\
+         else printf '{\"outcome\":\"fail\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}'; fi\n",
+    );
+    let receipt = success(
+        env.rimz()
+            .env("RIMZ_BIN", "/bin/true")
+            .args(["workflow", "run", "review"])
+            .output()
+            .unwrap(),
+    );
+    let id = receipt
+        .split_whitespace()
+        .find(|word| word.starts_with("wf_"))
+        .unwrap();
+    for _ in 0..4 {
+        success(command(&env, &["workflow", "advance", id]));
+    }
+    let text = success(command(&env, &["workflow", "show", id]));
+    let rail = text
+        .lines()
+        .find(|line| line.starts_with("☾ pr  "))
+        .unwrap();
+    assert!(rail.contains("×4"), "{text}");
+    assert!(text.contains("pr pass ×3 → pr"), "{text}");
+}
+
+#[test]
+fn a_hold_forecasts_its_clock_only_when_it_beats_other_bounds() {
+    let (env, mut record) = fixture("active", None, vec![]);
+    record.wait = serde_json::from_value(json!({"node":"gate","outcome":"hold","case":2,
+        "first":AT,"last":AT,"count":3,"recheck_at":null}))
+    .unwrap();
+    let results = ["10m", "30m", "40m"].map(|timeout| {
+        save(&env, &record);
+        sealed_spec(
+            &env,
+            &record,
+            &CONDITION_RAIL
+                .replace(
+                    "else = 'pending'",
+                    &format!("timeout = '{timeout}'\nelse = 'pending'"),
+                )
+                .replace("for = '10m'", "for = '30m'"),
+        );
+        let text = human(&env, &record, false);
+        let case = text.lines().find(|line| line.contains("▸ 3")).unwrap();
+        assert!(case.contains("holding 30m of 30m"), "{text}");
+        assert!(
+            text.contains(if timeout == "40m" {
+                "then build at"
+            } else {
+                "then @user at"
+            }),
+            "{text}"
+        );
+        case.contains(" at ")
+    });
+    assert_eq!(results, [false, false, true]);
+}
+
+#[test]
+fn current_rail_glyph_matches_the_headline_in_every_live_state() {
+    for mode in ["waiting", "hold", "running", "checking", "asking", "parked"] {
+        let (env, mut record) = fixture(
+            if mode == "parked" { "parked" } else { "active" },
+            (mode == "parked").then_some("user"),
+            vec![],
+        );
+        if matches!(mode, "waiting" | "hold") {
+            record.wait = serde_json::from_value(json!({"node":"gate",
+                "outcome": if mode == "hold" { "hold" } else { "pending" },
+                "case":(mode == "hold").then_some(2),
+                "first":AT,"last":AT,"count":1,"recheck_at":null}))
+            .unwrap();
+        }
+        if matches!(mode, "running" | "asking") {
+            record.node = "build".into();
+            record.attempt = Some(
+                serde_json::from_value(json!({
+                    "kind":"agent", "seq":1,"node":"build","started_at":AT,
+                    "host":{"pid":1,"start":null},
+                    "asking":(mode == "asking").then(|| json!({"since":AT,
+                        "handle":"@builder","kind":"permission","text":"May I push?"}))
+                }))
+                .unwrap(),
+            );
+        }
+        save(&env, &record);
+        sealed_spec(&env, &record, CONDITION_RAIL);
+        let text = human(&env, &record, false);
+        let glyph = text
+            .lines()
+            .next()
+            .unwrap()
+            .split("  ")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap();
+        assert!(
+            text.lines()
+                .skip(1)
+                .any(|line| line.contains(&format!("{glyph} {}", record.node))),
+            "{mode}: no matching current node in rail:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn condition_rail_marks_the_winner_and_prints_each_reached_reading_once_without_color() {
+    let (env, record) = fixture(
+        "active",
+        None,
+        vec![evaluation(
+            "pending",
+            json!({
+                "outcome":"pending", "case":3,
+                "readings":{"pr":"open","ci":"pending","pr.queue":"none"}
+            }),
+        )],
+    );
+    sealed_spec(&env, &record, CONDITION_RAIL);
+    let text = success(
+        env.rimz()
+            .env("NO_COLOR", "1")
+            .args(["workflow", "show", record.id.as_str()])
+            .output()
+            .unwrap(),
+    );
+    contains(&text, &["▸ 4", "pending @wait", "wakes on", "pr.*", "ci.*"]);
+    assert_eq!(text.matches("ci: pending").count(), 1, "{text}");
+    assert_eq!(text.matches("pr: open").count(), 1, "{text}");
+    assert!(
+        !text.contains("pr.queue: none") && !text.contains('\u{1b}'),
+        "{text}"
+    );
+    assert!(
+        text.find("ci: pending").unwrap() < text.find("3  ci=passed").unwrap(),
+        "{text}"
+    );
+}
+
+#[test]
+fn condition_rail_marks_unread_instead_of_a_later_winner() {
+    let (env, record) = fixture(
+        "active",
+        None,
+        vec![evaluation(
+            "unknown",
+            json!({
+                "outcome":"unknown", "readings":{"pr":"open","ci":null},
+                "reason":"ci (local HEAD is not on the PR (old), retry later)"
+            }),
+        )],
+    );
+    sealed_spec(&env, &record, CONDITION_RAIL);
+    let text = human(&env, &record, false);
+    contains(
+        &text,
+        &[
+            "? 2",
+            "ci unread: local HEAD is not on the PR (old), retry later",
+        ],
+    );
+    assert!(!text.contains("▸"), "{text}");
+    assert_eq!(text.matches("ci unread:").count(), 1, "{text}");
+}
+
+#[test]
+fn condition_rail_paints_a_held_case_even_without_a_new_evaluation() {
+    let (env, mut record) = fixture("active", None, vec![]);
+    record.wait = serde_json::from_value(json!({"node":"gate","outcome":"hold","case":2,
+        "first":AT,"last":AT,"count":3,"recheck_at":null}))
+    .unwrap();
+    save(&env, &record);
+    sealed_spec(&env, &record, CONDITION_RAIL);
+    let text = human(&env, &record, false);
+    contains(
+        &text,
+        &[
+            "▸ 3",
+            "holding 10m of 10m",
+            &format!("→ build at {}", historical_clock("2000-01-01T12:10:00Z")),
+        ],
+    );
+}
+
+#[test]
+fn parked_and_terminal_rails_are_compact_and_only_parked_has_a_current_node() {
+    let (env, mut record) = fixture(
+        "parked",
+        Some("cap"),
+        vec![
+            evaluation("ok", json!({"outcome":"ok"})),
+            attempt(1, Value::Null),
+        ],
+    );
+    record.node = "build".into();
+    record.visits = serde_json::from_value(json!({"build":{"total":1,"keys":[]}})).unwrap();
+    save(&env, &record);
+    let parked = human(&env, &record, false);
+    contains(&parked, &["● gate ×2  ? build 1/2"]);
+    assert!(
+        parked.find("you can\n").unwrap() < parked.find("● gate").unwrap(),
+        "{parked}"
+    );
+    assert!(!parked.contains("├─"), "{parked}");
+    for state in [RunState::Done, RunState::Failed, RunState::Canceled] {
+        record.state = state;
+        record.terminal_at = Some(record.entered_at);
+        save(&env, &record);
+        let text = human(&env, &record, false);
+        contains(&text, &["● gate ×2  ● build 1/2"]);
+        assert!(
+            !text.contains("you can\n") && !text.contains("├─"),
             "{text}"
         );
     }
