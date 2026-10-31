@@ -9,7 +9,7 @@ use std::io::{self, Write};
 use jiff::Timestamp;
 
 use crate::cli::render::{
-    Cell, KeyVals, Table, age_label, cell, compact_count, fmt_bytes, home_relative,
+    Cell, KeyVals, Table, age_label, cell, compact_count, fmt_bytes, folded_span, home_relative,
     home_relative_path, lsp_state_label, paint, palette, status,
 };
 use rimz::agents::AgentStatus;
@@ -1978,20 +1978,12 @@ fn issue_span(issue: &super::model::MuxLogIssue) -> String {
         count => format!("{count}×"),
     };
     let now = Timestamp::now();
-    // A burst inside one second has no span worth naming; reporting it as
-    // "over 0s" reads as a broken clock rather than a tight cluster.
-    let span_secs = match (issue.first_occurrence, issue.last_occurrence) {
-        (Some(first), Some(last)) => u64::try_from(last.duration_since(first).as_secs())
-            .ok()
-            .filter(|secs| *secs > 0),
+    let span = match (issue.first_occurrence, issue.last_occurrence) {
+        (Some(first), Some(last)) => folded_span(first, last),
         _ => None,
     };
-    match (span_secs, issue.first_occurrence, issue.last_occurrence) {
-        (Some(secs), _, Some(last)) => format!(
-            "{count} over {}, last {}",
-            age_label(secs),
-            age_short(now, last)
-        ),
+    match (span, issue.first_occurrence, issue.last_occurrence) {
+        (Some(span), _, Some(last)) => format!("{count} {span}, last {}", age_short(now, last)),
         (_, Some(at), None) | (_, _, Some(at)) => format!("{count}, {}", age_short(now, at)),
         (_, None, None) => count,
     }

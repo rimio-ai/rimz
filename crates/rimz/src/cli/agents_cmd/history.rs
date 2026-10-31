@@ -141,8 +141,9 @@ fn render_history(
         let mut prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
         if row.len() > 1 {
             from = format!("{from} ×{}", row.len());
-            let span = render::folded_span(first.started_at, turn.started_at);
-            prompt = format!("{span} · {prompt}");
+            if let Some(span) = render::folded_span(first.started_at, turn.started_at) {
+                prompt = format!("{span} · {prompt}");
+            }
         }
         table.row([
             render::cell(
@@ -425,13 +426,28 @@ mod tests {
         last.cost_usd = None;
         let missing = render(&[unfinished.clone(), last], None);
         let partial = render(&[first, unfinished], None);
+        let burst = [0, 999].map(|millis| {
+            let mut turn = turn(0, keepalive("999ms"));
+            turn.started_at += jiff::SignedDuration::from_millis(millis);
+            turn.ended_at = Some(turn.started_at);
+            turn
+        });
+        let burst = render(&burst, None);
         let actual = [
             !single.contains('×') && !single.contains("over "),
             equal.contains("keepalive ×2") && equal.contains("over 5m") && !equal.contains("1m–"),
             missing.lines().nth(1).unwrap().split_whitespace().nth(1) == Some("-"),
             partial.lines().nth(1).unwrap().split_whitespace().nth(1) == Some("1m"),
+            burst
+                .lines()
+                .nth(1)
+                .unwrap()
+                .ends_with("keepalive ×2  Elapsed age: 999ms"),
         ];
-        assert_eq!(actual, [true; 4], "{single}\n{equal}\n{missing}\n{partial}");
+        assert_eq!(
+            actual, [true; 5],
+            "{single}\n{equal}\n{missing}\n{partial}\n{burst}"
+        );
     }
 
     #[test]

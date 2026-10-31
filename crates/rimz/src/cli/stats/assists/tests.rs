@@ -751,6 +751,19 @@ mod repeats {
             "{lines:?}"
         );
         assert_eq!(older, 0);
+
+        let records = [999, 0].map(|millis| {
+            let mut record = keepalive_record("a", true);
+            record["at"] = serde_json::json!(Timestamp::from_millisecond(millis).unwrap());
+            serde_json::from_value(record).unwrap()
+        });
+        let stats = AssistStats::from_records("all", records.into());
+        let (lines, _) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("@a cache keepalive after 1h00m — 1 wait pending · ×2 · agent a"),
+            "{lines:?}"
+        );
     }
 
     #[test]

@@ -2,6 +2,28 @@ use super::*;
 use serde::ser::Error as _;
 
 #[test]
+fn folded_span_names_only_positive_whole_seconds() {
+    let earliest = Timestamp::from_second(0).unwrap();
+    let cases = [
+        (0, None),
+        (999, None),
+        (1000, Some("over 1s")),
+        (1900, Some("over 1s")),
+        (-1000, None),
+        (120_000, Some("over 2m")),
+    ];
+    assert_eq!(
+        cases.map(|(millis, _)| {
+            folded_span(
+                earliest,
+                earliest + jiff::SignedDuration::from_millis(millis),
+            )
+        }),
+        cases.map(|(_, span)| span.map(str::to_owned))
+    );
+}
+
+#[test]
 fn ambiguity_rows_are_ranked_runnable_and_offer_stop_all() {
     let now = Timestamp::now();
     let mut agents = Vec::new();
