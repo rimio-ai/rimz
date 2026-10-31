@@ -204,6 +204,17 @@ fn write_live(
     let head = batch
         .first()
         .expect("send_batch_to_live_pane requires at least one message");
+    // A steer or interrupt can wait out another writer's lock while its turn
+    // raises an input prompt, and compact-first judges the current fill, so
+    // both decide on the row as it stands under the lock.
+    let fresh = if send.kind != DeliveryKind::Boundary
+        || batch.iter().any(|message| message.auto_compact.is_some())
+    {
+        row_under_lock(store, head)?
+    } else {
+        None
+    };
+    let bound = fresh.as_ref().or(bound);
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
         return Ok(
@@ -222,22 +233,6 @@ fn write_live(
             .iter()
             .all(|message| message.body == MessageBody::Prompt)
     );
-    let fresh = if batch.iter().any(|message| message.auto_compact.is_some()) {
-        let current = store.snapshot_cached()?;
-        store
-            .rows_with_live_context(
-                current
-                    .agents
-                    .iter()
-                    .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none()),
-            )
-            .into_iter()
-            .next()
-            .map(std::borrow::Cow::into_owned)
-    } else {
-        None
-    };
-    let bound = fresh.as_ref().or(bound);
     let mut compacted = false;
     let compact = batch
         .iter()
@@ -307,6 +302,20 @@ fn write_live(
             PaneWrite::ClaimLost => Receipt::ClaimLost,
         },
     )
+}
+
+fn row_under_lock(store: &Store, head: &MessageRecord) -> Result<Option<AgentState>> {
+    let current = store.snapshot_with_context(|_, _| false)?;
+    Ok(store
+        .rows_with_live_context(
+            current
+                .agents
+                .iter()
+                .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none()),
+        )
+        .into_iter()
+        .next()
+        .map(std::borrow::Cow::into_owned))
 }
 
 pub(super) fn interrupt_key(kind: &crate::ids::AgentKind, label: &str) -> Result<NamedKey> {

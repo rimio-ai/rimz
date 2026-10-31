@@ -218,7 +218,7 @@ A condition is met for delivery only once its `met_at` stamp is written (`Messag
 
 [`dispatch()`](../../../crates/rimz/src/message/dispatch.rs) is the one entry point for an owned send.
 
-1. **Load what the decision needs.** Pending records (boundary mode or an explicit resuming recipient), plus agent-context sidecars for interrupt mode, a condition, an agent sender, or `--wait`. Compact-first reads only its recipient's context after taking the pane lock.
+1. **Load what the decision needs.** Pending records (boundary mode or an explicit resuming recipient), plus agent-context sidecars for interrupt mode, a condition, an agent sender, or `--wait`. After taking the pane lock, a steer, an interrupt, or a send with a compaction line rereads only its recipient's row and context.
 2. **Choose a snapshot.** A full resolution snapshot costs a multiplexer round trip. When every target parks without a live pane (no lazy-registering kind, no provisional id), `targets_all_park_without_live` proves the cached rollup is enough and dispatch skips the mux. This `rollup_only` path is a latency optimization, and correctness never depends on it.
 3. **Resolve targets.** Live agents and live panes combine, so an agent with a bound pane yields one target. When the live view finds nothing, the durable audit rollup is the fallback, with pane-shadowed co-resident sessions filtered out first. For intrinsic `@all`, dispatch removes an agent caller from the resolved set before anything else runs, and no remaining peer is an error.
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card. A condition already satisfied gets `met_at` at once.
@@ -473,7 +473,7 @@ The backends carry a large paste differently:
 
 Interrupt is paste first, key second, inside `send::send_batch_to_live_pane` under one `PaneWriter`.
 
-1. With the lock held, it rereads `store.snapshot_cached()`. Only a live `Running` or `Waiting` row gets the key, because on a resting row the paste itself starts the turn the key would cancel. The awaiting-input refusal without `--force` comes from dispatch's preflight and from `write_batch`'s check against the earlier bound row.
+1. With the lock held, it rereads `store.snapshot_cached()`. Only a live `Running` or `Waiting` row gets the key, because on a resting row the paste itself starts the turn the key would cancel. The awaiting-input refusal without `--force` comes from dispatch's preflight and from `write_batch`'s check against the row `write_live` reads under the lock (`crates/rimz/src/message/send.rs::row_under_lock`), or against the bound row when the live card has no row, so a prompt raised while the send waited for the lock still refuses it.
 2. It writes exactly as steer does: any smart-compaction command, the paste, the `Sent` record, Enter.
 3. After `RIMZ_MESSAGE_INTERRUPT_DELAY_MS` (default 3000) it presses the adapter's key once, still under the lock.
 
@@ -574,7 +574,7 @@ Thresholds parse as `70%` (a fraction of the window), `120000` (absolute occupie
 
 A percent threshold reads the same fill gauge the sidebar card renders (`context_fill_pct`). A token threshold reads `occupied_context_tokens`, which prefers the folded statusline breakdown, then the per-call split (cache reads plus cache writes plus fresh input), then the carried `total_tokens` gauge.
 
-With the pane lock held, `write_live` resolves the live card again and reads that row with current context through `crates/rimz/src/store/mod.rs::Store::agent_with_context` in runtime scope. Compact-first checks this fresh row's fill and skips it while `AgentState::holds_open_turn()` is true, for boundary, steer, and interrupt alike. The prompt still follows its ordinary delivery path, with no `compacted` receipt when no command was sent.
+With the pane lock held, `write_live` resolves the live card again and reads that row with current context (`crates/rimz/src/message/send.rs::row_under_lock`) for every steer and interrupt, and for any batch that carries a line. `write_batch`'s input-prompt guard decides on this row, so a turn that raised an input prompt while the send waited out another writer's lock gets no paste and no Enter. A boundary send without a line keeps the row it was claimed on. Compact-first checks this fresh row's fill and skips it while `AgentState::holds_open_turn()` is true, for boundary, steer, and interrupt alike. The prompt still follows its ordinary delivery path, with no `compacted` receipt when no command was sent.
 
 At rest, the delivery modes compact differently:
 
