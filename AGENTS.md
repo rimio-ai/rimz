@@ -102,6 +102,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - Put every flag before the pattern, and search a pattern that starts with `-` as `-e PATTERN` (`rg -n -F -e '--target' .`), never after `--`: rg reads everything after `--` as paths.
 - Name only files you have listed; a glob that matches nothing aborts the command before it runs.
 - Search a snake_case field or function name with `rg -w`; a bare substring also matches every longer identifier that starts with it. Under `-w`, a pattern that ends in punctuation (`definitions\(`) misses every call whose next character is a word character (`definitions(kind)`), so search call sites with `rg '\bname\('`.
+- A search for literal text that holds a regex metacharacter (`+`, `.`, `(`, `*`) passes `-F`: `rg -n '"+g'` reads `"+` as one or more quotes and matches every quoted `g`.
 - rustfmt splits long method chains one segment per line, so a grep for a field access through a path (`self.ui.freeze`) uses `rg -U 'self\s*\.ui\s*\.freeze'`; a single-line pattern misses the split form.
 - A scan command always names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` searches stdin and hangs until the tool timeout.
 - A tree-wide `rg` skips dot-directories: name `.github` as a path (or pass `--hidden`) when the question includes workflows.
