@@ -117,6 +117,7 @@ fn draw_into(
     );
     ui.meter_pixels = meter_pixels;
     ui.card_heights = card_heights;
+    view.note_layout(&composed);
     let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
     ui.sections = composed

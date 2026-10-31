@@ -121,6 +121,31 @@ impl ViewAccess {
         (record.resolved(pane), record.observed(pane))
     }
 
+    pub(super) fn mirror_source(&self, pane: &PaneState) -> Option<MirrorSource> {
+        let views = self.registry.lock();
+        let own = &pane.config.own_pane;
+        let visible = pane
+            .optimistic_watch_until
+            .is_some_and(|until| pane.clock.now() < until)
+            || views
+                .observed(own)
+                .unwrap_or_else(|| pane.watches_snapshot(self.mirror()));
+        if views.mapped(own) || views.resolved(own) || visible {
+            return None;
+        }
+        let (id, state, context, _revision) = views.mirror_view()?;
+        Some(MirrorSource {
+            target: (id, state.layout_sequence),
+            view: state.clone(),
+            snapshot: context.current.clone(),
+            alert: context.health.alert.clone(),
+            gate_notice: context.gate.rule.map(|rule| render::GateNotice { rule }),
+            nonce: context.last_folded_focus_intent,
+            #[cfg(feature = "testkit")]
+            revision: _revision,
+        })
+    }
+
     pub(super) fn share(&mut self, views: Arc<ViewsHandle>) -> Option<PaneId> {
         self.cached = RefCell::new(views.read());
         self.registry = views;

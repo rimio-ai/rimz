@@ -6,6 +6,12 @@ use crate::sidebar_pane::app::inbox::WakeupInbox;
 use crate::testkit::host_pass::{self, Counter};
 use std::sync::Barrier;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CycleChange {
+    Content,
+    Structure,
+}
+
 #[derive(Default)]
 pub struct FanoutThread {
     pub views_locks: u64,
@@ -85,7 +91,41 @@ impl FanoutThread {
 impl IdleCycleFixture {
     /// Run real attachment threads and one publisher. Warm through an idle backstop, measure
     /// content publications and a nudge, then reveal a hidden pane outside the counting window.
-    pub fn run_concurrent(mut self, publications: usize) -> ConcurrentFanout {
+    pub fn run_concurrent(self, publications: usize) -> ConcurrentFanout {
+        self.run_concurrent_with(publications, CycleChange::Content)
+    }
+
+    /// Alternate removing and restoring a bound agent pane, waiting for every mirror to paint.
+    /// A build without mirrors measures the watched paint as the baseline control instead.
+    /// A spare work pane keeps card removal independent of empty-tab self-close.
+    pub fn run_concurrent_structural(self, publications: usize) -> ConcurrentFanout {
+        {
+            let mut data = self.sink.host_data.lock().unwrap();
+            let frame = Arc::make_mut(&mut data.inputs.as_mut().unwrap().frame);
+            let mut spare = frame
+                .tabs
+                .iter()
+                .flat_map(|tab| &tab.panes)
+                .find(|pane| pane.pane_id.raw() == "terminal_56")
+                .expect("unbound process pane")
+                .clone();
+            spare.pane_id = PaneId::from_parts(crate::MuxName::Zellij, "terminal_spare");
+            frame
+                .tabs
+                .iter_mut()
+                .find(|tab| {
+                    tab.panes
+                        .iter()
+                        .any(|pane| pane.pane_id.raw() == "sidebar_0")
+                })
+                .expect("watched tab")
+                .panes
+                .push(spare);
+        }
+        self.run_concurrent_with(publications, CycleChange::Structure)
+    }
+
+    fn run_concurrent_with(mut self, publications: usize, change: CycleChange) -> ConcurrentFanout {
         assert!(publications >= 5);
         assert!(self.renderers.is_empty());
         self.run_cycle();
@@ -166,6 +206,13 @@ impl IdleCycleFixture {
                     let mut terminal = ratatui::Terminal::new(backend).expect("fixture terminal");
                     let mut inbox = WakeupInbox::new(receiver);
                     let counts = host_pass::thread_counters();
+                    while watching && renderer.bench_painted().is_none() {
+                        renderer
+                            .step(&mut inbox, &mut terminal)
+                            .expect("warm first frame");
+                    }
+                    // Publish the watched layout before hidden threads can finish warming.
+                    barrier.wait();
                     let warm = counts.get(Counter::TimeoutIdle);
                     while if watching {
                         counts.get(Counter::WakePublication) == 0
@@ -177,7 +224,10 @@ impl IdleCycleFixture {
                             .expect("warm attachment");
                     }
                     let before = sample(&output);
-                    let mut acknowledged = before.publication_wakes;
+                    let mut acknowledged = publication.lock().unwrap().0;
+                    let mut acknowledged_wakes = before.publication_wakes;
+                    let require_paint = watching
+                        || (change == CycleChange::Structure && renderer.bench_painted().is_some());
                     let events = counts.get(Counter::WakeRoomEvent);
                     barrier.wait();
                     barrier.wait();
@@ -194,13 +244,15 @@ impl IdleCycleFixture {
                             backstop.send(index).unwrap();
                             idle_reported = true;
                         }
-                        if wakes > acknowledged {
-                            let paint = watching
+                        let revision = publication.lock().unwrap().0;
+                        if revision > acknowledged {
+                            let paint = require_paint
                                 .then(|| painted_publication(&renderer, &publication))
                                 .flatten();
-                            if !watching || paint.is_some() {
+                            if paint.is_some() || (!require_paint && wakes > acknowledged_wakes) {
                                 ack.send((index, paint)).expect("publisher waiting");
-                                acknowledged = wakes;
+                                acknowledged = revision;
+                                acknowledged_wakes = wakes;
                             }
                         }
                         if counts.get(Counter::WakeRoomEvent) != events {
@@ -210,19 +262,22 @@ impl IdleCycleFixture {
                             break;
                         }
                     }
+                    let before_reveal = publication.lock().unwrap().0;
                     barrier.wait();
+                    if !(watching || reveal) {
+                        ack.send((index, None)).unwrap();
+                        return;
+                    }
                     loop {
                         renderer
                             .step(&mut inbox, &mut terminal)
                             .expect("reveal pass");
-                        if counts.get(Counter::WakePublication) > acknowledged {
-                            let paint = (watching || reveal)
-                                .then(|| painted_publication(&renderer, &publication))
-                                .flatten();
-                            if !(watching || reveal) || paint.is_some() {
-                                ack.send((index, paint)).unwrap();
-                                break;
-                            }
+                        let publication_revision = publication.lock().unwrap().0;
+                        if publication_revision > before_reveal
+                            && let Some(paint) = painted_publication(&renderer, &publication)
+                        {
+                            ack.send((index, Some(paint))).unwrap();
+                            break;
                         }
                     }
                 });
@@ -239,6 +294,7 @@ impl IdleCycleFixture {
                         receivers: Vec::new(),
                     };
                     let own = host_pass::thread_counters();
+                    barrier.wait();
                     let before = own.get(Counter::ViewsLock);
                     barrier.wait();
                     let total = host_pass::TOTAL.get(Counter::ViewsLock);
@@ -246,11 +302,23 @@ impl IdleCycleFixture {
                     barrier.wait();
                     let mut latency = Vec::new();
                     let mut lateness = Vec::new();
+                    let mut removed = None;
                     for _ in 0..publications {
-                        fixture.run_content_cycle();
+                        match change {
+                            CycleChange::Content => fixture.run_content_cycle(),
+                            CycleChange::Structure => {
+                                fixture.toggle_agent_pane(&mut removed);
+                                fixture.run_cycle();
+                            }
+                        }
                         std::thread::sleep(FOLD_FLOOR);
                         let painted = wait_for_paints(&acknowledgments, threads);
-                        let (visible, late) = painted[&watched].expect("watched paint");
+                        let (visible, late) = painted
+                            .values()
+                            .flatten()
+                            .max_by_key(|(latency, _)| *latency)
+                            .copied()
+                            .expect("at least the watched paint");
                         latency.push(visible);
                         lateness.push(late);
                     }
@@ -309,6 +377,30 @@ impl IdleCycleFixture {
                 .join()
                 .expect("publisher")
         })
+    }
+
+    fn toggle_agent_pane(&mut self, removed: &mut Option<crate::sidebar::frame::PaneState>) {
+        let mut data = self.sink.host_data.lock().unwrap();
+        let frame = Arc::make_mut(&mut data.inputs.as_mut().unwrap().frame);
+        let tab = frame
+            .tabs
+            .iter_mut()
+            .find(|tab| {
+                tab.panes
+                    .iter()
+                    .any(|pane| pane.pane_id.raw() == "sidebar_0")
+            })
+            .expect("watched tab");
+        if let Some(pane) = removed.take() {
+            tab.panes.push(pane);
+        } else {
+            let slot = tab
+                .panes
+                .iter()
+                .position(|pane| pane.pane_id.raw() == "terminal_0")
+                .expect("bound agent pane");
+            *removed = Some(tab.panes.remove(slot));
+        }
     }
 }
 

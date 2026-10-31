@@ -58,6 +58,8 @@ pub(in crate::sidebar_pane) enum EntryCursor {
 /// Client presentation state, independent of a pane's render resources and hit geometry.
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct ViewState {
+    pub(in crate::sidebar_pane) layout_sequence: u64,
+    pub(in crate::sidebar_pane) layout_key: Option<LayoutKey>,
     pub(in crate::sidebar_pane) hook_drainer_alert: Option<Alert>,
     pub(in crate::sidebar_pane) selected_index: Option<usize>,
     pub(in crate::sidebar_pane) entry_cursor: Option<EntryCursor>,
@@ -214,6 +216,42 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
 }
 
+#[derive(Clone, Debug)]
+pub(in crate::sidebar_pane) struct LayoutKey {
+    rows: Vec<(String, isize)>,
+    top_height: usize,
+    bottom_height: usize,
+    content_height: usize,
+    scroll_max: usize,
+    expanded_groups: BTreeSet<String>,
+    landed_open: bool,
+    delegation_overrides: BTreeMap<String, bool>,
+    delegation_history: BTreeMap<String, Option<Timestamp>>,
+    dashboard_tab: Option<DashboardTab>,
+    make_up_filter: BodyLens,
+    help_visible: bool,
+    search_draft: Option<String>,
+}
+
+impl LayoutKey {
+    /// Compares in place, so recomposing an unchanged layout allocates nothing.
+    fn describes(&self, frame: &super::compose::ComposedFrame, view: &ViewState) -> bool {
+        self.rows == frame.anchored_rows
+            && self.top_height == frame.top_height
+            && self.bottom_height == frame.bottom_height
+            && self.content_height == frame.content_height
+            && self.scroll_max == frame.scroll_max
+            && self.expanded_groups == view.expanded_groups
+            && self.landed_open == view.landed_open
+            && self.delegation_overrides == view.delegation_overrides
+            && self.delegation_history == view.delegation_history
+            && self.dashboard_tab == view.dashboard_tab
+            && self.make_up_filter == view.make_up_filter
+            && self.help_visible == view.help_visible
+            && self.search_draft == view.search_draft
+    }
+}
+
 impl UiState {
     pub(in crate::sidebar_pane) fn theme(&mut self, config: &ThemeConfig) -> Rc<Theme> {
         if let Some((cached_config, theme)) = &self.theme_cache
@@ -233,6 +271,32 @@ impl UiState {
 }
 
 impl ViewState {
+    pub(super) fn note_layout(&mut self, frame: &super::compose::ComposedFrame) {
+        if self
+            .layout_key
+            .as_ref()
+            .is_some_and(|key| key.describes(frame, self))
+        {
+            return;
+        }
+        self.layout_key = Some(LayoutKey {
+            rows: frame.anchored_rows.clone(),
+            top_height: frame.top_height,
+            bottom_height: frame.bottom_height,
+            content_height: frame.content_height,
+            scroll_max: frame.scroll_max,
+            expanded_groups: self.expanded_groups.clone(),
+            landed_open: self.landed_open,
+            delegation_overrides: self.delegation_overrides.clone(),
+            delegation_history: self.delegation_history.clone(),
+            dashboard_tab: self.dashboard_tab.clone(),
+            make_up_filter: self.make_up_filter.clone(),
+            help_visible: self.help_visible,
+            search_draft: self.search_draft.clone(),
+        });
+        self.layout_sequence += 1;
+    }
+
     pub(super) fn effective_held_expansions(&self, roster: &VisibleRoster<'_>) -> BTreeSet<String> {
         let selected_id = self
             .selected_index

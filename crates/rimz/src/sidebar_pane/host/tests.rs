@@ -725,7 +725,7 @@ fn hidden_attachment_keeps_lifecycle_and_paints_on_viewed_fold() {
 }
 
 #[test]
-fn detached_attachment_keeps_lifecycle_and_hidden_resize_waits_for_visibility() {
+fn detached_attachment_mirrors_layout_without_routing_on_hidden_resize() {
     hidden_reveal(
         MuxName::Zellij,
         crate::store::snapshot::SidebarPresence::Detached,
@@ -766,13 +766,19 @@ fn hidden_reveal(
     );
     let mut visible = Pty::open(40, 20);
     let mut hidden = Pty::open(40, 20);
-    let visible_pane = room.attach_as(&visible, Some(visible_id.clone()));
-    let hidden_pane = room.attach_as(&hidden, Some(hidden_id.clone()));
+    let attach = |pty, pane_id| {
+        let mut request = hello(&SidebarInstanceId::new());
+        request.pane_id = pane_id;
+        request.refresh_ms = Some(100);
+        room.attach_hello(pty, request, room.connect())
+    };
+    let visible_pane = attach(&visible, visible_id.clone());
+    let hidden_pane = attach(&hidden, hidden_id.clone());
     painted(&mut visible);
     painted(&mut hidden);
 
     let mut snapshot = crate::sidebar_pane::app::fixtures::agent_snapshot(&workspace());
-    snapshot.theme.display.refresh_ms = 500;
+    snapshot.theme.display.refresh_ms = 100;
     snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
         sibling_count: 1,
         working_pane_ids: Vec::new(),
@@ -780,6 +786,12 @@ fn hidden_reveal(
     });
     snapshot.presence = Some(presence);
     snapshot.viewed_panes = vec![visible_id.clone()];
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .delegated_cost_usd = Some(1.0);
     let publish = |snapshot: &crate::store::snapshot::SidebarSnapshot| {
         use crate::sidebar_pane::app::fixtures::pane;
         let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
@@ -820,7 +832,17 @@ fn hidden_reveal(
             .contains(&snapshot.worktree_groups[0].rows[0].name)
     });
     visible.drain();
-    hidden.drain();
+    let mut hidden_parser = vt100::Parser::new(20.try_into().unwrap(), 40.try_into().unwrap(), 0);
+    eventually(
+        "the hidden pane mirrors the initial layout without reveal",
+        || {
+            hidden_parser.process(&hidden.drain());
+            hidden_parser
+                .screen()
+                .contents()
+                .contains(&snapshot.worktree_groups[0].rows[0].name)
+        },
+    );
     let heartbeat_path = room
         .runtime
         .sidebar_heartbeat_path(&hidden_pane.instance_id);
@@ -829,33 +851,49 @@ fn hidden_reveal(
         .modified()
         .unwrap();
 
-    for (name, status) in [
-        ("hidden-one", crate::agents::AgentStatus::Running),
-        ("hidden-two", crate::agents::AgentStatus::Waiting),
-        ("hidden-latest", crate::agents::AgentStatus::Idle),
-    ] {
-        std::sync::Arc::make_mut(
-            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
-        )[0]
-        .name = name.to_owned();
+    for cost in [2.0, 3.0, 4.0] {
         std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
         )[0]
         .as_agent_mut()
         .unwrap()
-        .status = status;
+        .delegated_cost_usd = Some(cost);
         publish(&snapshot);
         std::thread::sleep(Duration::from_millis(600));
         assert!(
             !visible.drain().is_empty(),
-            "the visible attachment paints {name}"
+            "the visible attachment paints cost {cost}"
         );
         assert_eq!(
             hidden.drain(),
             b"",
-            "hidden fold {name} emits no frame bytes"
+            "hidden number-only fold {cost} emits no frame bytes"
         );
     }
+    let mut new_row = snapshot.worktree_groups[0].rows[0].clone();
+    new_row.id = "hidden-new-card".into();
+    new_row.name = "hidden-new-card".into();
+    new_row.pane = None;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(new_row);
+    let changed = Instant::now();
+    publish(&snapshot);
+    eventually("the viewed pane paints the structural publication", || {
+        parser.process(&visible.drain());
+        parser.screen().contents().contains("hidden-new-card")
+    });
+    eventually("a structural publication mirrors without reveal", || {
+        hidden_parser.process(&hidden.drain());
+        hidden_parser
+            .screen()
+            .contents()
+            .contains("hidden-new-card")
+    });
+    // Wall-clock liveness bound; the virtual-clock unit test pins one frame interval.
+    assert!(
+        changed.elapsed() < Duration::from_millis(500),
+        "structural mirror remains live"
+    );
     eventually("the hidden heartbeat renews", || {
         std::fs::metadata(&heartbeat_path)
             .and_then(|metadata| metadata.modified())
@@ -871,16 +909,22 @@ fn hidden_reveal(
         );
     }
     assert_eq!(room.host.plane.record_binding(&hidden_id), (false, false));
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .delegated_cost_usd = Some(0.5);
     let revealed = Instant::now();
     snapshot.viewed_panes.push(hidden_id.clone());
     publish(&snapshot);
-    let mut bytes = Vec::new();
-    while !String::from_utf8_lossy(&bytes).contains("hidden-latest") {
+    while !hidden_parser.screen().contents().contains("$0.50") {
         assert!(
             revealed.elapsed() < Duration::from_millis(500),
-            "reveal paints within one frame"
+            "reveal paints within one frame: {}",
+            hidden_parser.screen().contents()
         );
-        bytes.extend(hidden.drain());
+        hidden_parser.process(&hidden.drain());
         std::thread::sleep(Duration::from_millis(2));
     }
 

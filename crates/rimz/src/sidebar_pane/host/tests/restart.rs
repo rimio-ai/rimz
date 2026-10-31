@@ -92,7 +92,8 @@ fn a_hidden_attachments_carry_cannot_seed_the_view_seen_elsewhere() {
     let mut viewed = Pty::open(54, 30);
     let _viewed = room.attach_carried(&viewed, 0, Some(working(0)));
     selected(&mut viewed, 0);
-    assert!(!has_frame_content(&hidden.drain(), 30, 54));
+    selected(&mut hidden, 0);
+    assert_eq!(room.host.plane.record_binding(&sidebar(1)), (false, false));
 }
 
 #[test]

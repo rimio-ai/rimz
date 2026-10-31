@@ -1,5 +1,622 @@
 use super::*;
 
+fn mirror_pair(mux: MuxName) -> super::scroll::SharedPanes {
+    let mut pair = super::scroll::SharedPanes::new(mux);
+    set_cost(&mut pair.snapshot, 1.0);
+    let now = pair.snapshot.now;
+    Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows)[1].pane = None;
+    let card = Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap();
+    card.sub_agent_count = 1;
+    card.sub_agents = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "mirror-child", "kind": "claude", "name": "mirror-child",
+            "status": "running", "last_activity": now,
+        }))
+        .unwrap(),
+    ];
+    pair.sample(&[(1, 0)]);
+    pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+        v.state.freeze = None;
+    });
+    for rig in &mut pair.panes {
+        settle_width(rig);
+        rig.state.pane.optimistic_watch_until = None;
+    }
+    pair.panes[0].state.pane.dirty = true;
+    pair.clock.advance(Duration::from_secs(1));
+    advance_wakeup(&mut pair.panes[0], Wakeup::Snapshot);
+    advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot);
+    pair
+}
+
+fn repaint_source(pair: &mut super::scroll::SharedPanes) {
+    pair.panes[0].state.pane.dirty = true;
+    pair.panes[0].state.pane.next_frame = pair.clock.now();
+    advance_wakeup(&mut pair.panes[0], Wakeup::Snapshot);
+}
+
+#[test]
+fn hidden_mirrors_structural_layouts_on_both_backends() {
+    let mut results = Vec::new();
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        for change in ["appear", "leave", "reorder", "scroll", "open", "close"] {
+            let mut pair = mirror_pair(mux);
+            if change == "close" {
+                pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+                    v.state.delegation_overrides.insert("agent-0".into(), true);
+                });
+                repaint_source(&mut pair);
+            }
+            let before = pair.plane.views.read().mirror_target;
+            match change {
+                "appear" | "leave" => {
+                    let rows = Arc::make_mut(
+                        &mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows,
+                    );
+                    if change == "appear" {
+                        let mut row = rows[0].clone();
+                        row.id = "mirror-new".into();
+                        row.name = "mirror-new".into();
+                        row.pane = None;
+                        rows.insert(1, row);
+                    } else {
+                        rows.remove(1);
+                    }
+                    pair.sample(&[(1, 0)]);
+                }
+                "reorder" => pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+                    Arc::make_mut(
+                        &mut Arc::make_mut(&mut v.context.current.worktree_groups)[0].rows,
+                    )
+                    .swap(0, 1);
+                    v.state.scroll_offset = 0;
+                    v.state.offset_authoritative = true;
+                }),
+                "scroll" => {
+                    let source = &mut pair.panes[0];
+                    source
+                        .state
+                        .on_input(Wakeup::Scroll { down: true }, &mut source.terminal)
+                        .unwrap();
+                }
+                _ => pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+                    v.state
+                        .delegation_overrides
+                        .insert("agent-0".into(), change == "open");
+                }),
+            }
+            repaint_source(&mut pair);
+            let target = pair.plane.views.read().mirror_target;
+            let expected = pair
+                .view(0)
+                .anchored_rows
+                .iter()
+                .map(|(id, y)| {
+                    (
+                        id.clone(),
+                        y + pair.panes[0].state.pane.ui.scroll_zone_top as isize,
+                    )
+                })
+                .collect::<Vec<_>>();
+            pair.clock.advance(animation_frame(&pair.snapshot));
+            let counts = host_pass::thread_counters();
+            counts.reset();
+            let painted = advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
+            results.push((
+                mux,
+                change,
+                target != before,
+                painted,
+                pair.panes[1].state.pane.ui.painted_rows == expected,
+                counts.get(Counter::ViewsLock),
+            ));
+        }
+    }
+    let expected = results
+        .iter()
+        .map(|(mux, change, ..)| (*mux, *change, true, true, true, 1))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn hidden_mirrors_last_card_height_changes_in_a_fitting_roster() {
+    let mut results = Vec::new();
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        let rows = Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows);
+        let mut child = rows[0].as_agent().unwrap().sub_agents[0].clone();
+        child.id = "tail-existing-child".into();
+        child.name = "tail-existing-child".into();
+        let last = rows[1].as_agent_mut().unwrap();
+        last.delegated_cost_usd = Some(1.0);
+        last.sub_agent_count = 1;
+        last.sub_agents = vec![child];
+        for rig in &mut pair.panes {
+            rig.terminal = Terminal::with_options(
+                PaneBackend::headless(std::io::sink()),
+                ratatui::TerminalOptions {
+                    viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 160)),
+                },
+            )
+            .unwrap();
+        }
+        pair.sample(&[(1, 0)]);
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.delegation_overrides.insert("agent-1".into(), true);
+        });
+        repaint_source(&mut pair);
+        assert_eq!(
+            pair.view(0).anchored_rows.last().map(|(id, _)| id.as_str()),
+            Some("agent-1")
+        );
+        let output = FrameOutput::default();
+        pair.panes[1]
+            .terminal
+            .backend_mut()
+            .play_output(output.clone());
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+        let mut screen = vt100::Parser::new(160.try_into().unwrap(), 80.try_into().unwrap(), 0);
+        screen.process(&std::mem::take(&mut *output.0.lock().unwrap()));
+        assert!(screen.screen().contents().contains("tail-existing-child"));
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let _subscription = pair.plane.subscribe(&pair.panes[1].state.pane.config, send);
+        for adding in [true, false] {
+            let before = pair.plane.views.read().mirror_target;
+            let starts = pair.view(0).anchored_rows;
+            let rows =
+                Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows);
+            let mut child = rows[0].as_agent().unwrap().sub_agents[0].clone();
+            child.id = "tail-child".into();
+            child.name = "tail-child".into();
+            // Two child lines shrink to one older marker without reducing the lifetime count.
+            child.model = Some("Opus".into());
+            let last = rows[1].as_agent_mut().unwrap();
+            if adding {
+                last.sub_agent_count = 2;
+                last.sub_agents.push(child);
+            } else {
+                last.sub_agents.pop();
+            }
+            pair.sample(&[(1, 0)]);
+            repaint_source(&mut pair);
+            assert_eq!(pair.panes[0].state.pane.ui.drawn_scroll_max, Some(0));
+            assert_eq!(pair.view(0).anchored_rows, starts);
+            pair.clock.advance(animation_frame(&pair.snapshot));
+            let painted = advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
+            screen.process(&std::mem::take(&mut *output.0.lock().unwrap()));
+            results.push((
+                mux,
+                adding,
+                pair.plane.views.read().mirror_target != before,
+                matches!(receive.try_recv(), Ok(Wakeup::Tick)),
+                painted,
+                screen.screen().contents().contains("tail-child") == adding,
+            ));
+        }
+    }
+    let expected = results
+        .iter()
+        .map(|(mux, adding, ..)| (*mux, *adding, true, true, true, true))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn hidden_mirrors_coalesce_and_cap_the_driver_deadline() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        let interval = animation_frame(&pair.snapshot);
+        let paints = pair.panes[1].state.pane.paints;
+        for offset in [3, 6] {
+            pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+                v.state.scroll_offset = offset;
+                v.state.offset_authoritative = true;
+                v.state.scroll_ease.cancel();
+            });
+            repaint_source(&mut pair);
+            let rig = &mut pair.panes[1];
+            let (painted, deadline) = rig
+                .state
+                .advance(&mut super::scroll::queued([]), &mut rig.terminal)
+                .unwrap();
+            assert!(!painted, "{mux:?}: rate limited inside the interval");
+            assert!(
+                deadline <= pair.clock.now() + interval,
+                "{mux:?}: pending mirror deadline"
+            );
+        }
+        pair.clock.advance(interval);
+        assert!(
+            advance_wakeup(&mut pair.panes[1], Wakeup::Tick),
+            "{mux:?}: latest layout mirrors"
+        );
+        assert_eq!(pair.panes[1].state.pane.paints, paints + 1);
+        assert_eq!(
+            pair.panes[1].state.pane.ui.painted_rows,
+            pair.panes[0].state.pane.ui.painted_rows
+        );
+        assert!(!advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+    }
+}
+
+#[test]
+fn layout_publications_ignore_numbers_clocks_and_scroll_easing() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        let target = pair.plane.views.read().mirror_target;
+        assert!(target.is_some(), "a painted layout is published");
+        let paints = pair.panes[1].state.pane.paints;
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let _subscription = pair.plane.subscribe(&pair.panes[1].state.pane.config, send);
+        Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows)[0].name =
+            "renamed-card-0".into();
+        pair.sample(&[(1, 0)]);
+        repaint_source(&mut pair);
+        assert_eq!(
+            pair.plane.views.read().mirror_target,
+            target,
+            "{mux:?}: rename only"
+        );
+        assert!(
+            receive.try_recv().is_err(),
+            "{mux:?}: rename wakes no hidden pane"
+        );
+        assert!(!advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+        set_cost(&mut pair.snapshot, 5.0);
+        pair.sample(&[(1, 0)]);
+        for elapsed in [1, 100, 1000, 11000] {
+            pair.clock.advance(Duration::from_millis(elapsed));
+            repaint_source(&mut pair);
+            assert_eq!(
+                pair.plane.views.read().mirror_target,
+                target,
+                "{mux:?}: number/clock only"
+            );
+            let counts = host_pass::thread_counters();
+            counts.reset();
+            assert!(!advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+            assert_eq!(counts.get(Counter::ViewsLock), 0);
+        }
+        assert_eq!(pair.panes[1].state.pane.paints, paints);
+        let source = &mut pair.panes[0];
+        source
+            .state
+            .on_input(Wakeup::Scroll { down: true }, &mut source.terminal)
+            .unwrap();
+        let scrolled = pair.plane.views.read().mirror_target;
+        assert_ne!(scrolled, target);
+        for _ in 0..5 {
+            pair.clock.advance(animation_frame(&pair.snapshot));
+            repaint_source(&mut pair);
+            assert_eq!(
+                pair.plane.views.read().mirror_target,
+                scrolled,
+                "ease frames keep target placements"
+            );
+        }
+    }
+}
+
+#[test]
+fn layout_publications_wake_only_unmapped_subscribers() {
+    let mut results = Vec::new();
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        let mut subscriptions = Vec::new();
+        let mut receivers = Vec::new();
+        for rig in &pair.panes {
+            let (send, receive) = std::sync::mpsc::sync_channel(1);
+            subscriptions.push(pair.plane.subscribe(&rig.state.pane.config, send));
+            receivers.push(receive);
+        }
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.landed_open = !v.state.landed_open;
+        });
+        repaint_source(&mut pair);
+        results.push((
+            mux,
+            receivers[0].try_recv().is_err(),
+            matches!(receivers[1].try_recv(), Ok(Wakeup::Tick)),
+        ));
+    }
+    assert_eq!(
+        results,
+        [(MuxName::Tmux, true, true), (MuxName::Zellij, true, true)]
+    );
+}
+
+#[test]
+fn hidden_mirror_preserves_view_and_arrival_obligations() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.scroll_offset = 3;
+            v.state.offset_authoritative = true;
+            v.state.scroll_ease.cancel();
+        });
+        repaint_source(&mut pair);
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+        assert_eq!(
+            pair.panes[1]
+                .state
+                .pane
+                .mirrored
+                .as_ref()
+                .map(|last| last.target),
+            pair.plane.views.read().mirror_target,
+            "{mux:?}: consume the scrolled target before resizing"
+        );
+        let baseline = pair.panes[1].state.pane.painted_baseline.clone();
+        let cursor = pair.panes[1].state.pane.own.revision;
+        let reductions = pair.panes[1].state.pane.content_applications;
+        let state = format!("{:?}", pair.view(0));
+        let context = pair.panes[0].state.inspect_view(|_, v| {
+            (
+                v.anim_start,
+                v.tab_read_dwell_until,
+                v.last_folded_focus_intent,
+            )
+        });
+        pair.panes[1].terminal = terminal_with_width(39);
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        assert!(
+            advance_wakeup(&mut pair.panes[1], Wakeup::Resize),
+            "{mux:?}: a real resize re-mirrors"
+        );
+        assert_eq!(
+            pair.panes[1].state.pane.mirrored.as_ref().unwrap().size,
+            ratatui::layout::Size::new(39, 24)
+        );
+        let own = &pair.panes[1].state.pane.config.own_pane;
+        assert_eq!(pair.plane.record_binding(own), (false, false));
+        assert_eq!(format!("{:?}", pair.view(0)), state);
+        assert_eq!(
+            pair.panes[0].state.inspect_view(|_, v| (
+                v.anim_start,
+                v.tab_read_dwell_until,
+                v.last_folded_focus_intent
+            )),
+            context
+        );
+        assert_eq!(pair.panes[1].state.pane.painted_baseline, baseline);
+        assert_eq!(pair.panes[1].state.pane.own.revision, cursor);
+        assert_eq!(pair.panes[1].state.pane.content_applications, reductions);
+        pair.sample(&[]);
+        set_cost(&mut pair.snapshot, 5.0);
+        pair.sample(&[]);
+        pair.sample(&[(1, 1)]);
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+        let arrived = pair.view(1);
+        assert!(arrived.freeze.is_some());
+        assert_eq!(arrived.last_order.rows, arrived.freeze.unwrap().frozen.rows);
+        assert!(
+            pair.panes[1]
+                .state
+                .inspect_view(|_, v| v.tab_read_dwell_until.is_some())
+        );
+        assert!(!arrived.cost_rolls.any_rolling(arrived.animation_phase));
+    }
+}
+
+#[test]
+fn auto_density_arrival_only_shifts_rows_below_the_new_selection() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = super::scroll::SharedPanes::new(mux);
+        pair.snapshot.theme.display.card_density = crate::config::CardDensityMode::Auto;
+        for row in Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows) {
+            let card = row.as_agent_mut().unwrap();
+            card.prompt = Some("inspect auth".into());
+            card.usage.total_tokens = Some(1000);
+            card.usage.cache_read_input_tokens = Some(500);
+        }
+        for rig in &mut pair.panes {
+            rig.terminal = Terminal::with_options(
+                PaneBackend::headless(std::io::sink()),
+                ratatui::TerminalOptions {
+                    viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 160)),
+                },
+            )
+            .unwrap();
+            settle_width(rig);
+            rig.state.pane.optimistic_watch_until = None;
+        }
+        let rows = &pair.snapshot.worktree_groups[0].rows;
+        let source = rows[0].pane.as_ref().unwrap().pane_id.clone();
+        let destination = rows[10].pane.as_ref().unwrap().pane_id.clone();
+        pair.snapshot.focused_pane = Some(source.clone());
+        pair.sample_with(&[(1, 0)], |frame| {
+            frame.client_views[0].pane_id = source;
+        });
+        pair.clock.advance(Duration::from_secs(1));
+        repaint_source(&mut pair);
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.freeze = None;
+        });
+        repaint_source(&mut pair);
+        assert_eq!(pair.view(0).drawn_selection.as_deref(), Some("agent-0"));
+        assert!(pair.view(0).freeze.is_none());
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+        let mirrored_rows = pair.panes[1].state.pane.ui.painted_rows.clone();
+        assert_eq!(mirrored_rows.len(), 20);
+        assert_eq!(pair.panes[1].state.pane.ui.drawn_scroll_max, Some(0));
+        assert_eq!(
+            pair.plane
+                .record_binding(&pair.panes[1].state.pane.config.own_pane),
+            (false, false)
+        );
+
+        pair.snapshot.focused_pane = Some(destination.clone());
+        pair.sample_with(&[(1, 1)], |frame| {
+            frame.client_views[0].pane_id = destination.clone();
+        });
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        let paints = pair.panes[1].state.pane.paints;
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+        assert_eq!(pair.panes[1].state.pane.paints, paints + 1);
+        assert_eq!(pair.view(1).selected_pane, Some(destination));
+        let arrived_rows = &pair.panes[1].state.pane.ui.painted_rows;
+        assert_eq!(arrived_rows.len(), mirrored_rows.len());
+        let selected = mirrored_rows
+            .iter()
+            .position(|(id, _)| id == "agent-10")
+            .unwrap();
+        assert_eq!(
+            arrived_rows[..=selected],
+            mirrored_rows[..=selected],
+            "{mux:?}: arrival preserves every row through the newly selected card's start"
+        );
+        let mirrored_height = mirrored_rows[selected + 1].1 - mirrored_rows[selected].1;
+        let arrived_height = arrived_rows[selected + 1].1 - arrived_rows[selected].1;
+        assert!(
+            arrived_height > mirrored_height,
+            "{mux:?}: the newly selected card opens"
+        );
+        let growth = arrived_height - mirrored_height;
+        let shifted = mirrored_rows[selected + 1..]
+            .iter()
+            .map(|(id, row)| (id.clone(), *row + growth))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &arrived_rows[selected + 1..],
+            shifted.as_slice(),
+            "{mux:?}: every following row moves by exactly the card's growth"
+        );
+    }
+}
+
+#[test]
+fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
+    use crate::sidebar_pane::pets::{PetAssets, PetBody, PetGridSize, PetPixelView, PetView};
+    use crate::sidebar_pane::pixel::PixelRenderCaps;
+
+    for resident_pet in [false, true] {
+        let mut pair = mirror_pair(MuxName::Tmux);
+        pair.snapshot.theme.mode = crate::config::ThemeMode::Truecolor;
+        pair.snapshot.theme.display.pixel = crate::config::PixelMode::Auto;
+        pair.snapshot.theme.pets.enabled = false;
+        Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows)[0]
+            .as_agent_mut()
+            .unwrap()
+            .usage
+            .context_pct = Some(50);
+        let rig = &mut pair.panes[1];
+        rig.state.pane.paint = FramePainter::with_assets(
+            PetAssets::test_loaded_pixel_frame("codex"),
+            PixelRenderCaps {
+                pixel_transport: true,
+                kitty_clients: true,
+            },
+            true,
+        );
+        if resident_pet {
+            rig.state.pane.ui.pet = Some(PetView {
+                body: Some(PetBody::Pixel(PetPixelView {
+                    pet_id: "codex".into(),
+                    sprite_index: 0,
+                    image_id: 0x520000,
+                    size: PetGridSize { cols: 2, rows: 1 },
+                })),
+                caption: None,
+                frame_interval: None,
+            });
+            rig.state
+                .pane
+                .paint
+                .ensure_pixel_transmitted(&mut Vec::new(), &rig.state.pane.ui, 0)
+                .unwrap();
+        }
+        let output = FrameOutput::default();
+        rig.terminal.backend_mut().play_output(output.clone());
+        pair.sample(&[(1, 0)]);
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.landed_open = !v.state.landed_open;
+        });
+        repaint_source(&mut pair);
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+        let bytes = std::mem::take(&mut *output.0.lock().unwrap());
+        assert!(
+            !bytes.windows(3).any(|bytes| bytes == b"\x1b_G"),
+            "a tmux mirror emits no graphics, including deletes and slot sweeps"
+        );
+        let rig = &mut pair.panes[1];
+        assert!(
+            rig.state
+                .pane
+                .ui
+                .meter_pixels
+                .as_ref()
+                .unwrap()
+                .visible_rasters()
+                .next()
+                .is_some()
+        );
+        pair.sample(&[(1, 1)]);
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+        let bytes = output.0.lock().unwrap();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("a=t"),
+            "arrival transmits the meter that the mirror did not mark resident"
+        );
+    }
+}
+
+#[test]
+fn no_painted_view_publishes_no_hidden_mirror() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        assert!(pair.plane.views.read().mirror_target.is_some());
+        pair.sample(&[]);
+        for rig in &mut pair.panes {
+            rig.state.pane.optimistic_watch_until = None;
+            advance_wakeup(rig, Wakeup::Snapshot);
+        }
+        assert!(pair.plane.views.read().mirror_target.is_none());
+        Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows).remove(0);
+        pair.sample(&[]);
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        for rig in &mut pair.panes {
+            assert!(!advance_wakeup(rig, Wakeup::Snapshot));
+        }
+    }
+}
+
+#[test]
+fn hidden_mirror_retries_after_the_jump_fence_releases() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        pair.panes[1].state.pane.focus_peers = Some(pair.plane.focus_peers(
+            pair.panes[1].state.pane.config.instance_id.clone(),
+            crate::diag::DiagSink::disabled(),
+        ));
+        let lease = pair
+            .plane
+            .focus_peers(SidebarInstanceId::new(), crate::diag::DiagSink::disabled())
+            .arm(
+                pair.panes[0].state.pane.config.own_pane.clone(),
+                pair.clock.now(),
+            );
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.landed_open = !v.state.landed_open;
+        });
+        repaint_source(&mut pair);
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        assert!(!advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+        lease.release();
+        assert!(
+            advance_wakeup(&mut pair.panes[1], Wakeup::Tick),
+            "{mux:?}: refused mirror stays due"
+        );
+    }
+}
+
 fn settled_shared_hidden(mux: MuxName) -> Rig {
     let own = PaneId::from_parts(
         mux,
