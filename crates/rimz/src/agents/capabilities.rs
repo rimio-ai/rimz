@@ -1055,7 +1055,10 @@ pub trait ContextCapability: CoreCapability {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccountProfileProbe {
     NotAttempted,
-    Answered(Option<String>),
+    Answered {
+        plan: Option<String>,
+        display_name: Option<String>,
+    },
     Failed,
 }
 

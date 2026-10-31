@@ -99,11 +99,12 @@ fn read_account_profile(
     }
     let mut state = previous.cloned().unwrap_or_default();
     state.attempted_at_ms = probed_at_ms;
-    if let AccountProfileProbe::Answered(plan) = outcome {
+    if let AccountProfileProbe::Answered { plan, display_name } = outcome {
         state.answer = Some(AccountProfileAnswer {
             owner: owner.to_owned(),
             basis: account.plan.clone(),
             plan,
+            plan_name: display_name,
             read_at_ms,
         });
     }
@@ -702,16 +703,16 @@ fn merge_probe_results(
                         previous_record.and_then(|record| account_version(record.account.as_ref()))
                     });
                 }
-                if let Some(plan) = profile
+                if let Some(answer) = profile
                     .as_ref()
                     .and_then(|state| state.answer.as_ref())
                     .filter(|answer| {
                         account.profile_fingerprint.as_deref() == Some(answer.owner.as_str())
                             && account.plan == answer.basis
                     })
-                    .and_then(|answer| answer.plan.clone())
                 {
-                    account.plan = Some(plan);
+                    account.plan = answer.plan.clone().or(account.plan);
+                    account.plan_name.clone_from(&answer.plan_name);
                 }
                 Some(account)
             }

@@ -182,7 +182,8 @@ pub struct SidebarProviderPanel {
     pub color_role: Option<PaletteRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// Brand plan label (`Claude Max 20x`, `ChatGPT Pro 200`); `None` when unknown.
+    /// Brand plan label, preferring the provider's display name (`Claude Ultra`),
+    /// otherwise its tier vocabulary (`ChatGPT Pro 200`); `None` when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
     /// Whether the account is metered by rate-limit windows.

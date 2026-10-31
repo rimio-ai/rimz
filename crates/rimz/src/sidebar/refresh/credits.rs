@@ -678,7 +678,7 @@ fn apply_credits_cache_with(
                     panel.plan = displayable_entry
                         .and_then(|entry| entry.plan.as_deref())
                         .filter(|plan| !plan.trim().is_empty())
-                        .map(|plan| format_plan_label(&panel.kind, plan));
+                        .map(|plan| format_plan_label(&panel.kind, plan, None));
                 }
                 panel.extra_credits = displayable_entry
                     .and_then(|entry| entry.extra_credits.clone())

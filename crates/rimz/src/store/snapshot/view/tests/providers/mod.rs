@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn go_plan_headers_keep_known_and_unknown_product_names() {
     let labels = ["go", "go-plus", "black-max"]
-        .map(|product| crate::store::snapshot::view::format_plan_label("opencode", product));
+        .map(|product| crate::store::snapshot::view::format_plan_label("opencode", product, None));
     assert_eq!(labels, ["Go", "Go Plus", "Black Max"]);
 }
 
