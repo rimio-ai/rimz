@@ -13,13 +13,18 @@ fn width_proof_cache(
         "session_name": "rimz-test", "produced_at_ms": crate::utils::time::unix_now_ms(),
         "clients": clients,
         "panes": [
-            {"id": 1, "stable_tab_id": 10, "tab_position": 0, "pane_x": 0, "pane_columns": 60, "tab_viewed": latched},
-            {"id": 2, "stable_tab_id": 10, "tab_position": 0, "pane_x": 60, "pane_columns": 240, "tab_viewed": latched},
-            {"id": 3, "stable_tab_id": 20, "tab_position": 1, "pane_x": 0, "pane_columns": 24, "tab_viewed": latched},
-            {"id": 4, "stable_tab_id": 20, "tab_position": 1, "pane_x": 24, "pane_columns": hidden_cols - 24, "tab_viewed": latched},
+            {"id": 1, "stable_tab_id": 10, "tab_position": 0,
+                "pane_x": 0, "pane_columns": 60, "tab_viewed": latched},
+            {"id": 2, "stable_tab_id": 10, "tab_position": 0,
+                "pane_x": 60, "pane_columns": 240, "tab_viewed": latched},
+            {"id": 3, "stable_tab_id": 20, "tab_position": 1,
+                "pane_x": 0, "pane_columns": 24, "tab_viewed": latched},
+            {"id": 4, "stable_tab_id": 20, "tab_position": 1,
+                "pane_x": 24, "pane_columns": hidden_cols - 24, "tab_viewed": latched},
             {"id": 9, "is_plugin": true, "stable_tab_id": 10, "tab_position": 0}
         ]
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
 fn one_width_client() -> serde_json::Value {
@@ -44,7 +49,9 @@ fn renderer_width_proof_uses_client_count_and_equal_width_tabs() {
         {"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}},
         {"client_id": 2, "pane_id": {"kind": "plugin", "id": 9}}
     ]});
-    let unresolved = serde_json::json!({"views": [{"client_id": 1, "pane_id": {"kind": "terminal", "id": 999}}]});
+    let unresolved = serde_json::json!({"views": [
+        {"client_id": 1, "pane_id": {"kind": "terminal", "id": 999}}
+    ]});
     let duplicate = serde_json::json!({"views": [
         {"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}},
         {"client_id": 1, "pane_id": {"kind": "terminal", "id": 2}}
