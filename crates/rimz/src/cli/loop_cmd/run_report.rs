@@ -452,6 +452,7 @@ fn outcome_failure_tail(summary: &RunSummary<'_>) -> Option<String> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Forensics {
     Full,
+    Folded { holder: RunLockInfo, count: usize },
     Summary,
 }
 
@@ -528,13 +529,22 @@ pub(super) fn write_record_forensics(
     if let Some(checkout) = &record.checkout {
         write_detail_link(out, "checkout", &checkout.display().to_string())?;
     }
-    if let Some(holder) = record.holder {
+    let (holder, count) = match detail {
+        Forensics::Folded { holder, count } => (Some(holder), count),
+        _ => (record.holder, 1),
+    };
+    if let Some(holder) = holder {
         let elapsed = record.at.duration_since(holder.started_at).as_secs().max(0) as u64;
+        let fire = if count > 1 {
+            "the newest fire"
+        } else {
+            "this fire"
+        };
         write_detail_link(
             out,
             "holder",
             &format!(
-                "pid {} · started {} before this fire",
+                "pid {} · started {} before {fire}",
                 holder.pid,
                 ui::age_label(elapsed)
             ),
@@ -554,7 +564,7 @@ pub(super) fn write_record_forensics(
             ui::paint(ui::palette::muted(), &format!("  cost: {spend}"))
         )?;
     }
-    if detail == Forensics::Full
+    if detail != Forensics::Summary
         && let Some(signal) = &record.signal
     {
         write_detail_link(out, "signal", signal.name.as_str())?;
@@ -570,7 +580,7 @@ pub(super) fn write_record_forensics(
         let current = entry
             .and_then(|entry| entry.when.as_deref())
             .and_then(|clauses| schedule::when::WhenExpr::parse(clauses).ok());
-        if detail == Forensics::Full
+        if detail != Forensics::Summary
             || !current.is_some_and(|expr| expr.to_string() == condition.when)
         {
             write_detail_link(out, "when", &format!("{}{held}", condition.when))?;
@@ -664,7 +674,7 @@ fn write_check_section(
                 None
             };
             let tail = match detail {
-                Forensics::Full => None,
+                Forensics::Full | Forensics::Folded { .. } => None,
                 Forensics::Summary => summary_check_tail(record, check),
             };
             write_gutter_block(out, first_style, tail.unwrap_or(&check.output))?;

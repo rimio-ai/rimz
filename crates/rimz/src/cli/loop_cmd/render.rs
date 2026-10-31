@@ -1225,13 +1225,14 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             &view.name,
             &view.entry,
             &view.records,
+            &attribution,
             now,
             ui::prose::Prose::for_stdout(),
         )?;
+        let rows = collapsed_run_rows(&view.records, &attribution, true);
         if view.show_agent_runs {
-            write_agent_runs(out, &view.records, now)?;
+            write_agent_runs(out, &view.records, &rows, now)?;
         }
-        let rows = collapsed_run_rows(&view.records, &attribution);
         let repeats_detail = rows.len() == 1
             && rows[0].count == 1
             && rows[0].skipped == 0
@@ -1239,7 +1240,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             && detail_index(&view.records)
                 .is_some_and(|index| std::ptr::eq(rows[0].latest, &view.records[index]));
         if !repeats_detail {
-            write_runs_table(out, &view.records, &rows, runs, now)?;
+            write_runs_table(out, &rows, runs, now)?;
         }
     }
     if !view.entry.each_worktree {
@@ -1527,14 +1528,17 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 "{} — one-shot fired · finished\n",
                 ui::paint(ui::palette::header(), &args.name)
             )?;
-            let visible = view
-                .history
-                .fires
-                .iter()
-                .rev()
-                .take(args.runs)
-                .collect::<Vec<_>>();
-            return write_log_records(&mut out, None, &visible);
+            let attribution = refused_fire_attribution(&view.history.fires);
+            write_log_records(
+                &mut out,
+                None,
+                &view.history.fires,
+                &attribution,
+                None,
+                args.runs,
+                false,
+            )?;
+            return Ok(());
         }
         ShowTarget::Owner(owners) => {
             if args.json {
@@ -2127,6 +2131,7 @@ fn write_last_run(
     name: &str,
     entry: &TaskEntry,
     records: &[LoopRunRecord],
+    attribution: &[FireAttribution],
     now: Timestamp,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
@@ -2155,12 +2160,17 @@ fn write_last_run(
         }
     }
     writeln!(out)?;
+    let blocks = collapsed_run_rows(records, attribution, false);
+    let blocks_since = blocks
+        .iter()
+        .skip_while(|row| !std::ptr::eq(row.latest, record))
+        .count();
     run_report::render_record_detail(
         out,
         entry,
         record,
         "LAST RUN",
-        &format!("rimz loop logs {name} -n {}", records.len() - idx),
+        &format!("rimz loop logs {name} -n {blocks_since}"),
         now,
         prose,
     )
@@ -2190,10 +2200,18 @@ fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Resu
     writeln!(out, "  stop with `rimz loop stop {}`", args.name)?;
     let records =
         run_log::task_history(&rimz::disk::paths::logs_dir(), &args.name, Some(root), None).fires;
-    let visible = records.iter().rev().take(args.runs).collect::<Vec<_>>();
-    if !visible.is_empty() {
+    if !records.is_empty() && args.runs > 0 {
         writeln!(out)?;
-        write_log_records(&mut out, None, &visible)?;
+        let attribution = refused_fire_attribution(&records);
+        write_log_records(
+            &mut out,
+            None,
+            &records,
+            &attribution,
+            None,
+            args.runs,
+            false,
+        )?;
     }
     Ok(())
 }
@@ -2212,11 +2230,6 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
             .and_then(|entry| entry.wait_meta.as_ref())
             .map(|meta| meta.armed_at),
     );
-    let records = if args.heard {
-        &history.records
-    } else {
-        &history.fires
-    };
     let lookup = match entry {
         Some(entry) => in_flight_run(&args.name, &entry.resolved_root()),
         None => in_flight_without_row(&args.name, globals)
@@ -2227,14 +2240,18 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }
     let in_flight = in_flight.filter(|_| !args.failed);
-    let visible = records
-        .iter()
-        .filter(|record| !args.failed || record_is_failure(record))
-        .rev()
-        .take(args.runs)
-        .collect::<Vec<_>>();
     let mut out = ui::out();
-    if visible.is_empty() && in_flight.is_none() {
+    let attribution = refused_fire_attribution(&history.fires);
+    let shown = write_log_records(
+        &mut out,
+        entry,
+        &history.fires,
+        &attribution,
+        args.heard.then_some(history.records.as_slice()),
+        args.runs,
+        args.failed,
+    )?;
+    if shown == 0 && in_flight.is_none() {
         if args.failed {
             writeln!(out, "no failed runs recorded")?;
         } else if entry.is_none() && !history.records.is_empty() {
@@ -2248,9 +2265,8 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         return Ok(());
     }
-    write_log_records(&mut out, entry, &visible)?;
     if let Some(in_flight) = &in_flight {
-        if !visible.is_empty() {
+        if shown > 0 {
             writeln!(out)?;
         }
         writeln!(
@@ -2265,43 +2281,103 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-/// History rows oldest first, from `visible` collected newest first.
+/// History blocks oldest first, limited from the newest after folding and filtering.
 fn write_log_records(
     out: &mut impl Write,
     entry: Option<&TaskEntry>,
-    visible: &[&LoopRunRecord],
-) -> Result<()> {
+    records: &[LoopRunRecord],
+    attribution: &[FireAttribution],
+    heard: Option<&[LoopRunRecord]>,
+    limit: usize,
+    failed: bool,
+) -> Result<usize> {
+    let mut rows = collapsed_run_rows(records, attribution, false);
+    if let Some(history) = heard {
+        let mut folded = rows.into_iter().peekable();
+        let mut fire_index = 0;
+        rows = history
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                if record.result == LoopRunResult::SignalSkipped {
+                    return Some(CollapsedRunRow::new(record, index, 0, 0));
+                }
+                let row = folded.next_if(|row| row.last_index == fire_index);
+                fire_index += 1;
+                row
+            })
+            .collect();
+    }
+    let visible = rows
+        .iter()
+        .filter(|row| !failed || record_is_failure(row.latest))
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>();
     let now = Timestamp::now();
     let prose = ui::prose::Prose::for_stdout();
-    for (idx, record) in visible.iter().rev().enumerate() {
+    for (idx, row) in visible.iter().rev().enumerate() {
         if idx > 0 {
             writeln!(out)?;
         }
+        let record = row.latest;
         let status = run_status(record);
-        write!(
-            out,
-            "{}",
-            ui::paint(status.style, &format!("{} {}", status.glyph, status.label))
-        )?;
-        write!(
-            out,
-            " · {} · {}",
-            ui::rel_age(record.at, now),
-            if record.mode == Some(LoopRunMode::Manual) {
-                "manual".to_owned()
-            } else if let Some(signal) = &record.signal {
-                format!("signal {}", signal.name)
-            } else {
-                "scheduled".to_owned()
+        let (label, style) = if row.is_no_record() {
+            ("○ no record".to_owned(), ui::palette::warn())
+        } else {
+            let mut label = format!("{} {}", status.glyph, status.label);
+            if row.count > 1 {
+                label.push_str(&format!(" ×{}", row.count));
             }
+            (label, status.style)
+        };
+        write!(
+            out,
+            "{} · {}",
+            ui::paint(style, &label),
+            ui::rel_age(record.at, now)
         )?;
-        if let Some(exit) = run_report::detail_exit_segment(record) {
-            write!(out, " · {exit}")?;
+        if row.is_no_record() {
+            if let Some(checkout) = checkout_note(row.key.checkout, None) {
+                write!(out, " · {checkout}")?;
+            }
+        } else {
+            if let Some(span) = row.span_note() {
+                write!(out, " · {span}")?;
+            }
+            write!(
+                out,
+                " · {}",
+                if record.mode == Some(LoopRunMode::Manual) {
+                    "manual".to_owned()
+                } else if let Some(signal) = &record.signal {
+                    format!("signal {}", signal.name)
+                } else {
+                    "scheduled".to_owned()
+                }
+            )?;
+            if let Some(exit) = run_report::detail_exit_segment(record) {
+                write!(out, " · {exit}")?;
+            }
+        }
+        for note in row.fire_notes() {
+            write!(out, " · {note}")?;
         }
         writeln!(out)?;
-        run_report::write_record_forensics(out, entry, record, prose, run_report::Forensics::Full)?;
+        let detail = match (row.kind, record.holder) {
+            (RunRowKind::NoRecord(holder), _) => run_report::Forensics::Folded {
+                holder,
+                count: row.skipped + row.waited,
+            },
+            (_, Some(holder)) if row.count > 1 => run_report::Forensics::Folded {
+                holder,
+                count: row.count,
+            },
+            _ => run_report::Forensics::Full,
+        };
+        run_report::write_record_forensics(out, entry, record, prose, detail)?;
     }
-    Ok(())
+    Ok(visible.len())
 }
 
 /// The in-flight lookup as `show` and `logs` use it: the active run is
@@ -2691,6 +2767,7 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
 fn write_agent_runs(
     out: &mut impl Write,
     records: &[LoopRunRecord],
+    rows: &[CollapsedRunRow<'_>],
     now: Timestamp,
 ) -> std::io::Result<()> {
     let agent_runs = records
@@ -2699,16 +2776,16 @@ fn write_agent_runs(
         .collect::<Vec<_>>();
     writeln!(out)?;
     let heading = if agent_runs.is_empty() {
-        format!("AGENT RUNS — none in {} runs", records.len())
+        format!("AGENT RUNS — none in {}", fires(records.len()))
     } else {
         let costs = agent_runs
             .iter()
             .filter_map(|record| valid_cost(record))
             .collect::<Vec<_>>();
         let mut heading = format!(
-            "AGENT RUNS — {} of {} runs",
+            "AGENT RUNS — {} of {}",
             agent_runs.len(),
-            records.len()
+            fires(records.len())
         );
         if !costs.is_empty() {
             let total = costs.iter().sum::<f64>();
@@ -2722,31 +2799,34 @@ fn write_agent_runs(
         return Ok(());
     }
 
-    let visible = agent_runs.iter().rev().take(5).collect::<Vec<_>>();
-    let show_note = visible.iter().any(|record| record_note(record).is_some());
+    let mut folded = Vec::<CollapsedRunRow<'_>>::new();
+    for row in rows
+        .iter()
+        .rev()
+        .filter(|row| row.kind == RunRowKind::Recorded && is_agent_run(row.latest))
+    {
+        if let Some(newer) = folded.last_mut().filter(|newer| newer.key == row.key) {
+            newer.merge(row.clone());
+        } else {
+            folded.push(row.clone());
+        }
+    }
+    let visible = folded.iter().take(5).collect::<Vec<_>>();
+    let show_note = visible.iter().any(|row| row.note(now).is_some());
     let mut headers = vec!["WHEN", "STATUS", "TOOK", "COST"];
     if show_note {
         headers.push("NOTE");
     }
     let mut table = ui::Table::new(headers).right(&[2, 3]).indent(2);
-    for record in visible {
+    for row in visible {
         let mut cells = vec![
-            ui::cell(ui::rel_age(record.at, now)),
-            run_status_cell(record, 1),
-            ui::cell(
-                record
-                    .watch
-                    .as_ref()
-                    .map(|verdict| verdict.elapsed_ms())
-                    .or(record.duration_ms)
-                    .map(format_duration_ms)
-                    .unwrap_or_else(|| "-".to_owned()),
-            )
-            .dash(),
-            cost_cell(record),
+            ui::cell(ui::rel_age(row.latest.at, now)),
+            run_status_cell(row.latest, row.count),
+            ui::cell(row.took().as_deref().unwrap_or("-")).dash(),
+            ui::cell(row.cost_usd.map(run_cost).as_deref().unwrap_or("-")).dash(),
         ];
         if show_note {
-            cells.push(ui::cell(record_note(record).as_deref().unwrap_or("-")).dash());
+            cells.push(ui::cell(row.note(now).as_deref().unwrap_or("-")).dash());
         }
         table.row(cells);
     }
@@ -2755,7 +2835,6 @@ fn write_agent_runs(
 
 fn write_runs_table(
     out: &mut impl Write,
-    records: &[LoopRunRecord],
     rows: &[CollapsedRunRow<'_>],
     limit: usize,
     now: Timestamp,
@@ -2764,19 +2843,17 @@ fn write_runs_table(
     if visible_rows.is_empty() {
         return Ok(());
     }
-    let shown = visible_rows
-        .iter()
-        .map(|row| row.count + row.skipped + row.waited)
-        .sum::<usize>();
-    writeln!(out)?;
-    writeln!(
-        out,
-        "{}",
-        ui::paint(
-            ui::palette::header(),
-            &format!("RECENT RUNS (newest first · {shown} of {})", records.len())
+    let heading = if visible_rows.len() < rows.len() {
+        format!(
+            "RECENT RUNS (newest first · {} of {} rows)",
+            visible_rows.len(),
+            rows.len()
         )
-    )?;
+    } else {
+        "RECENT RUNS (newest first)".to_owned()
+    };
+    writeln!(out)?;
+    writeln!(out, "{}", ui::paint(ui::palette::header(), &heading))?;
     let mut modes = visible_rows
         .iter()
         .filter(|row| !row.is_no_record())
@@ -2967,11 +3044,19 @@ impl<'a> RunRowKey<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunRowKind {
+    Recorded,
+    NoRecord(RunLockInfo),
+    Trailing,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct CollapsedRunRow<'a> {
     key: RunRowKey<'a>,
     latest: &'a LoopRunRecord,
-    no_record_holder: Option<RunLockInfo>,
+    last_index: usize,
+    kind: RunRowKind,
     count: usize,
     oldest: Timestamp,
     duration: Option<(u64, u64)>,
@@ -2984,11 +3069,12 @@ struct CollapsedRunRow<'a> {
 }
 
 impl<'a> CollapsedRunRow<'a> {
-    fn new(record: &'a LoopRunRecord, skipped: usize, waited: usize) -> Self {
+    fn new(record: &'a LoopRunRecord, last_index: usize, skipped: usize, waited: usize) -> Self {
         Self {
             key: RunRowKey::new(record, skipped, waited),
             latest: record,
-            no_record_holder: None,
+            last_index,
+            kind: RunRowKind::Recorded,
             count: 1,
             oldest: record.at,
             duration: record
@@ -3006,13 +3092,14 @@ impl<'a> CollapsedRunRow<'a> {
     }
 
     fn is_no_record(&self) -> bool {
-        self.no_record_holder.is_some()
+        matches!(self.kind, RunRowKind::NoRecord(_))
     }
 
     fn merge(&mut self, previous: Self) {
         self.count += previous.count;
         self.skipped += previous.skipped;
         self.waited += previous.waited;
+        self.last_index = self.last_index.max(previous.last_index);
         self.oldest = self.oldest.min(previous.oldest);
         if previous.latest.at > self.latest.at {
             self.latest = previous.latest;
@@ -3052,7 +3139,7 @@ impl<'a> CollapsedRunRow<'a> {
 
     fn note(&self, now: Timestamp) -> Option<String> {
         let mut parts = Vec::new();
-        if let Some(holder) = self.no_record_holder {
+        if let RunRowKind::NoRecord(holder) = self.kind {
             parts.extend(checkout_note(
                 self.key.checkout,
                 Some(format!("pid {}", holder.pid)),
@@ -3067,11 +3154,21 @@ impl<'a> CollapsedRunRow<'a> {
                 ui::rel_age(self.oldest, now)
             ));
         } else {
-            if self.count > 1 {
-                parts.extend(ui::folded_span(self.oldest, self.latest.at));
-            }
+            parts.extend(self.span_note());
             parts.extend(record_note(self.latest));
         }
+        parts.extend(self.fire_notes());
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    }
+
+    fn span_note(&self) -> Option<String> {
+        (self.count > 1)
+            .then(|| ui::folded_span(self.oldest, self.latest.at))
+            .flatten()
+    }
+
+    fn fire_notes(&self) -> Vec<String> {
+        let mut parts = Vec::new();
         if self.waited > 0 {
             parts.push(format!("{} waited on it", fires(self.waited)));
         }
@@ -3081,16 +3178,18 @@ impl<'a> CollapsedRunRow<'a> {
                 fires(self.skipped)
             ));
         }
-        (!parts.is_empty()).then(|| parts.join(" · "))
+        parts
     }
 }
 
-/// Table rows in log order. Lock refusals follow their attributed record or their holder's
-/// `no record` row; trailing refusals take no row. Exact tenure joins outrank checkout and result.
+/// Rows for both history views. Lock refusals follow their attributed record or their holder's
+/// `no record` row. Exact tenure joins outrank checkout and result. `for_show` merges equal
+/// adjacent runs and drops trailing lock refusals; `loop logs` keeps a block for each.
 /// A lock-holding at-lock record with matched fires keeps its own status, note and record count.
 fn collapsed_run_rows<'a>(
     records: &'a [LoopRunRecord],
     attribution: &[FireAttribution],
+    for_show: bool,
 ) -> Vec<CollapsedRunRow<'a>> {
     let mut folded = vec![(0, 0, None); records.len()];
     for (record, destination) in records.iter().zip(attribution) {
@@ -3116,26 +3215,28 @@ fn collapsed_run_rows<'a>(
             by_checkout.remove(checkout);
         }
         let (skipped, waited, no_record_holder) = folded[index];
+        let mut row = CollapsedRunRow::new(record, index, skipped, waited);
         if is_at_lock_fire(record) {
-            if skipped == 0 && waited == 0 {
+            if skipped > 0 || waited > 0 {
+                rows.push(Some(match no_record_holder {
+                    Some(holder) => CollapsedRunRow {
+                        kind: RunRowKind::NoRecord(holder),
+                        count: 0,
+                        duration: None,
+                        cost_usd: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        ..row
+                    },
+                    None => row,
+                }));
                 continue;
             }
-            let row = CollapsedRunRow::new(record, skipped, waited);
-            rows.push(Some(match no_record_holder {
-                Some(holder) => CollapsedRunRow {
-                    no_record_holder: Some(holder),
-                    count: 0,
-                    duration: None,
-                    cost_usd: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                    ..row
-                },
-                None => row,
-            }));
-            continue;
+            if for_show || !matches!(attribution[index], FireAttribution::Trailing) {
+                continue;
+            }
+            row.kind = RunRowKind::Trailing;
         }
-        let mut row = CollapsedRunRow::new(record, skipped, waited);
         if record.result == LoopRunResult::TakeoverBlocked
             && let Some(checkout) = record.checkout.as_deref()
         {
@@ -3145,10 +3246,12 @@ fn collapsed_run_rows<'a>(
             if let Some(previous) = previous {
                 row.merge(previous);
             }
-        } else if let Some(previous) = rows
-            .last_mut()
-            .and_then(Option::as_mut)
-            .filter(|previous| previous.key == row.key)
+        } else if (for_show || is_refused_fire(record))
+            && let Some(previous) = rows.last_mut().and_then(Option::as_mut).filter(|previous| {
+                previous.key == row.key
+                    && previous.kind == row.kind
+                    && (row.kind != RunRowKind::Trailing || previous.latest.holder == record.holder)
+            })
         {
             let older = std::mem::replace(previous, row);
             previous.merge(older);
@@ -3355,15 +3458,6 @@ pub(super) fn run_cost(cost: f64) -> String {
     } else {
         format!("${cost:.2}")
     }
-}
-
-fn cost_cell(record: &LoopRunRecord) -> ui::Cell {
-    ui::cell(
-        valid_cost(record)
-            .map(run_cost)
-            .unwrap_or_else(|| "-".to_owned()),
-    )
-    .dash()
 }
 
 pub(super) fn record_exit(record: &LoopRunRecord) -> Option<String> {

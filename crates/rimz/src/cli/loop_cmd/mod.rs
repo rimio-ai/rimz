@@ -432,7 +432,7 @@ struct LogsArgs {
         crate::cli::complete::loop_tasks
     ))]
     name: String,
-    /// Number of recent runs to print.
+    /// Number of recent blocks to print after folding and filtering.
     #[arg(short = 'n', long = "runs", default_value_t = 10)]
     runs: usize,
     /// Print only runs that failed.
