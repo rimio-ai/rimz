@@ -810,28 +810,161 @@ fn short_tempdir() -> tempfile::TempDir {
         .expect("short tempdir")
 }
 
-#[test]
-fn unit_tests_resolve_implicit_home_to_an_uncreated_temp_path() {
-    if env_path("RIMZ_HOME").is_some() {
-        return;
-    }
+fn planted_root_env(root: &Path) -> [(&'static str, PathBuf); 8] {
+    [
+        ("HOME", root.join("home")),
+        ("RIMZ_HOME", root.join("home/.rimz")),
+        ("XDG_CONFIG_HOME", root.join("home/config")),
+        ("XDG_STATE_HOME", root.join("home/state")),
+        ("XDG_DATA_HOME", root.join("home/data")),
+        ("XDG_CACHE_HOME", root.join("home/cache")),
+        ("XDG_RUNTIME_DIR", root.join("run")),
+        ("RIMZ_AGENTS_HOME", root.join("agents")),
+    ]
+}
 
-    let resolved = rimz_home();
-    if let Some(home) = env_path("HOME") {
-        assert_ne!(
-            resolved,
-            home.join(".rimz"),
-            "unit test escaped to real home"
+#[test]
+fn unit_tests_ignore_production_roots() {
+    const CHILD_ROOT: &str = "RIMZ_TEST_IGNORED_PRODUCTION_ROOTS";
+    let Some(root) = env_path(CHILD_ROOT) else {
+        let dir = tempfile::tempdir().unwrap();
+        let planted = planted_root_env(dir.path());
+        for (_, path) in &planted {
+            fs::create_dir_all(path).unwrap();
+        }
+        let tmp = dir.path().join("tmp");
+        fs::create_dir(&tmp).unwrap();
+        let mut child = std::process::Command::new(env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "disk::paths::tests::unit_tests_ignore_production_roots",
+                "--nocapture",
+            ])
+            .envs(planted.clone())
+            .env("TMPDIR", &tmp)
+            .env(CHILD_ROOT, dir.path());
+        for (key, _) in &planted {
+            child.env_remove(format!("RIMZ_UNIT_TEST_{key}"));
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
-    }
+        for (_, path) in &planted {
+            let actual = fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected = planted
+                .iter()
+                .filter(|(_, child)| child.parent() == Some(path.as_path()))
+                .map(|(_, child)| child.clone())
+                .collect();
+            assert_eq!(actual, expected, "planted root changed: {}", path.display());
+        }
+        return;
+    };
+
+    let planted = planted_root_env(&root);
+    let resolved = [
+        rimz_home(),
+        config_home(),
+        state_home(),
+        data_home(),
+        cache_home(),
+        runtime_home(),
+        agents_home(),
+    ];
+    let outside = resolved
+        .iter()
+        .map(|path| !planted.iter().any(|(_, root)| path.starts_with(root)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outside,
+        vec![true; resolved.len()],
+        "resolved roots: {resolved:?}"
+    );
+    let home = rimz_home();
+    assert_ne!(
+        home,
+        root.join("home/.rimz"),
+        "unit test escaped to real home"
+    );
     assert!(
-        resolved.starts_with(env::temp_dir()),
+        home.starts_with(env::temp_dir()),
         "unit-test home must be a temp root"
     );
     assert!(
-        !resolved.exists(),
+        !home.exists(),
         "resolving the unit-test home must not create residue"
     );
+    let runtime = runtime_home();
+    assert_eq!(runtime.parent(), Some(Path::new("/tmp")));
+    assert!(runtime.as_os_str().len() <= 32, "{}", runtime.display());
+    assert_ne!(runtime, runtime_home_from(None, current_uid()));
+    assert!(
+        !runtime.exists(),
+        "resolving the runtime must not create residue"
+    );
+
+    let paths = StatePaths::for_project_root(&root.join("project")).unwrap();
+    assert!(paths.root.starts_with(&home));
+    fs::create_dir_all(&paths.root).unwrap();
+}
+
+#[test]
+fn unit_test_root_keys_win_over_production_roots() {
+    const CHILD_ROOT: &str = "RIMZ_TEST_EXPLICIT_UNIT_ROOTS";
+    let Some(root) = env_path(CHILD_ROOT) else {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new(env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "disk::paths::tests::unit_test_root_keys_win_over_production_roots",
+                "--nocapture",
+            ])
+            .envs(planted_root_env(&dir.path().join("production")))
+            .env(CHILD_ROOT, dir.path());
+        for (key, path) in planted_root_env(&dir.path().join("unit")) {
+            if key != "HOME" && key != "RIMZ_AGENTS_HOME" {
+                child.env(format!("RIMZ_UNIT_TEST_{key}"), path);
+            }
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+
+    let unit = root.join("unit");
+    assert_eq!(
+        [
+            rimz_home(),
+            config_home(),
+            state_home(),
+            data_home(),
+            cache_home(),
+            runtime_home()
+        ],
+        [
+            unit.join("home/.rimz"),
+            unit.join("home/config"),
+            unit.join("home/state"),
+            unit.join("home/data"),
+            unit.join("home/cache"),
+            unit.join("run"),
+        ]
+    );
+    assert_eq!(agents_home(), rimz_home());
 }
 
 #[test]

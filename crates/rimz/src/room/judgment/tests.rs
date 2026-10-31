@@ -174,7 +174,7 @@ fn judgment_warns_for_shared_account_budget_and_subscription_month_cap() {
                 "room::judgment::tests::judgment_warns_for_shared_account_budget_and_subscription_month_cap",
                 "--nocapture",
             ])
-            .env("RIMZ_HOME", home.path())
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
             .env("RIMZ_TEST_JUDGMENT_BUDGET_HOME", "1")
             .output()
             .unwrap();

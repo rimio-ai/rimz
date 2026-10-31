@@ -18,8 +18,8 @@ fn legacy_only_config_refuses_inheritance_but_allows_a_default_pin() {
         let home = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "agents::login::tests::legacy_only_config_refuses_inheritance_but_allows_a_default_pin", "--nocapture"])
-            .env("RIMZ_HOME", home.path().join(".rimz"))
-            .env("XDG_STATE_HOME", home.path().join("state"))
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path().join(".rimz"))
+            .env("RIMZ_UNIT_TEST_XDG_STATE_HOME", home.path().join("state"))
             .env("RIMZ_TEST_LEGACY_HOME", "1")
             .output().unwrap();
         assert!(
@@ -29,8 +29,10 @@ fn legacy_only_config_refuses_inheritance_but_allows_a_default_pin() {
         );
         return;
     }
-    let legacy = PathBuf::from(std::env::var_os("XDG_STATE_HOME").expect("isolated test state"))
-        .join("rimz");
+    let legacy = PathBuf::from(
+        std::env::var_os("RIMZ_UNIT_TEST_XDG_STATE_HOME").expect("isolated test state"),
+    )
+    .join("rimz");
     std::fs::create_dir_all(&legacy).unwrap();
     let config = crate::config::MachineConfig::load_lenient();
     let root = tempfile::tempdir().unwrap();

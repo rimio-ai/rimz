@@ -130,6 +130,41 @@ fn only_a_test_sandbox_exports_offline_pricing_and_its_runs_keep_it() {
 }
 
 #[test]
+fn only_a_test_sandbox_exports_unit_test_roots_and_its_runs_keep_them() {
+    let workspace = TempDir::new().unwrap();
+    let sandbox = HostSandbox::for_tests(workspace.path()).unwrap();
+    let exported = sandbox.command_env();
+    let roots = [
+        "RIMZ_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+    ];
+    let actual = roots.map(|root| {
+        let unit_key = format!("RIMZ_UNIT_TEST_{root}");
+        exported
+            .iter()
+            .find_map(|(key, value)| (*key == unit_key).then_some(value))
+    });
+    assert_eq!(actual, roots.map(|key| Some(&sandbox.env[key])));
+    let ambient = roots.map(|key| std::ffi::OsString::from(format!("RIMZ_UNIT_TEST_{key}")));
+    assert_eq!(
+        test_removed_env(ambient.into_iter(), &sandbox.env, &[]),
+        ["NO_COLOR"]
+    );
+
+    let manual = HostSandbox::for_manual_command().unwrap();
+    assert!(
+        manual
+            .command_env()
+            .iter()
+            .all(|(key, _)| !key.starts_with("RIMZ_UNIT_TEST_"))
+    );
+}
+
+#[test]
 fn skip_records_group_distinct_tests_by_reason() {
     let records = "\
 journey::sandbox::b\tAF_UNIX bind is forbidden in this sandbox

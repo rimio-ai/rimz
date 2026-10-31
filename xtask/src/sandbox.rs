@@ -104,6 +104,17 @@ impl HostSandbox {
         let missing_codex = sandbox.root.join("missing-codex");
         sandbox.env.insert(CODEX_BIN_ENV, missing_codex);
         sandbox.env.insert(PRICING_OFFLINE_ENV, PathBuf::from("1"));
+        for (unit_key, key) in [
+            ("RIMZ_UNIT_TEST_RIMZ_HOME", "RIMZ_HOME"),
+            ("RIMZ_UNIT_TEST_XDG_CONFIG_HOME", "XDG_CONFIG_HOME"),
+            ("RIMZ_UNIT_TEST_XDG_DATA_HOME", "XDG_DATA_HOME"),
+            ("RIMZ_UNIT_TEST_XDG_CACHE_HOME", "XDG_CACHE_HOME"),
+            ("RIMZ_UNIT_TEST_XDG_STATE_HOME", "XDG_STATE_HOME"),
+            ("RIMZ_UNIT_TEST_XDG_RUNTIME_DIR", "XDG_RUNTIME_DIR"),
+        ] {
+            // `sandbox_env` sets every production root key, so the index cannot miss.
+            sandbox.env.insert(unit_key, sandbox.env[key].clone());
+        }
         Ok(sandbox)
     }
 

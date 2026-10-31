@@ -66,7 +66,7 @@ fn empty_dir_launch_refusal_names_the_machine_wide_grant() {
                 "agents::folder_trust::tests::empty_dir_launch_refusal_names_the_machine_wide_grant",
                 "--nocapture",
             ])
-            .env("RIMZ_HOME", &link)
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", &link)
             .env("RIMZ_TEST_LAUNCH_DIR_LINKED_HOME", "1")
             .output()
             .unwrap();

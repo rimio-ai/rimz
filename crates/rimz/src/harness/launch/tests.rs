@@ -13,7 +13,7 @@ fn compiler_refuses_a_shared_accounts_own_budget() {
                 "harness::launch::tests::compiler_refuses_a_shared_accounts_own_budget",
                 "--nocapture",
             ])
-            .env("RIMZ_HOME", home.path().join(".rimz"))
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path().join(".rimz"))
             .env("RIMZ_TEST_COMPILE_SHARED_BUDGET_HOME", "1")
             .output()
             .unwrap();
@@ -68,7 +68,7 @@ fn compiler_refuses_only_the_kind_with_an_unsupported_budget() {
                 "harness::launch::tests::compiler_refuses_only_the_kind_with_an_unsupported_budget",
                 "--nocapture",
             ])
-            .env("RIMZ_HOME", home.path().join(".rimz"))
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path().join(".rimz"))
             .env("RIMZ_TEST_COMPILE_BUDGET_HOME", "1")
             .output()
             .unwrap();

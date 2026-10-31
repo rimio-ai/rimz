@@ -2573,7 +2573,7 @@ fn default_launch_keeps_a_trusted_project_home_over_an_exported_declared_one() {
                 "harness::launch_plan::tests::default_launch_keeps_a_trusted_project_home_over_an_exported_declared_one",
                 "--nocapture",
             ])
-            .env("RIMZ_HOME", home.path().join(".rimz"))
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path().join(".rimz"))
             .env("RIMZ_TEST_PROJECT_HOME", "1")
             .output()
             .unwrap();

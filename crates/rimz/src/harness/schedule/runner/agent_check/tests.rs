@@ -430,7 +430,7 @@ fn with_action_hooks(test: &str) -> bool {
             "--nocapture",
         ])
         .env("CLAUDE_CONFIG_DIR", home.path())
-        .env("RIMZ_HOME", home.path().join(".rimz"))
+        .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path().join(".rimz"))
         .env("RIMZ_TEST_CHECK_ACTION_HOME", home.path())
         .output()
         .unwrap();

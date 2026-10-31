@@ -12,6 +12,9 @@
 //! `docs/internals/store.md`; shared election locks live under
 //! `$XDG_RUNTIME_DIR/rimz/shared/`.
 //!
+//! Library unit tests instead read roots from `RIMZ_UNIT_TEST_*` keys, falling
+//! back to per-process temp roots; their agent library uses the test home.
+//!
 //! A workspace dir name is a [`WorkspaceDirName`], `<basename>-<hex>`, never
 //! the [`WorkspaceId`] itself. Resolving an id scans `ws/` for names whose hex
 //! prefixes the id and lets each candidate's `workspace.json` decide; a site
@@ -1621,16 +1624,17 @@ pub fn empty_dir_root_under(home: &Path) -> PathBuf {
 }
 
 /// The one RimZ home: `$RIMZ_HOME`, else `$HOME/.rimz`.
+/// Library unit tests read only `$RIMZ_UNIT_TEST_RIMZ_HOME`, falling back to an
+/// uncreated per-process temp path.
 pub fn rimz_home() -> PathBuf {
-    let explicit = env_path("RIMZ_HOME");
     #[cfg(test)]
     {
-        explicit.unwrap_or_else(unit_test_rimz_home)
+        env_path("RIMZ_UNIT_TEST_RIMZ_HOME").unwrap_or_else(unit_test_rimz_home)
     }
     #[cfg(not(test))]
     {
         rimz_home_from(
-            explicit.as_deref(),
+            env_path("RIMZ_HOME").as_deref(),
             env_path("HOME").as_deref(),
             &env::temp_dir(),
         )
@@ -1671,10 +1675,10 @@ pub(crate) fn is_under_root(path: &Path, root: &Path) -> bool {
         )
 }
 
-/// Under `cfg(test)`, the lib crate resolves the implicit home to a
-/// process-unique, uncreated temp path. Read-only callers leave no residue;
-/// mutating tests own a [`tempfile::TempDir`] and use [`StatePaths::under`].
-/// Tests that need a specific root set `RIMZ_HOME`.
+/// The library unit-test home and XDG fallback: a process-unique, uncreated
+/// temp path. Read-only callers leave no residue; mutating tests normally own
+/// a [`tempfile::TempDir`] and use [`StatePaths::under`]. Re-exec tests needing
+/// a specific home set `RIMZ_UNIT_TEST_RIMZ_HOME` on the child.
 #[cfg(test)]
 fn unit_test_rimz_home() -> PathBuf {
     use std::sync::LazyLock;
@@ -1684,6 +1688,21 @@ fn unit_test_rimz_home() -> PathBuf {
             "rimz-unit-test-home-{}-{}",
             std::process::id(),
             uuid::Uuid::now_v7().simple()
+        ))
+    });
+
+    ROOT.clone()
+}
+
+/// A process-unique, uncreated runtime fallback within the socket path budget.
+#[cfg(test)]
+fn unit_test_runtime_home() -> PathBuf {
+    use std::sync::LazyLock;
+
+    static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
+        PathBuf::from("/tmp").join(format!(
+            "rimz-unit-{:016x}",
+            uuid::Uuid::now_v7().as_u64_pair().1
         ))
     });
 
@@ -1771,11 +1790,21 @@ pub fn handoffs_dir() -> PathBuf {
     rimz_home().join("handoffs")
 }
 
+/// `$XDG_RUNTIME_DIR`, else `/tmp/rimz-<uid>`.
+/// Library unit tests read only `$RIMZ_UNIT_TEST_XDG_RUNTIME_DIR`, falling
+/// back to a short, uncreated per-process path under `/tmp`.
 pub fn runtime_home() -> PathBuf {
-    // Containers and minimal hosts often lack XDG_RUNTIME_DIR. Use the short
-    // /tmp/rimz-<uid> namespace per the docs; RuntimePaths::ensure_dirs verifies
-    // and hardens the fallback root, rimz root, workspace root, and shared root.
-    runtime_home_from(env_path("XDG_RUNTIME_DIR").as_deref(), current_uid())
+    #[cfg(test)]
+    {
+        env_path("RIMZ_UNIT_TEST_XDG_RUNTIME_DIR").unwrap_or_else(unit_test_runtime_home)
+    }
+    #[cfg(not(test))]
+    {
+        // Containers and minimal hosts often lack XDG_RUNTIME_DIR. Use the short
+        // /tmp/rimz-<uid> namespace per the docs; RuntimePaths::ensure_dirs verifies
+        // and hardens the fallback root, rimz root, workspace root, and shared root.
+        runtime_home_from(env_path("XDG_RUNTIME_DIR").as_deref(), current_uid())
+    }
 }
 
 /// Resolve the runtime root from an explicit environment view.
@@ -1921,18 +1950,20 @@ pub(crate) fn cache_home() -> PathBuf {
     xdg_home("XDG_CACHE_HOME", ".cache")
 }
 
-/// `$<key>`, else `$HOME/<under_home>`. Without either a unit test resolves
-/// to an uncreated temp path and production to `<tmp>/rimz-xdg/<under_home>`.
+/// `$<key>`, else `$HOME/<under_home>`, then `<tmp>/rimz-xdg/<under_home>`.
+/// Library unit tests read only `$RIMZ_UNIT_TEST_<key>`, falling back to an
+/// uncreated per-process temp path.
 fn xdg_home(key: &str, under_home: &str) -> PathBuf {
-    if let Some(value) = env_path(key) {
-        return value;
-    }
     #[cfg(test)]
     {
-        unit_test_rimz_home().join("xdg").join(under_home)
+        env_path(&format!("RIMZ_UNIT_TEST_{key}"))
+            .unwrap_or_else(|| unit_test_rimz_home().join("xdg").join(under_home))
     }
     #[cfg(not(test))]
     {
+        if let Some(value) = env_path(key) {
+            return value;
+        }
         env_path("HOME")
             .map(|home| home.join(under_home))
             .unwrap_or_else(|| env::temp_dir().join("rimz-xdg").join(under_home))
@@ -1941,8 +1972,16 @@ fn xdg_home(key: &str, under_home: &str) -> PathBuf {
 
 /// Per-user agent library root: `$RIMZ_AGENTS_HOME`, else [`rimz_home`].
 /// `RIMZ_AGENTS_HOME` relocates profiles, teams, and skills together.
+/// Library unit tests ignore that override and always use [`rimz_home`].
 pub fn agents_home() -> PathBuf {
-    env_path("RIMZ_AGENTS_HOME").unwrap_or_else(rimz_home)
+    #[cfg(test)]
+    {
+        rimz_home()
+    }
+    #[cfg(not(test))]
+    {
+        env_path("RIMZ_AGENTS_HOME").unwrap_or_else(rimz_home)
+    }
 }
 
 /// Resolve the agent library root from a launch environment, ignoring empty values.
