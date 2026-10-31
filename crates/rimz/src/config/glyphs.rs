@@ -79,6 +79,7 @@ glyph_roles! {
     "meter" {
         MeterContextFull => "context_full",
         MeterContextEmpty => "context_empty",
+        MeterCompacted => "context_compacted",
         MeterBarFilled => "bar_filled",
         MeterBarTrack => "bar_track",
         MeterBarCap => "bar_cap",

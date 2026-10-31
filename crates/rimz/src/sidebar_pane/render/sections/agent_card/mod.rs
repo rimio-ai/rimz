@@ -286,7 +286,11 @@ pub(super) fn row_lines(
                 CardSlot::Gauge => {
                     inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()).into());
                 }
-                CardSlot::Tokens => inner.push(context_tokens_line(ctx, row).into()),
+                CardSlot::Tokens => {
+                    if !row.compacted_context_unknown() {
+                        inner.push(context_tokens_line(ctx, row).into());
+                    }
+                }
                 CardSlot::Cache => inner.extend(cache_line(ctx, row).map(CardLine::from)),
                 CardSlot::Delegation => {
                     inner.extend(delegation_line(ctx, agent).map(|line| CardLine {

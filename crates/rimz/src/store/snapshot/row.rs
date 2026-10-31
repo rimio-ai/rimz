@@ -232,6 +232,14 @@ impl SidebarRow {
         self.as_agent().and_then(AgentCard::context_used_tokens)
     }
 
+    /// A completed compaction whose context size has not yet been reported.
+    pub(crate) fn compacted_context_unknown(&self) -> bool {
+        self.as_agent()
+            .is_some_and(|agent| agent.compaction_count > 0)
+            && self.context_gauge_percent().is_none()
+            && self.context_used_tokens().is_none()
+    }
+
     /// The latest call's composition when the rich token blob is absent.
     pub fn call_split(&self) -> Option<RowCallSplit> {
         self.as_agent().and_then(AgentCard::call_split)
@@ -725,7 +733,7 @@ impl AgentCard {
     }
 
     /// Evidence that the session has already done work. A compacted session may
-    /// rest at a 0% context gauge, but token, tool, compaction, or spend history
+    /// await a context reading, but token, tool, compaction, or spend history
     /// keeps it distinct from a never-started agent.
     pub fn has_session_history(&self) -> bool {
         self.usage.total_tokens.is_some_and(|total| total > 0)

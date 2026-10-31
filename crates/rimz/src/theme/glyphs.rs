@@ -57,6 +57,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(TokensCompaction, "↻", Some("\u{f0e2}")),
     glyph!(MeterContextFull, "▣", Some("\u{f0570}")),
     glyph!(MeterContextEmpty, "▢", Some("\u{f11d9}")),
+    glyph!(MeterCompacted, "↻", Some("\u{f0e2}")),
     glyph!(MeterBarFilled, "━", None),
     glyph!(MeterBarTrack, "─", None),
     glyph!(MeterBarCap, "╺", None),
@@ -333,6 +334,30 @@ pub fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
 mod tests {
     use super::*;
     use crate::config::{ThemeGlyphsConfig, ThemeStyle};
+
+    #[test]
+    fn compacted_meter_has_independent_configurable_presets() {
+        let role = GlyphRole::from_namespaced("meter", "context_compacted");
+        assert!(
+            role.is_some(),
+            "meter.context_compacted must be configurable"
+        );
+        let role = role.unwrap();
+        for (set, default) in [("unicode", "↻"), ("nerd_font", "\u{f0e2}")] {
+            let mut theme = ThemeConfig {
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            };
+            assert_eq!(GlyphSet::resolve(&theme).glyph(role), default);
+            theme.glyphs = toml::from_str(&format!(
+                "set = '{set}'\n[{set}.meter]\ncontext_compacted = 'c'\n[{set}.tokens]\ncompaction = 't'"
+            ))
+            .unwrap();
+            let glyphs = GlyphSet::resolve(&theme);
+            assert_eq!(glyphs.glyph(role), "c");
+            assert_eq!(glyphs.glyph(GlyphRole::TokensCompaction), "t");
+        }
+    }
 
     #[test]
     fn entry_spine_resolves_in_both_sets_and_accepts_overrides() {

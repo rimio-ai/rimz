@@ -97,12 +97,15 @@ pub(super) fn bar_row(
 /// filled window fold into the lead run; each remaining accent starts with a
 /// gap-fronted `╺` cap, and the segmented fill ends flush at a whole cell. The
 /// cache-read run carries severity when present; `▣` follows the fill's tone
-/// while the `▤` stats head always keeps severity. The value prefers a one-decimal precise fraction (`78.2%`)
-/// over the integer gauge. An empty (0%) window reads the hollow `▢`; any usage
-/// fills it to `▣`.
+/// while the `▤` stats head always keeps severity. The value prefers a
+/// one-decimal precise fraction (`78.2%`) over the integer gauge. An empty (0%)
+/// window reads the hollow `▢`; any usage fills it to `▣`. A completed compaction
+/// awaiting a context reading shows its own glyph and an empty muted track,
+/// without a percentage.
 ///
 /// At L2 every meter reserves a five-cell age cluster after a space; below L2
-/// the bar keeps that room and the stats line pins the age instead. The age
+/// the bar keeps that room and the stats line pins the age instead, except in
+/// the compaction gap, whose meter keeps the cluster at every width. The age
 /// appears from five minutes quiet, filling over an hour ([`hour_age_glyph`])
 /// and staying full past it unless the cache expires. Its continuous tone is
 /// muted until half the known TTL, or the last ten minutes if earlier, and
@@ -122,9 +125,14 @@ pub(super) fn gauge_line(
     let theme = ctx.theme;
     let bands = ctx.bands;
     let width = content_width(ctx.width);
+    let compacted_unknown = row.compacted_context_unknown();
     let percent = row.context_gauge_percent().unwrap_or(0);
     let precise = precise_context_pct(row);
-    let value = pct_label(precise, percent);
+    let value = if compacted_unknown {
+        String::new()
+    } else {
+        pct_label(precise, percent)
+    };
     let fill = precise.unwrap_or_else(|| f64::from(percent));
     let fill = if bands.log_scale {
         log_scaled_fill(fill, display_context_window(row))
@@ -137,23 +145,38 @@ pub(super) fn gauge_line(
     // keeps the flat cache-write and fresh-input composition tones.
     let amount = severity_heat_amount(severity, percent, row.context_used_tokens(), bands);
     let color = theme.heat_tone(amount);
-    let (bar_color, segments) = if cache_age(row, ctx.now).expired(ctx.now) {
+    let (bar_color, segments) = if compacted_unknown {
+        (theme.component(Component::ContextCompacted), None)
+    } else if cache_age(row, ctx.now).expired(ctx.now) {
         (theme.component(Component::CacheExpired), None)
     } else {
         (color, gauge_segments(theme, row, color))
     };
-    let glyph = if percent == 0 {
+    let glyph = if compacted_unknown {
+        theme.glyph(GlyphRole::MeterCompacted)
+    } else if percent == 0 {
         theme.glyph(GlyphRole::MeterContextEmpty)
     } else {
         theme.glyph(GlyphRole::MeterContextFull)
     };
-    let age_width = if ctx.tier == Tier::L2 { 6 } else { 0 };
+    // The gap hides the stats line that pins the age below L2, so its meter keeps the age.
+    let age_width = if ctx.tier == Tier::L2 || compacted_unknown {
+        6
+    } else {
+        0
+    };
     let mut line = bar_row(
         theme,
         glyph,
         theme.style(bar_color, Modifier::empty()),
         &value,
         |bar_width| {
+            if compacted_unknown {
+                return vec![Span::styled(
+                    theme.glyph(GlyphRole::MeterBarTrack).repeat(bar_width),
+                    theme.style(bar_color, Modifier::empty()),
+                )];
+            }
             if let Some(pixels) = meter_pixels
                 && let Some(spans) = pixel_gauge_spans(
                     theme,
@@ -305,9 +328,8 @@ fn correlated_current_usage(row: &SidebarRow) -> Option<&AgentCurrentUsage> {
 /// flat composition tones match the context line's markers, so the line legends
 /// the bar by construction. The rich statusline blob is preferred; the
 /// row-level [`SidebarRow::call_split`] stands in when the blob carries no split.
-/// `None` when neither source reported one (a
-/// fresh session, or a statusline blob cleared by `/compact` — a rollout-fed
-/// split refreshes with the next call instead), so the bar falls back to a
+/// `None` when neither source reported one (a fresh session, or a
+/// post-compaction reading with no split), so a measured bar falls back to a
 /// single-color ramp.
 pub(super) fn gauge_segments(
     theme: &Theme,

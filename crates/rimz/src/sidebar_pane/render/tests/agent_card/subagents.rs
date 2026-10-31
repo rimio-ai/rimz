@@ -347,6 +347,7 @@ fn child_compaction_count_uses_the_child_record_for_live_and_finished_entries() 
         for count in [0, 1, 12] {
             let mut parent = agent("parent", "claude", AgentStatus::Running, None, None, None);
             parent.compaction_count = 9;
+            parent.context = Some(claude_context(fixed_now()));
             let mut child = agent("child", "claude", status, None, None, Some("Explore"));
             child.parent_agent_id = Some("parent".into());
             child.compaction_count = count;

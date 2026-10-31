@@ -173,6 +173,7 @@
 [theme.glyphs.unicode.meter]
 ## context_full = "▣"
 ## context_empty = "▢"
+## context_compacted = "↻"
 ## bar_filled = "━"
 ## bar_track = "─"
 ## bar_cap = "╺"
@@ -307,6 +308,7 @@
 [theme.glyphs.nerd_font.meter]
 ## context_full = "󰕰"
 ## context_empty = "󱇙"
+## context_compacted = ""
 ## bar_filled = "━"
 ## bar_track = "─"
 ## bar_cap = "╺"

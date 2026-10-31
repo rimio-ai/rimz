@@ -3581,7 +3581,8 @@ path = "crates/rimz/src/store"
 # Store::queue_tail_message assigns an unclaimed continue's FIFO-tail id under the queue lock (+1).
 # workflow::RunAddress, its parser error, matching, and RunRecord::address share run names (+4).
 # workflow::AttemptOutcome::as_str shares the attempt word with journal inspection (+1).
-surface-budget = 524
+# SidebarRow::compacted_context_unknown shares the renderer's post-compaction gap predicate (+1).
+surface-budget = 525
 
 [[verdict]]
 kind = "item"
