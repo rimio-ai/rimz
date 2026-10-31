@@ -11650,6 +11650,514 @@ fn expired_automatic_command_cannot_be_forced_into_the_pane() {
 }
 
 #[test]
+fn idle_compaction_after_registration_at_rest_waits_then_delivers_once() {
+    let (env, trace) = compact_race_agent();
+    compact_race_hook_payload(
+        &env,
+        &trace,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-race",
+            "source": "resume",
+        }),
+    );
+    let receiver = env.store().snapshot_cached().unwrap().agents[0].clone();
+    assert!(receiver.turn_started_at > receiver.turn_ended_at);
+    assert_eq!(receiver.last_request_at(), receiver.turn_ended_at);
+    // Hold the command behind a FIFO head until the explicit delivery below.
+    let head = MessageRecord::new(
+        env.workspace_id.clone(),
+        &receiver,
+        "preceding boundary message".to_owned(),
+        DeliveryGate::Done,
+    );
+    queue_messages(&env, &[&head]);
+    let id = MessageId::new();
+    let outcome = rimz::message::compact::send_compact(
+        &env.resolve_workspace(&env.project_root),
+        &env.store(),
+        rimz::message::compact::CompactRequest {
+            message_id: id.clone(),
+            agent: &receiver,
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+            command: rimz::agents::compact_command(
+                &receiver,
+                &rimz::config::HarnessConfig::default(),
+            )
+            .unwrap(),
+            sender: MessageSender::System,
+            automated: true,
+            idle: true,
+        },
+    );
+    assert!(
+        matches!(outcome, Ok(rimz::message::compact::CompactOutcome::Queued)),
+        "expected a queued idle compaction after registration at rest, got {outcome:?}"
+    );
+    assert_eq!(message_by_id(&env, &id).status, MessageStatus::Queued);
+    assert_eq!(
+        message_by_id(&env, &id).idle_since,
+        receiver.turn_started_at.max(receiver.turn_ended_at)
+    );
+    env.store()
+        .cancel_message(&head.message_id, "test", "open the FIFO gate")
+        .unwrap();
+    run_success(
+        traced_rimz(&env, &trace).args(["message", "deliver", "--message-id", id.as_str()]),
+        "deliver idle compaction after registration at rest",
+    );
+    let settled = wait_for_compaction_settlement(&env, &trace, &id);
+    let lines = trace_lines(&trace);
+    assert_eq!(settled.status, MessageStatus::Sent, "trace={lines:?}");
+    assert_compact_segments_then_enter(
+        &lines,
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+}
+
+#[test]
+fn idle_compaction_is_canceled_when_a_resumed_parked_turn_ends() {
+    let (env, trace) = compact_race_agent();
+    compact_race_hook_payload(
+        &env,
+        &trace,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-race",
+            "background_tasks": [{"status": "running"}],
+        }),
+    );
+    let receiver = env.store().snapshot_cached().unwrap().agents[0].clone();
+    assert_eq!(receiver.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(receiver.phase, rimz::agents::TurnPhase::Parked);
+    compact_race_hook(&env, &trace, "UserPromptSubmit");
+    let resumed = env.store().snapshot_cached().unwrap().agents[0].clone();
+    assert_eq!(resumed.turn_started_at, receiver.turn_started_at);
+    assert_eq!(resumed.phase, rimz::agents::TurnPhase::Reasoning);
+    let id = MessageId::new();
+    let outcome = rimz::message::compact::send_compact(
+        &env.resolve_workspace(&env.project_root),
+        &env.store(),
+        rimz::message::compact::CompactRequest {
+            message_id: id.clone(),
+            agent: &receiver,
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+            command: rimz::agents::compact_command(
+                &receiver,
+                &rimz::config::HarnessConfig::default(),
+            )
+            .unwrap(),
+            sender: MessageSender::System,
+            automated: true,
+            idle: true,
+        },
+    );
+    assert!(matches!(
+        outcome,
+        Ok(rimz::message::compact::CompactOutcome::Queued)
+    ));
+    compact_race_hook(&env, &trace, "Stop");
+    let ended = env.store().snapshot_cached().unwrap().agents[0].clone();
+    assert_eq!(ended.turn_started_at, receiver.turn_started_at);
+    assert!(ended.turn_ended_at > receiver.turn_ended_at);
+    let settled = wait_for_compaction_settlement(&env, &trace, &id);
+    let lines = trace_lines(&trace);
+    assert_eq!(
+        settled.status,
+        MessageStatus::Canceled,
+        "status={:?}, trace={lines:?}",
+        settled.status
+    );
+    assert_eq!(
+        settled.last_error.as_deref(),
+        Some("agent took a turn after this idle compaction was queued")
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("\taction\twrite") || is_enter_key(line)),
+        "trace={lines:?}"
+    );
+}
+
+#[test]
+fn queued_idle_compaction_is_canceled_after_registration_at_rest() {
+    let (env, trace, command) = queue_compact_command(true);
+    compact_race_hook_payload(
+        &env,
+        &trace,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-race",
+            "source": "resume",
+        }),
+    );
+    let reset = env.store().snapshot_cached().unwrap().agents[0].clone();
+    assert!(reset.turn_started_at > command.idle_since);
+    run_success(
+        traced_rimz(&env, &trace).args(["message", "sweep"]),
+        "sweep idle compaction after registration at rest",
+    );
+    let settled = wait_for_compaction_settlement(&env, &trace, &command.message_id);
+    let lines = trace_lines(&trace);
+    assert_eq!(settled.status, MessageStatus::Canceled, "trace={lines:?}");
+    assert_eq!(
+        settled.last_error.as_deref(),
+        Some("agent took a turn after this idle compaction was queued")
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("\taction\twrite") || is_enter_key(line)),
+        "trace={lines:?}"
+    );
+}
+
+#[test]
+fn queued_idle_compaction_survives_a_keepalive_ping() {
+    let (env, trace, command) = queue_compact_command(true);
+    let receiver = env.store().snapshot_cached().unwrap().agents[0].clone();
+    compact_race_hook_payload(
+        &env,
+        &trace,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-race",
+            "prompt": "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm.",
+        }),
+    );
+    let ping = env.store().snapshot_cached().unwrap().agents[0].clone();
+    assert!(ping.ping_turn);
+    assert_eq!(ping.turn_started_at, receiver.turn_started_at);
+    assert_eq!(ping.turn_ended_at, receiver.turn_ended_at);
+    compact_race_hook(&env, &trace, "Stop");
+    let closed = env.store().snapshot_cached().unwrap().agents[0].clone();
+    assert!(!closed.ping_turn);
+    assert!(closed.pinged_at > receiver.turn_ended_at);
+    assert_eq!(closed.turn_started_at, receiver.turn_started_at);
+    assert_eq!(closed.turn_ended_at, receiver.turn_ended_at);
+    let settled = wait_for_compaction_settlement(&env, &trace, &command.message_id);
+    let lines = trace_lines(&trace);
+    assert_eq!(settled.status, MessageStatus::Sent, "trace={lines:?}");
+    assert_compact_segments_then_enter(
+        &lines,
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+}
+
+#[test]
+fn queued_idle_compaction_is_canceled_after_a_real_turn() {
+    let (env, trace, command) = queue_compact_command(true);
+    compact_race_hook(&env, &trace, "UserPromptSubmit");
+    let receiver = env
+        .store()
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap()
+        .clone();
+    assert!(receiver.turn_started_at > Some(command.enqueued_at));
+    compact_race_hook(&env, &trace, "Stop");
+    let settled = wait_for_compaction_settlement(&env, &trace, &command.message_id);
+    let lines = trace_lines(&trace);
+    let pane_trace = lines
+        .iter()
+        .filter(|line| line.contains("\taction\twrite") || is_enter_key(line))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        settled.status,
+        MessageStatus::Canceled,
+        "status={:?}, pane trace:\n{pane_trace}",
+        settled.status
+    );
+    assert_eq!(
+        settled.last_error.as_deref(),
+        Some("agent took a turn after this idle compaction was queued")
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("\taction\twrite") || is_enter_key(line)),
+        "trace={lines:?}"
+    );
+    let shown = run_success(
+        env.rimz()
+            .args(["message", "show", command.message_id.as_str()]),
+        "show canceled idle compaction",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains(settled.last_error.as_deref().unwrap()),
+        "{shown}"
+    );
+    let events = env.read_events();
+    assert!(
+        events.iter().any(|event| {
+            event.method == "message.canceled"
+                && event.params_value()["message_id"] == command.message_id.as_str()
+                && event.params_value()["reason"] == settled.last_error.as_deref().unwrap()
+        }),
+        "events={events:?}"
+    );
+}
+
+#[test]
+fn idle_compaction_first_attempt_keeps_its_cancellation_reason() {
+    let (env, trace, command) = queue_compact_command(true);
+    let receiver = env.store().snapshot_cached().unwrap().agents[0].clone();
+    let store = env.store();
+    store
+        .cancel_message(&command.message_id, "test", "replace fixture command")
+        .unwrap();
+    compact_race_hook(&env, &trace, "UserPromptSubmit");
+    let outcome = rimz::message::compact::send_compact(
+        &env.resolve_workspace(&env.project_root),
+        &store,
+        rimz::message::compact::CompactRequest {
+            message_id: MessageId::new(),
+            agent: &receiver,
+            pane_id: command.pane_id.unwrap(),
+            command: command.text,
+            sender: MessageSender::System,
+            automated: true,
+            idle: true,
+        },
+    );
+    let reason = match outcome {
+        Err(rimz::message::compact::CompactErr::Settled { reason, .. }) => reason,
+        other => panic!("expected a settled idle compaction, got {other:?}"),
+    };
+    assert_eq!(
+        reason,
+        "agent took a turn after this idle compaction was queued"
+    );
+    let lines = trace_lines(&trace);
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("\taction\twrite") || is_enter_key(line)),
+        "trace={lines:?}"
+    );
+}
+
+#[test]
+fn queued_idle_compaction_delivers_once_when_the_turn_stamp_ties() {
+    let (env, trace, command) = queue_compact_command(true);
+    let receiver = env
+        .store()
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        receiver.turn_started_at.max(receiver.turn_ended_at),
+        command.idle_since
+    );
+    run_success(
+        traced_rimz(&env, &trace).args([
+            "message",
+            "deliver",
+            "--message-id",
+            command.message_id.as_str(),
+        ]),
+        "deliver tied idle compaction",
+    );
+    let settled = wait_for_compaction_settlement(&env, &trace, &command.message_id);
+    let lines = trace_lines(&trace);
+    assert_eq!(settled.status, MessageStatus::Sent, "trace={lines:?}");
+    assert_compact_segments_then_enter(
+        &lines,
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
+    );
+    assert_eq!(
+        lines.iter().filter(|line| is_enter_key(line)).count(),
+        1,
+        "trace={lines:?}"
+    );
+}
+
+#[test]
+fn queued_compact_first_command_survives_a_later_turn() {
+    let (env, trace, command) = queue_compact_command(false);
+    compact_race_hook(&env, &trace, "UserPromptSubmit");
+    let receiver = env
+        .store()
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap()
+        .clone();
+    assert!(receiver.turn_started_at > Some(command.enqueued_at));
+    compact_race_hook(&env, &trace, "Stop");
+    let settled = wait_for_compaction_settlement(&env, &trace, &command.message_id);
+    let lines = trace_lines(&trace);
+    assert_eq!(settled.status, MessageStatus::Sent, "trace={lines:?}");
+    assert_compact_segments_then_enter(
+        &lines,
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
+    );
+    assert_eq!(
+        lines.iter().filter(|line| is_enter_key(line)).count(),
+        1,
+        "trace={lines:?}"
+    );
+}
+
+#[test]
+fn manual_compaction_queues_behind_a_lapsed_idle_compaction() {
+    let (env, trace, command) = queue_compact_command(true);
+    compact_race_hook(&env, &trace, "UserPromptSubmit");
+    let output = run_success(
+        traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
+        "queue manual compaction behind lapsed idle compaction",
+    );
+    let output = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.starts_with("queued compaction for @claude"),
+        "{output}"
+    );
+    let manual = env
+        .store()
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.message_id != command.message_id)
+        .unwrap();
+    assert_eq!(manual.status, MessageStatus::Queued);
+    assert_eq!(manual.idle_since, None);
+    compact_race_hook(&env, &trace, "Stop");
+    let settled = wait_for_compaction_settlement(&env, &trace, &command.message_id);
+    assert_eq!(settled.status, MessageStatus::Canceled);
+    let wake: Option<jiff::Timestamp> =
+        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).unwrap()).unwrap();
+    assert!(
+        wake.is_some(),
+        "cancel must leave the next head armed: {wake:?}"
+    );
+    run_success(
+        traced_rimz(&env, &trace).args(["message", "sweep"]),
+        "drive next head after idle cancellation",
+    );
+    let sent = wait_for_compaction_settlement(&env, &trace, &manual.message_id);
+    let lines = trace_lines(&trace);
+    assert_eq!(sent.status, MessageStatus::Sent, "trace={lines:?}");
+    assert_compact_segments_then_enter(
+        &lines,
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
+    );
+    assert_eq!(
+        lines.iter().filter(|line| is_enter_key(line)).count(),
+        1,
+        "trace={lines:?}"
+    );
+}
+
+fn queue_compact_command(idle_tagged: bool) -> (Env, PathBuf, MessageRecord) {
+    let (env, trace) = compact_race_agent();
+    let receiver = env
+        .store()
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap()
+        .clone();
+    let mut command = MessageRecord::new(
+        env.workspace_id.clone(),
+        &receiver,
+        rimz::agents::compact_command(&receiver, &rimz::config::HarnessConfig::default()).unwrap(),
+        DeliveryGate::Done,
+    )
+    .with_channel(receiver.channel())
+    .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+    .with_sender(MessageSender::System)
+    .with_body(MessageBody::Command)
+    .with_automated(true);
+    command.compacted_context_tokens = receiver.occupied_context_tokens();
+    if idle_tagged {
+        command.idle_since = receiver.turn_started_at.max(receiver.turn_ended_at);
+    }
+    queue_messages(&env, &[&command]);
+    (env, trace, command)
+}
+
+fn compact_race_agent() -> (Env, PathBuf) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-race",
+        "feature-race",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace = env.project_root.join("compact-race.log");
+    compact_race_hook(&env, &trace, "Stop");
+    (env, trace)
+}
+
+fn compact_race_hook(env: &Env, trace: &Path, event: &str) {
+    compact_race_hook_payload(
+        env,
+        trace,
+        json!({
+            "hook_event_name": event,
+            "session_id": "sess-race",
+            "worktree_branch": "feature-race",
+            "prompt": "real work",
+        }),
+    );
+}
+
+fn compact_race_hook_payload(env: &Env, trace: &Path, payload: serde_json::Value) {
+    let shim = zellij_trace_shim();
+    run_hook(
+        env,
+        payload,
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim.to_str().unwrap()),
+            ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().unwrap()),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+            ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
+            ("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0"),
+        ],
+    );
+}
+
+fn wait_for_compaction_settlement(env: &Env, trace: &Path, id: &MessageId) -> MessageRecord {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (live, history) = env.store().list_messages_and_history().unwrap();
+        let record = live
+            .into_iter()
+            .chain(history)
+            .find(|record| &record.message_id == id)
+            .unwrap();
+        let lines = trace_lines(trace);
+        if record.status.is_terminal()
+            || (record.status == MessageStatus::Sent && lines.iter().any(|line| is_enter_key(line)))
+        {
+            return record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "status={:?}, trace={lines:?}",
+            record.status
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
 fn agents_compact_queues_for_a_running_agent() {
     let env = Env::new();
     env.record(&env.project_root);

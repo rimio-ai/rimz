@@ -5,7 +5,9 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::agents::AgentState;
 use crate::ids::{MessageId, PaneId};
-use crate::store::message::{DeliveryGate, MessageBody, MessageSender, MessageStatus};
+use crate::store::message::{
+    DeliveryGate, MessageBody, MessageSender, MessageStatus, idle_compaction_edge,
+};
 use crate::store::writer::DeliveryFailureDisposition;
 use crate::workspace::ResolvedWorkspace;
 
@@ -67,6 +69,7 @@ pub struct CompactRequest<'a> {
     pub command: String,
     pub sender: MessageSender,
     pub automated: bool,
+    pub idle: bool,
 }
 
 pub fn refuse_repeat(store: &Store, agent: &AgentState, now: Timestamp) -> Result<()> {
@@ -77,6 +80,7 @@ pub fn refuse_repeat(store: &Store, agent: &AgentState, now: Timestamp) -> Resul
         message.body == MessageBody::Command
             && !message.status.is_terminal()
             && message.same_agent_card(agent)
+            && !(message.status == MessageStatus::Queued && message.idle_compaction_lapsed(agent))
     }) {
         return Err(CompactErr::Pending {
             message_id: message.message_id,
@@ -110,6 +114,9 @@ pub fn send_compact(
     .with_body(MessageBody::Command);
     message.message_id = request.message_id;
     message.compacted_context_tokens = request.agent.occupied_context_tokens();
+    if request.idle {
+        message.idle_since = idle_compaction_edge(request.agent);
+    }
     if synthetic::deliver_now(
         workspace,
         store,
@@ -214,5 +221,98 @@ mod tests {
         );
         let other = AgentState::stub("claude", "session-2", AgentStatus::Idle);
         assert!(refuse_repeat(&store, &other, now).is_ok());
+
+        store
+            .cancel_message(&command.message_id, "session", "test")
+            .unwrap();
+        let mut tagged = MessageRecord::requeue_from(&command);
+        tagged.idle_since = Some(now);
+        store.queue_message(&tagged, "session").unwrap();
+        agent.turn_started_at = Some(now);
+        let tied = matches!(
+            refuse_repeat(&store, &agent, now),
+            Err(CompactErr::Pending { .. })
+        );
+        agent.turn_started_at = Some(now + std::time::Duration::from_secs(1));
+        let lapsed = refuse_repeat(&store, &agent, now).is_ok();
+        store
+            .claim_message_for_steer(&tagged.message_id, now)
+            .unwrap()
+            .unwrap();
+        let claimed = matches!(
+            refuse_repeat(&store, &agent, now),
+            Err(CompactErr::Pending { .. })
+        );
+        assert_eq!((tied, lapsed, claimed), (true, true, true));
+    }
+
+    #[test]
+    fn standalone_compaction_persists_the_idle_decision_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = ResolvedWorkspace {
+            workspace_id: WorkspaceId::from_project_root(dir.path()),
+            project_root: dir.path().into(),
+            cwd_project_root: None,
+            root_class: crate::workspace::RootClass::Directory,
+            worktree_root: dir.path().into(),
+            worktree_branch: None,
+            session_name: "room".into(),
+            mux_hint: None,
+        };
+        let store = Store::open(
+            StatePaths::under(workspace.workspace_id.clone(), &dir.path().join("state")).unwrap(),
+            RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("runtime"))
+                .unwrap(),
+        )
+        .unwrap();
+        let stamp = Timestamp::from_second(1_000).unwrap();
+        let earlier = stamp - std::time::Duration::from_secs(1);
+        let cases = [
+            (false, Some(stamp), Some(earlier), None),
+            (true, Some(stamp), Some(earlier), Some(stamp)),
+            (true, Some(earlier), Some(stamp), Some(stamp)),
+            (true, None, Some(stamp), Some(stamp)),
+            (true, None, None, None),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .enumerate()
+            .map(|(index, &(idle, started, ended, _))| {
+                let mut agent =
+                    AgentState::stub("claude", &format!("session-{index}"), AgentStatus::Running);
+                agent.turn_started_at = started;
+                agent.turn_ended_at = ended;
+                let id = MessageId::new();
+                let outcome = send_compact(
+                    &workspace,
+                    &store,
+                    CompactRequest {
+                        message_id: id.clone(),
+                        agent: &agent,
+                        pane_id: PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_3"),
+                        command: "/compact".to_owned(),
+                        sender: MessageSender::System,
+                        automated: true,
+                        idle,
+                    },
+                )
+                .unwrap();
+                assert_eq!(outcome, CompactOutcome::Queued);
+                let queued = store
+                    .list_messages()
+                    .unwrap()
+                    .into_iter()
+                    .find(|message| message.message_id == id)
+                    .unwrap();
+                serde_json::to_value(queued)
+                    .unwrap()
+                    .get("idle_since")
+                    .cloned()
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            cases.map(|(_, _, _, expected)| expected.map(|stamp| serde_json::json!(stamp)))
+        );
     }
 }

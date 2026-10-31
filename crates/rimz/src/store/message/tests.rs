@@ -7,6 +7,44 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn idle_compaction_lapses_only_for_a_later_turn_on_its_card() {
+    let at = Some(Timestamp::from_second(1_000).unwrap());
+    let later = at.map(|at| at + Duration::from_secs(1));
+    let receiver = agent("receiver", None);
+    let record =
+        delivery_message(1, &receiver, DeliveryGate::Done, None).with_body(MessageBody::Command);
+    let cases = [
+        (None, later, later, false, MessageStatus::Queued, false),
+        (at, at, at, false, MessageStatus::Queued, false),
+        (at, later, at, false, MessageStatus::Queued, true),
+        (at, later, at, false, MessageStatus::Claimed, true),
+        (at, None, None, false, MessageStatus::Queued, false),
+        (at, at, later, false, MessageStatus::Queued, true),
+        (at, None, later, false, MessageStatus::Queued, true),
+        (later, later, at, false, MessageStatus::Queued, false),
+        (at, later, at, true, MessageStatus::Queued, false),
+        (at, later, at, false, MessageStatus::Sent, false),
+        (at, later, at, false, MessageStatus::Canceled, false),
+        (at, later, at, false, MessageStatus::Delivered, false),
+    ];
+    let actual = cases.map(|(idle_since, started, ended, other_card, status, _)| {
+        let mut record = record.clone();
+        record.idle_since = idle_since;
+        record.status = status;
+        let mut row = if other_card {
+            agent("other", None)
+        } else {
+            receiver.clone()
+        };
+        row.turn_started_at = started;
+        row.turn_ended_at = ended;
+        row.pinged_at = later;
+        record.idle_compaction_lapsed(&row)
+    });
+    assert_eq!(actual, cases.map(|(_, _, _, _, _, expected)| expected));
+}
+
+#[test]
 fn soft_compact_tags_round_trip_through_records_events_and_requeue() {
     use crate::store::event::MessageEventPayload;
 

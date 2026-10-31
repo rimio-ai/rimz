@@ -1049,6 +1049,7 @@ fn compact_flipper(
             request.workspace,
             request.store,
             CompactRequest {
+                idle: false,
                 message_id: message_id.clone(),
                 agent,
                 pane_id: pane.clone(),

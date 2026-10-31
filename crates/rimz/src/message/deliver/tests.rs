@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn failed_idle_compaction_check_names_its_claim_release_reason() {
+    let receiver = agent("session", AgentStatus::Idle);
+    let mut command = message(&receiver, 1, "/compact").with_body(MessageBody::Command);
+    command.idle_since = Some(Timestamp::from_second(1_000).unwrap());
+    assert_eq!(
+        moot_check_failure_reason(&command),
+        "deferred: cannot check idle-compaction turn"
+    );
+}
+
+#[test]
 fn stall_classes_cover_every_delivery_verdict() {
     let now = Timestamp::now();
     let mut cases = vec![

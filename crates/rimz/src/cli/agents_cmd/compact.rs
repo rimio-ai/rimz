@@ -62,6 +62,7 @@ pub(super) fn compact_agent(
         &ctx.workspace,
         &ctx.store,
         CompactRequest {
+            idle: false,
             message_id: message_id.clone(),
             agent,
             pane_id,

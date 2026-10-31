@@ -227,7 +227,7 @@ A wait is refused before sending when a target has no lifecycle state, is not ru
 | `delivered` | The agent acknowledged it: a turn started with the prompt, or compaction started for a command. |
 | `timed_out` | The agent never acknowledged it. A command is never resent, because repeating `/compact` can discard context. |
 | `errored` | Delivery could not happen, for example the address matched no agent. |
-| `canceled` | `message cancel` or `message clear` stopped it, a fleet digest was fully joined, or a pause/stall notice's child run ended before delivery. `message show` keeps the reason in its timeline. |
+| `canceled` | `message cancel` or `message clear` stopped it, a fleet digest was fully joined, a pause/stall notice's child run ended, a soft-compaction cycle cleared, or an idle compaction's agent took a turn after its idle decision. `message show` keeps the reason in its timeline. |
 | `abandoned` | Delivery attempts failed repeatedly before anything reached the pane. |
 | `expired` | An automatic command remained queued for ten minutes without delivery, or a resumed child did not register by its follow-up's deadline. Automatic commands stop blocking later messages even before the next sweep records expiry; registration expiry is recorded only while the card is absent or ended no later than enqueue. Other prompts and operator commands never expire. |
 | `archived` | The recipient, its channel, or a watched `--when` agent ended first. |

@@ -3583,7 +3583,9 @@ path = "crates/rimz/src/store"
 # workflow::RunAddress, its parser error, matching, and RunRecord::address share run names (+4).
 # workflow::AttemptOutcome::as_str shares the attempt word with journal inspection (+1).
 # SidebarRow::compacted_context_unknown shares the renderer's post-compaction gap predicate (+1).
-surface-budget = 525
+# MessageRecord::idle_compaction_lapsed shares idle-decision expiry with delivery and repeat refusal (+1).
+# idle_compaction_edge keeps idle stamps and lapse checks on the same turn boundaries (+1).
+surface-budget = 527
 
 [[verdict]]
 kind = "item"
@@ -3639,6 +3641,16 @@ reason = "Dispatch and the parent-only resume doorway act on the queue commit's 
 kind = "item"
 key = "store::message::MessageRecord::awaiting_registration"
 reason = "Delivery, registration expiry and in-flight resume detection must share the same enqueue/end ordering rule."
+
+[[verdict]]
+kind = "item"
+key = "store::message::MessageRecord::idle_compaction_lapsed"
+reason = "Delivery cancellation and standalone-compaction repeat refusal share the same idle-decision lapse predicate."
+
+[[verdict]]
+kind = "item"
+key = "store::message::idle_compaction_edge"
+reason = "Idle-compaction stamping and lapse checks share one turn edge, including resets at rest and resumed parked turns."
 
 [[verdict]]
 kind = "item"
