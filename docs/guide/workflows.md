@@ -140,14 +140,27 @@ max-visits:  3
 
 ```sh
 rimz workflow list         # every active and parked run, with its node and what it waits on
-rimz workflow show "$RUN"  # one run: position, next moves, and a compact trail
+rimz workflow show "$RUN"  # one run: painted graph, next moves, and a short trail
 rimz workflow show "$RUN" --history  # every check and attempt, when you need the evidence
 rimz workflow show fix-tests  # definition rail, then live runs
 ```
 
 `list` puts parks and blocking questions under NEEDS YOU, longest waiting first, with a hint to inspect the first run. ACTIVE holds the rest. Each row has a status glyph, a short address such as `fix-tests#feat-x`, its node, what it is doing, and its age. You can use that address instead of `$RUN` in `show`, `resume`, and `cancel`; the part after `#` is the checkout directory's name (the project directory for project scope). Several rooms get separate headings.
 
-`show` on an address or id starts with where the run is and what it is waiting for. It shows condition readings, visit counts, and a short trail of routing decisions, then the work directory and a command for full history. When parked, it explains why and gives the exact commands to resume, grant more bounds, choose another node, or cancel. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field and the rules for choosing a run by name or address.
+`show` on an address or id starts with where the run is and what it is waiting for, then paints its sealed graph: `●` for reached nodes, `○` for those not reached, and the headline's glyph at the current node. Past nodes keep their last outcome or attempt, time and repeat count. The current condition's cases show each reading once, with `▸` at the winner or held case and `?` where unread evidence stopped it. Those marks work without color. Visit counts and a short trail follow, then the work directory and a command for full history. When parked, it explains why and gives the exact commands to resume, grant more bounds, choose another node, or cancel, followed by a compact rail. Finished runs use the compact rail without a current node. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field and the rules for choosing a run by name or address.
+
+Here the suite passed without needing `fix`. The finished run keeps that distinction visible:
+
+```console
+$ rimz workflow show fix-tests#feat-x
+fix-tests#feat-x  ✓ done 3m
+started 09:12 by hand · 0 attempts
+
+● tests  ○ fix
+trail  09:12 tests pass → @done · 09:12 done
+work dir ~/.rimz/ws/demo-1234/owned/workflows/wf_00000000000000000000000000000004/work
+all of it: rimz --root ~/project workflow show 'fix-tests#feat-x' --history
+```
 
 An attempt can end as `died` when an agent fails to start or crashes, or when a command fails. Use `show --history` for checks and attempts in order, folding adjacent repeated evaluations with their count, span, newest answer, and summed judge cost (`--json` keeps every journal entry): the handle or exit code, commits before and after, duration, known cost, recorded `reason:`, and log path. A command's log holds its output; an agent's own UI carries errors that it did not report to RimZ.
 

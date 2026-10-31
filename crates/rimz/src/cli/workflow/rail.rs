@@ -10,6 +10,7 @@ use super::render;
 pub(super) struct Rail {
     pub(super) rows: Vec<Row>,
     pub(super) unreachable: Vec<Row>,
+    pub(super) compact: bool,
     start: String,
 }
 
@@ -56,11 +57,30 @@ impl Rail {
         Self {
             rows,
             unreachable,
+            compact: false,
             start: spec.workflow.start.clone(),
         }
     }
 
     pub(super) fn write(&self, out: &mut impl Write, width: usize) -> std::io::Result<()> {
+        if self.compact {
+            let mut columns = 0;
+            for row in self.rows.iter().chain(&self.unreachable) {
+                let text = row.label();
+                let length = unicode_width::UnicodeWidthStr::width(text.as_str());
+                if columns > 0 && columns + 2 + length > width {
+                    writeln!(out)?;
+                    columns = 0;
+                }
+                if columns > 0 {
+                    write!(out, "  ")?;
+                    columns += 2;
+                }
+                write!(out, "{}", render::paint(row.style, &text))?;
+                columns += length;
+            }
+            return writeln!(out);
+        }
         for row in &self.rows {
             row.write(out, width)?;
         }
@@ -75,6 +95,15 @@ impl Rail {
 }
 
 impl Row {
+    fn label(&self) -> String {
+        let glyph = rimz::theme::theme_glyphs(&super::super::machine_config().theme)(self.glyph);
+        if self.heading.is_empty() {
+            format!("{glyph} {}", self.name)
+        } else {
+            format!("{glyph} {} {}", self.name, self.heading)
+        }
+    }
+
     fn definition(
         spec: &WorkflowSpec,
         name: &str,
