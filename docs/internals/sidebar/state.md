@@ -451,6 +451,8 @@ The CI verdict comes from the most specific commit:
 
 `ci_sha` is absent when the verdict or its commit is unknown. Older cache files without it still load with an unknown CI commit.
 
+Gitea answers a commit that no check reported on with `state: "pending"`, `total_count: 0`, and `statuses` null or empty. `forge::parse_tea_combined_status` reads that response as no verdict and no commit, so a PR without CI draws no CI marker and never joins the pending hot tier. A response that reports any status, by count or by record, keeps its aggregate `state`, and so does one without a `total_count`.
+
 #### When a repository is probed
 
 A repository is due when its tier TTL has passed, when a target's HEAD differs from the last seen HEAD, or when a target has never been probed. The tier is `PR_STATE_HOT_TTL` (20 seconds) when any of its worktrees is hot, focused, has a pending verdict, or has an open PR in the merge queue, and `PR_STATE_TTL` (5 minutes) otherwise. Branch rows join the uncached and pending or queued hot tiers without synthetic paths reaching disk. A failed probe backs off from `PR_STATE_RETRY_TTL` (30 seconds), doubling up to the tier TTL, and keeps the last-known-good links.

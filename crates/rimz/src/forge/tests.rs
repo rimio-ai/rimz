@@ -1355,6 +1355,51 @@ fn parses_tea_combined_commit_status() {
 }
 
 #[test]
+fn tea_combined_status_without_statuses_has_no_verdict() {
+    // Gitea's answer for a commit no check reported on: the aggregate reads pending.
+    for state in ["pending", "success"] {
+        for statuses in [serde_json::Value::Null, serde_json::json!([])] {
+            let raw = serde_json::json!({
+                "state": state,
+                "sha": "head",
+                "total_count": 0,
+                "statuses": statuses,
+            });
+            assert_eq!(
+                parse_tea_combined_status(&raw.to_string()).unwrap(),
+                (None, None),
+                "{raw}"
+            );
+        }
+        let raw = serde_json::json!({"state": state, "sha": "head", "total_count": 0});
+        assert_eq!(
+            parse_tea_combined_status(&raw.to_string()).unwrap(),
+            (None, None)
+        );
+    }
+
+    // A reported status, by count or by record, keeps the aggregate state.
+    let pending = serde_json::json!([{"state": "pending", "context": "ci"}]);
+    for (count, statuses) in [
+        (1, pending.clone()),
+        (1, serde_json::Value::Null),
+        (0, pending),
+    ] {
+        let raw = serde_json::json!({
+            "state": "pending",
+            "sha": "head",
+            "total_count": count,
+            "statuses": statuses,
+        });
+        assert_eq!(
+            parse_tea_combined_status(&raw.to_string()).unwrap(),
+            (Some(WorktreeCi::Pending), Some("head".to_owned())),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
 fn tea_commit_status_endpoint_carries_repo_and_branch() {
     assert_eq!(
         tea_commit_status_endpoint("org/repo", "feat/x"),

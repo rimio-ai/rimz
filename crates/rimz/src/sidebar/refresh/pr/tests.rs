@@ -2271,6 +2271,32 @@ fn tea_open_ci_keeps_the_combined_status_commit_without_a_local_fallback() {
 }
 
 #[test]
+fn tea_open_pr_without_reported_statuses_shows_no_ci() {
+    let groups = group_targets(vec![tea_target("/repo/local", "feature")]);
+    let (repo, group) = groups.first_key_value().unwrap();
+    let result = probe_tea_repo_group_with(
+        repo,
+        group,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        |_, program, args| {
+            assert_eq!(program, "tea");
+            if args.starts_with(&["pr", "list", "--state", "open"]) {
+                return Some(r#"[{"index":"42","state":"open","head":"feature"}]"#.into());
+            }
+            assert_eq!(args, ["api", "repos/org/repo/commits/feature/status"]);
+            Some(r#"{"state":"pending","sha":"head","total_count":0,"statuses":null}"#.into())
+        },
+    );
+    assert!(result.ok);
+    let link = &result.states["/repo/local"];
+    assert_eq!(link.state, WorktreePrState::Open);
+    assert_eq!(link.number, Some(42));
+    assert_eq!(link.ci, None);
+    assert_eq!(link.ci_sha, None);
+}
+
+#[test]
 fn tea_merged_ci_keeps_the_commit_of_the_status_that_answered() {
     for (merge_status, expected_ci, expected_sha) in [
         (Some("success"), WorktreeCi::Passing, "merge"),

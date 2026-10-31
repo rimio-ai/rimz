@@ -1100,6 +1100,10 @@ pub(crate) fn tea_commit_status_endpoint(repo_slug: &str, branch: &str) -> Strin
 }
 
 /// Parse Gitea's combined commit status and the commit it was resolved at.
+///
+/// Gitea answers a commit no check reported on with `state: "pending"`, `total_count: 0`, and
+/// `statuses` null or empty. That response carries no verdict, so the commit has no CI rather
+/// than CI in progress.
 pub(crate) fn parse_tea_combined_status(
     raw: &str,
 ) -> Result<(Option<WorktreeCi>, Option<String>), String> {
@@ -1107,6 +1111,9 @@ pub(crate) fn parse_tea_combined_status(
     let object = value
         .as_object()
         .ok_or_else(|| "tea combined commit status must be a JSON object".to_owned())?;
+    if reports_no_statuses(object) {
+        return Ok((None, None));
+    }
     let verdict = object
         .get("state")
         .and_then(Value::as_str)
@@ -1120,6 +1127,16 @@ pub(crate) fn parse_tea_combined_status(
         });
     let sha = verdict.and_then(|_| object.get("sha").and_then(Value::as_str).and_then(nonempty));
     Ok((verdict, sha))
+}
+
+/// Whether a combined status says outright that no status was reported: a zero `total_count`
+/// and no status record beside it. A response without a count keeps its aggregate state.
+fn reports_no_statuses(object: &serde_json::Map<String, Value>) -> bool {
+    object.get("total_count").and_then(Value::as_u64) == Some(0)
+        && object
+            .get("statuses")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
 }
 
 fn pr_state_from_value(value: &Value) -> Option<WorktreePrState> {
