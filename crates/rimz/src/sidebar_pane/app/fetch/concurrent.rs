@@ -97,7 +97,7 @@ impl IdleCycleFixture {
     }
 
     /// Alternate removing and restoring a bound agent pane, waiting for every mirror to paint.
-    /// A build without mirrors measures the watched paint as the baseline control instead.
+    /// Every build reports the watched paint; a mirror build also reports the last mirror.
     /// A spare work pane keeps card removal independent of empty-tab self-close.
     pub fn run_concurrent_structural(self, publications: usize) -> ConcurrentFanout {
         {
