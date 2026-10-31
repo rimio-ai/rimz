@@ -1,4 +1,4 @@
-use crate::common::{CommandTimeoutExt, Env, daemon_test_guard};
+use crate::common::{CommandTimeoutExt, Env, available_loopback_port, daemon_test_guard};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -115,15 +115,6 @@ fn ttyd_mouse_flow_paces_drag_reports() {
     );
 }
 
-#[cfg(unix)]
-fn free_loopback_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .expect("bind test web port")
-        .local_addr()
-        .expect("test web address")
-        .port()
-}
-
 fn write_machine_config(env: &Env, text: &str) {
     let path = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config parent");
@@ -185,8 +176,8 @@ impl WebFixture {
         let ttyd_bin = bin_dir.join("ttyd");
         std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
         let ttyd_log = env.project_root.join(log_name);
-        let web_port = free_loopback_port();
-        let share_port = free_loopback_port();
+        let web_port = available_loopback_port();
+        let share_port = available_loopback_port();
         write_machine_config(
             &env,
             &format!("[web]\nport = {web_port}\nshare_port = {share_port}\n"),
@@ -2173,7 +2164,7 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
     std::fs::create_dir_all(ttyd_bin.parent().expect("ttyd fixture parent"))
         .expect("mkdir ttyd fixture parent");
     std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
-    let web_port = free_loopback_port();
+    let web_port = available_loopback_port();
     write_machine_config(&env, &format!("[web]\nport = {web_port}\n"));
     crate::common::room::seed_sidebar_heartbeat(
         &env.runtime_paths(),

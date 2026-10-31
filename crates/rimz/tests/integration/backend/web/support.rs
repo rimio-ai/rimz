@@ -11,7 +11,9 @@ use headless_chrome::{Browser, LaunchOptions, Tab};
 use rimz::mux::{ClientFocusOptions, MuxBackend, ZellijBackend};
 
 use crate::backend::tmux::TmuxServer;
-use crate::common::{CommandTimeoutExt, Env, ZellijNamespace, daemon_test_guard};
+use crate::common::{
+    CommandTimeoutExt, Env, ZellijNamespace, available_loopback_port, daemon_test_guard,
+};
 
 const MIN_TTYD_VERSION: (u32, u32, u32) = (1, 7, 5);
 
@@ -312,8 +314,8 @@ impl LiveWebFixture {
                 "#{pane_id}",
             ],
         );
-        let web_port = free_loopback_port();
-        let share_port = free_loopback_port();
+        let web_port = available_loopback_port();
+        let share_port = available_loopback_port();
         write_machine_config(
             &env,
             &format!("[web]\nport = {web_port}\nshare_port = {share_port}\n"),
@@ -635,8 +637,8 @@ impl LiveZellijWebFixture {
             .bounded_output()
             .expect("create live Zellij room");
         assert_success(&output, "create live Zellij room");
-        let web_port = free_loopback_port();
-        let share_port = free_loopback_port();
+        let web_port = available_loopback_port();
+        let share_port = available_loopback_port();
         write_machine_config(
             &env,
             &format!("[web]\nport = {web_port}\nshare_port = {share_port}\n"),
@@ -854,14 +856,6 @@ fn eval_value(tab: &Tab, expression: &str) -> Result<serde_json::Value, String> 
         .map_err(|err| err.to_string())?
         .value
         .ok_or_else(|| format!("{expression} returned no value"))
-}
-
-fn free_loopback_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .expect("bind test web port")
-        .local_addr()
-        .expect("test web address")
-        .port()
 }
 
 fn write_machine_config(env: &Env, text: &str) {

@@ -208,7 +208,7 @@ fn unavailable_machine_record_does_not_stop_connect_or_forwarding() {
     std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
     std::fs::write(&dir, b"not a directory").unwrap();
     let log = env.project_root.join("ssh-trace.log");
-    let port = available_forward_probe_port();
+    let port = crate::common::available_loopback_port();
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_REMOTE_PROBE_MS", "10")
         .env("RIMZ_TEST_PROBE_PORT", port.to_string())
@@ -250,7 +250,7 @@ fn supervisor_publishes_while_alive_and_removes_its_record_on_return() {
     let ready = env.project_root.join("control-master-ready");
     let ready_plan = env.project_root.join("ssh-master-ready.plan");
     std::fs::write(&ready_plan, "0\n").unwrap();
-    let port = available_forward_probe_port();
+    let port = crate::common::available_loopback_port();
     let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
         .env("RIMZ_TEST_SSH_MASTER_READY_PLAN", &ready_plan)
