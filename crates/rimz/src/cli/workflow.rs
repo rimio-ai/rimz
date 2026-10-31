@@ -13,8 +13,10 @@ use rimz::store::workflow::{self as records, RunRecord};
 use super::render;
 use super::workflow_view;
 
+mod definition;
 mod host;
 mod list;
+mod rail;
 mod receipt;
 mod resolve;
 mod show;
@@ -160,14 +162,7 @@ fn start(
     prompt: Option<String>,
     globals: &super::GlobalFlags,
 ) -> Result<()> {
-    let mut components = name.components();
-    let dir = if matches!(components.next(), Some(std::path::Component::Normal(_)))
-        && components.next().is_none()
-    {
-        paths::workflows_dir().join(name)
-    } else {
-        name
-    };
+    let dir = definition_dir(&name);
     let project_root = validation_root(globals);
     let report = workflow::validate(
         &dir,
@@ -238,6 +233,17 @@ fn locate(id: &WorkflowRunId) -> Result<(rimz::StatePaths, paths::WorkflowPaths)
         .with_context(|| format!("unknown workflow run {id}"))
 }
 
+fn definition_dir(name: &std::path::Path) -> PathBuf {
+    let mut components = name.components();
+    if matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+    {
+        paths::workflows_dir().join(name)
+    } else {
+        name.to_owned()
+    }
+}
+
 fn show(target: &str, json: bool, history: bool, globals: &super::GlobalFlags) -> Result<()> {
     if history && resolve::names_workflow(target) {
         return Err(super::usage::UsageError::new(
@@ -246,7 +252,12 @@ fn show(target: &str, json: bool, history: bool, globals: &super::GlobalFlags) -
         .into());
     }
     match resolve::select(target, "show", globals, None, &[])? {
-        resolve::Selection::Workflow(runs) => list::render(&runs, Some(target), json, globals),
+        resolve::Selection::Workflow(runs) => {
+            if !json {
+                definition::render(target, globals)?;
+            }
+            list::render(&runs, Some(target), json, globals)
+        }
         resolve::Selection::Run(run) => show::render(&run, json, history, globals),
     }
 }
@@ -258,7 +269,7 @@ fn validation_root(globals: &super::GlobalFlags) -> Option<PathBuf> {
 fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> Result<()> {
     let home = paths::workflows_dir();
     let dirs = if let Some(dir) = dir {
-        vec![dir]
+        vec![definition_dir(&dir)]
     } else {
         let mut dirs = Vec::new();
         match std::fs::read_dir(&home) {

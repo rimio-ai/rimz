@@ -97,11 +97,32 @@ Without `-w` the run uses the checkout you are in. `-w` selects an existing RimZ
 
 ## Watch a run
 
+Before starting a larger workflow, read its routes without jumping between TOML tables. `rimz workflow show fix-tests` draws the graph from `start`, hangs a returning step beneath its check, and keeps the limits beside the node they bound. Downward routes use `→`, returns use `↑`. Conditions show their cases in order, including how long a case must hold. Uniform defaults appear once below the rail; `validate` also lists edges that cannot fire, with the reason. The runs of this workflow follow the graph.
+
+```console
+$ rimz workflow show fix-tests
+fix-tests
+one run per worktree · no loop task starts it; by hand: rimz workflow run fix-tests -w '<worktree>'
+
+○ tests  check  sh: cargo test
+│   fail → fix · pass @done
+│
+├─○ fix  step  claude · 1 turn ≤1h · ↑ tests · 3 visits, then @user
+│
+
+A step goes on to its next check however its turn ends.
+A check that cannot run parks at @user.
+No deadline is set; a deadline granted to a run parks it at @user.
+one node in full: rimz workflow show fix-tests tests · source ~/.rimz/workflows/fix-tests/workflow.toml
+
+no active or parked runs of fix-tests
+```
+
 ```sh
 rimz workflow list         # every active and parked run, with its node and what it waits on
 rimz workflow show "$RUN"  # one run: position, next moves, and a compact trail
 rimz workflow show "$RUN" --history  # every check and attempt, when you need the evidence
-rimz workflow show fix-tests  # live runs of this workflow, as list rows
+rimz workflow show fix-tests  # definition rail, then live runs
 ```
 
 `list` puts parks and blocking questions under NEEDS YOU, longest waiting first, with a hint to inspect the first run. ACTIVE holds the rest. Each row has a status glyph, a short address such as `fix-tests#feat-x`, its node, what it is doing, and its age. You can use that address instead of `$RUN` in `show`, `resume`, and `cancel`; the part after `#` is the checkout directory's name (the project directory for project scope). Several rooms get separate headings.

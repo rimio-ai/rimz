@@ -11,7 +11,7 @@ rimz workflow run babysit-pr -w feat-x --prompt 'merge before Friday'
 rimz workflow list                                # active and parked runs, every room
 rimz workflow show 'babysit-pr#feat-x'
 rimz workflow show 'babysit-pr#feat-x' --history     # detailed history, folded repeats
-rimz workflow show babysit-pr                      # live runs of this workflow
+rimz workflow show babysit-pr                      # definition rail, then live runs
 rimz workflow resume 'babysit-pr#feat-x' --at pr --extend visits=+1
 rimz workflow cancel 'babysit-pr#feat-x'
 ```
@@ -20,7 +20,7 @@ The [global flags](../cli.md#global-flags) apply. Every subcommand except `run` 
 
 `show`, `resume`, and `cancel` accept a run address `<workflow>#<lane>`, a workflow name, or a full run id (`wf_` and 32 hexadecimal digits). The lane is the basename of the recorded scope path, even after that checkout is removed. Root-checkout and project-scoped runs use the project directory's name. A requested `feat/x` also matches `feat-x`. When a target begins with `-`, put options before `--` and the target after it.
 
-An address selects its live run; `show` falls back to the newest finished run when none is live. Two live runs sharing an address refuse and list their ids and checkouts. A workflow name in `show` always lists that workflow's live runs, never one run's detail; a known workflow with none prints `no active or parked runs of <name>`. For `resume` and `cancel`, a workflow name prefers the caller's checkout or its project's project-scoped run, then the only live run, otherwise lists commands to choose one. Matching runs in the caller's room take precedence; without a local match, several rooms refuse with `--root` commands. Each command a refusal lists names its run by address, or by id where another candidate in the same room shares that address, and carries `--root` when the run is outside the current directory's room. The global `--root` chooses the caller's room. Run ids remain unambiguous across rooms.
+An address selects its live run; `show` falls back to the newest finished run when none is live. Two live runs sharing an address refuse and list their ids and checkouts. A workflow name in `show` draws its definition, then lists that workflow's live runs, never one run's detail; a known workflow with none ends with `no active or parked runs of <name>`. For `resume` and `cancel`, a workflow name prefers the caller's checkout or its project's project-scoped run, then the only live run, otherwise lists commands to choose one. Matching runs in the caller's room take precedence; without a local match, several rooms refuse with `--root` commands. Each command a refusal lists names its run by address, or by id where another candidate in the same room shares that address, and carries `--root` when the run is outside the current directory's room. The global `--root` chooses the caller's room. Run ids remain unambiguous across rooms.
 
 ## Run a workflow
 
@@ -42,18 +42,19 @@ An agent step requires `prompt-file`. Its `agent` accepts the fresh-launch layou
 
 Agent steps of automatically loop-started runs also ask the [start throttle](./loop.md#the-start-throttle) before taking over a checkout. `throttle = "off"` bypasses it. `capacity-wait` accepts a positive `s`, `m`, `h`, or `d` duration, or `forever` (the default). A held step spends no visit and retries about once a minute. Giving up follows `on.capacity`, default `@failed`; it may instead name `@done` or a node, but not `@user` or `@wait`, since capacity give-up never parks a run. A window or occupancy wait restarts the capacity clock. The run deadline still applies. Runs created by `workflow run` or `loop fire`, and runs detached by `loop remove`, bypass capacity, as do checks, command steps, and already-open staying sessions.
 
+## Inspect definitions
+
+`rimz workflow show <WORKFLOW>` draws the current definition in walk order, with returning steps hung beneath their earlier sending check. `→` points to a later node and `↑` to an earlier node or itself. Unreached nodes follow under `unreachable from <start>`. The header names the summary, scope, loop tasks that start this workflow in the caller's project (machine tasks only outside a room), and any configured deadline route. Without a loop task it gives the by-hand command.
+
+Each node shows its runner, summary when set, routes, and routing limits. Condition cases retain their order and hold durations, followed by `none true`; the note names where an unread term goes. Timeouts, visit caps, windows, takeover, bounded capacity waits, and staying lifecycles stay beside their nodes. Edges that cannot fire are omitted; uniform turn-end, invalid-check and unset-deadline defaults are stated once in the footer, only when used. `validate` shows the omitted edges with their marks. The footer names the source file and a command for one node in full. The live-runs table follows the definition.
+
+A missing or unloadable definition prints `definition unavailable` with a `workflow validate` command, then still lists its runs and exits 0. An unknown workflow with neither a definition directory nor runs refuses. `show <WORKFLOW> --json` keeps its live-runs array and does not include the rail.
+
 ## Inspect runs
 
 `rimz workflow list [--json]` prints every active and parked run across rooms, without column headers. NEEDS YOU holds parked runs and active runs with a blocking ask, longest waiting first. ACTIVE holds the rest, sorted by address. Rows are `<glyph> <address>  <node>  <detail>  <age>`: `?` for parked or asking, `☾` for an active wait, `⢿` for other active work, from the configured glyph set. Age starts at the park, at the opening of an ask, or at node entry otherwise. Detail truncates before age at narrow terminal widths. NEEDS YOU ends with a `workflow show` hint for its first run. Several rooms get headings, the caller's room first, and hints for other rooms carry `--root`. Finished runs are omitted.
 
 Detail is `asking you: <handle> (<kind>): <one-line text>` for a blocking ask; otherwise a live staying session reads `with you`, with `; checking <check>` while held and `; <wait phrase>` when waiting. Other runs print the [park phrase](#park-reasons), [wait phrase](#the-waiting-line), `running` (with ` · visit <n> of <max>` when capped), or `checking`. JSON `detail` uses the same phrase, without node or age. A single-run `show` says `<step> is asking you` while asking, otherwise `<step> is with you` for a live staying attempt. Its session attempt is `held.attempt` while checking, otherwise `attempt`; its `lifecycle` is `stay` or `until`, omitted for turn attempts. An open blocking ask is stored in `asking`; `asked_ms` is the total closed pause time in milliseconds. Both are omitted when empty or zero. While held, NODE names the check; `show` keeps the session's step and handle in its headline and names the current check below it.
-
-```console
-$ rimz workflow show repair
-NEEDS YOU
-  ? repair#feat-x  work  cap: 2 of 2 visits  0s
-  → rimz workflow show 'repair#feat-x'
-```
 
 `rimz workflow show <RUN> [--history | --json]` opens with the address and current state. A wait names its node, elapsed time, recheck and the next bound's time and target; a hold names its outcome, duration and the next bound's time and target. The forecast picks the earliest unfired deadline, timeout or hold completion, in that order on ties. A running step shows its visit limit and agent handle when available. Asking shows the question and says to answer in the pane or with `rimz answer`; a turn step's timeout pauses while asking. Finished runs say `done`, `failed`, or `canceled`, aged from termination. The next line names when and how the run started (by hand or by loop task), the number of completed attempts, and their known total cost, including judge evaluations. It omits cost when none is recorded, and never estimates a live attempt's spend.
 
@@ -110,7 +111,7 @@ resumed repair#feat-x at work · work 2 of 3 visits, every capped step +1
 
 ## Validate and schema
 
-`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, step layout, judge profile, or `condition`), `BACKGROUND` (whether the step's leader reports background work), and `EDGES`. An edge prints `outcome → target (source)`, or `outcome → target (source, mark)` when conditional or unable to fire; `source` is `explicit` or `default`. A step's `asked` edge appears only when `on.asked` is set, always as explicit; staying steps have none. Errors and `warning:` lines follow. Any error exits 1. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
+`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. A single normal path component names a workflow under that home, as in `run`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, step layout, judge profile, or `condition`), `BACKGROUND` (whether the step's leader reports background work), and `EDGES`. An edge prints `outcome → target (source)`, or `outcome → target (source, mark)` when conditional or unable to fire; `source` is `explicit` or `default`. A step's `asked` edge appears only when `on.asked` is set, always as explicit; staying steps have none. Errors and `warning:` lines follow. Any error exits 1. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
 
 Rows follow the graph from `start`, with a returning step immediately below the earlier check that sends it. Nodes reachable only through `workflow.on.deadline` follow the start component; unreachable nodes come last in name order. Edges follow case order without repeats, then `else`, then other explicit outcomes in name order, then engine triggers: `unknown`, `timeout`, `invalid`, `deadline` for checks; `then`, `asked`, `cap`, `capacity`, `deadline` for steps. These row and edge orders also apply to JSON.
 

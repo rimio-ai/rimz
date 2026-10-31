@@ -24,8 +24,8 @@ pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
 pub use inspect::{Hop, HopKind, evaluation_target, hold_until, hops, next_bound, timeout_at};
 pub use script::{CaseMark, CaseMarks, case_marks, unread_reasons};
 pub use spec::{
-    Case, Check, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, WorkflowSpec, load,
-    schema,
+    Case, Check, CheckKind, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, StepKind,
+    WorkflowSpec, load, schema,
 };
 pub use validate::{Issue, NodeRow, Validation, validate};
 
