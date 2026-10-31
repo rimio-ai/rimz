@@ -228,7 +228,7 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
     row.section = Section::NeedsYou;
     row.attention = Some(Attention::Strikes);
     row.reason = "disabled after 3 strikes".into();
-    row.workflow_runs = vec![WorkflowRunRow {
+    let run = || WorkflowRunRow {
         id: rimz::ids::WorkflowRunId::new(),
         address: Some("live#probe".into()),
         checkout: "/repo-worktrees/probe".into(),
@@ -236,17 +236,23 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
         node: "gate".into(),
         since: now,
         reason: Some("user"),
-        text: Some("review the probe".into()),
+        text: Some("review the probe 界 ".repeat(8)),
         parked_at: None,
         detail: String::new(),
-    }];
+    };
+    row.workflow_runs = vec![run()];
+    row.head = "every 5m".into();
+    row.continuation = "each worktree".into();
+    let mut parked = TaskRow::rowless("parked".into(), None, None);
+    parked.head = "every 5m".into();
+    parked.attach_workflow_runs(vec![run()], now);
     let model = ListModel {
         rooms: vec![Room {
             root: "/repo".into(),
             open: true,
             here: true,
             spend_today_usd: 0.0,
-            tasks: vec![row],
+            tasks: vec![row, parked],
             retired: Vec::new(),
         }],
         caller_root: Some("/repo".into()),
@@ -269,6 +275,28 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
         rendered.contains("  live#probe gate user: review the probe"),
         "{rendered}"
     );
+    let mut out = Vec::new();
+    text::write(
+        &mut out,
+        &model,
+        &[&model.rooms[0]],
+        false,
+        Some(60),
+        None,
+        None,
+    )
+    .unwrap();
+    let rendered = String::from_utf8(out).unwrap();
+    let rendered = anstream::adapter::strip_str(&rendered).to_string();
+    assert!(
+        rendered.lines().all(|line| line.width() <= 60),
+        "{rendered}"
+    );
+    let summary = rendered
+        .lines()
+        .find(|line| line.contains("1 run(s) parked:"))
+        .unwrap();
+    assert!(summary.ends_with("… 0s"), "{rendered}");
 }
 
 #[test]
@@ -282,7 +310,8 @@ fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
             "created_at":now, "entered_at":Timestamp::from_second(100).unwrap(),
             "state":"parked", "node":"gate", "task":"babysit",
             "park":{
-                "reason":"user", "text":"review this", "at":Timestamp::from_second(880).unwrap(),
+                "reason":"user", "text":"review this 界 ".repeat(8),
+                "at":Timestamp::from_second(880).unwrap(),
             },
             "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
         }))
@@ -326,9 +355,34 @@ fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
     .unwrap();
     let text = String::from_utf8(out).unwrap();
     for lane in ["first", "second"] {
-        let summary = format!("review#{lane} gate user: review this 2m");
+        let summary = format!(
+            "review#{lane} gate user: {} 2m",
+            "review this 界 ".repeat(8).trim_end()
+        );
         assert_eq!(text.matches(&summary).count(), 1, "{text}");
     }
+    let original = serde_json::to_value(&model.rooms).unwrap();
+    let mut out = Vec::new();
+    text::write(
+        &mut out,
+        &model,
+        &[&model.rooms[0]],
+        false,
+        Some(60),
+        None,
+        None,
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let text = anstream::adapter::strip_str(&text).to_string();
+    assert!(text.lines().all(|line| line.width() <= 60), "{text}");
+    let summaries = text
+        .lines()
+        .filter(|line| line.contains("2m"))
+        .collect::<Vec<_>>();
+    assert_eq!(summaries.len(), 2, "{text}");
+    assert!(summaries.iter().all(|line| line.contains("… 2m")), "{text}");
+    assert_eq!(serde_json::to_value(&model.rooms).unwrap(), original);
 }
 
 #[test]

@@ -130,8 +130,10 @@ fn needs_you(
     }
     rows.sort_by_key(|row| &row.name);
     let worktree = rows.iter().any(|row| row.worktree.is_some());
+    let trigger_column = 1 + usize::from(worktree);
+    let reason_column = trigger_column + 1;
     writeln!(out, "\n{}", ui::paint(ui::palette::header(), "NEEDS YOU"))?;
-    let cells = rows
+    let mut cells = rows
         .iter()
         .map(|row| {
             let mut cells = name_cells(row, worktree);
@@ -148,13 +150,35 @@ fn needs_you(
             (cells, continuation, reason_style(row.attention))
         })
         .collect::<Vec<_>>();
-    write_table(
+    let headers = vec![""; 3 + usize::from(worktree)];
+    let trigger_width = trigger_width(&headers, &cells, trigger_column, width);
+    if let Some(width) = width {
+        let names = (0..trigger_column)
+            .map(|column| {
+                cells
+                    .iter()
+                    .map(|(cells, _, _)| cells[column].width())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .sum::<usize>();
+        let trigger = trigger_width.unwrap_or(0);
+        let reason_width = width.saturating_sub(2 + reason_column * 2 + names + trigger);
+        for (row, (cells, _, _)) in rows.iter().zip(&mut cells) {
+            if row.attention == Some(Attention::Parked)
+                && let Some(summary) = row.parked_reason(now)
+            {
+                cells[reason_column] = clipped_summary(summary, Some(reason_width));
+            }
+        }
+    }
+    write_wrapped_table(
         out,
-        &vec![""; 3 + usize::from(worktree)],
+        &headers,
         &cells,
-        1 + usize::from(worktree),
-        2 + usize::from(worktree),
-        width,
+        trigger_column,
+        reason_column,
+        trigger_width,
     )?;
     for row in &rows {
         let parked: Vec<_> = row
@@ -167,7 +191,11 @@ fn needs_you(
             .into_iter()
             .skip(usize::from(row.attention == Some(Attention::Parked)))
         {
-            writeln!(out, "  {}", run.summary(now))?;
+            writeln!(
+                out,
+                "  {}",
+                clipped_summary(run.summary(now), width.map(|width| width.saturating_sub(2)))
+            )?;
         }
     }
     let mut hints: BTreeMap<Attention, Vec<&str>> = BTreeMap::new();
@@ -199,6 +227,14 @@ fn needs_you(
         writeln!(out, "  → {command}")?;
     }
     Ok(())
+}
+
+fn clipped_summary((text, age): (String, String), width: Option<usize>) -> String {
+    let text = width.map_or_else(
+        || text.clone(),
+        |width| ui::clip_to_width(&text, width.saturating_sub(age.width() + 1)),
+    );
+    format!("{text} {age}")
 }
 
 fn section_heading(
@@ -534,7 +570,23 @@ pub(super) fn write_table(
     state_column: usize,
     width: Option<usize>,
 ) -> Result<()> {
-    let trigger_width = width.map(|width| {
+    write_wrapped_table(
+        out,
+        headers,
+        rows,
+        trigger_column,
+        state_column,
+        trigger_width(headers, rows, trigger_column, width),
+    )
+}
+
+fn trigger_width(
+    headers: &[&str],
+    rows: &[(Vec<String>, String, anstyle::Style)],
+    trigger_column: usize,
+    width: Option<usize>,
+) -> Option<usize> {
+    width.map(|width| {
         let other = headers
             .iter()
             .enumerate()
@@ -547,10 +599,27 @@ pub(super) fn write_table(
                     .max(header.width())
             })
             .sum::<usize>();
-        width
+        let wrap_width = width
             .saturating_sub(other + 2 + (headers.len() - 1) * 2)
-            .max(24)
-    });
+            .max(24);
+        rows.iter()
+            .flat_map(|(cells, continuation, _)| [&cells[trigger_column], continuation])
+            .flat_map(|text| wrap_trigger(text, wrap_width))
+            .map(|line| line.width())
+            .chain([headers[trigger_column].width()])
+            .max()
+            .unwrap_or(0)
+    })
+}
+
+fn write_wrapped_table(
+    out: &mut impl Write,
+    headers: &[&str],
+    rows: &[(Vec<String>, String, anstyle::Style)],
+    trigger_column: usize,
+    state_column: usize,
+    trigger_width: Option<usize>,
+) -> Result<()> {
     let mut table = ui::Table::new(headers.iter().copied()).indent(2);
     for (cells, continuation, style) in rows {
         let lines = trigger_width.map_or_else(
