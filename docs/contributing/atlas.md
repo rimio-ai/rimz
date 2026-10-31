@@ -211,7 +211,7 @@ reason = "Provider formats intentionally share this choreography."
 
 After every rebase, run `cargo xtask atlas conform --ratchet` before any hand-off. A rebase runs no pre-commit hook, and a textual merge of two budgets does not prove the merged surface fits: a budget that merges cleanly can still sit below the surface the trunk added.
 
-Every `[[verdict]]` needs a non-empty reason and a unique `(kind, key)`. Key forms are:
+Every `[[verdict]]` needs a non-empty reason and a unique `(kind, key)`. A reason names the items it rests on (`cli::agents_cmd::history::render_history`), never a `file:line` range: the next edit to that file moves the lines, and no check reads a reason. Key forms are:
 
 | kind | key |
 | --- | --- |
