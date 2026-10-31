@@ -2600,7 +2600,7 @@ fn messages_section_renders_empty_state() {
 #[test]
 fn diagnostics_section_renders_history_watermark() {
     let mut report = report_fixture();
-    report.history_cleared_at = Some(Timestamp::now());
+    report.history_cleared_at = Some(Timestamp::now() - std::time::Duration::from_secs(7200));
     report.diagnostics = Some(Diagnostics::Ready {
         path: "/tmp/diagnostics".to_owned(),
         incidents: Vec::new(),
@@ -2611,7 +2611,7 @@ fn diagnostics_section_renders_history_watermark() {
         render_diagnostics(w, &report, &mut tally)
     });
 
-    assert!(out.contains("history cleared 0s ago"), "{out}");
+    assert!(out.contains("history cleared 2h ago"), "{out}");
 }
 
 #[test]
@@ -2871,7 +2871,7 @@ fn shortfall_details() -> serde_json::Value {
 
 fn assert_refusal_shape(event: &str, details: serde_json::Value, memory: bool) {
     let record = rimz::diag::lsp::Record {
-        at: Timestamp::now(),
+        at: Timestamp::now() - std::time::Duration::from_secs(7200),
         root: "/project".into(),
         server: "rust".into(),
         event: event.into(),
@@ -2887,7 +2887,7 @@ fn assert_refusal_shape(event: &str, details: serde_json::Value, memory: bool) {
         }),
         "{body}"
     );
-    assert!(body.contains("0s ago"), "{body}");
+    assert!(body.contains("2h ago"), "{body}");
     let closing = strip(|w| render_tally(w, &tally));
     if memory {
         assert!(
