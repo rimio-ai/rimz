@@ -26,7 +26,7 @@ pub struct EventsArgs {
 
 #[derive(Debug, Subcommand)]
 enum EventsSubcmd {
-    /// List recent signals from the active event log, newest first; repeats fold into one row.
+    /// List recent signals newest first; text output folds adjacent repeats into one row.
     List {
         /// Keep an exact signal name or a family such as ci.*.
         #[arg(long)]
