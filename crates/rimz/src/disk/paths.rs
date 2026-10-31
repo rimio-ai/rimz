@@ -931,7 +931,7 @@ impl RuntimePaths {
 
     /// Build runtime paths rooted at `runtime_root`, naming the dir through
     /// the state lookup under that same root (else `ws-<24hex>`). Tests
-    /// prefer this so they don't need to set `XDG_RUNTIME_DIR`. This raw
+    /// prefer this to root their runtime tree in a directory they own. This raw
     /// constructor deliberately skips the socket budget; ambient production
     /// callers use [`Self::for_workspace`] so a long runtime root fails before
     /// any session side effect. Shared data and lock paths both root under
