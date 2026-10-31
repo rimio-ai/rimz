@@ -220,11 +220,23 @@ fn overdue_sent_wake_releases_sleeping_without_reconciliation() {
             message.status = MessageStatus::Sent;
             let overdue =
                 now - message.body.delivery_window() - std::time::Duration::from_millis(1);
-            for (sent_at, retry_after, held) in [
-                (overdue, None, false),
-                (now, None, true),
-                (overdue, Some(now + message.body.delivery_window()), true),
+            for (sent_at, retry_after, compacting, held) in [
+                (overdue, None, false, false),
+                (now, None, false, true),
+                (
+                    overdue,
+                    Some(now + message.body.delivery_window()),
+                    false,
+                    true,
+                ),
+                (overdue, None, true, true),
+                (overdue, Some(overdue), true, true),
             ] {
+                agent.compacting_since = compacting.then_some(
+                    now - jiff::SignedDuration::from_secs(
+                        crate::agents::COMPACTING_WINDOW_SECS + 1,
+                    ),
+                );
                 message.updated_at = sent_at;
                 message.last_sent_at = Some(sent_at);
                 message.retry_after = retry_after;
@@ -248,6 +260,10 @@ fn overdue_sent_wake_releases_sleeping_without_reconciliation() {
                     } else {
                         TurnCompletion::Completed
                     }
+                );
+                assert_eq!(
+                    view.reason(&agent),
+                    held.then_some(TurnWaitReason::WakeInFlight)
                 );
             }
         }

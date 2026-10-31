@@ -296,7 +296,7 @@ Check 14 honours the pin. A record pinned to a pane binds only to that pane (`ad
 
 Check 6 counts three kinds of holder in the same card and lane: a deliverable `Queued` record, an unexpired `Claimed` record, and a `Sent` prompt still inside its reconcile deadline. The selector and the explain scan share this rule (`crates/rimz/src/store/message.rs::delivery_batch_indices`, `older_ready_blocker`).
 
-A `Sent` prompt holds the slot while its turn-start acknowledgement is pending, even if the card still reads `Idle`: the store already knows a prompt was submitted before the hook commits. Readers release an overdue hold without a sweep or a record transition, through `MessageRecord::sent_hold_expired`. A compaction, ingress, or provider-start deferral extends that deadline ([Reconciliation](#reconciliation)). Late acknowledgements stay valid while the record is `Sent`, or `Queued` after a requeue.
+A `Sent` prompt holds the slot while its turn-start acknowledgement is pending, even if the card still reads `Idle`: the store already knows a prompt was submitted before the hook commits. FIFO readers release an overdue hold without a sweep or a record transition, through `MessageRecord::sent_hold_expired`. A compaction, ingress, or provider-start deferral extends that deadline ([Reconciliation](#reconciliation)). Wake-in-flight readers additionally hold a card's `Sent` harness wake throughout its receiver's open compaction bracket, regardless of that deadline. Late acknowledgements stay valid while the record is `Sent`, or `Queued` after a requeue.
 
 A `Sent` command does not hold the card. The composer queues a paste made during compaction, and holding for the command's 180 s acknowledgement window would freeze prompts whenever its hook never arrives.
 
@@ -312,7 +312,7 @@ Ended launched children stay in runtime snapshots while their parent is visible 
 
 #### Compaction and gates
 
-The compaction window at check 9 closes every gate, `Resume` included. A receiver whose `compacting_since` marker is less than 90 seconds old (`COMPACTING_WINDOW_SECS`) takes nothing. The window expires so that a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation uses the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
+The compaction window at check 9 closes every gate, `Resume` included. A receiver whose `compacting_since` marker is less than 90 seconds old (`COMPACTING_WINDOW_SECS`) takes nothing. The window expires so that a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation and wake-in-flight reads use the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
 
 `DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 12 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked while an agent is paused, so a rate-limited agent does not receive a pile of user text the moment it waits. Both open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait. `Resume` does not open for `Sleeping`. Hibernation does not change the gate's status input, and delivery thaws the provider before writing to its pane.
 
@@ -418,7 +418,7 @@ Origin classification is a separate, read-only decision in `store::message::clas
 
 Reconciliation (`Store::reconcile_stale_messages`) runs in `message sweep` and `gc`, and handles expired claims alongside stale writes.
 
-A `Sent` record has one deadline for reconciliation, wakeups, and readers: `retry_after` when set, otherwise its last write (`last_sent_at`, falling back to `updated_at`) plus its body's delivery window. A pass before that deadline leaves the record untouched, even if the condition that armed a hold has already cleared. Past the deadline, reconciliation tries each rule below in order and applies the first that matches.
+A `Sent` record's deadline for reconciliation, wakeups, FIFO, and acknowledgement selection is `retry_after` when set, otherwise its last write (`last_sent_at`, falling back to `updated_at`) plus its body's delivery window. Wake-in-flight readers additionally hold a `Sent` harness wake while its receiver's compaction bracket is open, without waiting for reconciliation to extend the deadline. A pass before that deadline leaves the record untouched, even if the condition that armed a hold has already cleared. Past the deadline, reconciliation tries each rule below in order and applies the first that matches.
 
 | # | Case | Effect |
 | --- | --- | --- |
@@ -709,7 +709,7 @@ Each leg is a two-phase machine.
 
 **Delivery** waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into a running turn opens the reply phase from `Sent + Running` instead, because the live turn emits no second `TurnStarted`: the rest of that turn is the reply. Interrupt never takes that shortcut, so `--interrupt --wait` follows only the fresh turn that `Delivered` acknowledges.
 
-**Reply** reads status through `TurnWaitView`, which loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness message whose sent hold has not expired, reads as `Sleeping`. Legs settle through `TurnCompletion`:
+**Reply** reads status through `TurnWaitView`, which loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness wake still in flight, reads as `Sleeping`. A `Sent` wake stays in flight while its deadline has not passed or its receiver's compaction bracket is open, regardless of the 90 s display/delivery window. After the bracket closes, the deadline applies again. Legs settle through `TurnCompletion`:
 
 | Observed | Leg |
 | --- | --- |

@@ -1024,9 +1024,10 @@ pub struct AgentState {
     /// `session_before_compact`). Set by the rollup, cleared by the session's
     /// next lifecycle signal; the sidebar renders a transient "compacting" head
     /// while it is recent (see [`COMPACTING_WINDOW_SECS`]); the delivery gate
-    /// also treats a recent marker as busy. Pane-write reconciliation reads the
-    /// marker without that expiry because a composer queues input during the
-    /// bracket and submits it when compaction ends.
+    /// also treats a recent marker as busy. Pane-write reconciliation and
+    /// wake-in-flight reads use the marker without that expiry because a
+    /// composer queues input during the bracket and submits it when compaction
+    /// ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
     /// How many times this session has condensed its context window — the count

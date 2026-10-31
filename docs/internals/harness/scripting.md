@@ -150,7 +150,7 @@ A clean turn end does not complete a run while its session is still owed a harne
 | `Subagents` | a launched fleet member has a run that is live or still owes a report, as `FleetRuns` selects them ([subagents.md](./subagents.md#which-runs-a-fleet-owes)) |
 | `Team` | a team this session launched has an open team run whose board is not `Done` (`fleet::owed_team_runs`) |
 | `Wait` | the card has an armed one-shot wait |
-| `WakeInFlight` | a harness `Wait`, `Signal`, `SubagentReport`, `AgentReport`, or `TeamReport` message for the card is in flight |
+| `WakeInFlight` | a harness `Wait`, `Signal`, `SubagentReport`, `AgentReport`, or `TeamReport` message for the card is non-terminal and, if `Sent`, either within its deadline or held by the receiver's open compaction bracket; the bracket has no age bound, and after it closes the deadline applies again |
 
 A run whose `report_to` is `nobody` counts toward neither the fleet nor the team term, so a launcher with only detached work running ends its turn and completes instead of parking. The fleet and team terms are independent, so a launcher that launched only a team is owed too.
 
