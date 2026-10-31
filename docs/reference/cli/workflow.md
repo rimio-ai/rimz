@@ -12,6 +12,7 @@ rimz workflow list                                # active and parked runs, ever
 rimz workflow show 'babysit-pr#feat-x'
 rimz workflow show 'babysit-pr#feat-x' --history     # detailed history, folded repeats
 rimz workflow show babysit-pr                      # definition rail, then live runs
+rimz workflow show babysit-pr pr                   # one definition node in full
 rimz workflow resume 'babysit-pr#feat-x' --at pr --extend visits=+1
 rimz workflow cancel 'babysit-pr#feat-x'
 ```
@@ -49,6 +50,10 @@ Agent steps of automatically loop-started runs also ask the [start throttle](./l
 Each node shows its runner, summary when set, routes, and routing limits. Condition cases retain their order and hold durations, followed by `none true`; the note names where an unread term goes. Timeouts, visit caps, windows, takeover, bounded capacity waits, and staying lifecycles stay beside their nodes. Edges that cannot fire are omitted; uniform turn-end, invalid-check and unset-deadline defaults are stated once in the footer, only when used. `validate` shows the omitted edges with their marks. The footer names the source file and a command for one node in full. The live-runs table follows the definition.
 
 A missing or unloadable definition prints `definition unavailable` with a `workflow validate` command, then still lists its runs and exits 0. An unknown workflow with neither a definition directory nor runs refuses. `show <WORKFLOW> --json` keeps its live-runs array and does not include the rail.
+
+`rimz workflow show <WORKFLOW> <NODE>` prints one definition node in full: runner kind and summary, predecessors with the outcomes that reach it, check subscriptions (derived for conditions, explicit otherwise) and the minute tick, ordered condition cases with holds and keys, every resolved edge with its source and fireability mark, then the configured command text, agent layout, prompt path, lifecycle, takeover, window, throttle, capacity wait, visit bounds, timeout, provider and account. Commands keep their full text, including multiple lines. Never-firing edges appear here even though the rail omits them. Predecessors omit never-firing routes; conditional ones carry the shared mark.
+
+The two-positional form takes a workflow name only, not an address or run id (usage error, exit 2), and conflicts with `--json` and `--history` in clap. An unknown node refuses with the definition's node names (exit 1). A missing or unloadable definition refuses with its validation command (exit 1); there is no runs-table fallback for a node view.
 
 ## Inspect runs
 

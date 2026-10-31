@@ -118,15 +118,8 @@ impl Row {
                 row.heading.push_str(&format!(" · window {window}"));
             }
             if !check.cases.is_empty() {
-                if let Some(edge) = live.iter().find(|edge| edge.outcome == "unknown") {
-                    let action = if edge.target == "@wait" {
-                        "waits".into()
-                    } else {
-                        format!("goes {}", target(name, &edge.target, order))
-                    };
-                    row.details.push(format!(
-                        "the first true case wins; an unread term above it {action}"
-                    ));
+                if let Some(note) = case_note(name, &edges, order) {
+                    row.details.push(note);
                 }
                 for (index, case) in check.cases.iter().enumerate() {
                     if let Some(edge) = live.iter().find(|edge| edge.outcome == case.outcome) {
@@ -295,6 +288,18 @@ impl Row {
         }
         writeln!(out, "│")
     }
+}
+
+pub(super) fn case_note(node: &str, edges: &[Edge], order: &[&str]) -> Option<String> {
+    let edge = edges.iter().find(|edge| edge.outcome == "unknown")?;
+    let action = if edge.target == "@wait" {
+        "waits".into()
+    } else {
+        format!("goes {}", target(node, &edge.target, order))
+    };
+    Some(format!(
+        "the first true case wins; an unread term above it {action}"
+    ))
 }
 
 fn edge_text(node: &str, edge: &Edge, order: &[&str]) -> String {

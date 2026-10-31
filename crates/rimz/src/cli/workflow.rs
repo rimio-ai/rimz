@@ -16,6 +16,7 @@ use super::workflow_view;
 mod definition;
 mod host;
 mod list;
+mod node;
 mod rail;
 mod receipt;
 mod resolve;
@@ -50,11 +51,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Show a run's current position, next moves, or full history.
+    /// Show a definition, one node, or a run's progress and history.
     Show {
         /// Run address `<workflow>#<lane>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
         id: String,
+        /// Show this node in full; requires a workflow name, not a run.
+        #[arg(value_name = "NODE", conflicts_with_all = ["json", "history"])]
+        node: Option<String>,
         /// Print the run address, work directory, record, and history as JSON.
         #[arg(long)]
         json: bool,
@@ -116,7 +120,12 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             prompt,
         } => start(name, worktree, prompt, globals),
         Command::List { json } => list::run(json, globals),
-        Command::Show { id, json, history } => show(&id, json, history, globals),
+        Command::Show {
+            id,
+            node,
+            json,
+            history,
+        } => show(&id, node.as_deref(), json, history, globals),
         Command::Cancel { id } => receipt::cancel(&id, globals),
         Command::Resume { id, at, extend } => receipt::resume(&id, at.as_deref(), &extend, globals),
         Command::Advance {
@@ -244,7 +253,26 @@ fn definition_dir(name: &std::path::Path) -> PathBuf {
     }
 }
 
-fn show(target: &str, json: bool, history: bool, globals: &super::GlobalFlags) -> Result<()> {
+fn show(
+    target: &str,
+    node: Option<&str>,
+    json: bool,
+    history: bool,
+    globals: &super::GlobalFlags,
+) -> Result<()> {
+    if let Some(node) = node {
+        if !resolve::names_workflow(target) {
+            return Err(super::usage::UsageError::new(
+                concat!(
+                    "use rimz workflow show <workflow> <node>; ",
+                    "the node view takes a workflow name, not a run address or id"
+                )
+                .into(),
+            )
+            .into());
+        }
+        return node::render(target, node);
+    }
     if history && resolve::names_workflow(target) {
         return Err(super::usage::UsageError::new(
             "--history requires a run address or run id, not a workflow name".into(),

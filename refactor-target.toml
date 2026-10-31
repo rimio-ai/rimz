@@ -2061,7 +2061,8 @@ path = "crates/rimz/src/harness"
 # Workflow fireability/mark, walk, case marks and unread reasons serve CLI inspection (+10).
 # EdgeSource shares typed route provenance with CLI inspection (+1).
 # CheckKind/kind and StepKind/kind share runner selection with definition rails (+4).
-surface-budget = 1058
+# Check::subscriptions shares derived and explicit wakes with the full node view (+1).
+surface-budget = 1059
 
 [[verdict]]
 kind = "item"
