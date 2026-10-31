@@ -53,7 +53,7 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "harness::workflow::engine::tests::accounting_uses_closed_waits_and_evaluation_origin", "--nocapture"])
             .env("RIMZ_TEST_WORKFLOW_ACCOUNTING", "1")
-            .env("RIMZ_HOME", home.path())
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
             .output().unwrap();
         assert!(
             output.status.success(),

@@ -19,7 +19,7 @@ pub(super) fn account_test_home(test: &str) -> bool {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--nocapture"])
         .env("HOME", home.path())
-        .env("RIMZ_HOME", home.path().join(".rimz"))
+        .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path().join(".rimz"))
         .env("RIMZ_TEST_ACCOUNT_HOME", "1")
         .output()
         .unwrap();

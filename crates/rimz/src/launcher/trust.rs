@@ -358,7 +358,7 @@ mod tests {
                     "launcher::trust::tests::empty_dir_undecided_fix_is_machine_wide",
                     "--nocapture",
                 ])
-                .env("RIMZ_HOME", &link)
+                .env("RIMZ_UNIT_TEST_RIMZ_HOME", &link)
                 .env("RIMZ_TEST_TRUST_LINKED_HOME", "1")
                 .output()
                 .unwrap();

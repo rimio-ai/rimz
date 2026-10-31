@@ -192,7 +192,7 @@ fn dangling_core_refuses_account_inheritance_but_allows_a_default_pin() {
         let home = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "config::edit::tests::dangling_core_refuses_account_inheritance_but_allows_a_default_pin", "--nocapture"])
-            .env("RIMZ_HOME", home.path())
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
             .env("RIMZ_TEST_DANGLING_CORE", "1")
             .output().unwrap();
         assert!(
