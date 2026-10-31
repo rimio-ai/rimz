@@ -2,7 +2,15 @@ use super::super::run_report::render_record_detail;
 use super::*;
 
 fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
-    super::collapsed_run_rows(records, &refused_fire_attribution(records))
+    super::collapsed_run_rows(records, &refused_fire_attribution(records), true)
+}
+
+fn write_agent_runs(
+    out: &mut impl Write,
+    records: &[LoopRunRecord],
+    now: Timestamp,
+) -> std::io::Result<()> {
+    super::write_agent_runs(out, records, &collapsed_run_rows(records), now)
 }
 
 fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<String> {
@@ -16,7 +24,7 @@ fn write_runs_table(
     now: Timestamp,
 ) -> std::io::Result<()> {
     let rows = collapsed_run_rows(records);
-    super::write_runs_table(out, records, &rows, limit, now)
+    super::write_runs_table(out, &rows, limit, now)
 }
 
 #[test]
@@ -670,9 +678,7 @@ fn logs_name_signal_or_manual_trigger() {
         (LoopRunMode::Manual, "manual"),
     ] {
         row.mode = Some(mode);
-        let mut out = Vec::new();
-        write_log_records(&mut out, None, &[&row]).unwrap();
-        let text = String::from_utf8(out).unwrap();
+        let text = logs_text(std::slice::from_ref(&row), 10, false);
         assert!(text.lines().next().unwrap().contains(trigger), "{text}");
     }
 }
@@ -1520,11 +1526,11 @@ fn takeover_refusals_fold_alternating_checkouts_with_latest_reason_and_oldest_ag
         text.find("beta ·").unwrap() < text.find("alpha ·").unwrap(),
         "{text}"
     );
-    assert!(text.contains("4 of 4"), "{text}");
+    assert!(text.contains("RECENT RUNS (newest first)"), "{text}");
     assert!(!text.contains("/repo/") && !text.contains("@old"), "{text}");
     let limited = runs_table(&records, 1);
     assert!(
-        limited.contains("2 of 4") && limited.contains("beta ·"),
+        limited.contains("1 of 2 rows") && limited.contains("beta ·"),
         "{limited}"
     );
     assert!(!limited.contains("alpha ·"), "{limited}");
@@ -1561,9 +1567,9 @@ fn takeover_refusal_folding_preserves_other_rows_and_overlap_counts() {
     );
     assert!(text.contains("✗ failed ×2"), "{text}");
     assert_eq!(text.matches("✗ failed").count(), 2, "{text}");
-    assert!(text.contains("8 of 8"), "{text}");
+    assert!(text.contains("RECENT RUNS (newest first)"), "{text}");
     let limited = runs_table(&records, 2);
-    assert!(limited.contains("3 of 8"), "{limited}");
+    assert!(limited.contains("2 of 5 rows"), "{limited}");
 }
 
 #[test]
@@ -1588,7 +1594,7 @@ fn takeover_refusal_runs_have_separate_counts_and_ages_matching_current_block() 
     let launched = text.find("✓ launched").unwrap();
     let oldest = text.find("alpha · @old is working · since 1m ago").unwrap();
     assert!(newest < launched && launched < oldest, "{text}");
-    assert!(text.contains("6 of 6"), "{text}");
+    assert!(text.contains("RECENT RUNS (newest first)"), "{text}");
     let blocks = takeover_refusals(&records);
     let block = &blocks[Path::new("/repo/alpha")];
     assert_eq!(block.count, 3);
@@ -1621,7 +1627,7 @@ fn takeover_refusal_run_ends_at_an_overlapped_fire_in_the_same_checkout() {
         text.contains("alpha · @old is working · since 1m ago"),
         "{text}"
     );
-    assert!(text.contains("5 of 5"), "{text}");
+    assert!(text.contains("RECENT RUNS (newest first)"), "{text}");
 }
 
 #[test]
@@ -1956,11 +1962,465 @@ fn last_run(records: &[LoopRunRecord]) -> String {
         "wait",
         &TaskEntry::default(),
         records,
+        &refused_fire_attribution(records),
         Timestamp::from_second(100).unwrap(),
         ui::prose::Prose::Raw,
     )
     .unwrap();
     anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+fn logs_text(records: &[LoopRunRecord], limit: usize, failed: bool) -> String {
+    let fires = records
+        .iter()
+        .filter(|record| record.result != LoopRunResult::SignalSkipped)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut out = Vec::new();
+    write_log_records(
+        &mut out,
+        None,
+        &fires,
+        &refused_fire_attribution(&fires),
+        records
+            .iter()
+            .any(|record| record.result == LoopRunResult::SignalSkipped)
+            .then_some(records),
+        limit,
+        failed,
+    )
+    .unwrap();
+    anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+#[test]
+fn logs_fold_at_lock_fires_into_their_recorded_tenures() {
+    let first = run_lock_info(11, 0);
+    let second = run_lock_info(22, 15);
+    let records = [
+        with_run_lock(scheduled(10, LoopRunResult::Completed), first),
+        with_run_lock(scheduled(20, LoopRunResult::Completed), second),
+        refused_by(deferred(30), first),
+        refused_by(overlap(40), first),
+    ];
+    let text = logs_text(&records, 10, false);
+    assert!(
+        !text.contains("○ deferred") && !text.contains("○ overlapped"),
+        "{text}"
+    );
+    let headers = text
+        .lines()
+        .filter(|line| line.starts_with("✓ completed"))
+        .collect::<Vec<_>>();
+    assert_eq!(headers.len(), 2, "{text}");
+    assert!(
+        headers[0].ends_with(" · 1 fire waited on it · 1 fire skipped, run already active"),
+        "{text}"
+    );
+    assert!(!headers[1].contains("fire"), "{text}");
+}
+
+#[test]
+fn logs_fold_legacy_fires_past_gates_and_onto_takeover_refusals() {
+    let records = [
+        deferred(10),
+        overlap(20),
+        scheduled(30, LoopRunResult::BudgetSkipped),
+        scheduled(40, LoopRunResult::TakeoverBlocked),
+        deferred(50),
+        scheduled(60, LoopRunResult::Completed),
+    ];
+    let text = logs_text(&records, 10, false);
+    assert!(
+        !text.contains("○ deferred") && !text.contains("○ overlapped"),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("○ takeover blocked")
+                && line.ends_with(" · 1 fire waited on it · 1 fire skipped, run already active")),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|line| line.starts_with("✓ completed")
+            && line.ends_with(" · 1 fire waited on it")),
+        "{text}"
+    );
+}
+
+#[test]
+fn logs_no_record_blocks_keep_the_newest_fire_position_and_forensics() {
+    let gone = run_lock_info(11, 0);
+    let next = run_lock_info(22, 50);
+    let mut records = [
+        refused_by(deferred(10), gone),
+        scheduled(20, LoopRunResult::BudgetSkipped),
+        refused_by(overlap(30), gone),
+        with_run_lock(scheduled(60, LoopRunResult::Completed), next),
+    ];
+    for row in &mut records {
+        row.checkout = Some("/repo/alpha".into());
+    }
+    let text = logs_text(&records, 10, false);
+    assert_eq!(text.matches("○ no record").count(), 1, "{text}");
+    assert!(
+        text.find("○ budget skipped").unwrap() < text.find("○ no record").unwrap()
+            && text.find("○ no record").unwrap() < text.find("✓ completed").unwrap(),
+        "{text}"
+    );
+    let header = text
+        .lines()
+        .find(|line| line.starts_with("○ no record"))
+        .unwrap();
+    assert!(
+        header.ends_with(" · alpha · 1 fire waited on it · 1 fire skipped, run already active"),
+        "{text}"
+    );
+    assert!(!header.contains("pid") && !header.contains('×'), "{text}");
+    assert!(
+        text.contains("holder: pid 11 · started 30s before the newest fire"),
+        "{text}"
+    );
+    assert_eq!(text.matches("pid 11").count(), 1, "{text}");
+    assert!(
+        !text.contains("○ deferred") && !text.contains("○ overlapped"),
+        "{text}"
+    );
+}
+
+#[test]
+fn logs_fold_trailing_fires_in_place_only_with_the_same_holder() {
+    let first = run_lock_info(11, 0);
+    let other = run_lock_info(22, 0);
+    let records = [
+        refused_by(deferred(60), first),
+        refused_by(deferred(120), first),
+        refused_by(deferred(180), other),
+        refused_by(deferred(240), other),
+        scheduled(270, LoopRunResult::BudgetSkipped),
+        refused_by(deferred(300), first),
+    ];
+    let text = logs_text(&records, 10, false);
+    assert_eq!(text.matches("○ deferred").count(), 3, "{text}");
+    assert_eq!(text.matches("○ deferred ×2").count(), 2, "{text}");
+    assert!(text.starts_with("○ deferred ×2"), "{text}");
+    assert!(text.contains(" · over 1m · scheduled\n"), "{text}");
+    assert!(
+        text.contains("holder: pid 11 · started 2m before the newest fire"),
+        "{text}"
+    );
+    assert!(
+        text.contains("holder: pid 22 · started 4m before the newest fire"),
+        "{text}"
+    );
+    assert!(
+        text.find("pid 22").unwrap() < text.find("○ budget skipped").unwrap()
+            && text.find("○ budget skipped").unwrap() < text.rfind("○ deferred").unwrap(),
+        "{text}"
+    );
+}
+
+#[test]
+fn logs_gate_refusals_and_lock_holding_at_lock_records_keep_their_counts() {
+    let holder = run_lock_info(11, 0);
+    for result in [LoopRunResult::ThrottleSkipped, LoopRunResult::Deferred] {
+        let records = [
+            refused_by(overlap(10), holder),
+            refused_by(deferred(20), holder),
+            with_run_lock(scheduled(30, result), holder),
+        ];
+        let text = logs_text(&records, 10, false);
+        assert_eq!(
+            text.lines().filter(|line| line.starts_with("○ ")).count(),
+            1,
+            "{text}"
+        );
+        assert!(
+            text.lines()
+                .next()
+                .unwrap()
+                .ends_with(" · 1 fire waited on it · 1 fire skipped, run already active"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn logs_fold_gate_refusals_but_keep_each_runs_output() {
+    let mut records = ["old cap", "another cap", "new cap"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, reason)| {
+            let mut row = scheduled(10 + index as i64 * 10, LoopRunResult::BudgetSkipped);
+            row.error = Some(reason.into());
+            row
+        })
+        .collect::<Vec<_>>();
+    for result in [LoopRunResult::Completed, LoopRunResult::CheckSkipped] {
+        for output in ["first output", "second output"] {
+            let mut row = scheduled(40 + records.len() as i64 * 10, result);
+            row.check = Some(check(Some(0), output));
+            records.push(row);
+        }
+    }
+    let text = logs_text(&records, 10, false);
+    assert_eq!(text.matches("○ budget skipped").count(), 1, "{text}");
+    assert!(
+        text.contains("○ budget skipped ×3 ·") && text.contains(" · over 20s · scheduled"),
+        "{text}"
+    );
+    assert!(
+        text.contains("new cap") && !text.contains("old cap") && !text.contains("another cap"),
+        "{text}"
+    );
+    assert_eq!(text.matches("✓ completed").count(), 2, "{text}");
+    assert_eq!(text.matches("✓ check passed").count(), 2, "{text}");
+    assert_eq!(text.matches("first output").count(), 2, "{text}");
+    assert_eq!(text.matches("second output").count(), 2, "{text}");
+}
+
+#[test]
+fn logs_fold_takeover_refusals_per_checkout_at_the_newest_position() {
+    let records = [
+        refusal(10, "/repo/alpha", "old blocker"),
+        refusal(20, "/repo/beta", "beta blocker"),
+        refusal(30, "/repo/alpha", "new blocker"),
+    ];
+    let text = logs_text(&records, 10, false);
+    assert_eq!(text.matches("○ takeover blocked").count(), 2, "{text}");
+    assert!(text.contains("○ takeover blocked ×2"), "{text}");
+    assert!(
+        text.find("beta blocker").unwrap() < text.find("new blocker").unwrap(),
+        "{text}"
+    );
+    assert!(!text.contains("old blocker"), "{text}");
+}
+
+#[test]
+fn logs_limit_counts_blocks_after_folding() {
+    let records = [
+        scheduled(10, LoopRunResult::Failed),
+        scheduled(20, LoopRunResult::BudgetSkipped),
+        scheduled(30, LoopRunResult::BudgetSkipped),
+        scheduled(40, LoopRunResult::BudgetSkipped),
+    ];
+    let text = logs_text(&records, 2, false);
+    assert!(text.starts_with("✗ failed"), "{text}");
+    assert!(text.contains("○ budget skipped ×3"), "{text}");
+}
+
+#[test]
+fn logs_failed_filter_keeps_waited_counts_before_limiting() {
+    let records = [
+        deferred(10),
+        scheduled(20, LoopRunResult::Failed),
+        scheduled(30, LoopRunResult::Completed),
+        deferred(40),
+        deferred(50),
+        scheduled(60, LoopRunResult::Failed),
+        scheduled(70, LoopRunResult::Completed),
+    ];
+    let text = logs_text(&records, 1, true);
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(
+        text.starts_with("✗ failed") && text.ends_with(" · 2 fires waited on it\n"),
+        "{text}"
+    );
+}
+
+#[test]
+fn logs_heard_records_keep_payloads_and_never_take_waited_counts() {
+    let heard = |second, value| {
+        let mut row = scheduled(second, LoopRunResult::SignalSkipped);
+        row.signal = Some(run_log::SignalRecord {
+            name: "ci.running".parse().unwrap(),
+            payload: serde_json::from_value(serde_json::json!({"value": value})).unwrap(),
+        });
+        row
+    };
+    let records = [
+        deferred(10),
+        heard(20, 1),
+        heard(30, 2),
+        scheduled(40, LoopRunResult::Completed),
+    ];
+    let text = logs_text(&records, 10, false);
+    assert!(!text.contains("○ deferred"), "{text}");
+    assert_eq!(text.matches("○ heard").count(), 2, "{text}");
+    assert!(
+        text.contains("{\"value\":1}") && text.contains("{\"value\":2}"),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|line| line.starts_with("✓ completed")
+            && line.ends_with(" · 1 fire waited on it")),
+        "{text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.starts_with("○ heard") && line.contains("waited")),
+        "{text}"
+    );
+}
+
+#[test]
+fn logs_heard_records_keep_append_order_when_gate_times_run_backwards() {
+    let records = [
+        scheduled(20, LoopRunResult::SignalSkipped),
+        refusal(10, "/repo/alpha", "blocked after the heard signal"),
+    ];
+    let text = logs_text(&records, 10, false);
+    assert!(text.starts_with("○ heard"), "{text}");
+    assert!(
+        text.find("○ heard").unwrap() < text.find("○ takeover blocked").unwrap(),
+        "{text}"
+    );
+    let newest = logs_text(&records, 1, false);
+    assert!(newest.starts_with("○ takeover blocked"), "{newest}");
+    assert!(!newest.contains("○ heard"), "{newest}");
+}
+
+#[test]
+fn logs_heard_records_follow_a_folded_blocks_newest_log_member_not_its_time() {
+    let records = [
+        refusal(30, "/repo/alpha", "earlier refusal"),
+        scheduled(35, LoopRunResult::Completed),
+        scheduled(40, LoopRunResult::SignalSkipped),
+        refusal(10, "/repo/alpha", "later refusal"),
+    ];
+    let text = logs_text(&records, 10, false);
+    assert!(text.starts_with("✓ completed"), "{text}");
+    assert!(
+        text.find("○ heard").unwrap() < text.find("○ takeover blocked ×2").unwrap(),
+        "{text}"
+    );
+    let newest = logs_text(&records, 1, false);
+    assert!(newest.starts_with("○ takeover blocked ×2"), "{newest}");
+    assert!(!newest.contains("○ heard"), "{newest}");
+}
+
+#[test]
+fn logs_heard_without_heard_records_matches_plain_logs_and_limits() {
+    let records = [
+        scheduled(30, LoopRunResult::Completed),
+        scheduled(10, LoopRunResult::BudgetSkipped),
+        scheduled(20, LoopRunResult::Failed),
+    ];
+    for limit in [10, 1] {
+        let mut out = Vec::new();
+        write_log_records(
+            &mut out,
+            None,
+            &records,
+            &refused_fire_attribution(&records),
+            Some(&records),
+            limit,
+            false,
+        )
+        .unwrap();
+        let text = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert_eq!(text, logs_text(&records, limit, false), "limit {limit}");
+    }
+}
+
+#[test]
+fn last_run_hint_counts_trailing_blocks_instead_of_fire_records() {
+    let mut passed = scheduled(10, LoopRunResult::Completed);
+    passed.check = Some(check(Some(0), "l1\nl2\nl3\nl4\nl5\nl6\n"));
+    let records = [passed, overlap(20), overlap(30)];
+    let text = last_run(&records);
+    assert!(
+        text.ends_with("full output: rimz loop logs wait -n 2\n"),
+        "{text}"
+    );
+    assert!(logs_text(&records, 2, false).starts_with("✓ completed"));
+}
+
+#[test]
+fn agent_runs_fold_deliveries_with_ranges_costs_and_waited_counts() {
+    let mut first = scheduled(20, LoopRunResult::Delivered);
+    first.duration_ms = Some(1000);
+    first.cost_usd = Some(0.25);
+    first.target = Some("@worker".into());
+    let mut second = first.clone();
+    second.at = Timestamp::from_second(40).unwrap();
+    second.duration_ms = Some(3000);
+    second.cost_usd = Some(0.75);
+    let records = [
+        deferred(10),
+        overlap(11),
+        first,
+        scheduled(25, LoopRunResult::CheckSkipped),
+        deferred(30),
+        overlap(31),
+        second,
+    ];
+    let mut out = Vec::new();
+    write_agent_runs(&mut out, &records, Timestamp::from_second(100).unwrap()).unwrap();
+    let text = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert_eq!(text.matches("✓ delivered").count(), 1, "{text}");
+    assert!(
+        text.contains("✓ delivered ×2") && text.contains("1.0s–3.0s"),
+        "{text}"
+    );
+    let row = text
+        .lines()
+        .find(|line| line.contains("✓ delivered"))
+        .unwrap();
+    assert!(
+        row.contains("$1.00")
+            && row.ends_with(
+                "over 20s · @worker · 2 fires waited on it · 2 fires skipped, run already active"
+            ),
+        "{text}"
+    );
+    assert!(
+        text.contains("AGENT RUNS — 2 of 7 fires · $1.00 total · ø $0.50"),
+        "{text}"
+    );
+    let recent = runs_table(&records, 10);
+    assert_eq!(collapsed_run_rows(&records).len(), 3, "{recent}");
+    assert_eq!(recent.matches("✓ delivered").count(), 2, "{recent}");
+    assert!(!recent.contains("✓ delivered ×2"), "{recent}");
+}
+
+#[test]
+fn agent_runs_limit_folded_rows_but_keep_spawned_run_identities() {
+    let mut records = (1..=4)
+        .map(|index| {
+            let mut row = scheduled(index * 10, LoopRunResult::Delivered);
+            row.target = Some(format!("@worker{index}"));
+            row
+        })
+        .collect::<Vec<_>>();
+    for (second, run_id) in [(50, "run_first"), (60, "run_second")] {
+        let mut row = scheduled(second, LoopRunResult::Completed);
+        row.run_id = Some(run_id.into());
+        records.push(row);
+    }
+    records.extend([
+        scheduled(70, LoopRunResult::Delivered),
+        scheduled(75, LoopRunResult::CheckSkipped),
+        scheduled(80, LoopRunResult::Delivered),
+    ]);
+    let mut out = Vec::new();
+    write_agent_runs(&mut out, &records, Timestamp::from_second(100).unwrap()).unwrap();
+    let text = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert_eq!(
+        text.lines().filter(|line| line.contains("✓ ")).count(),
+        5,
+        "{text}"
+    );
+    assert_eq!(text.matches("✓ completed").count(), 2, "{text}");
+    assert!(
+        text.contains("✓ delivered ×2") && text.contains("@worker3") && text.contains("@worker4"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("@worker1") && !text.contains("@worker2"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -2209,7 +2669,7 @@ fn agent_runs_heading_aggregates_all_valid_costs() {
     write_agent_runs(&mut out, &[costed, delivered, skipped.clone()], now).unwrap();
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(
-        out.contains("AGENT RUNS — 2 of 3 runs · $1.00 total · ø $0.50"),
+        out.contains("AGENT RUNS — 2 of 3 fires · $1.00 total · ø $0.50"),
         "{out}"
     );
 
@@ -2218,13 +2678,13 @@ fn agent_runs_heading_aggregates_all_valid_costs() {
     let mut out = Vec::new();
     write_agent_runs(&mut out, &[cost_free], now).unwrap();
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(out.contains("AGENT RUNS — 1 of 1 runs"), "{out}");
+    assert!(out.contains("AGENT RUNS — 1 of 1 fire"), "{out}");
     assert!(!out.contains("total"), "{out}");
 
     let mut out = Vec::new();
     write_agent_runs(&mut out, &[skipped], now).unwrap();
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(out.contains("AGENT RUNS — none in 1 runs"), "{out}");
+    assert!(out.contains("AGENT RUNS — none in 1 fire"), "{out}");
     assert!(!out.contains("WHEN"), "{out}");
 }
 
@@ -2953,7 +3413,7 @@ fn refused_fires_stay_with_the_holder_that_refused_them() {
                 && line.ends_with("1 fire waited on it")),
             lines.iter().position(|line| line.contains("○ no record")
                 && line.ends_with("pid 3003569 · 6 fires waited on it")),
-            table.contains("8 of 8"),
+            table.contains("RECENT RUNS (newest first)"),
         ),
         (Some(3), Some(4), true),
         "{table}"
@@ -2995,7 +3455,7 @@ fn an_uncontended_run_does_not_take_an_unrecorded_holders_fires() {
         [(0, 6), (1, 0)],
         "{table}"
     );
-    assert!(table.contains("7 of 7"), "{table}");
+    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
 }
 
 #[test]
@@ -3019,7 +3479,7 @@ fn a_new_holder_separates_old_fires_even_when_its_record_has_no_stamp() {
         [(0, 6), (1, 1)],
         "{table}"
     );
-    assert!(table.contains("8 of 8"), "{table}");
+    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
 }
 
 #[test]
@@ -3040,7 +3500,7 @@ fn stamped_runs_take_holderless_fires_but_not_another_tenures_fires() {
         [(0, 1), (1, 1)],
         "{table}"
     );
-    assert!(table.contains("3 of 3"), "{table}");
+    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
 }
 
 #[test]
@@ -3068,7 +3528,7 @@ fn stopped_holders_take_their_fires_without_a_checkout_on_the_record() {
         ],
         "{table}"
     );
-    assert!(table.contains("4 of 4"), "{table}");
+    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
 }
 
 #[test]
@@ -3089,7 +3549,7 @@ fn recorded_gate_refusals_take_their_matched_fires_and_keep_the_stale_clause() {
         let table = runs_table(&records, 10);
         let rows = collapsed_run_rows(&records);
         assert_eq!((rows[0].skipped, rows[0].waited), (1, 1), "{table}");
-        assert!(table.contains("3 of 3"), "{table}");
+        assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
         assert_eq!(
             stale_clause(&records, false).as_deref(),
             Some("1 fire skipped, nothing has run since")
@@ -3107,7 +3567,7 @@ fn late_skip_policy_refusals_fold_back_into_their_recorded_holder() {
     let table = runs_table(&records, 10);
     let rows = collapsed_run_rows(&records);
     assert_eq!((rows.len(), rows[0].skipped), (1, 1), "{table}");
-    assert!(table.contains("2 of 2"), "{table}");
+    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
 }
 
 #[test]
@@ -3179,7 +3639,7 @@ fn lock_holding_at_lock_records_keep_their_own_row_and_matched_fires() {
                 lines.iter().position(|line| line.contains(label)
                     && line.contains("2.0s")
                     && line.ends_with(&format!("{detail} · 1 fire waited on it"))),
-                table.contains("3 of 3"),
+                table.contains("RECENT RUNS (newest first)"),
                 table.contains("○ no record"),
             ),
             (Some(3), Some(4), true, false),
@@ -3212,7 +3672,7 @@ fn lock_holding_at_lock_records_keep_their_own_row_and_matched_fires() {
             (1, LoopRunResult::Completed, skipped, waited),
             "{table}"
         );
-        assert!(table.contains("2 of 2"), "{table}");
+        assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
     }
 }
 
@@ -3259,7 +3719,7 @@ fn legacy_run_boundaries_preserve_single_holder_gaps_even_for_late_refusals() {
         "{table}"
     );
     assert!(
-        table.contains("6 of 6") && !table.contains("no record"),
+        table.contains("RECENT RUNS (newest first)") && !table.contains("no record"),
         "{table}"
     );
 }
@@ -3322,7 +3782,8 @@ fn no_record_rows_keep_their_position_counts_and_empty_measurements() {
         "{table}"
     );
     assert!(!table.contains("MODE"), "{table}");
-    assert!(table.contains("4 of 4"), "{table}");
+    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
+    assert!(runs_table(&records, 2).contains("RECENT RUNS (newest first · 2 of 3 rows)"));
     let missing = table
         .lines()
         .filter(|line| line.contains("○ no record"))
@@ -3384,7 +3845,7 @@ fn coalesce_history_separates_the_busy_run_and_folds_the_follow_up() {
                 .any(|line| line.contains("7m") && line.ends_with("7 fires waited on it")),
             table.matches("✓ completed ×3").count(),
             table.contains("840ms–1.7s  over 1m"),
-            table.contains("14 of 14"),
+            table.contains("RECENT RUNS (newest first)"),
         ),
         (vec![3, 1, 3], false, true, 2, true, true),
         "{table}"
@@ -3423,7 +3884,7 @@ fn at_lock_fires_wait_for_a_run_in_their_own_checkout_past_other_gates() {
             notes.iter().any(|line| line
                 .ends_with("alpha · 1 fire waited on it · 1 fire skipped, run already active")),
             notes.iter().any(|line| line.ends_with("beta")),
-            table.contains("5 of 5"),
+            table.contains("RECENT RUNS (newest first)"),
         ),
         (3, true, true, true),
         "{table}"
@@ -3723,9 +4184,7 @@ fn last_run_cuts_a_passing_check_to_its_tail_and_points_at_the_rest() {
     gated.check = Some(check(Some(1), seven));
     assert!(last_run(&[gated.clone()]).is_empty());
     for record in [failed, gated] {
-        let mut out = Vec::new();
-        write_log_records(&mut out, None, &[&record]).unwrap();
-        let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        let out = logs_text(std::slice::from_ref(&record), 10, false);
         assert!(out.contains("  │ l1\n  │ l2\n  │ l3\n"), "{out}");
         assert!(!out.contains("full output"), "{out}");
     }
@@ -3747,10 +4206,7 @@ fn overlaps_fold_into_the_run_that_follows_them() {
         table.contains("checkout changed · 4 fires skipped, run already active"),
         "{table}"
     );
-    assert!(
-        table.contains("RECENT RUNS (newest first · 5 of 5)"),
-        "{table}"
-    );
+    assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
 
     let records = vec![
         scheduled(10, LoopRunResult::Completed),
@@ -3918,7 +4374,7 @@ fn runs_table_is_newest_first_and_limits_from_the_newest() {
     assert!(table.contains("✓ completed"), "{table}");
     assert!(!table.contains("✗ failed"), "{table}");
     assert!(
-        table.contains("RECENT RUNS (newest first · 1 of 2)"),
+        table.contains("RECENT RUNS (newest first · 1 of 2 rows)"),
         "{table}"
     );
 }
