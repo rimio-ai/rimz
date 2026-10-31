@@ -611,7 +611,7 @@ The floor resolves along one path, and an explicit `off` anywhere on it ends the
 2. The first `idle-compact` up the seat's profile chain. A Markdown role's value rides its role overlay into the synthetic `<team>.<role>` profile, so `RoleBinding.idle_compact` stays `None` there.
 3. `[harness] idle_compact`.
 
-A `rimz subagents` child (`launch_depth` set) resolves no floor.
+A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) resolves no floor. An agent-launched peer resolves like any other seat.
 
 A seat is eligible when it is not a provider subagent, has a nonempty session id, and is effectively `Idle` or `Success` with no pending wait, input request, budget park, hibernation, or compaction marker (`AgentState::compacted_since_prompt`). Occupied context must reach the floor and differ from `last_compact_command_tokens`, and the adapter must expose a compact command. The board stage, PR state, and teammate activity play no part, so a team seat compacts after `Done` like any idle seat. A seat [keep-warm](#prompt-cache-keepalive) holds is skipped, on both the producer pass and the helper recheck, so the two reflexes never race on one cache window.
 
@@ -669,7 +669,7 @@ Keep-warm extends the same reflex to an agent with nothing pending, for a config
 
 - A team seat resolves `max` and `while` per field through `Team::keep_warm`, role over team, where `off` cancels.
 - A solo seat takes its profile's `max`. A TOML profile with no `keep-warm` of its own takes the nearest one up its `agent` base chain, and an explicit `off` stops the walk. Markdown definitions arrive with inheritance resolved.
-- A `rimz subagents` child (`launch_depth` set) never resolves a horizon.
+- A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) never resolves a horizon. An agent-launched peer resolves like any other seat.
 
 The horizon is admitted only when `ping_lifetime` admits the agent's lifetime, under the same margin and floor as sleeping pings. `SeatPolicy::horizon` evaluates a resolved `while` with the shared `WhenExpr` evaluator against the seat's `lane_path`. Only `team.stage` is admitted, at load in `prepare_team`. A false known reading returns no horizon, and an unknown reading passes. A while-only hold takes `harness.cache_keepalive_max` as its horizon, and has none when that cap is off.
 

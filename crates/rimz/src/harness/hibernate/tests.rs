@@ -128,6 +128,7 @@ fn keep_warm_holds_hibernation_only_while_the_cache_can_stay_warm() {
     let policy = Policy::new(&config, &SeatPolicy::load(&config, None)).unwrap();
     agent.profile = Some("warm".into());
     agent.turn_started_at = Some(agent.last_activity);
+    agent.launch_depth = Some(1);
     assert_eq!(
         decision(&store, &agent, &policy, &scope, 1_180),
         Verdict::Hold(Hold::KeepWarm)
