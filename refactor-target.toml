@@ -8994,27 +8994,27 @@ reason = "Signature floor on execute_reconcile_plan (reconcile.rs:304); pub(supe
 [[verdict]]
 kind = "item"
 key = "mux::width::SidebarTarget"
-reason = "Named by the separate integration crate (tests/integration/backend/tmux/support.rs:46,53,65) and by cli/agents_cmd/placement.rs:286-287, which see only pub (pass 24c)."
+reason = "Named only by the separate integration crate, which sees only pub: the tmux and Zellij backend fixtures build one (integration::backend::tmux::support, integration::backend::zellij::support::session), and integration::backend::zellij::width and integration::journey::deep compute Zellij targets with SidebarTarget::zellij_step (pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "mux::width::WidthPermille"
-reason = "Named by the separate integration crate (tests/integration/backend/tmux/support.rs:46,53,65) and by cli/agents_cmd/placement.rs:286-287, which see only pub (pass 24c)."
+reason = "The type of the pub SidebarTarget::share, named only by the separate integration crate, which sees only pub: its tmux and Zellij backend fixtures build shares with WidthPermille::from_percent and WidthPermille::from_cols (integration::backend::tmux::support, integration::backend::zellij::width) (pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "mux::width::from_cols"
-reason = "WidthPermille::from_cols is constructed by the integration crate's tmux support and the CLI placement path, both outside the library (pass 24c)."
+reason = "WidthPermille::from_cols is called by the integration crate's tmux and Zellij backend tests, outside the library (pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "mux::width::from_percent"
-reason = "WidthPermille::from_percent is constructed by the integration crate's tmux support and the CLI placement path, both outside the library (pass 24c)."
+reason = "WidthPermille::from_percent is called by the integration crate's tmux and Zellij backend tests and journey/deep.rs, outside the library (pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "mux::width::resolve"
-reason = "WidthPercent::resolve is called from cli/agents_cmd/placement.rs:286-287, a binary reader that sees only pub (pass 24c)."
+reason = "WidthPercent::resolve is called only by the separate integration crate, which sees only pub (integration::backend::tmux::support, integration::backend::zellij::width, integration::journey::deep); the binary no longer reads it (pass 24c)."
 
 [[verdict]]
 kind = "item"
