@@ -703,24 +703,6 @@ fn web_prep_invocation_count(log: &Path) -> usize {
         .count()
 }
 
-/// Keep the probe below the ephemeral range's low end so a port-0 bind cannot
-/// take it between this probe and the child's auto-forward availability check.
-/// A host whose range starts at or below 20000 leaves no such port, and the
-/// scan then runs inside the range rather than failing the test outright.
-fn available_forward_probe_port() -> u16 {
-    let ceiling = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
-        .ok()
-        .and_then(|range| range.split_whitespace().next()?.parse::<u16>().ok())
-        .filter(|low| *low > 20000)
-        .unwrap_or(32768);
-    let offset = std::process::id() % u32::from(ceiling - 20000);
-    let start = 20000 + u16::try_from(offset).expect("probe offset fits below the ceiling");
-    (start..ceiling)
-        .chain(20000..start)
-        .find(|port| TcpListener::bind(("127.0.0.1", *port)).is_ok())
-        .expect("free auto-forward probe port below the ephemeral range")
-}
-
 fn relay_url(stdout: &str) -> (u16, &str) {
     let line = stdout.lines().next().unwrap_or_default();
     let url = url::Url::parse(line)
@@ -1142,7 +1124,7 @@ fn link_stats_ingest_keeps_a_newer_publishers_sidecar() {
 fn supervised_connect_opens_new_remote_listener_forwards() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
-    let port = available_forward_probe_port();
+    let port = crate::common::available_loopback_port();
     let _busy = TcpListener::bind(("127.0.0.1", port)).expect("hold the remote port busy locally");
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_REMOTE_PROBE_MS", "10")
@@ -1201,7 +1183,7 @@ fn supervised_connect_opens_new_remote_listener_forwards() {
 fn supervised_connect_forwards_a_room_scoped_first_report() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
-    let port = available_forward_probe_port();
+    let port = crate::common::available_loopback_port();
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_REMOTE_PROBE_MS", "10")
         .env("RIMZ_TEST_PROBE_PORT", port.to_string())
@@ -2517,7 +2499,7 @@ fn established_link_drop_reconnects_and_notifies_once() {
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
     let notify_log = env.project_root.join("notify.log");
-    let port = available_forward_probe_port();
+    let port = crate::common::available_loopback_port();
     // First session drops the link (255), the reattach detaches cleanly (0).
     std::fs::write(&plan, "255\n0\n").expect("write plan");
     let out = remote_connect_command(&env, &log)
@@ -2756,7 +2738,7 @@ fn established_mux_disconnect_reconnects() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
-    let port = available_forward_probe_port();
+    let port = crate::common::available_loopback_port();
     // A mux client can return nonzero when its server process dies; the
     // replacement attach then detaches cleanly.
     std::fs::write(&plan, "1\n0\n").expect("write plan");

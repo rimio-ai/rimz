@@ -16,7 +16,7 @@ use rimz::wakeup::events::RELOAD_CONTROL_WORD;
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use rimz::wakeup::reload_all;
 
-use crate::common::Env;
+use crate::common::{Env, available_loopback_port};
 
 const SESSION_NAME: &str = "rimz-reload-test";
 
@@ -47,11 +47,7 @@ fn standalone_sidebar_repair_does_not_stage_a_build() {
 #[test]
 fn reload_restarts_an_online_web_daemon_and_leaves_an_offline_one_offline() {
     let env = Env::new();
-    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
-        .expect("bind web port")
-        .local_addr()
-        .expect("web address")
-        .port();
+    let port = available_loopback_port();
     let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).expect("mkdir config");
     std::fs::write(

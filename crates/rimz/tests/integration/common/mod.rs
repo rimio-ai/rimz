@@ -343,6 +343,34 @@ pub fn daemon_test_guard() -> rimz::disk::lock::WorkspaceLock {
         .unwrap_or_else(|err| panic!("acquire web daemon test lock {}: {err}", path.display()))
 }
 
+/// Keep the probe below the ephemeral range's low end so a port-0 bind cannot
+/// take it between this probe and the child's availability check or bind.
+/// A host whose range starts at or below 20000 leaves no such window, and the
+/// scan then runs inside the range rather than failing the test outright.
+#[track_caller]
+pub(crate) fn available_loopback_port() -> u16 {
+    use std::hash::{BuildHasher as _, RandomState};
+    use std::iter::Chain;
+    use std::ops::Range;
+    use std::sync::LazyLock;
+
+    static PORTS: LazyLock<Mutex<Chain<Range<u16>, Range<u16>>>> = LazyLock::new(|| {
+        let ceiling = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+            .ok()
+            .and_then(|range| range.split_whitespace().next()?.parse::<u16>().ok())
+            .filter(|low| *low > 20000)
+            .unwrap_or(32768);
+        let offset = RandomState::new().hash_one(()) % u64::from(ceiling - 20000);
+        let start = 20000 + u16::try_from(offset).expect("probe offset fits below the ceiling");
+        Mutex::new((start..ceiling).chain(20000..start))
+    });
+    PORTS
+        .lock()
+        .expect("loopback port cursor")
+        .find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
+        .expect("unused loopback port for a child")
+}
+
 pub fn exec_args(env: &Env, request: &rimz::harness::launch::ExecRequest) -> Vec<String> {
     rimz::harness::launch::exec_argv(std::path::Path::new("rimz"), &env.runtime_paths(), request)
         .expect("encode hidden exec request")
@@ -576,6 +604,35 @@ mod tests {
     use super::{
         MAX_OSC_TITLE_BYTES, OUTPUT_TAIL_BYTES, OscTitleScanner, OutputMarker, PtyRecorder,
     };
+
+    #[test]
+    fn child_loopback_ports_are_distinct_bindable_and_below_the_ephemeral_range() {
+        let ports = [
+            super::available_loopback_port(),
+            super::available_loopback_port(),
+        ];
+        assert_ne!(ports[0], ports[1], "separate children need distinct ports");
+        let range =
+            std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").unwrap_or_default();
+        let low = range
+            .split_whitespace()
+            .next()
+            .and_then(|low| low.parse::<u16>().ok());
+        for port in ports {
+            assert!(
+                port >= 20000,
+                "child port {port} is below the helper's window"
+            );
+            if let Some(low) = low.filter(|low| *low > 20000) {
+                assert!(
+                    port < low,
+                    "child port {port} is in the ephemeral range starting at {low}"
+                );
+            }
+            let _listener = std::net::TcpListener::bind(("127.0.0.1", port))
+                .unwrap_or_else(|error| panic!("child port {port} cannot bind: {error}"));
+        }
+    }
 
     #[test]
     fn output_marker_is_independent_of_read_boundaries() {
