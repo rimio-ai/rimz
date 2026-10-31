@@ -99,14 +99,17 @@ impl View<'_> {
             }
             ParkReason::User => {
                 self.option(out, None, &[], &format!("run {} again", self.record.node))?;
-                if let Some(check) = self.spec.checks.get(&self.record.node) {
-                    let nodes = check
-                        .on
-                        .values()
+                if self.spec.checks.contains_key(&self.record.node) {
+                    let nodes = self
+                        .spec
+                        .edges(&self.record.node)
+                        .into_iter()
+                        .filter(|edge| edge.outcome != "deadline")
+                        .map(|edge| edge.target)
                         .filter(|target| !target.starts_with('@'))
                         .collect::<std::collections::BTreeSet<_>>();
                     for node in nodes {
-                        self.option(out, Some(node), &[], &format!("continue at {node}"))?;
+                        self.option(out, Some(&node), &[], &format!("continue at {node}"))?;
                     }
                 }
             }

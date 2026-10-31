@@ -40,6 +40,7 @@ impl Transition<'_> {
                     object,
                     &self.spec.checks[&self.record.node],
                     self.record.key.as_ref(),
+                    &self.spec.edges(&self.record.node),
                 ),
                 "invalid",
             ),
@@ -123,13 +124,13 @@ impl Transition<'_> {
             return Ok(());
         }
         let check = &self.spec.checks[&self.record.node];
-        let edges = check.edges();
-        let object =
-            object.and_then(|object| normalize_object(object, check, self.record.key.as_ref()));
+        let edges = self.spec.edges(&self.record.node);
+        let object = object
+            .and_then(|object| normalize_object(object, check, self.record.key.as_ref(), &edges));
         let (mut object, mut outcome, mut target, reason, origin) = match object {
             Ok(object) => {
                 let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
-                let target = edges[&outcome].clone();
+                let target = self.spec.engine_target(&self.record.node, &outcome);
                 (
                     object,
                     outcome,
@@ -143,7 +144,7 @@ impl Transition<'_> {
                     json!({"outcome":"invalid", "node":self.record.node, "reason":reason}),
                 ),
                 "invalid".into(),
-                edges["invalid"].clone(),
+                self.spec.engine_target(&self.record.node, "invalid"),
                 ParkReason::Invalid,
                 EvaluationOrigin::Engine,
             ),
@@ -602,7 +603,7 @@ impl Transition<'_> {
             return self.engine_route(
                 "deadline",
                 json!({"outcome":"deadline", "deadline":self.record.deadline}),
-                self.spec.workflow.on.deadline.as_deref().unwrap_or("@user"),
+                &self.spec.engine_target(&self.record.node, "deadline"),
                 ParkReason::Deadline,
             );
         }
@@ -613,19 +614,11 @@ impl Transition<'_> {
                     "outcome":"asked", "reason":previous.asked.as_ref().map(|ask| &ask.text),
                     "asked":previous.asked
                 }),
-                self.spec.steps[&self.record.node]
-                    .on
-                    .asked
-                    .as_deref()
-                    .unwrap_or("@user"),
+                &self.spec.engine_target(&self.record.node, "asked"),
                 ParkReason::Asked,
             );
         }
-        let target = self.spec.steps[&self.record.node]
-            .then
-            .as_deref()
-            .unwrap_or("@user")
-            .to_owned();
+        let target = self.spec.engine_target(&self.record.node, "then");
         self.route(
             &target,
             self.engine_object(self.record.input.clone().unwrap_or_else(|| json!({}))),
@@ -730,11 +723,11 @@ impl Transition<'_> {
                 return Ok(true);
             }
             self.record.deadline_fired = true;
-            let target = self.spec.workflow.on.deadline.as_deref().unwrap_or("@user");
+            let target = self.spec.engine_target(&self.record.node, "deadline");
             self.engine_route(
                 "deadline",
                 json!({"outcome":"deadline", "deadline":deadline}),
-                target,
+                &target,
                 ParkReason::Deadline,
             )?;
             return Ok(true);
@@ -755,12 +748,11 @@ impl Transition<'_> {
             return Ok(true);
         }
         let check = &self.spec.checks[&self.record.node];
-        let edges = check.edges();
-        let target = &edges["timeout"];
+        let target = self.spec.engine_target(&self.record.node, "timeout");
         self.engine_route(
             "timeout",
             json!({"outcome":"timeout", "node":self.record.node, "timeout":check.timeout}),
-            target,
+            &target,
             ParkReason::Timeout,
         )?;
         Ok(true)
@@ -830,6 +822,7 @@ fn normalize_object(
     object: Value,
     check: &super::Check,
     key: Option<&Key>,
+    edges: &[super::Edge],
 ) -> Result<Value, String> {
     let Value::Object(mut object) = object else {
         return Err("stdout must contain one JSON object".into());
@@ -841,7 +834,7 @@ fn normalize_object(
     if (RESERVED_OUTCOMES.contains(&outcome)
         && !(outcome == "unknown"
             && matches!(check.kind(), Some(super::spec::CheckKind::Condition))))
-        || !check.edges().contains_key(outcome)
+        || !edges.iter().any(|edge| edge.outcome == outcome)
     {
         return Err(format!("reserved or unrouted outcome {outcome:?}"));
     }

@@ -163,7 +163,11 @@ pub(super) fn prepare_end(
     t.now = Timestamp::now();
     let lifecycle = attempt.lifecycle;
     let missing_run = attempt.run.is_none();
-    let on_asked = t.spec.steps[&attempt.node].on.asked.is_some();
+    let on_asked = t
+        .spec
+        .edges(&attempt.node)
+        .iter()
+        .any(|edge| edge.outcome == "asked");
     let hold_changed = hold(
         t.record.attempt.as_mut().expect("observed agent attempt"),
         observed.ask.as_ref(),

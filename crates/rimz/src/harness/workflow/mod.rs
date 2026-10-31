@@ -11,6 +11,7 @@ use crate::store::run::RunStatus;
 use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited, TurnEnd};
 
 mod engine;
+mod graph;
 mod inspect;
 mod script;
 mod spec;
@@ -19,12 +20,13 @@ mod validate;
 
 pub(crate) use engine::reassign_task;
 pub use engine::{WorkflowErr, advance, cancel, create, resume, wake, wake_run};
+pub use graph::Edge;
 pub use inspect::{Hop, HopKind, evaluation_target, hold_until, hops, next_bound, timeout_at};
 pub use spec::{
     Case, Check, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, WorkflowSpec, load,
     schema,
 };
-pub use validate::{Edge, Issue, NodeRow, Validation, validate};
+pub use validate::{Issue, NodeRow, Validation, validate};
 
 fn head(path: &Path) -> Option<String> {
     let output = crate::proc::run_bounded_git_output(

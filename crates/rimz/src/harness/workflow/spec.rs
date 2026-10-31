@@ -23,36 +23,6 @@ pub struct WorkflowSpec {
 }
 
 impl WorkflowSpec {
-    /// Resolve a routing decision against this spec, including engine-owned outcomes.
-    pub fn target(&self, node: &str, outcome: &str) -> Option<String> {
-        if outcome == "deadline" {
-            return (self.checks.contains_key(node) || self.steps.contains_key(node)).then(|| {
-                self.workflow
-                    .on
-                    .deadline
-                    .as_deref()
-                    .unwrap_or("@user")
-                    .into()
-            });
-        }
-        if let Some(check) = self.checks.get(node) {
-            return if outcome == "hold" {
-                Some("@wait".into())
-            } else {
-                check.edges().get(outcome).cloned()
-            };
-        }
-        let step = self.steps.get(node)?;
-        let edge = match outcome {
-            "ended" | "died" | "canceled" | "limited" | "timeout" => "then",
-            other => other,
-        };
-        step.edges()
-            .get(edge)
-            .map(|(target, _)| (*target).to_owned())
-            .or_else(|| matches!(edge, "then" | "asked").then(|| "@user".into()))
-    }
-
     /// `Some(empty)` demands checkout facts; `None` means no condition or wake needs them.
     pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
         let mut branches = None;
@@ -207,21 +177,6 @@ impl Check {
             _ => None,
         }
     }
-
-    pub(super) fn edges(&self) -> BTreeMap<String, String> {
-        let mut edges = self.on.clone();
-        for outcome in ["timeout", "invalid"] {
-            edges
-                .entry(outcome.into())
-                .or_insert_with(|| "@user".into());
-        }
-        if matches!(self.kind(), Some(CheckKind::Condition)) {
-            edges
-                .entry("unknown".into())
-                .or_insert_with(|| "@wait".into());
-        }
-        edges
-    }
 }
 
 pub(super) const RESERVED_OUTCOMES: [&str; 7] = [
@@ -297,20 +252,6 @@ impl Step {
             (None, None, Some(shell)) => Some(StepKind::Shell(shell)),
             _ => None,
         }
-    }
-
-    pub(super) fn edges(&self) -> BTreeMap<&'static str, (&str, bool)> {
-        [
-            ("then", self.then.as_deref(), None),
-            ("asked", self.on.asked.as_deref(), None),
-            ("cap", self.on.cap.as_deref(), Some("@user")),
-            ("capacity", self.on.capacity.as_deref(), Some("@failed")),
-        ]
-        .into_iter()
-        .filter_map(|(outcome, target, default)| {
-            Some((outcome, (target.or(default)?, target.is_some())))
-        })
-        .collect()
     }
 }
 

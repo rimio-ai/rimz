@@ -379,6 +379,36 @@ fn until_warns_about_unreported_background_work_but_not_auto_continue() {
 }
 
 #[test]
+fn deadline_wait_does_not_require_a_check_timeout_or_allow_a_check_only_cycle() {
+    let results = ["@done", "pick"].map(|target| {
+        let spec: WorkflowSpec = toml::from_str(&format!(
+            "[workflow]\nscope='project'\nstart='pick'\non.deadline='@wait'\n\
+             [checks.pick]\nrun='true'\non.ready='{target}'\n"
+        ))
+        .unwrap();
+        let report = super::validate::validate_spec(
+            std::path::Path::new("."),
+            "review",
+            &spec,
+            &LoadedDefinitions::default(),
+            None,
+        );
+        report
+            .errors
+            .into_iter()
+            .map(|issue| issue.message)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        results,
+        [
+            vec![],
+            vec!["review: checks.pick: check-only cycle has no @wait".to_owned()]
+        ]
+    );
+}
+
+#[test]
 fn validation_rejects_each_invalid_spec() {
     let shell = "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='true'\non={pass='@done',fail='@user'}\n";
     let cases = [
