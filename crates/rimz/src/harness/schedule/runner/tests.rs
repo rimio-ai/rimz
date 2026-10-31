@@ -4,6 +4,14 @@ use super::*;
 use crate::disk::lease::assert_waits_for_gate;
 
 fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
+    backlog_fire_from(root, catalog, catalog::TaskSource::Config)
+}
+
+fn backlog_fire_from<'a>(
+    root: &Path,
+    catalog: &'a TaskCatalog,
+    source: catalog::TaskSource,
+) -> TaskFire<'a> {
     TaskFire::new(
         "pending",
         LoadedTask::new(
@@ -15,7 +23,7 @@ fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
                 overlap: Some(crate::config::OverlapPolicy::Coalesce),
                 ..Default::default()
             },
-            catalog::TaskSource::Config,
+            source,
         ),
         catalog,
         LoopRunMode::Scheduled,
@@ -239,7 +247,9 @@ fn stop_marks_retype_the_holder_once_and_three_replacements_disable() {
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         for strike in 1..=3 {
-            let mut fire = backlog_fire(root.path(), &catalog);
+            // Every test process under `cargo xtask test` shares one RIMZ_HOME, so a machine
+            // task's strike key is shared with siblings; an instance key is scoped to this root.
+            let mut fire = backlog_fire_from(root.path(), &catalog, catalog::TaskSource::Instance);
             fire.prepare_run_lock(false).unwrap();
             let (_, Some(info)) = held_run_lock("pending", root.path()).unwrap().unwrap() else {
                 panic!("holder is recorded")
