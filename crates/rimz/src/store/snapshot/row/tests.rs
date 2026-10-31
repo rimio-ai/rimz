@@ -645,6 +645,74 @@ fn context_with_tokens(tokens: AgentTokenUsage) -> AgentContext {
 }
 
 #[test]
+fn compacted_context_unknown_requires_a_compaction_and_no_reading() {
+    let mut row = SidebarRow {
+        id: "agent:s1".to_owned(),
+        name: "claude".to_owned(),
+        pane: None,
+        worktree_path: None,
+        checkout: None,
+        worktree_branch: None,
+        channel: None,
+        unread: false,
+        inactive: false,
+        archived: false,
+        attention_score: 0,
+        last_activity: row_time(),
+        card: RowCard::Agent(Arc::default()),
+    };
+    assert!(
+        !row.compacted_context_unknown(),
+        "a fresh card is not compacted"
+    );
+    row.as_agent_mut().unwrap().compaction_count = 1;
+    assert!(
+        row.compacted_context_unknown(),
+        "the compacted size is unknown"
+    );
+
+    for percent in [0, 3] {
+        row.as_agent_mut().unwrap().usage.context_pct = Some(percent);
+        assert!(
+            !row.compacted_context_unknown(),
+            "a fold percentage is a reading"
+        );
+        row.as_agent_mut().unwrap().usage.context_pct = None;
+        row.as_agent_mut().unwrap().context = Some(context_with_tokens(AgentTokenUsage {
+            context_window_size: Some(200_000),
+            used_percentage: Some(percent),
+            ..Default::default()
+        }));
+        assert!(
+            !row.compacted_context_unknown(),
+            "a statusline percentage is a reading"
+        );
+        row.as_agent_mut().unwrap().context = None;
+    }
+
+    for used in [0, 6_000] {
+        row.as_agent_mut().unwrap().usage.fresh_input_tokens = Some(used);
+        assert!(
+            !row.compacted_context_unknown(),
+            "a call split is a reading"
+        );
+        row.as_agent_mut().unwrap().usage.fresh_input_tokens = None;
+        row.as_agent_mut().unwrap().context = Some(context_with_tokens(AgentTokenUsage {
+            current_context_tokens: Some(used),
+            ..Default::default()
+        }));
+        assert!(
+            !row.compacted_context_unknown(),
+            "a token count needs no window"
+        );
+        row.as_agent_mut().unwrap().context = None;
+    }
+    assert!(row.compacted_context_unknown());
+    row.card = RowCard::Process(ProcessCard::default());
+    assert!(!row.compacted_context_unknown());
+}
+
+#[test]
 fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window() {
     // A sidecar percentage drawn against an unknown window cannot share a
     // denominator with the displayed window, so the gauge prefers the

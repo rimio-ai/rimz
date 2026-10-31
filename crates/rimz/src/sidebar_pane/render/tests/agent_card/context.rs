@@ -2007,7 +2007,7 @@ fn render_agent_card_age_pin_holds_the_parent_own_clock_while_children_work() {
 }
 
 #[test]
-fn completed_compaction_empties_the_gauge_until_a_fresh_reading() {
+fn completed_compaction_marks_unknown_size_until_a_fresh_reading() {
     let lifecycle = |event_name: &str, signal: serde_json::Value, reading: bool| {
         let mut params = serde_json::json!({
             "event_name": event_name,
@@ -2066,11 +2066,66 @@ fn completed_compaction_empties_the_gauge_until_a_fresh_reading() {
     });
     claude.context = Some(context);
 
-    let rendered = snapshot_to_screen(&snapshot_with(vec![claude.clone()]), 58, 17);
-    assert!(
-        rendered.contains(" 0%      ▐") && rendered.contains('▢') && rendered.contains("▤ 0 · ↻ 1"),
-        "no reading survives the close:\n{rendered}"
+    let snapshot = snapshot_with(vec![claude.clone()]);
+    for (set, glyph) in [("unicode", "↻"), ("nerd_font", "\u{f0e2}")] {
+        let theme = Theme::fixed_for_theme(
+            false,
+            &crate::config::ThemeConfig {
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            },
+        );
+        for width in [32, 46, 58] {
+            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+            let rendered = line_texts(&lines).join("\n");
+            assert!(
+                rendered.contains(&format!("{glyph} ─")),
+                "{set}:\n{rendered}"
+            );
+            let meter = lines
+                .iter()
+                .find(|line| line.to_string().contains(glyph))
+                .unwrap();
+            assert!(!meter.to_string().contains('%'), "{meter}");
+            assert!(
+                !meter.to_string().contains(&format!("{glyph} 1")),
+                "{meter}"
+            );
+            assert!(
+                !rendered.contains(theme.glyph(GlyphRole::TokensFilled)),
+                "{rendered}"
+            );
+            assert!(
+                meter
+                    .spans
+                    .iter()
+                    .filter(|span| span.content.contains('─'))
+                    .all(|span| { span.style.fg == theme.muted().fg }),
+                "the empty track is muted: {meter:?}"
+            );
+        }
+    }
+    assert_snapshot(
+        "compacted_context_unknown",
+        snapshot_to_screen(&snapshot, 58, 17),
     );
+
+    // With the stats line hidden, the gap meter keeps the age on either side of L2.
+    let mut quiet = claude.clone();
+    quiet.last_activity = fixed_now() - Duration::from_secs(12 * 60);
+    quiet.last_seen = quiet.last_activity;
+    let quiet = snapshot_with(vec![quiet]);
+    let theme = Theme::fixed_for_theme(false, &crate::config::ThemeConfig::default());
+    let glyph = theme.glyph(GlyphRole::MeterCompacted);
+    for width in [32, 45, 46, 47, 58] {
+        let lines = group_lines_at_width(&quiet, &theme, 0, width);
+        let meter = lines
+            .iter()
+            .map(|line| line.to_string())
+            .find(|line| line.contains(glyph))
+            .unwrap();
+        assert!(meter.contains("12m"), "width {width}: {meter}");
+    }
 
     let tokens = claude.context.as_mut().and_then(|c| c.tokens.as_mut());
     tokens.expect("sidecar tokens").used_percentage = Some(3);
@@ -2078,5 +2133,19 @@ fn completed_compaction_empties_the_gauge_until_a_fresh_reading() {
     assert!(
         rendered.contains(" 3%      ▐") && rendered.contains("▤ 0 · ↻ 1"),
         "the fresh statusline percentage draws alone:\n{rendered}"
+    );
+
+    let fresh = agent(
+        "fresh",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    let rendered = snapshot_to_screen(&snapshot_with(vec![fresh]), 58, 17);
+    assert!(
+        rendered.contains('▢') && rendered.contains(" 0%"),
+        "{rendered}"
     );
 }

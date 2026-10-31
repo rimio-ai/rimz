@@ -115,8 +115,8 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
 | `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker |
 | `body` | body text: stat figures, subagent lines, worktree headers |
-| `muted` | chrome: labels, ages, subordinate values |
-| `faint` | faintest chrome: bar tracks, `·` separators, dotted dividers |
+| `muted` | chrome: labels, ages, subordinate values, and the compacted-context meter's glyph and empty track while its size is unknown |
+| `faint` | faintest chrome: measured bar tracks, `·` separators, dotted dividers |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |
@@ -146,7 +146,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `status` | the leading status heads, one per state an agent can be in, plus the `⟲` repeated-tool marker |
 | `cockpit` | the workspace, sessions, agents, and open-PR counters at the top |
 | `tokens` | the token-accounting markers |
-| `meter` | the drawn gauges, bars, and scrollbar |
+| `meter` | the drawn gauges, bars, and scrollbar; `context_compacted` marks a compacted context whose size is unknown (`↻` in Unicode, `` in Nerd Font), independently of `tokens.compaction` |
 | `clock` | age faces: cards and waits fill over an hour and stay full; `over` (`◉`) marks an expired card cache or child quiet past its stall window, never a long wait |
 | `value` | compact value qualifiers, such as the active-time `approx` marker, and the `seam` separator between values (`·`) |
 | `worktree` | the group header's git story: branch and merge, ahead and behind, trunk state, PR and CI state; a collapsed finished group's `expand`; the `dotted` rule that seals the selected header, draws the `external` divider, and flanks the landed chip; and the landed chip's `landed_closed` / `landed_open` |
