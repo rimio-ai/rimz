@@ -112,8 +112,12 @@ pub(super) fn wait_frame(
         }
         assert!(
             Instant::now() < deadline,
-            "{label}: {:?}, {:?}",
+            "{label}: client_views: {:?}, focused_pane: {:?}, viewed_panes: {:?}, \
+             client_view_fresh: {resolved}, produced_at_ms: {}, presence: {:?}",
             frame.client_views,
+            frame.focused_pane,
+            frame.viewed_panes,
+            frame.produced_at_ms,
             frame.presence
         );
         std::thread::sleep(Duration::from_millis(50));
