@@ -3076,6 +3076,112 @@ fn late_skip_policy_refusals_fold_back_into_their_recorded_holder() {
 }
 
 #[test]
+fn late_refusals_of_an_earlier_run_do_not_make_the_newest_run_stale() {
+    let first = run_lock_info(11, 0);
+    let newest = run_lock_info(22, 25);
+    let records = [
+        with_run_lock(scheduled(10, LoopRunResult::Completed), first),
+        refused_by(overlap(20), first),
+        with_run_lock(scheduled(30, LoopRunResult::Completed), newest),
+    ];
+    assert_eq!(stale_clause(&records, false), None);
+    let rows = collapsed_run_rows(&records);
+    assert_eq!((rows[0].skipped, rows[1].skipped), (1, 0));
+
+    let holderless = |mut record: LoopRunRecord| {
+        record.holder = None;
+        record
+    };
+    let in_checkout = |mut record: LoopRunRecord, checkout: &str| {
+        record.checkout = Some(checkout.into());
+        record
+    };
+    let newest_run = with_run_lock(scheduled(30, LoopRunResult::Completed), newest);
+    for records in [
+        [holderless(overlap(20)), newest_run.clone()],
+        [refused_by(overlap(20), newest), newest_run.clone()],
+        // A killed holder's fire in one fan-out checkout, then a run in another: no row takes it.
+        [
+            in_checkout(refused_by(overlap(20), first), "/repo/alpha"),
+            in_checkout(newest_run.clone(), "/repo/beta"),
+        ],
+        // A legacy `stay` history ending in a stop-ladder record, which names no checkout.
+        [
+            in_checkout(holderless(overlap(20)), "/repo"),
+            scheduled(30, LoopRunResult::Canceled),
+        ],
+    ] {
+        assert_eq!(
+            stale_clause(&records, false).as_deref(),
+            Some("a fire skipped during the last run, nothing has run since")
+        );
+    }
+}
+
+#[test]
+fn lock_holding_at_lock_records_keep_their_own_row_and_matched_fires() {
+    let holder = run_lock_info(11, 0);
+    let detail = "resident launch completed during room birth — skipped";
+    for (result, label, skipped, waited) in [
+        (LoopRunResult::Overlapped, "overlapped", 1, 0),
+        (LoopRunResult::Deferred, "deferred", 0, 1),
+    ] {
+        let mut held = with_run_lock(scheduled(20, result), holder);
+        held.error = Some(detail.into());
+        held.duration_ms = Some(2000);
+        let records = [
+            refused_by(deferred(10), holder),
+            held.clone(),
+            scheduled(30, LoopRunResult::Completed),
+        ];
+        let table = runs_table(&records, 10);
+        let lines = table.lines().collect::<Vec<_>>();
+        assert_eq!(
+            (
+                lines
+                    .iter()
+                    .position(|line| line.contains("✓ completed") && !line.contains("fire")),
+                lines.iter().position(|line| line.contains(label)
+                    && line.contains("2.0s")
+                    && line.ends_with(&format!("{detail} · 1 fire waited on it"))),
+                table.contains("3 of 3"),
+                table.contains("○ no record"),
+            ),
+            (Some(3), Some(4), true, false),
+            "{table}"
+        );
+        let rows = collapsed_run_rows(&records);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    row.latest.at.as_second(),
+                    row.count,
+                    row.skipped,
+                    row.waited
+                ))
+                .collect::<Vec<_>>(),
+            [(20, 1, 0, 1), (30, 1, 0, 0)]
+        );
+        assert_eq!(stale_clause(&records, false), None, "{table}");
+
+        let records = [held, scheduled(30, LoopRunResult::Completed)];
+        let table = runs_table(&records, 10);
+        let rows = collapsed_run_rows(&records);
+        assert_eq!(
+            (
+                rows.len(),
+                rows[0].latest.result,
+                rows[0].skipped,
+                rows[0].waited
+            ),
+            (1, LoopRunResult::Completed, skipped, waited),
+            "{table}"
+        );
+        assert!(table.contains("2 of 2"), "{table}");
+    }
+}
+
+#[test]
 fn late_refusals_of_unrecorded_holders_keep_the_already_observed_new_tenure() {
     let gone = run_lock_info(11, 0);
     let next = run_lock_info(22, 15);
