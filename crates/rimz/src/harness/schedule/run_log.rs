@@ -103,6 +103,9 @@ pub struct LoopRunRecord {
     pub checkout: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<PathBuf>,
+    /// When the fire started for a gate refusal (`TaskFire::record_gate`), and when the record
+    /// was written for runs and heard records. It is not append order: order records by their
+    /// position in the log.
     pub at: Timestamp,
     pub result: LoopRunResult,
     #[serde(default, skip_serializing_if = "is_zero")]
