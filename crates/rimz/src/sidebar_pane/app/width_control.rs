@@ -532,6 +532,26 @@ impl WidthController {
                     .div_ceil(100) as u16,
             )
         };
+        let end_cols = match dir {
+            WidthAdjust::Narrower => min_cols,
+            WidthAdjust::Wider => max_cols,
+        };
+        let on_end_step = |cols: u16| {
+            !sidebar_width_off_spec(
+                u64::from(cols),
+                u64::from(end_cols),
+                u64::from(self.convergence.stop_step()),
+            )
+        };
+        // Zellij may render an end step a column off its estimate: a press
+        // toward an end step whose band holds this pane and the room target
+        // moves nothing.
+        let settled_on_end_step = self.mux == MuxName::Zellij
+            && on_end_step(base_cols)
+            && self
+                .convergence
+                .target()
+                .is_none_or(|target| on_end_step(target.get()));
         let target = crate::mux::width::adjust_target_cols(
             base_cols, dir, step, min_cols, max_cols,
         )
@@ -544,7 +564,7 @@ impl WidthController {
             },
             _ => target,
         });
-        if let Some(target) = target {
+        if !settled_on_end_step && let Some(target) = target {
             burst.target = Some(target);
             burst.dir = dir;
             burst.verdict = SidebarWidthIntentVerdict::Accepted;

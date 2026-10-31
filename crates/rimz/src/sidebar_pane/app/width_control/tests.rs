@@ -1307,10 +1307,20 @@ fn zellij_width_keys_reject_steps_past_the_bounded_grid() {
             WidthAdjust::Wider,
             SidebarWidthIntentVerdict::RejectedCeiling,
         ),
+        // A tab one column under the end step's ceiling estimate (40% of 271
+        // is 108.4, estimate 109) already sits on that step.
+        (
+            271,
+            108,
+            40,
+            WidthAdjust::Wider,
+            SidebarWidthIntentVerdict::RejectedCeiling,
+        ),
     ] {
         let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
         let mut theme = crate::config::ThemeConfig::default();
         theme.display.max_percent = maximum;
+        theme.display.max_cols = target(view);
         write_zellij_topology_for_view(&runtime, view);
         crate::mux::width_target::pin(
             &runtime,
@@ -1320,6 +1330,7 @@ fn zellij_width_keys_reject_steps_past_the_bounded_grid() {
         )
         .unwrap();
         controller.reload_target(&theme, Some(cols), &DiagSink::disabled());
+        let settled = controller.convergence.target();
 
         controller.adjust(cols, direction);
 
@@ -1329,8 +1340,27 @@ fn zellij_width_keys_reject_steps_past_the_bounded_grid() {
             "view {view}, width {cols}, maximum {maximum}"
         );
         assert_eq!(burst.target, None);
-        assert_eq!(controller.convergence.target(), Some(target(cols)));
+        assert_eq!(controller.convergence.target(), settled);
     }
+}
+
+#[test]
+fn zellij_width_key_back_to_the_end_step_reverses_a_pending_press() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let mut theme = crate::config::ThemeConfig::default();
+    theme.display.max_percent = 40;
+    theme.display.max_cols = target(271);
+    write_zellij_topology_for_view(&runtime, 271);
+    let width = crate::mux::SidebarWidth::from_config(&theme);
+    crate::mux::width_target::pin(&runtime, width, target(108), 271).unwrap();
+    controller.reload_target(&theme, Some(108), &DiagSink::disabled());
+
+    controller.adjust(108, WidthAdjust::Narrower);
+    controller.adjust(108, WidthAdjust::Wider);
+
+    let burst = controller.key_burst.as_ref().unwrap();
+    assert_eq!(burst.verdict, SidebarWidthIntentVerdict::Accepted);
+    assert_eq!(burst.target, Some(target(109)));
 }
 
 #[test]
