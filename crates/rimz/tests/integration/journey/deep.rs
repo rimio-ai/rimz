@@ -918,15 +918,14 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
     // converge against it, then publish the completed tab without a target
     // broadcast. The next keypress must resolve against this proven viewport.
     std::thread::sleep(Duration::from_secs(3));
-    let layout_width =
-        wait_for_rendered_sidebar_width(&mut client, |_| true, "layout sidebar width");
     write_zellij_topology(&cleanup.namespace, &runtime_paths, name, false);
 
     let backend = ZellijBackend::with_runtime_dir(runtime);
     let pane = wait_for_zellij_sidebar_pane(&backend, &runtime_paths, name);
     // The sidebar-only extent never nudges, so the first nudge measured
     // against the whole tab is the controller acting on the proven viewport.
-    // The key must land after the frame repainted at that nudge's width.
+    // The key must land after automatic convergence settles and the frame
+    // repaints inside its target band, not at an intermediate nudge's width.
     env.wait_for_diag(
         name,
         |record| {
@@ -937,10 +936,21 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
         },
         CAPTURE_BUDGET,
     );
+    let width = rimz::mux::SidebarWidth::default();
+    let target = rimz::mux::SidebarTarget {
+        share: rimz::mux::WidthPermille::from_percent(
+            width.percent.resolve(Some(u64::from(view_cols))),
+        ),
+        max_cols: width.max_cols,
+        pinned: false,
+    }
+    .zellij_step(Some(view_cols), width.max_percent)
+    .1;
+    let half_step = usize::from(view_cols).div_ceil(20) / 2;
     let initial = wait_for_rendered_sidebar_width(
         &mut client,
-        |width| width != layout_width,
-        "sidebar frame at the automatic width",
+        |width| width.abs_diff(usize::from(target.get())) <= half_step,
+        "sidebar frame at the settled automatic width",
     );
 
     backend.send_keys(&pane, name, "d").expect("send wider key");
