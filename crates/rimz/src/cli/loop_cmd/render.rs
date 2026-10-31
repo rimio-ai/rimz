@@ -2061,8 +2061,9 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
 /// Fires refused at the other gates ran nothing, so they neither bound the
 /// newest run nor end a count of overlaps.
 /// Fires on a `no record` row are excluded: a later tenure already proves their holder gone.
-/// The `during` count leaves out overlaps the table shows on another row and records that
-/// held the lock themselves; an overlap no row takes still counts.
+/// The `during` count leaves out overlaps the table shows on another row; an overlap no row
+/// takes still counts. A record that held the lock itself counts only when it folds onto the
+/// newest run's row, not when it has a row of its own or no row to fold onto.
 fn stale_clause(
     records: &[LoopRunRecord],
     attribution: &[FireAttribution],
