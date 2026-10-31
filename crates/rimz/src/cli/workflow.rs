@@ -245,10 +245,10 @@ fn locate(id: &WorkflowRunId) -> Result<(rimz::StatePaths, paths::WorkflowPaths)
 }
 
 pub(super) fn waiting(record: &RunRecord) -> Option<String> {
-    waiting_line(record, true)
+    waiting_line(record, None)
 }
 
-fn waiting_line(record: &RunRecord, show_count: bool) -> Option<String> {
+fn waiting_line(record: &RunRecord, history: Option<&[HistoryRow<'_>]>) -> Option<String> {
     record.wait.as_ref().map(|w| {
         if w.outcome == "capacity" {
             return format!(
@@ -299,6 +299,9 @@ fn waiting_line(record: &RunRecord, show_count: bool) -> Option<String> {
             .recheck_at
             .map(|at| format!(", recheck {}", at.to_zoned(zone.clone()).strftime("%H:%M")))
             .unwrap_or_default();
+        let show_count = history.is_none_or(|rows| {
+            !wait_row_counts(rows, &w.node, &w.outcome, w.first, w.last).eq([w.count])
+        });
         let count = if show_count {
             format!(", ×{}", w.count)
         } else {
@@ -482,10 +485,7 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         render::cell(record.prompt.as_deref().unwrap_or("none")),
     );
     header.render(&mut out)?;
-    let show_count = record.wait.as_ref().is_none_or(|wait| {
-        !wait_in_history(&history, &wait.node, &wait.outcome, wait.first, wait.last)
-    });
-    if let Some(waiting) = waiting_line(&record, show_count) {
+    if let Some(waiting) = waiting_line(&record, Some(&history)) {
         writeln!(out, "{waiting}")?;
     }
     if record
@@ -610,7 +610,9 @@ fn collapsed_history(journal: &[records::JournalEntry]) -> Vec<HistoryRow<'_>> {
             last,
             ..
         } = &entry.event
-            && wait_in_history(&rows, &entry.node, outcome, *first, *last)
+            && wait_row_counts(&rows, &entry.node, outcome, *first, *last)
+                .next()
+                .is_some()
         {
             continue;
         }
@@ -631,22 +633,25 @@ fn collapsed_history(journal: &[records::JournalEntry]) -> Vec<HistoryRow<'_>> {
     rows
 }
 
-fn wait_in_history(
-    rows: &[HistoryRow<'_>],
-    node: &str,
-    outcome: &str,
+fn wait_row_counts<'a>(
+    rows: &'a [HistoryRow<'_>],
+    node: &'a str,
+    outcome: &'a str,
     first: jiff::Timestamp,
     last: jiff::Timestamp,
-) -> bool {
-    rows.iter().rev().any(|row| {
-        row.latest.node == node
-            && matches!(
-                &row.latest.event,
-                records::JournalEvent::Evaluation { outcome: answer, .. } if answer == outcome
-            )
-            && row.first.at <= last
-            && first <= row.latest.at
-    })
+) -> impl Iterator<Item = u64> + 'a {
+    rows.iter()
+        .rev()
+        .filter(move |row| {
+            row.latest.node == node
+                && matches!(
+                    &row.latest.event,
+                    records::JournalEvent::Evaluation { outcome: answer, .. } if answer == outcome
+                )
+                && row.first.at <= last
+                && first <= row.latest.at
+        })
+        .map(|row| row.count)
 }
 
 fn render_history(
@@ -1104,14 +1109,111 @@ mod tests {
     }
 
     #[test]
-    fn an_open_wait_is_represented_only_by_its_nodes_outcome_and_span() {
+    fn wait_rows_match_the_nodes_outcome_and_inclusive_span() {
         let journal = [evaluation(1, 1, "pending", None)];
         let rows = collapsed_history(&journal);
-        assert!(wait_in_history(&rows, "pr", "pending", at(1), at(1)));
-        assert!(wait_in_history(&rows, "pr", "pending", at(0), at(2)));
-        assert!(!wait_in_history(&rows, "pr", "window", at(0), at(2)));
-        assert!(!wait_in_history(&rows, "ci", "pending", at(0), at(2)));
-        assert!(!wait_in_history(&rows, "pr", "pending", at(2), at(3)));
-        assert!(!wait_in_history(&rows, "pr", "pending", at(0), at(0)));
+        assert!(wait_row_counts(&rows, "pr", "pending", at(1), at(1)).eq([1]));
+        assert!(wait_row_counts(&rows, "pr", "pending", at(0), at(2)).eq([1]));
+        for (node, outcome, first, last) in [
+            ("pr", "window", 0, 2),
+            ("ci", "pending", 0, 2),
+            ("pr", "pending", 2, 3),
+            ("pr", "pending", 0, 0),
+        ] {
+            assert!(
+                wait_row_counts(&rows, node, outcome, at(first), at(last))
+                    .next()
+                    .is_none()
+            );
+        }
+    }
+
+    fn waiting_record(first: i64, last: i64, count: u64) -> RunRecord {
+        serde_json::from_value(json!({
+            "version":2, "id":WorkflowRunId::new(), "workflow":"review",
+            "spec_dir":"/spec", "spec_digest":"digest",
+            "scope":{"kind":"worktree", "path":"/checkout"}, "project_root":"/checkout",
+            "created_at":at(0), "state":"active", "node":"build", "entered_at":at(0),
+            "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":4,
+            "wait":{"node":"pr", "outcome":"pending", "first":at(first), "last":at(last),
+                    "count":count}
+        }))
+        .unwrap()
+    }
+
+    fn kept_turn(minute: i64) -> JournalEntry {
+        JournalEntry {
+            seq: Some(1),
+            at: at(minute),
+            node: "build".into(),
+            event: JournalEvent::TurnEnd {
+                action: records::TurnEndAction::Kept,
+                turn: records::TurnEnd {
+                    agent_id: "leader".into(),
+                    started_at: at(minute - 1),
+                    ended_at: at(minute),
+                },
+                check: "pr".into(),
+                outcome: Some("pending".into()),
+                target: Some("@wait".into()),
+                reason: None,
+            },
+        }
+    }
+
+    #[test]
+    fn one_kept_turn_states_the_open_wait_and_suppresses_its_closing_row() {
+        let mut journal = vec![
+            evaluation(2, 0, "pending", None),
+            kept_turn(1),
+            evaluation(3, 2, "done", None),
+        ];
+        let record = waiting_record(0, 0, 1);
+        let line = waiting_line(&record, Some(&collapsed_history(&journal))).unwrap();
+        assert!(!line.contains('×'), "{line}");
+        assert!(waiting(&record).unwrap().contains("×1"));
+        journal.push(wait(2, "pending", 0, 0, 1));
+        assert_eq!(collapsed_history(&journal).len(), 3);
+        assert!(!history(&journal).contains("pr wait"));
+    }
+
+    #[test]
+    fn several_kept_turns_keep_the_header_total_but_not_a_closing_summary() {
+        let mut journal = vec![
+            evaluation(2, 0, "pending", None),
+            kept_turn(1),
+            evaluation(3, 2, "pending", None),
+            kept_turn(3),
+        ];
+        let record = waiting_record(0, 2, 2);
+        let line = waiting_line(&record, Some(&collapsed_history(&journal))).unwrap();
+        assert!(line.contains("×2"), "{line}");
+        journal.push(wait(4, "pending", 0, 2, 2));
+        assert_eq!(collapsed_history(&journal).len(), 4);
+        assert!(!history(&journal).contains("pr wait"));
+    }
+
+    #[test]
+    fn wakes_keep_the_open_waits_total_across_rows() {
+        let journal = [
+            evaluation(1, 0, "pending", None),
+            evaluation(2, 1, "pending", None),
+            wake(2, "review.ready"),
+            evaluation(3, 3, "pending", None),
+        ];
+        let record = waiting_record(0, 3, 3);
+        let line = waiting_line(&record, Some(&collapsed_history(&journal))).unwrap();
+        assert!(line.contains("×3"), "{line}");
+    }
+
+    #[test]
+    fn early_advances_keep_a_count_no_single_evaluation_states() {
+        let mut journal = vec![evaluation(1, 0, "pending", None)];
+        let record = waiting_record(0, 2, 3);
+        let line = waiting_line(&record, Some(&collapsed_history(&journal))).unwrap();
+        assert!(line.contains("×3"), "{line}");
+        journal.push(wait(3, "pending", 0, 2, 3));
+        assert_eq!(collapsed_history(&journal).len(), 1);
+        assert!(!history(&journal).contains("pr wait"));
     }
 }

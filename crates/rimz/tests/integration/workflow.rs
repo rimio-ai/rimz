@@ -1207,6 +1207,27 @@ fn human_show_wait_and_journal_are_readable() {
         .replace(&local_time(&wait["first"]), "<clock>")
         .replace(&local_time(&wait["recheck_at"]), "<clock>");
     insta::assert_snapshot!("show_wait", normalized);
+    for _ in 0..2 {
+        success(command(&env, &["workflow", "advance", &id]));
+    }
+    let advanced = show(&env, &id);
+    assert_eq!(advanced["record"]["wait"]["count"], 3);
+    assert_eq!(
+        advanced["journal"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["event"] == "evaluation")
+            .count(),
+        1
+    );
+    let waiting = success(command(&env, &["workflow", "show", &id]));
+    assert!(
+        waiting
+            .lines()
+            .any(|line| line.starts_with("waiting:") && line.contains("×3")),
+        "{waiting}"
+    );
     fs::write(dir.join("checks/pr.sh"), "printf 'not-json'").unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     settled(&env, &id, "parked");
