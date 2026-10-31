@@ -271,12 +271,15 @@ fn warm_fleet_produce_forks_zero_subprocesses() {
     .expect("cold produce");
 
     // Steady state: one delta per tick, every stamp young — the elder's
-    // common case. Inputs re-publish before each produce.
+    // common case. Inputs re-publish before each produce, and the retained
+    // producer adopts the republished frame, which it otherwise reads only
+    // when built.
     let spawns_before = spawn_count();
     for round in 0..ROUNDS {
         let event = registered_lifecycle(&paths.workspace_id, round as usize % FLEET);
         event_log::append(&paths.events_log, &event).expect("append delta");
         h.publish_fresh_produce_inputs(SESSION_NAME, panes.clone());
+        producer.adopt_published_frame(&h.runtime_paths, SESSION_NAME);
         let snapshot = rimz::sidebar::produce::produce_snapshot(
             &mut cursor,
             paths,

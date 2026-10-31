@@ -160,6 +160,15 @@ impl SnapshotProducer {
             projection: None,
         }
     }
+
+    /// Adopts the pane frame published now as this producer's pane prior, read the way
+    /// [`Self::seeded`] reads it, and keeps the projection and every other retained field. A
+    /// producer reads the published frame only when it is built, so a caller that republishes
+    /// the frame and then produces again on a producer that already produced calls this right
+    /// after the republish.
+    pub fn adopt_published_frame(&mut self, runtime: &RuntimePaths, session: &str) {
+        self.panes.prior = panes::published_prior(runtime, session);
+    }
 }
 
 #[cfg(feature = "testkit")]

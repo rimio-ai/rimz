@@ -591,12 +591,16 @@ pub mod fleet {
         Ok(())
     }
 
-    /// Publish fresh pane, spending, and account sidecars for warm produce.
+    /// Publish fresh pane, spending, and account sidecars for warm produce. A producer that
+    /// already produced sees the new pane frame only after
+    /// [`sidebar::produce::SnapshotProducer::adopt_published_frame`].
     pub fn publish_fresh_produce_inputs(runtime: &RuntimePaths, fleet: usize) -> io::Result<()> {
         publish_fresh_produce_inputs_for_panes(runtime, synthetic_panes(fleet))
     }
 
-    /// Publish fresh pane, spending, and account sidecars for custom pane shapes.
+    /// Publish fresh pane, spending, and account sidecars for custom pane shapes. A producer
+    /// that already produced sees the new pane frame only after
+    /// [`sidebar::produce::SnapshotProducer::adopt_published_frame`].
     pub fn publish_fresh_produce_inputs_for_panes(
         runtime: &RuntimePaths,
         panes: Vec<PaneRef>,
