@@ -726,6 +726,167 @@ fn live_fold_heals_a_pre_token_counter_sidecar() {
 
 const TOKEN_COUNT_LINE: &str = r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#;
 
+const GUARDIAN_META: &str = r#"{"timestamp":"2026-10-23T07:34:12.905Z","type":"session_meta","payload":{"id":"01a167ae-849a-78b1-817c-64c998a0e63b","session_id":"01a1649e-674c-7ba2-8376-d21b94e75b54","parent_thread_id":"01a1649e-674c-7ba2-8376-d21b94e75b54","source":{"subagent":{"other":"guardian"}},"thread_source":"guardian_review","cli_version":"0.164.0"}}"#;
+
+fn helper_spend_body() -> [String; 3] {
+    use serde_json::json;
+    [
+        timing_line(0, "turn_context", json!({"model":"codex-auto-review"})),
+        timing_line(
+            1_000,
+            "response_item",
+            json!({"type":"function_call","name":"shell"}),
+        ),
+        count_line(2),
+    ]
+}
+
+#[test]
+fn helper_sources_emit_no_spend_and_other_sources_keep_identical_entries() {
+    use serde_json::json;
+    let body = helper_spend_body();
+    let body = body.iter().map(String::as_str).collect::<Vec<_>>();
+    let (_dir, root) = write_session("root.jsonl", &body);
+    let prices = PriceBook::default();
+    let expected = parse_codex_spend(&root, None, &prices);
+    assert_eq!(expected.entries.len(), 1);
+    assert_eq!(expected.entries[0].tool_calls.get("shell"), Some(&1));
+    assert!(expected.unknown_models.contains_key("codex-auto-review"));
+    assert_eq!(
+        serde_json::to_value(&expected.cursor).unwrap()["s"],
+        json!({
+            "current_model":"codex-auto-review",
+            "replay_checked":true,
+            "skipping_replay":false,
+            "response_boundary":{"InFlight":null},
+        }),
+    );
+
+    for payload in [
+        json!({}),
+        json!({"source":"cli"}),
+        json!({"source":"vscode"}),
+        json!({"source":"exec"}),
+        json!({"source":"mcp"}),
+        json!({"source":"unknown"}),
+        json!({"source":{"custom":"future"}}),
+        json!({"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}),
+        json!({"source":{"subagent":"compact"}}),
+        json!({"source":{"subagent":{"other":"future"}}}),
+        json!({"source":{"internal":"future"}}),
+        json!({"thread_source":"guardian_review"}),
+    ] {
+        let meta = json!({"type":"session_meta","payload":payload}).to_string();
+        let mut lines = vec![meta.as_str()];
+        lines.extend(&body);
+        let (_dir, path) = write_session("kept.jsonl", &lines);
+        let parsed = parse_codex_spend(&path, None, &prices);
+        assert_eq!(parsed.entries, expected.entries, "{meta}");
+        assert_eq!(parsed.unknown_models, expected.unknown_models, "{meta}");
+        assert_eq!(
+            parsed.cursor.state_as::<serde_json::Value>(),
+            expected.cursor.state_as::<serde_json::Value>(),
+            "{meta}",
+        );
+    }
+
+    for meta in [
+        GUARDIAN_META.to_owned(),
+        json!({"type":"session_meta","payload":{"source":{"subagent":"review"}}}).to_string(),
+        json!({"type":"session_meta","payload":{
+            "source":{"subagent":"memory_consolidation"}
+        }})
+        .to_string(),
+        json!({"type":"session_meta","payload":{
+            "source":{"subagent":{"other":"memory_consolidation"}}
+        }})
+        .to_string(),
+        json!({"type":"session_meta","payload":{"source":{"internal":"guardian"}}}).to_string(),
+        json!({"type":"session_meta","payload":{
+            "source":{"internal":"memory_consolidation"}
+        }})
+        .to_string(),
+    ] {
+        let mut lines = vec![meta.as_str()];
+        lines.extend(&body);
+        let (_dir, path) = write_session("helper.jsonl", &lines);
+        let parsed = parse_codex_spend(&path, None, &prices);
+        assert!(parsed.entries.is_empty(), "{meta}: {:?}", parsed.entries);
+        assert!(parsed.unknown_models.is_empty(), "{meta}");
+        assert_eq!(parsed.read_error, None);
+        assert_eq!(parsed.cursor.offset, std::fs::metadata(path).unwrap().len());
+    }
+}
+
+#[test]
+fn guardian_exclusion_survives_every_line_cut_and_later_growth() {
+    let body = helper_spend_body();
+    let mut lines = vec![GUARDIAN_META];
+    lines.extend(body.iter().map(String::as_str));
+    for split in 1..=lines.len() {
+        let (_dir, path) = write_session("guardian.jsonl", &lines[..split]);
+        let prefix = parse_codex_spend(&path, None, &PriceBook::default());
+        assert!(prefix.entries.is_empty(), "prefix cut at {split}");
+        let cursor: SpendCursor =
+            serde_json::from_value(serde_json::to_value(prefix.cursor).unwrap()).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for line in &lines[split..] {
+            writeln!(file, "{line}").unwrap();
+        }
+        let suffix = parse_codex_spend(&path, Some(&cursor), &PriceBook::default());
+        assert!(suffix.entries.is_empty(), "suffix cut at {split}");
+        assert!(suffix.unknown_models.is_empty());
+        writeln!(file, "{}", body[1]).unwrap();
+        append_live_total(&path, 3, 2_000, 0, 200);
+        let grown = parse_codex_spend(&path, Some(&suffix.cursor), &PriceBook::default());
+        assert!(grown.entries.is_empty(), "growth after cut at {split}");
+        assert!(grown.unknown_models.is_empty());
+        assert_eq!(grown.cursor.offset, std::fs::metadata(&path).unwrap().len());
+        let unchanged = parse_codex_spend(&path, Some(&grown.cursor), &PriceBook::default());
+        assert!(unchanged.entries.is_empty());
+        assert!(unchanged.unknown_models.is_empty());
+    }
+}
+
+#[test]
+fn first_session_meta_alone_decides_spend_across_resume() {
+    let root_meta = r#"{"type":"session_meta","payload":{"source":"cli"}}"#;
+    let first_total = r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#;
+    let next_total = r#"{"type":"event_msg","timestamp":"2026-01-01T10:01:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":250,"output_tokens":75}}}}"#;
+    for (first, later, kept) in [
+        (root_meta, GUARDIAN_META, true),
+        (GUARDIAN_META, root_meta, false),
+    ] {
+        let lines = [first, first_total, later, next_total];
+        let (_dir, path) = write_session("mixed.jsonl", &lines);
+        let cold = parse_codex_spend(&path, None, &gpt5_book());
+        if kept {
+            assert_eq!(cold.entries.len(), 2);
+            assert_eq!((cold.entries[1].input, cold.entries[1].output), (150, 25));
+        } else {
+            assert!(cold.entries.is_empty());
+        }
+        for split in 1..lines.len() {
+            let (_dir, path) = write_session("resume.jsonl", &lines[..split]);
+            let prefix = parse_codex_spend(&path, None, &gpt5_book());
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            for line in &lines[split..] {
+                writeln!(file, "{line}").unwrap();
+            }
+            let suffix = parse_codex_spend(&path, Some(&prefix.cursor), &gpt5_book());
+            let mut entries = prefix.entries;
+            entries.extend(suffix.entries);
+            assert_eq!(entries, cold.entries, "split at {split}, kept: {kept}");
+        }
+    }
+}
+
 #[test]
 fn session_meta_cwd_stamps_origin_survives_resume_and_is_none_when_absent() {
     let cwd = "/home/user/code/rimz-worktrees/budget-reset";

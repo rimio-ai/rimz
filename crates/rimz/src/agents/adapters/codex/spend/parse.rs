@@ -200,6 +200,8 @@ pub(super) struct CodexSpendState {
     /// keeps its workspace origin without re-reading the header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) cwd: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    excluded_helper: bool,
     /// Forked and subagent rollouts can begin with a copied parent history.
     /// Codex rewrites that replay into one timestamp second; suppress it while
     /// preserving the cumulative baseline for the first new delta.
@@ -258,15 +260,28 @@ pub(super) fn parse_codex_session(
         state.replay_checked = true;
     }
 
+    // Rollouts start with metadata; resumed cursors already carry its verdict.
+    let mut session_meta_seen = from_offset != 0;
     for line in content.split(|&b| b == b'\n') {
+        if state.excluded_helper {
+            break;
+        }
         if line.is_empty() {
             continue;
         }
         match codex_line_kind(line) {
             Some(CodexLineKind::SessionMeta) => {
+                let Some(record) = decode_line(line) else {
+                    continue;
+                };
+                let RolloutKind::SessionMeta(payload) = record.kind else {
+                    continue;
+                };
+                if !session_meta_seen {
+                    state.excluded_helper = payload.is_spending_helper();
+                    session_meta_seen = true;
+                }
                 if state.cwd.is_none()
-                    && let Some(record) = decode_line(line)
-                    && let RolloutKind::SessionMeta(payload) = record.kind
                     && let Some(cwd) = payload.cwd
                 {
                     state.cwd = origin_path(Some(cwd.as_ref()));
