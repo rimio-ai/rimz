@@ -10353,8 +10353,17 @@ fn steer_auto_compact_runs_before_a_resting_agents_prompt() {
 
 #[test]
 fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
-    for changed in ["open turn", "lower fill", "waiting"] {
+    for (changed, line) in [
+        ("open turn", Some("70%")),
+        ("lower fill", Some("70%")),
+        ("waiting", Some("70%")),
+        ("waiting", None),
+    ] {
         for mode in [None, Some("--steer"), Some("--interrupt")] {
+            // Without a line, a boundary send keeps the row it was claimed on.
+            if line.is_none() && mode.is_none() {
+                continue;
+            }
             let env = Env::new();
             env.record(&env.project_root);
             env.install_agent_hooks("claude");
@@ -10370,8 +10379,21 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
             if let Some(mode) = mode {
                 command.arg(mode);
             }
+            command.arg("@claude");
+            match line {
+                Some(line) => {
+                    command.args(["--smart-compact", line]);
+                }
+                None => {
+                    run_success(
+                        env.rimz()
+                            .args(["config", "set", "harness.smart_compact", "off"]),
+                        "send without a seat line",
+                    );
+                }
+            }
             let child = command
-                .args(["@claude", "--smart-compact", "70%", "--", "go"])
+                .args(["--", "go"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -10400,7 +10422,10 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
                 "mode {mode:?}, {changed}: compact-first used stale state: {lines:?}"
             );
             if changed == "waiting" {
-                assert!(lines.is_empty(), "no write into an input prompt: {lines:?}");
+                assert!(
+                    lines.is_empty(),
+                    "mode {mode:?}, line {line:?}: no write into an input prompt: {lines:?}"
+                );
                 assert_eq!(output.status.success(), mode.is_none(), "{output:?}");
                 if mode.is_some() {
                     assert!(

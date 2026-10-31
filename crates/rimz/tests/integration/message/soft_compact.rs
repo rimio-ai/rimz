@@ -681,6 +681,40 @@ fn interruption_and_blank_continue_text_do_not_strand_a_soft_cycle() {
 }
 
 #[test]
+fn wrap_up_skips_an_input_prompt_raised_while_it_waited_for_the_pane_lock() {
+    let fixture = Fixture::new("claude");
+    let before = DeliveryRendezvous::new(&fixture.env, "soft-before-lock");
+    let child = fixture
+        .command(SoftCompactStep::WrapUp)
+        .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    fixture.lifecycle(LifecycleSignal::AwaitingInput {
+        kind: AskKind::Permission,
+        ask_id: None,
+        detail: None,
+        native_key: None,
+    });
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        fixture.trace().is_empty(),
+        "no write into an input prompt: {:?}, {output:?}",
+        fixture.trace()
+    );
+    let records = fixture.records();
+    assert_eq!(records.len(), 1, "{output:?}");
+    assert_eq!(records[0].status, MessageStatus::Canceled);
+    assert_eq!(
+        records[0].last_error.as_deref(),
+        Some("agent is waiting on input in its pane")
+    );
+}
+
+#[test]
 fn wrap_up_write_failure_cancels_the_miss_and_records_one_failed_assist() {
     let fixture = Fixture::new("claude");
     let output = fixture
