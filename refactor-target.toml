@@ -2058,7 +2058,9 @@ path = "crates/rimz/src/harness"
 # next_bound shares first-bound forecasting and engine recheck limits (+1).
 # evaluation_target shares routed-evaluation provenance across inspection views (+1).
 # WorkflowSpec::edges replaces Check::edges as the shared routing table (net 0).
-surface-budget = 1043
+# Workflow fireability/mark, walk, case marks and unread reasons serve CLI inspection (+10).
+# EdgeSource shares typed route provenance with CLI inspection (+1).
+surface-budget = 1054
 
 [[verdict]]
 kind = "item"
@@ -10428,7 +10430,52 @@ reason = "The workflow CLI and subsequent engine share the strict spec model, de
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Edge"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The engine and CLI share resolved routes, provenance and fireability through one graph table."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::EdgeSource"
+reason = "Route provenance crosses the harness/CLI seam as a typed value with stable JSON and text spellings."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Fireability"
+reason = "Definition and run inspection distinguish unconditional, impossible and conditional routes."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::NeverReason"
+reason = "Never-firing edges carry a stable machine reason and shared human mark."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Walk"
+reason = "Validation and rail views share reachable node order and the alphabetical unreachable tail."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::WalkNode"
+reason = "Rail views share which returning steps hang beneath an earlier sending check."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::CaseMark"
+reason = "Condition presentation distinguishes false, winning, holding, unread and unreached cases."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::CaseMarks"
+reason = "The CLI paints one harness-owned case decision prefix and else mark."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::case_marks"
+reason = "Condition rail marks reuse parsed three-valued truth and stored winner or hold evidence."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::unread_reasons"
+reason = "Stored condition unread prose is parsed beside its writer, never in a CLI renderer."
 
 [[verdict]]
 kind = "item"

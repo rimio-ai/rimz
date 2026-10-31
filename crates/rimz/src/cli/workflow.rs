@@ -313,7 +313,12 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                 render::cell(
                     row.edges
                         .iter()
-                        .map(|edge| format!("{} → {} ({})", edge.outcome, edge.target, edge.source))
+                        .map(|edge| {
+                            let mark = edge
+                                .mark()
+                                .map_or(String::new(), |mark| format!(", {mark}"));
+                            format!("{} → {} ({}{mark})", edge.outcome, edge.target, edge.source)
+                        })
                         .collect::<Vec<_>>()
                         .join(", "),
                 ),

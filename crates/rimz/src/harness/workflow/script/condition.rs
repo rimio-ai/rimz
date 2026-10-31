@@ -4,13 +4,28 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-use super::super::Check;
+use super::super::{Check, SpecErr};
 use crate::disk::paths::StatePaths;
 use crate::harness::schedule::{
     self,
     when::{self, CiSource, WhenExpr, WindowReadings},
 };
-use crate::store::workflow::RunRecord;
+use crate::store::workflow::{RunRecord, Wait};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaseMark {
+    False,
+    Winner,
+    Holding,
+    Unread,
+    NotReached,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CaseMarks {
+    pub cases: Vec<CaseMark>,
+    pub else_mark: CaseMark,
+}
 
 pub(super) fn evaluate(
     state: &StatePaths,
@@ -138,6 +153,100 @@ fn answer(
     object
 }
 
+/// Project a condition answer; pass only the wait belonging to this check.
+pub fn case_marks(
+    check: &Check,
+    object: &Value,
+    wait: Option<&Wait>,
+) -> Result<CaseMarks, SpecErr> {
+    let selected = wait
+        .filter(|wait| wait.is_hold())
+        .and_then(|wait| wait.case)
+        .map(|case| (u64::from(case), CaseMark::Holding))
+        .or_else(|| {
+            object
+                .get("case")
+                .and_then(Value::as_u64)
+                .map(|case| (case, CaseMark::Winner))
+        })
+        .filter(|(case, _)| *case < check.cases.len() as u64);
+    if let Some((selected, mark)) = selected {
+        return Ok(CaseMarks {
+            cases: (0..check.cases.len() as u64)
+                .map(|index| match index.cmp(&selected) {
+                    std::cmp::Ordering::Less => CaseMark::False,
+                    std::cmp::Ordering::Equal => mark,
+                    std::cmp::Ordering::Greater => CaseMark::NotReached,
+                })
+                .collect(),
+            else_mark: CaseMark::NotReached,
+        });
+    }
+    let readings = object
+        .get("readings")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(key, value)| (key.clone(), value.as_str().map(str::to_owned)))
+        .collect();
+    let mut cases = Vec::new();
+    for case in &check.cases {
+        let mark = match WhenExpr::parse(&case.when)?.truth(&readings) {
+            Some(false) => CaseMark::False,
+            Some(true) => CaseMark::Winner,
+            None => CaseMark::Unread,
+        };
+        cases.push(mark);
+        if mark != CaseMark::False {
+            cases.resize(check.cases.len(), CaseMark::NotReached);
+            return Ok(CaseMarks {
+                cases,
+                else_mark: CaseMark::NotReached,
+            });
+        }
+    }
+    Ok(CaseMarks {
+        cases,
+        else_mark: CaseMark::Winner,
+    })
+}
+
+/// Recover `answer`'s per-key unread prose without splitting the prose itself on commas.
+pub fn unread_reasons(object: &Value) -> BTreeMap<String, String> {
+    let Some((readings, mut remaining)) = object
+        .get("readings")
+        .and_then(Value::as_object)
+        .zip(object.get("reason").and_then(Value::as_str))
+    else {
+        return BTreeMap::new();
+    };
+    let keys = readings
+        .iter()
+        .filter(|(_, value)| value.is_null())
+        .map(|(key, _)| key.as_str())
+        .collect::<Vec<_>>();
+    let mut reasons = BTreeMap::new();
+    for (index, key) in keys.iter().enumerate() {
+        let Some(body) = remaining.strip_prefix(&format!("{key} (")) else {
+            return BTreeMap::new();
+        };
+        let reason = if let Some(next) = keys.get(index + 1) {
+            let Some(end) = body.find(&format!("), {next} (")) else {
+                return BTreeMap::new();
+            };
+            remaining = &body[end + 3..];
+            &body[..end]
+        } else {
+            let Some(reason) = body.strip_suffix(')') else {
+                return BTreeMap::new();
+            };
+            reason
+        };
+        reasons.insert((*key).to_owned(), reason.to_owned());
+    }
+    reasons
+}
+
 fn ci_unread(
     pr_head: &str,
     ci_sha: Option<&str>,
@@ -181,6 +290,122 @@ fn is_ancestor(path: &Path, commit: &str, tip: &str) -> Option<bool> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn case_marks_paint_only_the_decision_prefix_and_else() {
+        use CaseMark::{False, NotReached, Unread, Winner};
+
+        let check: Check = toml::from_str("else='pending'\ncases=[{when=['pr=merged'],outcome='merged'},{when=['ci=passed'],outcome='green'},{when=['team.stage=Done'],outcome='done'}]").unwrap();
+        let expressions = check
+            .cases
+            .iter()
+            .map(|case| WhenExpr::parse(&case.when).unwrap())
+            .collect::<Vec<_>>();
+        let now = "2026-01-01T00:00:00Z".parse().unwrap();
+        for (readings, cases, else_mark) in [
+            (
+                [Some("open"), Some("passed"), Some("Done")],
+                vec![False, Winner, NotReached],
+                NotReached,
+            ),
+            (
+                [None, Some("passed"), Some("Done")],
+                vec![Unread, NotReached, NotReached],
+                NotReached,
+            ),
+            (
+                [Some("open"), None, Some("Done")],
+                vec![False, Unread, NotReached],
+                NotReached,
+            ),
+            (
+                [Some("open"), Some("failed"), Some("Todo")],
+                vec![False, False, False],
+                Winner,
+            ),
+            (
+                [Some("merged"), None, None],
+                vec![Winner, NotReached, NotReached],
+                NotReached,
+            ),
+        ] {
+            let object = answer(
+                &check,
+                &expressions,
+                ["pr", "ci", "team.stage"]
+                    .into_iter()
+                    .zip(readings)
+                    .map(|(key, value)| (key.into(), value.map(str::to_owned)))
+                    .collect(),
+                Some(now),
+                (now, "stale"),
+                None,
+                |_| "not read".into(),
+            );
+            assert_eq!(
+                case_marks(&check, &object, None).unwrap(),
+                CaseMarks { cases, else_mark },
+                "{object}"
+            );
+        }
+    }
+
+    #[test]
+    fn case_marks_use_the_held_case_from_the_record() {
+        let check: Check = toml::from_str("else='pending'\ncases=[{when=['pr=merged'],outcome='merged'},{when=['ci=passed'],outcome='green',for='30m'}]").unwrap();
+        let object = json!({"outcome":"hold","readings":{"pr":"open","ci":"passed"}});
+        let wait: Wait = serde_json::from_value(json!({"node":"gate","outcome":"hold","case":1,"first":"2026-01-01T00:00:00Z","last":"2026-01-01T00:00:01Z","count":2})).unwrap();
+        assert_eq!(
+            case_marks(&check, &object, Some(&wait)).unwrap(),
+            CaseMarks {
+                cases: vec![CaseMark::False, CaseMark::Holding],
+                else_mark: CaseMark::NotReached
+            }
+        );
+    }
+
+    #[test]
+    fn unread_reasons_round_trip_answer_with_commas_and_parentheses() {
+        let reasons = [
+            (
+                "ci",
+                "ci=passed",
+                "read at aaaaaaa, PR head bbbbbbb (queued)",
+            ),
+            (
+                "pr.queue",
+                "pr.queue=queued",
+                "no supported forge for this checkout (x), y",
+            ),
+        ];
+        let now = "2026-01-01T00:00:00Z".parse().unwrap();
+        for count in [1, 2] {
+            let clauses = reasons[..count]
+                .iter()
+                .map(|(_, clause, _)| *clause)
+                .collect::<Vec<_>>();
+            let check: Check = toml::from_str(&format!(
+                "else='pending'\ncases=[{{when={clauses:?},outcome='ready'}}]"
+            ))
+            .unwrap();
+            let expressions = [WhenExpr::parse(&check.cases[0].when).unwrap()];
+            let expected = reasons[..count]
+                .iter()
+                .map(|(key, _, reason)| (key.to_string(), reason.to_string()))
+                .collect::<BTreeMap<_, _>>();
+            let object = answer(
+                &check,
+                &expressions,
+                expected.keys().map(|key| (key.clone(), None)).collect(),
+                Some(now),
+                (now, "stale"),
+                None,
+                |key| expected[key].clone(),
+            );
+            assert_eq!(unread_reasons(&object), expected, "{object}");
+        }
+        assert!(unread_reasons(&json!({"readings":{"ci":"passed"}})).is_empty());
+    }
 
     #[test]
     fn cases_are_ordered_and_unread_is_not_false_even_under_negation() {

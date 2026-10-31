@@ -1,9 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 
-use super::Edge;
 use super::spec::{self, CheckKind, RESERVED_OUTCOMES, StepKind, WorkflowSpec};
+use super::{Edge, EdgeSource};
 use crate::config::definitions::LoadedDefinitions;
 use crate::store::workflow::StepLifecycle;
 use serde::Serialize;
@@ -517,6 +517,16 @@ pub(super) fn validate_spec(
     for issue in report.errors.iter_mut().chain(&mut report.warnings) {
         issue.message = format!("{name}: {}", issue.message);
     }
+    let walk = spec.walk();
+    let order = walk
+        .nodes
+        .into_iter()
+        .map(|node| node.node)
+        .chain(walk.unreachable)
+        .enumerate()
+        .map(|(index, node)| (node, index))
+        .collect::<BTreeMap<_, _>>();
+    report.rows.sort_by_key(|row| order[&row.node]);
     report
 }
 
@@ -809,10 +819,13 @@ fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -
         if !seen.insert(node.clone()) {
             continue;
         }
-        for (outcome, (target, explicit)) in spec.node_edges(&node).unwrap_or_default() {
-            if outcome == "deadline" || (spec.steps.contains_key(&node) && !explicit) {
+        for edge in spec.resolved_edges(&node).unwrap_or_default() {
+            if edge.outcome == "deadline"
+                || (spec.steps.contains_key(&node) && edge.source != EdgeSource::Explicit)
+            {
                 continue;
             }
+            let target = edge.target;
             if !allowed(&target) {
                 continue;
             }

@@ -11,7 +11,7 @@ Paths are under `crates/rimz/src/`.
 | Path | Owns |
 | --- | --- |
 | `harness/workflow/spec.rs` | `WorkflowSpec` and the serde types `rimz workflow schema` derives from, plus check- and step-kind selection (`Check::kind`, `Step::kind`), visit bounds, `run` argv resolution, deadline and window parsing. In the sidebar import graph. |
-| `harness/workflow/graph.rs` | The shared edge table (`WorkflowSpec::edges`) and routing lookup (`WorkflowSpec::target`), including engine defaults. |
+| `harness/workflow/graph.rs` | The shared edge table (`WorkflowSpec::edges`), fireability and mark text, routing lookup (`WorkflowSpec::target`), and graph walk (`WorkflowSpec::walk`). |
 | `harness/workflow/inspect.rs` | Read-only journal hops and the timeout instant shared by inspection and transitions. |
 | `harness/workflow/validate.rs` | `validate` and `validate_spec`: every definition rule and the `rimz workflow validate` rows. |
 | `harness/workflow/engine.rs` | Run control: `create`, `advance` and its locked `prepare`, `cancel`, `resume`, `wake`, `wake_run`, `reassign_task`, and `persist`, the one publication path. |
@@ -63,7 +63,7 @@ Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Every table reject
 | --- | --- | --- | --- |
 | run | `run` | `wake`, `timeout`, `on` | Its own outcomes, plus `timeout` and `invalid`. |
 | shell | nonempty `shell` | `wake`, `timeout`, `on` | Requires `on.pass` and `on.fail`. Accepts only those plus `on.timeout` and `on.invalid`. |
-| judge | `agent`, with a required `prompt-file` | `window`, `wake`, `timeout`, `on` | Its own outcomes, plus `timeout` and `invalid`. The profile's adapter must have a headless launch. |
+| judge | `agent`, with a required `prompt-file` | `window`, `wake`, `timeout`, `on` | Its own outcomes and `timeout`. An invalid answer retries once, then parks at `@user`, ignoring `on.invalid`. The profile's adapter must have a headless launch. |
 | condition | nonempty `cases` | required `else`, `provider`, `account`, `timeout`, `on` | Every case outcome and `else` must be routed. Any other route is refused, except `unknown`, `timeout`, and `invalid`. |
 
 Every kind accepts an optional `summary`: one nonempty line describing what the node does. Omission never warns. Other fields outside a kind's row are refused on that kind. A `window` holds provider-window terms only. A condition takes `provider` exactly when a case reads a `window.*` term, and `account` only with `provider`.
@@ -91,7 +91,13 @@ Both visit bounds must be at least 1. When both are set, `max-visits-per-key` mu
 
 ### Edges and the graph
 
-An edge names another node, `@wait`, `@done`, `@failed`, or `@user`. Checks and steps share one name namespace, and a node or workflow name is nonempty ASCII letters, digits, `-`, and `_` (`crates/rimz/src/harness/schedule.rs::validate_name`). The resolver in `crates/rimz/src/harness/workflow/graph.rs::WorkflowSpec::edges` supplies check and step edges and the header deadline: `timeout`, `invalid`, `cap`, and `deadline` default to `@user`, capacity to `@failed`, and a condition's `unknown` to `@wait`. An explicit entry overrides a default. Engine routing, validation rows, timeout admission, cycle detection, and inspection read that resolver. A step's turn-ending outcomes resolve through `then`; an absent `on.asked` keeps the question live and is not a displayed edge. The routing lookup retains an `@user` fallback for a forced `asked` settlement or a missing `then` in an unvalidated spec.
+An edge names another node, `@wait`, `@done`, `@failed`, or `@user`. Checks and steps share one name namespace, and a node or workflow name is nonempty ASCII letters, digits, `-`, and `_` (`crates/rimz/src/harness/schedule.rs::validate_name`). The resolver in `crates/rimz/src/harness/workflow/graph.rs::WorkflowSpec::edges` supplies check and step edges and the header deadline. A check's `timeout` and `invalid`, a step's `cap`, and the header's `deadline` default to `@user`; agent capacity defaults to `@failed`, and a condition's `unknown` to `@wait`. An explicit entry overrides a default. Engine routing, validation rows, timeout admission, cycle detection, and inspection read that resolver. A step's turn-ending outcomes resolve through `then`; an absent `on.asked` keeps the question live and is not a displayed edge. The routing lookup retains an `@user` fallback for a forced `asked` settlement or a missing `then` in an unvalidated spec.
+
+Each edge also carries fireability and, when it can never fire, a typed reason. `Edge::mark` owns the human wording used by validation and inspection. A judge's `invalid` route remains accepted and listed but never fires: `Transition::finish_judge` retries once, then parks independently of that edge. Capacity needs a finite wait and enabled throttle and can only give up in an automatic loop-started run. An unset header deadline is conditional on a run grant, not a never-firing edge. These annotations do not change engine behavior or admission's configured-cycle checks.
+
+`crates/rimz/src/harness/workflow/graph.rs::WorkflowSpec::walk` takes reverse postorder from `start`, traversing fireable edges last-to-first in display order. It walks a header deadline destination after the start component, and lists unreachable nodes alphabetically. A step hangs under its `then` check only when that check occurs earlier in the walk and has a fireable edge to the step. This keeps a forward return, such as land's `triage` to `ruled`, standalone. Hanging children follow their parent's edge order.
+
+`crates/rimz/src/harness/workflow/script/condition.rs::case_marks` projects the latest answer's readings through `WhenExpr::truth`, stopping at the winner or first unread case; later cases are not reached. A holding wait's `case` selects the held winner. The adjacent `unread_reasons` parser recovers per-key reasons from `answer`'s stored prose, using its null-reading keys as delimiters so commas and parentheses inside a reason survive. It adds no stored field.
 
 | Rule | Why |
 | --- | --- |

@@ -20,8 +20,9 @@ mod validate;
 
 pub(crate) use engine::reassign_task;
 pub use engine::{WorkflowErr, advance, cancel, create, resume, wake, wake_run};
-pub use graph::Edge;
+pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
 pub use inspect::{Hop, HopKind, evaluation_target, hold_until, hops, next_bound, timeout_at};
+pub use script::{CaseMark, CaseMarks, case_marks, unread_reasons};
 pub use spec::{
     Case, Check, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, WorkflowSpec, load,
     schema,
