@@ -152,7 +152,7 @@ pub enum CheckKind<'a> {
 }
 
 impl Check {
-    pub(super) fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
+    pub fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
         if !matches!(self.kind(), Some(CheckKind::Condition)) {
             return self.wake.iter().flatten().map(Wake::subscription).collect();
         }

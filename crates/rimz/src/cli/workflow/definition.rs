@@ -8,15 +8,10 @@ use super::*;
 pub(super) fn render(name: &str, globals: &super::super::GlobalFlags) -> Result<()> {
     let dir = definition_dir(Path::new(name));
     let mut out = render::out();
-    let spec = match workflow::load(&dir) {
+    let spec = match load(name) {
         Ok(spec) => spec,
         Err(error) => {
-            let error = render::one_line(&error.to_string());
-            writeln!(
-                out,
-                "{name}: definition unavailable: {error}; check with {}",
-                validate_command(name)
-            )?;
+            writeln!(out, "{error}")?;
             return Ok(());
         }
     };
@@ -50,8 +45,14 @@ pub(super) fn render(name: &str, globals: &super::super::GlobalFlags) -> Result<
     Ok(())
 }
 
-fn validate_command(name: &str) -> String {
-    resolve::command("validate", &[name], None, None, &[], &[])
+pub(super) fn load(name: &str) -> Result<WorkflowSpec> {
+    workflow::load(&definition_dir(Path::new(name))).map_err(|error| {
+        anyhow::anyhow!(
+            "{name}: definition unavailable: {}; check with {}",
+            render::one_line(&error.to_string()),
+            resolve::command("validate", &[name], None, None, &[], &[]),
+        )
+    })
 }
 
 fn header(

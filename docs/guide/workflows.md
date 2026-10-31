@@ -118,6 +118,26 @@ one node in full: rimz workflow show fix-tests tests · source ~/.rimz/workflows
 no active or parked runs of fix-tests
 ```
 
+When a route needs a closer look, open its node rather than guessing which defaults apply: `rimz workflow show fix-tests fix`. This view includes the prompt path, layout, limits and every resolved edge, even one that cannot fire. A condition node also shows its wake subscriptions and each case's hold and key. This reads the definition for future runs; a run address still inspects that run's sealed graph and history.
+
+```console
+$ rimz workflow show fix-tests fix
+fix · step in fix-tests · agent
+
+reached from: tests by fail
+
+edges:
+  then → tests (explicit)
+  cap → @user (default)
+  capacity → @failed (default, never: capacity-wait is forever)
+  deadline → @user (default, only with a deadline)
+
+agent:       claude
+prompt-file: prompts/fix.md
+timeout:     1h
+max-visits:  3
+```
+
 ```sh
 rimz workflow list         # every active and parked run, with its node and what it waits on
 rimz workflow show "$RUN"  # one run: position, next moves, and a compact trail
