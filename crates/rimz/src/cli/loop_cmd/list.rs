@@ -881,23 +881,28 @@ impl TaskRow {
         {
             return;
         }
-        let mut parked = self.workflow_runs.iter().filter(|run| run.reason.is_some());
-        let Some(first) = parked.next() else {
+        let Some((text, age)) = self.parked_reason(now) else {
             return;
         };
-        let more = parked.count();
         self.attention = Some(Attention::Parked);
         self.section = Section::NeedsYou;
-        self.reason = format!(
-            "{} run(s) parked: {}{}",
-            more + 1,
-            first.summary(now),
+        self.reason = format!("{text} {age}");
+    }
+
+    fn parked_reason(&self, now: Timestamp) -> Option<(String, String)> {
+        let mut parked = self.workflow_runs.iter().filter(|run| run.reason.is_some());
+        let first = parked.next()?;
+        let more = parked.count();
+        let (text, age) = first.summary(now);
+        let tail = format!(
+            "{age}{}",
             if more > 0 {
                 format!(" (+{more} more)")
             } else {
                 String::new()
             }
         );
+        Some((format!("{} run(s) parked: {text}", more + 1), tail))
     }
 
     fn rowless(
@@ -1218,18 +1223,20 @@ impl WorkflowRunRow {
         self.address.as_deref().unwrap_or(self.id.as_str())
     }
 
-    /// `<address> <node> <reason>[: <text>] <age>`.
-    pub(super) fn summary(&self, now: Timestamp) -> String {
+    /// `<address> <node> <reason>[: <text>]` and its age, kept apart so only the text clips.
+    pub(super) fn summary(&self, now: Timestamp) -> (String, String) {
         let text = self
             .text
             .as_ref()
             .map(|text| format!(": {}", ui::one_line(text)))
             .unwrap_or_default();
-        format!(
-            "{} {} {}{text} {}",
-            self.name(),
-            self.node,
-            self.reason.unwrap_or(self.state),
+        (
+            format!(
+                "{} {} {}{text}",
+                self.name(),
+                self.node,
+                self.reason.unwrap_or(self.state)
+            ),
             elapsed(self.parked_at.unwrap_or(self.since), now),
         )
     }
