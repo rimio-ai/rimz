@@ -139,7 +139,10 @@ fn parse_profile_plan(body: &str, owner: &str) -> AccountProfileProbe {
         return AccountProfileProbe::Failed;
     };
     if fingerprint != owner {
-        return AccountProfileProbe::Answered(None);
+        return AccountProfileProbe::Answered {
+            plan: None,
+            display_name: None,
+        };
     }
     let plan = match (
         profile.organization.organization_type.as_deref(),
@@ -150,7 +153,14 @@ fn parse_profile_plan(body: &str, owner: &str) -> AccountProfileProbe {
         (Some("claude_max"), Some("default_claude_max_20x")) => Some("max_20x"),
         _ => None,
     };
-    AccountProfileProbe::Answered(plan.map(str::to_owned))
+    AccountProfileProbe::Answered {
+        plan: plan.map(str::to_owned),
+        display_name: profile
+            .organization
+            .plan_display_name
+            .as_deref()
+            .and_then(crate::agents::single_line_description),
+    }
 }
 
 fn redemption_hold(usage: &UsageWire, now: Timestamp) -> Option<RedeemHold> {
@@ -311,6 +321,8 @@ struct OrganizationWire {
     organization_type: Option<String>,
     #[serde(default)]
     rate_limit_tier: Option<String>,
+    #[serde(default)]
+    plan_display_name: Option<String>,
 }
 
 #[derive(Deserialize)]

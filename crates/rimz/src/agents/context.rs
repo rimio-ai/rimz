@@ -752,10 +752,13 @@ pub struct AgentAccount {
     #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
     pub scope: ProviderAccountScope,
     /// Plan/subscription tier (`max`, `team`, `pro`), including adapter-normalized
-    /// subtiers (`max_5x`, `max_20x`); the renderer formats its brand label
-    /// (`Claude Max 20x`, `ChatGPT Pro 200`).
+    /// subtiers (`max_5x`, `max_20x`); display names stay separate from this identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// Provider-supplied human plan name from an owner- and saved-plan-bound profile
+    /// answer. Labels prefer it to the tier vocabulary; it never supplies a missing plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_name: Option<String>,
     /// Provider-native account identifier when an integration exposes one.
     /// Display remains provider-specific; this stable value primarily keys
     /// account switches and machine-readable diagnostics.
@@ -805,6 +808,7 @@ impl std::fmt::Debug for AgentAccount {
             .field("credentials", &self.credentials)
             .field("account_key", &self.account_key)
             .field("plan", &self.plan)
+            .field("plan_name", &self.plan_name)
             .field("account_id", &self.account_id)
             .field("metered", &self.metered)
             .field("version", &self.version)

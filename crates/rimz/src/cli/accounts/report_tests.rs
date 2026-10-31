@@ -264,6 +264,47 @@ fn unlimited_credits_render_in_overview_and_detail() {
 }
 
 #[test]
+fn profile_plan_names_reach_the_report_fallback_but_do_not_override_a_panel() {
+    let login = ProviderLogin::default_for(AgentKind::new_unchecked("claude"));
+    let record = record(
+        1,
+        true,
+        Some(AgentAccount {
+            plan_name: Some("Ultra".into()),
+            ..account("max_20x", true)
+        }),
+    );
+    let config = MachineConfig::default();
+    let context = ReportContext {
+        day_cutoff_secs: None,
+        config: &config,
+        installed: &BTreeSet::new(),
+        spend_step: &|_| SpendStep::Subscription,
+    };
+    let provider = panel("claude");
+    let actual: Vec<_> = [None, Some(&provider)]
+        .into_iter()
+        .map(|panel| {
+            let report = build_report(
+                &login,
+                Some(&record),
+                panel,
+                &ProviderSpendingCache::default(),
+                &context,
+            );
+            (report.plan, report.plan_label)
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (Some("max_20x".into()), Some("Claude Ultra".into())),
+            (Some("max_20x".into()), Some("Claude Max".into())),
+        ]
+    );
+}
+
+#[test]
 fn undecided_report_keeps_unknown_metering_with_or_without_a_panel() {
     let login = ProviderLogin::default_for(AgentKind::new_unchecked("pi"));
     let record = record(
@@ -271,6 +312,8 @@ fn undecided_report_keeps_unknown_metering_with_or_without_a_panel() {
         true,
         Some(AgentAccount {
             provisional: true,
+            plan: Some("max_20x".into()),
+            plan_name: Some("Ultra".into()),
             ..Default::default()
         }),
     );
@@ -353,10 +396,30 @@ fn lapsed_provider_report_does_not_restore_the_cached_plan() {
     let mut value = serde_json::to_value(panel("claude")).unwrap();
     value["plan"] = serde_json::Value::Null;
     value["entitlement"] = serde_json::json!({"lapsed":{"since_ms":1_700_000_000_000_u64}});
-    let reports = group(
-        "claude",
-        vec![("default", serde_json::from_value(value).unwrap())],
+    let provider: SidebarProviderPanel = serde_json::from_value(value).unwrap();
+    let reports = group("claude", vec![("default", provider.clone())]);
+    let named = record(
+        1,
+        true,
+        Some(AgentAccount {
+            plan_name: Some("Ultra".into()),
+            ..account("max_20x", true)
+        }),
     );
+    let config = MachineConfig::default();
+    let report = build_report(
+        &ProviderLogin::default_for(AgentKind::new_unchecked("claude")),
+        Some(&named),
+        Some(&provider),
+        &ProviderSpendingCache::default(),
+        &ReportContext {
+            day_cutoff_secs: None,
+            config: &config,
+            installed: &BTreeSet::new(),
+            spend_step: &|_| SpendStep::Subscription,
+        },
+    );
+    assert_eq!((report.plan, report.plan_label), (None, None));
     assert_eq!(reports[0].plan_label, None);
     assert_eq!(
         serde_json::to_value(&reports[0]).unwrap()["entitlement"],

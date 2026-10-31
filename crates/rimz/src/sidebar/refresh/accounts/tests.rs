@@ -96,6 +96,7 @@ fn profile_state(attempted_at_ms: u64, read_at_ms: u64) -> AccountProfileState {
             owner: "owner".into(),
             basis: Some("max_5x".into()),
             plan: Some("pro".into()),
+            plan_name: None,
             read_at_ms,
         }),
     }
@@ -112,13 +113,17 @@ fn profile_answer_records_the_fresh_credential_plan() {
             ProfileReadPolicy::Forced,
             0,
             100,
-            || AccountProfileProbe::Answered(Some("pro".into())),
+            || AccountProfileProbe::Answered {
+                plan: Some("pro".into()),
+                display_name: Some("Pro".into()),
+            },
             || 200,
         )
         .unwrap();
         let answer = state.answer.unwrap();
         assert_eq!(answer.basis.as_deref(), basis);
         assert_eq!(answer.plan.as_deref(), Some("pro"));
+        assert_eq!(answer.plan_name.as_deref(), Some("Pro"));
         let encoded = serde_json::to_value(&answer).unwrap();
         assert_eq!(encoded.get("basis").is_some(), basis.is_some());
         assert_eq!(
@@ -183,6 +188,7 @@ fn profile_merge_does_not_mask_a_changed_credential_plan() {
         let answer = state.answer.as_mut().unwrap();
         answer.basis = basis.map(str::to_owned);
         answer.plan = Some("max_5x".into());
+        answer.plan_name = Some("Max".into());
         let mut old = record(1, true, None);
         old.profile = Some(state);
         let previous = AccountsCache {
@@ -210,6 +216,16 @@ fn profile_merge_does_not_mask_a_changed_credential_plan() {
                 .as_deref(),
             expected,
             "an answer must not override a different credential plan"
+        );
+        assert_eq!(
+            cache.logins[&key("claude")]
+                .account
+                .as_ref()
+                .unwrap()
+                .plan_name
+                .as_deref(),
+            (basis == fresh_plan).then_some("Max"),
+            "a name must follow the same saved-plan binding"
         );
     }
 }
@@ -284,7 +300,15 @@ fn profile_due_rule_has_strict_triggers_and_a_ten_minute_attempt_floor() {
 fn profile_merge_resolves_only_bound_answers_and_carries_state_through_every_outcome() {
     let mut old = record(1, true, Some(profile_account(Some("owner"))));
     old.account.as_mut().unwrap().plan = Some("pro".into());
+    old.account.as_mut().unwrap().plan_name = Some("Pro".into());
     old.profile = Some(profile_state(1, 1));
+    old.profile
+        .as_mut()
+        .unwrap()
+        .answer
+        .as_mut()
+        .unwrap()
+        .plan_name = Some("Pro".into());
     let previous = AccountsCache {
         logins: BTreeMap::from([(key("claude"), old.clone())]),
     };
@@ -307,20 +331,28 @@ fn profile_merge_resolves_only_bound_answers_and_carries_state_through_every_out
                 .account
                 .as_ref()
                 .and_then(|account| account.plan.clone()),
+            record
+                .account
+                .as_ref()
+                .and_then(|account| account.plan_name.clone()),
             record.profile.clone(),
         ));
     }
     assert_eq!(
         actual,
         [
-            Some("pro"),
-            Some("max_5x"),
-            Some("max_5x"),
-            None,
-            Some("pro")
+            (Some("pro"), Some("Pro")),
+            (Some("max_5x"), None),
+            (Some("max_5x"), None),
+            (None, None),
+            (Some("pro"), Some("Pro"))
         ]
         .into_iter()
-        .map(|plan| (plan.map(str::to_owned), old.profile.clone()))
+        .map(|(plan, name)| (
+            plan.map(str::to_owned),
+            name.map(str::to_owned),
+            old.profile.clone()
+        ))
         .collect::<Vec<_>>()
     );
     for answer in [
@@ -329,6 +361,7 @@ fn profile_merge_resolves_only_bound_answers_and_carries_state_through_every_out
             owner: "other".into(),
             basis: Some("max_5x".into()),
             plan: Some("pro".into()),
+            plan_name: Some("Pro".into()),
             read_at_ms: 1,
         }),
     ] {
@@ -346,16 +379,66 @@ fn profile_merge_resolves_only_bound_answers_and_carries_state_through_every_out
             ..successful_probe("claude")
         };
         let cache = merge_probe_results(&previous, &BTreeSet::new(), 20, [result]);
+        let account = cache.logins[&key("claude")].account.as_ref().unwrap();
+        assert_eq!(account.plan.as_deref(), Some("max_5x"));
+        assert_eq!(account.plan_name, None);
+    }
+}
+
+#[test]
+fn profile_merge_uses_names_for_unrecognised_tiers_and_accepts_legacy_records() {
+    let legacy = serde_json::json!({
+        "account": {"plan": "max_5x", "profile_fingerprint": "owner"},
+        "probed_at_ms": 1, "ok": true,
+        "profile": {"attempted_at_ms": 1, "answer": {
+            "owner": "owner", "basis": "max_5x", "plan": null, "read_at_ms": 1
+        }}
+    });
+    let mut actual = Vec::new();
+    for name in [None, Some("Future")] {
+        let mut old: ProviderRecord = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(old.account.as_ref().unwrap().plan_name, None);
         assert_eq!(
-            cache.logins[&key("claude")]
-                .account
+            old.profile
                 .as_ref()
                 .unwrap()
-                .plan
-                .as_deref(),
-            Some("max_5x")
+                .answer
+                .as_ref()
+                .unwrap()
+                .plan_name,
+            None
         );
+        old.profile
+            .as_mut()
+            .unwrap()
+            .answer
+            .as_mut()
+            .unwrap()
+            .plan_name = name.map(str::to_owned);
+        let cache = merge_probe_results(
+            &AccountsCache {
+                logins: BTreeMap::from([(key("claude"), old)]),
+            },
+            &BTreeSet::new(),
+            20,
+            [ProviderProbeResult {
+                outcome: AccountProbe::Found(profile_account(Some("owner"))),
+                ..successful_probe("claude")
+            }],
+        );
+        let account = cache.logins[&key("claude")].account.as_ref().unwrap();
+        actual.push((
+            account.plan.as_deref().unwrap().to_owned(),
+            account.plan_name.clone(),
+        ));
     }
+    assert_eq!(
+        actual,
+        [
+            ("max_5x".into(), None),
+            ("max_5x".into(), Some("Future".into()))
+        ]
+    );
 }
 
 #[test]
@@ -457,7 +540,10 @@ fn profile_failure_changes_only_the_attempt_and_an_unrecognised_answer_ends_over
             clock.set(150);
             trigger_ms.set(clock.get());
             clock.set(200);
-            AccountProfileProbe::Answered(None)
+            AccountProfileProbe::Answered {
+                plan: None,
+                display_name: None,
+            }
         },
         || clock.get(),
     )
@@ -548,7 +634,10 @@ fn unavailable_coordination_reads_profiles_only_when_forced() {
                     100,
                     || {
                         calls.set(calls.get() + 1);
-                        AccountProfileProbe::Answered(Some("pro".into()))
+                        AccountProfileProbe::Answered {
+                            plan: Some("pro".into()),
+                            display_name: None,
+                        }
                     },
                     || 100,
                 );
@@ -706,7 +795,10 @@ fn forced_query_waits_for_a_peer_then_probes_and_reads_once() {
                     3,
                     || {
                         reads.fetch_add(1, Ordering::SeqCst);
-                        AccountProfileProbe::Answered(Some("pro".into()))
+                        AccountProfileProbe::Answered {
+                            plan: Some("pro".into()),
+                            display_name: None,
+                        }
                     },
                     || 4,
                 );

@@ -499,7 +499,7 @@ reason = "Typed skipped flag mappings travel from provider normalization to laun
 [[verdict]]
 kind = "item"
 key = "agents::capabilities::AccountProfileProbe"
-reason = "The public account capability distinguishes no attempt, an answered plan and failure without changing login facts."
+reason = "The public account capability distinguishes no attempt, an answered plan with an optional display name and failure without changing login facts."
 
 [[verdict]]
 kind = "item"
@@ -509,7 +509,7 @@ reason = "The public ProviderRecord carries the profile attempt and answer throu
 [[verdict]]
 kind = "item"
 key = "agents::account::AccountProfileAnswer"
-reason = "The public profile state carries an opaque owner, recognised plan and response time to the account worker's resolution."
+reason = "The public profile state carries an opaque owner, saved-plan basis, recognised plan, optional display name and request start time to the account worker's resolution."
 
 [[verdict]]
 kind = "item"

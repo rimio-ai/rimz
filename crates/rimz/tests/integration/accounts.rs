@@ -1999,6 +1999,134 @@ fn live_profile_corrects_only_its_owner_and_obeys_cache_refresh_failure_and_offl
 
 #[cfg(unix)]
 #[test]
+fn live_profile_names_label_reports_without_changing_plan_ids() {
+    let env = Env::new();
+    let (answer, _) = write_fake_claude(&env);
+    std::fs::write(answer, "echo '{\"loggedIn\":false}'\n").unwrap();
+    for name in ["work", "other"] {
+        let home = env.home_root.join(name);
+        succeeded(&accounts(
+            &env,
+            &["add", "claude", name, "--home", home.to_str().unwrap()],
+        ));
+        std::fs::write(
+            home.join(".credentials.json"),
+            json!({"claudeAiOauth": {
+                "accessToken": format!("synthetic-{name}"),
+                "expiresAt": 4102444800000_u64,
+                "scopes": ["user:profile"],
+                "subscriptionType": "max", "rateLimitTier": "default_claude_max_5x"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let auth = json!({
+            "loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max",
+            "email":format!("{name}@example.test"),"orgId":"org"
+        });
+        std::fs::write(
+            home.join("claude-auth"),
+            format!("printf '%s\\n' '{auth}'\n"),
+        )
+        .unwrap();
+    }
+    let query = |args: &[&str], branding: (&str, &str), profile_status, offline, profiles| {
+        let profile = json!({
+            "account":{"email":"work@example.test"},
+            "organization":{
+                "uuid":"org", "organization_type":"claude_max",
+                "rate_limit_tier":branding.0, "plan_display_name":branding.1,
+                "plan_display_label":"Not the name plan"
+            }
+        });
+        let (origin, server) = super::oauth_usage::serve_http_routes(
+            vec![
+                (
+                    "GET /api/oauth/profile",
+                    profile_status,
+                    profile.to_string(),
+                ),
+                ("GET /api/oauth/usage", 200, "{}".into()),
+            ],
+            profiles * 2,
+        );
+        let output = hermetic(&env, &mut env.rimz())
+            .arg("accounts")
+            .args(args)
+            .env("RIMZ_OAUTH_USAGE_OFFLINE", if offline { "1" } else { "0" })
+            .env(
+                "RIMZ_CLAUDE_OAUTH_USAGE_URL",
+                format!("{origin}/api/oauth/usage"),
+            )
+            .output()
+            .unwrap();
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("GET /api/oauth/profile"))
+                .count(),
+            profiles,
+            "{requests:?}"
+        );
+        assert_eq!(requests.len(), profiles * 2, "{requests:?}");
+        succeeded(&output)
+    };
+    let assert_plans = |text: &str, plan: &str, label: &str| {
+        let rows: Value = serde_json::from_str(text).unwrap();
+        for (name, plan, label) in [("work", plan, label), ("other", "max_5x", "Claude Max 5x")] {
+            let row = rows
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["account"] == format!("claude@{name}"))
+                .unwrap();
+            assert_eq!(row["plan"], plan, "{row}");
+            assert_eq!(row["plan_label"], label, "{row}");
+            assert!(
+                row.get("plan_name").is_none(),
+                "the JSON surface is unchanged: {row}"
+            );
+        }
+    };
+    let ultra = ("default_claude_max_20x", "Ultra");
+    assert_plans(
+        &query(&["list", "--json"], ultra, 200, false, 2),
+        "max_20x",
+        "Claude Ultra",
+    );
+    for args in [vec!["list"], vec!["show", "claude@work"]] {
+        let text = query(&args, ultra, 200, false, 0);
+        assert!(text.contains("Claude Ultra"), "{text}");
+    }
+    for (status, offline, profiles) in [(200, false, 2), (200, true, 0), (500, false, 2)] {
+        assert_plans(
+            &query(
+                &["list", "--refresh", "--json"],
+                ultra,
+                status,
+                offline,
+                profiles,
+            ),
+            "max_20x",
+            "Claude Ultra",
+        );
+    }
+    assert_plans(
+        &query(
+            &["list", "--refresh", "--json"],
+            ("default_claude_max_5x", "Max"),
+            200,
+            false,
+            2,
+        ),
+        "max_5x",
+        "Claude Max",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn list_probes_default_under_the_native_home_from_a_named_account_pane() {
     let env = Env::new();
     let home = env.home_root.join("work home");
