@@ -1972,11 +1972,12 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
 enum FireAttribution {
     Trailing,
     Recorded(usize),
-    NoRecord(usize),
+    NoRecord(usize, RunLockInfo),
 }
 
 /// Exact tenure joins span the window. Unmatched holders use checkout-local evidence within
 /// legacy record boundaries, so a later tenure cannot reach back past an unstamped run.
+/// At-lock records with matched fires take their own row, not another record's fire count.
 fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
     let mut recorded_by_lock = BTreeMap::new();
     let mut newest_by_checkout = BTreeMap::new();
@@ -2035,10 +2036,20 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
         };
         if newest.is_some_and(|started_at| started_at > holder.started_at) {
             let latest_fire = *missing_by_lock.entry(key).or_insert(index);
-            attribution[index] = FireAttribution::NoRecord(latest_fire);
+            attribution[index] = FireAttribution::NoRecord(latest_fire, holder);
         } else if let Some(run_index) = fallback {
             attribution[index] = FireAttribution::Recorded(run_index);
         }
+    }
+    let recorded_rows = attribution
+        .iter()
+        .filter_map(|destination| match *destination {
+            FireAttribution::Recorded(index) if is_at_lock_fire(&records[index]) => Some(index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for index in recorded_rows {
+        attribution[index] = FireAttribution::Trailing;
     }
     attribution
 }
@@ -2050,6 +2061,8 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
 /// Fires refused at the other gates ran nothing, so they neither bound the
 /// newest run nor end a count of overlaps.
 /// Fires on a `no record` row are excluded: a later tenure already proves their holder gone.
+/// The `during` count leaves out overlaps the table shows on another row and records that
+/// held the lock themselves; an overlap no row takes still counts.
 fn stale_clause(
     records: &[LoopRunRecord],
     attribution: &[FireAttribution],
@@ -2060,7 +2073,7 @@ fn stale_clause(
     let tail = records[start..]
         .iter()
         .zip(&attribution[start..])
-        .filter(|(_, destination)| !matches!(destination, FireAttribution::NoRecord(_)))
+        .filter(|(_, destination)| !matches!(destination, FireAttribution::NoRecord(..)))
         .map(|(record, _)| record);
     let after = tail.clone().filter(|record| is_overlap(record)).count();
     if after > 0 && has_active_run {
@@ -2090,7 +2103,12 @@ fn stale_clause(
         .rev()
         .take_while(|(record, _)| is_refused_fire(record))
         .filter(|(record, destination)| {
-            is_overlap(record) && !matches!(destination, FireAttribution::NoRecord(_))
+            is_overlap(record)
+                && match **destination {
+                    FireAttribution::Recorded(index) => index == newest_run,
+                    FireAttribution::NoRecord(..) => false,
+                    FireAttribution::Trailing => record.run_lock.is_none(),
+                }
         })
         .count();
     let skipped = match during {
@@ -2952,6 +2970,7 @@ impl<'a> RunRowKey<'a> {
 struct CollapsedRunRow<'a> {
     key: RunRowKey<'a>,
     latest: &'a LoopRunRecord,
+    no_record_holder: Option<RunLockInfo>,
     count: usize,
     oldest: Timestamp,
     duration: Option<(u64, u64)>,
@@ -2968,6 +2987,7 @@ impl<'a> CollapsedRunRow<'a> {
         Self {
             key: RunRowKey::new(record, skipped, waited),
             latest: record,
+            no_record_holder: None,
             count: 1,
             oldest: record.at,
             duration: record
@@ -2985,7 +3005,7 @@ impl<'a> CollapsedRunRow<'a> {
     }
 
     fn is_no_record(&self) -> bool {
-        is_at_lock_fire(self.latest)
+        self.no_record_holder.is_some()
     }
 
     fn merge(&mut self, previous: Self) {
@@ -3031,8 +3051,7 @@ impl<'a> CollapsedRunRow<'a> {
 
     fn note(&self, now: Timestamp) -> Option<String> {
         let mut parts = Vec::new();
-        if self.is_no_record() {
-            let holder = self.latest.holder?;
+        if let Some(holder) = self.no_record_holder {
             parts.extend(checkout_note(
                 self.key.checkout,
                 Some(format!("pid {}", holder.pid)),
@@ -3067,17 +3086,20 @@ impl<'a> CollapsedRunRow<'a> {
 
 /// Table rows in log order. Lock refusals follow their attributed record or their holder's
 /// `no record` row; trailing refusals take no row. Exact tenure joins outrank checkout and result.
+/// A lock-holding at-lock record with matched fires keeps its own status, note and record count.
 fn collapsed_run_rows<'a>(
     records: &'a [LoopRunRecord],
     attribution: &[FireAttribution],
 ) -> Vec<CollapsedRunRow<'a>> {
-    let mut folded = vec![(0, 0); records.len()];
+    let mut folded = vec![(0, 0, None); records.len()];
     for (record, destination) in records.iter().zip(attribution) {
-        let index = match *destination {
-            FireAttribution::Recorded(index) | FireAttribution::NoRecord(index) => index,
+        let (index, no_record_holder) = match *destination {
+            FireAttribution::Recorded(index) => (index, None),
+            FireAttribution::NoRecord(index, holder) => (index, Some(holder)),
             FireAttribution::Trailing => continue,
         };
-        let (skipped, waited) = &mut folded[index];
+        let (skipped, waited, holder) = &mut folded[index];
+        *holder = no_record_holder;
         if is_overlap(record) {
             *skipped += 1;
         } else {
@@ -3092,18 +3114,23 @@ fn collapsed_run_rows<'a>(
         {
             by_checkout.remove(checkout);
         }
-        let (skipped, waited) = folded[index];
+        let (skipped, waited, no_record_holder) = folded[index];
         if is_at_lock_fire(record) {
             if skipped == 0 && waited == 0 {
                 continue;
             }
-            rows.push(Some(CollapsedRunRow {
-                count: 0,
-                duration: None,
-                cost_usd: None,
-                input_tokens: None,
-                output_tokens: None,
-                ..CollapsedRunRow::new(record, skipped, waited)
+            let row = CollapsedRunRow::new(record, skipped, waited);
+            rows.push(Some(match no_record_holder {
+                Some(holder) => CollapsedRunRow {
+                    no_record_holder: Some(holder),
+                    count: 0,
+                    duration: None,
+                    cost_usd: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    ..row
+                },
+                None => row,
             }));
             continue;
         }
