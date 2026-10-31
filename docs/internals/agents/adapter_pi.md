@@ -259,7 +259,7 @@ The settled transcript walk can only raise the row's cost. On a turn end, `crate
 
 ### The conversation stream
 
-`transcript::parse_messages` keeps `message` entries with role `user` or `assistant`. It takes their text from a string or from `text` blocks joined by newlines, and passes user text through `sanitize_user_prompt`, which peels RimZ and harness envelopes and drops a message that still carries a control tag. Thinking, tool calls, tool results, summaries, and extension records stay out. `agents history`, reply streaming, and every transcript-backed consumer read this stream.
+`transcript::parse_messages` keeps `message` entries with role `user` or `assistant`. It takes their text from a string or from `text` blocks joined by newlines, and passes user text through `sanitize_user_prompt`. It unwraps a `<user_query>` wrapper and balanced `<pasted_content id=…>` envelopes, peels RimZ's `<system_reminder>` and `<previous-attempt-failure>` blocks, and drops a message left empty or still carrying a control tag. A RimZ message's `Type:` header stays in the text, which is where `agents history` reads each turn's sender and finds the keepalive turns it folds. Thinking, tool calls, tool results, summaries, and extension records stay out. `agents history`, reply streaming, and every transcript-backed consumer read this stream.
 
 ## Account and balance
 
