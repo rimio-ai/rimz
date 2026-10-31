@@ -329,7 +329,8 @@ upward-dependencies = ["address"]
 # SoftCompactSkip, soft_compact_skip and soft_compact_prompt and their facade exports share mid-turn policy (+6).
 # SoftCompactMark carries the fold's durable wrap-up epoch into helper policy (+1).
 # SoftCompactProgress distinguishes wrap-up, clean turn end and queued continuation (+1).
-surface-budget = 1213
+# ShareReport::default_home and shares_history let the CLI render its sharing summary (+2).
+surface-budget = 1215
 
 [[verdict]]
 kind = "item"

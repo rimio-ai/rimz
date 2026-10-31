@@ -148,10 +148,7 @@ fn a_fresh_shared_account_links_every_entry_that_is_not_private() {
     assert_eq!(again.current, report.linked);
     assert!(again.moved.is_empty() && again.unlinked.is_empty());
     assert_eq!(names(&home.named), before);
-    assert_eq!(
-        again.to_string(),
-        format!("already linked to {}", home.native.display())
-    );
+    assert_eq!(again.to_string(), "");
 }
 
 #[test]
@@ -330,7 +327,7 @@ fn switching_to_standalone_unlinks_history_and_keeps_settings() {
     assert_eq!(
         report.to_string(),
         format!(
-            "unlinked from {home}: archived_sessions, history.jsonl, sessions\nalready linked to {home}",
+            "unlinked from {home}: archived_sessions, history.jsonl, sessions\n",
             home = home.native.display()
         )
     );
@@ -535,10 +532,7 @@ fn a_standalone_account_shares_settings_alone_and_rerun_changes_nothing() {
         assert!(again.set_aside.is_empty());
         assert!(again.notes.is_empty());
         assert_eq!(names(named), before);
-        assert_eq!(
-            again.to_string(),
-            format!("already linked to {}", native.display())
-        );
+        assert_eq!(again.to_string(), "");
     }
 }
 
@@ -649,10 +643,7 @@ fn a_stowed_account_climbs_from_its_real_home_and_reruns_current() {
     );
     let again = home.run(true);
     assert_eq!(again.current, report.linked);
-    assert_eq!(
-        again.to_string(),
-        format!("already linked to {}", home.native.display())
-    );
+    assert_eq!(again.to_string(), "");
     assert!(!home.named.join(ASIDE_DIR).exists());
     assert_eq!(home.run(false).unlinked, ["archived_sessions", "sessions"]);
 }

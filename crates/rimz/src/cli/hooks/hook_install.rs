@@ -181,14 +181,19 @@ pub(in crate::cli) fn install_hooks_into(
 ) -> Result<()> {
     let options = crate::cli::hook_install_options();
     let disposition = install_disposition(agent, login_env, options);
-    let report = agent.install_hooks(login_env, options)?;
+    let (report, untrusted) = install_hooks_quietly(agent, login_env)?;
     write_install_result(out, &report, disposition)?;
-    write_untrusted_hooks_notice(
-        report.agent,
-        &agent.untrusted_installed_hooks(login_env),
-        out,
-    )?;
+    write_untrusted_hooks_notice(report.agent, &untrusted, out)?;
     Ok(())
+}
+
+/// Install without printing, returning the report and hooks still needing trust.
+pub(in crate::cli) fn install_hooks_quietly(
+    agent: &rimz::agents::AgentDefinition,
+    login_env: &BTreeMap<String, String>,
+) -> Result<(HookInstallReport, Vec<String>)> {
+    let report = agent.install_hooks(login_env, crate::cli::hook_install_options())?;
+    Ok((report, agent.untrusted_installed_hooks(login_env)))
 }
 
 /// Stderr notice for hooks the agent's own trust gate still skips: the gate

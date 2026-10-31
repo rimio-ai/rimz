@@ -59,9 +59,11 @@ rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone] [-
 
 1. For a new account, writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given, `history` only when `--history` is given, and `label` only when a non-empty `--label` is given. For an existing account, checks any `--history` or `--label` edit against the current `config.toml` without writing it. If that check fails, the home and `config.toml` stay unchanged.
 2. Creates the home directory.
-3. Links the account home to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `PI_CODING_AGENT_DIR`, under one lock per provider in `~/.rimz/accounts/.locks/`. Reports linked entries, entries moved into the provider's own home, links removed, links removed from unshared names, and any moves to `.rimz-aside`. On an existing account, writes any checked `--history` and `--label` updates after the links reach the requested mode, rereading `config.toml` for the edit. A refused rerun leaves `config.toml` unchanged.
+3. Links the account home to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `PI_CODING_AGENT_DIR`, under one lock per provider in `~/.rimz/accounts/.locks/`. Summarizes what is shared, and reports entries moved into the provider's own home, links removed, links removed from unshared names, and any moves to `.rimz-aside`. On an existing account, writes any checked `--history` and `--label` updates after the links reach the requested mode, rereading `config.toml` for the edit. A refused rerun leaves `config.toml` unchanged.
 4. Installs RimZ hooks through the named home's config link (`settings.json` for Claude, `config.toml` for Codex) or Pi's `extensions/` directory link, updating the provider's own home too.
-5. Prints where the account lives, the command that logs the provider in once under that home, the `rimz start` flag that uses it, and the `rimz accounts use` commands for a running room and new rooms.
+5. Prints the account home, the sharing summary, and `RimZ hooks installed`. A new declaration's header says `created at`; a rerun says `at`. Home paths in the header and sharing summary are `~`-relative. A shared account says `shares sessions, history, and settings with <default-home>`; a standalone account says `shares settings with <default-home>; keeps its own sessions and history`.
+
+`Finish setup` appears for a new declaration or when installed hooks still need trust. A new declaration asks for login when the provider starts, followed by hook trust if needed. A rerun asks only for any remaining hook trust; a clean rerun prints no setup section. Login is not probed by `add`; use `rimz accounts` to check an existing account's login. The section prints one command: `rimz agents <kind> --account <name>` when the current project's room is running (honoring `--root`), otherwise the provider command with its account-home environment overrides.
 
 Links are relative when the account home's real location is under the real ambient `HOME` and the provider home's configured path is under the configured `HOME`. They climb from the account home's real location, then follow the provider home's configured path below `HOME`, even if that provider home is a symlink. Otherwise links are absolute, including when `HOME` is unset, empty, or cannot be resolved. This keeps links under home portable across dotfile sync and a moved home.
 
@@ -78,7 +80,7 @@ Each entry takes one of five paths, and nothing but a link is ever removed:
 | Account home | Provider's own home | Result |
 | --- | --- | --- |
 | Link with the text RimZ would write | any | Left alone as current, even if its target is missing. |
-| Link with other text to the same existing file or directory | Present | Atomically rewritten in place, without a live-agent or daemon check or a `.rimz-aside` entry, and reported as linked. |
+| Link with other text to the same existing file or directory | Present | Atomically rewritten in place, without a live-agent or daemon check or a `.rimz-aside` entry. |
 | Absent | any | Linked. Missing settings and history directory targets are created; other missing targets remain dangling links until written. |
 | File or directory | Absent | Moved into the provider's own home, then linked. Across filesystems it stays in the account home and `add` warns. |
 | File, directory, or any other link | Present, or the entry is a link | Moved to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, then linked, and reported as `<account> account: moved <slot> aside to <aside>; the account now reads the copy in <default-home>`. A relative link is rewritten against the account home's real location, preserving where it resolves. A dangling link with other text takes this path too. |
@@ -89,18 +91,17 @@ A shared Codex account launches with `CODEX_SQLITE_HOME` set to the provider's o
 
 ```console
 $ rimz accounts add claude work
-linked to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles, projects
-✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
-claude account `work` lives at ~/.rimz/accounts/claude/work
-  log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
-  use at birth  rimz start --account claude@work
-  this room     rimz accounts use claude work
-  new rooms     rimz accounts use --global claude work
+✓ claude account work created at ~/.rimz/accounts/claude/work
+  shares sessions, history, and settings with ~/.claude
+  RimZ hooks installed
+
+Finish setup: log in when claude starts.
+  CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
 ```
 
-RimZ writes no credentials and never writes inside an unshared name. Unshared names remain per account; every other listed entry is shared by a link, not copied. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`; trust hooks once per account path, through its startup review or `/hooks` (see `hooks untrusted` under [`list`](#list)).
+RimZ writes no credentials and never writes inside an unshared name. Unshared names remain per account; every other listed entry is shared by a link, not copied. Run the printed setup command once so the provider stores its own credentials there. For Codex, trust hooks once per account path, through its startup review or `/hooks` (see `hooks untrusted` under [`list`](#list)).
 
-Rerunning `add` leaves the config entry alone unless `--history` or `--label` updates its field, creates the home if missing, brings the links to the account's mode, and refreshes hooks. An update rewrites an account declared as an inline table as its own `[accounts.<KIND>.<NAME>]` table, keeping its comments. Links whose text matches remain unchanged and print `already linked to <default-home>`. This also repairs a link replaced by a provider save, moving the replacement to `.rimz-aside`. `--home` on a rerun must name the same directory. An agent launch on a named account runs the same link step before it starts the provider, prints the removed-link, moved-aside, and left-in-place lines as warnings, and refuses on the same error.
+Rerunning `add` leaves the config entry alone unless `--history` or `--label` updates its field, creates the home if missing, brings the links to the account's mode, and refreshes hooks. An update rewrites an account declared as an inline table as its own `[accounts.<KIND>.<NAME>]` table, keeping its comments. Links whose text matches remain unchanged. This also repairs a link replaced by a provider save, moving the replacement to `.rimz-aside`. `--home` on a rerun must name the same directory. An agent launch on a named account runs the same link step before it starts the provider, prints the removed-link, moved-aside, and left-in-place lines as warnings, and refuses on the same error.
 
 `add` refuses these cases. The live-agent checks count agents with a pane attached unless their recorded process has died, so the unstarted seats of one team launch never block each other, and run before any entry changes, but after first-declaration config writing and home creation; that declaration remains for a rerun. The other checks, including resolved-home and exported-home checks, precede those writes.
 

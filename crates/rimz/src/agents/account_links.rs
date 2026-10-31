@@ -141,6 +141,7 @@ fn daemon_writers(sessions: Option<NonZeroUsize>, kind: &AgentKind, writes: &str
 pub struct ShareReport {
     account: LoginKey,
     default_home: PathBuf,
+    shared: bool,
     linked: Vec<String>,
     current: Vec<String>,
     /// Entries only the account had, now in the provider's own home.
@@ -156,6 +157,16 @@ pub struct ShareReport {
 }
 
 impl ShareReport {
+    /// The provider home the account shares with.
+    pub fn default_home(&self) -> &Path {
+        &self.default_home
+    }
+
+    /// Whether sessions and history share that home as well as settings.
+    pub fn shares_history(&self) -> bool {
+        self.shared
+    }
+
     /// What the account's owner must hear about: every link removed from a
     /// name no account shares, every entry set aside, and every entry left in
     /// the account home.
@@ -204,11 +215,7 @@ impl std::fmt::Display for ShareReport {
         if !self.unlinked.is_empty() {
             writeln!(f, "unlinked from {home}: {}", self.unlinked.join(", "))?;
         }
-        if self.linked.is_empty() {
-            write!(f, "already linked to {home}")
-        } else {
-            write!(f, "linked to {home}: {}", self.linked.join(", "))
-        }
+        Ok(())
     }
 }
 
@@ -534,6 +541,7 @@ fn reconcile_homes(
     let mut report = ShareReport {
         account: homes.account.clone(),
         default_home: default_home.clone(),
+        shared: homes.shared,
         linked: Vec::new(),
         current: Vec::new(),
         moved: Vec::new(),

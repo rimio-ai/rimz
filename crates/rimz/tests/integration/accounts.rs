@@ -291,6 +291,141 @@ fn failed(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+#[test]
+fn accounts_add_receipt_finishes_new_codex_setup_outside_room() {
+    let env = Env::new();
+    let home = env.rimz_home().join("accounts/codex/work");
+    let added = succeeded(&accounts(&env, &["add", "codex", "work"]));
+    assert_eq!(
+        added,
+        format!(
+            "✓ codex account work created at ~/rimz-home/accounts/codex/work\n  shares sessions, history, and settings with ~/.codex\n  RimZ hooks installed\n\nFinish setup: log in when codex starts, then run /hooks inside codex and trust the RimZ hooks.\n  CODEX_HOME={} CODEX_SQLITE_HOME={} codex\n",
+            home.display(),
+            env.home_root.join(".codex").display(),
+        )
+    );
+}
+
+#[test]
+fn accounts_add_receipt_only_requests_hook_trust_on_codex_rerun() {
+    let env = Env::new();
+    succeeded(&accounts(&env, &["add", "codex", "work"]));
+    env.record(&env.project_root);
+    let rerun = succeeded(&room_accounts(&env, &["add", "codex", "work"]));
+    assert_eq!(
+        rerun,
+        format!(
+            "✓ codex account work at ~/rimz-home/accounts/codex/work\n  shares sessions, history, and settings with ~/.codex\n  RimZ hooks installed\n\nFinish setup: run /hooks inside codex and trust the RimZ hooks.\n  CODEX_HOME={} CODEX_SQLITE_HOME={} codex\n",
+            env.rimz_home().join("accounts/codex/work").display(),
+            env.home_root.join(".codex").display(),
+        )
+    );
+}
+
+#[test]
+fn accounts_add_receipt_omits_setup_after_codex_hooks_are_trusted() {
+    let env = Env::new();
+    let home = env.rimz_home().join("accounts/codex/work");
+    succeeded(&accounts(&env, &["add", "codex", "work"]));
+    trust_codex_account(&env, &home);
+    let rerun = succeeded(&accounts(&env, &["add", "codex", "work"]));
+    assert_eq!(
+        rerun,
+        "✓ codex account work at ~/rimz-home/accounts/codex/work\n  shares sessions, history, and settings with ~/.codex\n  RimZ hooks installed\n"
+    );
+}
+
+#[test]
+fn accounts_add_receipt_uses_login_command_for_a_stopped_standalone_account() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let added = succeeded(&room_accounts(
+        &env,
+        &["add", "codex", "work", "--history", "standalone"],
+    ));
+    assert_eq!(
+        added,
+        format!(
+            "✓ codex account work created at ~/rimz-home/accounts/codex/work\n  shares settings with ~/.codex; keeps its own sessions and history\n  RimZ hooks installed\n\nFinish setup: log in when codex starts, then run /hooks inside codex and trust the RimZ hooks.\n  CODEX_HOME={} codex\n",
+            env.rimz_home().join("accounts/codex/work").display(),
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn accounts_add_receipt_uses_room_launch_only_for_a_live_session() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::write_path_shim(
+        &provider_bin(&env),
+        "tmux",
+        r#"
+if [ "$1" = -S ]; then shift 3; fi
+if [ "$1" = -V ]; then printf 'tmux 3.5\n'; exit 0; fi
+if [ "$1" = list-sessions ] && [ -n "$RIMZ_TEST_TMUX_SESSION" ]; then
+    printf '%s\n' "$RIMZ_TEST_TMUX_SESSION"
+    exit 0
+fi
+exit 1"#,
+    );
+    let login = format!(
+        "  CODEX_HOME={} CODEX_SQLITE_HOME={} codex",
+        env.rimz_home().join("accounts/codex/work").display(),
+        env.home_root.join(".codex").display(),
+    );
+    for (session, command) in [
+        (
+            workspace.session_name.as_str(),
+            "  rimz agents codex --account work",
+        ),
+        ("another-room", login.as_str()),
+        ("", login.as_str()),
+    ] {
+        let added = succeeded(
+            &hermetic(&env, &mut env.rimz())
+                .envs(rimz::workspace::pin_env(
+                    &workspace.workspace_id,
+                    &workspace.project_root,
+                ))
+                .env("RIMZ_TEST_TMUX_SESSION", session)
+                .args(["--mux", "tmux", "accounts", "add", "codex", "work"])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(added.lines().last(), Some(command), "{session:?}");
+    }
+}
+
+#[test]
+fn accounts_add_receipt_falls_back_when_room_runtime_is_unusable() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let output = hermetic(&env, &mut env.rimz())
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ))
+        .env("XDG_RUNTIME_DIR", env.home_root.join("runtime".repeat(30)))
+        .args(["accounts", "add", "claude", "work"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "receipt room lookup must not refuse account creation: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        succeeded(&output),
+        format!(
+            "✓ claude account work created at ~/rimz-home/accounts/claude/work\n  shares sessions, history, and settings with ~/.claude\n  RimZ hooks installed\n\nFinish setup: log in when claude starts.\n  CLAUDE_CONFIG_DIR={} claude\n",
+            env.rimz_home().join("accounts/claude/work").display(),
+        )
+    );
+}
+
 fn room_accounts(env: &Env, args: &[&str]) -> Output {
     let workspace = env.resolve_workspace(&env.project_root);
     hermetic(env, &mut env.rimz())
@@ -897,22 +1032,12 @@ fn pi_accounts_share_extensions_and_history_but_keep_logins_private() {
         assert!(!home.join(name).exists(), "{name} must stay private");
         assert_eq!(std::fs::read_to_string(native.join(name)).unwrap(), "{}");
     }
-    assert!(
-        added.contains(&format!("linked to {}:", native.display())),
-        "{added}"
-    );
-    let extension = home.join("extensions/rimz.ts");
-    let printed_extension = format!(
-        "~/{}",
-        extension.strip_prefix(&env.home_root).unwrap().display()
-    );
-    assert!(added.contains(&printed_extension), "{added}");
-    assert!(
-        added.contains(&format!(
-            "log in once   PI_CODING_AGENT_DIR={} pi",
-            home.display()
-        )),
-        "{added}"
+    assert_eq!(
+        added,
+        format!(
+            "✓ pi account work created at ~/rimz-home/accounts/pi/work\n  shares sessions, history, and settings with ~/.pi/agent\n  RimZ hooks installed\n\nFinish setup: log in when pi starts.\n  PI_CODING_AGENT_DIR={} pi\n",
+            home.display(),
+        )
     );
     let selected = succeeded(&accounts(&env, &["use", "--global", "pi", "work"]));
     assert!(selected.contains("pi@work"), "{selected}");
@@ -987,15 +1112,17 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
         Path::new("../.claude/settings.json")
     );
     assert!(std::fs::read_to_string(&target).unwrap().contains("rimz"));
-    assert!(
-        added.contains(&format!(
-            "log in once   CLAUDE_CONFIG_DIR='{home_arg}' claude"
-        )),
-        "{added}"
+    assert_eq!(
+        added,
+        format!(
+            "✓ claude account work created at ~/claude work\n  shares sessions, history, and settings with ~/.claude\n  RimZ hooks installed\n\nFinish setup: log in when claude starts.\n  CLAUDE_CONFIG_DIR='{home_arg}' claude\n"
+        )
     );
     let rerun = succeeded(&accounts(&env, &["add", "claude", "work"]));
-    assert!(rerun.contains("hooks up to date"), "{rerun}");
-    assert!(rerun.contains("already linked to"), "{rerun}");
+    assert_eq!(
+        rerun,
+        "✓ claude account work at ~/claude work\n  shares sessions, history, and settings with ~/.claude\n  RimZ hooks installed\n"
+    );
     assert_eq!(
         std::fs::read_link(home.join("settings.json")).unwrap(),
         Path::new("../.claude/settings.json")
