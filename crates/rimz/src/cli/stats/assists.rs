@@ -1676,9 +1676,8 @@ fn row_benefit_line(
             ..
         } => {
             let agent = label.as_deref().unwrap_or(kind.as_str());
-            let silence = repeat_duration_range(*silent_secs, duration, |secs| {
-                rimz::utils::time::format_duration_compact(Duration::from_secs(secs))
-            });
+            let silence =
+                repeat_duration_range(*silent_secs, duration, rimz::theme::fmt::active_duration);
             let error = error
                 .as_deref()
                 .map(|error| format!(" ({})", first_line(error)))
@@ -1809,11 +1808,14 @@ fn row_benefit_line(
             ..
         } => {
             let agent = label.as_deref().unwrap_or(kind.as_str());
-            let compact =
-                |secs| rimz::utils::time::format_duration_compact(Duration::from_secs(secs));
-            let idle = repeat_duration_range(*idle_secs, duration, compact);
+            let idle =
+                repeat_duration_range(*idle_secs, duration, rimz::theme::fmt::active_duration);
             let holding = horizon_secs
-                .map(|horizon| format!(", holding warm ({})", compact(horizon)))
+                .map(|horizon| {
+                    let horizon =
+                        rimz::utils::time::format_duration_compact(Duration::from_secs(horizon));
+                    format!(", holding warm ({horizon})")
+                })
                 .unwrap_or_default();
             let error = error
                 .as_deref()
@@ -1838,8 +1840,6 @@ fn row_benefit_line(
             ..
         } => {
             let outcome = if *stopped { "stopped" } else { "stop failed" };
-            let compact =
-                |secs: u64| rimz::utils::time::format_duration_compact(Duration::from_secs(secs));
             let requester = requested_by
                 .as_deref()
                 .map(|by| format!(" — requested by {by}"))
@@ -1850,8 +1850,8 @@ fn row_benefit_line(
                 .unwrap_or_default();
             format!(
                 "{time} ■ {label} idle {outcome} after {} (threshold {}){requester}{error}",
-                repeat_duration_range(*idle_secs, duration, compact),
-                compact(*idle_after_secs),
+                repeat_duration_range(*idle_secs, duration, rimz::theme::fmt::active_duration),
+                rimz::utils::time::format_duration_compact(Duration::from_secs(*idle_after_secs)),
             )
         }
         AssistEvent::IdleStopWithdrawn {
@@ -1913,7 +1913,7 @@ fn row_benefit_line(
                 if ms < 1000 {
                     "<1s".to_owned()
                 } else {
-                    rimz::utils::time::format_duration_compact(Duration::from_secs(ms / 1000))
+                    rimz::theme::fmt::active_duration(ms / 1000)
                 }
             });
             let outcome = if *relaunched {
@@ -1949,22 +1949,15 @@ fn row_benefit_line(
                 .as_deref()
                 .map(|error| format!(" ({})", first_line(error)))
                 .unwrap_or_default();
-            let compact =
-                |secs| rimz::utils::time::format_duration_compact(Duration::from_secs(secs));
-            let (idle, threshold) = idle_after_secs.map_or_else(
-                || {
-                    (
-                        repeat_duration_range(*idle_secs, duration, format_hours),
-                        String::new(),
-                    )
-                },
-                |threshold| {
-                    (
-                        repeat_duration_range(*idle_secs, duration, compact),
-                        format!(" (threshold {})", compact(threshold)),
-                    )
-                },
-            );
+            let idle =
+                repeat_duration_range(*idle_secs, duration, rimz::theme::fmt::active_duration);
+            let threshold = idle_after_secs
+                .map(|secs| {
+                    let threshold =
+                        rimz::utils::time::format_duration_compact(Duration::from_secs(secs));
+                    format!(" (threshold {threshold})")
+                })
+                .unwrap_or_default();
             format!(
                 "{time} ⌁ {agent} idle {outcome} after {idle}{threshold} — {} ctx{error}",
                 compact_token_count(*occupied_tokens),

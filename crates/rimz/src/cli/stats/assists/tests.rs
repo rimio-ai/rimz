@@ -473,13 +473,13 @@ fn idle_stop_stats_count_stops_and_preserve_failures() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        lines.contains("■ @coder idle stopped after 200s (threshold 3m) — requested by @lead"),
+        lines.contains("■ @coder idle stopped after 3m (threshold 3m) — requested by @lead"),
         "{lines}"
     );
     assert!(!lines.contains("stopped true"), "{lines}");
     assert!(
         lines.contains(
-            "@coder idle stop failed after 200s (threshold 3m) — requested by @lead (no bound pane)"
+            "@coder idle stop failed after 3m (threshold 3m) — requested by @lead (no bound pane)"
         ),
         "{lines}"
     );
@@ -549,7 +549,7 @@ fn keepalive_stats_count_deliveries_and_preserve_failures() {
             let mut record = serde_json::json!({
                 "at": "2026-01-01T00:00:00Z", "assist": "cache_keepalive",
                 "kind": "claude", "agent_id": "session-1", "label": "@coder",
-                "idle_secs": 3540, "waits": 2, "message_id": "msg_1",
+                "idle_secs": 3541, "waits": 2, "message_id": "msg_1",
                 "delivered": delivered, "error": if delivered { None } else { Some("gate closed") }
             });
             if capped {
@@ -742,12 +742,12 @@ mod repeats {
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(
             lines[0]
-                .contains("@a cache keepalive after 1h — 1 wait pending · ×3 over 4h · agent a"),
+                .contains("@a cache keepalive after 1h00m — 1 wait pending · ×3 over 4h · agent a"),
             "{lines:?}"
         );
         assert!(
             lines[1]
-                .contains("@b cache keepalive after 1h — 1 wait pending · ×2 over 2h · agent b"),
+                .contains("@b cache keepalive after 1h00m — 1 wait pending · ×2 over 2h · agent b"),
             "{lines:?}"
         );
         assert_eq!(older, 0);
@@ -872,7 +872,7 @@ mod repeats {
             ),
             (
                 vec![keepalive_record("a", true), older_keepalive],
-                vec!["after 1h–2h", "×2 over 1h"],
+                vec!["after 1h00m–2h00m", "×2 over 1h"],
             ),
             (
                 vec![resumes[0].clone(), resumes[1].clone()],
@@ -918,7 +918,7 @@ mod repeats {
     }
 
     #[test]
-    fn timeline_repeats_range_per_attempt_durations_in_their_original_units() {
+    fn timeline_repeats_range_per_attempt_durations() {
         let fixtures = [
             (
                 serde_json::json!({
@@ -928,7 +928,7 @@ mod repeats {
                 }),
                 "idle_secs",
                 3600,
-                "after 0.2h–1.0h",
+                "after 10m–1h00m",
             ),
             (
                 serde_json::json!({
@@ -938,7 +938,7 @@ mod repeats {
                 }),
                 "idle_secs",
                 3600,
-                "after 10m–1h (threshold 5m)",
+                "after 10m–1h00m (threshold 5m)",
             ),
             (
                 serde_json::json!({
@@ -947,7 +947,7 @@ mod repeats {
                 }),
                 "idle_secs",
                 3600,
-                "after 10m–1h (threshold 5m)",
+                "after 10m–1h00m (threshold 5m)",
             ),
             (
                 serde_json::json!({
@@ -956,7 +956,7 @@ mod repeats {
                 }),
                 "silent_secs",
                 3600,
-                "silent 10m–1h",
+                "silent 10m–1h00m",
             ),
             (
                 serde_json::json!({
@@ -966,6 +966,26 @@ mod repeats {
                 "startup_ms",
                 1200,
                 "after <1s–1s before",
+            ),
+            (
+                serde_json::json!({
+                    "assist": "cache_keepalive", "kind": "claude", "agent_id": "a",
+                    "idle_secs": 3000, "waits": 1, "message_id": "msg_keepalive",
+                    "delivered": true
+                }),
+                "idle_secs",
+                4000,
+                "after 50m–1h06m —",
+            ),
+            (
+                serde_json::json!({
+                    "assist": "cache_keepalive", "kind": "claude", "agent_id": "a",
+                    "idle_secs": 3540, "waits": 1, "message_id": "msg_keepalive",
+                    "delivered": true
+                }),
+                "idle_secs",
+                3551,
+                "after 59m —",
             ),
         ];
         let results = fixtures
