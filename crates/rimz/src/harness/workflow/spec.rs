@@ -144,7 +144,7 @@ fn nonempty_cases<'de, D: serde::Deserializer<'de>>(
     Ok(cases)
 }
 
-pub(super) enum CheckKind<'a> {
+pub enum CheckKind<'a> {
     Run(&'a str),
     Shell(&'a str),
     Agent(&'a str),
@@ -169,7 +169,7 @@ impl Check {
         Ok(subscriptions)
     }
 
-    pub(super) fn kind(&self) -> Option<CheckKind<'_>> {
+    pub fn kind(&self) -> Option<CheckKind<'_>> {
         match (&self.run, &self.shell, &self.agent, self.cases.is_empty()) {
             (Some(run), None, None, true) => Some(CheckKind::Run(run)),
             (None, Some(shell), None, true) => Some(CheckKind::Shell(shell)),
@@ -210,7 +210,7 @@ pub struct Step {
     pub timeout: Option<String>,
 }
 
-pub(super) enum StepKind<'a> {
+pub enum StepKind<'a> {
     Agent(&'a str),
     Run(&'a str),
     Shell(&'a str),
@@ -246,7 +246,7 @@ impl Step {
         .find(|(_, used, max)| used >= max)
     }
 
-    pub(super) fn kind(&self) -> Option<StepKind<'_>> {
+    pub fn kind(&self) -> Option<StepKind<'_>> {
         match (&self.agent, &self.run, &self.shell) {
             (Some(agent), None, None) => Some(StepKind::Agent(agent)),
             (None, Some(run), None) => Some(StepKind::Run(run)),

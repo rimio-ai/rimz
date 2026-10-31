@@ -2060,7 +2060,8 @@ path = "crates/rimz/src/harness"
 # WorkflowSpec::edges replaces Check::edges as the shared routing table (net 0).
 # Workflow fireability/mark, walk, case marks and unread reasons serve CLI inspection (+10).
 # EdgeSource shares typed route provenance with CLI inspection (+1).
-surface-budget = 1054
+# CheckKind/kind and StepKind/kind share runner selection with definition rails (+4).
+surface-budget = 1058
 
 [[verdict]]
 kind = "item"
@@ -10456,6 +10457,16 @@ reason = "Validation and rail views share reachable node order and the alphabeti
 kind = "item"
 key = "harness::workflow::WalkNode"
 reason = "Rail views share which returning steps hang beneath an earlier sending check."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::CheckKind"
+reason = "Definition views present the same runner kind the workflow engine selects."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::StepKind"
+reason = "Definition views present the same runner kind the workflow engine selects."
 
 [[verdict]]
 kind = "item"

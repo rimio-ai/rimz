@@ -1,6 +1,7 @@
 use super::*;
 use rimz::store::workflow::{RunRecord, RunState};
 
+mod definition;
 mod show;
 
 const SPEC: &str = "[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nshell='true'\non.ok='build'\ntimeout='1h'\n[steps.build]\nshell='true'\nthen='gate'\nmax-visits=2\n";
@@ -324,9 +325,11 @@ fn bare_show_always_lists_live_runs_and_distinguishes_known_empty_from_unknown()
     assert!(!text.contains("current node"), "{text}");
     let known = env.rimz_home().join("workflows/unused");
     fs::create_dir_all(known).unwrap();
-    assert_eq!(
-        success(command(&env, &["workflow", "show", "unused"])),
-        "no active or parked runs of unused\n"
+    let text = success(command(&env, &["workflow", "show", "unused"]));
+    assert!(text.contains("definition unavailable"), "{text}");
+    assert!(
+        text.ends_with("no active or parked runs of unused\n"),
+        "{text}"
     );
     let text = refusal(command(&env, &["workflow", "show", "absent"]));
     assert!(text.contains("unknown workflow absent"), "{text}");
@@ -392,15 +395,17 @@ fn rooms_refuse_outside_and_prefer_the_callers_room_without_creating_state() {
     here.state = RunState::Done;
     here.terminal_at = Some(jiff::Timestamp::now());
     save(&env, &here);
-    assert_eq!(
-        success(
-            env.rimz()
-                .current_dir(&outside)
-                .args(["workflow", "show", "review"])
-                .output()
-                .unwrap()
-        ),
-        "no active or parked runs of review\n"
+    let text = success(
+        env.rimz()
+            .current_dir(&outside)
+            .args(["workflow", "show", "review"])
+            .output()
+            .unwrap(),
+    );
+    assert!(text.contains("definition unavailable"), "{text}");
+    assert!(
+        text.ends_with("no active or parked runs of review\n"),
+        "{text}"
     );
 }
 

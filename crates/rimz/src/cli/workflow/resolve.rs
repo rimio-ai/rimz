@@ -57,7 +57,7 @@ pub(super) fn all() -> Result<Vec<Located>> {
 
 pub(super) fn command(
     verb: &str,
-    target: &str,
+    targets: &[&str],
     root: Option<&Path>,
     at: Option<&str>,
     extend: &[String],
@@ -77,16 +77,25 @@ pub(super) fn command(
             }
         },
     );
-    let flags = flags.iter().copied().chain(
-        at.into_iter()
-            .flat_map(|node| ["--at", node])
-            .chain(extend.iter().flat_map(|grant| ["--extend", grant.as_str()])),
-    );
+    let at_args = match at {
+        Some(node) if node.starts_with('-') => vec![format!("--at={node}")],
+        Some(node) => vec!["--at".into(), node.into()],
+        None => Vec::new(),
+    };
+    let flags = flags
+        .iter()
+        .copied()
+        .chain(at_args.iter().map(String::as_str))
+        .chain(extend.iter().flat_map(|grant| ["--extend", grant.as_str()]));
     let args = ["workflow", verb].into_iter();
-    let command = if target.starts_with('-') {
-        shell_command(args.chain(flags).chain(["--", target]))
+    let command = if targets.iter().any(|target| target.starts_with('-')) {
+        shell_command(
+            args.chain(flags)
+                .chain(["--"])
+                .chain(targets.iter().copied()),
+        )
     } else {
-        shell_command(args.chain([target]).chain(flags))
+        shell_command(args.chain(targets.iter().copied()).chain(flags))
     };
     format!("{prefix} {command}")
 }
@@ -139,7 +148,7 @@ impl<'a> RunCommands<'a> {
         } else {
             &self.target
         };
-        command(verb, target, self.root.as_deref(), at, extend, flags)
+        command(verb, &[target], self.root.as_deref(), at, extend, flags)
     }
 }
 
@@ -245,7 +254,7 @@ pub(super) fn select(
             .map(|run| {
                 command(
                     verb,
-                    &candidate_target(&run.record, &runs),
+                    &[&candidate_target(&run.record, &runs)],
                     Some(&run.record.project_root),
                     at,
                     extend,
@@ -294,7 +303,7 @@ pub(super) fn select(
                     "  {} {}\n    {}",
                     run.record.id,
                     run.record.scope.path.display(),
-                    command(verb, &target, root, at, extend, &[])
+                    command(verb, &[&target], root, at, extend, &[])
                 )
             })
             .collect::<Vec<_>>()
