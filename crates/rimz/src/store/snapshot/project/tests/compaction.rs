@@ -488,6 +488,177 @@ fn retired_usage() -> crate::agents::AgentUsageSummary {
 }
 
 #[test]
+fn codex_estimate_keeps_the_gap_until_a_model_call_reports_its_split() {
+    let before = serde_json::json!({
+        "context_window": 372_400, "total_tokens": 16_736,
+        "cache_read_input_tokens": 0, "cache_write_input_tokens": 0,
+        "fresh_input_tokens": 16_729, "output_tokens": 7,
+    });
+    let estimate = serde_json::json!({
+        "context_window": 372_400, "total_tokens": 19_359,
+        "cache_read_input_tokens": 0, "cache_write_input_tokens": 0,
+        "fresh_input_tokens": 0, "output_tokens": 0,
+    });
+    let reading = |name: &str, signal, usage: serde_json::Value| {
+        let mut params = usage;
+        params["event_name"] = name.into();
+        params["agent_id"] = "sess-1".into();
+        params["signal"] = signal;
+        raw_lifecycle("codex", params)
+    };
+    let mut events = vec![
+        lifecycle("codex", "SessionStart", signal("registered")),
+        lifecycle("codex", "UserPromptSubmit", signal("turn_started")),
+        reading("Stop", turn_ended(), before.clone()),
+        reading("PreCompact", signal("compacting"), before),
+        reading(
+            "PostCompact",
+            compaction_ended(Some(false)),
+            estimate.clone(),
+        ),
+    ];
+    let agent = reduce_agent_states(&events).remove(0);
+    assert!(agent.compacted_unmeasured);
+    assert_eq!(agent.compaction_count, 1);
+    assert_eq!(agent.usage.context_pct, Some(5));
+    assert_eq!(agent.usage.input_context_tokens(), None);
+    assert!(agent.compacted_awaiting_prompt.is_some());
+
+    events.push(reading(
+        "UserPromptSubmit",
+        signal("turn_started"),
+        estimate.clone(),
+    ));
+    let agent = reduce_agent_states(&events).remove(0);
+    assert!(agent.compacted_unmeasured);
+    assert_eq!(agent.usage.context_pct, Some(5));
+    assert!(agent.compacted_awaiting_prompt.is_none());
+
+    let mut delayed_echo = events.clone();
+    delayed_echo.push(reading("SessionStart", compaction_ended(None), estimate));
+    let agent = reduce_agent_states(&delayed_echo).remove(0);
+    assert!(agent.compacted_unmeasured);
+    assert_eq!(agent.retired_context_tokens, Some(19_359));
+    assert_eq!(agent.usage.context_pct, None);
+    assert_eq!(agent.compaction_count, 1);
+
+    events.push(reading(
+        "Stop",
+        turn_ended(),
+        serde_json::json!({
+            "fresh_input_tokens": 20_000, "cache_read_input_tokens": 10_000,
+            "cache_write_input_tokens": 0, "total_tokens": 30_010, "output_tokens": 10,
+        }),
+    ));
+    let agent = reduce_agent_states(&events).remove(0);
+    assert!(!agent.compacted_unmeasured);
+    assert_eq!(agent.usage.context_pct, Some(8));
+}
+
+#[test]
+fn claude_gap_survives_the_retired_split_echo_and_prompt_until_tool_usage() {
+    for echo in [serde_json::json!({}), compacted_reading()] {
+        let mut events = vec![
+            lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+            lifecycle("claude", "PreCompact", signal("compacting")),
+            lifecycle_reading("PostCompact", compaction_ended(Some(false)), full_reading()),
+        ];
+        assert!(reduce_agent_states(&events)[0].compacted_unmeasured);
+        events.push(lifecycle_reading(
+            "SessionStart",
+            compaction_ended(None),
+            echo,
+        ));
+        assert!(reduce_agent_states(&events)[0].compacted_unmeasured);
+        events.push(lifecycle(
+            "claude",
+            "UserPromptSubmit",
+            signal("turn_started"),
+        ));
+        assert!(reduce_agent_states(&events)[0].compacted_unmeasured);
+        events.push(lifecycle_reading(
+            "PostToolUse",
+            tool_used(),
+            serde_json::json!({
+                "fresh_input_tokens": 6_000, "cache_read_input_tokens": 1_000,
+            }),
+        ));
+        assert!(!reduce_agent_states(&events)[0].compacted_unmeasured);
+    }
+}
+
+#[test]
+fn automatic_mid_turn_compaction_waits_for_a_nonzero_input_split() {
+    let mut events = vec![
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle_reading(
+            "PostCompact",
+            compaction_ended(Some(true)),
+            compacted_reading(),
+        ),
+    ];
+    let agent = reduce_agent_states(&events).remove(0);
+    assert!(agent.compacted_unmeasured);
+    assert_eq!(agent.status, AgentStatus::Running);
+    assert!(agent.compacted_awaiting_prompt.is_none());
+    events.push(lifecycle_reading(
+        "PostToolUse",
+        tool_used(),
+        serde_json::json!({
+            "fresh_input_tokens": 6_000,
+        }),
+    ));
+    assert!(!reduce_agent_states(&events)[0].compacted_unmeasured);
+}
+
+#[test]
+fn a_keepalive_reply_is_a_real_reading_but_its_open_keeps_the_gap() {
+    let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    let mut events = vec![
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle("claude", "PostCompact", compaction_ended(Some(false))),
+        raw_lifecycle(
+            "claude",
+            serde_json::json!({
+                "event_name": "UserPromptSubmit", "agent_id": "sess-1",
+                "prompt": ping,
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+    ];
+    assert!(reduce_agent_states(&events)[0].compacted_unmeasured);
+    events.push(lifecycle_reading(
+        "Stop",
+        turn_ended(),
+        serde_json::json!({
+            "fresh_input_tokens": 6_000,
+        }),
+    ));
+    let agent = reduce_agent_states(&events).remove(0);
+    assert!(!agent.compacted_unmeasured);
+    assert!(
+        agent.compacted_awaiting_prompt.is_some(),
+        "a ping is not a prompt"
+    );
+}
+
+#[test]
+fn linked_continuation_without_a_prior_enters_the_gap() {
+    let events = [raw_lifecycle(
+        "codex",
+        serde_json::json!({
+            "event_name": "SessionStart", "agent_id": "continuation",
+            "compacted_from": "predecessor", "signal": { "signal": "compaction_ended" },
+        }),
+    )];
+    let agent = reduce_agent_states(&events).remove(0);
+    assert!(agent.compacted_unmeasured);
+    assert_eq!(agent.compaction_count, 0);
+}
+
+#[test]
 fn completed_compaction_retires_the_usage_measured_before_it() {
     let mut events = vec![
         lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
@@ -497,6 +668,7 @@ fn completed_compaction_retires_the_usage_measured_before_it() {
     ];
 
     let agent = reduce_agent_states(&events).remove(0);
+    assert!(agent.compacted_unmeasured);
     assert_eq!(agent.usage, retired_usage());
     assert_eq!(agent.compaction_count, 1);
     assert_eq!(agent.retired_context_tokens, Some(85_000));
@@ -507,6 +679,7 @@ fn completed_compaction_retires_the_usage_measured_before_it() {
         full_reading(),
     ));
     let agent = reduce_agent_states(&events).remove(0);
+    assert!(agent.compacted_unmeasured, "registration preserves the gap");
     assert_eq!(
         agent.usage,
         retired_usage(),
@@ -519,6 +692,7 @@ fn completed_compaction_retires_the_usage_measured_before_it() {
         serde_json::json!({ "fresh_input_tokens": 6_000, "output_tokens": 40 }),
     ));
     let agent = reduce_agent_states(&events).remove(0);
+    assert!(!agent.compacted_unmeasured);
     assert_eq!(agent.usage.fresh_input_tokens, Some(6_000));
     assert_eq!(agent.usage.cache_read_input_tokens, None);
     assert_eq!(agent.usage.output_tokens, Some(40));
@@ -535,6 +709,7 @@ fn failed_compaction_keeps_the_usage_and_retires_nothing() {
     ])
     .remove(0);
 
+    assert!(!agent.compacted_unmeasured);
     assert_eq!(agent.usage.fresh_input_tokens, Some(5_000));
     assert_eq!(agent.usage.context_pct, Some(42));
     assert_eq!(agent.compaction_count, 0);
@@ -596,7 +771,7 @@ fn card_after_a_completed_compaction_reads_only_the_fresh_sidecar() {
         context_window_size: Some(200_000),
         ..Default::default()
     });
-    agent.context = Some(context);
+    agent.attach_context(Some(context));
 
     let row = row_from_agent(&agent, epoch());
     assert_eq!(row.context_gauge_percent(), None);
@@ -609,9 +784,25 @@ fn card_after_a_completed_compaction_reads_only_the_fresh_sidecar() {
 
     let tokens = agent.context.as_mut().and_then(|c| c.tokens.as_mut());
     tokens.expect("sidecar tokens").used_percentage = Some(3);
+    agent.attach_context(agent.context.clone());
+    let row = row_from_agent(&agent, epoch());
+    assert_eq!(row.context_gauge_percent(), None);
+    assert_eq!(row.context_used_tokens(), None);
+    assert_eq!(row.call_split(), None);
+
+    let tokens = agent
+        .context
+        .as_mut()
+        .and_then(|c| c.tokens.as_mut())
+        .unwrap();
+    tokens.current_usage = Some(crate::agents::AgentCurrentUsage {
+        input_tokens: Some(6_000),
+        ..Default::default()
+    });
+    agent.attach_context(agent.context.clone());
     let row = row_from_agent(&agent, epoch());
     assert_eq!(row.context_gauge_percent(), Some(3));
-    assert_eq!(row.context_used_tokens(), None);
+    assert_eq!(row.context_used_tokens(), Some(6_000));
     assert_eq!(row.call_split(), None);
 }
 
@@ -646,6 +837,7 @@ fn successful_end_without_an_open_bracket_retires_the_usage() {
         .remove(0);
 
         assert_eq!(agent.usage, expected, "{label}");
+        assert!(agent.compacted_unmeasured, "{label}");
         assert_eq!(agent.retired_context_tokens, Some(85_000), "{label}");
         // The count stays on the bracket: with no open, none closed.
         assert_eq!(agent.compaction_count, 0, "{label}");
@@ -660,6 +852,7 @@ fn failed_end_without_an_open_bracket_retires_nothing() {
     ])
     .remove(0);
 
+    assert!(!agent.compacted_unmeasured);
     assert_eq!(agent.usage.fresh_input_tokens, Some(5_000));
     assert_eq!(agent.retired_context_tokens, None);
 }

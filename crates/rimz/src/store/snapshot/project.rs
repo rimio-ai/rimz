@@ -807,6 +807,7 @@ fn carried_base(
         state.background_shells = prior.background_shells.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
         state.retired_context_tokens = prior.retired_context_tokens;
+        state.compacted_unmeasured = prior.compacted_unmeasured;
         state.compacted_awaiting_prompt = prior.compacted_awaiting_prompt;
         state.turn_started_at = prior.turn_started_at;
         state.user_turn_started_at = prior.user_turn_started_at;
@@ -956,6 +957,13 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         && observed_usage.context_used_tokens() == state.retired_context_tokens
     {
         clear_current_window(&mut observed_usage);
+    }
+    state.compacted_unmeasured |= retires_usage;
+    if observed_usage
+        .input_context_tokens()
+        .is_some_and(|input| input > 0)
+    {
+        state.compacted_unmeasured = false;
     }
     let usage = observed_usage.merge(carried_usage.as_ref(), default_window);
     // Established lineage stays authoritative. The explicit adoption event is
