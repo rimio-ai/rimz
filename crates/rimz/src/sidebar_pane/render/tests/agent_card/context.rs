@@ -2007,7 +2007,7 @@ fn render_agent_card_age_pin_holds_the_parent_own_clock_while_children_work() {
 }
 
 #[test]
-fn completed_compaction_marks_unknown_size_until_a_fresh_reading() {
+fn completed_compaction_keeps_its_glyph_until_a_real_reading() {
     let lifecycle = |event_name: &str, signal: serde_json::Value, reading: bool| {
         let mut params = serde_json::json!({
             "event_name": event_name,
@@ -2059,6 +2059,7 @@ fn completed_compaction_marks_unknown_size_until_a_fresh_reading() {
     );
     claude.usage = folded.usage;
     claude.compaction_count = folded.compaction_count;
+    claude.compacted_unmeasured = true;
     let mut context = claude_context(fixed_now());
     context.tokens = Some(AgentTokenUsage {
         context_window_size: Some(200_000),
@@ -2106,7 +2107,7 @@ fn completed_compaction_marks_unknown_size_until_a_fresh_reading() {
         }
     }
     assert_snapshot(
-        "compacted_context_unknown",
+        "compacted_unmeasured_empty",
         snapshot_to_screen(&snapshot, 58, 17),
     );
 
@@ -2129,10 +2130,28 @@ fn completed_compaction_marks_unknown_size_until_a_fresh_reading() {
 
     let tokens = claude.context.as_mut().and_then(|c| c.tokens.as_mut());
     tokens.expect("sidecar tokens").used_percentage = Some(3);
+    claude.attach_context(claude.context.clone());
+    let rendered = snapshot_to_screen(&snapshot_with(vec![claude.clone()]), 58, 17);
+    assert!(rendered.contains("↻ ─"), "{rendered}");
+    assert!(
+        !rendered.contains('▤'),
+        "a bare percent is not a call:\n{rendered}"
+    );
+
+    let tokens = claude
+        .context
+        .as_mut()
+        .and_then(|c| c.tokens.as_mut())
+        .unwrap();
+    tokens.current_usage = Some(AgentCurrentUsage {
+        input_tokens: Some(6_000),
+        ..Default::default()
+    });
+    claude.attach_context(claude.context.clone());
     let rendered = snapshot_to_screen(&snapshot_with(vec![claude]), 58, 17);
     assert!(
-        rendered.contains(" 3%      ▐") && rendered.contains("▤ 0 · ↻ 1"),
-        "the fresh statusline percentage draws alone:\n{rendered}"
+        rendered.contains(" 3.0%      ▐") && rendered.contains("▤ 6k") && rendered.contains("↻ 1"),
+        "a real sidecar reading restores the meter and stats:\n{rendered}"
     );
 
     let fresh = agent(
@@ -2147,5 +2166,154 @@ fn completed_compaction_marks_unknown_size_until_a_fresh_reading() {
     assert!(
         rendered.contains('▢') && rendered.contains(" 0%"),
         "{rendered}"
+    );
+}
+
+#[test]
+fn codex_compaction_events_render_an_estimate_until_the_first_real_call() {
+    let before = serde_json::json!({
+        "context_window": 372_400, "total_tokens": 16_736,
+        "fresh_input_tokens": 16_729, "cache_read_input_tokens": 0,
+        "cache_write_input_tokens": 0, "output_tokens": 7,
+    });
+    let estimate = serde_json::json!({
+        "context_window": 372_400, "total_tokens": 19_359,
+        "fresh_input_tokens": 0, "cache_read_input_tokens": 0,
+        "cache_write_input_tokens": 0, "output_tokens": 0,
+    });
+    let mut events = Vec::new();
+    for (name, signal, mut params) in [
+        (
+            "SessionStart",
+            serde_json::json!({"signal": "registered"}),
+            serde_json::json!({}),
+        ),
+        (
+            "UserPromptSubmit",
+            serde_json::json!({"signal": "turn_started"}),
+            serde_json::json!({}),
+        ),
+        (
+            "Stop",
+            serde_json::json!({"signal": "turn_ended", "errored": false,
+            "parked_on_background": false}),
+            before.clone(),
+        ),
+        (
+            "PreCompact",
+            serde_json::json!({"signal": "compacting"}),
+            before,
+        ),
+        (
+            "PostCompact",
+            serde_json::json!({"signal": "compaction_ended", "auto": false}),
+            estimate,
+        ),
+    ] {
+        params["event_name"] = name.into();
+        params["agent_id"] = "codex-1".into();
+        params["signal"] = signal;
+        let mut event = crate::store::event::EventEnvelope::new(
+            fixed_workspace(),
+            "session",
+            "codex",
+            "agent-hook",
+            "agent.lifecycle",
+            params,
+        );
+        event.timestamp = fixed_now();
+        events.push(event);
+    }
+    let project = |events| {
+        let folded = SidebarSnapshot::build_with_carryover(
+            fixed_workspace(),
+            events,
+            Vec::new(),
+            fixed_now(),
+        );
+        let mut codex = folded.agents[0].clone();
+        codex.worktree_path = Some("/repo/main".to_owned());
+        codex.worktree_branch = Some("main".to_owned());
+        codex.task = Some("compact the context".to_owned());
+        snapshot_with(vec![codex])
+    };
+    let snapshot = project(events.clone());
+    for set in ["unicode", "nerd_font"] {
+        let theme = Theme::fixed_for_theme(
+            false,
+            &crate::config::ThemeConfig {
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            },
+        );
+        for width in [32, 45, 46, 47, 58] {
+            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+            let rendered = line_texts(&lines).join("\n");
+            let meter = lines
+                .iter()
+                .find(|line| {
+                    line.to_string()
+                        .contains(theme.glyph(GlyphRole::MeterCompacted))
+                })
+                .unwrap_or_else(|| panic!("{set}, {width}:\n{rendered}"));
+            assert!(meter.to_string().contains("5%"), "{meter}");
+            assert!(
+                meter.to_string().contains('━'),
+                "a filled estimate: {meter}"
+            );
+            assert!(
+                !meter.to_string().contains('╺'),
+                "no split in an estimate: {meter}"
+            );
+            assert!(
+                !rendered.contains(theme.glyph(GlyphRole::TokensFilled)),
+                "{rendered}"
+            );
+            let glyph = meter
+                .spans
+                .iter()
+                .find(|span| {
+                    span.content
+                        .contains(theme.glyph(GlyphRole::MeterCompacted))
+                })
+                .unwrap();
+            let fill = meter
+                .spans
+                .iter()
+                .find(|span| span.content.contains('━'))
+                .unwrap();
+            assert_eq!(glyph.style.fg, fill.style.fg);
+            assert_ne!(glyph.style.fg, theme.muted().fg);
+        }
+    }
+    assert_snapshot(
+        "compacted_unmeasured_estimate",
+        snapshot_to_screen(&snapshot, 58, 17),
+    );
+
+    let mut reading = crate::store::event::EventEnvelope::new(
+        fixed_workspace(),
+        "session",
+        "codex",
+        "agent-hook",
+        "agent.lifecycle",
+        serde_json::json!({
+            "event_name": "Stop", "agent_id": "codex-1",
+            "signal": {"signal": "turn_ended", "errored": false, "parked_on_background": false},
+            "fresh_input_tokens": 20_000, "cache_read_input_tokens": 10_000,
+            "cache_write_input_tokens": 0, "total_tokens": 30_010, "output_tokens": 10,
+        }),
+    );
+    reading.timestamp = fixed_now();
+    events.push(reading);
+    let rendered = snapshot_to_screen(&project(events), 58, 17);
+    assert!(
+        rendered.contains('▣') && rendered.contains("▤ 30k"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("↻ 1"), "{rendered}");
+    assert!(
+        rendered.contains('╺'),
+        "the call restores segmented fill:\n{rendered}"
     );
 }

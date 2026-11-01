@@ -100,8 +100,9 @@ pub(super) fn bar_row(
 /// while the `▤` stats head always keeps severity. The value prefers a
 /// one-decimal precise fraction (`78.2%`) over the integer gauge. An empty (0%)
 /// window reads the hollow `▢`; any usage fills it to `▣`. A completed compaction
-/// awaiting a context reading shows its own glyph and an empty muted track,
-/// without a percentage.
+/// keeps its own glyph until the first real reading. A provider estimate fills
+/// the track flat in its ordinary tone with a percentage; without one, the
+/// glyph and empty track are muted, without a percentage.
 ///
 /// At L2 every meter reserves a five-cell age cluster after a space; below L2
 /// the bar keeps that room and the stats line pins the age instead, except in
@@ -125,10 +126,22 @@ pub(super) fn gauge_line(
     let theme = ctx.theme;
     let bands = ctx.bands;
     let width = content_width(ctx.width);
-    let compacted_unknown = row.compacted_context_unknown();
-    let percent = row.context_gauge_percent().unwrap_or(0);
-    let precise = precise_context_pct(row);
-    let value = if compacted_unknown {
+    let compacted_unmeasured = row
+        .as_agent()
+        .is_some_and(|agent| agent.compacted_unmeasured);
+    let percent = if compacted_unmeasured {
+        row.as_agent().and_then(|agent| agent.usage.context_pct)
+    } else {
+        row.context_gauge_percent()
+    };
+    let compacted_empty = compacted_unmeasured && percent.is_none();
+    let percent = percent.unwrap_or(0);
+    let precise = if compacted_unmeasured {
+        None
+    } else {
+        precise_context_pct(row)
+    };
+    let value = if compacted_empty {
         String::new()
     } else {
         pct_label(precise, percent)
@@ -145,14 +158,16 @@ pub(super) fn gauge_line(
     // keeps the flat cache-write and fresh-input composition tones.
     let amount = severity_heat_amount(severity, percent, row.context_used_tokens(), bands);
     let color = theme.heat_tone(amount);
-    let (bar_color, segments) = if compacted_unknown {
+    let (bar_color, segments) = if compacted_empty {
         (theme.component(Component::ContextCompacted), None)
     } else if cache_age(row, ctx.now).expired(ctx.now) {
         (theme.component(Component::CacheExpired), None)
+    } else if compacted_unmeasured {
+        (color, None)
     } else {
         (color, gauge_segments(theme, row, color))
     };
-    let glyph = if compacted_unknown {
+    let glyph = if compacted_unmeasured {
         theme.glyph(GlyphRole::MeterCompacted)
     } else if percent == 0 {
         theme.glyph(GlyphRole::MeterContextEmpty)
@@ -160,7 +175,7 @@ pub(super) fn gauge_line(
         theme.glyph(GlyphRole::MeterContextFull)
     };
     // The gap hides the stats line that pins the age below L2, so its meter keeps the age.
-    let age_width = if ctx.tier == Tier::L2 || compacted_unknown {
+    let age_width = if ctx.tier == Tier::L2 || compacted_unmeasured {
         6
     } else {
         0
@@ -171,7 +186,7 @@ pub(super) fn gauge_line(
         theme.style(bar_color, Modifier::empty()),
         &value,
         |bar_width| {
-            if compacted_unknown {
+            if compacted_empty {
                 return vec![Span::styled(
                     theme.glyph(GlyphRole::MeterBarTrack).repeat(bar_width),
                     theme.style(bar_color, Modifier::empty()),
