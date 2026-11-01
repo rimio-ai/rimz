@@ -667,6 +667,9 @@ pub struct AgentSpec {
     pub brand: Brand,
     /// How a provider display name or raw plan tier becomes a brand label.
     pub plan_label: PlanLabel,
+    /// Weekly capacity per subscription plan, keyed by raw plan tier; `None`
+    /// when the provider's plans are not sized.
+    pub plan_capacities: Option<PlanCapacities>,
     /// Subscription provider ids whose account budget this agent meters, as a
     /// multi-provider client's auth file names them (Pi's `auth.json` keys:
     /// `anthropic`, `openai`, …). Used for account labeling and
@@ -966,6 +969,32 @@ impl PlanLabel {
             }
             Self::TitleCaseOnly => tier,
         }
+    }
+}
+
+/// A provider's subscription plans sized in one weekly unit.
+#[derive(Debug)]
+pub struct PlanCapacities {
+    /// The unit every plan's `units` counts: 1% of the provider's 1x plan's
+    /// week (`claude_pro_week_percent`). Units of different providers never
+    /// compare.
+    pub unit: &'static str,
+    pub plans: &'static [PlanCapacity],
+}
+
+/// One subscription plan: its stable key, the raw tiers that name it, and its
+/// weekly capacity in the provider's unit.
+#[derive(Debug)]
+pub struct PlanCapacity {
+    pub key: &'static str,
+    pub tiers: &'static [&'static str],
+    pub units: u32,
+}
+
+impl PlanCapacities {
+    /// The plan an exact raw tier names; `None` for a tier no plan lists.
+    pub fn resolve(&self, tier: &str) -> Option<&PlanCapacity> {
+        self.plans.iter().find(|plan| plan.tiers.contains(&tier))
     }
 }
 

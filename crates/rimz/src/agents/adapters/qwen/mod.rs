@@ -57,6 +57,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0x61, 0x5c, 0xed),
     },
     plan_label: PlanLabel::TitleCaseOnly,
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

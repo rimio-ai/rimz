@@ -77,8 +77,8 @@ use super::AskKind;
 use super::context::AgentContext;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanCapacities,
+    PlanCapacity, PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -153,6 +153,41 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             ("promax", "Pro 500"),
         ],
     },
+    plan_capacities: Some(PlanCapacities {
+        unit: "chatgpt_plus_week_percent",
+        plans: &[
+            PlanCapacity {
+                key: "plus",
+                tiers: &["plus"],
+                units: 100,
+            },
+            PlanCapacity {
+                key: "team_standard",
+                tiers: &["team", "business_standard"],
+                units: 100,
+            },
+            PlanCapacity {
+                key: "team_premium",
+                tiers: &["premium", "self_serve_business_prolite", "business_premium"],
+                units: 1000,
+            },
+            PlanCapacity {
+                key: "pro_100",
+                tiers: &["prolite"],
+                units: 1000,
+            },
+            PlanCapacity {
+                key: "pro_200",
+                tiers: &["pro"],
+                units: 2000,
+            },
+            PlanCapacity {
+                key: "pro_500",
+                tiers: &["promax"],
+                units: 5000,
+            },
+        ],
+    }),
     // An OpenAI OAuth subscription is the ChatGPT account Codex meters; Pi's
     // auth file names it `openai` (legacy installs `openai-codex`).
     sub_providers: &["openai", "openai-codex"],

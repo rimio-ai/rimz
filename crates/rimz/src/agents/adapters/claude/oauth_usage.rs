@@ -148,13 +148,18 @@ fn parse_profile_plan(body: &str, owner: &str) -> AccountProfileProbe {
         profile.organization.organization_type.as_deref(),
         profile.organization.rate_limit_tier.as_deref(),
     ) {
-        (Some("claude_pro"), _) => Some("pro"),
-        (Some("claude_max"), Some("default_claude_max_5x")) => Some("max_5x"),
-        (Some("claude_max"), Some("default_claude_max_20x")) => Some("max_20x"),
+        (Some("claude_pro"), _) => Some("pro".to_owned()),
+        (Some("claude_max"), Some("default_claude_max_5x")) => Some("max_5x".to_owned()),
+        (Some("claude_max"), Some("default_claude_max_20x")) => Some("max_20x".to_owned()),
+        (Some("claude_team"), _) => profile
+            .organization
+            .seat_tier
+            .as_deref()
+            .and_then(crate::agents::single_line_description),
         _ => None,
     };
     AccountProfileProbe::Answered {
-        plan: plan.map(str::to_owned),
+        plan,
         display_name: profile
             .organization
             .plan_display_name
@@ -323,6 +328,8 @@ struct OrganizationWire {
     rate_limit_tier: Option<String>,
     #[serde(default)]
     plan_display_name: Option<String>,
+    #[serde(default)]
+    seat_tier: Option<String>,
 }
 
 #[derive(Deserialize)]

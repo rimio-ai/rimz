@@ -38,6 +38,7 @@ static QODER_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0x8a, 0xe6, 0xa2),
     },
     plan_label: PlanLabel::TitleCaseOnly,
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

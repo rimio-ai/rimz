@@ -26,6 +26,56 @@ fn plan_labels_use_named_tiers_with_title_case_fallbacks() {
 }
 
 #[test]
+fn plan_capacities_resolve_exact_raw_tiers_to_keys_and_units() {
+    let resolve = |kind: &str, tier: &str| {
+        let capacities = crate::agents::spec_by_kind(kind)?
+            .plan_capacities
+            .as_ref()?;
+        let plan = capacities.resolve(tier)?;
+        Some((plan.key, plan.units, capacities.unit))
+    };
+    for (kind, tier, key, units) in [
+        ("claude", "pro", "pro", 100),
+        ("claude", "team_standard", "team_standard", 125),
+        ("claude", "team_premium", "team_premium", 625),
+        ("claude", "max_5x", "max", 500),
+        ("claude", "max_20x", "ultra", 1000),
+        ("codex", "plus", "plus", 100),
+        ("codex", "team", "team_standard", 100),
+        ("codex", "business_standard", "team_standard", 100),
+        ("codex", "premium", "team_premium", 1000),
+        ("codex", "self_serve_business_prolite", "team_premium", 1000),
+        ("codex", "business_premium", "team_premium", 1000),
+        ("codex", "prolite", "pro_100", 1000),
+        ("codex", "pro", "pro_200", 2000),
+        ("codex", "promax", "pro_500", 5000),
+    ] {
+        let unit = if kind == "claude" {
+            "claude_pro_week_percent"
+        } else {
+            "chatgpt_plus_week_percent"
+        };
+        assert_eq!(
+            resolve(kind, tier),
+            Some((key, units, unit)),
+            "{kind}: {tier}"
+        );
+    }
+    for (kind, tier) in [
+        ("claude", "max"),
+        ("claude", "team"),
+        ("claude", "enterprise"),
+        ("claude", "Pro"),
+        ("codex", "free"),
+        ("codex", "business"),
+        ("copilot", "pro"),
+        ("unregistered", "pro"),
+    ] {
+        assert_eq!(resolve(kind, tier), None, "{kind}: {tier}");
+    }
+}
+
+#[test]
 fn plan_labels_prefer_the_profile_name_without_changing_its_case() {
     let actual: Vec<_> = ["claude", "codex", "pi"]
         .into_iter()

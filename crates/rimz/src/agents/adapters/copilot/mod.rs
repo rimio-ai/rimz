@@ -64,6 +64,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0x89, 0x57, 0xe5),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Copilot" },
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

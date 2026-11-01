@@ -51,6 +51,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0x79, 0x0e, 0xcb),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Kiro" },
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

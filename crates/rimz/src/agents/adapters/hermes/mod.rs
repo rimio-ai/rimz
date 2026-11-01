@@ -29,6 +29,7 @@ static HERMES_SPEC: AgentSpec = AgentSpec {
         color_rgb: (0xff, 0xa5, 0x00),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Hermes" },
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tool_rules: crate::agents::skills::ToolRules::Unsupported,

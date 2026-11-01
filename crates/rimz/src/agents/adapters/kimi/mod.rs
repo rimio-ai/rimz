@@ -79,6 +79,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0x17, 0x83, 0xff),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Kimi" },
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &["5h", "7d"],
     tools: ToolClassification {

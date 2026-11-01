@@ -73,6 +73,59 @@ fn profile_plan_is_strict_bound_and_requires_a_well_formed_identity() {
 }
 
 #[test]
+fn profile_plan_falls_back_to_the_team_seat_tier() {
+    use crate::agents::capabilities::AccountProfileProbe::Answered;
+    let owner = super::super::account::profile_fingerprint("work@example.test", "org").unwrap();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (family, tier, seat, plan) in [
+        (
+            "claude_team",
+            None,
+            Some("team_standard"),
+            Some("team_standard"),
+        ),
+        (
+            "claude_team",
+            Some("default_claude_ai"),
+            Some("team_premium"),
+            Some("team_premium"),
+        ),
+        (
+            "claude_max",
+            Some("default_claude_max_20x"),
+            Some("team_standard"),
+            Some("max_20x"),
+        ),
+        ("claude_pro", None, Some("team_premium"), Some("pro")),
+        (
+            "claude_max",
+            Some("default_claude_ai"),
+            Some("team_standard"),
+            None,
+        ),
+        ("claude_enterprise", None, Some("team_standard"), None),
+        ("claude_team", None, None, None),
+        ("claude_team", None, Some(""), None),
+        ("claude_team", None, Some(" \t\n "), None),
+    ] {
+        let body = serde_json::json!({
+            "account": {"email": "work@example.test"},
+            "organization": {
+                "uuid": "org", "organization_type": family, "rate_limit_tier": tier,
+                "seat_tier": seat
+            }
+        });
+        actual.push(parse_profile_plan(&body.to_string(), &owner));
+        expected.push(Answered {
+            plan: plan.map(str::to_owned),
+            display_name: None,
+        });
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn profile_plan_names_are_cleaned_bound_and_independent_of_tier_recognition() {
     use crate::agents::capabilities::AccountProfileProbe::Answered;
     let owner = super::super::account::profile_fingerprint("work@example.test", "org").unwrap();
