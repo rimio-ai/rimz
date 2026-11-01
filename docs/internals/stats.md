@@ -130,9 +130,9 @@ The one-shot panel uses `panel::per_active_day`: dollars and days with tokens co
 
 ## Fitting the terminal
 
-The dashboard is a pure string renderer over published stats, per-tab assists, the active tab, and supplied terminal dimensions (`dashboard::Dashboard::frame`). crossterm appears only at the held loop's terminal edge (`tui::TerminalModeGuard`, `tui::replace_frame`, and key events), and the sidebar pane's ratatui widget stack is not on this path, so tests assert on rendered text.
+The dashboard is a pure frame renderer over published stats, per-tab assists, the active tab, and supplied terminal dimensions (`dashboard::Dashboard::frame`). It returns text and tab spans in screen coordinates. crossterm appears only at the held loop's terminal edge (`tui::TerminalModeGuard`, `tui::replace_frame`, and key and mouse events), and the sidebar pane's ratatui widget stack is not on this path, so tests assert on rendered text and paint-derived spans.
 
-Width is `min(cols, 113)`, centred independently of the heatmap week count. Below 112 columns pairs stack and bars shrink. When the full tab rail exceeds that width, inactive tabs omit their totals and the active tab keeps its bracketed label and total. Every line is clipped by display width while preserving ANSI styles. On a tty, top padding is `(rows − tallest_tab_height) / 2` at the chosen fit step, shared across tabs. The final frame joins lines without a trailing newline, so replacing a frame of exactly the terminal height cannot scroll its first row offscreen.
+Width is `min(cols, 113)`, centred independently of the heatmap week count. Below 112 columns pairs stack and bars shrink. When the full tab rail exceeds that width, inactive tabs omit their totals and the active tab keeps its bracketed label and total. Every line is clipped by display width while preserving ANSI styles. On a tty, top padding is `(rows − tallest_tab_height) / 2` at the chosen fit step, shared across tabs. Tab spans cover only the painted label, total and active brackets, after horizontal clipping, margin and top padding; removing the rail during height truncation removes its spans too. The final frame joins lines without a trailing newline, so replacing a frame of exactly the terminal height cannot scroll its first row offscreen.
 
 The fitter renders all four tabs at each cumulative step and picks the first whose tallest frame fits. All tabs share that step:
 
@@ -150,7 +150,7 @@ Beyond the last step, the body is clipped to terminal height while the final hin
 
 ## The held dashboard
 
-`--refresh` runs `hold::run_refresh`. `TerminalModeGuard` puts the terminal in raw mode on the alternate screen with mouse capture off, so the dashboard owns the pane without adding mux scrollback, and keypresses and stray mouse reports arrive as events the loop drains.
+`--refresh` runs `hold::run_refresh`. `TerminalModeGuard` puts the terminal in raw mode on the alternate screen with stdout click-and-wheel capture, so the dashboard owns the pane without adding mux scrollback, and keypresses and mouse reports arrive as events the loop drains. The guard disables capture on exit. `HeldStats` retains at most four spans from the last successfully painted frame. A left press inside one selects its window through the same outcome path as a jump key; separators, other positions, wheel, releases and drags are ignored. Terminal text selection with a drag needs Shift.
 
 One reusable worker thread (`hold::RefreshWorker`) loads through the elected service each cycle and sends back one `Result<Stats>`, with a panic caught and turned into an error. The foreground polls for events every 100 ms (`REFRESH_POLL_TICK`) and starts the next cycle once the refresh has landed and the 60-second deadline (`REFRESH_INTERVAL`) has passed. Until the first successful frame, a landed result moves the deadline to 5 seconds out (`EMPTY_REFRESH_RETRY`).
 
@@ -171,6 +171,7 @@ A history with no usage and no profile activity paints the wordmark while it fit
 | `←` / `→`, `h` / `l` | move one range without wrapping and repaint from the stats in hand |
 | `t` / `w` / `m` / `y` (either case) | jump to Today / 7 days / 30 days / 52 weeks |
 | `Tab` / `Shift-Tab` | cycle the window with wrap and repaint from the stats in hand |
+| Left press on a tab | select its range through `KeyOutcome::SelectWindow` |
 | `r` / `R` | reload the binary in place |
 | `q`, `Ctrl-C` | quit, unless `--hold` is set |
 
@@ -251,7 +252,7 @@ The durable records, their fields, and rotation belong to the [assist log](./har
 
 ## Tests
 
-`tests.rs` and its `tests/held.rs` child cover rendered strings. Held snapshots cover all four tabs at 119×76 and 119×40 plus empty history. A geometry matrix covers widths 60 to 160 and heights 10 to 90, checking line count, display width, a common fit step, and no final newline. `tests/held/columns.rs` pins whole 119-column rows (spend, provider, role, heatmap, and average-line columns) to the reference mock. One-shot assertions cover active-day averages, trend alignment, independent coverage dates and placement, agent-time columns, clamped unassigned spend, grouped sessions, footer scope, activity, and fresh-machine copy. `assists/tests.rs` covers the fold and timeline lines, with one inline snapshot. The load paths run against temporary `RuntimePaths`: a published cache served without a walk, a publication served on its history day whatever its account day (`one_shot_serves_the_published_history_day_across_zones`), and a cold refresh publishing the rollups the sidebar reads. The held loop is driven through `key_outcome` and `HeldStats` without a terminal.
+`tests.rs` and its `tests/held.rs` child cover rendered strings. Held snapshots cover all four tabs at 119×76 and 119×40, four colour-off stacked frames at 100×76, and empty history. A geometry matrix covers widths 60 to 160 and heights 10 to 90, checking line count, display width, a common fit step, and no final newline. Click tests paint full, short, padded, clipped and truncated rails before driving `HeldStats` with mouse events. The PTY journey `stats_refresh_clicks_tabs_and_restores_mouse_capture_on_exit` checks capture enable/disable and an SGR click repaint; it does not prove real multiplexer forwarding. `tests/held/columns.rs` pins whole 119-column rows (spend, provider, role, heatmap, and average-line columns) to the reference mock. One-shot assertions cover active-day averages, trend alignment, independent coverage dates and placement, agent-time columns, clamped unassigned spend, grouped sessions, footer scope, activity, and fresh-machine copy. `assists/tests.rs` covers the fold and timeline lines, with one inline snapshot. The load paths run against temporary `RuntimePaths`: a published cache served without a walk, a publication served on its history day whatever its account day (`one_shot_serves_the_published_history_day_across_zones`), and a cold refresh publishing the rollups the sidebar reads. The held loop is driven through `key_outcome` and `HeldStats` without a terminal.
 
 ```sh
 cargo xtask test 'cli::stats'

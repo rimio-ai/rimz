@@ -46,8 +46,15 @@ pub(super) struct Dashboard<'a> {
 
 pub(super) struct Frame {
     pub(super) text: String,
+    pub(super) tab_hits: Vec<TabHit>,
     #[cfg(test)]
     pub(super) step: usize,
+}
+
+pub(super) struct TabHit {
+    pub(super) window: Window,
+    pub(super) row: usize,
+    pub(super) columns: std::ops::Range<usize>,
 }
 
 struct ModelStyles<'a> {
@@ -72,7 +79,7 @@ impl Dashboard<'_> {
                 .map(|step| {
                     let tallest = Window::TABS
                         .into_iter()
-                        .map(|tab| self.lines(tab, width, step, &models).len())
+                        .map(|tab| self.lines(tab, width, step, &models).0.len())
                         .max()
                         .unwrap_or(0);
                     (step, tallest)
@@ -81,7 +88,7 @@ impl Dashboard<'_> {
                 .unwrap_or((8, rows))
         });
         let margin = " ".repeat(cols.saturating_sub(width) / 2);
-        let mut lines = self.lines(active, width, step, &models);
+        let (mut lines, mut tab_hits) = self.lines(active, width, step, &models);
         if let Some(rows) = rows {
             if lines.len() > rows {
                 let hint = lines.pop();
@@ -89,15 +96,26 @@ impl Dashboard<'_> {
                 while lines.last().is_some_and(String::is_empty) {
                     lines.pop();
                 }
+                tab_hits.retain(|hit| hit.row < lines.len());
                 if rows > 0 {
                     lines.extend(hint);
                 }
             }
-            lines.splice(
-                0..0,
-                std::iter::repeat_n(String::new(), rows.saturating_sub(tallest) / 2),
-            );
+            let padding = rows.saturating_sub(tallest) / 2;
+            lines.splice(0..0, std::iter::repeat_n(String::new(), padding));
+            for hit in &mut tab_hits {
+                hit.row += padding;
+            }
         }
+        tab_hits.retain_mut(|hit| {
+            hit.columns.end = hit.columns.end.min(width);
+            if hit.columns.start >= hit.columns.end {
+                return false;
+            }
+            hit.columns.start += margin.len();
+            hit.columns.end += margin.len();
+            true
+        });
         let text = lines
             .into_iter()
             .map(|line| {
@@ -110,6 +128,7 @@ impl Dashboard<'_> {
             .join("\n");
         Frame {
             text,
+            tab_hits,
             #[cfg(test)]
             step,
         }
@@ -121,7 +140,7 @@ impl Dashboard<'_> {
         width: usize,
         step: usize,
         styles: &ModelStyles<'_>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Vec<TabHit>) {
         let mut lines = Vec::new();
         let hint = render::paint(
             render::palette::muted(),
@@ -150,7 +169,7 @@ impl Dashboard<'_> {
             }
             section(&mut lines, self.assist_lines(active, width, step >= 2));
             section(&mut lines, vec![hint]);
-            return lines;
+            return (lines, Vec::new());
         }
         if step < 3 {
             section(&mut lines, self.heatmap(width));
@@ -168,25 +187,31 @@ impl Dashboard<'_> {
             .sum::<usize>()
             + 3 * display_width("  ·  ")
             + 4;
-        section(
-            &mut lines,
-            vec![
-                Window::TABS
-                    .into_iter()
-                    .zip(tab_labels)
-                    .map(|(tab, label)| {
-                        if tab == active {
-                            render::paint(render::palette::accent().bold(), &format!("[ {label} ]"))
-                        } else if full_rail_width > width {
-                            render::paint(render::palette::body(), tab.label())
-                        } else {
-                            render::paint(render::palette::body(), &label)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(&render::paint(render::palette::muted(), "  ·  ")),
-            ],
-        );
+        let mut rail = String::new();
+        let mut tab_hits = Vec::with_capacity(Window::TABS.len());
+        for (tab, label) in Window::TABS.into_iter().zip(tab_labels) {
+            if !rail.is_empty() {
+                rail.push_str(&render::paint(render::palette::muted(), "  ·  "));
+            }
+            let start = display_width(&rail);
+            let label = if tab == active {
+                render::paint(render::palette::accent().bold(), &format!("[ {label} ]"))
+            } else if full_rail_width > width {
+                render::paint(render::palette::body(), tab.label())
+            } else {
+                render::paint(render::palette::body(), &label)
+            };
+            rail.push_str(&label);
+            tab_hits.push(TabHit {
+                window: tab,
+                row: 0,
+                columns: start..display_width(&rail),
+            });
+        }
+        section(&mut lines, vec![rail]);
+        for hit in &mut tab_hits {
+            hit.row = lines.len() - 1;
+        }
         let chart_height = match step {
             0..=6 => 7,
             7 => 4,
@@ -250,7 +275,7 @@ impl Dashboard<'_> {
         }
         section(&mut lines, self.assist_lines(active, width, step >= 2));
         section(&mut lines, vec![hint]);
-        lines
+        (lines, tab_hits)
     }
 
     fn model_styles(&self) -> ModelStyles<'_> {
