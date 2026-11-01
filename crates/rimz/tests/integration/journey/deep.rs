@@ -411,6 +411,286 @@ fn tmux_cell_only_sidebar_bounds_client_bytes() {
     );
 }
 
+#[test]
+fn tmux_sidebar_scroll_sync_reaches_the_active_client() {
+    if which::which("tmux").is_err() {
+        crate::common::skip("tmux not on PATH");
+        return;
+    }
+    let caps = rimz::mux::tmux::capabilities().expect("tmux capabilities");
+    if !caps
+        .parsed_version
+        .is_some_and(|version| version >= (3, 7, 0))
+    {
+        crate::common::skip("tmux below 3.7 has no application synchronized updates");
+        return;
+    }
+    let Some(rimz) = rimz_bin() else {
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("theme.toml"),
+        "[theme.pets]\nenabled = false\n[theme.display]\npixel = 'off'\n",
+    )
+    .expect("cell-only sidebar theme");
+    let runtime = tempfile::Builder::new()
+        .prefix("rz")
+        .rand_bytes(6)
+        .tempdir()
+        .expect("short runtime dir");
+    let socket = managed_socket(runtime.path());
+    let _server = TmuxServerGuard::new(socket.clone());
+    let fake_codex = fake_codex_bin(runtime.path());
+    tmux(
+        &socket,
+        &[
+            "-f",
+            "/dev/null",
+            "new-session",
+            "-d",
+            "-s",
+            "room",
+            "-x",
+            "160",
+            "-y",
+            "24",
+            "-c",
+            &env.project_root.display().to_string(),
+            &format!("{} 300", fake_codex.display()),
+        ],
+    );
+    tmux(
+        &socket,
+        &["set-option", "-as", "terminal-features", "*:sync"],
+    );
+    tmux(&socket, &["set-option", "-t", "room", "status", "off"]);
+    env.install_agent_hooks("codex");
+    for index in 0..12 {
+        let pane = if index == 0 {
+            tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"])
+        } else {
+            tmux_capture(
+                &socket,
+                &[
+                    "new-window",
+                    "-d",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "-t",
+                    "room",
+                    "-c",
+                    &env.project_root.display().to_string(),
+                    &format!("{} 300", fake_codex.display()),
+                ],
+            )
+        };
+        let pid = tmux_capture(
+            &socket,
+            &["display-message", "-p", "-t", &pane, "#{pane_pid}"],
+        );
+        let name = format!("scroll-card-{index:02}");
+        let session = format!("scroll-agent-{index:02}");
+        let hook_env = [
+            ("TMUX_PANE", pane.as_str()),
+            ("RIMZ_AGENT_PID", pid.as_str()),
+            (rimz::harness::launch::ENV_AGENT_ROLE, name.as_str()),
+        ];
+        for payload in [
+            session_start_at(
+                &session,
+                "GPT-5.5",
+                "high",
+                env.project_root.display().to_string(),
+                None,
+            ),
+            serde_json::json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": session,
+                "prompt": "keep working while the sidebar scrolls",
+            }),
+        ] {
+            let out = env.run_installed_hook_in_pane("codex", &payload.to_string(), &hook_env);
+            assert!(out.status.success(), "codex hook failed: {out:?}");
+        }
+    }
+    let serve = format!(
+        "{} --refresh-ms 100",
+        sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room", &[])
+    );
+    let sidebar = tmux_capture(
+        &socket,
+        &[
+            "split-window",
+            "-h",
+            "-l",
+            "40",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "room:0",
+            &serve,
+        ],
+    );
+    assert_eq!(
+        tmux_capture(
+            &socket,
+            &["display-message", "-p", "-t", &sidebar, "#{pane_active}"]
+        ),
+        "1"
+    );
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(
+        24.try_into().unwrap(),
+        160.try_into().unwrap(),
+        0,
+    )));
+    let mut attach = CommandBuilder::new("tmux");
+    env.pin_pty_command(&mut attach);
+    attach.env("TERM", "xterm-256color");
+    attach.args([
+        "-u",
+        "-S",
+        socket.to_str().expect("utf8 socket"),
+        "attach",
+        "-t",
+        "room:0",
+    ]);
+    let client = AttachProcess::on_pty(attach, &parser);
+    let screen = || {
+        parser
+            .lock()
+            .expect("attached client parser")
+            .screen()
+            .contents()
+    };
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let mut startup = Vec::new();
+    while Instant::now() < deadline {
+        startup.extend(client.take_bytes());
+        let opens = startup.windows(8).filter(|b| *b == b"\x1b[?2026h").count();
+        let closes = startup.windows(8).filter(|b| *b == b"\x1b[?2026l").count();
+        if screen().contains("scroll-card-00") && opens == closes {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let initial = screen();
+    assert!(
+        initial.contains("scroll-card-00"),
+        "the attached client must see the first card: {initial}"
+    );
+    assert!(
+        !initial.contains("scroll-card-11"),
+        "cards must overflow the viewport: {initial}"
+    );
+    // tmux's unanswered terminal-query timer can redraw after five seconds.
+    let startup_quiet = Duration::from_secs(6);
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let mut settled = Instant::now();
+    startup.clear();
+    while settled.elapsed() < startup_quiet && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+        startup.extend(client.take_bytes());
+        if startup.windows(8).any(|b| b == b"\x1b[?2026h") {
+            startup.clear();
+            settled = Instant::now();
+        }
+    }
+    assert!(
+        settled.elapsed() >= startup_quiet,
+        "the active client's startup redraws must settle"
+    );
+    client.take_bytes();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let still = client.take_bytes();
+    assert!(
+        !still.is_empty(),
+        "the attached client must receive animation paints"
+    );
+    assert!(
+        !still.windows(8).any(|b| b == b"\x1b[?2026h"),
+        "still animation must stay unwrapped: {still:?}"
+    );
+    assert_eq!(
+        tmux_capture(
+            &socket,
+            &["display-message", "-p", "-t", &sidebar, "#{pane_active}"]
+        ),
+        "1"
+    );
+
+    // Literal SGR wheel input enters the supervisor's normal terminal event reader.
+    tmux(
+        &socket,
+        &["send-keys", "-t", &sidebar, "-l", "\x1b[<65;3;18M"],
+    );
+    let complete_pair = |bytes: &[u8]| {
+        let text = String::from_utf8_lossy(bytes);
+        text.matches("\x1b[?2026h").count() == text.matches("\x1b[?2026l").count()
+            && text
+                .split("\x1b[?2026h")
+                .skip(1)
+                .filter_map(|chunk| chunk.split_once("\x1b[?2026l"))
+                .any(|(body, _)| body.contains("scroll-card-"))
+    };
+    let new_content = |screen: &str| {
+        (1..12).any(|index| {
+            let name = format!("scroll-card-{index:02}");
+            screen.contains(&name) && !initial.contains(&name)
+        })
+    };
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let mut scrolled = screen();
+    let mut bytes = client.take_bytes();
+    loop {
+        // A later redraw's pair must not hide earlier unwrapped scroll updates.
+        let unwrapped_cards = String::from_utf8_lossy(&bytes)
+            .split("\x1b[?2026l")
+            .map(|chunk| {
+                chunk
+                    .split_once("\x1b[?2026h")
+                    .map_or(chunk, |(bare, _)| bare)
+            })
+            .map(|bare| bare.matches("scroll-card-").count())
+            .sum::<usize>();
+        assert_eq!(
+            unwrapped_cards, 0,
+            "scroll card text must never reach the client outside a sync pair"
+        );
+        if (!scrolled.contains("scroll-card-00") && new_content(&scrolled) && complete_pair(&bytes))
+            || Instant::now() >= deadline
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        // Include every byte that produced the observed screen.
+        scrolled = screen();
+        bytes.extend(client.take_bytes());
+    }
+    assert!(
+        !scrolled.contains("scroll-card-00"),
+        "the client's screen must scroll past the first card: {scrolled}"
+    );
+    assert!(
+        new_content(&scrolled),
+        "the client must see newly scrolled content: {scrolled}"
+    );
+    assert!(
+        complete_pair(&bytes),
+        "scrolled card text must reach the client inside one complete sync pair: {}",
+        String::from_utf8_lossy(&bytes).escape_debug()
+    );
+}
+
 /// tmux: closing a work column returns its width to the remaining work panes,
 /// not the fixed-width sidebar.
 #[test]
@@ -3847,6 +4127,7 @@ struct AttachProcess {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     reader: Option<std::thread::JoinHandle<()>>,
+    received: Arc<Mutex<Vec<u8>>>,
 }
 
 impl AttachedZellijScreen {
@@ -3928,12 +4209,20 @@ impl AttachProcess {
 
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let sink = Arc::clone(parser);
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let bytes = Arc::clone(&received);
         let reader = std::thread::spawn(move || {
             let mut chunk = [0u8; 4096];
             loop {
                 match reader.read(&mut chunk) {
                     Ok(0) | Err(_) => return,
-                    Ok(n) => sink.lock().expect("parser").process(&chunk[..n]),
+                    Ok(n) => {
+                        bytes
+                            .lock()
+                            .expect("client bytes")
+                            .extend_from_slice(&chunk[..n]);
+                        sink.lock().expect("parser").process(&chunk[..n]);
+                    }
                 }
             }
         });
@@ -3942,7 +4231,12 @@ impl AttachProcess {
             child,
             master: Some(pair.master),
             reader: Some(reader),
+            received,
         }
+    }
+
+    fn take_bytes(&self) -> Vec<u8> {
+        std::mem::take(&mut *self.received.lock().expect("client bytes"))
     }
 
     fn stop(&mut self) {
