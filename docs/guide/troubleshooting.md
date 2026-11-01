@@ -196,9 +196,9 @@ A provider following defaults or pinned to a named account refuses to launch whe
 
 ### Scoped isolation is unavailable
 
-The `SANDBOX` section reports the mode in effect, the bubblewrap path and version, the probe result, and the fix. Off Linux, configured `scoped` settings silently run on the host; an uncounted informational row names them. Scoped mode needs Linux and the `bubblewrap` package (`bwrap` on `PATH`). A failed probe usually means unprivileged user namespaces are disabled (`kernel.unprivileged_userns_clone` or `user.max_user_namespaces`) or an AppArmor or LSM policy blocks them.
+The `SANDBOX` section reports the mode in effect, the bubblewrap path and version, the probe result, and any required fix. Off Linux, the probe row says only that scoped isolation needs Linux, with no fix; a separate uncounted informational row names configured `scoped` settings that silently run on the host. Scoped mode needs Linux and the `bubblewrap` package (`bwrap` on `PATH`). A failed probe usually means unprivileged user namespaces are disabled (`kernel.unprivileged_userns_clone` or `user.max_user_namespaces`) or an AppArmor or LSM policy blocks them.
 
-Follow the probe's error for your host, or switch to host isolation, which needs no bubblewrap:
+On Linux, follow the probe's error for your host, or switch to host isolation, which needs no bubblewrap:
 
 ```sh
 rimz config set agents.isolation host

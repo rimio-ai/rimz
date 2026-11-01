@@ -538,6 +538,31 @@ fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
 }
 
 #[test]
+fn sandbox_off_linux_probe_is_informational() {
+    let diagnostic = rimz::sandbox::SandboxDiagnostic::off_linux();
+    assert!(diagnostic.path.is_none());
+    assert!(diagnostic.version.is_none());
+    let sandbox = super::super::model::Sandbox {
+        mode: rimz::config::Isolation::Host,
+        scoped_fallbacks: Vec::new(),
+        path: diagnostic.path,
+        version: diagnostic.version,
+        error: diagnostic.error,
+    };
+    let expected = "scoped isolation needs Linux";
+    let mut tally = Tally::default();
+    let body = strip(|w| render_sandbox(w, &sandbox, &mut tally));
+    let probe = body.lines().find(|line| line.contains("probe")).unwrap();
+    assert!(probe.contains(&format!("▸ {expected}")), "{body}");
+    assert!(!body.contains("agents.isolation"), "{body}");
+    assert!(tally.warns.is_empty() && tally.alarms.is_empty(), "{body}");
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(!closing.contains("fix:"), "{closing}");
+    let json = serde_json::to_value(&sandbox).unwrap();
+    assert_eq!(json["error"], expected);
+}
+
+#[test]
 fn sandbox_scoped_fallbacks_are_informational() {
     for (settings, expected) in [
         (vec![], None),
@@ -560,7 +585,7 @@ fn sandbox_scoped_fallbacks_are_informational() {
                 .collect(),
             path: None,
             version: None,
-            error: Some("scoped isolation requires Linux".into()),
+            error: rimz::sandbox::SandboxDiagnostic::off_linux().error,
         };
         let json = serde_json::to_value(&sandbox).unwrap();
         assert_eq!(json["scoped_fallbacks"], serde_json::json!(settings));

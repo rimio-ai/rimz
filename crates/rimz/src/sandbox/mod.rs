@@ -262,6 +262,16 @@ pub struct SandboxDiagnostic {
     pub error: Option<String>,
 }
 
+impl SandboxDiagnostic {
+    pub fn off_linux() -> Self {
+        Self {
+            path: None,
+            version: None,
+            error: Some("scoped isolation needs Linux".into()),
+        }
+    }
+}
+
 pub fn preflight_launch(
     isolation: Isolation,
     kind: &AgentKind,
@@ -314,11 +324,7 @@ pub fn diagnose() -> SandboxDiagnostic {
     #[cfg(target_os = "linux")]
     return linux::diagnose();
     #[cfg(not(target_os = "linux"))]
-    SandboxDiagnostic {
-        path: None,
-        version: None,
-        error: Some(SandboxErr::UnsupportedOs.to_string()),
-    }
+    SandboxDiagnostic::off_linux()
 }
 
 pub fn apply(plan: &SandboxPlan) -> Result<(), SandboxErr> {

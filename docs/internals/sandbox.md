@@ -53,7 +53,7 @@ Muse alone implements `LaunchCapability::disable_native_sandbox_args`: it adds `
 
 ## Preflight
 
-Every entry point that can start a scoped agent probes bubblewrap first and refuses with the fix. None falls back to host mode. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` with the `bwrap` found on `PATH`, and returns that binary's absolute path. Its errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, `ProbeFailed`, and `Io` (the probe could not run), each ending with what to change. Off Linux, the config loader silently changes a configured `scoped` setting to `host` before launch resolution; only doctor's SANDBOX section names the affected settings, as uncounted information. An explicit `--isolation scoped` still refuses.
+Every entry point that can start a scoped agent probes bubblewrap first and refuses with the fix. None falls back to host mode. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` with the `bwrap` found on `PATH`, and returns that binary's absolute path. Its errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, `ProbeFailed`, and `Io` (the probe could not run), each ending with what to change. Off Linux, the config loader silently changes a configured `scoped` setting to `host` before launch resolution; only doctor's SANDBOX section names the affected settings, as uncounted information. Doctor's off-Linux probe row reports the diagnosis, not the refusal: scoped isolation needs Linux, with no fix. An explicit `--isolation scoped` still refuses.
 
 Two callers soften the refusal. Room judgment (`room/judgment.rs`) records a failed probe as a warning with fixes and opens the room, while scoped launches in it still refuse. Room recovery skips an unavailable candidate and leaves it resumable. The `Blocker` conversion in `sandbox/mod.rs` gives the cause fixes (install bubblewrap, check the user-namespace sysctls and LSM policy) as text only, and marks the `rimz config set agents.isolation host` fix as a security surface for the user to run.
 
@@ -67,7 +67,7 @@ Two callers soften the refusal. Room judgment (`room/judgment.rs`) records a fai
 | Parent-message child resume (`cli/subagents/resume.rs`) | For the child's effective isolation after re-reading its profile. |
 | The exec wrapper (`cli/agents_cmd/exec.rs`) | For the launch's effective isolation. A failure marks the launch failed and fails its run with the refusal as its reason. |
 | `rimz agents explain` | For the explained launch's isolation. |
-| `rimz doctor` | Always. Reports mode, binary path, version, probe verdict, and fix. In host mode the check is informational. |
+| `rimz doctor` | Always. Reports mode, binary path, version, probe verdict, and a fix for a scoped-mode failure. In host mode the check is informational. |
 
 `launch`, `restart`, `fork`, `molt`, supervised runs, subagent resume, room rebirth, the exec wrapper, and `explain` call `sandbox::preflight_launch`, which checks skills before it probes. Under scoped isolation it refuses a configured profile `skills` list when the adapter cannot mark skills user-only (`ManualSkillsUnsupported`), so that refusal needs no bubblewrap. Under `sandbox`, preflight probes nothing: the level only adds provider flags, and whether the provider's sandbox can start is the provider's behaviour. Saving `agents.isolation sandbox` probes nothing either.
 
