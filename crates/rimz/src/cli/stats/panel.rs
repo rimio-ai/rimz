@@ -405,7 +405,7 @@ fn spend_footer(stats: &Stats, today_day: i64, window: Option<Window>) -> String
         } else {
             "sessions"
         },
-        rimz::theme::fmt::dollars2(spend.usd / f64::from(spend.sessions))
+        fmt_usd(spend.usd / f64::from(spend.sessions))
     ));
     line
 }

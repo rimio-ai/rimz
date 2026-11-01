@@ -98,7 +98,7 @@ fn provider_and_role_columns_match_the_mock() {
     assert!(month.iter().any(|line| line
         == "█ Codex      $11,340   46%   97% hit   5,995 sessions     ▒ Agents      $904   4%"));
     assert!(month.iter().any(|line| line
-        == "█ Pi           $0.04   <1%                 1 session      ░ No owner $20,520  84%"));
+        == "█ Pi             <$1   <1%                 1 session      ░ No owner $20,520  84%"));
     let today = lines(Window::Today);
     assert!(
         today
