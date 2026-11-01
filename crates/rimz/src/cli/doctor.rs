@@ -431,10 +431,22 @@ fn collect_loop() -> model::LoopTasks {
     let mut unscheduled = Vec::new();
     let config = rimz::config::MachineConfig::load_lenient();
     let machine = TaskCatalog::load_lenient(None);
-    let instances = workspace_instance_roots()
+    let catalogs = workspace_instance_roots()
         .into_iter()
-        .flat_map(|root| {
-            TaskCatalog::load_lenient(Some(&root))
+        .chain(
+            rimz::workspace::known_workspaces_read_only()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|room| room.project_root),
+        )
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|root| TaskCatalog::load_lenient(Some(&root)))
+        .collect::<Vec<_>>();
+    let instances = catalogs
+        .iter()
+        .flat_map(|catalog| {
+            catalog
                 .visible()
                 .iter()
                 .filter(|(_, task)| task.source() == TaskSource::Instance)
@@ -532,8 +544,22 @@ fn collect_loop() -> model::LoopTasks {
                 }),
         )
         .collect();
+    let tasks = machine
+        .visible()
+        .iter()
+        .chain(
+            catalogs
+                .iter()
+                .flat_map(|catalog| catalog.visible().iter())
+                .filter(|(_, task)| {
+                    task.source() != TaskSource::Config && task.source().blocked_state().is_none()
+                }),
+        )
+        .map(|(name, task)| (name.as_str(), task.entry()))
+        .collect::<Vec<_>>();
     model::LoopTasks {
         throttle_errors: rimz::harness::schedule::throttle::check_errors(),
+        throttle_holds: rimz::harness::schedule::throttle::diagnostic_holds(&config, &tasks),
         tasks: rows,
         timer,
         unscheduled,

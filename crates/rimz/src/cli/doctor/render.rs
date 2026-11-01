@@ -2542,6 +2542,28 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
             ),
         );
     }
+    for hold in &loop_tasks.throttle_holds {
+        let (label, fix) = match (hold.hold, hold.disk_path.as_ref()) {
+            (rimz::ids::HoldKind::Disk, Some(path)) => (
+                "disk floor",
+                format!(
+                    "free space at {} or lower `[throttle] min-disk` in loop.toml",
+                    path.display()
+                ),
+            ),
+            (rimz::ids::HoldKind::Store, _) => (
+                "agent count",
+                "repair or remove the workspace named above, or unset `[throttle] max-active` \
+                 and `max-active-per-task` in loop.toml"
+                    .to_owned(),
+            ),
+            _ => continue,
+        };
+        checks.push(
+            label,
+            unavailable(tally, Severity::Warning, &hold.text, &fix),
+        );
+    }
     checks.render(w)?;
     if loop_tasks.tasks.is_empty() {
         return writeln!(w, "  {}", paint(palette::faint(), "none configured"));

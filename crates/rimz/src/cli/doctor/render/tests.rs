@@ -864,6 +864,7 @@ fn report_fixture() -> DoctorReport {
             timer: LoopTimer::NotInstalled,
             unscheduled: Vec::new(),
             throttle_errors: Vec::new(),
+            throttle_holds: Vec::new(),
         },
         remote_control: RemoteControl::Off,
         disk_usage: None,
@@ -1457,6 +1458,7 @@ fn loop_worktree_holders_render_without_audit_and_do_not_raise_tally() {
         timer: LoopTimer::NotInstalled,
         unscheduled: Vec::new(),
         throttle_errors: Vec::new(),
+        throttle_holds: Vec::new(),
     };
     let mut tally = Tally::default();
     let out = strip(|w| {
@@ -1477,7 +1479,10 @@ fn capacity_check_errors_render_without_tasks_and_name_the_fix() {
         tasks: Vec::new(),
         timer: LoopTimer::NotInstalled,
         unscheduled: Vec::new(),
-        throttle_errors: vec!["claude/work: exit 2: broken credentials".into()],
+        throttle_errors: vec![
+            "capacity check failing: claude/work exit 2: broken credentials".into(),
+        ],
+        throttle_holds: Vec::new(),
     };
     let mut tally = Tally::default();
     let out = strip(|w| {
@@ -1485,11 +1490,75 @@ fn capacity_check_errors_render_without_tasks_and_name_the_fix() {
         render_tally(w, &tally)
     });
     assert!(
-        out.contains("claude/work: exit 2: broken credentials"),
+        out.contains("capacity check failing: claude/work exit 2: broken credentials"),
         "{out}"
     );
     assert!(out.contains("[throttle] check"), "{out}");
     assert_eq!(tally.warns.len(), 1);
+}
+
+#[test]
+fn throttle_holds_name_the_problem_and_put_repairs_in_the_closing_fixes() {
+    use rimz::harness::schedule::throttle::DiagnosticHold;
+    use rimz::ids::HoldKind;
+
+    let holds = [
+        DiagnosticHold {
+            hold: HoldKind::Disk,
+            text: "free disk 12 GB < 20 GB at /repo".into(),
+            disk_path: Some("/repo".into()),
+        },
+        DiagnosticHold {
+            hold: HoldKind::Disk,
+            text: "free disk 12 GB < 20 GB at /worktrees".into(),
+            disk_path: Some("/worktrees".into()),
+        },
+        DiagnosticHold {
+            hold: HoldKind::Store,
+            text: "cannot count active agents: workspace ws_broken unreadable: torn log".into(),
+            disk_path: None,
+        },
+    ];
+    for count in [1, 3] {
+        let tasks = LoopTasks {
+            tasks: Vec::new(),
+            timer: LoopTimer::NotInstalled,
+            unscheduled: Vec::new(),
+            throttle_errors: Vec::new(),
+            throttle_holds: holds[..count].to_vec(),
+        };
+        let mut tally = Tally::default();
+        let body = strip(|w| render_loop(w, &tasks, &mut tally));
+        assert!(
+            body.contains("disk floor") && body.contains(&holds[0].text),
+            "{body}"
+        );
+        assert!(
+            !body.contains("lower") && !body.contains("repair or remove"),
+            "{body}"
+        );
+        let closing = strip(|w| render_tally(w, &tally));
+        assert!(
+            closing.contains("free space at /repo or lower `[throttle] min-disk` in loop.toml"),
+            "{closing}"
+        );
+        if count > 1 {
+            assert!(
+                body.contains("agent count") && body.contains(&holds[2].text),
+                "{body}"
+            );
+            assert!(closing.contains("free space at /worktrees"), "{closing}");
+            assert!(
+                closing.contains(concat!(
+                    "repair or remove the workspace named above, or unset `[throttle] max-active` ",
+                    "and `max-active-per-task` in loop.toml",
+                )),
+                "{closing}"
+            );
+        }
+        assert_eq!(tally.warns.len(), count);
+        assert!(tally.alarms.is_empty());
+    }
 }
 
 #[test]
@@ -1518,6 +1587,7 @@ fn loop_section_lists_tasks_and_flags_invalid_ones() {
         timer: LoopTimer::NotInstalled,
         unscheduled: Vec::new(),
         throttle_errors: Vec::new(),
+        throttle_holds: Vec::new(),
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -2386,6 +2456,7 @@ fn loop_section_reads_empty_when_unconfigured() {
                 timer: LoopTimer::NotInstalled,
                 unscheduled: Vec::new(),
                 throttle_errors: Vec::new(),
+                throttle_holds: Vec::new(),
             },
             &mut tally,
         )
@@ -2443,6 +2514,7 @@ fn loop_section_reports_scheduler_coverage() {
             timer,
             unscheduled,
             throttle_errors: Vec::new(),
+            throttle_holds: Vec::new(),
         };
         let mut tally = Tally::default();
         let out = strip(|w| {

@@ -195,6 +195,16 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     )
     .expect("write stale record");
 
+    let bytes = std::fs::read(&paths.workspace_record).unwrap();
+    let known = known_workspaces_in(&workspaces_dir_under(&state_root), false).unwrap();
+    assert_eq!(known.len(), 1, "read-only enumeration must keep the room");
+    assert_eq!(known[0].project_root, canonical_root);
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), bytes);
+    assert!(
+        !paths.workspace_lock.exists(),
+        "read-only enumeration takes no lock"
+    );
+
     let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
     let before = record::read(&paths.workspace_record).unwrap();
     known_workspaces_under(&workspaces_dir_under(&state_root)).unwrap();

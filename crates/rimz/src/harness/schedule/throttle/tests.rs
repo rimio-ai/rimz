@@ -1473,6 +1473,64 @@ fn a_configured_limit_this_host_cannot_read_fails_with_the_key_and_the_fix() {
 }
 
 #[test]
+fn diagnostic_holds_read_distinct_write_paths_only_with_a_disk_floor() {
+    let fake = FakeHost::new();
+    *fake.disk.lock().unwrap() = 12_000_000_000;
+    let mut machine = MachineConfig::default();
+    machine.r#loop.throttle = config("min-disk = '20GB'\ncheck = 'exit 2'\n");
+    let entry: TaskEntry = toml::from_str("root = '/repo'\n").unwrap();
+    let tasks = [("first", &entry), ("second", &entry)];
+    assert_eq!(
+        diagnostic_holds_in(fake.as_ref(), &machine, &tasks),
+        [DiagnosticHold {
+            hold: HoldKind::Disk,
+            text: "free disk 12 GB < 20 GB at /repo".into(),
+            disk_path: Some("/repo".into()),
+        }]
+    );
+    assert_eq!(fake.disk_reads(), [PathBuf::from("/repo")]);
+    *fake.disk.lock().unwrap() = 20_000_000_000;
+    assert!(diagnostic_holds_in(fake.as_ref(), &machine, &tasks).is_empty());
+    machine.r#loop.throttle.min_disk = None;
+    fake.disk_reads.lock().unwrap().clear();
+    assert!(diagnostic_holds_in(fake.as_ref(), &machine, &tasks).is_empty());
+    assert!(fake.disk_reads().is_empty());
+    assert_eq!(fake.tickets(), 0);
+    assert!(!fake.queue_lock().exists());
+    assert!(fake.checked_groups().is_empty());
+    assert!(!fake.check_cache().exists());
+}
+
+#[test]
+fn diagnostic_agent_count_failures_require_a_configured_cap() {
+    let fake = FakeHost::new();
+    fake.rooms.lock().unwrap().insert(
+        workspace().to_string(),
+        Err("workspace ws_broken unreadable: torn log".into()),
+    );
+    let entry: TaskEntry = toml::from_str("root = '/repo'\n").unwrap();
+    let mut machine = MachineConfig::default();
+    assert!(diagnostic_holds_in(fake.as_ref(), &machine, &[("nightly", &entry)]).is_empty());
+    assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 0);
+    for caps in ["max-active = 2", "max-active-per-task = 1"] {
+        machine.r#loop.throttle = config(caps);
+        assert_eq!(
+            diagnostic_holds_in(fake.as_ref(), &machine, &[("nightly", &entry)]),
+            [DiagnosticHold {
+                hold: HoldKind::Store,
+                text: "cannot count active agents: workspace ws_broken unreadable: torn log".into(),
+                disk_path: None,
+            }]
+        );
+    }
+    fake.set_agents(&workspace(), Vec::new());
+    assert!(diagnostic_holds_in(fake.as_ref(), &machine, &[("nightly", &entry)]).is_empty());
+    assert_eq!(fake.tickets(), 0);
+    assert!(!fake.queue_lock().exists());
+    assert!(fake.checked_groups().is_empty());
+}
+
+#[test]
 fn memory_and_disk_floors_hold_below_the_floor_and_show_beside_the_reading() {
     let fake = FakeHost::new();
     let floors = config("min-memory = \"8GB\"\nmin-disk = \"20GB\"\n");

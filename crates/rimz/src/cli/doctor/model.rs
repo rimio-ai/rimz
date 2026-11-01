@@ -751,6 +751,7 @@ impl HookStatus {
 #[derive(Debug, Serialize)]
 pub(super) struct LoopTasks {
     pub(super) throttle_errors: Vec<String>,
+    pub(super) throttle_holds: Vec<rimz::harness::schedule::throttle::DiagnosticHold>,
     pub(super) tasks: Vec<LoopTaskRow>,
     pub(super) timer: LoopTimer,
     pub(super) unscheduled: Vec<String>,
