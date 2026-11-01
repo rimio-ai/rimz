@@ -832,7 +832,16 @@ fn dashboard_mock_heights_and_snapshots() {
     let mut heights = Vec::new();
     for rows in [76, 40] {
         for tab in Window::TABS {
-            let output = frame(&stats, &assists, tab, 119, Some(rows));
+            let output = Dashboard {
+                stats: &stats,
+                assists: &assists,
+                today: TODAY,
+                dollars: false,
+                glyphs: &panel_glyphs(),
+                hold: false,
+                color: tab != Window::Today,
+            }
+            .frame(tab, 119, Some(rows));
             heights.push((rows, tab, output.step, output.text.lines().count()));
             let text = strip_ansi(&output.text)
                 .lines()
@@ -1092,7 +1101,7 @@ fn dashboard_avg_counts_drawn_bars_and_titles_follow_the_active_tab() {
             assert!(output.contains("Spend per week · last 52 weeks"));
             assert!(!output.contains("per active day"));
         } else {
-            assert!(output.contains("by midnight · ░ yesterday $300"));
+            assert!(output.contains("by midnight · █ yesterday $300"));
             assert!(!output.contains("avg"));
         }
     }

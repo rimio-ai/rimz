@@ -2844,7 +2844,7 @@ fn today_dashboard_uses_day_breakdowns_and_grid_activity_without_a_trend() {
         "Today $12",
         "Current Mod",
         "Codex",
-        "today $12 so far · ~$12 by midnight · ░ yesterday $18",
+        "today $12 so far · ~$12 by midnight · █ yesterday $18",
         "3 active days since",
         "streak 2 days",
         "busiest",

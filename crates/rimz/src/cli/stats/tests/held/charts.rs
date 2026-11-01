@@ -161,11 +161,12 @@ fn dashboard_chart_titles_keep_the_comparison_figures_at_narrow_widths() {
     let (mut stats, assists) = fixture();
     for width in [60, 85, 119] {
         for (tab, comparison) in [
-            (Window::Today, "~$1,265 by midnight · ░ yesterday $1,293"),
+            (Window::Today, "~$1,265 by midnight · █ yesterday $1,293"),
             (Window::Week, "↓11% vs prior 7 days"),
             (Window::Month, "↑186% vs prior 30 days"),
         ] {
-            let output = strip_ansi(&frame(&stats, &assists, tab, width, None).text);
+            let frame = frame(&stats, &assists, tab, width, None);
+            let output = strip_ansi(&frame.text);
             let title = output
                 .lines()
                 .find(|line| line.contains("Spend per"))
@@ -173,6 +174,41 @@ fn dashboard_chart_titles_keep_the_comparison_figures_at_narrow_widths() {
             assert!(title.ends_with(comparison), "{width} {tab:?}: {title}");
             if tab == Window::Today {
                 assert_eq!(title.contains("today $1,024 so far · "), width == 119);
+                let raw_title = frame
+                    .text
+                    .lines()
+                    .find(|line| line.contains("Spend per"))
+                    .unwrap();
+                assert!(display_width(raw_title) <= width, "{width}: {raw_title:?}");
+                let mut actual = vt100::Parser::new(
+                    1.try_into().unwrap(),
+                    (width as u16).try_into().unwrap(),
+                    0,
+                );
+                actual.process(raw_title.as_bytes());
+                let comparison = render::palette::model_styles(&[], |_, _| false).1.forecast;
+                let mut expected =
+                    vt100::Parser::new(1.try_into().unwrap(), 2.try_into().unwrap(), 0);
+                expected.process(
+                    format!(
+                        "{}{}",
+                        render::paint(comparison, "█"),
+                        render::paint(render::palette::muted(), "x")
+                    )
+                    .as_bytes(),
+                );
+                let start = title.chars().position(|c| c == '~').unwrap();
+                for (column, glyph) in title.chars().enumerate().skip(start) {
+                    assert_eq!(
+                        actual.screen().cell(0, column as u16).unwrap().fgcolor(),
+                        expected
+                            .screen()
+                            .cell(0, u16::from(glyph != '█'))
+                            .unwrap()
+                            .fgcolor(),
+                        "{width}: {title} at {column}"
+                    );
+                }
             }
         }
     }
@@ -447,7 +483,7 @@ fn dashboard_without_color_keeps_the_ghost_but_omits_the_forecast_extension() {
 }
 
 #[test]
-fn dashboard_yesterday_ghost_never_tints_a_partial_spend_cell() {
+fn dashboard_yesterday_ghost_without_a_column_above_keeps_the_spend_background_clear() {
     let (mut stats, assists) = fixture();
     stats.chart.hours = BTreeMap::from([
         (TODAY * 24, BTreeMap::from([("opus-5.5".into(), 1.0)])),
@@ -457,18 +493,51 @@ fn dashboard_yesterday_ghost_never_tints_a_partial_spend_cell() {
             BTreeMap::from([("opus-5.5".into(), 12.0)]),
         ),
     ]);
-    let rows = plot(&stats, &assists, Window::Today, 119);
     let style = render::palette::model_styles(&["claude"], |_, _| true).0[0].mark;
-    assert!(rows[6].contains(&format!("{style}▁")), "{}", rows[6]);
-    assert!(!rows[6].contains(&format!(
-        "{}▁",
-        style.bg_color(render::palette::muted().get_fg_color())
-    )));
-    assert!(!rows.iter().any(|row| row.contains('░')), "{rows:?}");
+    for yesterday in [12.0, 0.5] {
+        stats.chart.hours.insert(
+            (TODAY - 1) * 24,
+            BTreeMap::from([("opus-5.5".into(), yesterday)]),
+        );
+        let rows = plot(&stats, &assists, Window::Today, 119);
+        assert!(rows[6].contains(&format!("{style}▁")), "{}", rows[6]);
+        assert!(!rows.iter().any(|row| row.contains('░')), "{rows:?}");
+    }
 }
 
 #[test]
-fn dashboard_yesterday_ghost_uses_whole_muted_cells_above_spend_and_in_future_hours() {
+fn dashboard_yesterday_ghost_fills_only_the_top_spend_cells_background() {
+    let (mut stats, assists) = fixture();
+    let (models, other) = render::palette::model_styles(&["claude"], |_, _| true);
+    let model = models[0].mark;
+    let backed = model.bg_color(other.forecast.get_fg_color());
+    for (spent, row, glyph) in [(0.0001, 6, '▁'), (5.0, 6, '▃'), (34.0, 4, '▃')] {
+        stats.chart.hours = BTreeMap::from([
+            (TODAY * 24, BTreeMap::from([("opus-5.5".into(), spent)])),
+            (TODAY * 24 + 1, BTreeMap::from([("opus-5.5".into(), 100.0)])),
+            (
+                (TODAY - 1) * 24,
+                BTreeMap::from([("opus-5.5".into(), 80.0)]),
+            ),
+        ]);
+        let rows = plot(&stats, &assists, Window::Today, 119);
+        assert!(
+            rows[row].contains(&render::paint(backed, &glyph.to_string().repeat(3))),
+            "spent {spent}: {rows:?}"
+        );
+        assert!(
+            rows[row - 1].contains(&render::paint(other.forecast, "███")),
+            "spent {spent}: {rows:?}"
+        );
+        for lower in &rows[row + 1..] {
+            assert!(lower.contains(&render::paint(model, "███")), "{lower:?}");
+            assert!(!lower.contains(&backed.to_string()), "{lower:?}");
+        }
+    }
+}
+
+#[test]
+fn dashboard_yesterday_ghost_uses_solid_comparison_cells_above_spend_and_in_future_hours() {
     let (mut stats, assists) = fixture();
     stats.chart.hours.clear();
     for (ago, hour, usd) in [
@@ -484,7 +553,9 @@ fn dashboard_yesterday_ghost_uses_whole_muted_cells_above_spend_and_in_future_ho
         );
     }
     let rows = plot(&stats, &assists, Window::Today, 119);
-    let ghost = render::paint(render::palette::muted(), "░░░");
+    let comparison = render::palette::model_styles(&[], |_, _| false).1.forecast;
+    assert_ne!(comparison, render::palette::muted());
+    let ghost = render::paint(comparison, "███");
     let model = render::paint(
         render::palette::model_styles(&["claude"], |_, _| true).0[0].mark,
         "███",
