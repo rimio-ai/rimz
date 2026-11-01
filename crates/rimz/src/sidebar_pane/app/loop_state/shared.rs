@@ -275,13 +275,13 @@ impl ViewAccess {
             // Presentation initialization above guarantees the portable context exists.
             let context = entry.context.as_mut().expect("initialized view context");
             if let Some(own_view) = own_view {
-                context.current.own_view = Some(own_view);
+                context.set_own_view(Some(own_view));
             }
             let mut arrival_until = None;
             if route.advancing && (entry.unpainted || entry.last_pane.as_ref() != Some(&own_pane)) {
                 // A pick arriving from another pane belongs there until topology lists this pane.
                 if own_pane_unlisted && entry.last_pane.as_ref() != Some(&own_pane) {
-                    context.current.own_view = None;
+                    context.set_own_view(None);
                     unseat_selection(&mut entry.state);
                 }
                 if entry.last_pane.is_some() || self.view_advanced {
