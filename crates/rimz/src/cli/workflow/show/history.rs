@@ -187,7 +187,6 @@ impl View<'_> {
                     object,
                     stderr_tail,
                     digests,
-                    retry,
                     ..
                 } => {
                     let answer = if object.is_null() {
@@ -208,10 +207,10 @@ impl View<'_> {
                     {
                         tail(out, stderr)?;
                     }
+                    // The check-retry context carries only the outcome and reason of the
+                    // failed evaluation the engine journaled before this one, which its own
+                    // row already prints, so it takes no line here; `--json` keeps it.
                     digests_out(out, digests)?;
-                    if let Some(retry) = retry {
-                        writeln!(out, "    retry: {}", value(retry))?;
-                    }
                 }
                 JournalEvent::Attempt {
                     outcome,

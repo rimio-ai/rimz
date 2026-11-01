@@ -92,13 +92,14 @@ fn failed_judge_history_does_not_invent_an_invalid_route() {
         !history.contains("said invalid → recover"),
         "failed judges did not route: {history}"
     );
-    let reason_prose = history
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("retry:"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    assert!(
+        !history
+            .lines()
+            .any(|line| line.trim_start().starts_with("retry:")),
+        "{history}"
+    );
     assert_eq!(
-        reason_prose
+        history
             .matches("reserved or unrouted outcome \"missing\"")
             .count(),
         1,
