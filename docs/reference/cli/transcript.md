@@ -154,7 +154,7 @@ The human view leaves out RimZ's own deliveries, so a conversation shows the wor
 | Hidden entry | Source |
 | --- | --- |
 | Fleet digest | The status-only `SUBAGENT_REPORT` from `@rimz` when an agent's launched subagents settle, or `AGENT_REPORT` for a fleet containing solo agents. |
-| Wait | A [`rimz wait`](./wait.md) or loop `--wait` delivery, a signal delivery, or a stage notice, from `@rimz`. |
+| Wait | A [`rimz wait`](./wait.md) or loop `--wait` delivery, signal, stage, keepalive, deadline, paused-child, stalled-child, queued, undelivered, or unknown notice from `@rimz`. |
 | `rimz` prompt or command | A prompt or command RimZ sent without a header, such as a nudge, a `rimz message --no-from` send, or a system `/compact`. A loop-spawned run's launch prompt is also hidden. |
 
 Each hidden entry takes with it the agent's replies and error output in the turn it opened. Three things stay visible: an ask raised in that turn, the output of a turn that asked the user, and any message the agent sends. A turn opened by both a hidden entry and a visible message stays visible. No flag shows hidden entries in the human view.

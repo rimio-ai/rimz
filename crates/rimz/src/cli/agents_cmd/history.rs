@@ -3,7 +3,7 @@ use super::*;
 use crate::cli::{Ctx, render};
 use rimz::agents::turns::TurnRecord;
 use rimz::store::message::{
-    HeaderKind, parse_message_header, prompt_is_keepalive_only, split_batched_prompt,
+    HarnessNotice, HeaderKind, parse_message_header, prompt_is_keepalive_only, split_batched_prompt,
 };
 
 pub(super) fn history_agent(
@@ -110,12 +110,23 @@ fn render_history(
         let (mut from, prompt) = match parse_message_header(prompt.trim_start()) {
             Some((kind, sender, body)) => {
                 let from = match kind {
-                    HeaderKind::Agent | HeaderKind::Subagent | HeaderKind::User => sender,
-                    HeaderKind::CacheKeepalive => "keepalive".to_owned(),
-                    HeaderKind::Deadline => "deadline".to_owned(),
-                    HeaderKind::Wait => "wait".to_owned(),
-                    HeaderKind::Signal => "signal".to_owned(),
-                    HeaderKind::Stage => "stage".to_owned(),
+                    HeaderKind::Agent => sender,
+                    HeaderKind::User => "user".to_owned(),
+                    HeaderKind::Notice(notice) => match notice {
+                        HarnessNotice::SubagentReport
+                        | HarnessNotice::AgentReport
+                        | HarnessNotice::TeamReport
+                        | HarnessNotice::Other(_) => sender,
+                        HarnessNotice::CacheKeepalive => "keepalive".to_owned(),
+                        HarnessNotice::Deadline => "deadline".to_owned(),
+                        HarnessNotice::Wait => "wait".to_owned(),
+                        HarnessNotice::Signal => "signal".to_owned(),
+                        HarnessNotice::Stage => "stage".to_owned(),
+                        HarnessNotice::SubagentPaused => "paused".to_owned(),
+                        HarnessNotice::SubagentStalled => "stalled".to_owned(),
+                        HarnessNotice::MessageUndelivered => "undelivered".to_owned(),
+                        HarnessNotice::MessageQueued => "queued".to_owned(),
+                    },
                 };
                 (from, body)
             }
@@ -256,6 +267,36 @@ mod tests {
                 "wait",
                 "tests finished",
             ),
+            (
+                "Type: SUBAGENT_PAUSED\nFrom: @rimz\nContent:\nchild paused",
+                "paused",
+                "child paused",
+            ),
+            (
+                "Type: SUBAGENT_STALLED\nFrom: @rimz\nContent:\nchild stalled",
+                "stalled",
+                "child stalled",
+            ),
+            (
+                "Type: MESSAGE_UNDELIVERED\nFrom: @rimz\nContent:\nmessage failed",
+                "undelivered",
+                "message failed",
+            ),
+            (
+                "Type: MESSAGE_QUEUED\nFrom: @rimz\nContent:\nmessage pending",
+                "queued",
+                "message pending",
+            ),
+            (
+                "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nnew notice",
+                "@rimz",
+                "new notice",
+            ),
+            (
+                "Type: USER_MESSAGE\nFrom: @user\nContent:\nnext task",
+                "user",
+                "next task",
+            ),
             ("plain prompt", "user", "plain prompt"),
         ];
         for (prompt, from, body) in prompts {
@@ -286,9 +327,12 @@ mod tests {
             let rendered = String::from_utf8(out).unwrap();
             assert_eq!(rendered.lines().count() - 2, 2, "{rendered}");
             assert!(rendered.contains("FROM"));
-            assert!(rendered.contains(from));
+            for row in rendered.lines().skip(1).take(2) {
+                assert_eq!(row.split_whitespace().nth(7), Some(from), "{row}");
+            }
             assert!(rendered.contains(body));
             assert!(!rendered.contains("Type:"));
+            assert!(!rendered.contains("@user"));
             assert!(!rendered.contains("second section"));
             assert!(!rendered.contains("cut"));
             assert!(rendered.contains("2024-01-01 00:30"));
