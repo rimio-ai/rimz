@@ -656,6 +656,135 @@ fn settled_shared_hidden(mux: MuxName) -> Rig {
     rig
 }
 
+fn source_baseline_landing_probe(mux: MuxName, retain_baseline: bool) {
+    let mut rig = settled_shared_hidden(mux);
+    let target = rig
+        .state
+        .views
+        .mirror()
+        .own_view
+        .as_ref()
+        .unwrap()
+        .working_pane_ids[0]
+        .clone();
+    let source_pane = PaneId::from_parts(
+        mux,
+        if mux == MuxName::Tmux {
+            "%503"
+        } else {
+            "source"
+        },
+    );
+    let source_work = PaneId::from_parts(
+        mux,
+        if mux == MuxName::Tmux {
+            "%504"
+        } else {
+            "source_work"
+        },
+    );
+    let published = rig.views.lock().fold.clone().unwrap();
+    let mut panes = published.frame.as_ref().unwrap().to_pane_refs();
+    for (id, command) in [(&source_pane, "rimz-sidebar"), (&source_work, "zsh")] {
+        let mut entry = pane(id.raw(), "tab_source", false);
+        entry.pane_id = id.clone();
+        entry.command = Some(command.into());
+        panes.push(entry);
+    }
+    let workspace = published
+        .workspace
+        .0
+        .clone()
+        .with_live_panes(panes.clone(), None);
+    let frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");
+    let fold = WorkspaceFold {
+        sampled_at: rig.state.pane.clock.now(),
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(workspace),
+        frame: Some(Arc::new(frame)),
+    };
+    let current = LoopState::project_fold(&fold, Some(&source_pane), None);
+    assert_eq!(
+        current.own_view.as_ref().unwrap().working_pane_ids,
+        vec![source_work]
+    );
+    assert!(
+        !current
+            .own_view
+            .as_ref()
+            .unwrap()
+            .working_pane_ids
+            .contains(&target)
+    );
+    assert!(rig.state.owns_focus_target(&target));
+    let now = rig.state.pane.clock.now();
+    let source = {
+        let mut views = rig.views.lock();
+        let revision = views.revision;
+        let (id, entry) = views.presentation(&source_pane, now, false);
+        let mut context = ViewContext::new(current.clone(), now);
+        let (fused, _) = context.fuse_pulled(
+            current,
+            EventStore::default(),
+            Some(&crate::mux::focus_anchor::FocusPresentation::Fence),
+            rig.state.pane.clock.now_ms(),
+        );
+        context.current = fused;
+        assert!(context.overlay_baseline.is_some());
+        if !retain_baseline {
+            context.overlay_baseline = None;
+        }
+        entry.context = Some(context);
+        entry.cursor.revision = revision;
+        id
+    };
+    assert!(rig.state.pending_preview().is_none());
+    let anchor = crate::mux::focus_anchor::FocusAnchor {
+        nonce: crate::ids::FocusNonce::new(),
+        session_name: "rimz-test".into(),
+        pane_id: target.clone(),
+        origin: crate::mux::focus_anchor::FocusOrigin::User,
+        repair_generation: None,
+        issued_at_ms: rig.state.pane.clock.now_ms(),
+        applied_at_ms: None,
+        state: crate::mux::focus_anchor::FocusIntentState::Requested,
+        pre_action: Vec::new(),
+        placement: None,
+        order: None,
+    };
+    let (mut push, ack) = focus_push(&mut rig, anchor);
+    push.source_view = Some(source);
+    let paints = rig.state.pane.paints;
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
+    let report = ack.try_recv();
+    assert!(
+        rig.state.owns_focus_target(&target) && rig.state.pane.paints > paints,
+        "{mux:?} retained={retain_baseline}: destination must remain owner and paint, \
+         report={report:?}, owns_after={}, paints_before={paints}, paints_after={}",
+        rig.state.owns_focus_target(&target),
+        rig.state.pane.paints,
+    );
+}
+
+#[test]
+fn tmux_source_baseline_absent_control() {
+    source_baseline_landing_probe(MuxName::Tmux, false);
+}
+
+#[test]
+fn zellij_source_baseline_absent_control() {
+    source_baseline_landing_probe(MuxName::Zellij, false);
+}
+
+#[test]
+fn tmux_source_baseline_retained_preserves_destination() {
+    source_baseline_landing_probe(MuxName::Tmux, true);
+}
+
+#[test]
+fn zellij_source_baseline_retained_preserves_destination() {
+    source_baseline_landing_probe(MuxName::Zellij, true);
+}
+
 fn advance_wakeup(rig: &mut Rig, wakeup: Wakeup) -> bool {
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     send.send(wakeup).unwrap();
