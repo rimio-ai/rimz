@@ -947,7 +947,15 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         .and_then(|definition| definition.default_context_window);
     let mut carried_usage = input.prior.map(|prior| prior.usage.clone());
     if retires_usage && let Some(carried) = &mut carried_usage {
-        if let Some(occupancy) = carried.context_used_tokens() {
+        // An estimate carries no per-call split. Retiring it again before a
+        // model call keeps the earlier count: the sidecar still holds that
+        // pre-compaction reading, and the attach must keep withholding it.
+        let measured = carried
+            .input_context_tokens()
+            .is_some_and(|input| input > 0);
+        if let Some(occupancy) = carried.context_used_tokens()
+            && (measured || state.retired_context_tokens.is_none())
+        {
             state.retired_context_tokens = Some(occupancy);
         }
         clear_current_window(carried);

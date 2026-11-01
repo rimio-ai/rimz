@@ -536,11 +536,30 @@ fn codex_estimate_keeps_the_gap_until_a_model_call_reports_its_split() {
 
     let mut delayed_echo = events.clone();
     delayed_echo.push(reading("SessionStart", compaction_ended(None), estimate));
-    let agent = reduce_agent_states(&delayed_echo).remove(0);
+    let mut agent = reduce_agent_states(&delayed_echo).remove(0);
     assert!(agent.compacted_unmeasured);
-    assert_eq!(agent.retired_context_tokens, Some(19_359));
-    assert_eq!(agent.usage.context_pct, None);
+    assert_eq!(
+        agent.retired_context_tokens,
+        Some(16_729),
+        "a re-retired estimate keeps the pre-compaction count"
+    );
+    assert_eq!(agent.usage.context_pct, Some(5));
     assert_eq!(agent.compaction_count, 1);
+    // Codex's sidecar still holds the reading from before the compaction.
+    let mut context = crate::agents::AgentContext::new("codex", epoch());
+    context.tokens = Some(crate::agents::AgentTokenUsage {
+        context_window_size: Some(372_400),
+        used_percentage: Some(4),
+        current_usage: Some(crate::agents::AgentCurrentUsage {
+            input_tokens: Some(16_729),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    agent.attach_context(Some(context));
+    let card = crate::store::snapshot::row::AgentCard::from_agent(&agent, epoch());
+    assert!(card.compacted_unmeasured, "the stale sidecar ends no gap");
+    assert_eq!(card.context_gauge_percent(), Some(5));
 
     events.push(reading(
         "Stop",
