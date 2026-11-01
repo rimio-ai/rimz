@@ -18,7 +18,7 @@ use crate::sidebar::read_marks::ReadMarks;
 use crate::sidebar::timing::{FOCUS_MARKER_TMUX_DWELL, FOCUS_MARKER_ZELLIJ_DWELL, TAB_READ_DWELL};
 use crate::sidebar::unread::UnreadClearCause;
 use crate::sidebar_pane::render::{self, ViewState};
-use crate::store::snapshot::SidebarSnapshot;
+use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
 
 use super::clock::LoopClock;
 use super::fetch::{FetchUpdate, FoldInputs, SnapshotSource};
@@ -123,6 +123,13 @@ impl ViewContext {
             health: Health::default(),
             gate: GateState::default(),
         }
+    }
+
+    pub(super) fn set_own_view(&mut self, own_view: Option<SidebarOwnView>) {
+        if let Some(baseline) = &mut self.overlay_baseline {
+            baseline.own_view = own_view.clone();
+        }
+        self.current.own_view = own_view;
     }
 
     pub(super) fn observe_focus_anchor(

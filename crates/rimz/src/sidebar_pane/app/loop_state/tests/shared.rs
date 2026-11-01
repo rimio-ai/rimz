@@ -116,6 +116,67 @@ fn a_shared_borrow_resets_scratch_presentation_and_mirrors_current() {
 }
 
 #[test]
+fn a_shared_borrow_rescopes_the_retained_overlay_baseline() {
+    let registry = views();
+    let source = shared_rig(registry.clone(), 0, 2);
+    let mut rig = shared_rig(registry, 1, 2);
+    let fold = rig.views.lock().fold.clone().unwrap();
+    let expected = SidebarOwnView::from_frame(
+        &rig.state.pane.config.own_pane,
+        fold.frame.as_deref().unwrap(),
+    )
+    .unwrap();
+    let mut baseline =
+        LoopState::project_fold(&fold, Some(&source.state.pane.config.own_pane), None);
+    assert_ne!(baseline.own_view.as_ref(), Some(&expected));
+    {
+        let mut view = rig.view();
+        let context = view.ctx();
+        context.current.own_view = baseline.own_view.clone();
+        context.overlay_baseline = Some(baseline.clone());
+    }
+    baseline.own_view = Some(expected.clone());
+
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        assert!(matches!(v.target, ViewTarget::Shared(_)));
+        assert_eq!(v.context.current.own_view.as_ref(), Some(&expected));
+        assert_eq!(v.context.overlay_baseline.as_ref(), Some(&baseline));
+    });
+}
+
+#[test]
+fn an_unlisted_arrival_clears_the_retained_overlay_baselines_own_view() {
+    let registry = views();
+    let source = shared_rig(registry.clone(), 0, 2);
+    let own = PaneId::from_parts(MuxName::Zellij, "sidebar_new");
+    let mut rig = Rig::with_own_pane(own.clone());
+    rig.share_views(registry);
+    let mut baseline = source.state.views.mirror().clone();
+    assert!(baseline.own_view.is_some());
+    let now = rig.state.pane.clock.now();
+    {
+        let mut views = rig.views.lock();
+        let frame = views.fold.as_ref().unwrap().frame.as_deref().unwrap();
+        assert!(SidebarOwnView::from_frame(&own, frame).is_none());
+        let revision = views.revision;
+        let (_, entry) = views.presentation(&own, now, false);
+        entry.last_pane = Some(source.state.pane.config.own_pane.clone());
+        entry.cursor.revision = revision;
+        let mut context = ViewContext::new(baseline.clone(), now);
+        context.overlay_baseline = Some(baseline.clone());
+        entry.context = Some(context);
+    }
+    baseline.own_view = None;
+    rig.state.pane.optimistic_watch_until = Some(now + FOCUS_RESUME_WATCH_WINDOW);
+
+    rig.state.with_view_for_test(Route::PAINT, |_, v| {
+        assert!(matches!(v.target, ViewTarget::Shared(_)));
+        assert_eq!(v.context.current.own_view, None);
+        assert_eq!(v.context.overlay_baseline.as_ref(), Some(&baseline));
+    });
+}
+
+#[test]
 fn outside_decisions_read_the_routed_view_not_scratch() {
     let views = views();
     let own = PaneId::from_parts(MuxName::Zellij, "sidebar_0");
