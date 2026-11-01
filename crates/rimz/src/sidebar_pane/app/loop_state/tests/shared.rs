@@ -319,6 +319,39 @@ fn painting_an_up_to_date_view_does_not_prepare_a_fold() {
     assert_eq!(rig.state.pane.fold_preparations, preparations);
 }
 
+#[test]
+fn coviewer_paints_step_the_shared_head_only_once_per_phase() {
+    let views = views();
+    let mut first = shared_rig(views.clone(), 0, 2);
+    let mut second = shared_rig(views, 0, 2);
+    let clock = LoopClock::play(Timestamp::now());
+    for rig in [&mut first, &mut second] {
+        rig.state.pane.clock = clock.clone();
+        rig.view().ctx().anim_start = clock.now();
+        rig.state
+            .draw_frame(&mut rig.terminal, clock.now(), false)
+            .unwrap();
+    }
+    clock.advance(Duration::from_millis(500));
+    for rig in [&mut first, &mut second] {
+        let paints = rig.state.pane.paints;
+        rig.state
+            .draw_frame(&mut rig.terminal, clock.now(), false)
+            .unwrap();
+        assert_eq!(rig.state.pane.paints, paints + 1, "each co-viewer composes");
+        assert_eq!(rig.view().ui().head_step, 1);
+    }
+    // The second pane read its clock just before the boundary the first pane crossed.
+    let start = clock.now() - Duration::from_millis(500);
+    for (pane, at) in [(0, 1001), (1, 999), (0, 1002)] {
+        let rig = if pane == 0 { &mut first } else { &mut second };
+        rig.state
+            .draw_frame(&mut rig.terminal, start + Duration::from_millis(at), false)
+            .unwrap();
+        assert_eq!(rig.view().ui().head_step, 2, "paint at {at} ms");
+    }
+}
+
 impl Write for BlockedOutput {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if let Some(entered) = self.entered.take() {

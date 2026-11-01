@@ -2997,6 +2997,8 @@ impl PaneState {
         let interactions = std::mem::take(&mut self.ui.interactions);
         let roster = std::mem::take(&mut self.ui.painted_roster);
         let rows = std::mem::take(&mut self.ui.painted_rows);
+        v.state
+            .advance_head_step(v.context.current.theme.display.resolved_refresh_ms());
         let (result, frame) = self.paint.compose_frame(
             terminal,
             &v.context.current,

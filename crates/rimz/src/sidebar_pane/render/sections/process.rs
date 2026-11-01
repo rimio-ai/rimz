@@ -18,6 +18,7 @@ pub(super) fn process_row_line(
     row: &SidebarRow,
     width: usize,
     animation_phase: u64,
+    head_step: u64,
 ) -> Line<'static> {
     // The row speaks the agent cards' vocabulary one step down: an active
     // pane (a build, a test, a script) gets the running braille spinner in
@@ -38,7 +39,7 @@ pub(super) fn process_row_line(
     } else {
         match state {
             ProcessState::Busy => (
-                role_glyph(theme, AnimationRole::Working, animation_phase),
+                role_glyph(theme, AnimationRole::Working, head_step),
                 working_style(theme, animation_phase).add_modifier(Modifier::DIM),
             ),
             ProcessState::Stuck => (

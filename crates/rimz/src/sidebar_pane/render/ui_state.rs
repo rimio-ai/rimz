@@ -66,11 +66,17 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Last agreed working-pane focus, finer-grained than the owning card baseline.
     pub(in crate::sidebar_pane) entry_focus: Option<PaneId>,
     pub(in crate::sidebar_pane) help_visible: bool,
-    /// Wall-clock animation frame counter, advanced by the serve loop's
-    /// animation tick. The renderer derives the running-agent spin frame from
-    /// it; freshness gating (per row) keeps a quiet agent frozen.
+    /// Driver-clock phase for effects, money rolls, scrollbar fade, and pets.
+    /// Frame-sequence heads read `head_step` instead, so late paints never skip frames.
     pub(in crate::sidebar_pane) animation_phase: u64,
-    /// Playback pins this phase for cosmetic cycles outside motion windows, leaving money rolls on `animation_phase`.
+    /// Frame-sequence step, advanced only by routed composition, once per new phase.
+    /// The first composition holds at zero; co-viewer paints in one phase share a step.
+    pub(in crate::sidebar_pane) head_step: u64,
+    /// Phase and `refresh_ms` at the last head advance, or at the first composition
+    /// or grid change; absent before painting.
+    pub(in crate::sidebar_pane) head_anchor: Option<(u64, u16)>,
+    /// Playback pins cosmetic cycles and head steps outside motion windows,
+    /// leaving money rolls on `animation_phase`.
     pub(in crate::sidebar_pane) cosmetic_phase: Option<u64>,
     /// Elapsed milliseconds since the loop's monotonic base, stamped beside the phase.
     pub(in crate::sidebar_pane) frame_ms: u64,
@@ -271,6 +277,23 @@ impl UiState {
 }
 
 impl ViewState {
+    pub(in crate::sidebar_pane) fn advance_head_step(&mut self, refresh_ms: u16) {
+        match self.head_anchor {
+            // A phase no later than the anchor's on the same grid holds: a co-viewer that
+            // read its clock before another pane's paint can stamp a phase one behind.
+            Some((phase, refresh)) if refresh == refresh_ms && self.animation_phase <= phase => {
+                return;
+            }
+            Some((_, refresh)) if refresh == refresh_ms => {
+                self.head_step = self.head_step.wrapping_add(1);
+            }
+            // A changed `refresh_ms` rescales the phase (a raise lowers it), so the
+            // head holds once and re-anchors rather than waiting for the phase to catch up.
+            Some(_) | None => {}
+        }
+        self.head_anchor = Some((self.animation_phase, refresh_ms));
+    }
+
     pub(super) fn note_layout(&mut self, frame: &super::compose::ComposedFrame) {
         if self
             .layout_key
@@ -508,5 +531,27 @@ impl Alert {
 
     pub(in crate::sidebar_pane) fn is_active(&self) -> bool {
         self.recovered_at.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn head_step_holds_first_and_same_phase_and_steps_once_over_any_gap() {
+        let mut view = ViewState::default();
+        let base = [(9, 0), (9, 0), (10, 1), (60, 2), (60, 2)].map(|(p, s)| (p, 100, s));
+        let coviewer_inversion = [(59, 100, 2), (60, 100, 2), (61, 100, 3)];
+        let raised_refresh = [(6, 1000, 3), (6, 1000, 3), (5, 1000, 3), (7, 1000, 4)];
+        for (phase, refresh_ms, step) in base
+            .into_iter()
+            .chain(coviewer_inversion)
+            .chain(raised_refresh)
+        {
+            view.animation_phase = phase;
+            view.advance_head_step(refresh_ms);
+            assert_eq!(view.head_step, step, "phase {phase} at {refresh_ms} ms");
+        }
     }
 }

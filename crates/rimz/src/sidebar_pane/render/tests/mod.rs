@@ -527,6 +527,7 @@ fn ui_at_phase(phase: u64) -> ViewState {
         selected_index: Some(0),
         help_visible: false,
         animation_phase: phase,
+        head_step: phase,
         ..Default::default()
     }
 }
@@ -553,6 +554,7 @@ fn test_row_ctx<'a>(
         held_expansions: const { &std::collections::BTreeSet::new() },
         entry_cursor: None,
         animation_phase,
+        head_step: animation_phase,
         money_phase: animation_phase,
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),

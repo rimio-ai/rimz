@@ -487,8 +487,8 @@ impl ResolvedAnimations {
     }
 }
 
-pub(crate) fn frame_at(animation: &Animation, phase: u64) -> String {
-    let index = ((phase / speed_divisor(animation.speed)) as usize) % animation.frames.len();
+pub(crate) fn frame_at(animation: &Animation, head_step: u64) -> String {
+    let index = ((head_step / speed_divisor(animation.speed)) as usize) % animation.frames.len();
     animation.frames[index].clone()
 }
 

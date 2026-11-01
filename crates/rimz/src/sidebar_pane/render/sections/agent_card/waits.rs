@@ -69,7 +69,7 @@ fn wait_entry(ctx: &RowCtx<'_>, wait: &PendingWait) -> Entry {
         PendingWaitTrigger::Signal { .. }
         | PendingWaitTrigger::Team { .. }
         | PendingWaitTrigger::Condition { .. } => theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
-        _ => role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
+        _ => role_glyph(theme, AnimationRole::Working, ctx.head_step),
     };
     entry(
         ctx,
@@ -94,7 +94,7 @@ fn shell_entry(ctx: &RowCtx<'_>, shell: &BackgroundShell) -> Entry {
         .or_else(|| shell.command.as_deref().map(program_label));
     entry(
         ctx,
-        role_glyph(ctx.theme, AnimationRole::Working, ctx.animation_phase),
+        role_glyph(ctx.theme, AnimationRole::Working, ctx.head_step),
         "shell",
         headline,
         detail,

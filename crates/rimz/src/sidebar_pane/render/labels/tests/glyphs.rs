@@ -696,6 +696,18 @@ fn animations_cycle_and_wrap() {
         role_glyph(&theme, AnimationRole::Working, u64::MAX),
         working[(u64::MAX % working.len() as u64) as usize]
     );
+    for (speed, divisor) in [("normal", 2), ("slow", 3)] {
+        let mut config = crate::config::ThemeConfig::default();
+        config.animations.working =
+            Some(toml::from_str(&format!("frames = 'AB'\nspeed = '{speed}'")).unwrap());
+        let theme = Theme::fixed_for_theme(false, &config);
+        for step in 0..=4 * divisor {
+            assert_eq!(
+                role_glyph(&theme, AnimationRole::Working, step),
+                if step / divisor % 2 == 0 { "A" } else { "B" }
+            );
+        }
+    }
 }
 
 #[test]

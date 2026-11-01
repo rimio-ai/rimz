@@ -1,4 +1,5 @@
-//! Driver-clock frame stamps and frame-grid helpers, with receive and focus-resume timing bounds.
+//! Driver-clock phase stamps and frame grids, with receive and focus-resume timing bounds.
+//! Frame-sequence heads step separately, only when a routed frame is composed.
 
 use std::time::{Duration, Instant};
 
@@ -37,11 +38,10 @@ pub(super) fn frame_clock(now: Instant, start: Instant, refresh_ms: u16) -> Fram
     }
 }
 
-/// Animation tick: how often an animated row advances a spin frame - a running
-/// agent's head, a resolver, or an active process spinning on real work. Pure
-/// in-process redraw from the cached snapshot never forks a fetch, so the spin
-/// layer is decoupled from the data layer and stays smooth regardless of fetch
-/// latency.
+/// Base paint grid for fast animation. A routed composition advances heads at
+/// most once per phase boundary, by one step even after a late paint. Pure
+/// in-process redraw from the cached snapshot never forks a fetch, so head
+/// motion is independent of data freshness.
 pub(super) fn animation_frame(snapshot: &SidebarSnapshot) -> Duration {
     crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
 }

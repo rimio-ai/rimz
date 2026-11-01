@@ -1179,6 +1179,7 @@ fn scroll_lines_windowed(
         held_expansions,
         entry_cursor: view.entry_cursor.as_ref(),
         animation_phase: view.cosmetic_phase.unwrap_or(view.animation_phase),
+        head_step: view.cosmetic_phase.unwrap_or(view.head_step),
         money_phase: view.animation_phase,
         cost_rolls: &view.cost_rolls,
         lead_unread: lead_unread_id,

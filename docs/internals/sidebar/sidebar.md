@@ -78,7 +78,7 @@ The contract types are in [`view.rs`](../../../crates/rimz/src/store/snapshot/vi
 | [`render/labels/`](../../../crates/rimz/src/sidebar_pane/render/labels/mod.rs) | The glyph and meter vocabulary every section shares. |
 | [`render/interaction.rs`](../../../crates/rimz/src/sidebar_pane/render/interaction.rs) | Typed hit geometry emitted with each painted frame. |
 | [`render/theme.rs`](../../../crates/rimz/src/sidebar_pane/render/theme.rs) | Palette depth and the motion modifiers the terminal supports. |
-| [`render/animation.rs`](../../../crates/rimz/src/sidebar_pane/render/animation.rs), [`odometer.rs`](../../../crates/rimz/src/sidebar_pane/render/odometer.rs), [`scrollbar.rs`](../../../crates/rimz/src/sidebar_pane/render/scrollbar.rs) | Motion, driven by the wall-clock animation phase. |
+| [`render/animation.rs`](../../../crates/rimz/src/sidebar_pane/render/animation.rs), [`odometer.rs`](../../../crates/rimz/src/sidebar_pane/render/odometer.rs), [`scrollbar.rs`](../../../crates/rimz/src/sidebar_pane/render/scrollbar.rs) | Motion: frame-sequence heads read the per-view paint step; effects, money rolls, and the scrollbar fade read the wall-clock animation phase. |
 
 `crates/rimz/src/sidebar/` is the data plane: the published caches, the realtime overlay store, and fusion, over the wakeup wire in `crates/rimz/src/wakeup/`. Both are mapped in [state.md](./state.md#where-the-code-lives).
 
@@ -460,7 +460,7 @@ Launch is idempotent by heartbeat. Only readable, current-protocol, fresh heartb
 
 ### Drawing
 
-Every animation reads the wall-clock animation phase, not the age of the data, so motion stays smooth over stale data and golden tests pin each frame deterministically. A terminal resize is a wakeup too: the process holding the pane's terminal turns `SIGWINCH` into a socket nudge, the loop reads the new size from the pane's output, and the frame repaints through the synchronous input path.
+Frame-sequence heads read a per-view paint step, so late paints slow the sequence rather than skipping frames ([the paint clock](./state.md#the-paint-clock)). Effects, money rolls, scrollbar fade, and pets keep reading the driver-clock animation phase, not the age of the data, so stale data does not stop motion. Golden tests pin both values deterministically; playback's cosmetic phase also pins the head step outside motion windows. A terminal resize is a wakeup too: the process holding the pane's terminal turns `SIGWINCH` into a socket nudge, the loop reads the new size from the pane's output, and the frame repaints through the synchronous input path.
 
 Row emphasis has three tiers: the shared unread signal, the normal tone for a selected or needs-a-look card, and one soft OKLab lightness step for a calm unselected card at truecolor. Every lead glyph, including the waiting and compacting overlays, follows the same tier as the name and description. The unread signal is shimmer, bright, or blink across the lead glyph, name, description, and make-up buckets ([unread attention](../../guide/theme.md#unread-attention)). The blink hard-toggles between the resting tone and a bright crest, so it reads as on and off at every color depth, and under `NO_COLOR` it keeps the shape and the on-phase bold. The renderer resolves palette depth, because terminal capability is local: `theme.mode = "auto"` emits RGB on truecolor terminals and quantized 256-color tones elsewhere ([theme.md](../theme.md#color-depth-and-graceful-degradation)).
 
