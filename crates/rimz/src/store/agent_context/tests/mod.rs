@@ -12,6 +12,7 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths) {
 fn ctx(observed_at: Timestamp) -> AgentContext {
     AgentContext {
         last_cache_write: None,
+        post_compaction_tokens: None,
         source: "claude".to_owned(),
         session_name: None,
         session_preview: None,
@@ -329,6 +330,20 @@ fn statusline_refresh_replaces_the_live_fast_reading() {
             fast
         );
     }
+}
+
+#[test]
+fn post_compaction_estimate_survives_whole_context_statusline_refresh() {
+    let (_dir, runtime) = runtime();
+    let now = Timestamp::now();
+    let mut record = AgentContextRecord::new("claude", "sess-1", ctx(now));
+    record.context.post_compaction_tokens = Some(14_786);
+    write_record(&runtime, &record).unwrap();
+
+    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
+    let stored = read_one(&runtime, "claude", "sess-1").unwrap();
+    assert_eq!(stored.context.post_compaction_tokens, Some(14_786));
+    assert!(stored.context.tokens.is_none());
 }
 
 #[test]

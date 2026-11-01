@@ -1,8 +1,118 @@
 use super::*;
+use crate::agents::context::record::AgentContextRecord;
 use crate::agents::{
     AgentTokenUsage, FieldPatch, LocalContextRefreshCtx, LocalSpendFold, RefreshTrigger,
 };
 use std::io::Write as _;
+
+fn post_compaction_patch(content: &str) -> FieldPatch<u64> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    std::fs::write(&path, content).unwrap();
+    refresh(&path, None, None)
+        .unwrap()
+        .context
+        .post_compaction_tokens
+}
+
+#[test]
+fn post_compaction_boundary_beyond_64_kib_sets_the_estimate() {
+    let boundary =
+        json!({ "subtype": "compact_boundary", "compactMetadata": {"postTokens": 14_786} });
+    let record = format!("{}\n", json!({ "content": "x".repeat(1000) }));
+    let suffix = format!(
+        "{}{}",
+        record.repeat(114_495 / record.len()),
+        "\n".repeat(114_495 % record.len())
+    );
+    assert_eq!(suffix.len(), 114_495);
+    assert_eq!(
+        post_compaction_patch(&format!("{boundary}\n{suffix}")),
+        FieldPatch::Set(14_786)
+    );
+}
+
+#[test]
+fn post_compaction_usage_after_the_boundary_clears_the_estimate() {
+    let boundary =
+        json!({ "subtype": "compact_boundary", "compactMetadata": {"postTokens": 14_786} });
+    assert_eq!(
+        post_compaction_patch(&format!(
+            "{boundary}\n{}\n",
+            usage_line("next", 10, 5, 0, 0)
+        )),
+        FieldPatch::Clear
+    );
+}
+
+#[test]
+fn post_compaction_boundary_without_a_size_clears_the_estimate() {
+    assert_eq!(
+        post_compaction_patch("{\"subtype\":\"compact_boundary\"}\n"),
+        FieldPatch::Clear
+    );
+}
+
+#[test]
+fn post_compaction_whole_file_without_usage_clears_the_estimate() {
+    assert_eq!(
+        post_compaction_patch("{\"type\":\"user\"}\n"),
+        FieldPatch::Clear
+    );
+}
+
+#[test]
+fn post_compaction_bounded_tail_without_usage_keeps_the_estimate() {
+    let boundary =
+        json!({ "subtype": "compact_boundary", "compactMetadata": {"postTokens": 14_786} });
+    assert_eq!(
+        post_compaction_patch(&format!(
+            "{boundary}\n{}",
+            "{\"tool\":true}\n".repeat(100_000)
+        )),
+        FieldPatch::Keep
+    );
+}
+
+#[test]
+fn post_compaction_local_refresh_persists_set_keep_and_clear_without_measuring_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let boundary =
+        json!({ "subtype": "compact_boundary", "compactMetadata": {"postTokens": 14_786} });
+    let mut record = AgentContextRecord::new("claude", "session-1", Default::default());
+    let sidecar = dir.path().join("context.json");
+    for (content, expected) in [
+        (format!("{boundary}\n"), Some(14_786)),
+        ("{\"tool\":true}\n".repeat(100_000), Some(14_786)),
+        ("{\"type\":\"user\"}\n".to_owned(), None),
+    ] {
+        std::fs::write(&path, content).unwrap();
+        record.apply_local_refresh(
+            ClaudeAdapter.spec(),
+            refresh(&path, None, None).unwrap(),
+            Timestamp::UNIX_EPOCH,
+        );
+        std::fs::write(&sidecar, serde_json::to_vec(&record).unwrap()).unwrap();
+        let stored: AgentContextRecord =
+            serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+        assert_eq!(stored.context.post_compaction_tokens, expected);
+        assert_eq!(
+            stored
+                .context
+                .tokens
+                .as_ref()
+                .and_then(AgentTokenUsage::used_tokens),
+            None
+        );
+    }
+    assert!(
+        serde_json::to_value(&record.context)
+            .unwrap()
+            .get("post_compaction_tokens")
+            .is_none()
+    );
+}
 
 #[test]
 fn newest_main_chain_cache_write_sets_retention() {

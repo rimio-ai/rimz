@@ -324,6 +324,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
     let mut agent = agent(activity);
     agent.context = Some(AgentContext {
         last_cache_write: None,
+        post_compaction_tokens: None,
         source: "claude".to_owned(),
         session_name: None,
         session_preview: None,

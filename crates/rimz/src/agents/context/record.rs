@@ -127,6 +127,7 @@ impl AgentContextRecord {
         let observed_cost = context.cost.is_some();
         context.turn_opened_by = self.context.turn_opened_by.clone();
         context.last_cache_write = self.context.last_cache_write;
+        context.post_compaction_tokens = self.context.post_compaction_tokens;
         if context.cost.is_none() {
             context.cost.clone_from(&self.context.cost);
         }

@@ -596,13 +596,15 @@ impl AgentCard {
             team: agent.team.clone(),
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,
-            usage: AgentUsageSummary {
-                context_window: agent.usage.context_window.or_else(|| {
-                    crate::agents::spec_by_kind(agent.kind.as_str())
-                        .and_then(|definition| definition.default_context_window)
+            usage: agent
+                .post_compaction_usage()
+                .unwrap_or_else(|| AgentUsageSummary {
+                    context_window: agent.usage.context_window.or_else(|| {
+                        crate::agents::spec_by_kind(agent.kind.as_str())
+                            .and_then(|definition| definition.default_context_window)
+                    }),
+                    ..agent.usage.clone()
                 }),
-                ..agent.usage.clone()
-            },
             context: agent.context.clone(),
             delegated_cost_usd: None,
             sub_agent_count: 0,
