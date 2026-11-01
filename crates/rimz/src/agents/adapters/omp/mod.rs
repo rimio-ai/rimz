@@ -305,6 +305,7 @@ static OMP_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0x27, 0xa0, 0x77),
     },
     plan_label: definition::PlanLabel::TitleCaseOnly,
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tool_rules: skills::ToolRules::Unsupported,

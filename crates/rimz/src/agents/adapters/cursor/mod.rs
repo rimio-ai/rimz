@@ -58,6 +58,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0xe8, 0xe8, 0xe8),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Cursor" },
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

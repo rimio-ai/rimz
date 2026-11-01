@@ -33,6 +33,7 @@ static MUSE_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0x08, 0x66, 0xff),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Muse" },
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

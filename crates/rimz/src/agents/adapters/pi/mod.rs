@@ -83,6 +83,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
     // Pi sessions span whatever provider account the user wired, so no single
     // brand prefix is honest — the tier renders bare.
     plan_label: PlanLabel::TitleCaseOnly,
+    plan_capacities: None,
     // Pi is the multi-provider client: it runs *on* other providers'
     // subscriptions rather than metering one of its own.
     sub_providers: &[],

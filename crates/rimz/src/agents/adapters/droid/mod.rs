@@ -55,6 +55,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0xd8, 0xd8, 0xd8),
     },
     plan_label: PlanLabel::TitleCaseOnly,
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

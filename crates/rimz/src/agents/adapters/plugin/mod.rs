@@ -423,6 +423,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
             color_rgb: manifest.brand.color_rgb.into(),
         },
         plan_label: PlanLabel::TitleCaseOnly,
+        plan_capacities: None,
         sub_providers: &[],
         expected_windows: &[],
         tools: ToolClassification {

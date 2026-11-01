@@ -35,6 +35,7 @@ static MINIMAX_SPEC: AgentSpec = AgentSpec {
         color_rgb: (0xff, 0x55, 0x77),
     },
     plan_label: PlanLabel::Prefixed { prefix: "MiniMax" },
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

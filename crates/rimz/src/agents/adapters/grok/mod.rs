@@ -42,6 +42,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0xff, 0xff, 0xff),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Grok" },
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

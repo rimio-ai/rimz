@@ -157,6 +157,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0x42, 0x85, 0xf4),
     },
     plan_label: PlanLabel::TitleCaseOnly,
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

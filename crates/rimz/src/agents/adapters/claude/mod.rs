@@ -55,8 +55,8 @@ use super::AskKind;
 use super::RemoteControlStatus;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanCapacities,
+    PlanCapacity, PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -100,6 +100,36 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0xd9, 0x77, 0x57),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Claude" },
+    plan_capacities: Some(PlanCapacities {
+        unit: "claude_pro_week_percent",
+        plans: &[
+            PlanCapacity {
+                key: "pro",
+                tiers: &["pro"],
+                units: 100,
+            },
+            PlanCapacity {
+                key: "team_standard",
+                tiers: &["team_standard"],
+                units: 125,
+            },
+            PlanCapacity {
+                key: "team_premium",
+                tiers: &["team_premium"],
+                units: 625,
+            },
+            PlanCapacity {
+                key: "max",
+                tiers: &["max_5x"],
+                units: 500,
+            },
+            PlanCapacity {
+                key: "ultra",
+                tiers: &["max_20x"],
+                units: 1000,
+            },
+        ],
+    }),
     // An Anthropic OAuth subscription is the account Claude meters, so a
     // multi-provider client (Pi) on that sub shares this budget.
     sub_providers: &["anthropic"],

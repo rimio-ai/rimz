@@ -331,7 +331,9 @@ upward-dependencies = ["address"]
 # SoftCompactProgress distinguishes wrap-up, clean turn end and queued continuation (+1).
 # ShareReport::default_home and shares_history let the CLI render its sharing summary (+2).
 # AgentState::has_native_turn_started shares the compaction marker's native-hook gate (+1).
-surface-budget = 1216
+# AgentState::post_compaction_usage shares the post-compaction estimate between hooks (+1).
+# PlanCapacities, PlanCapacity and PlanCapacities::resolve declare plan sizes beside PlanLabel (+3).
+surface-budget = 1220
 
 [[verdict]]
 kind = "item"

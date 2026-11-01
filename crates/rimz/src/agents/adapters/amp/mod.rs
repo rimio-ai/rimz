@@ -40,6 +40,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
         color_rgb: (0xee, 0xee, 0xee),
     },
     plan_label: PlanLabel::TitleCaseOnly,
+    plan_capacities: None,
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {

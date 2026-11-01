@@ -442,6 +442,34 @@ fn profile_merge_uses_names_for_unrecognised_tiers_and_accepts_legacy_records() 
 }
 
 #[test]
+fn profile_merge_refines_a_team_plan_to_its_seat_tier() {
+    let old: ProviderRecord = serde_json::from_value(serde_json::json!({
+        "account": {"plan": "team", "profile_fingerprint": "owner"},
+        "probed_at_ms": 1, "ok": true,
+        "profile": {"attempted_at_ms": 1, "answer": {
+            "owner": "owner", "basis": "team", "plan": "team_standard", "read_at_ms": 1
+        }}
+    }))
+    .unwrap();
+    let cache = merge_probe_results(
+        &AccountsCache {
+            logins: BTreeMap::from([(key("claude"), old)]),
+        },
+        &BTreeSet::new(),
+        20,
+        [ProviderProbeResult {
+            outcome: AccountProbe::Found(AgentAccount {
+                plan: Some("team".into()),
+                ..profile_account(Some("owner"))
+            }),
+            ..successful_probe("claude")
+        }],
+    );
+    let account = cache.logins[&key("claude")].account.as_ref().unwrap();
+    assert_eq!(account.plan.as_deref(), Some("team_standard"));
+}
+
+#[test]
 fn profile_failure_changes_only_the_attempt_and_an_unrecognised_answer_ends_override() {
     use std::cell::Cell;
     let account = profile_account(Some("owner"));
