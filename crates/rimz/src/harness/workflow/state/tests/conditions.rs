@@ -21,6 +21,7 @@ fn inspection_hold_uses_the_matching_cases_first_settlement() {
         outcome: "hold".into(),
         case: Some(0),
         detail: Some("ready".into()),
+        hold: None,
         kinds: vec![],
         gives_up_at: None,
         first,

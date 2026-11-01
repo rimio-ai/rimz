@@ -22,7 +22,7 @@ use crate::config::{MachineConfig, TaskEntry, ThrottleConfig, WorktreeConfig};
 use crate::disk::atomic::AtomicErr;
 use crate::disk::lock::{LockErr, WorkspaceLock};
 use crate::disk::paths::{self, RuntimePaths, StatePaths};
-use crate::ids::{AgentKind, AgentSessionId, LoginName, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, HoldKind, LoginName, WorkspaceId};
 use crate::store::run::RunRecord;
 use crate::utils::size::decimal_bytes;
 use crate::utils::time::format_duration_compact;
@@ -629,23 +629,9 @@ fn check_answer(
     (CheckAnswer::Error, detail)
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum HoldKind {
-    Capacity,
-    CheckFailed,
-    Queue,
-    TaskCap,
-    MachineCap,
-    Pressure,
-    Memory,
-    Disk,
-    Store,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(in crate::harness) struct Hold {
-    kind: HoldKind,
+    pub(in crate::harness) kind: HoldKind,
     pub(in crate::harness) text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::harness) kinds: Vec<AgentKind>,
@@ -1312,6 +1298,7 @@ pub struct Held {
     pub gives_up_ms: Option<u64>,
     /// The blocking reason, once the run's first pass recorded one.
     pub reason: Option<String>,
+    pub hold: Option<HoldKind>,
     /// 1-based place among the runs waiting or holding the turn.
     pub position: usize,
 }
@@ -1343,6 +1330,7 @@ fn held_in(host: &dyn Host, name: &str, root: &Path) -> Vec<Held> {
                     kinds: ticket.kinds.clone(),
                     gives_up_ms: ticket.gives_up_ms,
                     reason: reason.as_ref().map(|hold| hold.text.clone()),
+                    hold: reason.as_ref().map(|hold| hold.kind),
                     position: index + 1,
                 },
             )

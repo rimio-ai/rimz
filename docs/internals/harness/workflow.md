@@ -253,7 +253,7 @@ Admission checks, in order, bounds, the visit caps (total first, then the curren
 | The step's `window` is closed for any agent cell's provider. | `window`, with the blocking term and its reading in `Wait.detail` (`5h.left=12<42`), which the waiting line prints. |
 | An occupant is mid-turn. | `takeover` |
 | An idle occupant, and the step has no `takeover = true`. | `occupied` |
-| The shared start throttle holds the step. | `capacity`, with `Wait.kinds`, `Wait.detail`, and optional `Wait.gives_up_at`. |
+| The shared start throttle holds the step. | `capacity`, with `Wait.kinds`, `Wait.detail`, optional typed `Wait.hold`, and optional `Wait.gives_up_at`. The kind survives retries and closing the wait into history; legacy waits omit it. |
 
 Who occupies the checkout follows the [shared takeover occupancy rule](./loops.md#condition-planning). At the project root, owned nested worktrees are excluded. With `takeover = true`, capacity is decided before eviction, so a capacity-held step never stops the occupant. Admission and eviction run off-lock in separate round trips; each return re-reads bounds, visit caps, window, and occupancy, except that a successful eviction admits only the immediately following launch, fenced by its next sequence and node, without another occupancy read. An eviction error, launch-group resolution error, or admission error becomes a counted `died` attempt following `then`.
 

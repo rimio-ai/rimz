@@ -208,6 +208,7 @@ impl Transition<'_> {
                 event: JournalEvent::Wait {
                     outcome: wait.outcome,
                     detail: wait.detail,
+                    hold: wait.hold,
                     first: wait.first,
                     last: wait.last,
                     count: wait.count,
@@ -310,6 +311,7 @@ impl Transition<'_> {
             outcome,
             case,
             detail: None,
+            hold: None,
             kinds: Vec::new(),
             gives_up_at: None,
             first: at,
@@ -436,6 +438,7 @@ impl Transition<'_> {
             outcome: outcome.into(),
             case: None,
             detail: None,
+            hold: None,
             kinds: Vec::new(),
             gives_up_at: None,
             first: self.now,

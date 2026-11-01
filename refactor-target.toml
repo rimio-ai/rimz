@@ -2301,7 +2301,8 @@ reason = "Shared last-answer rule for strikes, history polarity and CLI status."
 path = "crates/rimz/src/ids.rs"
 # `WorkspaceDirName` names workspace dirs beside the `WorkspaceId` they hold.
 # `MessageId::successor` keeps boundary claim commits in per-card FIFO order.
-surface-budget = 67
+# HoldKind and needs_fix share typed throttle causes across records and renderers (+2).
+surface-budget = 69
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -9363,6 +9364,11 @@ reason = "Named by the binary crate (cli/sessions/picker/tests.rs:386, cli/trans
 kind = "item"
 key = "ids::LinkTier"
 reason = "The binary's doctor tests construct link tiers, also carried in the public sidebar frame link schema."
+
+[[verdict]]
+kind = "item"
+key = "ids::HoldKind"
+reason = "Throttle tickets, durable waits and renderers share one wire-stable hold classification."
 
 [[verdict]]
 kind = "item"

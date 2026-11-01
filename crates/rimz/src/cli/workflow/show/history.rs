@@ -540,6 +540,7 @@ mod tests {
             event: JournalEvent::Wait {
                 outcome: outcome.into(),
                 detail: None,
+                hold: None,
                 first: at(first),
                 last: at(last),
                 count,

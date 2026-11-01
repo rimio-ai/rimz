@@ -84,17 +84,19 @@ fn capacity_wait_round_trips_and_legacy_waits_still_load() {
         "node":"build", "outcome":"capacity", "detail":"no capacity for claude",
         "first":"2026-01-01T00:00:00Z", "last":"2026-01-01T00:00:00Z",
         "count":2, "recheck_at":null, "kinds":["claude", "codex"],
-        "gives_up_at":"2026-01-01T02:00:00Z"
+        "gives_up_at":"2026-01-01T02:00:00Z", "hold":"check_failed"
     });
     let decoded: Wait = serde_json::from_value(wait.clone()).unwrap();
     assert_eq!(serde_json::to_value(decoded).unwrap(), wait);
     let mut legacy = wait;
     legacy.as_object_mut().unwrap().remove("kinds");
     legacy.as_object_mut().unwrap().remove("gives_up_at");
+    legacy.as_object_mut().unwrap().remove("hold");
     let decoded: Wait = serde_json::from_value(legacy).unwrap();
     let encoded = serde_json::to_value(decoded).unwrap();
     assert!(encoded.get("kinds").is_none());
     assert!(encoded.get("gives_up_at").is_none());
+    assert!(encoded.get("hold").is_none());
 }
 
 #[test]

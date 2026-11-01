@@ -4,7 +4,8 @@
 //! hook protocol is a newtype. RimZ-minted long IDs (`RunId`, `EventId`,
 //! `SidebarInstanceId`) use UUIDv7, while message IDs use a shorter
 //! time-sortable token. IDs derived from external truth (`WorkspaceId`,
-//! `PaneId`) keep their natural shape. Shared classification enums (`MuxName`, `ViewKind`, `LinkTier`) travel beside them.
+//! `PaneId`) keep their natural shape. Shared classification enums (`MuxName`,
+//! `ViewKind`, `LinkTier`, `HoldKind`) travel beside them.
 
 use std::fmt;
 use std::path::Path;
@@ -85,6 +86,27 @@ pub enum LinkTier {
     Good,
     Degraded,
     Bad,
+}
+
+/// Why an automated start is held by the throttle.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldKind {
+    Capacity,
+    CheckFailed,
+    Queue,
+    TaskCap,
+    MachineCap,
+    Pressure,
+    Memory,
+    Disk,
+    Store,
+}
+
+impl HoldKind {
+    pub const fn needs_fix(self) -> bool {
+        matches!(self, Self::CheckFailed | Self::Disk | Self::Store)
+    }
 }
 
 /// Multiplexer view identifier: Zellij tab id or tmux window id.
@@ -1102,6 +1124,24 @@ pub(crate) fn dashed_name(raw: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hold_kinds_keep_the_ticket_wire_names_and_classify_only_repairs() {
+        for (wire, needs_fix) in [
+            ("capacity", false),
+            ("check_failed", true),
+            ("queue", false),
+            ("task_cap", false),
+            ("machine_cap", false),
+            ("pressure", false),
+            ("memory", false),
+            ("disk", true),
+            ("store", true),
+        ] {
+            let kind: HoldKind = serde_json::from_value(serde_json::json!(wire)).unwrap();
+            assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+            assert_eq!(kind.needs_fix(), needs_fix, "{wire}");
+        }
+    }
     #[test]
     fn link_tier_orders_good_below_degraded_below_bad_and_spells_snake_case() {
         assert!(LinkTier::Good < LinkTier::Degraded);
