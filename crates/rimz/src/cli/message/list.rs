@@ -79,9 +79,27 @@ pub(super) struct MessageListRow {
 }
 
 impl MessageListRow {
+    fn notice_subject(&self) -> Option<(&MessageSender, MessageBody, Option<&rimz::ids::RunId>)> {
+        use rimz::store::message::HarnessNotice;
+
+        let run = match &self.sender {
+            MessageSender::Harness {
+                notice: HarnessNotice::CacheKeepalive,
+            } => None,
+            MessageSender::Harness {
+                notice: HarnessNotice::SubagentPaused | HarnessNotice::SubagentStalled,
+            } => Some(self.about_run.as_ref()?),
+            MessageSender::System if self.body == MessageBody::Command => None,
+            _ => return None,
+        };
+        Some((&self.sender, self.body, run))
+    }
+
     fn same_notice(&self, other: &Self) -> bool {
-        !self.sender.is_conversation()
-            && self.sender == other.sender
+        let Some(subject) = self.notice_subject() else {
+            return false;
+        };
+        other.notice_subject() == Some(subject)
             && rimz::agents::AgentCardRef::new(
                 &self.kind,
                 &self.agent_id,
@@ -92,7 +110,6 @@ impl MessageListRow {
                 &other.agent_id,
                 other.agent_name.as_deref(),
             ))
-            && self.body == other.body
             && self.status == other.status
     }
 

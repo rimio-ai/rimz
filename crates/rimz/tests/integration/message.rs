@@ -1236,12 +1236,12 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
         let message = MessageRecord::new(
             env.workspace_id.clone(),
             &snapshot.agents[0],
-            format!("wake for command {n}"),
+            format!("keepalive {n}"),
             DeliveryGate::Done,
         )
         .with_channel(Some("docs".to_owned()))
         .with_sender(MessageSender::Harness {
-            notice: HarnessNotice::Wait,
+            notice: HarnessNotice::CacheKeepalive,
         });
         env.store().queue_message(&message, "rimz-test").unwrap();
         machine_ids.push(message.message_id.to_string());
@@ -1264,7 +1264,7 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
         assert_eq!(text.matches(" → ").count(), expected_rows, "{text}");
         assert!(text.contains("queued ×3"), "{text}");
         assert!(text.contains(newest), "{text}");
-        assert!(text.contains("wake for command 2"), "{text}");
+        assert!(text.contains("keepalive 2"), "{text}");
         assert!(!text.contains(&machine_ids[0]), "{text}");
         if limit == "1" {
             assert!(text.contains("... 1 older messages hidden"), "{text}");
@@ -1292,6 +1292,56 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
             Some("docs"),
         ),
         vec![newest.clone()]
+    );
+
+    let mut separate_ids = Vec::new();
+    for sender in [
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        },
+        MessageSender::System,
+    ] {
+        for n in 0..2 {
+            let message = MessageRecord::new(
+                env.workspace_id.clone(),
+                &snapshot.agents[0],
+                format!("separate text {n}"),
+                DeliveryGate::Done,
+            )
+            .with_channel(Some("docs".to_owned()))
+            .with_sender(sender.clone());
+            env.store().queue_message(&message, "rimz-test").unwrap();
+            separate_ids.push(message.message_id.to_string());
+        }
+    }
+    let shown = run_success(
+        env.rimz().args([
+            "message",
+            "list",
+            "--channel",
+            "docs",
+            "--system",
+            "--limit",
+            "0",
+        ]),
+        "distinct message list",
+    );
+    let text = String::from_utf8_lossy(&shown.stdout);
+    assert_eq!(text.matches(" → ").count(), 6, "{text}");
+    assert!(text.contains("queued ×3"), "{text}");
+    assert!(separate_ids.iter().all(|id| text.contains(id)), "{text}");
+    let all = list_message_ids(
+        &env,
+        &["message", "list", "--system", "--limit", "0", "--json"],
+        Some("docs"),
+    );
+    assert_eq!(
+        all,
+        separate_ids
+            .into_iter()
+            .rev()
+            .chain(expected)
+            .collect::<Vec<_>>()
     );
 }
 

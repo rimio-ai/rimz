@@ -259,11 +259,11 @@ user → @coder  queued  3m ago  msg_…
   Read plan.md when the planner finishes. · after @planner
 ```
 
-Conversation never folds. With `--system`, adjacent machine messages within each channel fold when their sender (including notice kind), recipient, body kind (`prompt` or `command`), and status agree. Text and reasons do not split a run, so a folded row quotes only the newest message. Its header keeps that message's id and age, with `×N` after the status. When the folded messages span at least one second, the text line starts with the enqueue span; a burst inside one second keeps `×N` without a span:
+Conversation never folds. With `--system`, only cache keepalives, paused or stalled child notices with the same recorded run id, and automatic compaction commands can fold. Adjacent messages within each channel must also agree on sender (including notice kind), recipient, body kind (`prompt` or `command`), and status. Other notices and system prompts, including `--no-from` text, keep their own rows. A folded row quotes only the newest message or reason. Its header keeps that message's id and age, with `×N` after the status. When the folded messages span at least one second, the text line starts with the enqueue span; a burst inside one second keeps `×N` without a span:
 
 ```text
 @rimz → @coder  delivered ×6  18m ago  msg_…
-  over 14m · newest wake notice
+  over 14m · newest keepalive
 ```
 
 The limit keeps whole folded rows. Use `show <id>` to inspect an individual message, or `--json` for every record. Unmet-condition markers and the fold span stay whole when the text is clipped, provided they fit the terminal width.
