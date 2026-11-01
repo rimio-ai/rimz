@@ -1,6 +1,7 @@
-use super::dashboard::{Dashboard, TabAssists};
+use super::dashboard::{Dashboard, TabAssists, TabHit};
 use super::panel::{PanelGlyphs, resolve_panel_glyphs};
 use super::*;
+use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 pub(super) struct RefreshWorker {
     pub(super) requests: mpsc::SyncSender<()>,
@@ -30,9 +31,9 @@ pub(super) fn run_refresh(dollars: bool, hold: bool, active: Window) -> Result<(
     let paths = RuntimePaths::shared();
     ensure_shared_runtime(&paths)?;
     // The alternate screen keeps this live dashboard full-screen and out of
-    // mux scrollback. Raw mode turns keypresses and stray mouse reports into
+    // mux scrollback. Raw mode turns keypresses and mouse reports into
     // typed events that the loop drains instead of echoing them.
-    let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
+    let _input = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)?;
     let mut state = HeldStats::new(dollars, glyphs, hold, active);
     let worker = RefreshWorker::new(move || load_or_refresh_stats_via_service(&paths))?;
     loop {
@@ -118,9 +119,50 @@ pub(super) struct HeldStats {
     dollars: bool,
     glyphs: PanelGlyphs,
     hold: bool,
+    // At most one span for each of the four tabs in the last painted rail.
+    tab_hits: Vec<TabHit>,
 }
 
 impl HeldStats {
+    pub(super) fn paint_frame(
+        &mut self,
+        text: &[u8],
+        tab_hits: Vec<TabHit>,
+        w: &mut impl Write,
+    ) -> Result<()> {
+        let choice = anstream::AutoStream::choice(&std::io::stdout());
+        let mut output = anstream::AutoStream::new(Vec::new(), choice);
+        output.write_all(text)?;
+        let mut output = output.into_inner();
+        while output.last() == Some(&b'\n') {
+            output.pop();
+        }
+        rimz::tui::replace_frame(w, &output)?;
+        self.tab_hits = tab_hits;
+        Ok(())
+    }
+
+    pub(super) fn apply_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        w: &mut impl Write,
+    ) -> Result<KeyOutcome> {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return Ok(KeyOutcome::Ignore);
+        }
+        let outcome = self
+            .tab_hits
+            .iter()
+            .find(|hit| {
+                hit.row == usize::from(mouse.row)
+                    && hit.columns.contains(&usize::from(mouse.column))
+            })
+            .map_or(KeyOutcome::Ignore, |hit| {
+                KeyOutcome::SelectWindow(hit.window)
+            });
+        self.apply_outcome(outcome, w)
+    }
+
     pub(super) fn new(dollars: bool, glyphs: PanelGlyphs, hold: bool, active: Window) -> Self {
         Self {
             current: None,
@@ -129,6 +171,7 @@ impl HeldStats {
             dollars,
             glyphs,
             hold,
+            tab_hits: Vec::new(),
         }
     }
 
@@ -172,7 +215,10 @@ impl HeldStats {
     }
 
     pub(super) fn apply_key(&mut self, key: KeyEvent, w: &mut impl Write) -> Result<KeyOutcome> {
-        let outcome = key_outcome(key, self.hold);
+        self.apply_outcome(key_outcome(key, self.hold), w)
+    }
+
+    fn apply_outcome(&mut self, outcome: KeyOutcome, w: &mut impl Write) -> Result<KeyOutcome> {
         match outcome {
             KeyOutcome::NextWindow => {
                 self.active = self.active.next();
@@ -208,10 +254,9 @@ impl HeldStats {
         self.active
     }
 
-    fn repaint(&self, w: &mut impl Write) -> Result<()> {
+    fn repaint(&mut self, w: &mut impl Write) -> Result<()> {
         let stdout = std::io::stdout();
         let choice = anstream::AutoStream::choice(&stdout);
-        let mut frame = anstream::AutoStream::new(Vec::new(), choice);
         match (self.current.as_ref(), self.refresh_failure.as_deref()) {
             (Some(stats), _) => {
                 let records = rimz::harness::assist_log::recent(&logs_dir(), None);
@@ -228,17 +273,16 @@ impl HeldStats {
                 };
                 let cols = render::terminal_columns(80);
                 let rows = stdout.is_terminal().then(|| render::terminal_rows(24));
-                frame.write_all(dashboard.frame(self.active, cols, rows).text.as_bytes())?;
+                let frame = dashboard.frame(self.active, cols, rows);
+                self.paint_frame(frame.text.as_bytes(), frame.tab_hits, w)
             }
-            (None, Some(error)) => panel::render_unavailable(&mut frame, error, "\n")?,
-            (None, None) => return Ok(()),
+            (None, Some(error)) => {
+                let mut text = Vec::new();
+                panel::render_unavailable(&mut text, error, "\n")?;
+                self.paint_frame(&text, Vec::new(), w)
+            }
+            (None, None) => Ok(()),
         }
-        let mut frame = frame.into_inner();
-        while frame.last() == Some(&b'\n') {
-            frame.pop();
-        }
-        rimz::tui::replace_frame(w, &frame)?;
-        Ok(())
     }
 }
 
@@ -276,6 +320,9 @@ pub(super) fn hold_cycle(
             Ok(true) => match event::read() {
                 Ok(Event::Resize(_, _)) => {
                     state.repaint(&mut std::io::stdout().lock())?;
+                }
+                Ok(Event::Mouse(mouse)) => {
+                    state.apply_mouse(mouse, &mut std::io::stdout().lock())?;
                 }
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                     match state.apply_key(key, &mut std::io::stdout().lock())? {

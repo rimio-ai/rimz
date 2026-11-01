@@ -24,6 +24,74 @@ const REDRAW_DEADLINE: Duration = Duration::from_secs(5);
 const REDRAW_BUDGET: Duration = Duration::from_secs(2);
 
 #[test]
+fn stats_refresh_clicks_tabs_and_restores_mouse_capture_on_exit() {
+    let root = short_tempdir();
+    let project = root.path().join(".claude/projects/repo");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("first.jsonl"),
+        serde_json::to_vec(&serde_json::json!({
+            "timestamp": jiff::Timestamp::now(), "costUSD": 1.0, "requestId": "click-turn",
+            "message": {"id": "click-turn", "usage": {"input_tokens": 100, "output_tokens": 10}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut harness = StatsRefreshHarness::launch_in(100, root, &[]);
+    let initial = wait_for_screen(
+        &harness.parser,
+        |text| text.contains("[ Today $1 ]") && text.contains("r reload"),
+        INITIAL_BUDGET,
+    )
+    .expect("stats tab rail");
+    let enabled = harness
+        .output
+        .lock()
+        .unwrap()
+        .windows(b"\x1b[?1000h".len())
+        .any(|bytes| bytes == b"\x1b[?1000h");
+    assert!(enabled, "stats must enable click capture");
+    let (row, rail) = initial
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("[ Today"))
+        .unwrap();
+    let column = rail[..rail.find("30 days").unwrap()].chars().count();
+    harness
+        .write_input(
+            format!(
+                "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+                column + 1,
+                row + 1,
+                column + 1,
+                row + 1
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    wait_for_screen(
+        &harness.parser,
+        |text| text.contains("[ 30 days $1 ]") && text.contains("Spend per day"),
+        REDRAW_DEADLINE,
+    )
+    .unwrap_or_else(|| panic!("click did not select 30 days:\n{}", screen(&harness.parser)));
+    harness.write_input(b"q").unwrap();
+    let deadline = Instant::now() + REDRAW_DEADLINE;
+    while harness.is_alive() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(!harness.is_alive(), "stats did not quit");
+    harness.reader.take().unwrap().join().unwrap();
+    let output = harness.output.lock().unwrap();
+    assert!(
+        output
+            .windows(b"\x1b[?1000l".len())
+            .any(|bytes| bytes == b"\x1b[?1000l"),
+        "stats must disable click capture on exit"
+    );
+}
+
+#[test]
 fn stats_refresh_owns_the_alternate_screen() {
     let harness = StatsRefreshHarness::launch(NARROW_COLS);
 
@@ -127,6 +195,7 @@ fn stats_refresh_reloads_on_sigusr1() {
 
 pub(super) struct StatsRefreshHarness {
     pub(super) parser: Arc<Mutex<vt100::Parser>>,
+    output: Arc<Mutex<Vec<u8>>>,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -195,18 +264,24 @@ impl StatsRefreshHarness {
         let writer = pair.master.take_writer().expect("pty writer");
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let sink = Arc::clone(&parser);
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let capture = Arc::clone(&output);
         let reader_thread = std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => return,
-                    Ok(n) => sink.lock().expect("parser").process(&buf[..n]),
+                    Ok(n) => {
+                        capture.lock().expect("output").extend_from_slice(&buf[..n]);
+                        sink.lock().expect("parser").process(&buf[..n]);
+                    }
                 }
             }
         });
 
         Self {
             parser,
+            output,
             master: Some(pair.master),
             writer: Some(writer),
             child,

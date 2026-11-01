@@ -8,6 +8,127 @@ mod columns;
 const TODAY: i64 = 20_749;
 
 #[test]
+fn dashboard_clicks_select_only_the_last_painted_tab_spans() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    for (cols, rows) in [(119, None), (60, None), (160, Some(100))] {
+        let (stats, assists) = fixture();
+        let mut state = HeldStats::new(false, panel_glyphs(), false, Window::Today);
+        let mut out = Vec::new();
+        let mouse = |kind, column, row| MouseEvent {
+            kind,
+            column: u16::try_from(column).unwrap(),
+            row: u16::try_from(row).unwrap(),
+            modifiers: KeyModifiers::NONE,
+        };
+        for tab in Window::TABS {
+            for edge in [false, true] {
+                let target = if state.active() == tab {
+                    format!(
+                        "[ {} {} ]",
+                        tab.label(),
+                        fmt_usd(tab.select(&stats.total).usd)
+                    )
+                } else if cols == 60 {
+                    tab.label().to_owned()
+                } else {
+                    format!("{} {}", tab.label(), fmt_usd(tab.select(&stats.total).usd))
+                };
+                let output = frame(&stats, &assists, state.active(), cols, rows);
+                let text = strip_ansi(&output.text);
+                let (row, rail) = text
+                    .lines()
+                    .enumerate()
+                    .find(|(_, line)| line.contains("[ "))
+                    .unwrap();
+                let start = display_width(&rail[..rail.find(&target).unwrap()]);
+                let column = start + if edge { display_width(&target) - 1 } else { 0 };
+                state
+                    .paint_frame(output.text.as_bytes(), output.tab_hits, &mut out)
+                    .unwrap();
+                assert_eq!(
+                    state
+                        .apply_mouse(
+                            mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+                            &mut out
+                        )
+                        .unwrap(),
+                    KeyOutcome::SelectWindow(tab),
+                    "{cols}: {rail}"
+                );
+                assert_eq!(state.active(), tab);
+            }
+        }
+        let output = frame(&stats, &assists, state.active(), cols, rows);
+        let text = strip_ansi(&output.text);
+        let (row, rail) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("[ "))
+            .unwrap();
+        let separator = display_width(&rail[..rail.find('·').unwrap()]);
+        let label = display_width(&rail[..rail.find("Today").unwrap()]);
+        state
+            .paint_frame(output.text.as_bytes(), output.tab_hits, &mut out)
+            .unwrap();
+        for event in [
+            mouse(MouseEventKind::Down(MouseButton::Left), separator, row),
+            mouse(MouseEventKind::Down(MouseButton::Left), label, row + 1),
+            mouse(MouseEventKind::ScrollUp, label, row),
+            mouse(MouseEventKind::ScrollDown, label, row),
+            mouse(MouseEventKind::Up(MouseButton::Left), label, row),
+            mouse(MouseEventKind::Drag(MouseButton::Left), label, row),
+            mouse(MouseEventKind::Down(MouseButton::Right), label, row),
+        ] {
+            assert_eq!(
+                state.apply_mouse(event, &mut out).unwrap(),
+                KeyOutcome::Ignore,
+                "{event:?}"
+            );
+            assert_eq!(state.active(), Window::Year);
+        }
+        let truncated = frame(&stats, &assists, state.active(), cols, Some(1));
+        state
+            .paint_frame(truncated.text.as_bytes(), truncated.tab_hits, &mut out)
+            .unwrap();
+        for hidden_row in [row, 0] {
+            assert_eq!(
+                state
+                    .apply_mouse(
+                        mouse(MouseEventKind::Down(MouseButton::Left), label, hidden_row),
+                        &mut out
+                    )
+                    .unwrap(),
+                KeyOutcome::Ignore
+            );
+        }
+        let clipped = frame(&stats, &assists, Window::Today, 24, None);
+        let text = strip_ansi(&clipped.text);
+        let row = text.lines().position(|line| line.contains("[ ")).unwrap();
+        state
+            .paint_frame(clipped.text.as_bytes(), clipped.tab_hits, &mut out)
+            .unwrap();
+        assert_eq!(
+            state
+                .apply_mouse(
+                    mouse(MouseEventKind::Down(MouseButton::Left), 23, row),
+                    &mut out
+                )
+                .unwrap(),
+            KeyOutcome::SelectWindow(Window::Week)
+        );
+        assert_eq!(
+            state
+                .apply_mouse(
+                    mouse(MouseEventKind::Down(MouseButton::Left), 24, row),
+                    &mut out
+                )
+                .unwrap(),
+            KeyOutcome::Ignore
+        );
+    }
+}
+
+#[test]
 fn dashboard_row_bars_scale_to_the_largest_drawn_row_including_other() {
     let (mut stats, assists) = fixture();
     stats.agents = [
@@ -134,6 +255,23 @@ fn dashboard_providers_use_session_shares_but_dollar_shares_gate_hit() {
         .unwrap()
         .to_owned();
     assert!(pi.ends_with("44 sessions"), "{pi}");
+    stats.by_provider = [("claude", 50.0, 1), ("codex", 50.0, 2)]
+        .map(|(kind, usd, sessions)| {
+            (
+                kind.into(),
+                mock_tally(
+                    mock_window(usd, 10_000, 95, 0, sessions),
+                    mock_window(usd, 10_000, 95, 0, sessions),
+                ),
+            )
+        })
+        .into();
+    let output = strip_ansi(&frame(&stats, &assists, Window::Month, 100, None).text);
+    let share_ends = ["1 session", "2 sessions"].map(|sessions| {
+        let row = output.lines().find(|line| line.contains(sessions)).unwrap();
+        display_width(row)
+    });
+    assert_eq!(share_ends[0], share_ends[1], "{output}");
 }
 
 #[test]
