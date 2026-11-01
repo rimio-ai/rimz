@@ -541,7 +541,37 @@ fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
     let current = workflow::load(&paths).unwrap();
     assert!(current.attempt.is_none());
     assert!(current.visits.is_empty());
-    assert_eq!(current.wait.unwrap().outcome, "capacity");
+    let wait = current.wait.unwrap();
+    assert_eq!(wait.outcome, "capacity");
+    assert_eq!(serde_json::to_value(&wait).unwrap()["hold"], "capacity");
+    prepare(
+        &state,
+        &paths,
+        &spec,
+        &mut BTreeSet::new(),
+        &host,
+        &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
+        &mut admission,
+    )
+    .unwrap();
+    let current = workflow::load(&paths).unwrap();
+    assert_eq!(current.wait.as_ref().unwrap().count, 2);
+    assert_eq!(
+        serde_json::to_value(&current.wait).unwrap()["hold"],
+        "capacity"
+    );
+    let mut t = Transition {
+        record: current,
+        paths: &paths,
+        spec: &spec,
+        now: Timestamp::now(),
+        entries: Vec::new(),
+    };
+    t.close_wait();
+    assert_eq!(
+        serde_json::to_value(&t.entries.last().unwrap().event).unwrap()["hold"],
+        "capacity"
+    );
 }
 
 #[test]

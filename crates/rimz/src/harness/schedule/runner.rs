@@ -804,7 +804,7 @@ impl<'a> TaskFire<'a> {
         let now = self.capacity_now()?;
         if wait.gives_up_at.is_some_and(|at| now >= at) {
             return self
-                .record_capacity_hold(wait.reason.clone(), wait.kinds.clone())
+                .record_capacity_hold(wait.reason.clone(), wait.kinds.clone(), wait.hold)
                 .map(Some);
         }
         Ok(None)
@@ -814,6 +814,7 @@ impl<'a> TaskFire<'a> {
         &mut self,
         reason: String,
         kinds: Vec<AgentKind>,
+        hold: Option<crate::ids::HoldKind>,
     ) -> Result<TaskFirePlan> {
         let now = self.capacity_now()?;
         let since = self
@@ -838,6 +839,7 @@ impl<'a> TaskFire<'a> {
                     count: previous.map_or(1, |wait| wait.count.saturating_add(1)),
                     kinds,
                     reason,
+                    hold,
                     gives_up_at,
                     gave_up: gives_up_at.is_some_and(|at| now >= at),
                 }
@@ -888,7 +890,7 @@ impl<'a> TaskFire<'a> {
         if let Some(plan) = self.prepare_capacity_end()? {
             return Ok(Some(plan));
         }
-        held.map(|hold| self.record_capacity_hold(hold.text, hold.kinds))
+        held.map(|hold| self.record_capacity_hold(hold.text, hold.kinds, Some(hold.kind)))
             .transpose()
     }
 
@@ -949,7 +951,9 @@ impl<'a> TaskFire<'a> {
             }
             match attempt {
                 throttle::Attempt::Held(hold) => {
-                    return self.record_capacity_hold(hold.text, hold.kinds).map(Some);
+                    return self
+                        .record_capacity_hold(hold.text, hold.kinds, Some(hold.kind))
+                        .map(Some);
                 }
                 throttle::Attempt::Turn(turn) => self.throttle_turn = Some(turn),
                 throttle::Attempt::Open => {}

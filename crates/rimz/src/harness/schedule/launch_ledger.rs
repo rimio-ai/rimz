@@ -25,6 +25,8 @@ pub struct CapacityRecord {
     pub count: u64,
     pub kinds: Vec<crate::ids::AgentKind>,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<crate::ids::HoldKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gives_up_at: Option<Timestamp>,
     pub gave_up: bool,
@@ -298,6 +300,19 @@ mod tests {
     use crate::config::{CheckOn, Judge, TaskCheck, TaskEntry};
 
     #[test]
+    fn capacity_kind_round_trips_and_legacy_records_still_load() {
+        let mut value = serde_json::json!({
+            "since":null, "first":"2026-01-01T00:00:00Z", "last":"2026-01-01T00:00:00Z",
+            "count":1, "kinds":["claude"], "reason":"check failed", "gave_up":false,
+            "hold":"check_failed"
+        });
+        let record: super::CapacityRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(record).unwrap(), value);
+        value.as_object_mut().unwrap().remove("hold");
+        let record: super::CapacityRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(record).unwrap(), value);
+    }
+    #[test]
     fn capacity_loader_is_strict_and_read_only() {
         let root = tempfile::tempdir().unwrap();
         let paths = crate::StatePaths::for_project_root(root.path()).unwrap();
@@ -326,6 +341,7 @@ mod tests {
             count: 1,
             kinds: vec![crate::ids::AgentKind::new_unchecked("claude")],
             reason: "no capacity".into(),
+            hold: None,
             gives_up_at: None,
             gave_up: false,
         };

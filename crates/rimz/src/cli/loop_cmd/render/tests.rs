@@ -3111,6 +3111,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         checkout: "/repo/.worktrees/a".into(),
         since_ms,
         reason: Some("cpu pressure 41% >= 25%".to_owned()),
+        hold: None,
         kinds: Vec::new(),
         gives_up_ms: None,
         position: 2,
@@ -4576,6 +4577,7 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
         checkout: checkout.into(),
         since_ms,
         reason: reason.map(str::to_owned),
+        hold: None,
         kinds: Vec::new(),
         gives_up_ms: None,
         position,
@@ -4646,6 +4648,7 @@ fn capacity_blocking_display_uses_the_shared_phrase_without_changing_held_json()
         kinds: vec![rimz::ids::AgentKind::new_unchecked("claude")],
         gives_up_ms: None,
         reason: Some("1 start ahead".into()),
+        hold: None,
         position: 2,
     };
     let phrase = rimz::theme::fmt::capacity_wait(&held.kinds, since, None, since);

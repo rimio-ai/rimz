@@ -878,6 +878,7 @@ fn prepare_capacity(
             .as_mut()
             .expect("capacity wait was just recorded");
         wait.kinds = hold.kinds.clone();
+        wait.hold = Some(hold.kind);
         if wait.kinds.is_empty() {
             wait.kinds = groups.into_iter().map(|group| group.kind).collect();
             wait.kinds.sort();

@@ -29,6 +29,7 @@ fn capacity_non_stay_conditions_retry_at_sixty_seconds_and_stop_after_give_up() 
         count: 1,
         kinds: vec![crate::ids::AgentKind::new_unchecked("claude")],
         reason: "no capacity".into(),
+        hold: None,
         gives_up_at: None,
         gave_up: false,
     };

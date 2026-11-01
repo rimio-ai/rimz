@@ -3103,6 +3103,7 @@ fn capacity_condition_holds_are_try_once_and_history_is_once_per_stretch() {
     .unwrap();
     let wait = &waits["owed"][root.path().to_str().unwrap()];
     assert_eq!(wait["count"], 2);
+    assert_eq!(wait["hold"], "pressure");
     assert_eq!(wait["first"], serde_json::to_value(first).unwrap());
     assert_ne!(wait["first"], wait["last"]);
     assert_eq!(host.tickets(), 0);

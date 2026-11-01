@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::ids::{AgentKind, AgentSessionId, RunId, WorkflowRunId};
+use crate::ids::{AgentKind, AgentSessionId, HoldKind, RunId, WorkflowRunId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -429,6 +429,8 @@ pub struct Wait {
     pub case: Option<u32>,
     #[serde(default)]
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<HoldKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<AgentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -589,6 +591,8 @@ pub enum JournalEvent {
         outcome: String,
         #[serde(default)]
         detail: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hold: Option<HoldKind>,
         first: Timestamp,
         last: Timestamp,
         count: u64,

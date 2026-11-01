@@ -1243,6 +1243,7 @@ fn a_waiting_run_is_reported_with_its_reason_and_place() {
         kinds: vec![AgentKind::new_unchecked("claude")],
         gives_up_ms: None,
         reason: reason.map(str::to_owned),
+        hold: reason.map(|_| crate::ids::HoldKind::Queue),
         position,
     };
     assert_eq!(
