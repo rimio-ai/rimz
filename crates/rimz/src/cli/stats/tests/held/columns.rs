@@ -39,23 +39,17 @@ fn spend_columns_match_the_mock() {
                 "{cols} {tab:?}:\n{}\n{row}",
                 lines[title]
             );
-            assert!(
-                output.contains(&render::paint(
-                    render::palette::muted(),
-                    "(already counted)"
-                )),
-                "{cols} {tab:?}: {text}"
-            );
+            assert!(!text.contains("already counted"), "{cols} {tab:?}: {text}");
         }
     }
     let month = lines(Window::Month);
     for expected in [
         "Models                                                                                  HIT       TOK/S  TOKENS",
-        "█ Opus 5.5       $9,371  ━━━━━━━━━━━━━━━━━━──────────────────────────────  38%          96%          85   15.4B",
-        "Agents             $904                                   Subagents        $1,681  (already counted)",
-        "● brainstormer     $266  ━━━━━━━─────────────────  29%    ● implementer    $1,060  ━━━━━━━━━━━━━━━─────────  63%",
-        "Teams            $3,148                                                          AGENT-TIME  MSGS (YOU)  TOKENS",
-        "● recon          $2,621  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────  83%       18h10m          34    4.5B",
+        "█ Opus 5.5       $9,371  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  38%          96%          85   15.4B",
+        "Agents             $904                                   Subagents        $1,681",
+        "● brainstormer     $266  ━━━━━━━━━━━━━━━━━━━━━━━━  29%    ● implementer    $1,060  ━━━━━━━━━━━━━━━━━━━━━━━━  63%",
+        "Teams            $3,148                                                          AGENT-TIME  MSGS  TOKENS",
+        "● recon          $2,621  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  83%       18h10m    34    4.5B",
     ] {
         assert!(
             month.iter().any(|line| line == expected),
@@ -64,7 +58,7 @@ fn spend_columns_match_the_mock() {
         );
     }
     let today = lines(Window::Today);
-    assert!(today.iter().any(|line| line == "█ Opus 5.5         $688  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────────  67%          97%          88    1.3B"));
+    assert!(today.iter().any(|line| line == "█ Opus 5.5         $688  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  67%          97%          88    1.3B"));
 }
 
 #[test]
@@ -91,24 +85,24 @@ fn provider_and_role_columns_match_the_mock() {
     }
     assert!(
         month.iter().any(|line| line
-            == "█ Claude     $13,232   54%   96% hit     877 sessions     █ Teams     $3,148  13%"),
+            == "█ Claude     $13,232   96% hit     877 sessions   13%     █ Teams     $3,148  13%"),
         "{}",
         month.join("\n")
     );
     assert!(month.iter().any(|line| line
-        == "█ Codex      $11,340   46%   97% hit   5,995 sessions     ▒ Agents      $904   4%"));
+        == "█ Codex      $11,340   97% hit   5,995 sessions   87%     ▒ Agents      $904   4%"));
     assert!(month.iter().any(|line| line
-        == "█ Pi             <$1   <1%                 1 session      ░ No owner $20,520  84%"));
+        == "█ Pi             <$1                 1 session            ░ No owner $20,520  84%"));
     let today = lines(Window::Today);
     assert!(
         today
             .iter()
-            .any(|line| line.starts_with("█ Claude        $691   67%   97% hit      42 sessions"))
+            .any(|line| line.starts_with("█ Claude        $691   97% hit      42 sessions   11%"))
     );
     assert!(
         today
             .iter()
-            .any(|line| line.starts_with("█ Codex         $334   33%   97% hit     348 sessions"))
+            .any(|line| line.starts_with("█ Codex         $334   97% hit     348 sessions   89%"))
     );
 }
 
@@ -381,23 +375,29 @@ fn dashboard_titles_and_role_marks_use_content_and_group_tones() {
 #[test]
 fn dashboard_messages_keep_two_cell_gutters_for_wide_counts() {
     let (mut stats, assists) = fixture();
-    let role = stats
-        .teams
-        .get_mut("recon")
-        .unwrap()
-        .values_mut()
-        .next()
-        .unwrap();
-    role.effort.month.from_user = 6_789;
-    role.effort.month.from_teammates = 5_556;
-    let output = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
-    let row = output.lines().find(|line| line.contains("recon")).unwrap();
-    assert!(row.contains("  12345 (6789)  "), "{row}");
-    let header = output
-        .lines()
-        .find(|line| line.contains("MSGS (YOU)"))
-        .unwrap();
-    assert!(header.contains("  MSGS (YOU)  TOKENS"), "{header}");
+    for (from_user, from_teammates, total) in
+        [(62, 489, "551"), (6_789, 5_556, "12345"), (0, 0, "-")]
+    {
+        let role = stats
+            .teams
+            .get_mut("recon")
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap();
+        role.effort.month.from_user = from_user;
+        role.effort.month.from_teammates = from_teammates;
+        let output = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
+        let row = output.lines().find(|line| line.contains("recon")).unwrap();
+        assert!(row.contains(&format!("  {total}  ")), "{row}");
+        assert!(!row.contains('('), "{row}");
+        let header = output
+            .lines()
+            .find(|line| line.contains("AGENT-TIME"))
+            .unwrap();
+        assert!(header.contains("  MSGS  TOKENS"), "{header}");
+        assert!(!header.contains("YOU"), "{header}");
+    }
 }
 
 #[test]

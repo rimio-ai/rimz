@@ -1,5 +1,21 @@
 use super::*;
 
+pub(super) fn muted_units(text: &str) -> String {
+    let mut output = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(|ch: char| ch.is_ascii_alphabetic()) {
+        let (number, units) = rest.split_at(start);
+        output.push_str(number);
+        let end = units
+            .find(|ch: char| !ch.is_ascii_alphabetic())
+            .unwrap_or(units.len());
+        output.push_str(&render::paint(render::palette::muted(), &units[..end]));
+        rest = &units[end..];
+    }
+    output.push_str(rest);
+    output
+}
+
 pub(super) fn fmt_usd_compact(value: f64) -> String {
     if value < 1.0 {
         return fmt_usd(value);

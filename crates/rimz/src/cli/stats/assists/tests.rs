@@ -80,7 +80,10 @@ fn category_modes_distinguish_requests_from_effects_and_label_parked_time() {
     );
     assert!(dashboard.values().all(|value| !value.contains("held")));
     assert!(dashboard["Hibernate:"].starts_with("3,646 ("));
-    assert_eq!(dashboard["Auto-continue:"], "16 (after 5.1h parked)");
+    assert_eq!(
+        anstream::adapter::strip_str(&dashboard["Auto-continue:"]).to_string(),
+        "16 (after 5.1h parked)"
+    );
     assert_eq!(dashboard["Auto-redeem:"], "1,002 (1,001 resets)");
     assert_eq!(dashboard["Auto-resume:"], "2 (1,240 agents)");
 

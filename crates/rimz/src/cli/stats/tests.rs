@@ -640,12 +640,22 @@ fn teams_sum_seats_and_render_effort_without_role_rows() {
                     .lines()
                     .find(|line| line.contains("recon"))
                     .expect(&text);
-                assert!(text.contains("AGENT-TIME") && text.contains("MSGS (YOU)"));
+                assert!(text.contains("AGENT-TIME") && text.contains("MSGS"));
+                assert!(!text.contains("MSGS (YOU)"));
                 assert!(
                     row.contains("$60") && row.contains("100%") && row.contains("6h12m"),
                     "{row}"
                 );
-                assert!(row.contains(messages), "{row}");
+                let total = from_user + from_teammates;
+                let total = if total == 0 {
+                    "-".into()
+                } else {
+                    total.to_string()
+                };
+                assert!(
+                    row.contains(&format!("  {total}  ")) && !row.contains('('),
+                    "{row}"
+                );
                 for role in ["coder", "planner", "reviewer"] {
                     assert!(!text.contains(role), "{text}");
                 }
