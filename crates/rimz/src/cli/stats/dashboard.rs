@@ -362,7 +362,10 @@ impl Dashboard<'_> {
                 } else {
                     String::new()
                 },
-                pad_left(&fmt_tokens(row.value.spend.display_tokens()), 8)
+                pad_left(
+                    &row_units(row, &fmt_tokens(row.value.spend.display_tokens())),
+                    8
+                )
             );
             lines.push(format!(
                 "{}{}",
@@ -390,14 +393,6 @@ impl Dashboard<'_> {
         let total = rows.iter().map(|row| row.value.spend.usd).sum();
         let columns = SpendColumns::new(rows, width.saturating_sub(30).min(24));
         let mut lines = vec![total_header(role.label(), total, columns.dollars)];
-        if role == RoleView::Subagents {
-            let note = render::paint(render::palette::muted(), "(already counted)");
-            if display_width(&lines[0]) + 2 + display_width(&note) <= width {
-                lines[0].push_str(&format!("  {note}"));
-            } else {
-                lines.push(note);
-            }
-        }
         lines.extend(rows.iter().map(|row| {
             self.spend_row(
                 row.name(),
@@ -413,26 +408,37 @@ impl Dashboard<'_> {
 
     fn team_lines(&self, rows: &[Row], width: usize) -> Vec<String> {
         let total = rows.iter().map(|row| row.value.spend.usd).sum();
+        let messages_label = |row: &Row| match row.value.messages() {
+            0 => "-".to_owned(),
+            count => count.to_string(),
+        };
+        let messages_header = "MSGS";
         let messages_width = rows
             .iter()
-            .map(|row| display_width(&panel::messages_label(&row.value)))
+            .map(|row| display_width(&messages_label(row)))
             .max()
             .unwrap_or(0)
-            .max(panel::MESSAGES_HEADER.len())
+            .max(messages_header.len())
             + 2;
         let columns = SpendColumns::new(rows, width.saturating_sub(51 + messages_width).min(48));
         let mut lines = vec![columns_header(
             &total_header("Teams", total, columns.dollars),
             columns,
-            ["AGENT-TIME", panel::MESSAGES_HEADER, "TOKENS"],
+            ["AGENT-TIME", messages_header, "TOKENS"],
             messages_width,
         )];
         for row in rows {
             let metrics = format!(
                 "{}{}{}",
-                pad_left(&active_duration(row.value.effort.active_ms / 1_000), 13),
-                pad_left(&panel::messages_label(&row.value), messages_width),
-                pad_left(&fmt_tokens(row.value.spend.display_tokens()), 8)
+                pad_left(
+                    &row_units(row, &active_duration(row.value.effort.active_ms / 1_000)),
+                    13
+                ),
+                pad_left(&messages_label(row), messages_width),
+                pad_left(
+                    &row_units(row, &fmt_tokens(row.value.spend.display_tokens())),
+                    8
+                )
             );
             lines.push(format!(
                 "{}{}",
@@ -463,10 +469,16 @@ impl Dashboard<'_> {
         (style, name_style): (anstyle::Style, anstyle::Style),
         marker: &str,
     ) -> String {
-        let SpendColumns { dollars, bar } = columns;
+        let SpendColumns {
+            dollars,
+            bar,
+            maximum,
+        } = columns;
         let usd = row.value.spend.usd;
         let share = ratio(usd, total);
-        let filled = (share * bar as f64).round().clamp(0.0, bar as f64) as usize;
+        let filled = (ratio(usd, maximum) * bar as f64)
+            .round()
+            .clamp(0.0, bar as f64) as usize;
         let paint = |style, text: &str| {
             if row.key.is_none() {
                 text.to_owned()
@@ -480,10 +492,7 @@ impl Dashboard<'_> {
             pad_to(&paint(name_style, &ellipsize(name, 14)), 14),
             pad_left(&paint(render::palette::money(), &fmt_usd(usd)), dollars),
             paint(style, &self.glyphs.bar_filled.repeat(filled)),
-            paint(
-                render::palette::faint(),
-                &self.glyphs.bar_track.repeat(bar - filled)
-            ),
+            " ".repeat(bar - filled),
             pad_left(&percent(share), 4)
         );
         if row.key.is_none() {
@@ -495,12 +504,16 @@ impl Dashboard<'_> {
 
     fn provider_lines(&self, rows: &[Row], active: Window, width: usize) -> Vec<String> {
         let total = active.select(&self.stats.total).usd;
+        let total_sessions = rows
+            .iter()
+            .map(|row| f64::from(row.value.spend.sessions))
+            .sum();
         let mut lines = vec![render::paint(title_style(), "Providers")];
         let parts: Vec<_> = rows
             .iter()
             .map(|row| {
                 (
-                    row.value.spend.usd,
+                    f64::from(row.value.spend.sessions),
                     "█",
                     row.key
                         .as_deref()
@@ -515,15 +528,15 @@ impl Dashboard<'_> {
             let name = kind
                 .map(agent_display_name)
                 .unwrap_or_else(|| "Other".into());
-            let share = ratio(row.value.spend.usd, total);
             let sessions = row.value.spend.sessions;
+            let share = (ratio(f64::from(sessions), total_sessions) * 100.0).round();
             let noun = if sessions == 1 { "session" } else { "sessions" };
-            let share_label = if share < 0.01 {
-                "<1%".to_owned()
+            let share_label = if share < 1.0 {
+                String::new()
             } else {
-                percent(share)
+                pad_left(&format!("{share}%"), 6 + "sessions".len() - noun.len())
             };
-            let cache_hit = if share >= 0.01 {
+            let cache_hit = if ratio(row.value.spend.usd, total) >= 0.01 {
                 let hit = hit(&row.value.spend, kind.is_some());
                 format!("{hit} hit")
             } else {
@@ -536,13 +549,13 @@ impl Dashboard<'_> {
                 ("█".into(), name)
             };
             let line = format!(
-                "{} {}{}{}{}{} {noun}",
+                "{} {}{}{}{} {noun}{}",
                 marker,
                 pad_to(&name, 8),
                 pad_left(&fmt_usd(row.value.spend.usd), 10),
-                pad_left(&share_label, 6),
                 pad_left(&cache_hit, 10),
-                pad_left(&group_thousands(u64::from(sessions)), 8)
+                pad_left(&group_thousands(u64::from(sessions)), 8),
+                share_label
             );
             lines.push(if kind.is_none() {
                 render::paint(render::palette::muted(), &line)
@@ -1020,6 +1033,7 @@ struct Row {
 struct SpendColumns {
     dollars: usize,
     bar: usize,
+    maximum: f64,
 }
 
 impl SpendColumns {
@@ -1033,6 +1047,10 @@ impl SpendColumns {
         Self {
             dollars,
             bar: bar.saturating_sub(dollars - 7),
+            maximum: rows
+                .iter()
+                .map(|row| row.value.spend.usd)
+                .fold(0.0, f64::max),
         }
     }
 }
@@ -1088,6 +1106,14 @@ fn model_name(id: &str) -> String {
             .chars()
             .filter(|ch| !ch.is_control())
             .collect()
+    }
+}
+
+fn row_units(row: &Row, text: &str) -> String {
+    if row.key.is_none() {
+        text.to_owned()
+    } else {
+        muted_units(text)
     }
 }
 

@@ -7,6 +7,210 @@ mod columns;
 
 const TODAY: i64 = 20_749;
 
+#[test]
+fn dashboard_row_bars_scale_to_the_largest_drawn_row_including_other() {
+    let (mut stats, assists) = fixture();
+    stats.agents = [
+        ("largest", 100.0),
+        ("half", 75.0),
+        ("third", 60.0),
+        ("fourth", 50.0),
+        ("tail-a", 30.0),
+        ("tail-b", 30.0),
+        ("tail-c", 30.0),
+        ("tail-d", 30.0),
+        ("tail-e", 30.0),
+    ]
+    .into_iter()
+    .map(|(name, usd)| {
+        (
+            name.into(),
+            effort_role(every_window(tally(1, usd, 1)), EffortWindow::default()),
+        )
+    })
+    .collect();
+    let output = strip_ansi(&frame(&stats, &assists, Window::Month, 100, None).text);
+    let section = output
+        .split("\nAgents ")
+        .nth(1)
+        .unwrap()
+        .split("\n\n")
+        .next()
+        .unwrap();
+    let other = section.lines().find(|line| line.contains("Other")).unwrap();
+    let half = section.lines().find(|line| line.contains("half")).unwrap();
+    assert_eq!(other.matches('━').count(), 24, "{section}");
+    assert_eq!(half.matches('━').count(), 12, "{section}");
+    for row in output
+        .lines()
+        .filter(|line| line.contains('●') || line.contains('█') && line.contains('$'))
+    {
+        assert!(!row.contains('─'), "{row}");
+    }
+}
+
+#[test]
+fn dashboard_providers_use_session_shares_but_dollar_shares_gate_hit() {
+    let (mut stats, assists) = fixture();
+    stats.total.day.usd = 236.4;
+    let providers = |opencode_sessions| {
+        [
+            ("claude", 129.0, 144, 96),
+            ("codex", 98.0, 278, 98),
+            ("pi", 9.0, 10, 88),
+            ("opencode", 0.4, opencode_sessions, 90),
+        ]
+        .map(|(kind, usd, sessions, hit)| {
+            (
+                kind.into(),
+                mock_tally(
+                    mock_window(usd, 10_000, hit, 0, sessions),
+                    mock_window(usd, 10_000, hit, 0, sessions),
+                ),
+            )
+        })
+        .into()
+    };
+    stats.by_provider = providers(3);
+    let output = strip_ansi(&frame(&stats, &assists, Window::Today, 100, None).text);
+    for (name, share, has_hit) in [
+        ("Claude", "33%", true),
+        ("Codex", "64%", true),
+        ("Pi", "2%", true),
+        ("Open Co", "1%", false),
+    ] {
+        let row = output
+            .lines()
+            .find(|line| line.contains(name) && line.contains("sessions"))
+            .unwrap();
+        assert!(row.ends_with(&format!("sessions   {share:>3}")), "{row}");
+        assert_eq!(row.contains("hit"), has_hit, "{row}");
+    }
+    stats.by_provider = providers(1);
+    let output = strip_ansi(&frame(&stats, &assists, Window::Today, 100, None).text);
+    let opencode = output
+        .lines()
+        .find(|line| line.contains("Open Co"))
+        .unwrap();
+    assert!(opencode.ends_with(" 1 session"), "{opencode}");
+    stats.by_provider = [
+        ("claude", 14_888.0, 6_207),
+        ("codex", 11_381.0, 7_537),
+        ("pi", 23.0, 44),
+    ]
+    .map(|(kind, usd, sessions)| {
+        (
+            kind.into(),
+            mock_tally(
+                mock_window(usd, 10_000, 95, 0, sessions),
+                mock_window(usd, 10_000, 95, 0, sessions),
+            ),
+        )
+    })
+    .into();
+    let output = frame(&stats, &assists, Window::Month, 100, None).text;
+    let bar = output
+        .lines()
+        .skip_while(|line| !line.contains("Providers"))
+        .nth(1)
+        .unwrap();
+    assert!(
+        bar.contains(&render::paint(
+            render::palette::identity("claude"),
+            &"█".repeat(24)
+        )),
+        "{bar}"
+    );
+    assert!(
+        bar.contains(&render::paint(
+            render::palette::identity("codex"),
+            &"█".repeat(30)
+        )),
+        "{bar}"
+    );
+    let pi = strip_ansi(&output)
+        .lines()
+        .find(|line| line.contains("Pi") && line.contains("sessions"))
+        .unwrap()
+        .to_owned();
+    assert!(pi.ends_with("44 sessions"), "{pi}");
+}
+
+#[test]
+fn dashboard_units_are_muted_without_restyling_digits_or_other_rows() {
+    let (mut stats, assists) = fixture();
+    let output = frame(&stats, &assists, Window::Month, 119, None).text;
+    let muted = |text| render::paint(render::palette::muted(), text);
+    let model = output
+        .lines()
+        .find(|line| line.contains("Opus 5.5"))
+        .unwrap();
+    assert!(model.contains(&format!("15.4{}", muted("B"))), "{model}");
+    let team = output.lines().find(|line| line.contains("recon")).unwrap();
+    assert!(
+        team.contains(&format!("18{}10{}", muted("h"), muted("m"))),
+        "{team}"
+    );
+    assert!(team.contains(&format!("4.5{}", muted("B"))), "{team}");
+    for unit in ["h", "GB"] {
+        assert!(output.contains(&muted(unit)), "{unit}: {output}");
+    }
+    let rollup = AssistRollup {
+        resumes: 1,
+        recovered_secs: 3_600,
+        sweeps: 1,
+        reclaimed_bytes: 64 * 1_024 * 1_024,
+        hibernations: 1,
+        hibernate_reclaimed_bytes: 480 * 1_024 * 1_024 * 1_024,
+        ..Default::default()
+    };
+    let dashboard = assists::category_entries(&rollup, assists::CategoryMode::Dashboard);
+    let timeline = assists::category_entries(&rollup, assists::CategoryMode::Timeline);
+    for (unit, digits) in [("h", "1.0"), ("MB", "64 "), ("GB", "480 ")] {
+        assert!(
+            dashboard
+                .iter()
+                .any(|(_, value)| value.contains(&format!("{digits}{}", muted(unit)))),
+            "{dashboard:?}"
+        );
+        assert!(
+            !timeline
+                .iter()
+                .any(|(_, value)| value.contains(&muted(unit))),
+            "{timeline:?}"
+        );
+    }
+    assert_eq!(
+        dashboard
+            .iter()
+            .map(|(label, value)| (*label, strip_ansi(value)))
+            .collect::<Vec<_>>(),
+        timeline
+    );
+    let today = frame(&stats, &assists, Window::Today, 119, None).text;
+    let other = today
+        .lines()
+        .find(|line| line.contains("Other") && line.contains("10M"))
+        .unwrap();
+    assert!(!other.contains(&muted("M")), "{other}");
+    let recon = stats
+        .teams
+        .get_mut("recon")
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    recon.effort.month.active_ms = (3 * 86_400 + 2 * 3_600) * 1_000;
+    recon.tally.month = mock_window(2_620.6, 6_000, 0, 0, 1);
+    let output = frame(&stats, &assists, Window::Month, 119, None).text;
+    let recon = output.lines().find(|line| line.contains("recon")).unwrap();
+    assert!(
+        recon.contains(&format!("3{}02{}", muted("d"), muted("h"))),
+        "{recon}"
+    );
+    assert!(recon.contains(&format!("6{}", muted("K"))), "{recon}");
+}
+
 fn mock_window(usd: f64, tokens: u64, hit: u64, rate: u64, sessions: u32) -> SpendWindow {
     let output = tokens / 10;
     let input = (tokens - output) * (100 - hit) / 100;
@@ -601,7 +805,10 @@ fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
     assert!(
         output
             .lines()
-            .any(|line| line.contains("Pi") && line.contains("<1%") && line.contains("1 session"))
+            .map(|line| line.chars().take(57).collect::<String>())
+            .any(|line| line.contains("Pi")
+                && line.trim_end().ends_with("1 session")
+                && !line.contains('%'))
     );
     assert!(output.contains("5,995 sessions"));
     assert!(!output.contains("agent-time and messages"));
@@ -610,14 +817,17 @@ fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
         .lines()
         .find(|line| line.contains("Other") && line.contains("1h40m"))
         .expect(&short);
-    assert!(other.contains("7 (1)"), "{other}");
+    assert!(other.contains("  7  ") && !other.contains('('), "{other}");
     assert!(short.contains("Assists  17 kinds"));
     stats.by_provider.get_mut("pi").unwrap().month.usd = 0.0;
     let unpriced = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
     assert!(
         unpriced
             .lines()
-            .any(|line| line.contains("Pi") && line.contains("<1%") && line.contains("1 session"))
+            .map(|line| line.chars().take(57).collect::<String>())
+            .any(|line| line.contains("Pi")
+                && line.trim_end().ends_with("1 session")
+                && !line.contains('%'))
     );
 }
 

@@ -6,14 +6,12 @@ const COLUMN_EDGES: [usize; 4] = [35, 52, 69, 86];
 
 pub(super) struct PanelGlyphs {
     pub(super) bar_filled: String,
-    pub(super) bar_track: String,
 }
 
 pub(super) fn resolve_panel_glyphs(theme: &ThemeConfig) -> PanelGlyphs {
     let glyph = theme_glyphs(theme);
     PanelGlyphs {
         bar_filled: glyph(GlyphRole::MeterBarFilled),
-        bar_track: glyph(GlyphRole::MeterBarTrack),
     }
 }
 

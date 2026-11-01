@@ -1567,6 +1567,13 @@ pub(super) fn category_entries(
     mode: CategoryMode,
 ) -> Vec<(&'static str, String)> {
     let mut rows = Vec::with_capacity(5);
+    let quantity = |value: String| {
+        if mode == CategoryMode::Dashboard {
+            super::fmt::muted_units(&value)
+        } else {
+            value
+        }
+    };
     let mut row = |label: &'static str, key: &str, count: usize, detail: Option<String>| {
         let held = if mode == CategoryMode::Timeline {
             rollup.held.get(key).copied().unwrap_or(0)
@@ -1627,8 +1634,12 @@ pub(super) fn category_entries(
         rollup.port_forwards,
         None,
     );
-    let recovered = (rollup.recovered_secs > 0)
-        .then(|| format!("after {} parked", format_hours(rollup.recovered_secs)));
+    let recovered = (rollup.recovered_secs > 0).then(|| {
+        format!(
+            "after {} parked",
+            quantity(format_hours(rollup.recovered_secs))
+        )
+    });
     row("Auto-continue:", "resumes", rollup.resumes, recovered);
     let compacts = rollup.compacts
         + if mode == CategoryMode::Dashboard {
@@ -1648,7 +1659,7 @@ pub(super) fn category_entries(
     );
     row("Molts:", "molts", rollup.molts, None);
     let reclaimed = (rollup.hibernations > 0).then(|| {
-        let bytes = render::fmt_bytes(rollup.hibernate_reclaimed_bytes);
+        let bytes = quantity(render::fmt_bytes(rollup.hibernate_reclaimed_bytes));
         format!("{bytes} reclaimed")
     });
     row("Hibernate:", "hibernations", rollup.hibernations, reclaimed);
@@ -1677,7 +1688,8 @@ pub(super) fn category_entries(
         )
     });
     row("Auto-resume:", "restores", rollup.restores, agents);
-    let freed = (rollup.reclaimed_bytes > 0).then(|| render::fmt_bytes(rollup.reclaimed_bytes));
+    let freed =
+        (rollup.reclaimed_bytes > 0).then(|| quantity(render::fmt_bytes(rollup.reclaimed_bytes)));
     row("Auto-gc:", "sweeps", rollup.sweeps, freed);
     row(
         "Spend rebuild:",
