@@ -310,7 +310,7 @@ Window fields are omitted when unknown:
 | `duration_mins` | Nominal window duration, such as `300` (5h) or `10080` (7d); also the identity for an unscoped time window. |
 | `observed_at` | Reading timestamp. |
 | `source` | `"authoritative"` for provider API readings; absent for agent-reported readings. |
-| `lifted` | `true` when the provider stopped enforcing this window; absent otherwise. |
+| `lifted` | `true` when the provider is not enforcing this window; absent otherwise. |
 | `fixed_period` | `true` when the clock runs on a fixed schedule regardless of usage; absent otherwise. Its countdown runs even at zero usage. |
 
 `spending.today` is spend since local midnight in the configured `timezone`, or `null` when publication was for another local day. `headline` follows the sidebar setting; sibling `window` names `session`, `24h`, or `today`. `week`, `month`, and `year` cover the last 7, 30, and 364 local calendar days, including today. Each holds `usd`, `tokens`, `input`, `output`, `cache_write`, `cache_read`, and `sessions`, plus `tool_calls` and a `tools` name-to-count map when recorded.

@@ -700,6 +700,33 @@ fn model_capacity_matches_only_the_model_family() {
 }
 
 #[test]
+fn known_unused_counts_lifted_windows_but_requires_unused_enforced_windows() {
+    let now = Timestamp::from_second(1_000_000).unwrap();
+    let lifted = RateLimitWindow {
+        duration_mins: Some(300),
+        source: crate::agents::context::WindowSource::Authoritative,
+        lifted: true,
+        ..Default::default()
+    };
+    let unused = ProviderCapacity::from_windows(vec![
+        lifted.clone(),
+        window(now, Some(0), 86_400, Some(10_080)),
+    ]);
+    assert!(
+        unused.known_unused(now),
+        "a lifted window has no clock to start"
+    );
+    for used in [Some(40), None] {
+        let capacity = ProviderCapacity::from_windows(vec![
+            lifted.clone(),
+            window(now, used, 86_400, Some(10_080)),
+        ]);
+        assert!(!capacity.known_unused(now), "used or unknown 7d: {used:?}");
+    }
+    assert!(!ProviderCapacity::default().known_unused(now));
+}
+
+#[test]
 fn spent_reset_and_available_capacity_use_projected_windows() {
     let now = Timestamp::from_second(1_000_000).unwrap();
     let spent = ProviderCapacity::from_windows(vec![window(now, Some(100), 3_600, Some(300))]);

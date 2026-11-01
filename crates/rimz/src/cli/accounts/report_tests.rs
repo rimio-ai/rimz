@@ -1473,6 +1473,25 @@ fn table_window_cells_show_what_is_left() {
         render::palette::budget(5),
         "the tone follows what is left"
     );
+
+    let mut claude = panel("claude");
+    claude.windows = vec![
+        RateLimitWindow {
+            duration_mins: Some(300),
+            source: rimz::agents::context::WindowSource::Authoritative,
+            lifted: true,
+            ..Default::default()
+        },
+        window(10_080, 40, Some(86_400), now),
+    ];
+    let reports = group("claude", vec![("default", claude)]);
+    let text = overview(&reports, now, &BTreeMap::new(), false);
+    let table: Vec<_> = text.lines().collect();
+    let five_column = cells(table[1])
+        .iter()
+        .position(|cell| *cell == "5h LEFT")
+        .unwrap();
+    assert_eq!(cells(table[2])[five_column], "no limit", "{text}");
 }
 
 #[test]

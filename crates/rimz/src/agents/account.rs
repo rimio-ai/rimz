@@ -391,17 +391,18 @@ impl ProviderCapacity {
             .max()
     }
 
-    /// Whether every subscription window is known to be unused: it reads 0%,
-    /// or its clock has not started, since a fresh window reports about 1%.
-    /// A window without a percentage, or no window at all, is unknown rather
-    /// than unused.
+    /// Whether every subscription window is lifted, reads 0%, or has not
+    /// started, since a fresh window reports about 1%. A lifted window has no
+    /// enforced clock a redemption could start. An enforced window without a
+    /// percentage, or no window at all, is unknown rather than unused.
     pub(crate) fn known_unused(&self, now: Timestamp) -> bool {
         let mut windows = self.projected_duration_windows(now).peekable();
         windows.peek().is_some()
             && windows.all(|window| {
-                window
-                    .used_percentage
-                    .is_some_and(|used| used == 0 || window.not_started(now))
+                window.lifted
+                    || window
+                        .used_percentage
+                        .is_some_and(|used| used == 0 || window.not_started(now))
             })
     }
 

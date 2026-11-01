@@ -796,13 +796,17 @@ fn collect_rate_limits(
     seven_day: Option<WindowWire>,
     limits: Vec<LimitWire>,
 ) -> Option<AgentRateLimits> {
-    let mut windows: Vec<RateLimitWindow> = [
-        window(five_hour, super::account::FIVE_HOUR_MINS),
-        window(seven_day, super::account::SEVEN_DAY_MINS),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let seven_day = window(seven_day, super::account::SEVEN_DAY_MINS);
+    let five_hour = match five_hour {
+        None if seven_day.is_some() => Some(RateLimitWindow {
+            duration_mins: Some(super::account::FIVE_HOUR_MINS),
+            source: WindowSource::Authoritative,
+            lifted: true,
+            ..Default::default()
+        }),
+        field => window(field, super::account::FIVE_HOUR_MINS),
+    };
+    let mut windows: Vec<RateLimitWindow> = [five_hour, seven_day].into_iter().flatten().collect();
     windows.extend(limits.into_iter().filter_map(|limit| {
         if limit.kind.as_deref() != Some("weekly_scoped") {
             return None;

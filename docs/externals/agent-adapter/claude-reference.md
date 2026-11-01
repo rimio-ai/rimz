@@ -829,6 +829,18 @@ On 2026-10-31, a live profile returned `organization.plan_display_name = "Ultra"
 | `extra_usage.used_credits`, `monthly_limit` | extra usage spent and its cap |
 | `limits[]` | limit entries with `kind`, `group`, `percent`, `resets_at` (an ISO 8601 string), and `scope`. The client treats a `kind: "weekly_scoped"` entry with a string `scope.model.display_name` as a per-model weekly cap |
 
+Live captures on 2026-11-01 with the `claude-cli/2.1.316 (external, cli)` User-Agent showed two shapes. An account without a 5h limit returned `five_hour: null`, a `seven_day` object, and `weekly_all` plus `weekly_scoped` rows in `limits[]`, without a `session` row. An active Pro account returned `five_hour` and `seven_day` objects, with a `session` row beside `weekly_all`. The 2.1.316 client's `/usage` renderers gate "Current session" on a present `five_hour` with non-null `utilization`, not on the `limits[]` session row. An idle Pro/Team/Max account was not observed: that its unstarted window is a present object such as `{ "utilization": 0, "resets_at": null }`, rather than null, remains an inference.
+
+To capture a named account's response, set `account_name` to its RimZ login name. The bearer is `.claudeAiOauth.accessToken` in `~/.rimz/accounts/claude/<name>/.credentials.json`:
+
+```sh
+account_name=work
+curl -fsS 'https://api.anthropic.com/api/oauth/usage' \
+  -H "Authorization: Bearer $(jq -r '.claudeAiOauth.accessToken' "$HOME/.rimz/accounts/claude/$account_name/.credentials.json")" \
+  -H 'anthropic-beta: oauth-2025-04-20' \
+  -A 'claude-cli/2.1.316 (external, cli)'
+```
+
 An authenticated usage-endpoint capture on 2026-10-10 returned HTTP 403 with this body (request ID elided): `{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization.","details":{"error_visibility":"user_facing","error_code":"oauth_not_allowed_for_organization"}},"request_id":"req_…"}`. The machine-readable code sits at `error.details.error_code`; `error.type` carries the class and `error.message` the human text. Source: a local curl capture against a lapsed account. This differs from a 401 credential rejection. The capture does not establish a `StopFailure.error` mapping.
 
 With the `cedar_ember=1` query parameter, live probes on 2026-09-26 returned banked limit resets in the same body, without changing windows or `extra_usage`. The 2.1.283 binary's User-Agent format is `claude-cli/<version> (external, cli)`. Probes with a different product prefix or without the suffix returned `ineligible_reason: "surface"`; `unknown`, 2.1.173, and 2.1.270 with the suffix returned `"cli_version"`, while 2.1.283 returned `eligible: true`. The exact minimum version was not established. An abridged eligible response:
