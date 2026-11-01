@@ -1216,12 +1216,26 @@ pub(super) fn render_full(stats: &AssistStats, limit: usize, all: bool, json: bo
     }
     writeln!(out)?;
     let zone = MachineConfig::load_lenient().time_zone();
-    let (lines, older) = timeline_lines(stats, limit, all, &zone);
+    write_timeline(&mut out, stats, limit, all, &zone)
+}
+
+fn write_timeline(
+    out: &mut impl Write,
+    stats: &AssistStats,
+    limit: usize,
+    all: bool,
+    zone: &jiff::tz::TimeZone,
+) -> Result<()> {
+    let (lines, older) = timeline_lines(stats, limit, all, zone);
     for line in lines {
         writeln!(out, "{line}")?;
     }
     if older > 0 {
-        writeln!(out, "… {older} older; rimz stats --assists -n 0 for all")?;
+        let unit = if older == 1 { "assist" } else { "assists" };
+        writeln!(
+            out,
+            "… {older} older {unit}; rimz stats --assists -n 0 for all"
+        )?;
     }
     Ok(())
 }
@@ -1298,6 +1312,7 @@ enum RepeatKey<'a> {
     Stall(&'a str, bool),
     Retry(Option<i32>),
     Judge(&'a str),
+    Resident(&'a [String]),
     Step(&'a str),
     Route(&'a str, &'a str, &'a str),
     Park(&'a str, rimz::store::workflow::ParkReason),
@@ -1401,6 +1416,7 @@ impl AssistEvent {
             } => RepeatKey::Stall(parent, *delivered),
             Self::LaunchRetry { exit_code, .. } => RepeatKey::Retry(*exit_code),
             Self::JudgeDecline { profile, .. } => RepeatKey::Judge(profile),
+            Self::ResidentLaunch { stopped, .. } => RepeatKey::Resident(stopped),
             Self::WorkflowStep { step, .. } => RepeatKey::Step(step),
             Self::WorkflowRoute { count: Some(_), .. } => return None,
             // Each rebuild names its own days and dollars, so none repeats another.
@@ -1417,10 +1433,9 @@ impl AssistEvent {
             Self::ModelAlias { from, to, .. } => RepeatKey::Alias(from, to),
             Self::EmptyDirGrant { key, profile, .. } => RepeatKey::Grant(key, profile.as_deref()),
             Self::Resume { cause, .. } => RepeatKey::Resume(*cause),
-            Self::ResidentLaunch { .. }
-            | Self::WorkflowStart { .. }
-            | Self::TmpEvict { .. }
-            | Self::Gc { .. } => RepeatKey::Plain,
+            Self::WorkflowStart { .. } | Self::TmpEvict { .. } | Self::Gc { .. } => {
+                RepeatKey::Plain
+            }
         };
         Some((self.outcome(), key))
     }
