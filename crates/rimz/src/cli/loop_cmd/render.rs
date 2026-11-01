@@ -1987,6 +1987,8 @@ enum FireAttribution {
 /// Exact tenure joins span the window. Unmatched holders use checkout-local evidence within
 /// legacy record boundaries, so a later tenure cannot reach back past an unstamped run.
 /// At-lock records with matched fires take their own row, not another record's fire count.
+/// Records are in append order; a run appends its terminal record before releasing its lock,
+/// so a fire refused in that gap follows its holder's record.
 fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
     let mut recorded_by_lock = BTreeMap::new();
     let mut newest_by_checkout = BTreeMap::new();
@@ -2070,6 +2072,8 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
 /// Fires refused at the other gates ran nothing, so they neither bound the
 /// newest run nor end a count of overlaps.
 /// Fires on a `no record` row are excluded: a later tenure already proves their holder gone.
+/// Counts on recorded rows stay on those rows; the warning names them without a number.
+/// With an active run, only rowless fires remain in the warning.
 /// The `during` count leaves out overlaps the table shows on another row; an overlap no row
 /// takes still counts. A record that held the lock itself counts only when it folds onto the
 /// newest run's row, not when it has a row of its own or no row to fold onto.
@@ -2083,28 +2087,42 @@ fn stale_clause(
     let tail = records[start..]
         .iter()
         .zip(&attribution[start..])
-        .filter(|(_, destination)| !matches!(destination, FireAttribution::NoRecord(..)))
-        .map(|(record, _)| record);
-    let after = tail.clone().filter(|record| is_overlap(record)).count();
-    if after > 0 && has_active_run {
-        return Some(format!(
-            "{} skipped while the active run holds the lock",
-            fires(after)
-        ));
+        .filter(|(_, destination)| !matches!(destination, FireAttribution::NoRecord(..)));
+    if has_active_run {
+        let after = tail
+            .filter(|(record, destination)| {
+                is_overlap(record) && matches!(destination, FireAttribution::Trailing)
+            })
+            .count();
+        return (after > 0).then(|| {
+            format!(
+                "{} skipped while the active run holds the lock",
+                fires(after)
+            )
+        });
     }
+    let after = tail
+        .clone()
+        .filter(|(record, _)| is_overlap(record))
+        .count();
     if after > 0 {
+        let counted_on_row = tail.clone().any(|(record, destination)| {
+            is_overlap(record) && matches!(destination, FireAttribution::Recorded(_))
+        });
         // The counted overlaps are "the last fires" only when no fire refused
         // at another gate sits among or after them.
-        let trailing = tail.rev().take_while(|record| is_overlap(record)).count();
-        let skipped = match (trailing == after, after) {
-            (true, 1) => "last fire".to_owned(),
-            (true, _) => format!("last {after} fires"),
-            (false, _) => fires(after),
+        let trailing = tail
+            .rev()
+            .take_while(|(record, _)| is_overlap(record))
+            .count();
+        let skipped = match (counted_on_row, trailing == after, after) {
+            (true, _, 1) => "a fire".to_owned(),
+            (true, _, _) => "fires".to_owned(),
+            (false, true, 1) => "last fire".to_owned(),
+            (false, true, _) => format!("last {after} fires"),
+            (false, false, _) => fires(after),
         };
         return Some(format!("{skipped} skipped, nothing has run since"));
-    }
-    if has_active_run {
-        return None;
     }
     let newest_run = newest_run?;
     let during = records[..newest_run]

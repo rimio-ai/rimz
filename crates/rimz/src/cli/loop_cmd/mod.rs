@@ -419,9 +419,10 @@ struct ShowArgs {
         crate::cli::complete::loop_tasks
     ))]
     name: String,
-    /// Number of recent run rows to show, newest first. Runs differing only in time fold into
-    /// one row; refused fires fold into their holder's run, or a `no record` row once a later
-    /// lock tenure proves the holder gone without a record.
+    /// Number of recent run rows to show, newest first. Rows fold by mode, result, outcome,
+    /// exit, checkout, run id, target, and whether fires waited or were skipped. Refused fires
+    /// fold into their holder's run, or a `no record` row once a later lock tenure proves the
+    /// holder gone without a record.
     #[arg(short = 'n', long = "runs", default_value_t = 10)]
     runs: usize,
 }

@@ -3546,15 +3546,16 @@ fn stopped_holders_take_their_fires_without_a_checkout_on_the_record() {
 }
 
 #[test]
-fn recorded_gate_refusals_take_their_matched_fires_and_keep_the_stale_clause() {
+fn recorded_gate_refusals_keep_their_fire_count_on_the_row() {
     let holder = run_lock_info(11, 0);
-    for result in [
+    let clauses = [
         LoopRunResult::ThrottleSkipped,
         LoopRunResult::CapacityHeld,
         LoopRunResult::BudgetSkipped,
         LoopRunResult::AccountSkipped,
         LoopRunResult::SurplusSkipped,
-    ] {
+    ]
+    .map(|result| {
         let records = [
             refused_by(overlap(10), holder),
             refused_by(deferred(11), holder),
@@ -3564,11 +3565,12 @@ fn recorded_gate_refusals_take_their_matched_fires_and_keep_the_stale_clause() {
         let rows = collapsed_run_rows(&records);
         assert_eq!((rows[0].skipped, rows[0].waited), (1, 1), "{table}");
         assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
-        assert_eq!(
-            stale_clause(&records, false).as_deref(),
-            Some("1 fire skipped, nothing has run since")
-        );
-    }
+        stale_clause(&records, false)
+    });
+    assert_eq!(
+        clauses.each_ref().map(|clause| clause.as_deref()),
+        [Some("a fire skipped, nothing has run since"); 5]
+    );
 }
 
 #[test]
@@ -3582,6 +3584,68 @@ fn late_skip_policy_refusals_fold_back_into_their_recorded_holder() {
     let rows = collapsed_run_rows(&records);
     assert_eq!((rows.len(), rows[0].skipped), (1, 1), "{table}");
     assert!(table.contains("RECENT RUNS (newest first)"), "{table}");
+    assert_eq!(
+        stale_clause(&records, false).as_deref(),
+        Some("a fire skipped, nothing has run since")
+    );
+}
+
+#[test]
+fn stale_tail_names_row_counts_and_counts_only_rowless_fires_while_running() {
+    let recorded = run_lock_info(11, 15);
+    let active = run_lock_info(22, 35);
+    let clauses = [false, true].map(|rowless| {
+        let mut records = vec![
+            scheduled(10, LoopRunResult::Completed),
+            refused_by(overlap(20), recorded),
+            with_run_lock(scheduled(30, LoopRunResult::ThrottleSkipped), recorded),
+        ];
+        if rowless {
+            records.push(refused_by(overlap(40), active));
+        }
+        [false, true].map(|running| stale_clause(&records, running))
+    });
+    assert_eq!(
+        clauses,
+        [
+            [Some("a fire skipped, nothing has run since".into()), None],
+            [
+                Some("fires skipped, nothing has run since".into()),
+                Some("1 fire skipped while the active run holds the lock".into()),
+            ],
+        ]
+    );
+}
+
+#[test]
+fn show_verdict_names_a_gate_rows_refused_fire_without_recounting_it() {
+    let holder = run_lock_info(11, 15);
+    let mut completed = scheduled(10, LoopRunResult::Completed);
+    completed.duration_ms = Some(1600);
+    let mut gate = with_run_lock(scheduled(30, LoopRunResult::ThrottleSkipped), holder);
+    gate.error = Some("throttle: 6 agents working, limit 6".into());
+    let records = [completed, refused_by(overlap(20), holder), gate];
+    let mut out = Vec::new();
+    let now = Timestamp::from_second(100).unwrap();
+    write_verdict(
+        &mut out,
+        &records,
+        &refused_fire_attribution(&records),
+        false,
+        now,
+    )
+    .unwrap();
+    write_runs_table(&mut out, &records, 10, now).unwrap();
+    let output = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert_eq!(
+        output.lines().next().unwrap(),
+        "  ✓ healthy · last run 1m ago, completed in 1.6s · a fire skipped, nothing has run since",
+        "{output}"
+    );
+    assert!(
+        output.contains("throttle: 6 agents working, limit 6 · 1 fire skipped, run already active"),
+        "{output}"
+    );
 }
 
 #[test]
