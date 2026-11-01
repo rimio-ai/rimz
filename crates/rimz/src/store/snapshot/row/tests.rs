@@ -805,6 +805,33 @@ fn context_gauge_percent_derives_from_sidecar_usage_when_percentage_is_absent() 
 }
 
 #[test]
+fn zero_split_with_a_nonzero_total_has_no_call_composition() {
+    let mut card = AgentCard {
+        usage: AgentUsageSummary {
+            fresh_input_tokens: Some(0),
+            cache_read_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
+            total_tokens: Some(19_359),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(card.call_split(), None);
+    assert_eq!(card.context_used_tokens(), None);
+    for total in [Some(0), None] {
+        card.usage.total_tokens = total;
+        assert_eq!(card.call_split().map(|split| split.filled()), Some(0));
+    }
+    card.usage.total_tokens = Some(19_359);
+    for (fresh, read, write) in [(1, 0, 0), (0, 1, 0), (0, 0, 1)] {
+        card.usage.fresh_input_tokens = Some(fresh);
+        card.usage.cache_read_input_tokens = Some(read);
+        card.usage.cache_write_input_tokens = Some(write);
+        assert_eq!(card.call_split().map(|split| split.filled()), Some(1));
+    }
+}
+
+#[test]
 fn current_context_scalar_controls_total_and_lifecycle_split_correlation() {
     let mut card = AgentCard {
         usage: AgentUsageSummary {

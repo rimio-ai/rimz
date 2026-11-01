@@ -717,6 +717,7 @@ impl AgentCard {
     /// The latest call's composition when the rich `context.tokens.
     /// current_usage` blob is absent.
     pub fn call_split(&self) -> Option<RowCallSplit> {
+        self.usage.input_context_tokens()?;
         let fresh_input = self.usage.fresh_input_tokens?;
         let split = RowCallSplit {
             cache_read: self.usage.cache_read_input_tokens.unwrap_or(0),

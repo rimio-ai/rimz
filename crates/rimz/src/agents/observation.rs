@@ -360,14 +360,14 @@ pub struct AgentUsageSummary {
 
 impl AgentUsageSummary {
     /// Current input-side context composition, when a provider reports the
-    /// fresh-input anchor that makes the split meaningful.
+    /// fresh-input anchor that makes the split meaningful. An all-zero split
+    /// beside a nonzero total is an estimate, not a call composition.
     pub fn input_context_tokens(&self) -> Option<u64> {
         let fresh = self.fresh_input_tokens?;
-        Some(
-            self.cache_read_input_tokens.unwrap_or(0)
-                + self.cache_write_input_tokens.unwrap_or(0)
-                + fresh,
-        )
+        let input = self.cache_read_input_tokens.unwrap_or(0)
+            + self.cache_write_input_tokens.unwrap_or(0)
+            + fresh;
+        (input > 0 || !self.total_tokens.is_some_and(|total| total > 0)).then_some(input)
     }
 
     /// Window occupancy: the input-side call split when known, else the latest
@@ -709,6 +709,35 @@ mod tests {
                 payload_has_context_observation(&json!({key: null})),
                 "{key} presence is context evidence"
             );
+        }
+    }
+
+    #[test]
+    fn zero_split_with_a_nonzero_total_is_an_estimate_not_a_call() {
+        let mut usage = AgentUsageSummary {
+            context_window: Some(372_400),
+            total_tokens: Some(19_359),
+            fresh_input_tokens: Some(0),
+            cache_read_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
+            output_tokens: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(usage.input_context_tokens(), None);
+        assert_eq!(usage.context_used_tokens(), Some(19_359));
+        assert_eq!(usage.merge(None, None).context_pct, Some(5));
+
+        for total in [Some(0), None] {
+            usage.total_tokens = total;
+            assert_eq!(usage.input_context_tokens(), Some(0));
+            assert_eq!(usage.context_used_tokens(), Some(0));
+        }
+        usage.total_tokens = Some(19_359);
+        for (fresh, read, write) in [(1, 0, 0), (0, 1, 0), (0, 0, 1)] {
+            usage.fresh_input_tokens = Some(fresh);
+            usage.cache_read_input_tokens = Some(read);
+            usage.cache_write_input_tokens = Some(write);
+            assert_eq!(usage.input_context_tokens(), Some(1));
         }
     }
 
