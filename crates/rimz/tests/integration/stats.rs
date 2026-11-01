@@ -275,7 +275,7 @@ fn stats_reads_spend_under_an_unnamed_system_zone() {
         .lines()
         .find(|line| line.trim_start().starts_with("dollars "))
         .expect("the report's spending row");
-    assert_eq!(spend.split_whitespace().nth(4), Some("$0.25"), "{stdout}");
+    assert_eq!(spend.split_whitespace().nth(4), Some("<$1"), "{stdout}");
     let stderr = String::from_utf8_lossy(&output.get_output().stderr);
     assert!(stderr.contains("no IANA name"), "{stderr}");
 }

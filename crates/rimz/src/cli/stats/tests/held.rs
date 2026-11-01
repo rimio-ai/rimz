@@ -689,7 +689,7 @@ fn dashboard_avg_counts_drawn_bars_and_titles_follow_the_active_tab() {
         (Window::Today, "today $1,024 so far · ~"),
         (Window::Week, "┄ avg $46"),
         (Window::Month, "┄ avg $11"),
-        (Window::Year, "┄ avg $6.23 a week"),
+        (Window::Year, "┄ avg $6 a week"),
     ] {
         let output = strip_ansi(&frame(&stats, &assists, tab, 119, None).text);
         assert!(output.contains(expected), "{tab:?}: {output}");
@@ -994,7 +994,7 @@ fn dashboard_avg_ignores_undrawn_history_and_has_no_line_without_spend() {
         (TODAY, BTreeMap::from([("opus-5.5".into(), 14.0)])),
     ]);
     let output = strip_ansi(&frame(&stats, &assists, Window::Week, 119, None).text);
-    assert!(output.contains("┄ avg $2.00"), "{output}");
+    assert!(output.contains("┄ avg $2"), "{output}");
     stats.chart.days.clear();
     stats.chart.weeks.clear();
     for tab in [Window::Week, Window::Month, Window::Year] {

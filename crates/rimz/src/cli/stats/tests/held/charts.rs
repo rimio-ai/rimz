@@ -281,7 +281,7 @@ fn dashboard_without_color_keeps_the_ghost_but_omits_the_forecast_extension() {
         plots[0].1.iter().all(|row| row.ends_with("░░░")),
         "{frames:?}"
     );
-    assert_eq!(plots[1].0, "$1.00", "{frames:?}");
+    assert_eq!(plots[1].0, "$1", "{frames:?}");
     assert!(
         plots[1]
             .1

@@ -42,10 +42,10 @@ pub(super) fn fmt_tokens_precise(n: u64) -> String {
     }
 }
 
-/// Dollars as `$8,666`, rounded and thousands grouped; under $10 keeps cents (`$0.12`).
+/// Whole dollars with grouped thousands; positive amounts below a dollar read `<$1`.
 pub(super) fn fmt_usd(v: f64) -> String {
-    if (0.0..10.0).contains(&v) {
-        return rimz::theme::fmt::dollars2(v);
+    if v > 0.0 && v < 1.0 {
+        return "<$1".into();
     }
     let whole = v.round() as i64;
     let sign = if whole < 0 { "-" } else { "" };

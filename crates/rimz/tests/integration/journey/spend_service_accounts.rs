@@ -89,7 +89,7 @@ fn accounts_of_one_pool_share_the_held_spend_service() {
     let harness = StatsRefreshHarness::launch_in(80, root, &[("CLAUDE_CONFIG_DIR", one.as_path())]);
     wait_for_screen(
         &harness.parser,
-        |text| text.contains("Today $"),
+        |text| text.contains("[ Today <$1 ]"),
         Duration::from_secs(5),
     )
     .unwrap_or_else(|| panic!("held stats never rendered:\n{}", screen(&harness.parser)));

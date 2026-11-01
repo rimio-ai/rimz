@@ -184,7 +184,7 @@ fn one_shot_average_excludes_the_oldest_partial_day_from_both_inputs() {
         .lines()
         .find(|line| line.contains("per active day"))
         .unwrap();
-    assert_eq!(row.split_whitespace().nth(4), Some("$4.00"), "{row}");
+    assert_eq!(row.split_whitespace().nth(4), Some("$4"), "{row}");
 }
 
 #[test]
@@ -409,10 +409,10 @@ fn one_shot_footer_scopes_sessions_and_omits_the_clause_without_them() {
         ..Default::default()
     };
     for (window, label, sessions, cost) in [
-        (Window::Today, "today", "1,111", "$3.00"),
-        (Window::Week, "in the last 7 days", "2,222", "$4.00"),
-        (Window::Month, "in the last 30 days", "3,333", "$5.00"),
-        (Window::Year, "in the last 52 weeks", "4,444", "$6.00"),
+        (Window::Today, "today", "1,111", "$3"),
+        (Window::Week, "in the last 7 days", "2,222", "$4"),
+        (Window::Month, "in the last 30 days", "3,333", "$5"),
+        (Window::Year, "in the last 52 weeks", "4,444", "$6"),
     ] {
         let text = spend_text(&stats, None, window);
         assert_eq!(
@@ -424,6 +424,12 @@ fn one_shot_footer_scopes_sessions_and_omits_the_clause_without_them() {
             assert_eq!(text.lines().last().unwrap(), "  as of 15:00");
         }
     }
+    stats.total.day.usd = 1.0;
+    let text = spend_text(&stats, None, Window::Today);
+    assert!(
+        text.ends_with("1,111 sessions today at <$1 each\n"),
+        "{text}"
+    );
     stats.total = SpendTally::default();
     let text = spend_text(&stats, None, Window::Today);
     assert_eq!(text.lines().last().unwrap(), "  as of 15:00");
@@ -2984,8 +2990,18 @@ fn token_and_dollar_formatting() {
     assert_eq!(fmt_tokens_precise(1_200_000_000), "1.2B");
     assert_eq!(fmt_usd(8_666.0), "$8,666");
     assert_eq!(fmt_usd(1_000_000.0), "$1,000,000");
-    assert_eq!(fmt_usd(0.12), "$0.12");
-    assert_eq!(fmt_usd(9.5), "$9.50");
+    for (value, expected) in [
+        (0.0, "$0"),
+        (0.004, "<$1"),
+        (0.12, "<$1"),
+        (0.99, "<$1"),
+        (1.40, "$1"),
+        (9.33, "$9"),
+        (9.5, "$10"),
+        (12_527.4, "$12,527"),
+    ] {
+        assert_eq!(fmt_usd(value), expected, "{value}");
+    }
     assert_eq!(fmt_usd(10.4), "$10");
     assert_eq!(rimz::theme::fmt::group_thousands(1_741), "1,741");
 }
