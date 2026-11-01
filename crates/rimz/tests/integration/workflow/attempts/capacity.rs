@@ -152,15 +152,34 @@ fn capacity_workflow_wait_reaches_the_human_loop_list() {
     .unwrap();
     let record = pending(&room, Some("nightly"));
     let value = advance(&room, &record);
-    let wait = &value["record"]["wait"];
-    let phrase = rimz::theme::fmt::capacity_wait(
-        &[rimz::ids::AgentKind::new_unchecked("codex")],
-        wait["first"].as_str().unwrap().parse().unwrap(),
-        None,
-        jiff::Timestamp::now(),
+    assert_capacity_phrase(&room, &["loop", "list"], &value["record"]["wait"], None);
+}
+
+/// Runs `args` and asserts its output holds the wait's capacity phrase. The phrase names
+/// the day when the wait is not today, and the binary reads its own clock, so the
+/// expected phrase is built from a clock read on each side of the command: a run that
+/// crosses local midnight matches one of the two.
+fn assert_capacity_phrase(
+    room: &Room,
+    args: &[&str],
+    wait: &serde_json::Value,
+    gives_up_at: Option<jiff::Timestamp>,
+) {
+    let phrase = |now| {
+        rimz::theme::fmt::capacity_wait(
+            &[rimz::ids::AgentKind::new_unchecked("codex")],
+            wait["first"].as_str().unwrap().parse().unwrap(),
+            gives_up_at,
+            now,
+        )
+    };
+    let before = phrase(jiff::Timestamp::now());
+    let text = success(room.command(args).output().unwrap());
+    let after = phrase(jiff::Timestamp::now());
+    assert!(
+        text.contains(&before) || text.contains(&after),
+        "{before:?} or {after:?} in {text}"
     );
-    let text = success(room.command(&["loop", "list"]).output().unwrap());
-    assert!(text.contains(&phrase), "{text}");
 }
 
 #[test]
@@ -270,18 +289,12 @@ fn capacity_holds_merge_without_consuming_visits_and_render_the_shared_phrase() 
     assert!(second["record"]["attempt"].is_null());
     assert!(tickets(&room).is_empty());
     let wait = &second["record"]["wait"];
-    let phrase = rimz::theme::fmt::capacity_wait(
-        &[rimz::ids::AgentKind::new_unchecked("codex")],
-        wait["first"].as_str().unwrap().parse().unwrap(),
-        Some(wait["gives_up_at"].as_str().unwrap().parse().unwrap()),
-        jiff::Timestamp::now(),
-    );
+    let gives_up_at = Some(wait["gives_up_at"].as_str().unwrap().parse().unwrap());
     for args in [
         vec!["workflow", "show", record.id.as_str()],
         vec!["workflow", "list"],
     ] {
-        let text = success(room.command(&args).output().unwrap());
-        assert!(text.contains(&phrase), "{text}");
+        assert_capacity_phrase(&room, &args, wait, gives_up_at);
     }
 }
 
