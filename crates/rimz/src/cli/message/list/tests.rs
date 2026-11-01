@@ -3,24 +3,25 @@ use super::*;
 use rimz::agents::AgentStatus;
 use rimz::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
+use rimz::store::message::HarnessNotice;
 
 #[test]
 fn machine_repeats_keep_the_newest_id_age_and_snippet() {
-    let mut newest = machine_row("newest notice");
+    let mut newest = machine_row("newest keepalive");
     newest.status = MessageStatus::Delivered;
     newest.enqueued_at = Timestamp::now() - jiff::SignedDuration::from_secs(180);
     let mut oldest = newest.clone();
     oldest.message_id = MessageId::new();
     oldest.enqueued_at -= jiff::SignedDuration::from_secs(840);
-    oldest.text = Some("older notice about another command".to_owned());
+    oldest.text = Some("older keepalive".to_owned());
     let output = render_digest(vec![newest.clone(), oldest.clone()], LaneScope::Root, None);
 
     assert_eq!(output.matches(" → ").count(), 1, "{output}");
     assert!(output.contains("delivered ×2  3m ago"), "{output}");
     assert!(output.contains(newest.message_id.as_str()), "{output}");
     assert!(!output.contains(oldest.message_id.as_str()), "{output}");
-    assert!(output.contains("over 14m · newest notice"), "{output}");
-    assert!(!output.contains("older notice"), "{output}");
+    assert!(output.contains("over 14m · newest keepalive"), "{output}");
+    assert!(!output.contains("older keepalive"), "{output}");
 }
 
 #[test]
@@ -97,18 +98,23 @@ fn machine_repeat_keys_ignore_unrendered_fields_and_match_receiver_cards() {
 }
 
 #[test]
-fn all_machine_senders_and_statuses_fold() {
-    let senders = [
-        machine_row("notice").sender,
-        MessageSender::System,
-        MessageSender::Subagent {
-            kind: AgentKind::new_unchecked("codex"),
-            name: "child".to_owned(),
-        },
-    ];
-    let counts = senders
+fn foldable_notice_kinds_fold_at_every_status() {
+    let keepalive = machine_row("notice");
+    let mut compact = keepalive.clone();
+    compact.sender = MessageSender::System;
+    compact.body = MessageBody::Command;
+    let mut paused = keepalive.clone();
+    paused.sender = MessageSender::Harness {
+        notice: HarnessNotice::SubagentPaused,
+    };
+    paused.about_run = Some(rimz::ids::RunId::new());
+    let mut stalled = paused.clone();
+    stalled.sender = MessageSender::Harness {
+        notice: HarnessNotice::SubagentStalled,
+    };
+    let counts = [keepalive, compact, paused, stalled]
         .into_iter()
-        .flat_map(|sender| {
+        .flat_map(|row| {
             [
                 MessageStatus::Queued,
                 MessageStatus::Claimed,
@@ -122,8 +128,7 @@ fn all_machine_senders_and_statuses_fold() {
                 MessageStatus::Abandoned,
             ]
             .map(|status| {
-                let mut row = machine_row("notice");
-                row.sender = sender.clone();
+                let mut row = row.clone();
                 row.status = status;
                 render_digest(vec![row.clone(), row], LaneScope::All, None)
                     .matches(" → ")
@@ -131,7 +136,92 @@ fn all_machine_senders_and_statuses_fold() {
             })
         })
         .collect::<Vec<_>>();
-    assert_eq!(counts, [1; 30]);
+    assert_eq!(counts, [1; 40]);
+}
+
+#[test]
+fn notices_without_typed_subjects_keep_each_message() {
+    let senders = [
+        HarnessNotice::Wait,
+        HarnessNotice::Signal,
+        HarnessNotice::Stage,
+        HarnessNotice::Deadline,
+        HarnessNotice::SubagentReport,
+        HarnessNotice::AgentReport,
+        HarnessNotice::TeamReport,
+        HarnessNotice::MessageUndelivered,
+        HarnessNotice::MessageQueued,
+        HarnessNotice::Other("x".to_owned()),
+    ]
+    .map(|notice| MessageSender::Harness { notice })
+    .into_iter()
+    .chain([
+        MessageSender::Subagent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: "child".to_owned(),
+        },
+        MessageSender::System,
+    ]);
+    let outputs = senders
+        .map(|sender| {
+            render_digest(
+                vec![
+                    message_row_with_sender("receiver", None, "newest text", sender.clone()),
+                    message_row_with_sender("receiver", None, "older text", sender),
+                ],
+                LaneScope::Root,
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| output.matches(" → ").count())
+            .collect::<Vec<_>>(),
+        [2; 12],
+        "{outputs:#?}"
+    );
+}
+
+#[test]
+fn child_notices_fold_only_with_the_same_recorded_run() {
+    let run = rimz::ids::RunId::new();
+    let other_run = rimz::ids::RunId::new();
+    let outputs = [
+        HarnessNotice::SubagentPaused,
+        HarnessNotice::SubagentStalled,
+    ]
+    .into_iter()
+    .flat_map(|notice| {
+        [
+            (Some(&run), Some(&run)),
+            (Some(&run), Some(&other_run)),
+            (None, Some(&run)),
+            (Some(&run), None),
+            (None, None),
+        ]
+        .map(|(newest_run, older_run)| {
+            let mut newest = machine_row("newest child notice");
+            newest.sender = MessageSender::Harness {
+                notice: notice.clone(),
+            };
+            newest.about_run = newest_run.cloned();
+            let mut older = newest.clone();
+            older.about_run = older_run.cloned();
+            older.text = Some("older child notice".to_owned());
+            render_digest(vec![newest, older], LaneScope::Root, None)
+        })
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| output.matches(" → ").count())
+            .collect::<Vec<_>>(),
+        [1, 2, 2, 2, 2, 1, 2, 2, 2, 2],
+        "{outputs:#?}"
+    );
 }
 
 #[test]
@@ -190,6 +280,7 @@ fn message_limit_counts_members_of_hidden_folds() {
     let newest = machine_row("shown notice");
     let mut hidden = machine_row("hidden notice");
     hidden.sender = MessageSender::System;
+    hidden.body = MessageBody::Command;
     let mut out = Vec::new();
     render_message_digest(
         &mut out,
@@ -267,7 +358,7 @@ fn machine_row(text: &str) -> MessageListRow {
         None,
         text,
         MessageSender::Harness {
-            notice: rimz::store::message::HarnessNotice::Wait,
+            notice: HarnessNotice::CacheKeepalive,
         },
     )
 }

@@ -245,7 +245,7 @@ user → @planner  delivered  12m ago  msg_06gc04t1kkr7c0h9
 ... 6 system messages hidden (--system shows them)
 ```
 
-The inbox shows conversation by default: your sends and attributed agent sends. The trailing line counts what the view left out, and `--system` brings in the traffic RimZ generates for itself, so you can see what woke or nudged an agent. Repeated system traffic folds into one row with its count and span, leaving the newest notice visible. `--limit` and `--status` narrow it further; the limit counts rows, a folded repeat as one, or individual messages with `--json`.
+The inbox shows conversation by default: your sends and attributed agent sends. The trailing line counts what the view left out, and `--system` brings in system traffic, including `--no-from` text, so you can see what woke or nudged an agent. Repeated keepalives, compaction commands, and paused or stalled notices about the same child run can fold into one row with their count and span, leaving the newest notice visible ([fold key](../reference/cli/message.md#list-messages)). Other notices and system prompts keep their own rows. `--limit` and `--status` narrow it further; the limit counts rows, a folded repeat as one, or individual messages with `--json`.
 
 When something is stuck the loop is always the same: `list` to find the record, `show` to name the blocker, then `steer`, `edit`, or `cancel` to clear it.
 
