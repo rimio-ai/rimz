@@ -464,6 +464,11 @@ fn prompt_origin_requires_only_non_user_headers() {
         wait.to_owned(),
         signal.to_owned(),
         stage.to_owned(),
+        "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nunknown".to_owned(),
+        "Type: SUBAGENT_PAUSED\nFrom: @rimz\nContent:\npaused".to_owned(),
+        "Type: SUBAGENT_STALLED\nFrom: @rimz\nContent:\nstalled".to_owned(),
+        "Type: MESSAGE_UNDELIVERED\nFrom: @rimz\nContent:\nundelivered".to_owned(),
+        "Type: MESSAGE_QUEUED\nFrom: @rimz\nContent:\nqueued".to_owned(),
         format!("{signal}\n\n{stage}"),
         format!("{report}\n\n{wait}"),
         format!("\n\n{agent}\n\n"),
@@ -479,7 +484,7 @@ fn prompt_origin_requires_only_non_user_headers() {
         format!("{stage}\n\n{human}"),
         format!("{human}\n\n{wait}"),
         format!("{agent}\n\nType: WAIT\nFrom: rimz\nContent:\ninvalid"),
-        "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nunknown".to_owned(),
+        "Type: FUTURE_NOTICE\nFrom: @coder\nContent:\nunknown".to_owned(),
         String::new(),
         " \n\t\n".to_owned(),
     ] {
@@ -513,6 +518,19 @@ fn keepalive_only_prompt_requires_every_section_to_be_a_keepalive() {
     ] {
         assert!(!prompt_is_keepalive_only(&prompt), "{prompt:?}");
     }
+    for notice in every_named_harness_notice()
+        .into_iter()
+        .chain([HarnessNotice::Other("future_notice".to_owned())])
+        .filter(|notice| *notice != HarnessNotice::CacheKeepalive)
+    {
+        let other = format!(
+            "Type: {}\nFrom: @rimz\nContent:\nNext task.",
+            notice.header_type()
+        );
+        for prompt in [other.clone(), format!("{keepalive}\n\n{other}")] {
+            assert!(!prompt_is_keepalive_only(&prompt), "{prompt:?}");
+        }
+    }
 }
 
 #[test]
@@ -531,17 +549,14 @@ fn wake_only_prompt_requires_every_section_to_be_a_wake() {
     ] {
         assert!(prompt_is_wake_only(&prompt), "{prompt:?}");
     }
-    for header in [
-        "STAGE",
-        "DEADLINE",
-        "CACHE_KEEPALIVE",
-        "AGENT_MESSAGE",
-        "SUBAGENT_REPORT",
-        "AGENT_REPORT",
-        "TEAM_REPORT",
-        "USER_MESSAGE",
-    ] {
-        let other = format!("Type: {header}\nFrom: @coder\nContent:\nNext task.");
+    let other_headers = every_named_harness_notice()
+        .into_iter()
+        .chain([HarnessNotice::Other("future_notice".to_owned())])
+        .filter(|notice| !matches!(notice, HarnessNotice::Wait | HarnessNotice::Signal))
+        .map(|notice| notice.header_type())
+        .chain(["AGENT_MESSAGE".to_owned(), "USER_MESSAGE".to_owned()]);
+    for header in other_headers {
+        let other = format!("Type: {header}\nFrom: @rimz\nContent:\nNext task.");
         for prompt in [other.clone(), format!("{wait}\n\n{other}")] {
             assert!(!prompt_is_wake_only(&prompt), "{prompt:?}");
         }
@@ -565,12 +580,23 @@ fn message_header_parser_rejects_near_misses() {
         "Type: AGENT_MESSAGE\nFrom: @coder ()\nContent:\nship it",
         "Type: AGENT_MESSAGE\nFrom: @coder planner\nContent:\nship it",
         "Type: AGENT_MESSAGE\nFrom: @coder ((planner))\nContent:\nship it",
-        "Type: SYSTEM_MESSAGE\nFrom: @rimz\nContent:\nship it",
+        "Type: SYSTEM_MESSAGE\nFrom: @coder\nContent:\nship it",
         "Type: AGENT_MESSAGE\nFrom: @coder\nship it",
         "Type: AGENT_MESSAGE\nFrom: coder\nContent:\nship it",
         "Type: AGENT_MESSAGE\nFrom: @code r\nContent:\nship it",
         "Type: SIGNAL\nFrom: @\nContent:\nship it",
-        "Type: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nship it",
+        "Type: SIGNAL_EXTRA\nFrom: @coder\nContent:\nship it",
+        "Type: FUTURE_NOTICE\nFrom: @coder\nContent:\nship it",
+        "Type: FUTURE_NOTICE\nFrom: @rimz (system)\nContent:\nship it",
+        "Type: FUTURE_NOTICE\nFrom: @rimz#main\nContent:\nship it",
+        "Type: signal_extra\nFrom: @rimz\nContent:\nship it",
+        "Type: Wait\nFrom: @rimz\nContent:\nship it",
+        "Type: _NOTICE\nFrom: @rimz\nContent:\nship it",
+        "Type: 2NOTICE\nFrom: @rimz\nContent:\nship it",
+        "Type: FUTURE-NOTICE\nFrom: @rimz\nContent:\nship it",
+        "Type: FUTURE_NOTICE \nFrom: @rimz\nContent:\nship it",
+        "Type: NÖTICE\nFrom: @rimz\nContent:\nship it",
+        "Type: \nFrom: @rimz\nContent:\nship it",
         "ordinary text: with colon",
     ] {
         assert_eq!(parse_message_header(text), None, "{text}");
@@ -581,10 +607,19 @@ fn message_header_parser_rejects_near_misses() {
 fn message_header_parser_strips_only_a_valid_label() {
     for (header, kind) in [
         ("AGENT_MESSAGE", HeaderKind::Agent),
-        ("AGENT_REPORT", HeaderKind::Subagent),
-        ("TEAM_REPORT", HeaderKind::Subagent),
-        ("AGENT_REPORT", HeaderKind::Subagent),
-        ("SUBAGENT_REPORT", HeaderKind::Subagent),
+        (
+            "AGENT_REPORT",
+            HeaderKind::Notice(HarnessNotice::AgentReport),
+        ),
+        ("TEAM_REPORT", HeaderKind::Notice(HarnessNotice::TeamReport)),
+        (
+            "AGENT_REPORT",
+            HeaderKind::Notice(HarnessNotice::AgentReport),
+        ),
+        (
+            "SUBAGENT_REPORT",
+            HeaderKind::Notice(HarnessNotice::SubagentReport),
+        ),
     ] {
         let prompt = format!("Type: {header}\nFrom: @calm-fox#docs (planner)\nContent:\nship it");
         assert_eq!(
@@ -609,8 +644,13 @@ fn signal_headers_split_mixed_batches() {
             .iter()
             .all(|section| parse_message_header(section).is_some())
     );
-    let near_miss = format!("{signal}\n\nType: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nnot a signal");
+    let near_miss = format!("{signal}\n\nType: SIGNAL_EXTRA\nFrom: @coder\nContent:\nnot a signal");
     assert_eq!(split_batched_prompt(&near_miss), vec![near_miss.as_str()]);
+    let unknown = "Type: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nnew notice";
+    assert_eq!(
+        split_batched_prompt(&format!("{signal}\n\n{unknown}")),
+        vec![signal, unknown]
+    );
 }
 
 #[test]
@@ -1970,7 +2010,11 @@ fn align_submitted_prompt_consumes_harness_report_header() {
         if header_type == "DEADLINE" {
             assert_eq!(
                 parse_message_header(&prompt),
-                Some((HeaderKind::Deadline, "@rimz".into(), "ship it".into()))
+                Some((
+                    HeaderKind::Notice(HarnessNotice::Deadline),
+                    "@rimz".into(),
+                    "ship it".into()
+                ))
             );
         }
 
@@ -2165,7 +2209,7 @@ fn align_submitted_prompt_requires_exact_system_text() {
 }
 
 /// Every header `@rimz` sends, with an exhaustive match so a new variant fails
-/// to compile until it is listed here and, through the test below, documented.
+/// to compile until it is listed here, round-tripped, and documented.
 fn every_named_harness_notice() -> Vec<HarnessNotice> {
     let all = vec![
         HarnessNotice::CacheKeepalive,
@@ -2203,6 +2247,132 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
 }
 
 #[test]
+fn every_harness_notice_header_round_trips() {
+    let notices = every_named_harness_notice()
+        .into_iter()
+        .chain([
+            HarnessNotice::Other("future_notice".to_owned()),
+            HarnessNotice::Other("system_message".to_owned()),
+            HarnessNotice::Other("signal_extra".to_owned()),
+            HarnessNotice::Other("future_notice_2".to_owned()),
+        ])
+        .collect::<Vec<_>>();
+    let parsed = notices
+        .iter()
+        .map(|notice| {
+            parse_message_header(&format!(
+                "Type: {}\nFrom: @rimz\nContent:\nbody",
+                notice.header_type()
+            ))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        parsed.iter().all(Option::is_some),
+        "every written notice must parse: {notices:?} -> {parsed:?}"
+    );
+    for (notice, parsed) in notices.into_iter().zip(parsed) {
+        assert_eq!(
+            parsed,
+            Some((
+                HeaderKind::Notice(notice),
+                "@rimz".to_owned(),
+                "body".to_owned()
+            ))
+        );
+    }
+}
+
+#[test]
+fn header_only_notices_preserve_origin() {
+    for notice in every_named_harness_notice()
+        .into_iter()
+        .chain([HarnessNotice::Other("future_notice".to_owned())])
+    {
+        let prompt = format!(
+            "Type: {}\nFrom: @rimz\nContent:\nbody",
+            notice.header_type()
+        );
+        let sections = classify_submitted_prompt(&prompt, &[], &[]);
+        let origin = if matches!(
+            notice,
+            HarnessNotice::SubagentReport | HarnessNotice::AgentReport | HarnessNotice::TeamReport
+        ) {
+            SectionOrigin::Subagent("@rimz".to_owned())
+        } else {
+            SectionOrigin::Notice("@rimz".to_owned())
+        };
+        assert_eq!(sections.len(), 1, "{notice:?}");
+        assert_eq!(sections[0].origin, origin, "{notice:?}");
+        assert_eq!(sections[0].text, "body", "{notice:?}");
+        assert!(sections[0].record.is_none(), "{notice:?}");
+        assert!(prompt_is_harness_delivered(&prompt), "{notice:?}");
+    }
+    let legacy = "Type: SUBAGENT_REPORT\nFrom: @child\nContent:\nfinished";
+    assert_eq!(
+        classify_submitted_prompt(legacy, &[], &[])[0].origin,
+        SectionOrigin::Subagent("@child".to_owned())
+    );
+}
+
+#[test]
+fn notice_headers_split_unaligned_batches_and_bind_records() {
+    let agent_prompt = "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nfirst";
+    let unrelated = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None);
+    for notice in every_named_harness_notice()
+        .into_iter()
+        .chain([HarnessNotice::Other("future_notice".to_owned())])
+    {
+        let header = notice.header_type();
+        let record = delivery_message(2, &agent("sess", None), DeliveryGate::Done, None)
+            .with_sender(MessageSender::Harness { notice });
+        let notice_prompt = format!("Type: {header}\nFrom: @rimz\nContent:\n{}", record.text);
+        let prompt = format!("{agent_prompt}\n\n{notice_prompt}");
+        assert_eq!(
+            split_batched_prompt(&prompt),
+            vec![agent_prompt, notice_prompt.as_str()]
+        );
+        assert!(align_submitted_prompt(&prompt, &[&unrelated, &record]).is_none());
+        let sections = classify_submitted_prompt(&prompt, &[&unrelated, &record], &[]);
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].text, "first");
+        assert_eq!(sections[1].origin, record.sender.section_origin());
+        assert_eq!(sections[1].text, record.text);
+        assert_eq!(
+            sections[1].record.map(|record| &record.message_id),
+            Some(&record.message_id)
+        );
+    }
+}
+
+#[test]
+fn notice_opened_turn_is_not_human() {
+    let observation = crate::agents::AgentLifecycleObservation::new(
+        Some("sess".into()),
+        crate::agents::LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    for notice in every_named_harness_notice()
+        .into_iter()
+        .chain([HarnessNotice::Other("future_notice".to_owned())])
+    {
+        let prompt = format!(
+            "Type: {}\nFrom: @rimz\nContent:\nbody",
+            notice.header_type()
+        );
+        let sections = classify_submitted_prompt(&prompt, &[], &[]);
+        assert!(
+            !human_opened_turn(
+                &observation,
+                &serde_json::Value::Null,
+                &sections,
+                &[],
+                false
+            ),
+            "{notice:?} must not open a human turn"
+        );
+    }
+}
+
+#[test]
 fn sender_notice_headers_preserve_recorded_origin_and_acknowledgement() {
     for (notice, wire, header) in [
         (
@@ -2229,6 +2399,7 @@ fn sender_notice_headers_preserve_recorded_origin_and_acknowledgement() {
         assert_eq!(aligned, vec![prompt.as_str()]);
         let sections = classify_submitted_prompt(&prompt, &[&record], &[]);
         assert_eq!(sections[0].origin, SectionOrigin::Notice("@rimz".into()));
+        assert_eq!(sections[0].text, record.text);
         assert_eq!(
             sections[0].record.map(|record| &record.message_id),
             Some(&record.message_id)

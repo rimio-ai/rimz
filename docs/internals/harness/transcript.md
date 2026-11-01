@@ -45,7 +45,7 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | `Prompt` | A human prompt, or a headerless system prompt or command with `from: "rimz"` | `user: @receiver, text` for a human prompt. A system prompt or command is hidden with the output of the turn it opens |
 | `Message` | An inter-agent delivery or a launched child's brief, with the sender's handle as `from` | `@sender: @receiver, text` |
 | `SubagentReport` | A fleet digest, agent report, or team report, with the header's sender as `from` (`@rimz`, or `@<child>` on a legacy per-child report) | Hidden with the output of the turn it opens |
-| `Wait` | A harness notice: a `WAIT`, `SIGNAL`, `STAGE`, `CACHE_KEEPALIVE`, or `DEADLINE` header, or a record-backed paused-child, stalled-child, queued, or undelivered notice | Hidden with the output of the turn it opens |
+| `Wait` | Any non-report harness notice, including paused-child, stalled-child, queued, undelivered, and unknown `@rimz` notice headers | Hidden with the output of the turn it opens |
 | `Assistant` | A root turn's final assistant message | `@receiver: text` |
 | `Ask` | A blocking question or plan approval with parsed questions, or a Codex async question | The agent's question |
 | `Answer` | The effective answer: from the native prompt UI, from `rimz answer`, or the first direct human prompt submitted while a question is open | `user` to the agent, folded into its ask card. An orphan uses its recorded question as an answer card, or a plain body when no question text was recorded |
@@ -84,13 +84,13 @@ The fold in step 1 runs before any record is read, so it uses the record-less cl
 
 ### Section classification
 
-A batched delivery splits at each blank line that is followed by a recognized header line (`split_batched_prompt`), so each section becomes its own entry. When the confirmed records align with the paste (`align_submitted_prompt`), the record boundaries win over the split. Each section then parses the [message header](./messaging.md#the-message-header) once.
+A batched delivery splits at each blank line that is followed by a recognized header type (`split_batched_prompt`), so each section becomes its own entry. An unknown notice type also requires the next line to be exactly `From: @rimz`. When the confirmed records align with the paste (`align_submitted_prompt`), the record boundaries win over the split. Each section then parses the [message header](./messaging.md#the-message-header) once.
 
 | Header `Type` | Entry |
 | --- | --- |
 | `AGENT_MESSAGE` | `Message`, with the header's sender as `from` |
 | `AGENT_REPORT`, `TEAM_REPORT`, or `SUBAGENT_REPORT` | `SubagentReport`, with the header's sender as `from` |
-| `WAIT`, `SIGNAL`, `STAGE`, `CACHE_KEEPALIVE`, or `DEADLINE` | `Wait`, with the header's sender as `from` |
+| Any other harness notice, including an unknown `@rimz` type | `Wait`, with the header's sender as `from` |
 | `USER_MESSAGE` | `Prompt`, header removed, no `from` |
 | No recognized header, and a confirmed or in-flight record accounts for it | The record sender's origin: human is `Prompt` without `from`, agent is `Message` from its handle, a child or report is `SubagentReport`, any other harness notice is `Wait`, system is `Prompt` with `from: "rimz"` |
 | No recognized header, and nothing accounts for it | Human `Prompt`, subject to the cases below |

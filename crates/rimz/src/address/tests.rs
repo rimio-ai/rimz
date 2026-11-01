@@ -1065,15 +1065,31 @@ fn message_header_parser_round_trips_attributed_senders() {
     let report = message_header(&subagent, &[], None, None).unwrap() + body;
     assert_eq!(
         parse_message_header(&report),
-        Some((HeaderKind::Subagent, "@rimz".to_owned(), body.to_owned()))
+        Some((
+            HeaderKind::Notice(HarnessNotice::SubagentReport),
+            "@rimz".to_owned(),
+            body.to_owned()
+        ))
     );
     for (notice, kind, header_type) in [
-        (HarnessNotice::Wait, HeaderKind::Wait, "WAIT"),
-        (HarnessNotice::Signal, HeaderKind::Signal, "SIGNAL"),
-        (HarnessNotice::Stage, HeaderKind::Stage, "STAGE"),
+        (
+            HarnessNotice::Wait,
+            HeaderKind::Notice(HarnessNotice::Wait),
+            "WAIT",
+        ),
+        (
+            HarnessNotice::Signal,
+            HeaderKind::Notice(HarnessNotice::Signal),
+            "SIGNAL",
+        ),
+        (
+            HarnessNotice::Stage,
+            HeaderKind::Notice(HarnessNotice::Stage),
+            "STAGE",
+        ),
         (
             HarnessNotice::CacheKeepalive,
-            HeaderKind::CacheKeepalive,
+            HeaderKind::Notice(HarnessNotice::CacheKeepalive),
             "CACHE_KEEPALIVE",
         ),
     ] {
@@ -1114,6 +1130,14 @@ fn unknown_harness_notice_header_and_ack_agree() {
     assert_eq!(
         prompt,
         "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nship it"
+    );
+    assert_eq!(
+        parse_message_header(&prompt),
+        Some((
+            HeaderKind::Notice(HarnessNotice::Other("future_notice".to_owned())),
+            "@rimz".to_owned(),
+            record.text.clone()
+        ))
     );
     let (leading, segments, trailing) =
         crate::store::message::align_submitted_prompt(&prompt, &[&record]).expect("aligned notice");

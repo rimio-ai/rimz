@@ -103,6 +103,24 @@ pub enum HarnessNotice {
 }
 
 impl HarnessNotice {
+    fn section_origin(&self, sender: String) -> SectionOrigin {
+        match self {
+            Self::SubagentReport | Self::AgentReport | Self::TeamReport => {
+                SectionOrigin::Subagent(sender)
+            }
+            Self::CacheKeepalive
+            | Self::Deadline
+            | Self::Wait
+            | Self::Signal
+            | Self::Stage
+            | Self::SubagentPaused
+            | Self::SubagentStalled
+            | Self::MessageUndelivered
+            | Self::MessageQueued
+            | Self::Other(_) => SectionOrigin::Notice(sender),
+        }
+    }
+
     pub(crate) fn is_fleet_digest(&self) -> bool {
         matches!(self, Self::SubagentReport | Self::AgentReport)
     }
@@ -132,26 +150,8 @@ impl MessageSender {
         match self {
             Self::Human => SectionOrigin::Human,
             Self::Agent { .. } => SectionOrigin::Agent(self.render()),
-            Self::Subagent { .. }
-            | Self::Harness {
-                notice:
-                    HarnessNotice::SubagentReport
-                    | HarnessNotice::AgentReport
-                    | HarnessNotice::TeamReport,
-            } => SectionOrigin::Subagent(self.render()),
-            Self::Harness {
-                notice:
-                    HarnessNotice::Deadline
-                    | HarnessNotice::CacheKeepalive
-                    | HarnessNotice::Wait
-                    | HarnessNotice::Signal
-                    | HarnessNotice::Stage
-                    | HarnessNotice::SubagentPaused
-                    | HarnessNotice::SubagentStalled
-                    | HarnessNotice::MessageUndelivered
-                    | HarnessNotice::MessageQueued
-                    | HarnessNotice::Other(_),
-            } => SectionOrigin::Notice(self.render()),
+            Self::Subagent { .. } => SectionOrigin::Subagent(self.render()),
+            Self::Harness { notice } => notice.section_origin(self.render()),
             Self::System => SectionOrigin::Harness,
         }
     }
@@ -1209,44 +1209,44 @@ pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool
     age.is_negative() || (age.as_secs() as u64) >= CLAIM_TTL.as_secs()
 }
 
-/// The sender class named by a structured message header.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The sender class named by a structured message header. Notices retain the
+/// writer's vocabulary, including unknown notice types from `@rimz`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HeaderKind {
-    CacheKeepalive,
-    Deadline,
     Agent,
-    Subagent,
-    Wait,
-    Signal,
-    Stage,
     User,
+    Notice(HarnessNotice),
 }
 
-fn classify_header_line(line: &str) -> Option<HeaderKind> {
-    match line {
-        "Type: CACHE_KEEPALIVE" => Some(HeaderKind::CacheKeepalive),
-        "Type: AGENT_MESSAGE" => Some(HeaderKind::Agent),
-        "Type: AGENT_REPORT" => Some(HeaderKind::Subagent),
-        "Type: TEAM_REPORT" => Some(HeaderKind::Subagent),
-        // The subagent fleet digest, and the legacy per-child
-        // `MessageSender::Subagent` header from `@<child>`.
-        "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),
-        "Type: WAIT" => Some(HeaderKind::Wait),
-        "Type: SIGNAL" => Some(HeaderKind::Signal),
-        "Type: STAGE" => Some(HeaderKind::Stage),
-        "Type: DEADLINE" => Some(HeaderKind::Deadline),
-        "Type: USER_MESSAGE" => Some(HeaderKind::User),
-        _ => None,
+fn classify_header_start(line: &str, from: Option<&str>) -> Option<HeaderKind> {
+    let token = match line {
+        "Type: AGENT_MESSAGE" => return Some(HeaderKind::Agent),
+        "Type: USER_MESSAGE" => return Some(HeaderKind::User),
+        _ => line.strip_prefix("Type: ")?,
+    };
+    let mut bytes = token.bytes();
+    if !bytes.next()?.is_ascii_uppercase()
+        || !bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return None;
     }
+    let notice =
+        serde_json::from_value(serde_json::Value::String(token.to_ascii_lowercase())).ok()?;
+    if matches!(notice, HarnessNotice::Other(_)) && from != Some("From: @rimz") {
+        return None;
+    }
+    Some(HeaderKind::Notice(notice))
 }
 
 /// Split a delivered prompt into its structured header and body.
 ///
-/// The handle keeps its leading `@` and any `#channel` suffix. System and `--no-from` text carry no header.
+/// The handle keeps its leading `@` and any `#channel` suffix. System and
+/// `--no-from` text carry no header. Unknown uppercase notice types require
+/// exactly `From: @rimz`.
 pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> {
     let (kind, rest) = text.split_once('\n')?;
-    let kind = classify_header_line(kind)?;
     let (from, rest) = rest.split_once('\n')?;
+    let kind = classify_header_start(kind, Some(from))?;
     let handle = parse_sender_handle(from.strip_prefix("From: @")?)?;
     let body = rest.strip_prefix("Content:\n")?;
     Some((kind, format!("@{handle}"), body.to_owned()))
@@ -1269,7 +1269,9 @@ fn parse_sender_handle(from: &str) -> Option<&str> {
     (!handle.is_empty() && !handle.chars().any(char::is_whitespace)).then_some(handle)
 }
 
-/// Split a batched pane paste into prompt sections. A blank-line boundary starts a new section only when the following first line names a message type.
+/// Split a batched pane paste at blank lines followed by a recognized message
+/// type. Unknown notice types also require the next line to be `From: @rimz`,
+/// using the same recognition rule as [`parse_message_header`].
 pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut start = 0;
@@ -1280,8 +1282,8 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
         while text[next_start..].starts_with('\n') {
             next_start += 1;
         }
-        let first_line = text[next_start..].lines().next().unwrap_or_default();
-        if classify_header_line(first_line).is_some() {
+        let mut lines = text[next_start..].split('\n');
+        if classify_header_start(lines.next().unwrap_or_default(), lines.next()).is_some() {
             segments.push(&text[start..boundary]);
             start = next_start;
         }
@@ -1310,7 +1312,7 @@ pub fn prompt_is_keepalive_only(prompt: &str) -> bool {
     !prompt.trim().is_empty()
         && split_batched_prompt(prompt).into_iter().all(|section| {
             parse_message_header(section.trim_start())
-                .is_some_and(|(kind, ..)| kind == HeaderKind::CacheKeepalive)
+                .is_some_and(|(kind, ..)| kind == HeaderKind::Notice(HarnessNotice::CacheKeepalive))
         })
 }
 
@@ -1318,8 +1320,12 @@ pub fn prompt_is_keepalive_only(prompt: &str) -> bool {
 pub(crate) fn prompt_is_wake_only(prompt: &str) -> bool {
     !prompt.trim().is_empty()
         && split_batched_prompt(prompt).into_iter().all(|section| {
-            parse_message_header(section.trim_start())
-                .is_some_and(|(kind, ..)| matches!(kind, HeaderKind::Wait | HeaderKind::Signal))
+            parse_message_header(section.trim_start()).is_some_and(|(kind, ..)| {
+                matches!(
+                    kind,
+                    HeaderKind::Notice(HarnessNotice::Wait | HarnessNotice::Signal)
+                )
+            })
         })
 }
 
@@ -1361,6 +1367,8 @@ pub fn human_opened_turn(
 }
 
 /// Classify submitted text against confirmed records and the pre-ack in-flight view.
+/// Every notice header uses the same origin mapping as its recorded sender;
+/// unknown uppercase types from exactly `From: @rimz` are notices too.
 /// Human is the residue when neither a header nor a record accounts for the text.
 pub fn classify_submitted_prompt<'a>(
     prompt: &str,
@@ -1398,12 +1406,7 @@ pub fn classify_submitted_prompt<'a>(
             Some((header, sender, body)) => {
                 let origin = match header {
                     HeaderKind::Agent => SectionOrigin::Agent(sender),
-                    HeaderKind::Subagent => SectionOrigin::Subagent(sender),
-                    HeaderKind::Wait
-                    | HeaderKind::CacheKeepalive
-                    | HeaderKind::Signal
-                    | HeaderKind::Stage
-                    | HeaderKind::Deadline => SectionOrigin::Notice(sender),
+                    HeaderKind::Notice(notice) => notice.section_origin(sender),
                     HeaderKind::User => SectionOrigin::Human,
                 };
                 (body.trim_end().to_owned(), Some(origin))
