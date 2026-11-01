@@ -138,7 +138,7 @@ fn a_zero_geometry_pane_is_unsized_and_draws_nothing_until_resized() {
         .clear_region(ratatui::backend::ClearType::All)
         .unwrap();
     Backend::flush(&mut backend).unwrap();
-    backend.end_frame(true).unwrap();
+    backend.end_frame(true, 0).unwrap();
     assert_eq!(pty.drain(), b"");
 
     pty.resize(39, 20);
@@ -163,7 +163,7 @@ fn a_frame_holds_raw_and_encoded_bytes_until_ended() {
         Write::flush(&mut backend).unwrap();
         assert_eq!(pty.drain(), b"", "flush must not ship a held frame");
 
-        backend.end_frame(bracket).unwrap();
+        backend.end_frame(bracket, 40).unwrap();
         assert_eq!(
             pty.drain(),
             if bracket {
@@ -189,13 +189,13 @@ fn a_composed_frame_defers_output_until_explicit_publish() {
     let mut backend = PaneBackend::for_fd(pty.slave()).unwrap();
     backend.begin_frame();
     backend.write_all(b"composed").unwrap();
-    let frame = backend.take_frame(true);
+    let frame = backend.take_frame(true, 40);
     assert_eq!(pty.drain(), b"");
     backend.begin_frame();
     backend.write_all(b"next").unwrap();
     frame.write(&mut backend).unwrap();
     assert_eq!(pty.drain(), b"\x1b[?2026hcomposed\x1b[?2026l");
-    backend.end_frame(false).unwrap();
+    backend.end_frame(false, 40).unwrap();
     assert_eq!(pty.drain(), b"next");
 }
 
@@ -210,6 +210,151 @@ fn a_write_to_a_closed_pane_is_an_error() {
     backend.write_all(b"frame").unwrap();
     let err = Backend::flush(&mut backend).unwrap_err();
     assert_eq!(err.raw_os_error(), Some(nix::libc::EIO));
+}
+
+fn draw_held_cells(terminal: &mut Terminal<PaneBackend>, columns: u16, rows: u16, graphics: bool) {
+    terminal.backend_mut().begin_frame();
+    let area = terminal
+        .draw(|frame| {
+            for y in 0..rows {
+                for x in 0..columns {
+                    frame.buffer_mut()[(x, y)].set_symbol("x");
+                }
+            }
+        })
+        .unwrap()
+        .area;
+    if graphics {
+        terminal
+            .backend_mut()
+            .write_all(b"\x1b_Ga=d,d=A\x1b\\")
+            .unwrap();
+    }
+    terminal
+        .backend_mut()
+        .end_frame(graphics, area.width)
+        .unwrap();
+}
+
+fn sync_pairs(bytes: &[u8]) -> (usize, usize) {
+    use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC};
+    (
+        bytes
+            .windows(BEGIN_SYNC.len())
+            .filter(|b| *b == BEGIN_SYNC)
+            .count(),
+        bytes
+            .windows(END_SYNC.len())
+            .filter(|b| *b == END_SYNC)
+            .count(),
+    )
+}
+
+#[test]
+fn cell_frames_bracket_at_half_the_touched_rows_drawn_width() {
+    let cases = [
+        ("one cell", 1, 1, false),
+        ("twenty spinners", 1, 20, false),
+        ("counter", 3, 1, false),
+        ("below half", 29, 1, false),
+        ("exactly half", 30, 1, true),
+        ("one whole row", 60, 1, true),
+        ("scroll", 55, 18, true),
+    ];
+    let results = cases.map(|(name, columns, rows, _)| {
+        // The fixed viewport, not the backend's 90-column geometry, supplies the width.
+        let mut pty = Pty::open(90, 24);
+        let mut terminal = Terminal::with_options(
+            PaneBackend::for_fd(pty.slave()).unwrap(),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 60, 24)),
+            },
+        )
+        .unwrap();
+        draw_held_cells(&mut terminal, columns, rows, false);
+        let bytes = pty.drain();
+        assert!(!bytes.is_empty(), "{name} must paint");
+        (name, sync_pairs(&bytes))
+    });
+    assert_eq!(
+        results,
+        cases.map(|(name, _, _, bracket)| (name, (usize::from(bracket), usize::from(bracket))))
+    );
+}
+
+#[test]
+fn graphics_and_dense_cells_share_one_bracket() {
+    let results = [1, 60].map(|columns| {
+        let mut pty = Pty::open(60, 24);
+        let mut terminal = Terminal::new(PaneBackend::for_fd(pty.slave()).unwrap()).unwrap();
+        draw_held_cells(&mut terminal, columns, 1, true);
+        sync_pairs(&pty.drain())
+    });
+    assert_eq!(results, [(1, 1), (1, 1)]);
+}
+
+#[test]
+fn a_whole_pane_clear_brackets_a_sparse_redraw() {
+    let results = [60, 45].map(|width| {
+        let mut pty = Pty::open(60, 24);
+        let mut terminal = Terminal::new(PaneBackend::for_fd(pty.slave()).unwrap()).unwrap();
+        terminal.backend_mut().begin_frame();
+        if width == 60 {
+            terminal.clear().unwrap();
+        } else {
+            pty.resize(width, 24);
+        }
+        let area = terminal
+            .draw(|frame| {
+                frame.buffer_mut()[(0, 0)].set_symbol("x");
+            })
+            .unwrap()
+            .area;
+        terminal.backend_mut().end_frame(false, area.width).unwrap();
+        let bytes = pty.drain();
+        assert!(bytes.windows(4).any(|b| b == b"\x1b[2J"), "{bytes:?}");
+        sync_pairs(&bytes)
+    });
+    assert_eq!(results, [(1, 1), (1, 1)]);
+}
+
+#[test]
+fn a_dense_frame_does_not_bracket_the_next_sparse_frame() {
+    let mut pty = Pty::open(60, 24);
+    let mut terminal = Terminal::new(PaneBackend::for_fd(pty.slave()).unwrap()).unwrap();
+    draw_held_cells(&mut terminal, 60, 1, false);
+    let first = sync_pairs(&pty.drain());
+    terminal.backend_mut().begin_frame();
+    let area = terminal
+        .draw(|frame| {
+            for x in 0..60 {
+                frame.buffer_mut()[(x, 0)].set_symbol(if x == 0 { "y" } else { "x" });
+            }
+        })
+        .unwrap()
+        .area;
+    terminal.backend_mut().end_frame(false, area.width).unwrap();
+    assert_eq!([first, sync_pairs(&pty.drain())], [(1, 1), (0, 0)]);
+}
+
+#[test]
+fn an_empty_frame_never_brackets() {
+    let mut pty = Pty::open(60, 24);
+    let mut backend = PaneBackend::for_fd(pty.slave()).unwrap();
+    backend.begin_frame();
+    backend.end_frame(true, 60).unwrap();
+    assert!(pty.drain().is_empty());
+}
+
+#[cfg(feature = "testkit")]
+#[test]
+fn a_capturing_backend_never_brackets() {
+    let mut pty = Pty::open(60, 24);
+    let mut backend = PaneBackend::captured(60, 24);
+    backend.play_output(std::fs::File::from(pty.slave()));
+    let mut terminal = Terminal::new(backend).unwrap();
+    draw_held_cells(&mut terminal, 60, 24, true);
+    assert_eq!(sync_pairs(&pty.drain()), (0, 0));
 }
 
 #[test]

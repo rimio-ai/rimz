@@ -317,8 +317,8 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
     };
     let exhausted_frame = draw(&mut painter, &snapshot, &mut view_ui, &mut ui);
     assert!(
-        !String::from_utf8_lossy(&exhausted_frame).contains("\x1b[?2026"),
-        "a disabled pixel session emits no synchronized-output markers"
+        !String::from_utf8_lossy(&exhausted_frame).contains("\x1b_G"),
+        "a disabled pixel session emits no kitty graphics bytes"
     );
     snapshot.theme.display.pixel = crate::config::PixelMode::Off;
     let mut cell_painter = paint::FramePainter::with_slot(
@@ -849,24 +849,32 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         !steady.contains("\u{1b}_G"),
         "unchanged frame emits no kitty graphics bytes"
     );
-    assert!(!second.contains("\x1b[?2026"));
+    assert!(
+        kitty_commands(&output[first_len..second_len]).is_empty(),
+        "layout shifts emit no kitty graphics commands"
+    );
     assert!(!steady.contains("\x1b[?2026"));
     assert!(
         !String::from_utf8_lossy(&output[first_len..]).contains("a=d,d=I"),
         "layout shifts must keep resident kitty images alive"
+    );
+    assert!(
+        second.starts_with("\x1b[?2026h") && second.ends_with("\x1b[?2026l"),
+        "a layout shift rewrites most of its touched rows, so it is one synchronized update"
     );
     let output = String::from_utf8_lossy(&output);
     assert_eq!(
         output
             .matches(std::str::from_utf8(BEGIN_SYNC).unwrap())
             .count(),
-        1
+        2,
+        "the first paint's sprite and the layout shift each carry one bracket"
     );
     assert_eq!(
         output
             .matches(std::str::from_utf8(END_SYNC).unwrap())
             .count(),
-        1
+        2
     );
 }
 
