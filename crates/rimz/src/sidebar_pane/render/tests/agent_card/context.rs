@@ -6,6 +6,14 @@ use crate::store::snapshot::CacheClock;
 use ratatui::text::Span;
 
 fn cache_meter_snapshot(quiet_secs: u64, cache: Option<CacheClock>) -> SidebarSnapshot {
+    cache_meter_snapshot_with_gap(quiet_secs, cache, false)
+}
+
+fn cache_meter_snapshot_with_gap(
+    quiet_secs: u64,
+    cache: Option<CacheClock>,
+    compacted: bool,
+) -> SidebarSnapshot {
     let mut parent = agent(
         "parent",
         "claude",
@@ -29,6 +37,7 @@ fn cache_meter_snapshot(quiet_secs: u64, cache: Option<CacheClock>) -> SidebarSn
     parent.context = Some(context);
     parent.last_activity = fixed_now() - Duration::from_secs(quiet_secs);
     parent.last_seen = parent.last_activity;
+    parent.compacted_awaiting_prompt = compacted.then_some(parent.last_activity);
     let mut snapshot = snapshot_with(vec![parent]);
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -47,6 +56,120 @@ fn half_hour_cache() -> CacheClock {
         held_since: None,
         rewarm_cost_usd: None,
     }
+}
+
+#[test]
+fn compaction_gap_hides_cache_guidance_at_every_density_and_tier() {
+    let theme = Theme::fixed(false);
+    for density in [
+        crate::config::CardDensityMode::Auto,
+        crate::config::CardDensityMode::Expanded,
+        crate::config::CardDensityMode::Compact,
+    ] {
+        for (quiet, notice) in [(40 * 60, "expired"), (20 * 60, "expires in")] {
+            let cache = Some(CacheClock {
+                rewarm_cost_usd: Some(0.45),
+                ..half_hour_cache()
+            });
+            let mut ordinary = cache_meter_snapshot(quiet, cache);
+            ordinary.theme.display.card_density = density;
+            let mut gap = cache_meter_snapshot_with_gap(quiet, cache, true);
+            gap.theme.display.card_density = density;
+            for width in [32, 45, 46, 47, 58] {
+                let ordinary =
+                    line_texts(&group_lines_at_width(&ordinary, &theme, 0, width)).join("\n");
+                assert!(ordinary.contains(notice), "width {width}: {ordinary}");
+                let gap = line_texts(&group_lines_at_width(&gap, &theme, 0, width)).join("\n");
+                assert!(!gap.contains("expire"), "width {width}: {gap}");
+                assert!(!gap.contains("$0.45"), "width {width}: {gap}");
+            }
+        }
+    }
+}
+
+#[test]
+fn compaction_gap_mutes_age_without_resetting_elapsed_time_or_overriding_a_hold() {
+    let theme = Theme::fixed(false);
+    for minutes in [20, 40] {
+        let snapshot = cache_meter_snapshot_with_gap(
+            80 * 60,
+            Some(CacheClock {
+                last_request_at: Some(fixed_now() - Duration::from_secs(minutes * 60)),
+                ..half_hour_cache()
+            }),
+            true,
+        );
+        for width in [32, 45, 46, 47, 58] {
+            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+            let pin = lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .find(|span| span.content.contains(&format!("{minutes}m")))
+                .expect("the age pin keeps the later cache-request anchor");
+            assert_eq!(pin.style.fg, theme.muted().fg, "width {width}: {pin:?}");
+            assert!(
+                !pin.content.contains(theme.glyph(GlyphRole::ClockOver)),
+                "{pin:?}"
+            );
+        }
+    }
+    let held = cache_meter_snapshot_with_gap(
+        80 * 60,
+        Some(CacheClock {
+            warm_until: Some(fixed_now() + Duration::from_secs(600)),
+            held_since: Some(fixed_now() - Duration::from_secs(50 * 60)),
+            ..half_hour_cache()
+        }),
+        true,
+    );
+    let lines = group_lines_at_width(&held, &theme, 0, 58);
+    let pin = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content.contains("50m"))
+        .expect("a held gap still counts from the last real turn");
+    assert_eq!(pin.style.fg, theme.good(Modifier::empty()).fg);
+}
+
+#[test]
+fn compaction_gap_mutes_the_stale_identity_age() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = cache_meter_snapshot_with_gap(80 * 60, Some(half_hour_cache()), true);
+    snapshot.theme.display.stale_after_secs = 600;
+    for width in [32, 45, 46, 47, 58] {
+        let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+        let identity_age = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content.trim() == "1h")
+            .expect("the stale identity line keeps its own activity age");
+        assert_eq!(identity_age.style.fg, theme.muted().fg, "width {width}");
+    }
+}
+
+#[test]
+fn measured_compaction_gap_keeps_its_segmented_fill_past_the_cache_ceiling() {
+    let theme = Theme::fixed(false);
+    let snapshot = cache_meter_snapshot_with_gap(40 * 60, Some(half_hour_cache()), true);
+    assert!(
+        !snapshot
+            .rows()
+            .next()
+            .unwrap()
+            .as_agent()
+            .unwrap()
+            .compacted_unmeasured
+    );
+    let meter = cache_meter_line(&snapshot, &theme);
+    assert!(
+        meter
+            .spans
+            .iter()
+            .all(|span| span.style.fg != Some(theme.component(Component::CacheExpired))),
+        "{meter:?}"
+    );
+    let reference = cache_meter_line(&cache_meter_snapshot(40 * 60, None), &theme);
+    assert_eq!(meter_fill(&meter), meter_fill(&reference));
 }
 
 #[test]
@@ -2096,6 +2219,12 @@ fn completed_compaction_keeps_its_glyph_until_a_real_reading() {
                 !rendered.contains(theme.glyph(GlyphRole::TokensFilled)),
                 "{rendered}"
             );
+            let glyph = meter
+                .spans
+                .iter()
+                .find(|span| span.content.contains(glyph))
+                .unwrap();
+            assert_eq!(glyph.style.fg, Some(theme.heat_tone(0.0)), "{set}, {width}");
             assert!(
                 meter
                     .spans
@@ -2290,6 +2419,43 @@ fn codex_compaction_events_render_an_estimate_until_the_first_real_call() {
         "compacted_unmeasured_estimate",
         snapshot_to_screen(&snapshot, 58, 17),
     );
+
+    let mut expired = snapshot.clone();
+    let row = expired.rows_mut().next().unwrap();
+    row.last_activity = fixed_now() - Duration::from_secs(40 * 60);
+    row.as_agent_mut().unwrap().cache = Some(half_hour_cache());
+    let theme = Theme::fixed(false);
+    for width in [32, 45, 46, 47, 58] {
+        let lines = group_lines_at_width(&expired, &theme, 0, width);
+        let meter = lines
+            .iter()
+            .find(|line| {
+                line.to_string()
+                    .contains(theme.glyph(GlyphRole::MeterCompacted))
+            })
+            .unwrap();
+        assert!(
+            meter
+                .spans
+                .iter()
+                .all(|span| span.style.fg != Some(theme.component(Component::CacheExpired))),
+            "an estimate in the gap never expires: {meter:?}"
+        );
+        let glyph = meter
+            .spans
+            .iter()
+            .find(|span| {
+                span.content
+                    .contains(theme.glyph(GlyphRole::MeterCompacted))
+            })
+            .unwrap();
+        let fill = meter
+            .spans
+            .iter()
+            .find(|span| span.content.contains('━'))
+            .unwrap();
+        assert_eq!(glyph.style.fg, fill.style.fg);
+    }
 
     let mut reading = crate::store::event::EventEnvelope::new(
         fixed_workspace(),

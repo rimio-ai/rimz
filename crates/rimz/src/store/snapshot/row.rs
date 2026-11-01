@@ -456,6 +456,12 @@ pub struct AgentCard {
     /// joined sidecar rails. The meter keeps its compaction glyph and hides stats.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacted_unmeasured: bool,
+    /// The old prompt cache is irrelevant after compaction. Native turn starts
+    /// use [`crate::agents::AgentState::compacted_since_prompt`]; other kinds
+    /// use the resolved [`Self::compacted_unmeasured`]. Unless held warm, the
+    /// age stays muted without a ring and the cache line stays hidden.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compacted_since_prompt: bool,
     /// Lifetime count of completed context compactions, copied from the rollup;
     /// the selected or held card's stats line (every engaged card under expanded
     /// density) renders `↻ N` from the first completed compaction.
@@ -524,6 +530,7 @@ impl Default for AgentCard {
             sub_agents: Vec::new(),
             compacting: false,
             compacted_unmeasured: false,
+            compacted_since_prompt: false,
             compaction_count: 0,
             tool_calls: BTreeMap::new(),
             tool_repeat: None,
@@ -557,6 +564,13 @@ impl AgentCard {
         } else {
             (agent.status, agent.phase, None)
         };
+        let compacted_unmeasured = agent.compacted_unmeasured
+            && !agent
+                .context
+                .as_ref()
+                .and_then(|context| context.tokens.as_ref())
+                .and_then(AgentTokenUsage::used_tokens)
+                .is_some_and(|used| used > 0);
         Self {
             status,
             ask_detail,
@@ -599,13 +613,12 @@ impl AgentCard {
             cache: None,
             sub_agents: Vec::new(),
             compacting: agent.is_compacting(now),
-            compacted_unmeasured: agent.compacted_unmeasured
-                && !agent
-                    .context
-                    .as_ref()
-                    .and_then(|context| context.tokens.as_ref())
-                    .and_then(AgentTokenUsage::used_tokens)
-                    .is_some_and(|used| used > 0),
+            compacted_unmeasured,
+            compacted_since_prompt: if agent.has_native_turn_started() {
+                agent.compacted_since_prompt()
+            } else {
+                compacted_unmeasured
+            },
             compaction_count: agent.compaction_count,
             tool_calls: agent.tool_calls.clone(),
             tool_repeat: agent.tool_repeat.clone(),

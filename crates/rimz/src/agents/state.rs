@@ -1084,7 +1084,8 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacted_unmeasured: bool,
     /// The next input must not be another compaction. Set by a sent compact
-    /// command or successful manual compaction; cleared only by `TurnStarted`.
+    /// command, a successful manual compaction, or a successful close at rest
+    /// with a known trigger or open bracket; cleared only by `TurnStarted`.
     /// Registration preserves it; delivery acknowledgements do not rearm it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_awaiting_prompt: Option<Timestamp>,
@@ -1453,12 +1454,16 @@ impl AgentState {
         self.is_compacting(now) || self.compacted_since_prompt()
     }
 
-    /// Whether a compaction has landed since the last real prompt. The marker
+    /// Whether a compaction is awaiting the next real prompt. The marker
     /// is actionable only when durable turn starts can clear it.
     pub fn compacted_since_prompt(&self) -> bool {
-        self.compacted_awaiting_prompt.is_some()
-            && super::spec_by_kind(self.kind.as_str())
-                .is_some_and(|spec| spec.lifecycle_hooks.turn_started.is_native())
+        self.compacted_awaiting_prompt.is_some() && self.has_native_turn_started()
+    }
+
+    /// Whether this kind reports durable turn starts through a native hook.
+    pub(crate) fn has_native_turn_started(&self) -> bool {
+        super::spec_by_kind(self.kind.as_str())
+            .is_some_and(|spec| spec.lifecycle_hooks.turn_started.is_native())
     }
 
     /// Minimal test fixture with stable identity fields and empty enrichment.
