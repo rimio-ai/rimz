@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
@@ -26,7 +27,7 @@ pub(super) fn agent_layout() -> LayoutPanes {
     }
 }
 
-pub(super) fn seed_agents(state: &rimz::StatePaths, panes: &[PaneRef]) {
+pub(super) fn seed_agents(state: &rimz::StatePaths, panes: &[PaneRef], worktree_path: &Path) {
     state.ensure_dirs().expect("agent state dirs");
     for (slot, pane) in panes.iter().enumerate() {
         let id = format!("view-agent-{slot:02}");
@@ -35,7 +36,7 @@ pub(super) fn seed_agents(state: &rimz::StatePaths, panes: &[PaneRef]) {
         observation.agent_name = Some(format!("view-card-{slot:02}"));
         observation.task = Some(format!("view-card-{slot:02}"));
         observation.pane_id = Some(pane.pane_id.clone());
-        observation.worktree_path = pane.cwd.clone();
+        observation.worktree_path = Some(worktree_path.to_string_lossy().into_owned());
         observation.worktree_branch = Some("main".to_owned());
         event_log::append(
             &state.events_log,
@@ -67,20 +68,60 @@ pub(super) fn seed_agents(state: &rimz::StatePaths, panes: &[PaneRef]) {
 pub(super) struct SidebarView {
     pub(super) cards: Vec<(String, bool)>,
     pub(super) selection_visible: bool,
+    selection_at_top: bool,
+    selection_below_cards: bool,
+}
+
+impl SidebarView {
+    pub(super) fn top_selected(&self) -> bool {
+        self.first_card().is_some() && self.selection_at_top
+    }
+
+    pub(super) fn unnamed_bottom_selected(&self) -> bool {
+        self.selection_below_cards && self.selected_card().is_none()
+    }
+
+    pub(super) fn selected_card(&self) -> Option<&str> {
+        self.cards
+            .iter()
+            .find(|(_, selected)| *selected)
+            .map(|(id, _)| id.as_str())
+    }
+
+    pub(super) fn first_card(&self) -> Option<&str> {
+        self.cards.first().map(|(id, _)| id.as_str())
+    }
+
+    pub(super) fn last_card(&self) -> Option<&str> {
+        self.cards.last().map(|(id, _)| id.as_str())
+    }
 }
 
 pub(super) fn sidebar_view(screen: &str) -> SidebarView {
     let mut view = SidebarView {
         cards: Vec::new(),
         selection_visible: false,
+        selection_at_top: false,
+        selection_below_cards: false,
     };
     for line in screen.lines() {
         let sidebar = line.split('│').next().unwrap().trim_start();
         let selected = sidebar.starts_with('▌');
         view.selection_visible |= selected;
+        if view.cards.is_empty() {
+            view.selection_at_top |= selected;
+        } else {
+            view.selection_below_cards |= selected;
+        }
+        if sidebar.starts_with(['↑', '↓']) {
+            continue;
+        }
         if let Some(start) = sidebar.find("view-card-") {
-            view.cards
-                .push((sidebar[start..].chars().take(12).collect(), selected));
+            view.selection_below_cards = false;
+            let id: String = sidebar[start..].chars().take(12).collect();
+            if !view.cards.iter().any(|(listed, _)| listed == &id) {
+                view.cards.push((id, selected));
+            }
         }
     }
     view
