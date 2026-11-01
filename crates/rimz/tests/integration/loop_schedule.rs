@@ -10313,7 +10313,7 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     let reason = record.error.as_deref().unwrap();
     assert!(
         reason.starts_with("gave up waiting for capacity after ")
-            && reason.ends_with("; 1 start ahead"),
+            && reason.ends_with("; queued: 1 start ahead"),
         "{record:?}"
     );
     // The deadline clock truncates to milliseconds.
@@ -10361,7 +10361,7 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     );
     let document: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
-    assert_eq!(document["held"]["reason"], "1 start ahead");
+    assert_eq!(document["held"]["reason"], "queued: 1 start ahead");
     assert_eq!(document["held"]["position"], 2);
     assert_eq!(document["held"]["pid"], runner.id());
     assert!(document["held"]["since"].is_string(), "{document}");
@@ -10494,7 +10494,7 @@ fn ctrl_c_ends_a_hidden_run_held_after_its_check_passed() {
         std::fs::read_dir(&queue)
             .expect("read queue")
             .filter_map(|entry| std::fs::read_to_string(entry.ok()?.path()).ok())
-            .filter(|ticket| ticket.contains("1 start ahead"))
+            .filter(|ticket| ticket.contains("queued: 1 start ahead"))
             .count()
     };
 

@@ -67,7 +67,7 @@ fn capacity_waits_reach_list_and_show_as_text_and_json() {
         &json!({"owed": {
             env.project_root.to_str().unwrap(): {
                 "since": since, "first": since, "last": since, "count": 2,
-                "kinds": ["claude"], "reason": "claude: no capacity (exit 75)", "gave_up": false
+                "kinds": ["claude"], "reason": "claude: no capacity (your check)", "gave_up": false
             }
         }}),
     )
@@ -83,7 +83,7 @@ fn capacity_waits_reach_list_and_show_as_text_and_json() {
     let task = &listed["rooms"][0]["tasks"][0];
     assert_eq!(
         task["capacity_wait"],
-        json!({"kinds": ["claude"], "since": since, "gives_up_at": null, "reason": "claude: no capacity (exit 75)"})
+        json!({"kinds": ["claude"], "since": since, "gives_up_at": null, "reason": "claude: no capacity (your check)"})
     );
     let shown: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "owed", "--json"])).unwrap();

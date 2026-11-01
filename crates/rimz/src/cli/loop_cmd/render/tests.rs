@@ -2439,7 +2439,7 @@ fn agent_runs_limit_folded_rows_but_keep_spawned_run_identities() {
 #[test]
 fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_queued() {
     let mut skipped = record(0, LoopRunResult::ThrottleSkipped);
-    skipped.error = Some("cpu pressure 41% >= 25%; held 30m".into());
+    skipped.error = Some("cpu pressure 41% ≥ 25%; held 30m".into());
     assert!(is_refused_fire(&skipped));
 
     let mut waited = record(0, LoopRunResult::Launched);
@@ -3110,7 +3110,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         pid: holder(200).pid,
         checkout: "/repo/.worktrees/a".into(),
         since_ms,
-        reason: Some("cpu pressure 41% >= 25%".to_owned()),
+        reason: Some("cpu pressure 41% ≥ 25%".to_owned()),
         hold: None,
         kinds: Vec::new(),
         gives_up_ms: None,
@@ -3130,14 +3130,14 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
     assert_eq!(
         running_text_full(&waiting, now),
         format!(
-            "{phrase} · cpu pressure 41% >= 25% · pid {}",
+            "{phrase} · cpu pressure 41% ≥ 25% · pid {}",
             holder(200).pid
         )
     );
     let json = held_json(&held);
     assert_eq!(json["pid"], holder(200).pid);
     assert_eq!(json["checkout"], "/repo/.worktrees/a");
-    assert_eq!(json["reason"], "cpu pressure 41% >= 25%");
+    assert_eq!(json["reason"], "cpu pressure 41% ≥ 25%");
     assert_eq!(json["position"], 2);
     assert_eq!(
         json["since"],
@@ -4584,12 +4584,12 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
     };
     // Checkout a launched and runs; b and c wait in other processes.
     let held = [
-        waiting(42, "/repo/.worktrees/b", Some("2 starts ahead"), 3),
+        waiting(42, "/repo/.worktrees/b", Some("queued: 2 starts ahead"), 3),
         waiting(43, "/repo/.worktrees/c", None, 4),
     ];
     assert_eq!(
         in_flight_text(Some(running), &held, now),
-        "▸ running 2m · 2 held: 2 starts ahead"
+        "▸ running 2m · 2 held: queued: 2 starts ahead"
     );
     let in_flight = InFlightRun {
         holder: Some(running),
@@ -4598,7 +4598,7 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
     };
     assert_eq!(
         running_text_full(&in_flight, now),
-        "▸ running 2m · pid 41 · 2 held: 2 starts ahead"
+        "▸ running 2m · pid 41 · 2 held: queued: 2 starts ahead"
     );
     let (own, others) = split_held(Some(running), &held);
     assert!(own.is_none());
@@ -4606,13 +4606,13 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
 
     // The holder is itself held: its own reason, never another checkout's.
     let held = [
-        waiting(42, "/repo/.worktrees/b", Some("1 start ahead"), 2),
-        waiting(41, "/repo/.worktrees/a", Some("cpu pressure 41% >= 25%"), 3),
+        waiting(42, "/repo/.worktrees/b", Some("queued: 1 start ahead"), 2),
+        waiting(41, "/repo/.worktrees/a", Some("cpu pressure 41% ≥ 25%"), 3),
     ];
     assert_eq!(
         in_flight_text(Some(running), &held, now),
         format!(
-            "{} · cpu pressure 41% >= 25% · 1 held: 1 start ahead",
+            "{} · cpu pressure 41% ≥ 25% · 1 held: queued: 1 start ahead",
             rimz::theme::fmt::capacity_wait(
                 &held[1].kinds,
                 Timestamp::from_millisecond(held[1].since_ms as i64).unwrap(),
@@ -4626,7 +4626,7 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
     // A holder the lock does not name owns no ticket.
     assert_eq!(
         in_flight_text(None, &held, now),
-        "▸ running · 2 held: 1 start ahead"
+        "▸ running · 2 held: queued: 1 start ahead"
     );
 }
 
@@ -4647,14 +4647,14 @@ fn capacity_blocking_display_uses_the_shared_phrase_without_changing_held_json()
         since_ms: since.as_millisecond() as u64,
         kinds: vec![rimz::ids::AgentKind::new_unchecked("claude")],
         gives_up_ms: None,
-        reason: Some("1 start ahead".into()),
+        reason: Some("queued: 1 start ahead".into()),
         hold: None,
         position: 2,
     };
     let phrase = rimz::theme::fmt::capacity_wait(&held.kinds, since, None, since);
     assert_eq!(
         held_run_text(&held, since),
-        format!("{phrase} · 1 start ahead")
+        format!("{phrase} · queued: 1 start ahead")
     );
     assert!(held_json(&held).get("kinds").is_none());
     assert!(held_json(&held).get("gives_up_ms").is_none());

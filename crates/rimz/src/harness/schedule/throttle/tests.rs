@@ -479,7 +479,7 @@ fn capacity_check_holds_an_admitted_turn_without_holding_the_queue_lock() {
         let second =
             try_admit_in(&weak.upgrade().unwrap().host(), &config(""), &run("second")).unwrap();
         assert!(
-            matches!(&second, Attempt::Held(hold) if hold.text == "1 start ahead"),
+            matches!(&second, Attempt::Held(hold) if hold.text == "queued: 1 start ahead"),
             "{second:?}"
         );
         assert_eq!(fake.tickets(), 1);
@@ -501,9 +501,18 @@ fn capacity_answers_and_cache_distinguish_full_errors_and_success() {
         Ok((None, false)),
         Err("cannot spawn".to_owned()),
     ];
+    let reasons = [
+        None,
+        Some("claude: no capacity (your check)"),
+        Some("capacity check failing: claude exit 2"),
+        Some("capacity check failing: claude timed out after 30s"),
+        Some("capacity check failing: claude terminated by signal"),
+        Some("capacity check failing: claude cannot spawn"),
+    ];
     let results: Vec<_> = answers
         .into_iter()
-        .map(|answer| {
+        .zip(reasons)
+        .map(|(answer, reason)| {
             let fake = FakeHost::new();
             *fake.check_answer.lock().unwrap() = answer;
             let configured = config("pace = '0s'\ncheck = 'capacity'");
@@ -512,7 +521,10 @@ fn capacity_answers_and_cache_distinguish_full_errors_and_success() {
                 let attempt = try_admit_in(&fake.host(), &configured, &run("first")).unwrap();
                 kinds.push(match attempt {
                     Attempt::Turn(_) => None,
-                    Attempt::Held(hold) => Some(hold.kind),
+                    Attempt::Held(hold) => {
+                        assert_eq!(Some(hold.text.as_str()), reason);
+                        Some(hold.kind)
+                    }
                     Attempt::Open => Some(HoldKind::Queue),
                 });
             }
@@ -679,6 +691,174 @@ fn capacity_queued_same_kind_waiters_do_not_block_other_kinds() {
 }
 
 #[test]
+fn queued_starts_keep_the_blocking_cause_and_its_text() {
+    let fake = FakeHost::new();
+    let capacity = (HoldKind::Capacity, "claude: no capacity (your check)");
+    let failure = (
+        HoldKind::CheckFailed,
+        "capacity check failing: claude exit 2",
+    );
+    let another_failure = (
+        HoldKind::CheckFailed,
+        "capacity check failing: claude timed out after 30s",
+    );
+    let queued = (HoldKind::Queue, "queued: 1 start ahead");
+    let mine = Ticket::new(fake.as_ref(), &run("last"), fake.now_ms());
+    let mut actual = Vec::new();
+    for blockers in [
+        vec![capacity, capacity],
+        vec![capacity, failure, another_failure],
+        vec![failure, queued],
+        vec![queued],
+    ] {
+        let queue = blockers
+            .iter()
+            .map(|(kind, text)| {
+                let mut ticket = Ticket::new(fake.as_ref(), &run("first"), fake.now_ms());
+                ticket.state = TicketState::Waiting {
+                    reason: Some(Hold {
+                        kind: *kind,
+                        text: (*text).into(),
+                        kinds: mine.kinds.clone(),
+                    }),
+                };
+                (PathBuf::new(), ticket)
+            })
+            .collect::<Vec<_>>();
+        let hold = queue_hold(&queue, queue.len(), &mine).unwrap();
+        actual.push((hold.kind, hold.text));
+    }
+    assert_eq!(
+        actual,
+        [
+            (capacity.0, capacity.1.into()),
+            (failure.0, failure.1.into()),
+            (failure.0, failure.1.into()),
+            (HoldKind::Queue, "queued: 1 start ahead".into()),
+        ]
+    );
+}
+
+#[test]
+fn queued_needs_fix_causes_survive_mixed_predecessors_and_held_turns() {
+    let fake = FakeHost::new();
+    let disk = (HoldKind::Disk, "free disk 1 GB < 20 GB at /other-room");
+    let store = (HoldKind::Store, "cannot count active agents: broken room");
+    let failure = (
+        HoldKind::CheckFailed,
+        "capacity check failing: claude exit 2",
+    );
+    let queued = (HoldKind::Queue, "queued: 1 start ahead");
+    let mine = Ticket::new(fake.as_ref(), &run("last"), fake.now_ms());
+    for held_turn in [false, true] {
+        for (blockers, expected) in [
+            (vec![disk], disk),
+            (vec![store], store),
+            (vec![queued, disk], disk),
+            (vec![disk, queued], disk),
+            (vec![disk, store], disk),
+            (vec![store, disk], store),
+            (vec![queued, failure], failure),
+        ] {
+            let mut queue = Vec::new();
+            if held_turn {
+                let mut ticket = mine.clone();
+                ticket.state = TicketState::Admitted;
+                queue.push((PathBuf::new(), ticket));
+            }
+            for (kind, text) in blockers {
+                let mut ticket = Ticket::new(fake.as_ref(), &run("first"), fake.now_ms());
+                ticket.state = TicketState::Waiting {
+                    reason: Some(Hold {
+                        kind,
+                        text: text.into(),
+                        kinds: mine.kinds.clone(),
+                    }),
+                };
+                queue.push((PathBuf::new(), ticket));
+            }
+            let hold = queue_hold(&queue, queue.len(), &mine).unwrap();
+            assert_eq!((hold.kind, hold.text.as_str()), expected);
+            assert!(hold.kinds.is_empty(), "a mixed queue cannot step aside");
+        }
+    }
+}
+
+#[test]
+fn disjoint_starts_cannot_pass_a_propagated_needs_fix_follower() {
+    for kind in [HoldKind::Disk, HoldKind::Store, HoldKind::CheckFailed] {
+        let fake = FakeHost::new();
+        let head = enqueue_as(&fake, 1, &run("head"));
+        let mut ticket = read_ticket(&head).unwrap().unwrap();
+        ticket.state = TicketState::Waiting {
+            reason: Some(Hold {
+                kind,
+                text: "the head's blocker".into(),
+                kinds: ticket.kinds.clone(),
+            }),
+        };
+        write_ticket(&head, &ticket).unwrap();
+        let mixed = enqueue_as(&fake, 2, &run("mixed"));
+        let follower = enqueue_as(&fake, 3, &run("follower"));
+        step(&fake, &config(""), &run("follower"), &follower);
+        let TicketState::Waiting {
+            reason: Some(propagated),
+        } = read_ticket(&follower).unwrap().unwrap().state
+        else {
+            panic!("the follower must wait on the head's blocker");
+        };
+        assert!(
+            propagated.kinds.is_empty(),
+            "a mixed queue cannot step aside"
+        );
+        remove_ticket(&head);
+        remove_ticket(&mixed);
+        let mut codex = run("codex");
+        codex.groups[0].kind = AgentKind::new_unchecked("codex");
+        let attempt = try_admit_in(&fake.host(), &config(""), &codex).unwrap();
+        let Attempt::Held(hold) = attempt else {
+            panic!("a propagated mixed hold must block disjoint starts: {attempt:?}");
+        };
+        let looked = look_in(fake.as_ref(), &config(""), &codex).unwrap();
+        assert_eq!(looked.as_ref(), Some(&hold));
+        assert_eq!(hold.kind, kind);
+        assert_eq!(hold.text, "the head's blocker");
+        assert_eq!(
+            hold.kinds,
+            codex.kinds(),
+            "the record names this run's providers"
+        );
+    }
+}
+
+#[test]
+fn failing_checks_lead_mixed_capacity_reasons_and_the_doctor_cache() {
+    let fake = FakeHost::new();
+    let configured = config("check='capacity'");
+    let mut candidate = run("first");
+    *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
+    check_groups(fake.as_ref(), &configured, &candidate).unwrap();
+    candidate.groups.push(StartGroup {
+        kind: AgentKind::new_unchecked("codex"),
+        account: Some("work".parse().unwrap()),
+        agents: 1,
+    });
+    *fake.check_answer.lock().unwrap() = Ok((Some(2), false));
+    let held = check_groups(fake.as_ref(), &configured, &candidate)
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.kind, HoldKind::CheckFailed);
+    assert_eq!(
+        held.text,
+        "capacity check failing: codex/work exit 2; claude: no capacity (your check)"
+    );
+    assert_eq!(
+        check_errors_in(fake.as_ref(), &configured),
+        ["capacity check failing: codex/work exit 2"]
+    );
+}
+
+#[test]
 fn capacity_check_stops_at_the_give_up_instant_without_caching_an_error() {
     let fake = FakeHost::new();
     let cut_at_the_bound = |fake: &FakeHost| {
@@ -745,10 +925,7 @@ fn capacity_check_timeout_keeps_its_first_stderr_line() {
     let checked = SystemHost.check(&configured, &run, &run.groups[0], timeout);
     assert_eq!(
         check_answer(checked, timeout),
-        (
-            CheckAnswer::Error,
-            "capacity check timed out after 1s: boom".to_owned()
-        )
+        (CheckAnswer::Error, "timed out after 1s: boom".to_owned())
     );
 }
 
@@ -969,7 +1146,7 @@ fn a_run_held_past_its_give_up_instant_is_skipped_with_its_last_reason() {
     };
     assert_eq!(
         reason,
-        "gave up waiting for capacity after 3s; cpu pressure 90% >= 25%"
+        "gave up waiting for capacity after 3s; cpu pressure 90% ≥ 25%"
     );
     assert_eq!(fake.elapsed_ms(), 3_000);
     assert_eq!(fake.tickets(), 0, "a skipped run leaves the queue");
@@ -1054,7 +1231,7 @@ fn with_pacing_off_the_next_start_is_admitted_at_the_report_and_counts_its_row()
     // Before the report the turn is held; at the report it passes on, and the
     // first sample the second run takes already counts the committed row.
     assert!(
-        matches!(skipped, Admission::Skipped { reason } if reason.ends_with("active agents 1 >= 1 (@claude)"))
+        matches!(skipped, Admission::Skipped { reason } if reason.ends_with("1 of 1 agents active (@claude)"))
     );
 }
 
@@ -1074,7 +1251,7 @@ fn a_dropped_turn_and_a_dead_owner_both_release_the_next_run() {
     let waiting = enqueue_as(&fake, 3, &run("third"));
     assert_eq!(
         step(&fake, &pacing, &run("third"), &waiting).as_deref(),
-        Some("1 start ahead")
+        Some("queued: 1 start ahead")
     );
     fake.kill(2);
     assert_eq!(step(&fake, &pacing, &run("third"), &waiting), None);
@@ -1115,7 +1292,7 @@ fn the_machine_cap_counts_only_working_agents_and_samples_every_five_seconds() {
     let held = limit_hold(fake.as_ref(), &capped, &run("nightly"))
         .unwrap()
         .unwrap();
-    assert_eq!(held.text, "active agents 2 >= 2 (@otter, @claude)");
+    assert_eq!(held.text, "2 of 2 agents active (@otter, @claude)");
     let admission = admit(&fake.host(), &capped, &run("nightly"), None).expect("admit");
     admitted(admission);
     assert_eq!(fake.elapsed_ms(), 10_000, "admitted on the sample after 7s");
@@ -1135,7 +1312,7 @@ fn a_cap_reason_truncates_the_agents_it_names() {
     let hold = limit_hold(fake.as_ref(), &config("max-active = 3\n"), &run("nightly"))
         .expect("sample")
         .expect("held");
-    assert_eq!(hold.text, "active agents 4 >= 3 (@a, @b, +2)");
+    assert_eq!(hold.text, "4 of 3 agents active (@a, @b, +2)");
 }
 
 #[test]
@@ -1179,16 +1356,16 @@ fn a_run_over_its_own_task_cap_is_passed_by_another_task_and_keeps_its_place() {
 
     assert_eq!(
         step(&fake, &capped, &run("nightly"), &other_task).as_deref(),
-        Some("1 start ahead"),
+        Some("queued: 1 start ahead"),
         "nothing is stepped over before it recorded its own cap"
     );
     assert_eq!(
         step(&fake, &capped, &run("fixer"), &first_fixer).as_deref(),
-        Some("task's active agents 1 >= 1 (@fixer-1)")
+        Some("task at its cap: 1 of 1 agents active (@fixer-1)")
     );
     assert_eq!(
         step(&fake, &capped, &run("fixer"), &second_fixer).as_deref(),
-        Some("2 starts ahead"),
+        Some("queued: 2 starts ahead"),
         "a run of the same task stays behind it"
     );
     assert_eq!(step(&fake, &capped, &run("nightly"), &other_task), None);
@@ -1198,7 +1375,7 @@ fn a_run_over_its_own_task_cap_is_passed_by_another_task_and_keeps_its_place() {
     fake.set_agents(&workspace(), vec![fixer]);
     assert_eq!(
         step(&fake, &capped, &run("fixer"), &second_fixer).as_deref(),
-        Some("1 start ahead")
+        Some("queued: 1 start ahead")
     );
     assert_eq!(step(&fake, &capped, &run("fixer"), &first_fixer), None);
 }
@@ -1216,16 +1393,16 @@ fn queue_order_follows_enqueue_order_across_owners() {
             &tickets[index],
         )
     };
-    assert_eq!(step_for(2).as_deref(), Some("2 starts ahead"));
-    assert_eq!(step_for(1).as_deref(), Some("1 start ahead"));
+    assert_eq!(step_for(2).as_deref(), Some("queued: 2 starts ahead"));
+    assert_eq!(step_for(1).as_deref(), Some("queued: 1 start ahead"));
     assert_eq!(step_for(0), None);
     assert_eq!(
         step_for(1).as_deref(),
-        Some("1 start ahead"),
+        Some("queued: 1 start ahead"),
         "the turn is held"
     );
     remove_ticket(&tickets[0]);
-    assert_eq!(step_for(2).as_deref(), Some("1 start ahead"));
+    assert_eq!(step_for(2).as_deref(), Some("queued: 1 start ahead"));
     assert_eq!(step_for(1), None);
 }
 
@@ -1257,7 +1434,7 @@ fn a_waiting_run_is_reported_with_its_reason_and_place() {
     later.since_ms = fake.now_ms();
     assert_eq!(
         held_in(fake.as_ref(), "second", Path::new("/repo")),
-        [held(Some("1 start ahead"), 2, 2), later.clone()]
+        [held(Some("queued: 1 start ahead"), 2, 2), later.clone()]
     );
     assert_eq!(held_in(fake.as_ref(), "first", Path::new("/repo")), []);
     assert_eq!(
@@ -1333,7 +1510,7 @@ fn memory_and_disk_floors_hold_below_the_floor_and_show_beside_the_reading() {
             ("memory", "9 GB available".to_owned()),
             ("disk", "20 GB free".to_owned()),
             ("active agents", "2 (limit max 6)".to_owned()),
-            ("task's active agents", "1 (limit max 2)".to_owned()),
+            ("task active agents", "1 (limit max 2)".to_owned()),
         ]
     );
 }
@@ -1363,7 +1540,7 @@ fn a_held_run_is_skipped_at_its_give_up_instant_even_when_its_hold_clears_then()
         };
         assert_eq!(
             reason,
-            format!("gave up waiting for capacity after {waited}; 1 start ahead")
+            format!("gave up waiting for capacity after {waited}; queued: 1 start ahead")
         );
         assert_eq!(fake.elapsed_ms(), clears_at + delay_ms);
         assert_eq!(fake.tickets(), 0);
@@ -1393,7 +1570,11 @@ fn a_compacting_agent_counts_toward_neither_cap_until_its_window_expires() {
         let hold = limit_hold(fake.as_ref(), &config(capped), &run("nightly"))
             .unwrap()
             .unwrap_or_else(|| panic!("{capped}: a stale compaction counts"));
-        assert!(hold.text.ends_with(">= 1 (@claude)"), "{}", hold.text);
+        assert!(
+            hold.text.ends_with("1 of 1 agents active (@claude)"),
+            "{}",
+            hold.text
+        );
     }
 }
 
@@ -1437,7 +1618,7 @@ fn every_waiting_run_of_a_capped_task_is_stepped_over_by_another_task() {
     let other_task = enqueue_as(&fake, 3, &run("nightly"));
     assert_eq!(
         step(&fake, &capped, &run("fixer"), &first_fixer).as_deref(),
-        Some("task's active agents 1 >= 1 (@claude)")
+        Some("task at its cap: 1 of 1 agents active (@claude)")
     );
     // A2 has not passed yet, so it carries no reason.
     assert_eq!(step(&fake, &capped, &run("nightly"), &other_task), None);
@@ -1446,7 +1627,7 @@ fn every_waiting_run_of_a_capped_task_is_stepped_over_by_another_task() {
     let other_task = enqueue_as(&fake, 3, &run("nightly"));
     assert_eq!(
         step(&fake, &capped, &run("fixer"), &second_fixer).as_deref(),
-        Some("1 start ahead"),
+        Some("queued: 1 start ahead"),
         "a run of the capped task keeps its place behind the first"
     );
     assert_eq!(step(&fake, &capped, &run("nightly"), &other_task), None);
@@ -1458,12 +1639,12 @@ fn every_waiting_run_of_a_capped_task_is_stepped_over_by_another_task() {
     fake.set_pressure(80.0, 80.0);
     assert_eq!(
         step(&fake, &capped, &run("nightly"), &pressured).as_deref(),
-        Some("cpu pressure 80% >= 50%")
+        Some("cpu pressure 80% ≥ 50%")
     );
     fake.set_pressure(0.0, 0.0);
     assert_eq!(
         step(&fake, &capped, &run("weekly"), &last).as_deref(),
-        Some("1 start ahead")
+        Some("queued: 1 start ahead")
     );
 }
 
