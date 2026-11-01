@@ -107,7 +107,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 
 | slot | what it paints |
 | --- | --- |
-| `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker |
+| `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker, and the compacted-context meter's glyph while it has no size estimate |
 | `warn` | the caution floor: resting `?` waits, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
 | `caution` | the warm "hot or costly" amber: the gauge mid-band and the age-heat midpoint |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
@@ -115,7 +115,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
 | `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker |
 | `body` | body text: stat figures, subagent lines, worktree headers |
-| `muted` | chrome: labels, ages, subordinate values, and the compacted-context meter's glyph and empty track while it has no size estimate |
+| `muted` | chrome: labels, ages, subordinate values, and the compacted-context meter's empty track while it has no size estimate |
 | `faint` | faintest chrome: measured bar tracks, `·` separators, dotted dividers |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |
@@ -123,7 +123,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 
 Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot or costly" everywhere. The [expired context meter](./sidebar.md) and its age clock wear a fixed greyed red, `alarm` blended halfway to `muted`, not another tunable slot.
 
-The four health slots also form a ramp, `good → warn → caution → alarm`, green through gold and orange to red, and the live meters slide along it. The context meter, the remote link badge, and the draining provider budget bar ride the whole ramp. The card age clock stays neutral until its [cache warning band](../interface/sidebar.md#the-card), then warms from yellow through orange to red using the agent's resolved lifetime, fallback included; only an unresolved lifetime with the fallback or provider setting `off` never heats. The reset-countdown pace uses the warm tail, with a cool green tail of its own once spending runs well under pace.
+The four health slots also form a ramp, `good → warn → caution → alarm`, green through gold and orange to red, and the live meters slide along it. The context meter, the remote link badge, and the draining provider budget bar ride the whole ramp. The card age clock stays neutral until its [cache warning band](../interface/sidebar.md#the-card), then warms from yellow through orange to red using the agent's resolved lifetime, fallback included. An unresolved lifetime with the fallback or provider setting `off` never heats; between compaction and the next prompt, the clock also stays muted without a ring unless keep-warm is actively holding it. The reset-countdown pace uses the warm tail, with a cool green tail of its own once spending runs well under pace.
 
 An override joins the ramp when it is a hex color or an xterm index of 16 or above. A flat ANSI index of 0 to 15 is terminal-defined, so RimZ cannot know its RGB value: that slot wears your override while the ramp keeps the scheme's derived tone. Money figures sit outside the slots altogether, on a fixed dollar green (`#85bb65`), as does each provider's [brand color](#provider-styling).
 
@@ -146,7 +146,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `status` | the leading status heads, one per state an agent can be in, plus the `⟲` repeated-tool marker |
 | `cockpit` | the workspace, sessions, agents, and open-PR counters at the top |
 | `tokens` | the token-accounting markers |
-| `meter` | the drawn gauges, bars, and scrollbar; `context_compacted` marks a compacted context until the first real reading (`↻` in Unicode, `` in Nerd Font), independently of `tokens.compaction`; it takes the fill's tone when an estimate fills the track, otherwise `muted` |
+| `meter` | the drawn gauges, bars, and scrollbar; `context_compacted` marks a compacted context until the first real reading (`↻` in Unicode, `` in Nerd Font), independently of `tokens.compaction`; it takes the fill's tone when an estimate fills the track, otherwise the healthy green start of the heat ramp, leaving the empty track `muted` |
 | `clock` | age faces: cards and waits fill over an hour and stay full; `over` (`◉`) marks an expired card cache or child quiet past its stall window, never a long wait |
 | `value` | compact value qualifiers, such as the active-time `approx` marker, and the `seam` separator between values (`·`) |
 | `worktree` | the group header's git story: branch and merge, ahead and behind, trunk state, PR and CI state; a collapsed finished group's `expand`; the `dotted` rule that seals the selected header, draws the `external` divider, and flanks the landed chip; and the landed chip's `landed_closed` / `landed_open` |

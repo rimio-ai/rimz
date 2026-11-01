@@ -102,7 +102,7 @@ pub(super) fn bar_row(
 /// window reads the hollow `▢`; any usage fills it to `▣`. A completed compaction
 /// keeps its own glyph until the first real reading. A provider estimate fills
 /// the track flat in its ordinary tone with a percentage; without one, the
-/// glyph and empty track are muted, without a percentage.
+/// glyph is healthy green and the empty track stays muted, without a percentage.
 ///
 /// At L2 every meter reserves a five-cell age cluster after a space; below L2
 /// the bar keeps that room and the stats line pins the age instead, except in
@@ -112,12 +112,13 @@ pub(super) fn bar_row(
 /// muted until half the known TTL, or the last ten minutes if earlier, and
 /// never before the last hour ([`CACHE_WARNING_MAX_SECS`]), then warn through
 /// caution to alarm at the ceiling. Past the ceiling it wears the fixed
-/// expired-cache tone and ringed over face. Unknown lifetimes stay muted. A
-/// keep-warm horizon uses the steady held tone ([`cache_age_pin`]). Finished
-/// cards follow the same ramp. The clock reads the agent's own quiet time
-/// ([`SidebarRow::own_last_activity`]) or last cache request, not child-folded
-/// activity: a parent waiting on children makes no model call, so its cache
-/// keeps cooling.
+/// expired-cache tone and ringed over face. Unknown lifetimes and the gap
+/// between compaction and prompt stay muted without a ring or cache line. A
+/// keep-warm horizon takes precedence in the steady held tone
+/// ([`cache_age_pin`]). Finished cards follow the same ramp. The clock reads
+/// the agent's own quiet time ([`SidebarRow::own_last_activity`]) or last
+/// cache request, not child-folded activity: a parent waiting on children
+/// makes no model call, so its cache keeps cooling.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
@@ -174,6 +175,11 @@ pub(super) fn gauge_line(
     } else {
         theme.glyph(GlyphRole::MeterContextFull)
     };
+    let glyph_color = if compacted_empty {
+        theme.heat_tone(0.0)
+    } else {
+        bar_color
+    };
     // The gap hides the stats line that pins the age below L2, so its meter keeps the age.
     let age_width = if ctx.tier == Tier::L2 || compacted_unmeasured {
         6
@@ -183,7 +189,7 @@ pub(super) fn gauge_line(
     let mut line = bar_row(
         theme,
         glyph,
-        theme.style(bar_color, Modifier::empty()),
+        theme.style(glyph_color, Modifier::empty()),
         &value,
         |bar_width| {
             if compacted_empty {
@@ -373,7 +379,8 @@ pub(super) fn gauge_segments(
 enum CacheAge {
     /// A keep-warm horizon holds the cache, counted from the last real turn.
     Held { ended: jiff::Timestamp },
-    /// Count from the later of own activity and the last ping; an unknown TTL has no ceiling.
+    /// Count from the later of own activity and the last ping; an unknown TTL
+    /// or the gap between compaction and prompt has no ceiling.
     Aging {
         since: jiff::Timestamp,
         ceiling: Option<i64>,
@@ -440,7 +447,8 @@ impl CachePhase {
 }
 
 fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
-    let cache = row.as_agent().and_then(|agent| agent.cache);
+    let agent = row.as_agent();
+    let cache = agent.and_then(|agent| agent.cache);
     if let Some(clock) = cache
         && clock.warm_until.is_some_and(|until| now < until)
         && let Some(ended) = clock.held_since
@@ -453,7 +461,12 @@ fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
                 .and_then(|clock| clock.last_request_at)
                 .unwrap_or_default(),
         ),
-        ceiling: cache.map(|clock| i64::from(clock.ceiling_secs)),
+        ceiling: if agent.is_some_and(|agent| agent.compacted_since_prompt) {
+            // The next request starts from the summary, not the old prompt cache.
+            None
+        } else {
+            cache.map(|clock| i64::from(clock.ceiling_secs))
+        },
     }
 }
 
@@ -467,7 +480,8 @@ pub(super) fn cache_age_style(theme: &Theme, row: &SidebarRow, now: jiff::Timest
 /// counts from the last real turn in steady `good`; otherwise the pin counts
 /// from own activity or the last cache request. Tone still follows the known
 /// TTL: muted until its warning band, then warn through caution to alarm.
-/// Unknown lifetimes stay muted; expired caches wear the meter's expired tone.
+/// Unknown lifetimes and the gap between compaction and prompt stay muted
+/// without a ring; expired caches wear the meter's expired tone.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
     let age = cache_age(row, now);
     let style = cache_age_style(theme, row, now);
@@ -484,7 +498,8 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
     Some(Span::styled(format!("{glyph} {label:>3}"), style))
 }
 
-/// Cache expiry guidance follows the template's stats, including held cards.
+/// Cache expiry guidance follows the template's stats, including held cards,
+/// but stays hidden between compaction and the next prompt.
 pub(super) fn cache_line(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Line<'static>> {
     let theme = ctx.theme;
     let wide = ctx.tier == Tier::L2;

@@ -719,6 +719,74 @@ fn compacted_unmeasured_resolves_the_fold_flag_against_sidecar_tokens() {
 }
 
 #[test]
+fn compacted_since_prompt_uses_the_native_marker_not_the_unmeasured_gap() {
+    let mut agent = AgentState::stub("claude", "s1", AgentStatus::Idle);
+    agent.compacted_unmeasured = true;
+    for marker in [Some(row_time()), None] {
+        agent.compacted_awaiting_prompt = marker;
+        for used in [None, Some(0), Some(6_000)] {
+            agent.context = used.map(|input| {
+                context_with_tokens(AgentTokenUsage {
+                    current_usage: Some(AgentCurrentUsage {
+                        input_tokens: Some(input),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            });
+            let card = AgentCard::from_agent(&agent, row_time());
+            assert_eq!(card.compacted_unmeasured, used != Some(6_000));
+            assert_eq!(card.compacted_since_prompt, marker.is_some(), "{used:?}");
+        }
+    }
+}
+
+#[test]
+fn compacted_since_prompt_falls_back_to_the_resolved_unmeasured_gap() {
+    assert!(crate::agents::spec_by_kind("unregistered").is_none());
+    let mut agent = AgentState::stub("unregistered", "s1", AgentStatus::Idle);
+    for marker in [None, Some(row_time())] {
+        agent.compacted_awaiting_prompt = marker;
+        for unmeasured in [true, false] {
+            agent.compacted_unmeasured = unmeasured;
+            for used in [None, Some(0), Some(6_000)] {
+                agent.context = used.map(|input| {
+                    context_with_tokens(AgentTokenUsage {
+                        current_usage: Some(AgentCurrentUsage {
+                            input_tokens: Some(input),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                });
+                let card = AgentCard::from_agent(&agent, row_time());
+                let gap = unmeasured && used != Some(6_000);
+                assert_eq!(card.compacted_unmeasured, gap);
+                assert_eq!(card.compacted_since_prompt, gap, "{marker:?}, {used:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn compacted_since_prompt_round_trips_and_defaults_false_on_older_cards() {
+    let mut agent = AgentState::stub("claude", "s1", AgentStatus::Idle);
+    agent.compacted_awaiting_prompt = Some(row_time());
+    let card = AgentCard::from_agent(&agent, row_time());
+    let wire = serde_json::to_value(&card).unwrap();
+    assert_eq!(wire["compacted_since_prompt"], true);
+    assert_eq!(serde_json::from_value::<AgentCard>(wire).unwrap(), card);
+
+    let wire = serde_json::to_value(AgentCard::default()).unwrap();
+    assert!(wire.get("compacted_since_prompt").is_none());
+    assert!(
+        !serde_json::from_value::<AgentCard>(wire)
+            .unwrap()
+            .compacted_since_prompt
+    );
+}
+
+#[test]
 fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window() {
     // A sidecar percentage drawn against an unknown window cannot share a
     // denominator with the displayed window, so the gauge prefers the

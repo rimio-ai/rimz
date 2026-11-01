@@ -122,7 +122,7 @@ pub(crate) enum Component {
     /// The context meter's expired prompt-cache fill: greyed `alarm`, red
     /// enough to read as lost without looking like the full bar.
     CacheExpired,
-    /// The compacted-context glyph and empty track while its size is unknown.
+    /// The compacted-context empty track while its size is unknown.
     ContextCompacted,
     /// Provider fast mode: a scheme-derived amber, independent of lifecycle state.
     FastMode,

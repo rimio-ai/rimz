@@ -671,7 +671,7 @@ The keepalive pings a resting agent shortly before its provider's prompt cache e
 An agent qualifies for a ping (`should_keepalive`) when all of these hold:
 
 1. It is effectively `Sleeping` (a pending wait, timer waits included), or keep-warm [holds](#the-keep-warm-hold) it.
-2. It passes `pingable`: not a provider subagent, a nonempty session id, not compacting, not compacted since its last prompt (`AgentState::compacted_since_prompt`), not budget-parked, not hibernated, and not awaiting input.
+2. It passes `pingable`: not a provider subagent, a nonempty session id, not compacting, not compacted since its last prompt (`AgentState::compacted_since_prompt`), not budget-parked, not hibernated, and not awaiting input. The sidebar shares that native-turn-start marker through `AgentCard.compacted_since_prompt`; kinds without native turn starts fall back to the card's resolved `compacted_unmeasured` ([cache display](../sidebar/state.md#workspace-enrichment)).
 3. `HarnessConfig::ping_lifetime` admits its resolved lifetime: above `harness.prompt_cache_margin` (default one minute) and at least `harness.keep_warm_min_ttl` (default 15m, `off` removes the floor). The same floor applies to sleeping and keep-warm pings. `now - last_request_at` must be inside `[TTL - margin, TTL)`.
 4. The run of pings has not reached `harness.cache_keepalive_max` ([the cap](#the-cap)).
 5. The producer finds a live pane for it.
