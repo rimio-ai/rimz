@@ -157,7 +157,8 @@ fn capacity_waits_share_one_cockpit_line_with_parked_runs() {
         "kinds": ["claude", "codex"], "since": fixed_now(),
         "gives_up_at": fixed_now() + Duration::from_secs(3600), "count": 4
     });
-    let snapshot: SidebarSnapshot = serde_json::from_value(value.clone()).unwrap();
+    let mut snapshot: SidebarSnapshot = serde_json::from_value(value.clone()).unwrap();
+    snapshot.now = fixed_now();
     let phrase = crate::theme::fmt::capacity_wait(
         &[
             crate::ids::AgentKind::new_unchecked("claude"),
@@ -165,12 +166,15 @@ fn capacity_waits_share_one_cockpit_line_with_parked_runs() {
         ],
         fixed_now(),
         Some(fixed_now() + Duration::from_secs(3600)),
+        fixed_now(),
     );
     let wide = snapshot_to_screen(&snapshot, 110, 18);
     let narrow = snapshot_to_screen(&snapshot, 46, 18);
     value["capacity_wait"]["gives_up_at"] = serde_json::Value::Null;
     value["capacity_wait"]["count"] = 1.into();
-    let forever = snapshot_to_screen(&serde_json::from_value(value).unwrap(), 110, 18);
+    let mut forever: SidebarSnapshot = serde_json::from_value(value).unwrap();
+    forever.now = fixed_now();
+    let forever = snapshot_to_screen(&forever, 110, 18);
     assert!(
         wide.contains(&phrase)
             && wide.contains("· 4 waiting")

@@ -23,16 +23,21 @@ impl HistoryRow<'_> {
             } => (*count, *first, *last, detail.as_deref()),
             _ => (self.count, self.first.at, self.latest.at, None),
         };
-        let mut note = if count > 1 {
-            let span = last.duration_since(first).as_secs().max(0) as u64;
-            format!(" ×{count} over {}", render::age_label(span))
-        } else {
-            String::new()
-        };
+        let mut note = fold_note(count, first, last);
         if let Some(detail) = detail {
             note.push_str(&format!(" · {detail}"));
         }
         note
+    }
+
+    fn target(&self, spec: &WorkflowSpec, journal: &[JournalEntry]) -> Option<String> {
+        match &self.latest.event {
+            JournalEvent::Evaluation { .. } => {
+                workflow::evaluation_target(spec, self.latest, &journal[self.index + 1..])
+            }
+            JournalEvent::Route { outcome, .. } => spec.target(&self.latest.node, outcome),
+            _ => None,
+        }
     }
 }
 
@@ -74,6 +79,9 @@ fn history_key(entry: &records::JournalEntry) -> Option<HistoryKey<'_>> {
 fn collapsed_history(journal: &[records::JournalEntry]) -> Vec<HistoryRow<'_>> {
     let mut rows = Vec::<HistoryRow<'_>>::new();
     for (index, entry) in journal.iter().enumerate() {
+        if workflow::repeats_evaluation(entry, index.checked_sub(1).map(|i| &journal[i])) {
+            continue;
+        }
         if let records::JournalEvent::Wait {
             outcome,
             first,
@@ -152,6 +160,9 @@ pub(super) fn waiting_line(
 
 impl View<'_> {
     pub(super) fn history(&self, out: &mut impl Write) -> Result<()> {
+        if let Some(asking) = workflow_view::asking(self.record) {
+            prose(out, &asking.ask.text, "  ")?;
+        }
         if let Some(wait) = &self.record.wait
             && (workflow_view::with_you(self.record)
                 || workflow_view::asking(self.record).is_some()
@@ -160,7 +171,8 @@ impl View<'_> {
         {
             writeln!(out, "  waiting: {}, {line}", wait.node)?;
         }
-        for row in collapsed_history(self.journal) {
+        let rows = collapsed_history(self.journal);
+        for (index, row) in rows.iter().enumerate() {
             let entry = row.latest;
             let seq = match (row.count, row.first.seq, entry.seq) {
                 (1, _, Some(seq)) => seq.to_string(),
@@ -178,15 +190,16 @@ impl View<'_> {
                     retry,
                     ..
                 } => {
+                    let answer = if object.is_null() {
+                        format!("said nothing · {outcome}")
+                    } else {
+                        format!("said {outcome}")
+                    };
                     writeln!(
                         out,
-                        "evaluation {outcome}{}{note}{}",
-                        workflow::evaluation_target(
-                            self.spec,
-                            entry,
-                            &self.journal[row.index + 1..]
-                        )
-                        .map_or_else(String::new, |target| format!(" → {target}")),
+                        "{answer}{}{note}{}",
+                        row.target(self.spec, self.journal)
+                            .map_or_else(String::new, |target| format!(" → {target}")),
                         cost(row.cost_usd)
                     )?;
                     self.answer(out, object)?;
@@ -333,7 +346,22 @@ impl View<'_> {
                 }
                 JournalEvent::Park { reason, text } => {
                     writeln!(out, "park {}", reason.as_str())?;
-                    if let Some(text) = text {
+                    let object = rows[..index]
+                        .iter()
+                        .rev()
+                        .filter(|row| row.latest.node == entry.node)
+                        .find_map(|row| match &row.latest.event {
+                            JournalEvent::Evaluation { object, .. }
+                            | JournalEvent::Route { input: object, .. } => Some(object),
+                            _ => None,
+                        });
+                    let repeats_reason = object
+                        .and_then(|object| object.get("reason"))
+                        .and_then(Value::as_str)
+                        == text.as_deref();
+                    if let Some(text) = text
+                        && !repeats_reason
+                    {
                         prose(out, text, "    ")?;
                     }
                 }
@@ -374,6 +402,17 @@ impl View<'_> {
         }
         Ok(())
     }
+}
+
+pub(super) fn fold_note(count: u64, first: Timestamp, last: Timestamp) -> String {
+    if count <= 1 {
+        return String::new();
+    }
+    let mut note = format!(" ×{count}");
+    if let Some(span) = render::folded_span(first, last) {
+        note.push_str(&format!(" {span}"));
+    }
+    note
 }
 
 pub(super) fn value(value: &Value) -> String {
@@ -561,7 +600,7 @@ mod tests {
         assert_eq!(collapsed_history(&journal).len(), 2, "{text}");
         assert!(
             text.contains(&format!(
-                "{} #1–5 pr evaluation pending → @wait ×5 over 4m · $0.12\n",
+                "{} #1–5 pr said pending → @wait ×5 over 4m · $0.12\n",
                 clock(4)
             )),
             "{text}"
@@ -569,7 +608,7 @@ mod tests {
         assert!(text.contains("reason: answer 5"), "{text}");
         assert!(!text.contains("answer 1"), "{text}");
         assert!(
-            text.contains(&format!("{} #6 pr evaluation done → @done\n", clock(5))),
+            text.contains(&format!("{} #6 pr said done → @done\n", clock(5))),
             "{text}"
         );
         assert!(!text.contains("pr wait"), "{text}");
@@ -588,11 +627,11 @@ mod tests {
         let text = history(&journal);
         assert_eq!(collapsed_history(&journal).len(), 2, "{text}");
         assert!(
-            text.contains("#1–2 pr evaluation hold → @wait ×2 over 1m"),
+            text.contains("#1–2 pr said hold → @wait ×2 over 1m"),
             "{text}"
         );
         assert!(
-            text.contains("#3–5 pr evaluation hold → @wait ×3 over 2m"),
+            text.contains("#3–5 pr said hold → @wait ×3 over 2m"),
             "{text}"
         );
         assert!(!text.contains("pr wait"), "{text}");
@@ -621,6 +660,20 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("pr wake review.changed\n"), "{text}");
+    }
+
+    #[test]
+    fn subsecond_folds_keep_the_count_without_a_span() {
+        let journal = [
+            evaluation(1, 0, "pending", None),
+            evaluation(2, 0, "pending", None),
+            wake(0, "review.ready"),
+            wake(0, "review.ready"),
+            wait(0, "window", 0, 0, 2),
+        ];
+        let text = history(&journal);
+        assert_eq!(text.matches("×2").count(), 3, "{text}");
+        assert!(!text.contains("over"), "{text}");
     }
 
     #[test]
@@ -682,6 +735,30 @@ mod tests {
                     ),
                     seq = seq,
                 )),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn parks_keep_text_not_printed_by_the_latest_answer_at_their_node() {
+        for (node, reason) in [("build", "answer 2"), ("pr", "answer 1")] {
+            let journal = [
+                evaluation(1, 0, "pending", None),
+                evaluation(2, 1, "done", None),
+                JournalEntry {
+                    seq: None,
+                    at: at(2),
+                    node: node.into(),
+                    event: JournalEvent::Park {
+                        reason: records::ParkReason::User,
+                        text: Some(reason.into()),
+                    },
+                },
+            ];
+            let text = history(&journal);
+            assert!(
+                text.ends_with(&format!("{node} park user\n    {reason}\n")),
                 "{text}"
             );
         }

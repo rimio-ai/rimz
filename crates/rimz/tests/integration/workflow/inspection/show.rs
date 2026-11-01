@@ -346,9 +346,7 @@ fn timeout_shows_the_flushed_wait_and_shell_log() {
         &text,
         &[
             "waited the full 1h",
-            "invalid ×7",
-            &historical_clock(AT),
-            &historical_clock("2000-01-01T13:00:00Z"),
+            "gate said invalid ×7 over 1h",
             "last log /tmp/check.log",
         ],
     );
@@ -506,7 +504,7 @@ fn history_renders_typed_facts_without_json_and_default_trail_is_bounded() {
         &text,
         &[
             "review#project",
-            "evaluation ok → build",
+            "said ok → build",
             "ci=passed",
             "pr=unread",
             "all green",
@@ -610,6 +608,7 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
         ],
     );
     assert!(!text.contains("history:"), "{text}");
+    assert_eq!(text.matches("said pending, ×2").count(), 1, "{text}");
 
     record.deadline = Some("2000-01-01T12:05:00Z".parse().unwrap());
     save(&env, &record);
@@ -627,6 +626,15 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
             historical_clock("2000-01-01T12:05:00Z")
         )],
     );
+}
+
+#[test]
+fn running_step_states_its_activity_once() {
+    let (env, mut record) = fixture("active", None, vec![]);
+    record.node = "build".into();
+    save(&env, &record);
+    let text = human(&env, &record, false);
+    assert_eq!(text.matches("build running").count(), 1, "{text}");
 }
 
 #[test]
@@ -657,6 +665,7 @@ fn holding_check_names_the_case_target_and_completion_clock() {
             &historical_clock("2000-01-01T12:10:00Z"),
         ],
     );
+    assert_eq!(text.matches("holding ready at gate").count(), 1, "{text}");
     let text = fs::read_to_string(&paths.spec).unwrap();
     fs::write(
         &paths.spec,

@@ -213,6 +213,8 @@ Two kinds of sidebar color stay off the component layer. Amount-driven tones com
 
 | function | output |
 | --- | --- |
+| `local_clock` | day-qualified local clock shared by workflow instants and capacity waits |
+| `capacity_wait` | `waiting for capacity[ (<kinds>)] since <clock>[, gives up at <clock>]`, using `local_clock` |
 | `reset_countdown` | two-unit reset countdown: `5h00m`, `1d01h` |
 | `window_label`, `window_duration_label` | budget-window labels: `window_label` uses a scope label, delegates known durations, or returns `usage`; `window_duration_label` uses `mo` for 28 to 31 days and exact duration units otherwise |
 | `duration_label` | exact duration units for non-window uses: `5h`, `30d`, `730h`, `90m` |

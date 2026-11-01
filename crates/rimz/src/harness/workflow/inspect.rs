@@ -80,7 +80,8 @@ pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry]) -> Vec<Hop> {
     hops
 }
 
-fn repeats_evaluation(entry: &JournalEntry, previous: Option<&JournalEntry>) -> bool {
+/// Whether a route repeats the immediately preceding evaluation's non-null answer.
+pub fn repeats_evaluation(entry: &JournalEntry, previous: Option<&JournalEntry>) -> bool {
     let Some(previous) = previous else {
         return false;
     };

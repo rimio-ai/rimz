@@ -6,7 +6,6 @@ review#project  ☾ waiting at pr <age>: said pending, ×1, recheck <clock> · g
 started <clock> by hand · 0 attempts
   ci: pending
   pr: unread
-  said pending, ×1, recheck <clock>
 
 ☾ pr  check  sh checks/pr.sh · waits ≤<age>, then @user · pending · <clock> · since <clock>
 │   checked ×1 · wakes on review.ready, the minute tick

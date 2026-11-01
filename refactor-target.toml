@@ -3710,7 +3710,13 @@ upward-dependencies = ["agents"]
 # Palette::model_tones shares readable provider-near model tones with renderers (+1).
 # fmt::age_label and fmt::rel_age give CLI reports and launcher entry facts one age vocabulary (+2).
 # fmt::capacity_wait shares the local-time phrase across loop, workflow and sidebar surfaces (+1).
-surface-budget = 40
+# fmt::local_clock gives workflow and capacity instants one day-qualified clock (+1).
+surface-budget = 41
+
+[[verdict]]
+kind = "item"
+key = "theme::fmt::local_clock"
+reason = "Workflow instants and capacity waits on every surface share one day-qualified local clock."
 
 [[verdict]]
 kind = "item"
@@ -10323,6 +10329,11 @@ reason = "Transitions and workflow inspection share each case's first-settlement
 kind = "item"
 key = "harness::workflow::next_bound"
 reason = "Inspection and engine rechecks share the earliest unfired deadline, timeout or hold with engine tie order."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::repeats_evaluation"
+reason = "Trail and full history suppress the same duplicate engine route evidence."
 
 [[verdict]]
 kind = "item"

@@ -21,6 +21,7 @@ use super::{metric_spans, pin_right, spans_width};
 pub(in crate::sidebar_pane::render) fn capacity_wait_line(
     theme: &Theme,
     wait: &CapacityWaitSummary,
+    now: jiff::Timestamp,
     width: usize,
 ) -> Line<'static> {
     let style = status_rest_style(theme, AgentStatus::Waiting);
@@ -28,7 +29,7 @@ pub(in crate::sidebar_pane::render) fn capacity_wait_line(
         format!(
             "{} {}",
             status_glyph(theme, AgentStatus::Waiting),
-            crate::theme::fmt::capacity_wait(&wait.kinds, wait.since, wait.gives_up_at)
+            crate::theme::fmt::capacity_wait(&wait.kinds, wait.since, wait.gives_up_at, now)
         ),
         style,
     )];

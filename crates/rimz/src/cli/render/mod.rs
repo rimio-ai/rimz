@@ -706,21 +706,7 @@ pub(super) fn folded_span(earliest: Timestamp, latest: Timestamp) -> Option<Stri
 }
 
 pub(super) fn workflow_clock(at: Timestamp, now: Timestamp) -> String {
-    let zone = jiff::tz::TimeZone::system();
-    let at = at.to_zoned(zone.clone());
-    let today = now.to_zoned(zone).date();
-    let format = if at.date() == today {
-        "%H:%M"
-    } else if at
-        .date()
-        .since(today)
-        .is_ok_and(|span| span.get_days().abs() <= 6)
-    {
-        "%a %H:%M"
-    } else {
-        "%Y-%m-%d %H:%M"
-    };
-    at.strftime(format).to_string()
+    rimz::theme::fmt::local_clock(at, now)
 }
 
 pub(crate) struct NeedsYouRow {

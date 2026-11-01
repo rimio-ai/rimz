@@ -838,6 +838,9 @@ fn timeout_kills_script_and_routes_or_parks() {
             "a timed-out evaluation must retain the script digest it ran: {evaluations:#?}"
         );
         assert!(!rimz::proc::process_is_live(pid, None));
+        let history = success(command(&env, &["workflow", "show", &id, "--history"]));
+        assert!(history.contains("pr said nothing · timeout\n"), "{history}");
+        assert!(history.contains("pr route timeout →"), "{history}");
     }
 }
 
@@ -1226,7 +1229,7 @@ fn human_show_wait_and_journal_are_readable() {
         text.starts_with("review#project  ☾ waiting at pr"),
         "{text}"
     );
-    assert!(text.contains("×1"));
+    assert_eq!(text.matches("said pending, ×1").count(), 1, "{text}");
     assert!(text.contains("trail  "), "{text}");
     let zone = jiff::tz::TimeZone::system();
     let today = jiff::Timestamp::now().to_zoned(zone.clone()).date();
@@ -1299,9 +1302,20 @@ fn human_show_wait_and_journal_are_readable() {
     let history = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(history.contains("pr wake review.ready"), "{history}");
     assert!(
-        history.contains("CI pending") && history.contains("evaluation"),
+        history.contains("CI pending") && history.contains("pr said pending"),
         "{history}"
     );
+    assert_eq!(
+        history.matches("pr said invalid → @user").count(),
+        1,
+        "{history}"
+    );
+    assert!(!history.contains("pr route invalid"), "{history}");
+    let value = show(&env, &id);
+    let reason = value["record"]["park"]["text"].as_str().unwrap();
+    assert_eq!(history.matches(reason).count(), 1, "{history}");
+    assert!(history.ends_with("pr park invalid\n"), "{history}");
+    assert_eq!(parked.matches(reason).count(), 1, "{parked}");
     assert_eq!(value["record"]["prompt"], "Review this");
     fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
     success(command(&env, &["workflow", "resume", &id]));
@@ -1311,6 +1325,24 @@ fn human_show_wait_and_journal_are_readable() {
         terminal.lines().next().unwrap().contains("done"),
         "{terminal}"
     );
+}
+
+#[test]
+fn history_park_omits_text_only_after_a_routed_answer() {
+    let (env, _) = fixture(
+        &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.review='@user'\n"),
+        "printf '%s\\n' '{\"outcome\":\"review\",\"reason\":\"Choose the next move\"}'\n",
+    );
+    let id = start(&env);
+    settled(&env, &id, "parked");
+    let history = success(command(&env, &["workflow", "show", &id, "--history"]));
+    assert!(history.contains("pr said review → @user\n"), "{history}");
+    assert_eq!(
+        history.matches("Choose the next move").count(),
+        1,
+        "{history}"
+    );
+    assert!(history.ends_with("pr park user\n"), "{history}");
 }
 
 #[test]
@@ -1351,11 +1383,11 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
 
     let rows = text
         .lines()
-        .filter(|line| line.contains("pr evaluation pending"))
+        .filter(|line| line.contains("pr said pending"))
         .collect::<Vec<_>>();
     assert_eq!(rows.len(), 1, "{text}");
     assert!(
-        rows[0].contains("#1–3 pr evaluation pending → @wait ×3 over "),
+        rows[0].contains("#1–3 pr said pending → @wait ×3"),
         "{text}"
     );
     let waiting_line = text
@@ -1365,7 +1397,7 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
     assert!(!waiting_line.contains('×'), "{waiting_line}");
     let finished = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(!finished.contains("pr wait"), "{finished}");
-    assert!(finished.contains("#4 pr evaluation done"), "{finished}");
+    assert!(finished.contains("#4 pr said done"), "{finished}");
 }
 
 #[test]

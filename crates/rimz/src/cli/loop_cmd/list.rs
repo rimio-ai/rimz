@@ -441,8 +441,8 @@ impl From<&launch_ledger::CapacityRecord> for CapacityWaitView {
 }
 
 impl CapacityWaitView {
-    pub(super) fn text(&self) -> String {
-        rimz::theme::fmt::capacity_wait(&self.kinds, self.since, self.gives_up_at)
+    pub(super) fn text(&self, now: Timestamp) -> String {
+        rimz::theme::fmt::capacity_wait(&self.kinds, self.since, self.gives_up_at, now)
     }
 }
 
@@ -979,7 +979,7 @@ impl TaskRow {
         if self.state == TaskState::Live
             && let Some(wait) = &self.capacity_wait
         {
-            let mut text = wait.text();
+            let mut text = wait.text(now);
             if self.capacity_count > 1 {
                 text.push_str(&format!(" · +{} more", self.capacity_count - 1));
             }

@@ -1044,7 +1044,7 @@ pub(super) fn top_lines(
         ));
     }
     if let Some(wait) = &snapshot.capacity_wait {
-        header.push(capacity_wait_line(theme, wait, inner));
+        header.push(capacity_wait_line(theme, wait, snapshot.now, inner));
     }
     header.push(hairline_rule(theme, inner));
     let header_len = header.len();

@@ -157,6 +157,7 @@ fn capacity_workflow_wait_reaches_the_human_loop_list() {
         &[rimz::ids::AgentKind::new_unchecked("codex")],
         wait["first"].as_str().unwrap().parse().unwrap(),
         None,
+        jiff::Timestamp::now(),
     );
     let text = success(room.command(&["loop", "list"]).output().unwrap());
     assert!(text.contains(&phrase), "{text}");
@@ -273,6 +274,7 @@ fn capacity_holds_merge_without_consuming_visits_and_render_the_shared_phrase() 
         &[rimz::ids::AgentKind::new_unchecked("codex")],
         wait["first"].as_str().unwrap().parse().unwrap(),
         Some(wait["gives_up_at"].as_str().unwrap().parse().unwrap()),
+        jiff::Timestamp::now(),
     );
     for args in [
         vec!["workflow", "show", record.id.as_str()],

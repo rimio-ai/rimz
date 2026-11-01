@@ -70,7 +70,7 @@ pub(super) fn wait_counted(
     if wait.outcome == "capacity" {
         return Some(format!(
             "{} · {}, ×{}",
-            rimz::theme::fmt::capacity_wait(&wait.kinds, wait.first, wait.gives_up_at),
+            rimz::theme::fmt::capacity_wait(&wait.kinds, wait.first, wait.gives_up_at, now),
             render::one_line(wait.detail.as_deref().unwrap_or("—")),
             wait.count,
         ));
