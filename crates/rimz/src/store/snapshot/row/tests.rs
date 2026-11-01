@@ -645,71 +645,77 @@ fn context_with_tokens(tokens: AgentTokenUsage) -> AgentContext {
 }
 
 #[test]
-fn compacted_context_unknown_requires_a_compaction_and_no_reading() {
-    let mut row = SidebarRow {
-        id: "agent:s1".to_owned(),
-        name: "claude".to_owned(),
-        pane: None,
-        worktree_path: None,
-        checkout: None,
-        worktree_branch: None,
-        channel: None,
-        unread: false,
-        inactive: false,
-        archived: false,
-        attention_score: 0,
-        last_activity: row_time(),
-        card: RowCard::Agent(Arc::default()),
+fn uncounted_compaction_is_session_history() {
+    let card = AgentCard {
+        compacted_unmeasured: true,
+        ..Default::default()
     };
     assert!(
-        !row.compacted_context_unknown(),
-        "a fresh card is not compacted"
+        card.has_session_history(),
+        "a retired window is not a fresh launch"
     );
-    row.as_agent_mut().unwrap().compaction_count = 1;
-    assert!(
-        row.compacted_context_unknown(),
-        "the compacted size is unknown"
-    );
+}
 
+#[test]
+fn compacted_unmeasured_resolves_the_fold_flag_against_sidecar_tokens() {
+    let mut agent = AgentState::stub("claude", "s1", AgentStatus::Idle);
+    agent.compaction_count = 1;
     for percent in [0, 3] {
-        row.as_agent_mut().unwrap().usage.context_pct = Some(percent);
-        assert!(
-            !row.compacted_context_unknown(),
-            "a fold percentage is a reading"
-        );
-        row.as_agent_mut().unwrap().usage.context_pct = None;
-        row.as_agent_mut().unwrap().context = Some(context_with_tokens(AgentTokenUsage {
+        agent.usage.context_pct = Some(percent);
+        agent.usage.fresh_input_tokens = Some(0);
+        agent.attach_context(Some(context_with_tokens(AgentTokenUsage {
             context_window_size: Some(200_000),
             used_percentage: Some(percent),
             ..Default::default()
-        }));
-        assert!(
-            !row.compacted_context_unknown(),
-            "a statusline percentage is a reading"
+        })));
+        let card = AgentCard::from_agent(&agent, row_time());
+        assert!(!card.compacted_unmeasured, "numbers do not select the gap");
+        assert_eq!(card.context_gauge_percent(), Some(percent));
+        assert_eq!(card.call_split().map(|split| split.filled()), Some(0));
+    }
+    agent.usage = AgentUsageSummary::default();
+    agent.compacted_unmeasured = true;
+    agent.compaction_count = 0;
+    agent.attach_context(None);
+    let card = AgentCard::from_agent(&agent, row_time());
+    assert!(
+        card.compacted_unmeasured,
+        "a lost-open close needs no count or sidecar"
+    );
+    assert_eq!(
+        serde_json::to_value(&card).unwrap()["compacted_unmeasured"],
+        true
+    );
+
+    for used in [None, Some(0), Some(6_000)] {
+        agent.attach_context(Some(context_with_tokens(AgentTokenUsage {
+            context_window_size: Some(200_000),
+            used_percentage: Some(3),
+            current_usage: used.map(|input| AgentCurrentUsage {
+                input_tokens: Some(input),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })));
+        let card = AgentCard::from_agent(&agent, row_time());
+        assert_eq!(card.compacted_unmeasured, used != Some(6_000));
+        assert_eq!(
+            card.context_gauge_percent(),
+            used.filter(|used| *used > 0).map(|_| 3)
         );
-        row.as_agent_mut().unwrap().context = None;
+        assert!(
+            agent.compacted_unmeasured,
+            "sidecar resolution is display-only"
+        );
     }
 
-    for used in [0, 6_000] {
-        row.as_agent_mut().unwrap().usage.fresh_input_tokens = Some(used);
-        assert!(
-            !row.compacted_context_unknown(),
-            "a call split is a reading"
-        );
-        row.as_agent_mut().unwrap().usage.fresh_input_tokens = None;
-        row.as_agent_mut().unwrap().context = Some(context_with_tokens(AgentTokenUsage {
-            current_context_tokens: Some(used),
-            ..Default::default()
-        }));
-        assert!(
-            !row.compacted_context_unknown(),
-            "a token count needs no window"
-        );
-        row.as_agent_mut().unwrap().context = None;
-    }
-    assert!(row.compacted_context_unknown());
-    row.card = RowCard::Process(ProcessCard::default());
-    assert!(!row.compacted_context_unknown());
+    let wire = serde_json::to_value(AgentCard::default()).unwrap();
+    assert!(wire.get("compacted_unmeasured").is_none());
+    assert!(
+        !serde_json::from_value::<AgentCard>(wire)
+            .unwrap()
+            .compacted_unmeasured
+    );
 }
 
 #[test]

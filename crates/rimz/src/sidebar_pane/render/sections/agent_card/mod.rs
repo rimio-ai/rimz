@@ -287,7 +287,7 @@ pub(super) fn row_lines(
                     inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()).into());
                 }
                 CardSlot::Tokens => {
-                    if !row.compacted_context_unknown() {
+                    if !agent.compacted_unmeasured {
                         inner.push(context_tokens_line(ctx, row).into());
                     }
                 }

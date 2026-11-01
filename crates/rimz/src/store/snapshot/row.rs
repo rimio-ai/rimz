@@ -232,14 +232,6 @@ impl SidebarRow {
         self.as_agent().and_then(AgentCard::context_used_tokens)
     }
 
-    /// A completed compaction whose context size has not yet been reported.
-    pub(crate) fn compacted_context_unknown(&self) -> bool {
-        self.as_agent()
-            .is_some_and(|agent| agent.compaction_count > 0)
-            && self.context_gauge_percent().is_none()
-            && self.context_used_tokens().is_none()
-    }
-
     /// The latest call's composition when the rich token blob is absent.
     pub fn call_split(&self) -> Option<RowCallSplit> {
         self.as_agent().and_then(AgentCard::call_split)
@@ -460,6 +452,10 @@ pub struct AgentCard {
     /// The agent is condensing its context window right now.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
+    /// A compaction is awaiting a real reading on both the lifecycle and
+    /// joined sidecar rails. The meter keeps its compaction glyph and hides stats.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compacted_unmeasured: bool,
     /// Lifetime count of completed context compactions, copied from the rollup;
     /// the selected or held card's stats line (every engaged card under expanded
     /// density) renders `↻ N` from the first completed compaction.
@@ -527,6 +523,7 @@ impl Default for AgentCard {
             cache: None,
             sub_agents: Vec::new(),
             compacting: false,
+            compacted_unmeasured: false,
             compaction_count: 0,
             tool_calls: BTreeMap::new(),
             tool_repeat: None,
@@ -602,6 +599,13 @@ impl AgentCard {
             cache: None,
             sub_agents: Vec::new(),
             compacting: agent.is_compacting(now),
+            compacted_unmeasured: agent.compacted_unmeasured
+                && !agent
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.tokens.as_ref())
+                    .and_then(AgentTokenUsage::used_tokens)
+                    .is_some_and(|used| used > 0),
             compaction_count: agent.compaction_count,
             tool_calls: agent.tool_calls.clone(),
             tool_repeat: agent.tool_repeat.clone(),
@@ -739,6 +743,7 @@ impl AgentCard {
     pub fn has_session_history(&self) -> bool {
         self.usage.total_tokens.is_some_and(|total| total > 0)
             || self.compaction_count > 0
+            || self.compacted_unmeasured
             || !self.tool_calls.is_empty()
             || self
                 .context
