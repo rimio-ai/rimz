@@ -161,7 +161,9 @@ pub(crate) use tools::{
 pub use tools::{ToolSet, definition_model_kind, skills_lack_skill_tool};
 use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
 use transcript_fs::read_transcript_lines;
-use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
+use transcript_fs::{
+    read_transcript_tail, read_transcript_tail_with_budget, read_transcript_tail_with_status,
+};
 
 pub mod plugins;
 pub mod skills;

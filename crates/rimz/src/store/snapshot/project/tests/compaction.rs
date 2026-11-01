@@ -575,6 +575,27 @@ fn codex_estimate_keeps_the_gap_until_a_model_call_reports_its_split() {
 }
 
 #[test]
+fn claude_compaction_hooks_with_the_same_widened_reading_keep_usage_retired() {
+    let reading = serde_json::json!({
+        "total_tokens": 100_500,
+        "fresh_input_tokens": 100_000,
+        "cache_read_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 500,
+    });
+    let events = [
+        lifecycle("claude", "SessionStart", signal("registered")),
+        lifecycle_reading("PreCompact", signal("compacting"), reading.clone()),
+        lifecycle_reading("PostCompact", compaction_ended(Some(false)), reading),
+    ];
+    let agent = reduce_agent_states(&events).remove(0);
+    assert!(agent.compacted_unmeasured);
+    assert_eq!(agent.retired_context_tokens, Some(100_000));
+    assert_eq!(agent.usage.total_tokens, None);
+    assert_eq!(agent.usage.context_pct, None);
+}
+
+#[test]
 fn claude_gap_survives_the_retired_split_echo_and_prompt_until_tool_usage() {
     for echo in [serde_json::json!({}), compacted_reading()] {
         let mut events = vec![
