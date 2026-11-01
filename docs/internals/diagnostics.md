@@ -360,11 +360,11 @@ These records stay when no `push_handshake` follows. Missing progress after a st
 
 `audit/plugin-presence.log.jsonl` holds the samples the presence plugin's keepalive delivers ([`plugin_presence.rs`](../../crates/rimz/src/diag/plugin_presence.rs), appended from `sidebar::presence`). Each sample carries the exact `(loaded_at_ms, plugin_id)` generation and the plugin build. The rest of its fields are listed in [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin).
 
-`rimz doctor` lists the presence-plugin panes loaded in the live session and joins each id to its newest telemetry generation. A plugin is active when it is the fresh topology cache's writer, rejected when it is the stale writer in `lanes/topology-writer-conflict.json`, and inactive otherwise. When the live listing fails, Doctor reports the probe unavailable rather than presenting retained telemetry as live. Each plugin row takes the first verdict that applies (`crates/rimz/src/cli/doctor/render.rs::presence_plugin_verdict`):
+`rimz doctor` lists the presence-plugin panes loaded in the live session and joins each id to its newest telemetry generation. A plugin is active when it is the fresh topology cache's writer, rejected when it is the stale writer in `lanes/topology-writer-conflict.json`, and inactive otherwise. The topology writer also carries its own optional `client_id`; attachment ranks ahead of desired identity and generation ([writer fencing](./multiplexers.md#writer-fencing)). A conflict is superseded when the cache writer differs from its accepted writer, even when the new writer's generation is older. When the live listing fails, Doctor reports the probe unavailable rather than presenting retained telemetry as live. Each plugin row takes the first verdict that applies (`crates/rimz/src/cli/doctor/render.rs::presence_plugin_verdict`):
 
 | Plugin | Verdict |
 | --- | --- |
-| Rejected | Counted warning: a newer plugin took over, with the ignored write count. Fix: `rimz reload` |
+| Rejected | Counted warning: another writer took over, with the ignored write count. Fix: `rimz reload` |
 | Inactive | Information: loaded, not writing pane topology |
 | Failure delta while its telemetry is fresh | Counted warning naming the last failure's cause |
 | Build differs from the desired plugin build (outdated) | Counted warning. Fix: `rimz reload` |

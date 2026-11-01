@@ -2278,7 +2278,7 @@ fn mux_section_renders_multiple_presence_plugin_generations() {
         "build desired-, current",
         "writing pane topology",
         "plugin #41",
-        "a newer plugin took over",
+        "another writer took over",
         "3 of its topology writes were ignored",
         "rimz reload",
         "telemetry log",
