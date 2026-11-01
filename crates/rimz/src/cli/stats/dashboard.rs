@@ -719,11 +719,16 @@ impl Dashboard<'_> {
         lines
     }
 
-    fn chart_title(&self, active: Window) -> String {
+    fn chart_title(&self, active: Window, comparison: anstyle::Style) -> String {
         let selected = active.select(&self.stats.total).usd;
         if active == Window::Today {
+            let swatch = if self.color {
+                format!("{comparison}█{}", render::palette::muted())
+            } else {
+                "░".into()
+            };
             return format!(
-                "today {} so far · ~{} by midnight · ░ yesterday {}",
+                "today {} so far · ~{} by midnight · {swatch} yesterday {}",
                 fmt_usd(selected),
                 fmt_usd(self.forecast()),
                 fmt_usd(
@@ -831,6 +836,15 @@ impl Dashboard<'_> {
             totals.iter().sum::<f64>() / count as f64
         };
         let ceiling = round_ceiling(max);
+        let ghost_heights = yesterday
+            .iter()
+            .map(|total| (total / ceiling * height as f64).round() as usize)
+            .collect::<Vec<_>>();
+        let comparison_style = if self.color {
+            styles.other.forecast
+        } else {
+            render::palette::muted()
+        };
         // The y labels' convention: plot row k from the bottom (k counted from 1) stands for
         // k/height of the ceiling, so the line takes the row nearest the mean, never below row 1.
         let nearest_row =
@@ -865,7 +879,7 @@ impl Dashboard<'_> {
         let mut right = if weekly {
             String::new()
         } else {
-            self.chart_title(active)
+            self.chart_title(active, comparison_style)
         };
         if hourly
             && display_width(&left) + 2 + display_width(&right) > width
@@ -886,7 +900,8 @@ impl Dashboard<'_> {
         let bars = dates
             .iter()
             .zip(&totals)
-            .map(|(day, total)| {
+            .enumerate()
+            .map(|(index, (day, total))| {
                 let extra = if *day == last_day { extension } else { 0.0 };
                 let projected = *total + extra;
                 if projected <= 0.0 {
@@ -932,7 +947,8 @@ impl Dashboard<'_> {
                     )
                 };
                 let forecast_style = styles.get(top_id).forecast;
-                (0..units.div_ceil(8))
+                let cell_count = units.div_ceil(8);
+                (0..cell_count)
                     .map(|cell| {
                         let projected = (units - cell * 8).min(8);
                         let spent = spent_units.saturating_sub(cell * 8).min(8);
@@ -944,6 +960,11 @@ impl Dashboard<'_> {
                         let style = styles.get(segment_at(&segments, at)).mark;
                         let background = if projected > spent {
                             forecast_style.get_fg_color()
+                        } else if self.color
+                            && ghost_heights[index] > cell_count
+                            && cell + 1 == cell_count
+                        {
+                            comparison_style.get_fg_color()
                         } else {
                             None
                         };
@@ -973,13 +994,15 @@ impl Dashboard<'_> {
                 if let Some(&(glyph, style)) = bar.get(row) {
                     line.push_str(&render::paint(style, &glyph.to_string().repeat(bar_width)));
                 } else {
-                    let ghost_height =
-                        (yesterday[index] / ceiling * height as f64).round() as usize;
-                    let ghost = row < ghost_height;
-                    let glyph = if ghost { "░" } else { baseline };
+                    let ghost = row < ghost_heights[index];
+                    let glyph = if ghost {
+                        if self.color { "█" } else { "░" }
+                    } else {
+                        baseline
+                    };
                     line.push_str(&render::paint(
                         if ghost {
-                            render::palette::muted()
+                            comparison_style
                         } else {
                             render::palette::faint()
                         },
