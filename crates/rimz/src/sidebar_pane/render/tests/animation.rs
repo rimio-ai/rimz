@@ -1142,11 +1142,11 @@ fn render_stalled_agent_reads_as_static_attention() {
     );
 }
 
-/// A running agent animates: advancing the phase advances the working fill,
+/// A running agent animates: advancing the head step advances the working fill,
 /// regardless of how recently it last reported (the freshness freeze is
 /// gone — staleness escalates to `!` instead of stopping the spinner).
 #[test]
-fn render_live_heads_follow_phase_and_turn_phase() {
+fn render_live_heads_follow_step_and_turn_phase() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -1182,6 +1182,37 @@ fn render_live_heads_follow_phase_and_turn_phase() {
         second.contains("⠂ claude"),
         "fast thinking speed advances on the next tick:\n{second}"
     );
+}
+
+#[test]
+fn head_frames_read_the_step_unless_playback_pins_the_cosmetic_phase() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("working"),
+    );
+    claude.phase = crate::agents::TurnPhase::Acting;
+    let snapshot = snapshot_with(vec![claude]);
+    let mut view = ui_at_phase(13);
+    view.head_step = 3;
+    for (pin, glyph) in [(None, "⢿"), (Some(2), "⣻")] {
+        view.cosmetic_phase = pin;
+        let screen = snapshot_to_screen_with_alert_and_ui(
+            &snapshot,
+            None,
+            &view,
+            &UiState::default(),
+            40,
+            16,
+        );
+        assert!(
+            screen.contains(&format!("{glyph} claude")),
+            "pin {pin:?}: {screen}"
+        );
+    }
 }
 
 #[test]

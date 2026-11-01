@@ -30,7 +30,13 @@ pub(super) fn identity_line(
 ) -> Line<'static> {
     let width = content_width(row_ctx.width);
     if row.is_process() {
-        return process_row_line(row_ctx.theme, row, width, row_ctx.animation_phase);
+        return process_row_line(
+            row_ctx.theme,
+            row,
+            width,
+            row_ctx.animation_phase,
+            row_ctx.head_step,
+        );
     }
 
     let status = row.status().unwrap_or(AgentStatus::Idle);
@@ -49,7 +55,7 @@ pub(super) fn agent_lead_cell(
     row: &SidebarRow,
     status: AgentStatus,
     attention: CardAttention,
-    animation_phase: u64,
+    head_step: u64,
 ) -> Span<'static> {
     let role = if !status.is_actionable() && row.as_agent().is_some_and(|agent| agent.compacting) {
         AnimationRole::Compacting
@@ -68,7 +74,7 @@ pub(super) fn agent_lead_cell(
         agent_role(status, row.phase())
     };
     Span::styled(
-        role_glyph(theme, role, animation_phase),
+        role_glyph(theme, role, head_step),
         agent_lead_style_with_attention(theme, role, attention),
     )
 }
@@ -109,7 +115,7 @@ pub(super) fn agent_identity_line(
     // the provider's brand color (or mid-gray chrome for kinds with no
     // registered definition); the bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
-        agent_lead_cell(theme, row, status, attention, row_ctx.animation_phase),
+        agent_lead_cell(theme, row, status, attention, row_ctx.head_step),
         Span::raw(" "),
     ];
     left.extend(attention_name_spans(
@@ -250,7 +256,7 @@ pub(super) fn stale_line(
             row,
             row.status().unwrap_or(AgentStatus::Idle),
             attention,
-            ctx.animation_phase,
+            ctx.head_step,
         ),
         Span::raw(" "),
     ];

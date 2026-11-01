@@ -1,6 +1,82 @@
 use super::*;
 use std::sync::atomic::Ordering;
 
+fn compacting_rig() -> (Rig, FrameOutput, LoopClock) {
+    let clock = LoopClock::play("2026-06-09T12:00:00Z".parse().unwrap());
+    let mut rig = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
+    let mut snapshot = agent_snapshot(&rig.ws);
+    snapshot.now = clock.timestamp();
+    snapshot
+        .rows_mut()
+        .next()
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .compacting = true;
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        v.state
+            .expanded_groups
+            .insert(snapshot.worktree_groups[0].key.clone());
+        v.context.current = snapshot;
+        v.context.anim_start = clock.now();
+    });
+    let output = FrameOutput::default();
+    rig.terminal.backend_mut().play_output(output.clone());
+    (rig, output, clock)
+}
+
+fn painted_head(output: &FrameOutput) -> String {
+    let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
+    parser.process(&output.0.lock().unwrap());
+    let screen = parser.screen().contents();
+    screen
+        .lines()
+        .find(|line| line.contains("claude"))
+        .unwrap_or_else(|| panic!("painted agent card: {screen}"))
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn head_steps_start_at_zero_and_never_skip_late_paints() {
+    let wave = ["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"];
+    for spacing in [2, 5] {
+        let (mut rig, output, clock) = compacting_rig();
+        let refresh = animation_frame(rig.state.views.mirror());
+        clock.advance(7 * refresh);
+        for step in 0..=wave.len() {
+            rig.state.pane.dirty = true;
+            rig.state.paint_now(&mut rig.terminal, clock.now()).unwrap();
+            assert_eq!(
+                painted_head(&output),
+                wave[step % wave.len()],
+                "spacing {spacing}, step {step}"
+            );
+            clock.advance(spacing * refresh);
+        }
+    }
+}
+
+#[test]
+fn head_steps_hold_during_input_bursts_within_each_phase() {
+    let (mut rig, output, clock) = compacting_rig();
+    let wave = ["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃", "▁"];
+    let mut previous = 0;
+    for (step, glyph) in wave.into_iter().enumerate() {
+        for offset in [0, 16, 96] {
+            let elapsed = step as u64 * 100 + offset;
+            clock.advance(Duration::from_millis(elapsed - previous));
+            previous = elapsed;
+            rig.state
+                .on_input(Wakeup::Resize, &mut rig.terminal)
+                .unwrap();
+            assert_eq!(painted_head(&output), glyph, "input at {elapsed} ms");
+        }
+    }
+}
+
 #[test]
 fn tab_read_dwell_ignores_wall_steps() {
     let clock = LoopClock::play("2026-06-09T12:00:00Z".parse().unwrap());

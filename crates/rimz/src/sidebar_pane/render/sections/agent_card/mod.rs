@@ -475,7 +475,7 @@ fn sub_agent_entry_lines(
         // finished one holds its static `✓`/`!` verdict — one head grammar
         // for the parent's cell and its children's.
         let lead = Span::styled(
-            agent_glyph(theme, sub.status, sub.phase, animation_phase),
+            agent_glyph(theme, sub.status, sub.phase, ctx.head_step),
             agent_role_style_at(theme, sub.status, sub.phase, animation_phase),
         );
         let detail = sub

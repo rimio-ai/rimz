@@ -87,9 +87,9 @@ pub(in crate::sidebar_pane::render) fn hour_age_glyph(theme: &Theme, secs: i64) 
 pub(in crate::sidebar_pane::render) fn role_glyph(
     theme: &Theme,
     role: AnimationRole,
-    animation_phase: u64,
+    head_step: u64,
 ) -> String {
-    frame_at(theme.animations.role(role), animation_phase)
+    frame_at(theme.animations.role(role), head_step)
 }
 
 /// The leading cell for an agent row. A `running` agent shows the thinking
@@ -102,19 +102,19 @@ pub(in crate::sidebar_pane::render) fn agent_glyph(
     theme: &Theme,
     status: AgentStatus,
     phase: TurnPhase,
-    animation_phase: u64,
+    head_step: u64,
 ) -> String {
     match status {
         AgentStatus::Running if phase == TurnPhase::Reasoning => {
-            role_glyph(theme, AnimationRole::Thinking, animation_phase)
+            role_glyph(theme, AnimationRole::Thinking, head_step)
         }
-        AgentStatus::Running => role_glyph(theme, AnimationRole::Working, animation_phase),
+        AgentStatus::Running => role_glyph(theme, AnimationRole::Working, head_step),
         AgentStatus::Idle
         | AgentStatus::Success
         | AgentStatus::Paused
         | AgentStatus::Sleeping
         | AgentStatus::Waiting
-        | AgentStatus::Failed => frame_at(theme.animations.status(status), animation_phase),
+        | AgentStatus::Failed => frame_at(theme.animations.status(status), head_step),
     }
 }
 
