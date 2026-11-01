@@ -299,6 +299,79 @@ fn dashboard_mode_is_selected_once_from_display_and_pet_settings() {
     assert_eq!(dashboard_mode(&snapshot), DashboardMode::Pet);
 }
 
+fn assert_one_bar_emblem_raised(mode: DashboardMode, width: usize, crest_offset: usize) {
+    let theme = Theme::fixed(false);
+    let two_bars = [provider_panel(
+        "claude",
+        "Claude",
+        173,
+        true,
+        false,
+        Some((20, 30)),
+    )];
+    let mut one_bar = two_bars.clone();
+    one_bar[0].windows.remove(0);
+    let texts = Dashboard::new(&theme, &one_bar, mode).width(width).texts();
+    let two_bar_lines = Dashboard::new(&theme, &two_bars, mode).width(width).lines();
+    assert_eq!(texts.len() + 1, two_bar_lines.len(), "{}", texts.join("\n"));
+    let header = texts
+        .iter()
+        .position(|line| line.contains("Claude Max"))
+        .unwrap();
+    let crest = header + crest_offset;
+    for (index, art) in one_bar[0].art.iter().enumerate() {
+        assert!(
+            texts[crest + index].contains(art.trim()),
+            "{}",
+            texts.join("\n")
+        );
+    }
+    assert!(texts[crest + 1].contains('◎'));
+    assert!(texts[crest + 2].contains("7d"));
+}
+
+#[test]
+fn one_bar_emblem_rides_the_tabbed_header() {
+    assert_one_bar_emblem_raised(DashboardMode::Tabbed, 54, 0);
+}
+
+#[test]
+fn one_bar_emblem_rides_the_wide_stacked_spacer() {
+    assert_one_bar_emblem_raised(DashboardMode::Stacked, 52, 1);
+}
+
+#[test]
+fn one_bar_emblem_rides_the_normal_stacked_header() {
+    assert_one_bar_emblem_raised(DashboardMode::Stacked, 40, 0);
+}
+
+#[test]
+fn one_bar_emblem_rides_the_narrow_stacked_header() {
+    assert_one_bar_emblem_raised(DashboardMode::Stacked, 34, 0);
+}
+
+#[test]
+fn undecided_emblem_uses_the_same_crest_slot_without_a_bar() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("claude", "Claude", 173, false, false, None);
+    panel.undecided = true;
+    panel.plan = None;
+    let panels = [panel];
+    let texts = Dashboard::tabbed(&theme, &panels).texts();
+    let header = texts
+        .iter()
+        .position(|line| line.contains("v2.1.158"))
+        .unwrap();
+    for (index, art) in panels[0].art.iter().enumerate() {
+        assert!(
+            texts[header + index].contains(art.trim()),
+            "{}",
+            texts.join("\n")
+        );
+    }
+    assert!(texts[header + 1].contains('◎'));
+}
+
 fn copilot_panel() -> crate::store::snapshot::SidebarProviderPanel {
     let definition = crate::agents::spec_by_kind("copilot").expect("copilot definition");
     let emblem = crate::agents::emblem_for("copilot");
@@ -319,7 +392,14 @@ fn copilot_panel() -> crate::store::snapshot::SidebarProviderPanel {
 fn copilot_crest_rides_tabbed_header_without_growing_the_block() {
     let theme = Theme::fixed(false);
     let copilot = [copilot_panel()];
-    let claude = [provider_panel("claude", "Claude", 173, false, false, None)];
+    let claude = [provider_panel(
+        "claude",
+        "Claude",
+        173,
+        true,
+        false,
+        Some((20, 30)),
+    )];
     let copilot_lines = Dashboard::tabbed(&theme, &copilot).lines();
     let claude_lines = Dashboard::tabbed(&theme, &claude).lines();
     let texts = line_texts(&copilot_lines);
@@ -330,6 +410,13 @@ fn copilot_crest_rides_tabbed_header_without_growing_the_block() {
 
     assert!(header.contains(" ╭─╮╭─╮"), "{header}");
     assert_eq!(copilot_lines.len(), claude_lines.len());
+    let mut two_bar_copilot = copilot_panel();
+    two_bar_copilot.metered = true;
+    two_bar_copilot.windows = claude[0].windows.clone();
+    assert_eq!(
+        copilot_lines.len(),
+        Dashboard::tabbed(&theme, &[two_bar_copilot]).lines().len()
+    );
 }
 
 #[test]
@@ -362,6 +449,11 @@ fn theme_supplied_narrow_art_centers_as_one_emblem() {
 
     assert!(texts.iter().any(|line| line.starts_with("   xxx   ")));
     assert!(texts.iter().any(|line| line.starts_with("    x    ")));
+    let header = texts
+        .iter()
+        .position(|line| line.contains("v2.1.158"))
+        .unwrap();
+    assert!(texts[header + 2].starts_with("   xxx   "));
 }
 
 #[test]

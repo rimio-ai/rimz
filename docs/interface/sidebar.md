@@ -710,6 +710,8 @@ With `provider_tabs = "auto"` (the default), two providers stack and three or mo
 | stats | `◎` sessions in the [spend window](#the-cockpit), the `◇ ↘ ↗ ◌` tokens with cache creation counted in `↘`, and the provider's spend. A provider with no usage history keeps the row: `◎` counts its sessions active in this room, and the token and dollar slots show `–`. |
 | budget rows | the two shortest time windows (or the sole window), with a label, bar, and reset countdown; a longer spent cap takes the second row, or leads usable extra usage. Named-quota accounts draw every enforced quota and bypass those substitutions. Lifted windows appear only when no enforced window remains. While lapsed, one bold alarm row replaces every bar |
 
+An emblem taller than the stats and bars (counting at most three of those rows) raises one row into the header, or the spacer in wide stacked blocks. Three-row emblems with one bar save a line; two-bar blocks keep their layout. Four-row emblems keep their existing crest and three body rows; two-row emblems already fit a one-bar block.
+
 Stacked blocks (`provider_tabs = "never"`):
 
 ```
@@ -726,10 +728,9 @@ Stacked blocks (`provider_tabs = "never"`):
   ▝▀▀▀▀▀▘  7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱ ↻  3d19h     ← running
 
  Pi v0.80.6 · OpenAI API
-
-  █▜███▛█  ◎ 19  ◇  8M ↘  7M ↗ 1M ◌ 142M        $420.42
- ▝▜▛▀▀▀▜▛▘ api ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ∞            ← API key with no budget
-  ▝▘   ▝▘
+  █▜███▛█
+ ▝▜▛▀▀▀▜▛▘ ◎ 19  ◇  8M ↘  7M ↗ 1M ◌ 142M        $420.42
+  ▝▘   ▝▘  api ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ∞            ← API key with no budget
 ```
 
 ### Budget bars
@@ -741,10 +742,9 @@ A lapsed subscription keeps the historical stats but removes the plan label and 
 ```
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 Claude · work v2.1.158                                                                          ⇅ rc
-
- ▐▛███▜▌  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k                                                      $3.50
-▝▜█████▛▘ plan lapsed · no Claude access · since <first seen>
-  ▘▘ ▝▝
+ ▐▛███▜▌
+▝▜█████▛▘ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k                                                      $3.50
+  ▘▘ ▝▝   plan lapsed · no Claude access · since <first seen>
 ```
 
 | you see | meaning |
@@ -789,7 +789,7 @@ With `[theme.pets] enabled = true`, the active block narrows and an animated com
 
 The pipeline reserves the whole run total, then admits the first shape that fits: track, name, and stage time; track and name; name and stage time; or an ellipsized name. The team badge fits only beside a drawn track or an undeclared stage and drops first. Stage time can reappear after the dots drop; dropping a declared track never buys the team badge back. The name keeps two cells beside an admitted total, and neither duration nor track draws partially.
 
-As the pane narrows, a block drops the input and output token split, then the version text. Below 36 columns the provider emblem goes and the bars run the full width. A pet narrows the block further.
+As the pane narrows, a block drops the input and output token split, then the version text. Below 34 columns the provider emblem goes and the bars run the full width. A pet narrows the block further.
 
 ### The fleet store
 
