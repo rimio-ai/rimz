@@ -311,12 +311,18 @@ fn capacity_holds_merge_without_consuming_visits_and_render_the_shared_phrase() 
     assert!(tickets(&room).is_empty());
     let wait = &second["record"]["wait"];
     let gives_up_at = Some(wait["gives_up_at"].as_str().unwrap().parse().unwrap());
-    for args in [
-        vec!["workflow", "show", record.id.as_str()],
-        vec!["workflow", "list"],
-    ] {
-        assert_capacity_phrase(&room, &args, wait, gives_up_at);
-    }
+    assert_capacity_phrase(
+        &room,
+        &["workflow", "show", record.id.as_str()],
+        wait,
+        gives_up_at,
+    );
+    let listed = success(room.command(&["workflow", "list"]).output().unwrap());
+    assert!(
+        listed.contains("HELD")
+            && listed.contains(&format!("{}, ×2", wait["detail"].as_str().unwrap())),
+        "{listed}"
+    );
 }
 
 #[test]
@@ -333,7 +339,7 @@ fn capacity_give_up_routes_failed_or_a_node_without_an_attempt() {
         let now = jiff::Timestamp::now();
         let mut held = serde_json::to_value(&record).unwrap();
         held["wait"] = json!({
-            "node":"build", "outcome":"capacity", "detail":"machine's active agents 0 >= 0 ()",
+            "node":"build", "outcome":"capacity", "detail":"0 of 0 agents active ()",
             "first":now-jiff::SignedDuration::from_secs(2), "last":now,
             "count":1, "recheck_at":null, "kinds":["codex"],
             "gives_up_at":now-jiff::SignedDuration::from_secs(1)

@@ -697,7 +697,57 @@ fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
     );
     running.entered_at = now + SignedDuration::from_secs(3_600);
     save(&env, &running);
+    for (lane, hold, count, age, reason) in [
+        ("d-held", Some("queue"), 3, 240, "queued: 1 start ahead"),
+        ("e-legacy", None, 1, 120, "legacy hold"),
+        (
+            "f-fix",
+            Some("check_failed"),
+            2,
+            90,
+            "capacity check failing: codex exit 2",
+        ),
+    ] {
+        let mut record = seed(&env, &env.project_root, &env.home_root.join(lane), "active");
+        record.wait = Some(
+            serde_json::from_value(json!({
+                "node":"gate", "outcome":"capacity", "hold":hold, "detail":reason,
+                "first":now - SignedDuration::from_secs(age), "last":now, "count":count,
+            }))
+            .unwrap(),
+        );
+        save(&env, &record);
+    }
+    let mut window = seed(
+        &env,
+        &env.project_root,
+        &env.home_root.join("g-window"),
+        "active",
+    );
+    window.wait = Some(
+        serde_json::from_value(json!({
+            "node":"gate", "outcome":"window", "detail":"5h.left=12<40",
+            "first":now, "last":now, "count":4,
+        }))
+        .unwrap(),
+    );
+    save(&env, &window);
     let text = success(command(&env, &["workflow", "list"]));
+    let needs = text.split_once("NEEDS YOU").unwrap().1;
+    let (needs, rest) = needs.split_once("HELD").expect("capacity starts need HELD");
+    let (held, active) = rest.split_once("ACTIVE").unwrap();
+    assert!(needs.contains("review#f-fix"), "{text}");
+    assert!(
+        held.contains("review#d-held") && held.contains("review#e-legacy"),
+        "{text}"
+    );
+    assert!(active.contains("review#g-window"), "{text}");
+    assert!(held.contains("queued: 1 start ahead, ×3"), "{text}");
+    assert!(
+        held.contains("legacy hold") && !held.contains("×1"),
+        "{text}"
+    );
+    assert!(!held.contains("held 4m"), "{text}");
     assert!(
         text.find("NEEDS YOU").unwrap_or(usize::MAX) < text.find("ACTIVE").unwrap_or(0),
         "{text}"
@@ -713,6 +763,10 @@ fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
         ("a-ask", rimz::config::GlyphRole::StatusWaiting, "2m"),
         ("b-sleep", rimz::config::GlyphRole::StatusSleeping, "1m"),
         ("c-run", rimz::config::GlyphRole::StatusWorking, "0s"),
+        ("d-held", rimz::config::GlyphRole::StatusIdle, "4m"),
+        ("e-legacy", rimz::config::GlyphRole::StatusIdle, "2m"),
+        ("f-fix", rimz::config::GlyphRole::StatusWaiting, "1m"),
+        ("g-window", rimz::config::GlyphRole::StatusSleeping, "0s"),
     ] {
         let line = text
             .lines()
