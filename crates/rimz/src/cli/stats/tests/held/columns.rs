@@ -137,40 +137,39 @@ fn heatmap_columns_match_the_mock() {
 
 #[test]
 fn avg_line_matches_the_mock_row() {
+    let (stats, assists) = fixture();
+    assert!(
+        frame(&stats, &assists, Window::Month, 119, None)
+            .text
+            .contains(&render::paint(render::palette::faint(), " $819 ┼ "))
+    );
     for (rows, height) in [(None, 7), (Some(40), 7)] {
         let month = lines_at(Window::Month, rows);
         let start = month
             .iter()
             .position(|line| line.starts_with("Spend per day"))
             .unwrap();
-        let plot = &month[start + 1..start + 1 + height];
-        assert!(plot[0].contains("$1,500"), "{}", month.join("\n"));
-        let half = plot.iter().position(|line| line.contains("$750")).unwrap();
-        let average = plot
-            .iter()
-            .position(|line| line.contains("avg $819"))
-            .unwrap();
-        assert_eq!(
-            average, half,
-            "average shares the middle row at height {height}"
-        );
+        let plot = &month[start + 2..start + 2 + height];
+        assert!(plot[0].contains("$1.5k"), "{}", month.join("\n"));
+        assert!(plot[3].contains("$819 ┼"), "{}", month.join("\n"));
+        assert!(!plot.iter().any(|line| line.contains("$750")));
     }
 }
 
 #[test]
-fn week_avg_caption_keeps_its_label() {
+fn week_avg_axis_keeps_its_label() {
     let captions = [None, Some(40)].map(|rows| {
         lines_at(Window::Week, rows)
             .iter()
             .find(|line| line.contains("$748"))
             .unwrap()
-            .rsplit('┄')
-            .next()
+            .split_once('┼')
             .unwrap()
+            .0
             .trim()
             .to_owned()
     });
-    assert_eq!(captions, ["avg $748"; 2]);
+    assert_eq!(captions, ["$748"; 2]);
 }
 
 #[test]
@@ -327,7 +326,10 @@ fn dashboard_shrinks_heatmap_before_roles_and_named_rows_before_teams() {
         }
         if current[2] {
             assert_eq!(
-                output.lines().filter(|line| line.contains('┤')).count(),
+                output
+                    .lines()
+                    .filter(|line| line.contains(['┤', '┼']))
+                    .count(),
                 7,
                 "{rows}: {output}"
             );
@@ -402,11 +404,12 @@ fn dashboard_messages_keep_two_cell_gutters_for_wide_counts() {
 fn chart_labels_match_the_mock_columns() {
     let month = lines(Window::Month);
     let axis = month.iter().find(|line| line.contains("└─")).unwrap();
-    assert_eq!(display_width(&axis[..axis.find("today").unwrap()]), 94);
-    let average = month.iter().find(|line| line.contains("avg $819")).unwrap();
-    assert_eq!(display_width(&average[..average.find("avg").unwrap()]), 101);
-    assert!(average.ends_with("██┄ avg $819"), "{average}");
-    assert_eq!(display_width(average), 109);
+    assert_eq!(display_width(&axis[..axis.find("today").unwrap()]), 92);
+    let average = month.iter().find(|line| line.contains("$819 ┼")).unwrap();
+    assert_eq!(display_width(&average[..average.find('$').unwrap()]), 1);
+    assert_eq!(display_width(&average[..average.find('┼').unwrap()]), 6);
+    assert!(average.ends_with("██"), "{average}");
+    assert_eq!(display_width(average), 97);
     let week = lines(Window::Week);
     let axis_row = week.iter().position(|line| line.contains("└─")).unwrap();
     let bottom = &week[axis_row - 1];
@@ -440,9 +443,12 @@ fn narrow_week_axis_separates_dates_and_keeps_today_under_its_bar() {
     assert_eq!(
         axes,
         [
-            ("Oct 17      Oct 19      Oct 21      today".to_owned(), true),
             (
                 "Oct 17 Oct 18 Oct 19 Oct 20 Oct 21        today".to_owned(),
+                true
+            ),
+            (
+                "Oct 17   Oct 18   Oct 19   Oct 20   Oct 21   Oct 22   today".to_owned(),
                 true
             ),
         ]

@@ -3007,6 +3007,30 @@ fn token_and_dollar_formatting() {
 }
 
 #[test]
+fn compact_dollars_promote_rounded_boundaries_within_five_cells() {
+    for (value, expected) in [
+        (0.0, "$0"),
+        (0.4, "<$1"),
+        (876.0, "$876"),
+        (999.6, "$1k"),
+        (1_899.0, "$1.9k"),
+        (2_000.0, "$2k"),
+        (9_960.0, "$10k"),
+        (14_499.0, "$14k"),
+        (15_000.0, "$15k"),
+        (750_000.0, "$750k"),
+        (999_499.6, "$999k"),
+        (999_600.0, "$1M"),
+        (1_500_000.0, "$1.5M"),
+        (999_000_000.0, "$999M"),
+    ] {
+        let label = fmt_usd_compact(value);
+        assert_eq!(label, expected, "{value}");
+        assert!(label.len() <= 5, "{label}");
+    }
+}
+
+#[test]
 fn fmt_day_reads_month_and_day() {
     // Epoch day 0 is 1970-01-01; day 31 is 1970-02-01 (January has 31 days).
     assert_eq!(utc_date(0), "1970-01-01");

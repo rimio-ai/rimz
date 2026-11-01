@@ -1,10 +1,143 @@
 use super::*;
 
+#[test]
+fn dashboard_round_ticks_use_the_nearest_row_without_collisions() {
+    let (mut stats, assists) = fixture();
+    for (ceiling, expected) in [
+        (1.5, vec![(4, "$1")]),
+        (12.0, vec![(5, "$10"), (2, "$5")]),
+        (1_500.0, vec![(6, "$1.5k"), (3, "$750")]),
+        (2_500.0, vec![(5, "$2k"), (2, "$1k")]),
+        (10_000.0, vec![(6, "$10k"), (3, "$5k")]),
+    ] {
+        stats.chart.hours =
+            BTreeMap::from([(TODAY * 24, BTreeMap::from([("opus-5.5".into(), ceiling)]))]);
+        let rows = plot(&stats, &assists, Window::Today, 119);
+        let labels = rows
+            .iter()
+            .rev()
+            .enumerate()
+            .filter_map(|(row, line)| {
+                let text = strip_ansi(line);
+                let label = text.split_once('┤').unwrap().0.trim();
+                assert!(label.len() <= 5, "{text}");
+                (!label.is_empty()).then(|| (row, label.to_owned()))
+            })
+            .rev()
+            .collect::<Vec<_>>();
+        let expected = expected
+            .into_iter()
+            .map(|(row, label)| (row, label.to_owned()))
+            .collect::<Vec<_>>();
+        assert_eq!(labels, expected, "ceiling {ceiling}");
+    }
+    for height in [4, 2] {
+        let output = (10..50)
+            .map(|rows| frame(&stats, &assists, Window::Today, 119, Some(rows)))
+            .find(|output| {
+                output
+                    .text
+                    .lines()
+                    .filter(|line| line.contains('┤'))
+                    .count()
+                    == height
+            })
+            .expect("short fitted chart");
+        let labels = strip_ansi(&output.text)
+            .lines()
+            .filter_map(|line| line.split_once('┤').map(|(label, _)| label.trim()))
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["$10k", "$5k"], "height {height}");
+    }
+}
+
+#[test]
+fn dashboard_averages_replace_ticks_on_the_axis_even_without_color() {
+    let (mut stats, assists) = fixture();
+    for (tab, count, peak, mean, label, row) in [
+        (Window::Week, 7, 1_400.0, 852.0, "$852", 3),
+        (Window::Month, 30, 2_500.0, 876.0, "$876", 5),
+        (Window::Year, 52, 10_000.0, 1_899.0, "$1.9k", 6),
+    ] {
+        let cells = (0..count)
+            .map(|ago| {
+                let usd = if ago == 0 {
+                    peak
+                } else {
+                    (mean * count as f64 - peak) / (count - 1) as f64
+                };
+                (
+                    TODAY - ago * if tab == Window::Year { 7 } else { 1 },
+                    BTreeMap::from([("opus-5.5".into(), usd)]),
+                )
+            })
+            .collect();
+        if tab == Window::Year {
+            stats.chart.weeks = cells;
+        } else {
+            stats.chart.days = cells;
+        }
+        let output = strip_ansi(
+            &Dashboard {
+                stats: &stats,
+                assists: &assists,
+                today: TODAY,
+                dollars: false,
+                glyphs: &panel_glyphs(),
+                hold: false,
+                color: false,
+            }
+            .frame(tab, 119, None)
+            .text,
+        );
+        let rows = output
+            .lines()
+            .filter(|line| line.contains(['┤', '┼']))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows.iter().filter(|line| line.contains('┼')).count(),
+            1,
+            "{output}"
+        );
+        assert_eq!(
+            rows[row].split_once('┼').unwrap().0.trim(),
+            label,
+            "{output}"
+        );
+        assert!(!output.contains("avg"), "{output}");
+        if tab == Window::Week {
+            assert!(!rows.iter().any(|line| line.contains("$750")), "{output}");
+        }
+    }
+}
+
+#[test]
+fn dashboard_chart_and_heatmap_titles_have_one_empty_line() {
+    let (stats, assists) = fixture();
+    for tab in Window::TABS {
+        let output = strip_ansi(&frame(&stats, &assists, tab, 119, None).text);
+        let lines = output.lines().collect::<Vec<_>>();
+        for title in ["Spend per", "Token activity"] {
+            let start = lines.iter().position(|line| line.contains(title)).unwrap();
+            assert_eq!(lines[start + 1], "", "{tab:?}: {title}");
+            assert!(!lines[start + 2].is_empty(), "{tab:?}: {title}");
+        }
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.is_empty() || !line.trim().is_empty()),
+            "{output}"
+        );
+    }
+}
+
 fn plot(stats: &Stats, assists: &TabAssists, tab: Window, width: usize) -> Vec<String> {
     frame(stats, assists, tab, width, None)
         .text
         .lines()
-        .filter(|line| strip_ansi(line).contains('┤'))
+        .filter(|line| strip_ansi(line).contains(['┤', '┼']))
         .map(str::to_owned)
         .collect()
 }
@@ -52,10 +185,7 @@ fn dashboard_chart_titles_keep_the_comparison_figures_at_narrow_widths() {
         .lines()
         .find(|line| line.contains("Spend per"))
         .unwrap();
-    assert!(
-        title.ends_with("┄ avg $1,040,000,000,000,000 a week"),
-        "{title}"
-    );
+    assert_eq!(title.trim_end(), "Spend per week · last 52 weeks");
 }
 
 #[test]
@@ -74,7 +204,7 @@ fn dashboard_plot_has_seven_rows_and_each_ranges_bar_count() {
             let rows = plot(&stats, &assists, tab, width);
             let bottom = strip_ansi(rows.last().unwrap());
             let bars: Vec<_> = bottom
-                .split('┤')
+                .split(['┤', '┼'])
                 .nth(1)
                 .unwrap()
                 .split_whitespace()
@@ -121,10 +251,10 @@ fn dashboard_bar_tops_use_all_eight_blocks_and_keep_trace_spend() {
 }
 
 #[test]
-fn dashboard_ceiling_uses_the_fine_ladder_and_middle_row() {
+fn dashboard_ceiling_keeps_the_fine_ladder_for_bar_heights() {
     let (mut stats, assists) = fixture();
     stats.chart.hours.clear();
-    let labels: Vec<_> = [1.0, 1.1, 1.3, 1.7, 2.1, 2.7, 3.2, 4.2, 5.2, 6.2, 8.1]
+    let tops: Vec<_> = [1.0, 1.1, 1.3, 1.7, 2.1, 2.7, 3.2, 4.2, 5.2, 6.2, 8.1]
         .into_iter()
         .map(|usd| {
             stats
@@ -132,22 +262,39 @@ fn dashboard_ceiling_uses_the_fine_ladder_and_middle_row() {
                 .hours
                 .insert(TODAY * 24, BTreeMap::from([("opus-5.5".into(), usd)]));
             let rows = plot(&stats, &assists, Window::Today, 119);
-            let label = |row: usize| {
-                strip_ansi(&rows[row])
-                    .split('┤')
-                    .next()
-                    .unwrap()
-                    .trim()
-                    .to_owned()
-            };
-            (label(0), label(3))
+            rows.iter()
+                .rev()
+                .enumerate()
+                .filter_map(|(row, line)| {
+                    strip_ansi(line)
+                        .split_once('┤')
+                        .unwrap()
+                        .1
+                        .trim()
+                        .chars()
+                        .next()
+                        .map(|glyph| (row, glyph))
+                })
+                .next_back()
+                .unwrap()
         })
         .collect();
-    let expected: Vec<_> = [1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
-        .into_iter()
-        .map(|ceiling| (fmt_usd(ceiling), fmt_usd(ceiling / 2.0)))
-        .collect();
-    assert_eq!(labels, expected);
+    assert_eq!(
+        tops,
+        [
+            (6, '█'),
+            (6, '▃'),
+            (6, '▁'),
+            (5, '█'),
+            (5, '▇'),
+            (6, '▂'),
+            (5, '▅'),
+            (5, '▇'),
+            (6, '▁'),
+            (5, '▃'),
+            (5, '▅')
+        ]
+    );
 }
 
 #[test]
@@ -268,15 +415,18 @@ fn dashboard_without_color_keeps_the_ghost_but_omits_the_forecast_extension() {
         )
     });
     let plots = frames.each_ref().map(|frame| {
-        let rows: Vec<_> = frame.lines().filter(|line| line.contains('┤')).collect();
+        let rows: Vec<_> = frame
+            .lines()
+            .filter(|line| line.contains(['┤', '┼']))
+            .collect();
         (
-            rows[0].split_once('┤').unwrap().0.trim().to_owned(),
+            rows[0].split_once(['┤', '┼']).unwrap().0.trim().to_owned(),
             rows.iter()
-                .map(|row| row.split_once('┤').unwrap().1.trim().to_owned())
+                .map(|row| row.split_once(['┤', '┼']).unwrap().1.trim().to_owned())
                 .collect::<Vec<_>>(),
         )
     });
-    assert_eq!(plots[0].0, "$1,500", "{frames:?}");
+    assert_eq!(plots[0].0, "$1.5k", "{frames:?}");
     assert!(
         plots[0].1.iter().all(|row| row.ends_with("░░░")),
         "{frames:?}"
