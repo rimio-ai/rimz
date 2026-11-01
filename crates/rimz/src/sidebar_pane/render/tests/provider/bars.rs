@@ -557,7 +557,7 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
 }
 
 #[test]
-fn lifted_window_is_a_full_unlimited_row_aligned_with_live_windows() {
+fn lifted_window_yields_to_a_live_window_and_remains_full_when_alone() {
     let theme = Theme::fixed(false);
     let now = fixed_now();
     let mut panel = provider_panel("codex", "Codex", 33, true, false, None);
@@ -568,7 +568,7 @@ fn lifted_window_is_a_full_unlimited_row_aligned_with_live_windows() {
             ..Default::default()
         },
         RateLimitWindow {
-            used_percentage: Some(40),
+            used_percentage: Some(30),
             resets_at: Some(now + Duration::from_secs(6 * 86_400)),
             duration_mins: Some(7 * 24 * 60),
             ..Default::default()
@@ -576,20 +576,19 @@ fn lifted_window_is_a_full_unlimited_row_aligned_with_live_windows() {
     ];
 
     let rows = metered_bar_rows(&theme, &panel);
-    assert_eq!(rows.len(), 2);
-    let texts: Vec<String> = rows
-        .iter()
-        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
-        .collect();
-    assert!(texts[0].starts_with("5h "), "{texts:?}");
-    assert_eq!(texts[0].chars().filter(|ch| *ch == '▰').count(), 17);
-    assert_eq!(texts[0].chars().position(|ch| ch == '∞'), Some(22));
-    assert!(texts[1].starts_with("7d "), "{texts:?}");
-    assert!(
-        !texts[1].contains('∞'),
-        "the reported weekly window stays metered"
-    );
-    assert_eq!(texts[1].chars().position(|ch| ch == '↻'), Some(22));
+    assert_eq!(rows.len(), 1, "only the enforced weekly window remains");
+    let weekly = rows[0].to_string();
+    assert!(weekly.starts_with("7d "), "{weekly}");
+    assert!(!weekly.contains('∞'), "the weekly window stays metered");
+    assert_eq!(weekly.chars().position(|ch| ch == '↻'), Some(22));
+
+    panel.windows.pop();
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1);
+    let unlimited = rows[0].to_string();
+    assert!(unlimited.starts_with("5h "), "{unlimited}");
+    assert_eq!(unlimited.chars().filter(|ch| *ch == '▰').count(), 17);
+    assert_eq!(unlimited.chars().position(|ch| ch == '∞'), Some(22));
     assert_eq!(
         bar_row_facts(&rows[0]).0,
         mana_style(&theme, 100, &Default::default()).fg,
@@ -628,10 +627,9 @@ fn lifted_window_infinity_stays_unicode_and_neutral_with_nerd_font() {
 }
 
 #[test]
-fn spent_longer_window_gates_a_lifted_row_as_exhausted() {
+fn spent_window_replaces_a_hidden_lifted_window_and_leads_available_extra() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("codex", "Codex", 33, true, false, None);
-    panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     panel.windows = vec![
         RateLimitWindow {
             duration_mins: Some(5 * 60),
@@ -645,19 +643,32 @@ fn spent_longer_window_gates_a_lifted_row_as_exhausted() {
         },
     ];
 
-    let rows = metered_bar_rows(&theme, &panel);
-    assert_eq!(rows.len(), 2);
-    let text = rows[0]
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<String>();
-    assert!(!text.contains('∞'), "a binding longer cap wins: {text:?}");
-    assert!(!text.contains('▰'), "the gated bar has no remaining fill");
-    let (label, track, has_reset) = bar_row_facts(&rows[0]);
-    assert_eq!(label, theme.alarm(Modifier::empty()).fg);
-    assert_eq!(track, label);
-    assert!(!has_reset);
+    for (credits, expected_rows) in [
+        (crate::agents::ExtraCredits::Disabled, 1),
+        (
+            crate::agents::ExtraCredits::known(None, Some(10.0), Some(20.0)),
+            2,
+        ),
+        (crate::agents::ExtraCredits::Unlimited, 2),
+    ] {
+        panel.extra_credits = Some(credits);
+        let rows = metered_bar_rows(&theme, &panel);
+        assert_eq!(rows.len(), expected_rows);
+        let spent = rows[0].to_string();
+        assert!(spent.starts_with("7d "), "{spent}");
+        assert!(!spent.contains('∞') && !spent.contains('▰'), "{spent}");
+        let (label, track, has_reset) = bar_row_facts(&rows[0]);
+        assert_eq!(label, theme.alarm(Modifier::empty()).fg);
+        assert_eq!(track, label);
+        assert!(!has_reset);
+        if expected_rows == 2 {
+            assert!(rows[1].to_string().starts_with("ex "));
+            assert_eq!(
+                rows[1].to_string().contains('∞'),
+                panel.extra_credits == Some(crate::agents::ExtraCredits::Unlimited)
+            );
+        }
+    }
 }
 
 #[test]
@@ -1023,10 +1034,10 @@ fn credit_balances_draw_full_or_spent_on_extra_and_api_rows() {
             panel.windows[0].lifted = true;
             panel.extra_credits = Some(crate::agents::ExtraCredits::known(None, Some(left), None));
             let rows = metered_bar_rows(&theme, &panel);
-            assert_eq!(rows.len(), if metered { 2 } else { 1 });
+            assert_eq!(rows.len(), if metered && left > 0.0 { 2 } else { 1 });
             if metered && left == 0.0 {
                 let labels: Vec<_> = rows.iter().map(|row| row.spans[0].content.trim()).collect();
-                assert_eq!(labels, ["5h", "7d"], "a spent balance yields to 7d");
+                assert_eq!(labels, ["7d"], "a spent balance yields to 7d");
                 continue;
             }
             if metered {
@@ -1133,13 +1144,9 @@ fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
     panel.windows[0].used_percentage = Some(0);
     panel.windows[0].resets_at = None;
     let rows = metered_bar_rows(&theme, &panel);
-    let unlimited = rows[0]
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<String>();
-    assert!(unlimited.starts_with("bld"));
-    assert!(unlimited.contains('∞'));
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].to_string().starts_with("dep"));
+    assert!(!rows[0].to_string().contains('∞'));
 }
 
 #[test]
@@ -1165,6 +1172,37 @@ fn copilot_credit_label_fills_the_shared_three_cell_slot() {
         text.starts_with("cr "),
         "literal three-cell label slot: {text:?}"
     );
+}
+
+#[test]
+fn copilot_lifted_quotas_yield_only_to_an_enforced_quota() {
+    let theme = Theme::fixed(false);
+    let quota = |id: &str, label: &str| RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: id.to_owned(),
+            label: label.to_owned(),
+        }),
+        lifted: true,
+        ..Default::default()
+    };
+    let mut panel = provider_panel("copilot", "Copilot", 33, true, false, None);
+    panel.windows = vec![quota("chat", "cht")];
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1, "a single unlimited quota keeps its bar");
+    assert!(rows[0].to_string().starts_with("cht"));
+    assert!(rows[0].to_string().contains('∞'));
+
+    panel.windows.push(quota("premium_interactions", "prm"));
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2, "all-lifted quotas keep both bars");
+    assert!(rows.iter().all(|row| row.to_string().contains('∞')));
+
+    panel.windows[1].lifted = false;
+    panel.windows[1].used_percentage = Some(40);
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1, "the enforced quota hides unlimited chat");
+    assert!(rows[0].to_string().starts_with("prm"));
+    assert!(!rows[0].to_string().contains('∞'));
 }
 
 #[test]
