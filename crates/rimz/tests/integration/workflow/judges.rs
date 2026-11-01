@@ -89,9 +89,22 @@ fn failed_judge_history_does_not_invent_an_invalid_route() {
     assert_eq!(value["record"]["park"]["reason"], "check", "{value:#}");
     assert_eq!(events(&value, "evaluation").len(), 2, "{value:#}");
     assert!(
-        !history.contains("evaluation invalid → recover"),
+        !history.contains("said invalid → recover"),
         "failed judges did not route: {history}"
     );
+    let reason_prose = history
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("retry:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        reason_prose
+            .matches("reserved or unrouted outcome \"missing\"")
+            .count(),
+        1,
+        "{history}"
+    );
+    assert!(history.ends_with("pr park check\n"), "{history}");
 }
 
 #[test]

@@ -3124,6 +3124,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         &held.kinds,
         Timestamp::from_millisecond(since_ms as i64).unwrap(),
         None,
+        now,
     );
     assert_eq!(
         running_text_full(&waiting, now),
@@ -3142,7 +3143,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         serde_json::json!(now - jiff::SignedDuration::from_secs(192))
     );
     held.reason = None;
-    assert_eq!(held_run_text(&held), phrase);
+    assert_eq!(held_run_text(&held, now), phrase);
 
     let mut readings = Vec::new();
     write_throttle_readings(
@@ -4613,7 +4614,8 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
             rimz::theme::fmt::capacity_wait(
                 &held[1].kinds,
                 Timestamp::from_millisecond(held[1].since_ms as i64).unwrap(),
-                None
+                None,
+                now,
             )
         )
     );
@@ -4646,8 +4648,11 @@ fn capacity_blocking_display_uses_the_shared_phrase_without_changing_held_json()
         reason: Some("1 start ahead".into()),
         position: 2,
     };
-    let phrase = rimz::theme::fmt::capacity_wait(&held.kinds, since, None);
-    assert_eq!(held_run_text(&held), format!("{phrase} · 1 start ahead"));
+    let phrase = rimz::theme::fmt::capacity_wait(&held.kinds, since, None, since);
+    assert_eq!(
+        held_run_text(&held, since),
+        format!("{phrase} · 1 start ahead")
+    );
     assert!(held_json(&held).get("kinds").is_none());
     assert!(held_json(&held).get("gives_up_ms").is_none());
 }

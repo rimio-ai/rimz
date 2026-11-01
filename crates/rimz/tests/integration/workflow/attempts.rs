@@ -360,10 +360,25 @@ fn stay_renders_with_you_or_asking_you_until_session_exit() {
     assert_eq!(asking["record"]["state"], "active", "{asking:#}");
     assert_eq!(asking["record"]["attempt"]["asking"]["kind"], "permission");
     assert!(success(room.command(&["workflow", "list"]).output().unwrap()).contains("asking you:"));
-    assert!(
-        success(room.command(&["workflow", "show", &id]).output().unwrap())
-            .contains("build is asking you")
-    );
+    let ask = asking["record"]["attempt"]["asking"]["text"]
+        .as_str()
+        .unwrap();
+    for args in [
+        vec!["workflow", "show", &id],
+        vec!["workflow", "show", &id, "--history"],
+    ] {
+        let text = success(room.command(&args).output().unwrap());
+        assert!(text.contains("build is asking you"), "{text}");
+        assert!(
+            !text.lines().next().unwrap().contains(&format!("): {ask}")),
+            "{text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| line.trim() == ask).count(),
+            1,
+            "{text}"
+        );
+    }
     rimz::harness::run::settle_session_exit(&room.env.store(), &run.run_id, || None).unwrap();
     success(
         room.command(&["workflow", "advance", &id])
@@ -1571,7 +1586,7 @@ fn show_keeps_durable_history_when_takeover_blockers_are_unavailable() {
             .output()
             .unwrap(),
     );
-    assert!(history.contains("evaluation"), "{history}");
+    assert!(history.contains("pr said go → build"), "{history}");
 }
 
 #[test]

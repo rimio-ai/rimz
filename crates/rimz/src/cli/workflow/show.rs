@@ -102,7 +102,7 @@ impl View<'_> {
                     "parked at {} {} · {}",
                     record.node,
                     render::age_short(workflow_view::since(record), self.now),
-                    workflow_view::park(record, Some(self.spec), self.now).unwrap_or_default()
+                    record.park.as_ref().map_or("", |park| park.reason.as_str())
                 ),
             )
         } else if let Some(asking) = asking {
@@ -111,10 +111,8 @@ impl View<'_> {
             (
                 GlyphRole::StatusWaiting,
                 format!(
-                    "{step} is asking you · {} ({}): {}",
-                    asking.ask.handle,
-                    asking.ask.kind,
-                    render::one_line(&asking.ask.text)
+                    "{step} is asking you · {} ({})",
+                    asking.ask.handle, asking.ask.kind,
                 ),
             )
         } else if workflow_view::with_you(record) {
@@ -312,13 +310,6 @@ impl View<'_> {
         if let Some(asking) = workflow_view::asking(self.record) {
             return prose(out, &asking.ask.text, "  ");
         }
-        if self.record.held.is_some() {
-            writeln!(out, "checking {}", self.record.node)?;
-        }
-        if let Some(hold) = self.hold()? {
-            writeln!(out, "  {hold}")?;
-            return Ok(());
-        }
         if !self
             .spec
             .checks
@@ -332,6 +323,16 @@ impl View<'_> {
             for (key, value) in readings {
                 writeln!(out, "  {key}: {}", history::value(value))?;
             }
+        }
+        if !workflow_view::with_you(self.record) {
+            return Ok(());
+        }
+        if self.record.held.is_some() {
+            writeln!(out, "checking {}", self.record.node)?;
+        }
+        if let Some(hold) = self.hold()? {
+            writeln!(out, "  {hold}")?;
+            return Ok(());
         }
         if let Some(wait) = workflow_view::wait(self.record, Some(self.spec), self.now) {
             writeln!(out, "  {wait}")?;

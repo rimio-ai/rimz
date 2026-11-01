@@ -239,7 +239,7 @@ Each line is the waiting `?` glyph, the workflow, the node it parked at, and the
 
 ### Waiting for capacity
 
-Condition loop fires and loop-started workflow steps held for capacity share one inert line beneath any parked workflow runs. It shows the oldest wait's provider kinds, start time, and give-up time in local time, using the same phrase as `rimz loop list` and `rimz workflow list`. A wait without a give-up time omits that clause. With several waits, `· N waiting` counts held checkout scopes and workflow runs, not retries; the count stays on the right when the phrase is clipped by a narrow pane. The line disappears when no durable capacity wait remains. Blocking signal, watch, and periodic fires appear in `rimz loop list` and `rimz loop show`, not here.
+Condition loop fires and loop-started workflow steps held for capacity share one inert line beneath any parked workflow runs. It shows the oldest wait's provider kinds, start time, and give-up time in local time, using the same phrase as `rimz loop list` and `rimz workflow list`. Times read `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that. A wait without a give-up time omits that clause. With several waits, `· N waiting` counts held checkout scopes and workflow runs, not retries; the count stays on the right when the phrase is clipped by a narrow pane. The line disappears when no durable capacity wait remains. Blocking signal, watch, and periodic fires appear in `rimz loop list` and `rimz loop show`, not here.
 
 ```
  ? waiting for capacity (claude, codex) since HH:MM, gives up at HH:MM                            · 4 waiting

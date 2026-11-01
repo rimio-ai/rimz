@@ -142,6 +142,47 @@ fn a_closing_turn_end_hook_stops_the_layout_and_uses_one_verdict() {
 }
 
 #[test]
+fn a_park_after_a_turn_end_omits_the_printed_reason() {
+    let room = room();
+    let definition = room.env.rimz_home().join("workflows/review");
+    let spec = definition.join("workflow.toml");
+    fs::write(
+        &spec,
+        fs::read_to_string(&spec)
+            .unwrap()
+            .replace("on.done = '@done'", "on.done = '@user'"),
+    )
+    .unwrap();
+    fs::write(
+        definition.join("checks/pr.sh"),
+        concat!(
+            "if grep -q '^  \"node\": \"pr\"' \"$RIMZ_WORKFLOW_DIR/context.json\"; then\n",
+            "  printf '%s\\n' '{\"outcome\":\"go\"}'\n",
+            "else\n",
+            "  printf '%s\\n' '{\"outcome\":\"done\",\"reason\":\"Review the finished work\"}'\n",
+            "fi\n",
+        ),
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    opened_turn(&room, &id, &run);
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let value = settled(&room.env, &id, "parked");
+    assert_eq!(events(&value, "turn_end")[0]["target"], "@user");
+    let text = success(
+        room.command(&["workflow", "show", &id, "--history"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        text.matches("Review the finished work").count(),
+        1,
+        "{text}"
+    );
+    assert!(text.ends_with("after park user\n"), "{text}");
+}
+
+#[test]
 fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
     let room = room();
     let (id, run) = room.launch();
@@ -185,6 +226,14 @@ fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
 #[test]
 fn a_held_check_publishes_the_live_session_and_renders_checking() {
     let room = room();
+    let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &spec,
+        fs::read_to_string(&spec)
+            .unwrap()
+            .replace("on.pending = 'build'", "on.pending = '@wait'"),
+    )
+    .unwrap();
     let (id, run) = room.launch();
     opened_turn(&room, &id, &run);
     wait_for_advances_to_exit(&room.env, &id);
@@ -214,8 +263,12 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
         text.contains("build is with you") && text.contains("checking after"),
         "{text}"
     );
+    assert_eq!(text.matches("checking after").count(), 1, "{text}");
     waiting.write_all(&[1]).unwrap();
     let value = until(&room.env, &id, decided);
     assert_eq!(events(&value, "turn_end")[0]["action"], "kept");
+    let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
+    assert!(text.contains("build is with you"), "{text}");
+    assert_eq!(text.matches("said pending").count(), 1, "{text}");
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }

@@ -76,6 +76,7 @@ fn capacity_waits_reach_list_and_show_as_text_and_json() {
         &[rimz::ids::AgentKind::new_unchecked("claude")],
         since,
         None,
+        jiff::Timestamp::now(),
     );
     let listed: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();

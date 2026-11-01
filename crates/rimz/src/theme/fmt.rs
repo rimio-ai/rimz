@@ -4,14 +4,33 @@ use jiff::Timestamp;
 
 use crate::agents::RateLimitWindow;
 
+/// Local HH:MM today, a weekday within six days, or a full date beyond that.
+pub fn local_clock(at: Timestamp, now: Timestamp) -> String {
+    let zone = jiff::tz::TimeZone::system();
+    let at = at.to_zoned(zone.clone());
+    let today = now.to_zoned(zone).date();
+    let format = if at.date() == today {
+        "%H:%M"
+    } else if at
+        .date()
+        .since(today)
+        .is_ok_and(|span| span.get_days().abs() <= 6)
+    {
+        "%a %H:%M"
+    } else {
+        "%Y-%m-%d %H:%M"
+    };
+    at.strftime(format).to_string()
+}
+
 /// `waiting for capacity (claude) since 15:02, gives up at 21:02` in local
-/// time; a wait without a give-up instant omits that clause.
+/// time, with the day when not today; a wait without a give-up instant omits that clause.
 pub fn capacity_wait(
     kinds: &[crate::ids::AgentKind],
     since: Timestamp,
     gives_up_at: Option<Timestamp>,
+    now: Timestamp,
 ) -> String {
-    let zone = jiff::tz::TimeZone::system();
     let kinds = kinds
         .iter()
         .map(ToString::to_string)
@@ -24,13 +43,10 @@ pub fn capacity_wait(
     };
     let mut text = format!(
         "waiting for capacity{providers} since {}",
-        since.to_zoned(zone.clone()).strftime("%H:%M")
+        local_clock(since, now)
     );
     if let Some(until) = gives_up_at {
-        text.push_str(&format!(
-            ", gives up at {}",
-            until.to_zoned(zone).strftime("%H:%M")
-        ));
+        text.push_str(&format!(", gives up at {}", local_clock(until, now)));
     }
     text
 }
@@ -400,17 +416,47 @@ mod tests {
     }
 
     #[test]
+    fn local_clock_disambiguates_other_days_in_both_directions() {
+        let zone = jiff::tz::TimeZone::system();
+        let now = jiff::civil::date(2026, 10, 30)
+            .at(12, 56, 0, 0)
+            .to_zoned(zone)
+            .unwrap();
+        let readings = [-7, -6, -1, 0, 1, 6, 7].map(|days| {
+            let at = now.checked_add(jiff::Span::new().days(days)).unwrap();
+            local_clock(at.timestamp(), now.timestamp())
+        });
+        assert_eq!(
+            readings,
+            [
+                "2026-10-23 12:56",
+                "Sat 12:56",
+                "Thu 12:56",
+                "12:56",
+                "Sat 12:56",
+                "Thu 12:56",
+                "2026-11-06 12:56",
+            ]
+        );
+    }
+
+    #[test]
     fn capacity_wait_phrase_has_one_vocabulary_for_all_renderers() {
-        let since: Timestamp = "2026-06-01T15:02:00Z".parse().unwrap();
-        let until: Timestamp = "2026-06-01T21:02:00Z".parse().unwrap();
         let local = jiff::tz::TimeZone::system();
+        let since = jiff::civil::date(2026, 6, 1)
+            .at(15, 2, 0, 0)
+            .to_zoned(local.clone())
+            .unwrap()
+            .timestamp();
+        let until = since + jiff::SignedDuration::from_hours(6);
         let clock = |at: Timestamp| at.to_zoned(local.clone()).strftime("%H:%M").to_string();
         assert_eq!(
             [
                 capacity_wait(
                     &[crate::ids::AgentKind::new_unchecked("claude")],
                     since,
-                    Some(until)
+                    Some(until),
+                    since,
                 ),
                 capacity_wait(
                     &[
@@ -418,7 +464,8 @@ mod tests {
                         crate::ids::AgentKind::new_unchecked("codex")
                     ],
                     since,
-                    None
+                    None,
+                    since,
                 ),
             ],
             [
@@ -432,6 +479,26 @@ mod tests {
                     clock(since)
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn capacity_wait_disambiguates_both_bounds_on_other_days() {
+        let zone = jiff::tz::TimeZone::system();
+        let now = jiff::civil::date(2026, 10, 30)
+            .at(12, 56, 0, 0)
+            .to_zoned(zone)
+            .unwrap();
+        let since = now.checked_sub(jiff::Span::new().days(1)).unwrap();
+        let until = now.checked_add(jiff::Span::new().days(7)).unwrap();
+        assert_eq!(
+            capacity_wait(
+                &[],
+                since.timestamp(),
+                Some(until.timestamp()),
+                now.timestamp()
+            ),
+            "waiting for capacity since Thu 12:56, gives up at 2026-11-06 12:56"
         );
     }
 }

@@ -268,13 +268,8 @@ impl View<'_> {
             ..
         } = &entry.event
         {
-            writeln!(
-                out,
-                "{} said {outcome} ×{count} from {} to {}",
-                entry.node,
-                self.clock(*first),
-                self.clock(*last)
-            )?;
+            let note = history::fold_note(*count, *first, *last);
+            writeln!(out, "{} said {outcome}{note}", entry.node)?;
         }
         if let Some(log) = self
             .journal

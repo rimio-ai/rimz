@@ -713,7 +713,7 @@ fn write_worktrees(
     let now = view.now_zoned.timestamp();
     for row in rendered {
         let state = if let Some(wait) = row.capacity {
-            list::CapacityWaitView::from(wait).text()
+            list::CapacityWaitView::from(wait).text(now)
         } else if let Some((since, _)) = &row.blocked {
             format!("ready · blocked {}", ui::rel_age(*since, now))
         } else {
@@ -1130,7 +1130,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
                 out,
                 "  {} · {} · {}",
                 checkout.display(),
-                list::CapacityWaitView::from(wait).text(),
+                list::CapacityWaitView::from(wait).text(now),
                 wait.reason
             )?;
         }
@@ -2415,7 +2415,7 @@ pub(super) fn running_text(holder: Option<RunLockInfo>, now: Timestamp) -> Strin
 }
 
 /// A run waiting for its turn in the start throttle, in place of running.
-fn held_run_text(held: &Held) -> String {
+fn held_run_text(held: &Held, now: Timestamp) -> String {
     let stamp = |ms| {
         i64::try_from(ms)
             .ok()
@@ -2423,7 +2423,7 @@ fn held_run_text(held: &Held) -> String {
     };
     let since = stamp(held.since_ms).unwrap_or(Timestamp::UNIX_EPOCH);
     let text =
-        rimz::theme::fmt::capacity_wait(&held.kinds, since, held.gives_up_ms.and_then(stamp));
+        rimz::theme::fmt::capacity_wait(&held.kinds, since, held.gives_up_ms.and_then(stamp), now);
     match &held.reason {
         Some(reason) => format!("{text} · {reason}"),
         None => text,
@@ -2460,7 +2460,7 @@ pub(super) fn others_held_text<'a>(mut others: impl Iterator<Item = &'a Held>) -
 pub(super) fn in_flight_text(holder: Option<RunLockInfo>, held: &[Held], now: Timestamp) -> String {
     let (own, others) = split_held(holder, held);
     let state = match own {
-        Some(own) => held_run_text(own),
+        Some(own) => held_run_text(own, now),
         None => running_text(holder, now),
     };
     match others_held_text(others) {
@@ -2492,7 +2492,7 @@ fn running_text_full(in_flight: &InFlightRun, now: Timestamp) -> String {
         .unwrap_or_default();
     let (own, others) = split_held(in_flight.holder, &in_flight.held);
     let state = match own {
-        Some(own) => held_run_text(own),
+        Some(own) => held_run_text(own, now),
         None => running_text(in_flight.holder, now),
     };
     let others = others_held_text(others)
