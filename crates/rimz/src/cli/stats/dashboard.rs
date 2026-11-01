@@ -6,6 +6,8 @@ use rimz::harness::assist_log::AssistRecord;
 use rimz::theme::fmt::{active_duration, group_thousands};
 use std::collections::BTreeSet;
 
+const CHART_GUTTER: usize = 8;
+
 #[derive(Default)]
 pub(super) struct TabAssists {
     pub(super) tabs: [AssistStats; 4],
@@ -609,10 +611,11 @@ impl Dashboard<'_> {
             title_style(),
         );
         lines.retain(|line| !line.is_empty());
+        lines.insert(1, String::new());
         if let Some(header) = lines.first_mut() {
             *header = header.trim_start().to_owned();
         }
-        if let [_, grid @ .., _] = lines.as_mut_slice() {
+        if let [_, _, grid @ .., _] = lines.as_mut_slice() {
             for line in grid {
                 line.insert(0, ' ');
             }
@@ -736,7 +739,7 @@ impl Dashboard<'_> {
             Window::Week => (7, 1, &self.stats.chart.days),
             Window::Month => (30, 1, &self.stats.chart.days),
             Window::Year => (
-                width.saturating_sub(10).clamp(1, 52),
+                width.saturating_sub(CHART_GUTTER).clamp(1, 52),
                 7,
                 &self.stats.chart.weeks,
             ),
@@ -792,20 +795,21 @@ impl Dashboard<'_> {
         let ceiling = round_ceiling(max);
         // The y labels' convention: plot row k from the bottom (k counted from 1) stands for
         // k/height of the ceiling, so the line takes the row nearest the mean, never below row 1.
-        let average_row = (average > 0.0)
-            .then(|| ((average / ceiling * height as f64).round() as usize).clamp(1, height) - 1);
-        // Keep the average label while daily bars can remain at least two columns wide.
-        let figure = average_row.filter(|_| !weekly).map(|_| fmt_usd(average));
-        let reserve = figure.as_deref().map_or(0, |figure| {
-            let short = 2 + display_width(figure);
-            let worded = short + "avg ".len();
-            if (width.saturating_sub(10 + worded) + 1) / count >= 3 {
-                worded
-            } else {
-                short
-            }
-        });
-        let stride = ((width.saturating_sub(10 + reserve) + 1) / count)
+        let nearest_row =
+            |value: f64| ((value / ceiling * height as f64).round() as usize).clamp(1, height) - 1;
+        let average_row = (average > 0.0).then(|| nearest_row(average));
+        let magnitude = 10_f64.powf(ceiling.log10().floor());
+        let tick = [1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
+            .into_iter()
+            .map(|step| step * magnitude)
+            .rfind(|value| *value <= ceiling && value.fract() == 0.0);
+        let ticks = tick
+            .into_iter()
+            .flat_map(|tick| [tick, tick / 2.0])
+            .filter(|value| *value >= 1.0 && value.fract() == 0.0)
+            .map(|value| (nearest_row(value), fmt_usd_compact(value)))
+            .collect::<BTreeMap<_, _>>();
+        let stride = ((width.saturating_sub(CHART_GUTTER) + 1) / count)
             .clamp(1, if weekly { 2 } else { width.max(1) });
         let bar_width = if weekly {
             1
@@ -814,14 +818,6 @@ impl Dashboard<'_> {
         };
         let gap = stride - bar_width;
         let plot_width = count * stride - gap;
-        let caption = figure.map(|figure| {
-            let worded = format!("avg {figure}");
-            if 10 + plot_width + 2 + display_width(&worded) <= width {
-                worded
-            } else {
-                figure
-            }
-        });
         let left = match active {
             Window::Today => "Spend per hour · today".into(),
             Window::Week => "Spend per day · last 7 days".into(),
@@ -829,11 +825,7 @@ impl Dashboard<'_> {
             Window::Year => format!("Spend per week · last {count} weeks"),
         };
         let mut right = if weekly {
-            if average > 0.0 {
-                format!("┄ avg {} a week", fmt_usd(average))
-            } else {
-                String::new()
-            }
+            String::new()
         } else {
             self.chart_title(active)
         };
@@ -852,6 +844,7 @@ impl Dashboard<'_> {
             ),
             render::paint(render::palette::muted(), &right)
         )];
+        lines.push(String::new());
         let bars = dates
             .iter()
             .zip(&totals)
@@ -922,15 +915,22 @@ impl Dashboard<'_> {
             })
             .collect::<Vec<_>>();
         for row in (0..height).rev() {
-            let label = if row == height - 1 {
-                fmt_usd(ceiling)
-            } else if row == (height - 1) / 2 {
-                fmt_usd(ceiling / 2.0)
+            let is_average = average_row == Some(row);
+            let label = if is_average {
+                fmt_usd_compact(average)
             } else {
-                String::new()
+                ticks.get(&row).cloned().unwrap_or_default()
             };
-            let mut line = render::paint(render::palette::muted(), &format!("{label:>7} ┤ "));
-            let baseline = if average_row == Some(row) { "┄" } else { " " };
+            let join = if is_average { '┼' } else { '┤' };
+            let mut line = render::paint(
+                if is_average {
+                    render::palette::faint()
+                } else {
+                    render::palette::muted()
+                },
+                &format!("{label:>width$} {join} ", width = CHART_GUTTER - 3),
+            );
+            let baseline = if is_average { "┄" } else { " " };
             for (index, bar) in bars.iter().enumerate() {
                 if let Some(&(glyph, style)) = bar.get(row) {
                     line.push_str(&render::paint(style, &glyph.to_string().repeat(bar_width)));
@@ -954,11 +954,6 @@ impl Dashboard<'_> {
                         &baseline.repeat(gap),
                     ));
                 }
-            }
-            if let Some(caption) = caption.as_deref().filter(|_| average_row == Some(row)) {
-                line.push_str(&render::paint(render::palette::faint(), "┄"));
-                line.push(' ');
-                line.push_str(&render::paint(render::palette::muted(), caption));
             }
             lines.push(line.trim_end().to_owned());
         }
@@ -998,7 +993,10 @@ impl Dashboard<'_> {
         }
         lines.push(format!(
             "{}{}{}",
-            render::paint(render::palette::muted(), "     $0 └─"),
+            render::paint(
+                render::palette::muted(),
+                &format!("{:>width$} └─", "$0", width = CHART_GUTTER - 3)
+            ),
             pad_to(&axis, final_start),
             render::paint(
                 if hourly {

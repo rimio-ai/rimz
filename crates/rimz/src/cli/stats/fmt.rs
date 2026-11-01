@@ -1,5 +1,25 @@
 use super::*;
 
+pub(super) fn fmt_usd_compact(value: f64) -> String {
+    if value < 1.0 {
+        return fmt_usd(value);
+    }
+    if value.round() < 1_000.0 {
+        return format!("${value:.0}");
+    }
+    let (scale, suffix) = if value < 999_500.0 {
+        (1_000.0, "k")
+    } else {
+        (1_000_000.0, "M")
+    };
+    let units = (value / scale * 10.0).round() / 10.0;
+    if units < 10.0 && units.fract() != 0.0 {
+        format!("${units:.1}{suffix}")
+    } else {
+        format!("${:.0}{suffix}", value / scale)
+    }
+}
+
 pub(super) fn agent_display_name(kind: &str) -> String {
     rimz::agents::spec_by_kind(kind)
         .map(|definition| definition.display_name.to_owned())

@@ -424,6 +424,11 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
                     "{cols}x{rows}"
                 );
                 assert!(!frame.text.ends_with('\n'));
+                assert!(
+                    strip_ansi(&frame.text)
+                        .lines()
+                        .all(|line| line.is_empty() || !line.trim().is_empty())
+                );
             }
         }
     }
@@ -459,7 +464,7 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
         }
     }
     let output = frame(&stats, &assists, Window::Month, 119, Some(40));
-    assert_eq!(output.text.lines().count(), 37);
+    assert_eq!(output.text.lines().count(), 38);
     let mut terminal = Vec::new();
     rimz::tui::replace_frame(&mut terminal, output.text.as_bytes()).unwrap();
     let mut parser = vt100::Parser::new(40.try_into().unwrap(), 119.try_into().unwrap(), 0);
@@ -482,17 +487,11 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
 #[test]
 fn dashboard_mock_heights_and_snapshots() {
     let (stats, assists) = fixture();
-    for (rows, today_height, month_height) in [(76, 65, 73), (40, 34, 37)] {
+    let mut heights = Vec::new();
+    for rows in [76, 40] {
         for tab in Window::TABS {
             let output = frame(&stats, &assists, tab, 119, Some(rows));
-            let expected = if tab == Window::Today {
-                today_height
-            } else {
-                month_height
-            };
-            if matches!(tab, Window::Today | Window::Month) {
-                assert_eq!(output.text.lines().count(), expected, "{tab:?} at {rows}");
-            }
+            heights.push((rows, tab, output.step, output.text.lines().count()));
             let text = strip_ansi(&output.text)
                 .lines()
                 .map(str::trim_end)
@@ -507,6 +506,43 @@ fn dashboard_mock_heights_and_snapshots() {
             let key = serde_json::to_value(tab).unwrap();
             insta::assert_snapshot!(format!("held_{}_{}", key.as_str().unwrap(), rows), text);
         }
+    }
+    assert_eq!(
+        heights,
+        [
+            (76, Window::Today, 0, 66),
+            (76, Window::Week, 0, 69),
+            (76, Window::Month, 0, 74),
+            (76, Window::Year, 0, 74),
+            (40, Window::Today, 4, 35),
+            (40, Window::Week, 4, 38),
+            (40, Window::Month, 4, 38),
+            (40, Window::Year, 4, 38),
+        ]
+    );
+}
+
+#[test]
+fn dashboard_stacked_snapshots() {
+    let (stats, assists) = fixture();
+    for tab in Window::TABS {
+        let output = Dashboard {
+            stats: &stats,
+            assists: &assists,
+            today: TODAY,
+            dollars: false,
+            glyphs: &panel_glyphs(),
+            hold: false,
+            color: false,
+        }
+        .frame(tab, 100, Some(76));
+        let text = strip_ansi(&output.text)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let key = serde_json::to_value(tab).unwrap();
+        insta::assert_snapshot!(format!("held_{}_100", key.as_str().unwrap()), text);
     }
 }
 
@@ -687,9 +723,9 @@ fn dashboard_avg_counts_drawn_bars_and_titles_follow_the_active_tab() {
     stats.chart.weeks = BTreeMap::from([(TODAY, cells(24.0)), (TODAY - 7, cells(300.0))]);
     for (tab, expected) in [
         (Window::Today, "today $1,024 so far · ~"),
-        (Window::Week, "┄ avg $46"),
-        (Window::Month, "┄ avg $11"),
-        (Window::Year, "┄ avg $6 a week"),
+        (Window::Week, "$46 ┼"),
+        (Window::Month, "$11 ┼"),
+        (Window::Year, "$6 ┼"),
     ] {
         let output = strip_ansi(&frame(&stats, &assists, tab, 119, None).text);
         assert!(output.contains(expected), "{tab:?}: {output}");
@@ -698,7 +734,7 @@ fn dashboard_avg_counts_drawn_bars_and_titles_follow_the_active_tab() {
             let lines: Vec<_> = output.lines().collect();
             let average = lines
                 .iter()
-                .position(|line| line.contains('┤') && line.contains("avg"))
+                .position(|line| line.contains('┼'))
                 .expect(&output);
             assert!(
                 lines[average + 1].contains("└─"),
@@ -994,12 +1030,12 @@ fn dashboard_avg_ignores_undrawn_history_and_has_no_line_without_spend() {
         (TODAY, BTreeMap::from([("opus-5.5".into(), 14.0)])),
     ]);
     let output = strip_ansi(&frame(&stats, &assists, Window::Week, 119, None).text);
-    assert!(output.contains("┄ avg $2"), "{output}");
+    assert!(output.contains("$2 ┼"), "{output}");
     stats.chart.days.clear();
     stats.chart.weeks.clear();
     for tab in [Window::Week, Window::Month, Window::Year] {
         let output = strip_ansi(&frame(&stats, &assists, tab, 119, None).text);
-        assert!(!output.contains("avg"), "{output}");
+        assert!(!output.contains('┼'), "{output}");
     }
 }
 
@@ -1044,21 +1080,19 @@ fn dashboard_caps_extreme_trend_labels() {
 }
 
 #[test]
-fn dashboard_avg_uses_a_bare_caption_when_narrow() {
+fn dashboard_avg_keeps_a_compact_axis_label_when_narrow() {
     let (mut stats, assists) = fixture();
     stats.chart.days = (0..30)
         .map(|ago| {
             (
                 TODAY - ago,
-                BTreeMap::from([("opus-5.5".into(), 300_000_000_000.0)]),
+                BTreeMap::from([("opus-5.5".into(), 999_000_000.0)]),
             )
         })
         .collect();
     let narrow = strip_ansi(&frame(&stats, &assists, Window::Month, 60, None).text);
     assert!(
-        narrow
-            .lines()
-            .any(|line| line.contains('┤') && line.ends_with("┄ $300,000,000,000")),
+        narrow.lines().any(|line| line.contains("$999M ┼")),
         "{narrow}"
     );
 }
@@ -1070,7 +1104,7 @@ fn dashboard_narrow_weekly_chart_keeps_the_newest_weeks_and_now() {
         (TODAY, BTreeMap::from([("newest".into(), 100.0)])),
         (TODAY - 50 * 7, BTreeMap::from([("oldest".into(), 100.0)])),
     ]);
-    let output = strip_ansi(&frame(&stats, &assists, Window::Year, 60, None).text);
+    let output = strip_ansi(&frame(&stats, &assists, Window::Year, 58, None).text);
     let chart = output
         .split("Spend per week")
         .nth(1)
