@@ -14,6 +14,7 @@ type SleepHook = Box<dyn FnMut(&FakeHost) + Send>;
 pub(in crate::harness::schedule) struct FakeHost {
     dir: tempfile::TempDir,
     clock: AtomicU64,
+    throttle_config: Mutex<Option<ThrottleConfig>>,
     owner: Mutex<Owner>,
     dead: Mutex<Vec<u32>>,
     pub(in crate::harness::schedule) pressure: Mutex<Result<Pressure, String>>,
@@ -28,6 +29,7 @@ pub(in crate::harness::schedule) struct FakeHost {
     on_check: Mutex<Option<SleepHook>>,
     check_answer: Mutex<Result<(Option<i32>, bool), String>>,
     checks: Mutex<Vec<StartGroup>>,
+    check_commands: Mutex<Vec<Option<String>>>,
     check_timeouts: Mutex<Vec<Duration>>,
     /// Raised as Ctrl-C would be; only a hold that listens hears it.
     pub(in crate::harness::schedule) interrupt: Arc<AtomicBool>,
@@ -39,6 +41,7 @@ impl FakeHost {
         Arc::new(Self {
             dir: tempfile::tempdir().expect("tempdir"),
             clock: AtomicU64::new(1_000_000),
+            throttle_config: Mutex::new(None),
             owner: Mutex::new(Owner {
                 pid: 1,
                 start: None,
@@ -59,6 +62,7 @@ impl FakeHost {
             on_check: Mutex::new(None),
             check_answer: Mutex::new(Ok((Some(0), false))),
             checks: Mutex::new(Vec::new()),
+            check_commands: Mutex::new(Vec::new()),
             check_timeouts: Mutex::new(Vec::new()),
             interrupt: Arc::new(AtomicBool::new(false)),
             listening: AtomicUsize::new(0),
@@ -126,18 +130,26 @@ impl FakeHost {
 }
 
 impl Host for FakeHost {
+    fn throttle_config(&self) -> Option<ThrottleConfig> {
+        self.throttle_config.lock().unwrap().clone()
+    }
+
     fn check_cache(&self) -> PathBuf {
         self.dir.path().join("checks.json")
     }
 
     fn check(
         &self,
-        _config: &ThrottleConfig,
+        config: &ThrottleConfig,
         _run: &Run,
         group: &StartGroup,
         timeout: Duration,
     ) -> Result<super::super::runner::CheckOutcome, String> {
         self.checks.lock().unwrap().push(group.clone());
+        self.check_commands
+            .lock()
+            .unwrap()
+            .push(config.check.clone());
         self.check_timeouts.lock().unwrap().push(timeout);
         if let Some(mut hook) = self.on_check.lock().unwrap().take() {
             hook(self);
@@ -837,14 +849,14 @@ fn failing_checks_lead_mixed_capacity_reasons_and_the_doctor_cache() {
     let configured = config("check='capacity'");
     let mut candidate = run("first");
     *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
-    check_groups(fake.as_ref(), &configured, &candidate).unwrap();
+    check_groups(fake.as_ref(), &configured, &candidate, false).unwrap();
     candidate.groups.push(StartGroup {
         kind: AgentKind::new_unchecked("codex"),
         account: Some("work".parse().unwrap()),
         agents: 1,
     });
     *fake.check_answer.lock().unwrap() = Ok((Some(2), false));
-    let held = check_groups(fake.as_ref(), &configured, &candidate)
+    let held = check_groups(fake.as_ref(), &configured, &candidate, false)
         .unwrap()
         .unwrap();
     assert_eq!(held.kind, HoldKind::CheckFailed);
@@ -1006,6 +1018,145 @@ fn capacity_blocking_admission_uses_the_callers_instant_or_waits_forever() {
         })
         .collect();
     assert_eq!(results, [(true, 3_000), (false, 5_000)]);
+}
+
+#[test]
+fn blocking_wait_reloads_the_disk_floor_before_reusing_a_hold() {
+    let fake = FakeHost::new();
+    *fake.disk.lock().unwrap() = 12_000_000_000;
+    fake.on_sleep(|fake| {
+        *fake.throttle_config.lock().unwrap() = Some(config("min-disk = '10GB'"));
+    });
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms() + 3_000),
+        ..run("nightly")
+    };
+    let result = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None).unwrap();
+    assert!(matches!(result, Admission::Turn { .. }), "{result:?}");
+    let (_turn, waited) = admitted(result);
+    assert_eq!(waited, Some(Duration::from_secs(1)));
+    assert_eq!(fake.disk_reads().len(), 2);
+}
+
+#[test]
+fn blocking_wait_reloads_a_raised_cap_before_reusing_a_hold() {
+    let fake = FakeHost::new();
+    fake.set_agents(&workspace(), vec![agent("otter", AgentStatus::Running)]);
+    fake.on_sleep(|fake| {
+        *fake.throttle_config.lock().unwrap() = Some(config("max-active = 2"));
+    });
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms() + 3_000),
+        ..run("nightly")
+    };
+    let result = admit(&fake.host(), &config("max-active = 1"), &run, None).unwrap();
+    assert!(matches!(result, Admission::Turn { .. }), "{result:?}");
+    let (_turn, waited) = admitted(result);
+    assert_eq!(waited, Some(Duration::from_secs(1)));
+    assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn blocking_wait_reloads_a_repaired_check_before_reusing_its_verdict() {
+    let fake = FakeHost::new();
+    *fake.check_answer.lock().unwrap() = Ok((Some(2), false));
+    fake.on_sleep(|fake| {
+        *fake.throttle_config.lock().unwrap() = Some(config("check = 'repaired'"));
+        *fake.check_answer.lock().unwrap() = Ok((Some(0), false));
+    });
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms() + 3_000),
+        ..run("nightly")
+    };
+    let result = admit(&fake.host(), &config("check = 'broken'"), &run, None).unwrap();
+    assert!(matches!(result, Admission::Turn { .. }), "{result:?}");
+    let (_turn, waited) = admitted(result);
+    assert_eq!(waited, Some(Duration::from_secs(1)));
+    assert_eq!(
+        *fake.check_commands.lock().unwrap(),
+        [Some("broken".into()), Some("repaired".into())]
+    );
+}
+
+#[test]
+fn blocking_wait_revalidates_new_unreadable_limits_with_the_key_and_fix() {
+    for (added, key) in [
+        ("io-pressure = 40", "io-pressure"),
+        ("min-memory = '8GB'", "min-memory"),
+    ] {
+        let fake = FakeHost::new();
+        *fake.disk.lock().unwrap() = 12_000_000_000;
+        *fake.pressure.lock().unwrap() = Err("/proc/pressure/io: missing".into());
+        *fake.memory.lock().unwrap() = Err("/proc/meminfo: missing".into());
+        fake.on_sleep(move |fake| {
+            *fake.throttle_config.lock().unwrap() =
+                Some(config(&format!("min-disk = '20GB'\n{added}")));
+        });
+        let run = Run {
+            gives_up_ms: Some(fake.now_ms() + 3_000),
+            ..run("nightly")
+        };
+        let error = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None)
+            .expect_err("a newly configured unreadable limit refuses the held start");
+        let message = error.to_string();
+        assert!(matches!(error, ThrottleError::Unreadable(_)), "{message}");
+        assert!(
+            message.contains(&format!("`loop.throttle.{key}`")),
+            "{message}"
+        );
+        assert!(
+            message.contains("remove the key from loop.toml"),
+            "{message}"
+        );
+        assert_eq!(fake.elapsed_ms(), 1_000);
+        assert_eq!(fake.tickets(), 0);
+    }
+}
+
+#[test]
+fn blocking_wait_keeps_the_last_good_config_and_its_original_deadline() {
+    let fake = FakeHost::new();
+    *fake.disk.lock().unwrap() = 12_000_000_000;
+    fake.on_sleep(|fake| {
+        *fake.throttle_config.lock().unwrap() = if fake.elapsed_ms() == 1_000 {
+            Some(config("min-disk = '15GB'"))
+        } else {
+            None
+        };
+    });
+    let run = Run {
+        gives_up_ms: Some(fake.now_ms() + 3_000),
+        ..run("nightly")
+    };
+    let result = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None).unwrap();
+    let Admission::Skipped { reason } = result else {
+        panic!("expected a skip, got {result:?}");
+    };
+    assert!(
+        reason.ends_with("free disk 12 GB < 15 GB at /repo"),
+        "{reason}"
+    );
+    assert_eq!(fake.elapsed_ms(), 3_000);
+    assert_eq!(fake.tickets(), 0);
+}
+
+#[test]
+fn blocking_wait_opens_when_gating_is_removed_but_not_after_its_deadline() {
+    for (bound, opens) in [(3_000, true), (1_000, false)] {
+        let fake = FakeHost::new();
+        *fake.disk.lock().unwrap() = 12_000_000_000;
+        fake.on_sleep(|fake| {
+            *fake.throttle_config.lock().unwrap() = Some(config("pace = '0s'"));
+        });
+        let run = Run {
+            gives_up_ms: Some(fake.now_ms() + bound),
+            ..run("nightly")
+        };
+        let result = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None).unwrap();
+        assert_eq!(matches!(result, Admission::Open), opens, "{result:?}");
+        assert_eq!(fake.elapsed_ms(), 1_000);
+        assert_eq!(fake.tickets(), 0);
+    }
 }
 
 #[test]

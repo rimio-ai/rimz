@@ -149,6 +149,7 @@ pub(super) struct Owner {
 pub(super) trait Host: Send + Sync {
     fn now_ms(&self) -> u64;
     fn sleep(&self, duration: Duration);
+    fn throttle_config(&self) -> Option<ThrottleConfig>;
     fn queue_dir(&self) -> PathBuf;
     fn queue_lock(&self) -> PathBuf;
     fn check_cache(&self) -> PathBuf;
@@ -183,6 +184,12 @@ pub(super) trait Host: Send + Sync {
 pub(super) struct SystemHost;
 
 impl Host for SystemHost {
+    fn throttle_config(&self) -> Option<ThrottleConfig> {
+        MachineConfig::load_loop()
+            .ok()
+            .map(|config| config.throttle)
+    }
+
     fn check_cache(&self) -> PathBuf {
         paths::loop_throttle_check_cache()
     }
@@ -440,7 +447,7 @@ pub(super) fn try_admit_in(
         write_ticket(&path, &ticket)?;
         Turn::new(host, path)
     };
-    match check_groups(host.as_ref(), config, run)? {
+    match check_groups(host.as_ref(), config, run, false)? {
         Some(hold) => Ok(Attempt::Held(hold)),
         // A check cut at the give-up instant answered nothing, so it grants no turn.
         None if run.gives_up_ms.is_some_and(|until| host.now_ms() >= until) => {
@@ -468,7 +475,7 @@ pub(super) fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Re
             return Ok(Some(hold));
         }
     }
-    check_groups(host, config, run)
+    check_groups(host, config, run, false)
 }
 
 /// The latest capacity-check errors, read without running a check or taking a turn.
@@ -512,7 +519,12 @@ fn read_verdicts(host: &dyn Host) -> Vec<Verdict> {
         .unwrap_or_default()
 }
 
-fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
+fn check_groups(
+    host: &dyn Host,
+    config: &ThrottleConfig,
+    run: &Run,
+    refresh: bool,
+) -> Result<Option<Hold>> {
     if config.check.is_none() {
         return Ok(None);
     }
@@ -527,7 +539,8 @@ fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<O
             let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
             let now = host.now_ms();
             read_verdicts(host).into_iter().find(|verdict| {
-                verdict.kind == group.kind
+                !refresh
+                    && verdict.kind == group.kind
                     && verdict.account == group.account
                     && verdict.outcome != CheckAnswer::Room
                     && now
@@ -757,7 +770,7 @@ impl Drop for TurnInner {
 /// How one gated run left the queue.
 #[derive(Debug)]
 pub(super) enum Admission {
-    /// Nothing is configured to gate on; no ticket was written.
+    /// Nothing is configured to gate on; no ticket is retained.
     Open,
     Turn {
         turn: Turn,
@@ -842,7 +855,20 @@ pub(super) fn admit(
     let mut blocked: Option<(u64, Hold)> = None;
     let mut heard: Option<String> = None;
     let mut interrupts = listening;
+    let mut config = config.clone();
+    let mut refresh_check = false;
     loop {
+        if let Some(current) = host.throttle_config()
+            && current != config
+        {
+            if let Some(problem) = unreadable(host.as_ref(), &current) {
+                return Err(ThrottleError::Unreadable(problem));
+            }
+            refresh_check |=
+                current.check != config.check || current.check_timeout != config.check_timeout;
+            config = current;
+            blocked = None;
+        }
         let mut hold = {
             let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
             // A Ctrl-C heard while sleeping or taking the lock wins over both
@@ -858,10 +884,18 @@ pub(super) fn admit(
             {
                 return skipped(reason);
             }
-            pass(host.as_ref(), config, run, Some(&path), now, &mut blocked)?
+            if !gates(&config) {
+                return Ok(Admission::Open);
+            }
+            pass(host.as_ref(), &config, run, Some(&path), now, &mut blocked)?
         };
         if hold.is_none() {
-            hold = check_groups(host.as_ref(), config, run)?;
+            hold = check_groups(
+                host.as_ref(),
+                &config,
+                run,
+                std::mem::take(&mut refresh_check),
+            )?;
             if let Some(hold) = &hold {
                 let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
                 let mut ticket =
