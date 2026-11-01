@@ -227,7 +227,7 @@ The request keeps only a versioned SHA-256 digest of the host and credential as 
 - Missing credentials, an unreadable config, an invalid host, and a provider-rejected credential settle quietly as no credentials.
 - Transport failures, unexpected HTTP status, and unusable responses take the shared short retry and reporting path.
 
-The response maps to named scopes. `quota_snapshots` wins per scope, and a missing scope falls back to `monthly_quotas` as entitlement and `limited_user_quotas` as remaining. The provider's `percent_remaining` wins, otherwise RimZ derives it from a positive entitlement and the remaining count, then clamps it. Resets accept RFC 3339 or a bare date. A zero-entitlement placeholder is dropped, and an explicit `unlimited` renders as a lifted row.
+The response maps to named scopes. `quota_snapshots` wins per scope, and a missing scope falls back to `monthly_quotas` as entitlement and `limited_user_quotas` as remaining. The provider's `percent_remaining` wins, otherwise RimZ derives it from a positive entitlement and the remaining count, then clamps it. Resets accept RFC 3339 or a bare date. A zero-entitlement placeholder is dropped, and an explicit `unlimited` becomes a lifted quota. Its dashboard bar is omitted while another quota is enforced; a single unlimited quota, or an all-unlimited set, keeps its full `∞` bars ([budget bars](../../interface/sidebar.md#budget-bars)).
 
 | Scope | Label |
 | --- | --- |

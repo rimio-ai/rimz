@@ -1199,6 +1199,7 @@ fn provider_token_detail(
 /// Reported extra usage follows the longest spent window; unknown or disabled
 /// extra usage keeps the included-window pair instead.
 /// Model-scoped sub-caps partition their parent window's bar without another row.
+/// Lifted windows are omitted when an enforced bar candidate remains.
 /// Each reset reads a two-unit countdown scaled to its magnitude. Each row
 /// aligns front and back within `region`, so they line up across providers too.
 fn provider_bar_rows(
@@ -1243,10 +1244,13 @@ fn provider_bar_rows(
             .map(|label| unknown_bar_row(theme, label, region))
             .collect();
     }
-    let (sub_caps, windows): (Vec<_>, Vec<_>) = panel
+    let (sub_caps, mut windows): (Vec<_>, Vec<_>) = panel
         .windows
         .iter()
         .partition(|window| window.scope.is_some() && window.duration_mins.is_some());
+    if windows.iter().any(|window| !window.lifted) {
+        windows.retain(|window| !window.lifted);
+    }
     select_provider_bars(credits, &windows)
         .into_iter()
         .map(|bar| match bar {
@@ -1417,12 +1421,12 @@ fn longer_window_limit(
 /// the value column. The reset marker is toned by burn pace when the window
 /// carries enough timing data, cooling toward green only once the early-window
 /// gate has elapsed; the countdown text stays in the neutral soft tier. The
-/// label mirrors its bar's remaining-budget tone. `force_exhausted`
-/// paints the row as fully spent — red, no countdown — regardless of the window's
-/// own reading (a longer spent window gates it). A window with no usage
-/// percentage paints as an unknown dim track, preserving the label but claiming
-/// no remaining budget. A lifted window paints as an unlimited full bar with
-/// `∞` in the reset-marker cell until the provider reports that duration again.
+/// label mirrors its bar's remaining-budget tone. A longer spent window paints
+/// an enforced row as fully spent — red, no countdown — regardless of its own
+/// reading. A window with no usage percentage paints as an unknown dim track,
+/// preserving the label but claiming no remaining budget. When no enforced
+/// bar candidate remains, a lifted window paints as an unlimited full bar with
+/// `∞` in the reset-marker cell.
 ///
 /// A window that has **not started** drops its countdown — a full bar with no
 /// `↻` reads "send a message to start it" rather than a misleading ticking reset.
@@ -1443,7 +1447,7 @@ fn metered_bar_row(
 ) -> Vec<Span<'static>> {
     let force_exhausted = matches!(longer, LongerWindowLimit::Spent);
     let label = window_label(window);
-    if !force_exhausted && window.lifted {
+    if window.lifted {
         let bar_width = provider_bar_width(region);
         return bar_row(
             &label,
