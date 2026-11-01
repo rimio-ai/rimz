@@ -820,7 +820,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
-        Some("ChatGPT Pro 200"),
+        Some("pro"),
         true,
         true,
         budget_windows_timed(70, 90, 7_200, 423_360),
@@ -838,7 +838,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "claude",
             Some("2.1.158"),
-            Some("Claude Max"),
+            Some("max"),
             true,
             true,
             budget_windows(30, 50),
@@ -1254,7 +1254,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
-        Some("ChatGPT Pro 200"),
+        Some("pro"),
         true,
         true,
         budget_windows_timed(70, 90, 7_200, 423_360),
@@ -1272,7 +1272,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "claude",
             Some("2.1.158"),
-            Some("Claude Max"),
+            Some("max"),
             true,
             true,
             budget_windows(30, 50),
@@ -1618,7 +1618,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
-        Some("ChatGPT Pro 200"),
+        Some("pro"),
         true,
         true,
         budget_windows_timed(15, 47, 4 * 60 * 60 + 30 * 60, 6 * 24 * 60 * 60),
@@ -1634,7 +1634,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "claude",
             Some("2.1.158"),
-            Some("Claude Max"),
+            Some("max"),
             true,
             true,
             budget_windows(18, 26),
@@ -1967,7 +1967,7 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "claude",
             Some("2.1.158"),
-            Some("Claude Max"),
+            Some("max"),
             true,
             true,
             budget_windows(29, 45),
@@ -1977,7 +1977,7 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "codex",
             Some("0.135.0"),
-            Some("ChatGPT Pro 200"),
+            Some("pro"),
             true,
             true,
             budget_windows(36, 54),
@@ -2434,7 +2434,7 @@ fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "claude",
             Some("2.1.158"),
-            Some("Claude Max"),
+            Some("max"),
             true,
             true,
             budget_windows(25, 37),
@@ -2444,7 +2444,7 @@ fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "codex",
             Some("0.135.0"),
-            Some("ChatGPT Pro 200"),
+            Some("pro"),
             false,
             false,
             Vec::new(),
@@ -2511,7 +2511,10 @@ fn provider_panel(
         color_rgb,
         color_role: None,
         version: version.map(ToOwned::to_owned),
-        plan: plan.map(ToOwned::to_owned),
+        plan: plan.map(|tier| crate::store::snapshot::ProviderPlan {
+            tier: tier.to_owned(),
+            name: None,
+        }),
         metered,
         undecided: false,
         alternates: Vec::new(),

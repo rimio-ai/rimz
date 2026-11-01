@@ -105,7 +105,7 @@ fn pi_credentials_partition_live_windows_without_partitioning_stats() {
                 panel.sub_provider.as_deref(),
                 panel.account_key.as_deref(),
                 panel.metered,
-                panel.plan.as_deref(),
+                panel.plan_label(),
                 panel
                     .windows
                     .iter()
@@ -121,7 +121,7 @@ fn pi_credentials_partition_live_windows_without_partitioning_stats() {
                 Some("anthropic"),
                 Some("a"),
                 true,
-                Some("Anthropic OAuth"),
+                Some("Anthropic OAuth".to_owned()),
                 vec![45]
             ),
             (Some("custom"), None, false, None, vec![]),
@@ -129,7 +129,7 @@ fn pi_credentials_partition_live_windows_without_partitioning_stats() {
                 Some("openai-codex"),
                 Some("b"),
                 true,
-                Some("OpenAI Codex OAuth"),
+                Some("OpenAI Codex OAuth".to_owned()),
                 vec![70]
             ),
         ]
@@ -184,10 +184,15 @@ fn an_undecided_pi_login_still_exposes_each_reported_credential() {
                 p.sub_provider.as_deref(),
                 p.undecided,
                 p.metered,
-                p.plan.as_deref()
+                p.plan_label()
             ))
             .collect::<Vec<_>>(),
-        [(Some("anthropic"), false, false, Some("Anthropic API Key"))]
+        [(
+            Some("anthropic"),
+            false,
+            false,
+            Some("Anthropic API Key".to_owned())
+        )]
     );
     assert!(panel.undecided);
     assert!(!panel.metered);
@@ -218,7 +223,7 @@ fn undecided_account_cannot_infer_metering_or_windows_from_a_session() {
         (
             panel.undecided,
             panel.metered,
-            panel.plan.as_deref(),
+            panel.plan_label(),
             panel.windows.len()
         ),
         (true, false, None, 0)

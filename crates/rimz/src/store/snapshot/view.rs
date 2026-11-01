@@ -33,17 +33,18 @@ mod reap;
 mod rows;
 mod score;
 
-pub(crate) use providers::{format_plan_label, sort_windows};
+use providers::format_plan_label;
+pub(crate) use providers::sort_windows;
 
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 use model::cohort_team;
 pub use model::{
     CapacityWaitSummary, DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack,
-    PresenceSample, RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
-    SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
-    SidebarStatusCount, SidebarUnitKey, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
-    UnitStatus, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, card_status,
-    lead_unread_row, needs_you,
+    PresenceSample, ProviderPlan, RedeemForecast, RemoteControlBadge, SidebarCohortEffort,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
+    SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarUnitKey,
+    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, UnitStatus, WorktreeCi, WorktreePrQueue,
+    WorktreePrState, WorktreeTrunkSync, card_status, lead_unread_row, needs_you,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
@@ -93,7 +94,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 66;
+pub const SNAPSHOT_VERSION: u32 = 67;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(

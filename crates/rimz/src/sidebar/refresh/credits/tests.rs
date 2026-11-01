@@ -405,7 +405,7 @@ fn alternate_credits_and_entitlement_follow_their_own_scope() {
         let alternate = &panel.alternates[0];
         results.push((
             alternate.entitlement,
-            alternate.plan.clone(),
+            alternate.plan_label(),
             alternate
                 .extra_credits
                 .as_ref()
@@ -968,7 +968,10 @@ fn credits_projection_suppresses_stale_plan_windows_and_credits_only_in_use() {
         )]),
     };
     let mut panel = panel("claude", true);
-    panel.plan = Some("Claude Max".to_owned());
+    panel.plan = Some(crate::store::snapshot::ProviderPlan {
+        tier: "max".to_owned(),
+        name: None,
+    });
     panel.windows = vec![crate::agents::RateLimitWindow {
         used_percentage: Some(7),
         ..Default::default()
@@ -1021,7 +1024,10 @@ fn unmetered_projection_ignores_cached_entitlement_and_keeps_api_spend_unless_un
     };
     let mut panel = panel("claude", false);
     panel.entitlement = Entitlement::Lapsed { since_ms: 100 };
-    panel.plan = Some("Claude API".to_owned());
+    panel.plan = Some(crate::store::snapshot::ProviderPlan {
+        tier: "api".to_owned(),
+        name: Some("API".to_owned()),
+    });
     let (_dir, runtime) = runtime();
     let mut snapshot = crate::sidebar::test_support::snapshot_with_panels(
         runtime.workspace_id.clone(),

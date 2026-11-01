@@ -25,11 +25,17 @@ fn pi_block_follows_the_card_then_memory_then_the_top_level_in_both_layouts() {
     let mut snapshot = snapshot_with(agents);
     let mut top = provider_panel("pi", "Pi", 28, true, false, Some((20, 30)));
     top.sub_provider = Some("openai-codex".to_owned());
-    top.plan = Some("OpenAI-Codex OAuth".to_owned());
+    top.plan = Some(crate::store::snapshot::ProviderPlan {
+        tier: "OpenAI-Codex OAuth".to_owned(),
+        name: Some("OpenAI-Codex OAuth".to_owned()),
+    });
     top.art.clear();
     let mut alternate = top.clone();
     alternate.sub_provider = Some("anthropic".to_owned());
-    alternate.plan = Some("Anthropic API Key".to_owned());
+    alternate.plan = Some(crate::store::snapshot::ProviderPlan {
+        tier: "Anthropic API Key".to_owned(),
+        name: None,
+    });
     alternate.metered = false;
     alternate.windows.clear();
     top.alternates = vec![alternate];
@@ -128,7 +134,10 @@ fn qwen_shaped_panel_shows_a_month_ceiling_on_the_week() {
     panel.art = emblem.lines;
     panel.art_tints = emblem.tints;
     panel.version = Some("1.0.0".to_owned());
-    panel.plan = Some("Alibaba Coding Plan".to_owned());
+    panel.plan = Some(crate::store::snapshot::ProviderPlan {
+        tier: "Alibaba Coding Plan".to_owned(),
+        name: None,
+    });
     panel.windows = [(300, 300, 1200), (10_080, 600, 3000), (43_200, 5000, 6000)]
         .into_iter()
         .map(|(mins, used, limit)| {
@@ -1165,7 +1174,10 @@ fn pet_caption_is_right_aligned_with_three_trailing_cells() {
 fn render_provider_dashboard_without_pet_uses_main_stats_body() {
     let theme = Theme::fixed(false);
     let mut providers = two_provider_panels();
-    providers[0].plan = Some("Claude Max Enterprise".to_owned());
+    providers[0].plan = Some(crate::store::snapshot::ProviderPlan {
+        tier: "max".to_owned(),
+        name: Some("Max Enterprise".to_owned()),
+    });
     let rendered = Dashboard::tabbed(&theme, &providers)
         .active("claude")
         .width(52)
@@ -1187,7 +1199,10 @@ fn render_provider_dashboard_without_pet_uses_main_stats_body() {
 fn render_provider_dashboard_narrow_hides_io_tokens_and_version() {
     let theme = Theme::fixed(false);
     let mut providers = two_provider_panels();
-    providers[0].plan = Some("Claude Max Enterprise".to_owned());
+    providers[0].plan = Some(crate::store::snapshot::ProviderPlan {
+        tier: "max".to_owned(),
+        name: Some("Max Enterprise".to_owned()),
+    });
     let rendered = Dashboard::pets(&theme, &providers)
         .active("claude")
         .width(38)

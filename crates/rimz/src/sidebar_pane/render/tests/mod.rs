@@ -727,7 +727,10 @@ fn provider_panel(
         color_rgb: None,
         color_role: None,
         version: Some("2.1.158".to_owned()),
-        plan: Some("Claude Max".to_owned()),
+        plan: Some(crate::store::snapshot::ProviderPlan {
+            tier: "max".to_owned(),
+            name: None,
+        }),
         metered,
         undecided: false,
         alternates: Vec::new(),
@@ -847,9 +850,10 @@ fn two_provider_panels() -> Vec<SidebarProviderPanel> {
         provider_panel("claude", "Claude", 173, true, true, Some((25, 40))),
         {
             let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
-            codex.plan = Some(crate::store::snapshot::format_plan_label(
-                "codex", "pro", None,
-            ));
+            codex.plan = Some(crate::store::snapshot::ProviderPlan {
+                tier: "pro".to_owned(),
+                name: None,
+            });
             codex.version = Some("0.135.0".to_owned());
             codex.spending = Some(
                 crate::SpendTally {

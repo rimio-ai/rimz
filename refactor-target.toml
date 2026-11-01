@@ -3591,7 +3591,8 @@ path = "crates/rimz/src/store"
 # AgentCard carries the resolved post-compaction measurement gap to the renderer.
 # MessageRecord::idle_compaction_lapsed shares idle-decision expiry with delivery and repeat refusal (+1).
 # idle_compaction_edge keeps idle stamps and lapse checks on the same turn boundaries (+1).
-surface-budget = 527
+# ProviderPlan and SidebarProviderPanel::plan_label replace the shared formatter (+1).
+surface-budget = 528
 
 [[verdict]]
 kind = "item"
@@ -5858,8 +5859,8 @@ reason = "Typed snapshot error boundary has frozen callers; writer publication d
 
 [[verdict]]
 kind = "item"
-key = "store::snapshot::view::providers::format_plan_label"
-reason = "Shared with sidebar/refresh, not a snapshot-private formatting helper (pass 15a)."
+key = "store::snapshot::view::model::ProviderPlan"
+reason = "One raw tier/name reading feeds account JSON and derived sidebar labels without duplicated state."
 
 [[verdict]]
 kind = "item"

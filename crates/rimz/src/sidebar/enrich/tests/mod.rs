@@ -374,7 +374,7 @@ fn entitlement_projection_overrides_cached_max_and_fresh_windows_only_for_its_lo
                 entry["entitlement"]
             );
         } else {
-            assert_eq!(panel.plan.as_deref(), Some("Claude Max"));
+            assert_eq!(panel.plan_label().as_deref(), Some("Claude Max"));
             assert_eq!(panel.windows.len(), 1);
         }
     }
