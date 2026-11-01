@@ -109,7 +109,7 @@ pub struct StatsArgs {
     /// Timeline lines to show (events with --json); 0 shows all retained.
     #[arg(short = 'n', default_value_t = 50, requires = "assists")]
     pub limit: usize,
-    /// Include held and undelivered assist attempts.
+    /// Include held and undelivered attempts and steps that changed nothing.
     #[arg(long, requires = "assists")]
     pub all: bool,
     /// Open the held view, refreshing every 60s and re-centring on resize.
