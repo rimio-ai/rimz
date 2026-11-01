@@ -125,7 +125,7 @@ Each panel field has one source:
 
 | Field | Source |
 | --- | --- |
-| `plan` | the session context with the newest `observed_at`, falling back to the resolved probed account, including a bound profile override and display name. Claude contexts supply no account. `format_plan_label` prefers the account's display name (`max_20x` with `Ultra` becomes `Claude Ultra`), otherwise the adapter's declared vocabulary (`max_20x` becomes `Claude Max 20x`, Codex `pro` becomes `ChatGPT Pro 200`), with title-case fallback for unknown kinds |
+| `plan` | the raw tier and optional display name from the session context with the newest `observed_at`, falling back to the resolved probed account, including a bound profile override. Claude contexts supply no account. `SidebarProviderPanel::plan_label` derives text when read, preferring the account's display name (`max_20x` with `Ultra` becomes `Claude Ultra`), otherwise the adapter's declared vocabulary (`max_20x` becomes `Claude Max 20x`, Codex `pro` becomes `ChatGPT Pro 200`), with title-case fallback for unknown kinds |
 | `version` | the newest version among the login's session contexts and the probed account, by [`newest_version`](../../../crates/rimz/src/agents/version.rs): a string that parses as a numeric `CliVersion` outranks one that does not, the greater `CliVersion` wins, and the greater string breaks what remains, so the answer does not depend on which session reported last |
 | `metered`, `account_scope`, `sub_provider` | the same account. `sub_provider` names the backing credential when known. A missing `metered` is inferred true when live windows exist or a keyed session owns the panel, except that an undecided account is unmetered |
 | `undecided` | the account is provisional and has no `sub_provider`. It has no plan label, windows, credits, or budget row, and claims no usage read |
@@ -291,6 +291,8 @@ An idle Codex account has no panel, and [auto-redeem's expiry rescue](#auto-rede
 ### The accounts command
 
 `rimz accounts` (also `accounts list`) and `accounts show` share one query pipeline outside the producer. They probe every catalog login and call `refresh_provider_usage` for logged-in accounts, on the same durable cadence and claim path unless `--refresh` forces the read. `show` limits usage reads to its kind, and still probes every login. For Claude, Codex, and Pi, the kinds with named accounts, the pipeline probes again, on every run, each stored record that is logged out or ambiguous (an `ok` record without the `login` field whose account carries only a version, `ProviderRecord::login_is_ambiguous`), so a new login shows on the next run. Remaining records keep the probe table's cadence above, including failure backoff and the provisional retry floor.
+
+The account JSON derives `plan`, `plan_label`, `plan_key`, and fixed weekly `capacity` from one reading. [Plans and capacity](./plans.md) defines the keys, provider-specific units, adapter tables, unknown tiers, and lifted-window convention. Cross-room `agents` and `agent_states` come from one store walk in `crates/rimz/src/room/standing.rs::live_agents_by_login`; these exposure-only fields do not select accounts or alter launch gates.
 
 ### Direct account-usage HTTP
 

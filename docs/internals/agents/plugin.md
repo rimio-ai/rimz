@@ -47,6 +47,7 @@ A plugin's spec must outlive the process like a built-in's `static` spec, becaus
 | `bin_names` | the kind alone |
 | `aliases`, `sub_providers`, `expected_windows`, `tools.blocking` | empty |
 | `plan_label` | `TitleCaseOnly` |
+| `plan_capacities` | none |
 | `tool_rules`, `host_skills` | `Unsupported` |
 | `capabilities.native_ask_ui`, `registers_lazily` | from `[capabilities]` |
 | `capabilities.direct_account_usage` | true when an account probe is declared |
