@@ -1079,6 +1079,10 @@ pub struct AgentState {
     /// retires nothing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compaction_retired: bool,
+    /// A compaction retired the context and no nonzero lifecycle input split
+    /// has been measured since. Sidecar readings resolve the display at the join.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compacted_unmeasured: bool,
     /// The next input must not be another compaction. Set by a sent compact
     /// command or successful manual compaction; cleared only by `TurnStarted`.
     /// Registration preserves it; delivery acknowledgements do not rearm it.
@@ -1343,6 +1347,7 @@ impl AgentState {
             last_compact_command_tokens: None,
             retired_context_tokens: None,
             compaction_retired: false,
+            compacted_unmeasured: false,
             compacted_awaiting_prompt: None,
             last_seen: at,
             last_activity: at,
@@ -1968,16 +1973,18 @@ impl AgentState {
     /// through here. A sidecar whose occupancy is the reading the latest
     /// completed compaction retired was measured before the close, so the
     /// attached copy drops its current-window fields and keeps the window
-    /// size and session counters. The sidecar file is not rewritten.
+    /// size and session counters. While awaiting a real post-compaction
+    /// reading, it also withholds bare percentages and zero token readings.
+    /// The sidecar file and fold-owned measurement flag are not rewritten.
     pub(crate) fn attach_context(&mut self, context: Option<AgentContext>) {
         self.context = context;
-        let Some(retired) = self.retired_context_tokens else {
-            return;
-        };
         let Some(tokens) = self.context.as_mut().and_then(|c| c.tokens.as_mut()) else {
             return;
         };
-        if tokens.used_tokens() == Some(retired) {
+        let used = tokens.used_tokens();
+        if (self.retired_context_tokens.is_some() && used == self.retired_context_tokens)
+            || (self.compacted_unmeasured && used.is_none_or(|used| used == 0))
+        {
             tokens.used_percentage = None;
             tokens.remaining_percentage = None;
             tokens.current_context_tokens = None;

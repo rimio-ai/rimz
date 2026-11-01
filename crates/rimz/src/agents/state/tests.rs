@@ -959,6 +959,49 @@ fn statusline_context_window_outranks_the_lifecycle_window() {
 }
 
 #[test]
+fn context_join_withholds_placeholder_percents_until_a_sidecar_token_reading() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    agent.compacted_unmeasured = true;
+    for percent in [0, 3] {
+        let mut context = AgentContext::new("claude", Timestamp::from_second(1_000).unwrap());
+        context.tokens = Some(crate::agents::AgentTokenUsage {
+            context_window_size: Some(200_000),
+            used_percentage: Some(percent),
+            remaining_percentage: Some(100 - percent),
+            ..Default::default()
+        });
+        for used in [None, Some(0)] {
+            context.tokens.as_mut().unwrap().current_context_tokens = used;
+            agent.attach_context(Some(context.clone()));
+            let tokens = agent.context.as_ref().unwrap().tokens.as_ref().unwrap();
+            assert_eq!(tokens.used_percentage, None);
+            assert_eq!(tokens.remaining_percentage, None);
+            assert_eq!(agent.context_fill_pct(), None);
+            assert!(
+                agent.compacted_unmeasured,
+                "the join never changes fold-owned state"
+            );
+        }
+        context.tokens.as_mut().unwrap().current_usage = Some(crate::agents::AgentCurrentUsage {
+            input_tokens: Some(6_000),
+            ..Default::default()
+        });
+        context.tokens.as_mut().unwrap().current_context_tokens = None;
+        agent.attach_context(Some(context.clone()));
+        assert_eq!(agent.context, Some(context.clone()));
+        assert_eq!(agent.context_fill_pct(), Some(3.0));
+        assert!(agent.compacted_unmeasured);
+
+        agent.compacted_unmeasured = false;
+        context.tokens.as_mut().unwrap().current_usage = None;
+        agent.attach_context(Some(context.clone()));
+        assert_eq!(agent.context, Some(context));
+        assert_eq!(agent.context_fill_pct(), Some(f64::from(percent)));
+        agent.compacted_unmeasured = true;
+    }
+}
+
+#[test]
 fn context_join_withholds_the_window_a_compaction_retired() {
     // One Codex `token_count` (85k input, 80k of it cached) as the sidecar
     // rail writes it; the lifecycle rail's occupancy for the same record is
