@@ -179,6 +179,38 @@ fn hook_drainer_card_label(snapshot: &SidebarSnapshot, outage: &HookDrainerOutag
         .to_owned()
 }
 
+pub(super) fn throttle_notice_line(
+    theme: &Theme,
+    notice: &crate::store::snapshot::ThrottleNotice,
+    width: usize,
+) -> Line<'static> {
+    let style = theme.styled(Component::ThrottleNotice, Modifier::empty());
+    let prefix = if notice.kind == crate::ids::HoldKind::CheckFailed {
+        ""
+    } else {
+        "starts held: "
+    };
+    let left = vec![Span::styled(
+        format!(
+            "{} {prefix}{}",
+            theme.glyph(GlyphRole::ChromeAlert),
+            notice.reason
+        ),
+        style,
+    )];
+    let count = if notice.count > 1 {
+        format!("{} held{}", notice.count, value_seam(theme))
+    } else {
+        String::new()
+    };
+    let right = vec![Span::styled(
+        format!("{}{count}rimz doctor", value_seam(theme).trim_start()),
+        style,
+    )];
+    let full = left.iter().chain(&right).map(Span::width).sum::<usize>() + 1;
+    layout::pin_right(left, right, width.min(full))
+}
+
 pub(super) fn truth_notice_lines(
     theme: &Theme,
     notice: &TruthNotice,

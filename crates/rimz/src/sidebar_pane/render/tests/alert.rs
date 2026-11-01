@@ -144,7 +144,7 @@ fn render_hook_drainer_alert_coexists_with_lingering_but_not_active_refresh_aler
 }
 
 #[test]
-fn capacity_waits_share_one_cockpit_line_with_parked_runs() {
+fn throttle_notices_keep_the_cause_count_and_fix_in_bottom_chrome() {
     let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
     value["parked_workflows"] = serde_json::json!([
         {
@@ -153,58 +153,66 @@ fn capacity_waits_share_one_cockpit_line_with_parked_runs() {
             "checkout": "/repo", "since": fixed_now()
         }
     ]);
-    value["capacity_wait"] = serde_json::json!({
-        "kinds": ["claude", "codex"], "since": fixed_now(),
-        "gives_up_at": fixed_now() + Duration::from_secs(3600), "count": 4
-    });
+    value["throttle_notices"] = serde_json::json!([
+        {"kind": "check_failed", "reason": "capacity check failing: claude exit 1", "count": 4},
+        {"kind": "disk", "reason": "free disk 1G < 2G at /repo", "count": 1},
+        {"kind": "store", "reason": "cannot count active agents: broken record", "count": 2}
+    ]);
     let mut snapshot: SidebarSnapshot = serde_json::from_value(value.clone()).unwrap();
     snapshot.now = fixed_now();
-    let phrase = crate::theme::fmt::capacity_wait(
-        &[
-            crate::ids::AgentKind::new_unchecked("claude"),
-            crate::ids::AgentKind::new_unchecked("codex"),
-        ],
-        fixed_now(),
-        Some(fixed_now() + Duration::from_secs(3600)),
-        fixed_now(),
-    );
-    let wide = snapshot_to_screen(&snapshot, 110, 18);
-    let narrow = snapshot_to_screen(&snapshot, 46, 18);
-    value["capacity_wait"]["gives_up_at"] = serde_json::Value::Null;
-    value["capacity_wait"]["count"] = 1.into();
-    let mut forever: SidebarSnapshot = serde_json::from_value(value).unwrap();
-    forever.now = fixed_now();
-    let forever = snapshot_to_screen(&forever, 110, 18);
+    let wide = snapshot_to_screen(&snapshot, 110, 24);
+    let narrow = snapshot_to_screen(&snapshot, 46, 24);
+    value["throttle_notices"] = serde_json::json!([]);
+    let mut clear: SidebarSnapshot = serde_json::from_value(value).unwrap();
+    clear.now = fixed_now();
+    let clear = snapshot_to_screen(&clear, 110, 24);
     assert!(
-        wide.contains(&phrase)
-            && wide.contains("· 4 waiting")
+        wide.contains("⚠ capacity check failing: claude exit 1")
+            && wide.contains("· 4 held · rimz doctor")
+            && wide.contains("⚠ starts held: free disk 1G < 2G at /repo")
+            && wide.contains("⚠ starts held: cannot count active agents: broken record")
             && wide.contains("review triage asked")
-            && narrow.contains("waiting for capacity")
-            && narrow.contains("4 waiting")
-            && !forever.contains("gives up")
-            && !forever.contains("1 waiting")
-            && forever.contains("waiting for capacity (claude, codex) since"),
-        "capacity waits must share one inert line, keep the count when narrow, and omit a forever deadline:\n{wide}\n{narrow}\n{forever}"
+            && narrow.contains("· 4 held · rimz doctor")
+            && !wide.contains("1 held")
+            && !clear.contains("rimz doctor"),
+        "notices keep their count and fix while the cause clips:\n{wide}\n{narrow}\n{clear}"
     );
-    assert_eq!(wide.matches("waiting for capacity").count(), 1);
     for (name, screen) in [
-        ("capacity_waits_wide", wide),
-        ("capacity_waits_l2", narrow),
-        ("capacity_waits_forever", forever),
+        ("throttle_notices_wide", wide),
+        ("throttle_notices_l2", narrow),
+        ("throttle_notices_clear", clear),
     ] {
-        let since = fixed_now()
-            .to_zoned(jiff::tz::TimeZone::system())
-            .strftime("%H:%M");
-        let until = (fixed_now() + Duration::from_secs(3600))
-            .to_zoned(jiff::tz::TimeZone::system())
-            .strftime("%H:%M");
-        assert_snapshot(
-            name,
-            screen
-                .replace(&since.to_string(), "HH:MM")
-                .replace(&until.to_string(), "HH:MM"),
-        );
+        assert_snapshot(name, screen);
     }
+    let theme = Theme::fixed(false);
+    let line =
+        super::super::chrome::throttle_notice_line(&theme, &snapshot.throttle_notices[0], 80);
+    assert!(
+        line.spans
+            .iter()
+            .filter(|span| !span.content.trim().is_empty())
+            .all(|span| span.style.fg == theme.warn(Modifier::empty()).fg)
+    );
+    snapshot.providers = two_provider_panels();
+    let (lines, _) = bottom_chrome_texts(&snapshot, None);
+    let notice = lines
+        .iter()
+        .position(|line| line.contains("rimz doctor"))
+        .unwrap();
+    assert!(
+        lines
+            .iter()
+            .skip(notice + 1)
+            .any(|line| line.contains("? for help")),
+        "{lines:?}"
+    );
+    let alert = Alert::active("unreadable", fixed_now());
+    assert!(
+        !bottom_chrome_texts(&snapshot, Some(&alert))
+            .0
+            .iter()
+            .any(|line| line.contains("rimz doctor"))
+    );
 }
 
 #[test]
