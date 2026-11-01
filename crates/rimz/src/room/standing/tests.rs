@@ -290,21 +290,89 @@ fn the_agents_column_is_the_refusal_count_with_nothing_launching() {
     let other_room = [agent(Some("team"))];
 
     let mut counts = BTreeMap::new();
-    count_live_logins(&mut counts, &room);
-    count_live_logins(&mut counts, &other_room);
+    count_live_logins(&mut counts, &room, &[]);
+    count_live_logins(&mut counts, &other_room, &[]);
     let team = LoginKey::new(kind("codex"), name("team"));
     let native = LoginKey::new(kind("codex"), LoginName::default_login());
+    let totals: BTreeMap<_, _> = counts
+        .iter()
+        .map(|(account, states)| (account.clone(), states.total()))
+        .collect();
     assert_eq!(
-        counts,
+        totals,
         BTreeMap::from([(native.clone(), 1), (team.clone(), 2)])
     );
-    for (account, column) in counts {
+    for (account, column) in totals {
         let refusal: usize = [&room[..], &other_room[..]]
             .iter()
             .map(|agents| count_others_on(agents, &account, &[]))
             .sum();
         assert_eq!(column, refusal);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_agents_column_splits_into_disjoint_states() {
+    use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
+    let agent = |id: &str, status: AgentStatus| {
+        let mut agent = AgentState::seed(
+            kind("claude"),
+            id.into(),
+            status,
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        agent.login = Some(name("team"));
+        agent.pane = Some(crate::pane::PaneRef::from_id(
+            crate::ids::PaneId::from_parts(crate::MuxName::Tmux, "%1"),
+        ));
+        agent
+    };
+    let mut native_child = agent("child", AgentStatus::Running);
+    native_child.parent_agent_id = Some("running".into());
+    let mut dead_owner = agent("dead", AgentStatus::Waiting);
+    dead_owner.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "dead",
+        u32::MAX,
+        None,
+    ));
+    let room = [
+        agent("running", AgentStatus::Running),
+        agent("paused", AgentStatus::Paused),
+        agent("waiting", AgentStatus::Waiting),
+        agent("idle", AgentStatus::Idle),
+        agent("done", AgentStatus::Success),
+        agent("frozen", AgentStatus::Idle),
+        native_child,
+        dead_owner,
+    ];
+    let frozen = crate::store::hibernate::Entry {
+        kind: kind("claude"),
+        agent_id: "frozen".into(),
+        ..serde_json::from_value(serde_json::json!({
+            "kind": "claude", "agent_id": "x", "pane_id": "tmux:%1", "scope": "/s",
+            "provider_pid": 1, "frozen_at": "1970-01-01T00:00:00Z", "reclaimed_bytes": 0
+        }))
+        .unwrap()
+    };
+    let mut other = frozen.clone();
+    other.kind = kind("codex");
+    other.agent_id = "running".into();
+
+    let mut counts = BTreeMap::new();
+    count_live_logins(&mut counts, &room, &[frozen, other]);
+    let states = counts[&LoginKey::new(kind("claude"), name("team"))];
+    assert_eq!(
+        states,
+        AgentStateCounts {
+            running: 2,
+            waiting: 1,
+            idle: 2,
+            hibernated: 1,
+        }
+    );
+    assert_eq!(states.total(), 6);
 }
 
 #[test]
