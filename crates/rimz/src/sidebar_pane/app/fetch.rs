@@ -339,7 +339,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         fenced_sessions,
         resume_outcomes,
         parked_workflows,
-        capacity_wait,
+        throttle_notices,
     } = left;
     shared_eq(worktree_groups, &right.worktree_groups)
         && shared_eq(agents, &right.agents)
@@ -391,7 +391,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && link == &right.link
         && reflects_log == &right.reflects_log
         && parked_workflows == &right.parked_workflows
-        && capacity_wait == &right.capacity_wait
+        && throttle_notices == &right.throttle_notices
 }
 
 /// Record every production attempt so errors and forced refreshes bound the next ordinary attempt.

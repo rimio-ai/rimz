@@ -1334,6 +1334,19 @@ pub fn held(name: &str, root: &Path) -> Vec<Held> {
 }
 
 fn held_in(host: &dyn Host, name: &str, root: &Path) -> Vec<Held> {
+    waiting_in(host, Some(name), root)
+        .into_iter()
+        .map(|(_, held)| held)
+        .collect()
+}
+
+/// Live waiting starts in this room, paired with their task names. Read-only
+/// and lock-free, using the same owner check as the task lookup.
+pub fn room_held(root: &Path) -> Vec<(String, Held)> {
+    waiting_in(&SystemHost, None, root)
+}
+
+fn waiting_in(host: &dyn Host, name: Option<&str>, root: &Path) -> Vec<(String, Held)> {
     let Ok(paths) = ticket_paths(&host.queue_dir()) else {
         return Vec::new();
     };
@@ -1346,18 +1359,23 @@ fn held_in(host: &dyn Host, name: &str, root: &Path) -> Vec<Held> {
             let TicketState::Waiting { reason } = &ticket.state else {
                 return None;
             };
-            (ticket.task == name && ticket.root == root && host.owner_is_live(&ticket.owner)).then(
-                || Held {
-                    pid: ticket.owner.pid,
-                    checkout: ticket.checkout.clone(),
-                    since_ms: ticket.enqueued_ms,
-                    kinds: ticket.kinds.clone(),
-                    gives_up_ms: ticket.gives_up_ms,
-                    reason: reason.as_ref().map(|hold| hold.text.clone()),
-                    hold: reason.as_ref().map(|hold| hold.kind),
-                    position: index + 1,
-                },
-            )
+            if name.is_some_and(|name| ticket.task != name)
+                || ticket.root != root
+                || !host.owner_is_live(&ticket.owner)
+            {
+                return None;
+            }
+            let held = Held {
+                pid: ticket.owner.pid,
+                checkout: ticket.checkout.clone(),
+                since_ms: ticket.enqueued_ms,
+                kinds: ticket.kinds.clone(),
+                gives_up_ms: ticket.gives_up_ms,
+                reason: reason.as_ref().map(|hold| hold.text.clone()),
+                hold: reason.as_ref().map(|hold| hold.kind),
+                position: index + 1,
+            };
+            Some((ticket.task, held))
         })
         .collect()
 }

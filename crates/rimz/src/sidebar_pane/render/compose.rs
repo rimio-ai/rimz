@@ -17,9 +17,9 @@ use super::chrome::{
 use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
     CardWalk, CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext,
-    capacity_wait_line, cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block,
-    fleet_header_lines, fleet_size, fleet_store_lines, fleet_total_lines, open_pr_total,
-    open_pr_worst_ci, parked_overflow_line, parked_workflow_line, worktree_group_lines_windowed,
+    cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block, fleet_header_lines,
+    fleet_size, fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci,
+    parked_overflow_line, parked_workflow_line, worktree_group_lines_windowed,
 };
 use super::theme::{Component, Theme};
 use super::{
@@ -489,6 +489,7 @@ fn plan_bottom_chrome(
         && snapshot.truth_degraded.is_none()
         && ui.gate_notice.is_none()
         && snapshot.skipped_settings == 0
+        && snapshot.throttle_notices.is_empty()
         && alert.is_none();
     let corner = if alert_active || owns_store {
         BottomCorner::None
@@ -570,6 +571,13 @@ pub(super) fn build_bottom_chrome(
             ),
             theme.muted().add_modifier(Modifier::DIM),
         )));
+    }
+    if !alert.is_some_and(Alert::is_active) {
+        for notice in &snapshot.throttle_notices {
+            bottom.push_inert(pad_chrome(super::chrome::throttle_notice_line(
+                theme, notice, inner,
+            )));
+        }
     }
     if plan.footer {
         let footer = footer_lines(snapshot, theme, inner);
@@ -1042,9 +1050,6 @@ pub(super) fn top_lines(
             parked.len() - PARKED_LINES,
             inner,
         ));
-    }
-    if let Some(wait) = &snapshot.capacity_wait {
-        header.push(capacity_wait_line(theme, wait, snapshot.now, inner));
     }
     header.push(hairline_rule(theme, inner));
     let header_len = header.len();

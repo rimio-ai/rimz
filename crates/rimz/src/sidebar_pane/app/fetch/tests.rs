@@ -442,23 +442,21 @@ fn hook_drainer_outages_are_content_not_a_clock_only_change() {
 }
 
 #[test]
-fn capacity_waits_are_content_not_a_clock_only_change() {
+fn throttle_notices_are_content_not_a_clock_only_change() {
     let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     let mut value = serde_json::to_value(&left).unwrap();
-    value["capacity_wait"] = serde_json::json!({
-        "kinds": ["claude"], "since": "2026-01-01T00:00:00Z",
-        "gives_up_at": null, "count": 1
-    });
+    value["throttle_notices"] = serde_json::json!([
+        {"kind": "disk", "reason": "free disk low", "count": 1}
+    ]);
     let right = serde_json::from_value(value.clone()).unwrap();
     let mut changes = vec![!same_snapshot_content(&left, &right)];
     for (field, changed) in [
         ("count", serde_json::json!(2)),
-        ("kinds", serde_json::json!(["codex"])),
-        ("since", serde_json::json!("2026-01-01T00:01:00Z")),
-        ("gives_up_at", serde_json::json!("2026-01-01T06:00:00Z")),
+        ("kind", serde_json::json!("store")),
+        ("reason", serde_json::json!("cannot count agents")),
     ] {
         let mut updated = value.clone();
-        updated["capacity_wait"][field] = changed;
+        updated["throttle_notices"][0][field] = changed;
         changes.push(!same_snapshot_content(
             &right,
             &serde_json::from_value(updated).unwrap(),
@@ -467,7 +465,7 @@ fn capacity_waits_are_content_not_a_clock_only_change() {
     changes.push(!same_snapshot_content(&right, &left));
     assert_eq!(
         changes,
-        vec![true; 6],
+        vec![true; 5],
         "every visible wait change must publish"
     );
 }

@@ -2065,7 +2065,8 @@ path = "crates/rimz/src/harness"
 # EdgeSource shares typed route provenance with CLI inspection (+1).
 # CheckKind/kind and StepKind/kind share runner selection with definition rails (+4).
 # Check::subscriptions shares derived and explicit wakes with the full node view (+1).
-surface-budget = 1059
+# throttle::room_held shares the lock-free room ticket read with sidebar and CLI (+1).
+surface-budget = 1060
 
 [[verdict]]
 kind = "item"
@@ -3585,7 +3586,7 @@ path = "crates/rimz/src/store"
 # AuditRows, its read/lookup surface and marked cohort copies share durable rows (+5).
 # message::cached_messages shares nontransactional queue/history projection reads (+1).
 # agent_context::read_cached_one isolates due-session reads from held projection records (+1).
-# CapacityWaitSummary carries only the room's oldest durable wait and total count (+1).
+# ThrottleNotice carries each needs-a-fix cause's oldest reason and count.
 # SidebarSnapshot::pane_session_demands shares the ladder's discovery request with the producer (+1).
 # SoftCompactStep shares the optional steer-only/continue record tag with message policy (+1).
 # Store::queue_tail_message assigns an unclaimed continue's FIFO-tail id under the queue lock (+1).
@@ -4629,6 +4630,11 @@ surface-budget = 65
 kind = "item"
 key = "harness::schedule::throttle::check_errors"
 reason = "Doctor reads the latest per-kind/account capacity-check errors without executing checks."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::throttle::room_held"
+reason = "Sidebar and loop inspection read live waiting tickets for one project without locks or mutations."
 
 [[verdict]]
 kind = "item"
@@ -6452,8 +6458,8 @@ reason = "A pub field of SidebarWorktreeGroup in the published snapshot schema t
 
 [[verdict]]
 kind = "item"
-key = "store::snapshot::view::model::CapacityWaitSummary"
-reason = "The read-only sidebar fold shares the oldest durable capacity wait and total count with the cockpit renderer."
+key = "store::snapshot::view::model::ThrottleNotice"
+reason = "The read-only fold shares needs-a-fix causes, oldest reasons, and start counts with bottom chrome."
 
 [[verdict]]
 kind = "item"

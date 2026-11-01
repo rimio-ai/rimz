@@ -126,6 +126,8 @@ pub(crate) enum Component {
     ContextCompacted,
     /// Provider fast mode: a scheme-derived amber, independent of lifecycle state.
     FastMode,
+    /// Starts needing a fix, above the footer.
+    ThrottleNotice,
 }
 
 #[cfg(test)]
@@ -177,6 +179,7 @@ impl Component {
         Component::CacheExpired,
         Component::ContextCompacted,
         Component::FastMode,
+        Component::ThrottleNotice,
     ];
 }
 
@@ -192,9 +195,8 @@ impl Component {
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
             }
-            WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited => {
-                palette.warn
-            }
+            WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited
+            | ThrottleNotice => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }

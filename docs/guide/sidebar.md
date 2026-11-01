@@ -55,7 +55,7 @@ A row of zeros in the attention buckets means nothing needs you, so you can skip
 
 When you know which work you want rather than which state needs you, press `Alt+p`, then `/auth` and `Enter` to focus the first matching pane. Search narrows the cards as you type; `↓` or `Ctrl+n` selects another match before `Enter`. For a quick jump without keeping the search, click a matching card while still typing instead. The committed `/ auth` chip stays on its own line above the dashboard in every tab, so `j` and `k` browse the matches and `n` still jumps to a matching card that needs you. A state filter such as `w` narrows those matches further. Clear the search with `Esc`, or press `A` to clear both the search and the state filter. Matching and editing rules are in [Text search](../interface/sidebar.md#text-search).
 
-Parked workflows add rows beneath the spend line. Condition loop fires and loop-started workflow steps waiting for capacity share one more line there: the oldest wait's provider kinds and times, plus a count when several starts are held ([capacity waits](../interface/sidebar.md#waiting-for-capacity)).
+Parked workflows add rows beneath the spend line. Automated starts held by a failing capacity check, the disk floor, or an unreadable agent count add warning notices above the footer, with their reason and `rimz doctor` hint. Self-clearing holds stay out of the sidebar; inspect them with `rimz loop list` or `rimz workflow list` ([notices](../interface/sidebar.md#notices-and-alerts)).
 
 Every figure in this block, and how each one is counted, is [Token Insight](./insight.md#per-room-the-cockpit).
 

@@ -193,7 +193,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 
 ## The cockpit
 
-The cockpit is the top block. Its lines stay put as agents change status; the unread banner, [parked workflow runs](#parked-workflow-runs), and [capacity waits](#waiting-for-capacity) add or remove rows.
+The cockpit is the top block. Its lines stay put as agents change status; the unread banner and [parked workflow runs](#parked-workflow-runs) add or remove rows.
 
 ```
  ⌘ query-engine                     ~/code/query-engine
@@ -213,7 +213,6 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 | 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
 | 3 | `¤` live agents, `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
 | then | one line per [parked workflow run](#parked-workflow-runs), only while a run is parked, above the rule. |
-| then | one [capacity-wait line](#waiting-for-capacity) for the room, only while automated starts are waiting, above the rule. |
 | 4 | the make-up line: units by status. |
 | 5 | the `↑ N need you` or `↓ N need you` banner, only while it applies. |
 
@@ -236,14 +235,6 @@ A [workflow run](../guide/workflows.md) that parks for you adds one line under t
 ```
 
 Each line is the waiting `?` glyph, the workflow, the node it parked at, and the park reason (`user`, `cap`, `deadline`, `timeout`, `invalid`, `asked`, or `check`), followed by its text when the park carries one: the question for `asked`, the check's own `reason` for `user`. The text loses its right end at the pane edge, and the time since the park stays on the right. The line is not a click target: `rimz workflow show <run>` and `rimz workflow resume <run>` act on it ([workflow commands](../reference/cli/workflow.md)). On a watched tab it appears within one data tick of the park.
-
-### Waiting for capacity
-
-Condition loop fires and loop-started workflow steps held for capacity share one inert line beneath any parked workflow runs. It shows the oldest wait's provider kinds, start time, and give-up time in local time, using the same phrase as `rimz loop list` and `rimz workflow list`. Times read `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that. A wait without a give-up time omits that clause. With several waits, `· N waiting` counts held checkout scopes and workflow runs, not retries; the count stays on the right when the phrase is clipped by a narrow pane. The line disappears when no durable capacity wait remains. Blocking signal, watch, and periodic fires appear in `rimz loop list` and `rimz loop show`, not here.
-
-```
- ? waiting for capacity (claude, codex) since HH:MM, gives up at HH:MM                            · 4 waiting
-```
 
 ### The make-up line
 
@@ -821,6 +812,24 @@ The footer is the last line, apart from hook-drainer alerts and recovered refres
 The away badge takes the left edge. The remote badge sits there otherwise, and follows the away badge only when the line has room. The remote badge's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading. On both backends, `afk_after_secs` also bounds retention of departed clients' sidebar views ([configuration](../guide/configuration.md#sidebar-rendering)).
 
 ### Notices and alerts
+
+Automated starts that need a fix add warning notices above the footer, one per cause: a failing capacity check, the disk floor, or an unreadable agent count. Each names the oldest held start's reason and points to `rimz doctor`. Condition fires, workflow steps, and live blocking fires in this room all count; retries do not. With several starts of one cause, `· N held` appears. Narrow panes clip the reason first, keeping the count and command. These notices clear on the next fold after the holds clear, have no dismiss key, and keep the footer unfolded. An active sidebar alert hides them until recovery, like the skipped-settings notice.
+
+```
+ ⚠ capacity check failing: claude exit 1 · 4 held · rimz doctor
+ ⚠ starts held: free disk 1G < 2G at /repo · rimz doctor
+ ⚠ starts held: cannot count active agents: broken record · 2 held · rimz doctor
+```
+
+Self-clearing holds add no sidebar line; inspect them with `rimz loop list` or `rimz workflow list`.
+
+At 46 columns the same notices keep their suffixes:
+
+```
+ ⚠ capacity check fail · 4 held · rimz doctor
+ ⚠ starts held: free disk 1G <  · rimz doctor
+ ⚠ starts held: cannot · 2 held · rimz doctor
+```
 
 When the room opened with configuration problems, a dim notice above the footer keeps them visible: `⚠ 2 settings skipped at start · rimz doctor` (singular `setting` for one). Doctor lists the settings, warnings, and fixes. Fixing the configuration clears the notice at the next start or attach; an empty or unreadable room record shows no notice.
 

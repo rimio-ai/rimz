@@ -18,11 +18,11 @@ use crate::forge::pr_state::{PrLink, PrQueueFact, read_pr_state_cache};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::Store;
 use crate::store::snapshot::{
-    CapacityWaitSummary, HookDrainerOutage, HookDrainerOutageAgent, LazyAgentPairingDiagnostic,
-    LazyAgentPairingResult, RemoteControlBadge, RuntimeReapInputs, SidebarLinkFreshness,
-    SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow,
-    SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreeCi,
-    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
+    HookDrainerOutage, HookDrainerOutageAgent, LazyAgentPairingDiagnostic, LazyAgentPairingResult,
+    RemoteControlBadge, RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
+    SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup,
+    SidebarWorktreeKind, ThrottleNotice, TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState,
+    WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
 use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;
@@ -603,11 +603,12 @@ pub fn project_local(
     snapshot
 }
 
-fn capacity_wait_summary(
+fn throttle_notices(
     state: &StatePaths,
     runtime: &RuntimePaths,
     workflows: &[crate::store::workflow::RunRecord],
-) -> Option<CapacityWaitSummary> {
+    root: Option<&Path>,
+) -> Vec<ThrottleNotice> {
     let waits = crate::harness::schedule::launch_ledger::load_live_capacity(state, runtime)
         .unwrap_or_else(|err| {
             tracing::warn!(error = %err, "loop capacity waits unreadable for the sidebar");
@@ -616,34 +617,61 @@ fn capacity_wait_summary(
     let loop_waits = waits
         .values()
         .flat_map(BTreeMap::values)
-        .map(|wait| (&wait.kinds, wait.first, wait.gives_up_at));
+        .map(|wait| (wait.hold, wait.first, wait.reason.as_str()));
     let workflow_waits = workflows
         .iter()
         .filter(|record| record.state == crate::store::workflow::RunState::Active)
         .filter_map(|record| record.wait.as_ref())
         .filter(|wait| wait.outcome == "capacity")
-        .map(|wait| (&wait.kinds, wait.first, wait.gives_up_at));
-    let mut oldest: Option<CapacityWaitSummary> = None;
-    let mut count = 0;
-    for (kinds, since, gives_up_at) in loop_waits.chain(workflow_waits) {
-        count += 1;
-        if oldest.as_ref().is_none_or(|wait| since < wait.since) {
-            oldest = Some(CapacityWaitSummary {
-                kinds: kinds.clone(),
+        .map(|wait| {
+            (
+                wait.hold,
+                wait.first,
+                wait.detail.as_deref().unwrap_or_default(),
+            )
+        });
+    let tickets = root
+        .map(crate::harness::schedule::throttle::room_held)
+        .unwrap_or_default();
+    let ticket_waits = tickets.iter().map(|(_, wait)| {
+        let since = i64::try_from(wait.since_ms)
+            .ok()
+            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+            .unwrap_or(Timestamp::UNIX_EPOCH);
+        (wait.hold, since, wait.reason.as_deref().unwrap_or_default())
+    });
+    let mut notices: Vec<(Timestamp, ThrottleNotice)> = Vec::new();
+    for (hold, since, reason) in loop_waits.chain(workflow_waits).chain(ticket_waits) {
+        let Some(kind) = hold.filter(|kind| kind.needs_fix()) else {
+            continue;
+        };
+        if let Some((oldest, notice)) = notices.iter_mut().find(|(_, notice)| notice.kind == kind) {
+            notice.count += 1;
+            if since < *oldest {
+                *oldest = since;
+                notice.reason = reason.to_owned();
+            }
+        } else {
+            notices.push((
                 since,
-                gives_up_at,
-                count: 0,
-            });
+                ThrottleNotice {
+                    kind,
+                    reason: reason.to_owned(),
+                    count: 1,
+                },
+            ));
         }
     }
-    oldest.map(|mut wait| {
-        wait.count = count;
-        wait
-    })
+    notices.sort_by_key(|(_, notice)| match notice.kind {
+        crate::ids::HoldKind::CheckFailed => 0,
+        crate::ids::HoldKind::Disk => 1,
+        _ => 2,
+    });
+    notices.into_iter().map(|(_, notice)| notice).collect()
 }
 
-/// Project parked runs and durable capacity waits even when no agent has launched.
-fn project_cockpit_waits(
+/// Project parked runs and starts needing a fix even before an agent launches.
+fn project_workflow_and_throttle_state(
     snapshot: &mut SidebarSnapshot,
     state: &StatePaths,
     runtime: &RuntimePaths,
@@ -652,7 +680,8 @@ fn project_cockpit_waits(
         tracing::warn!(error = %err, "workflow runs unreadable for the sidebar");
         Vec::new()
     });
-    snapshot.capacity_wait = capacity_wait_summary(state, runtime, &records);
+    snapshot.throttle_notices =
+        throttle_notices(state, runtime, &records, snapshot.project_root.as_deref());
     let mut parked: Vec<_> = records
         .into_iter()
         .filter(|record| record.state == crate::store::workflow::RunState::Parked)
@@ -775,7 +804,7 @@ fn enrich_core(
         );
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
     }
-    project_cockpit_waits(&mut snapshot, state, runtime);
+    project_workflow_and_throttle_state(&mut snapshot, state, runtime);
     let outages = crate::harness::drainer_outage::read(runtime);
     snapshot.hook_drainer_outage = outages.first().map(|first| HookDrainerOutage {
         since: Timestamp::from_millisecond(first.since_ms.min(i64::MAX as u64) as i64)

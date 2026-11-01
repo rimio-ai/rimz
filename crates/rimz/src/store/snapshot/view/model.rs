@@ -88,12 +88,11 @@ pub fn needs_you(
     })
 }
 
-/// The oldest durable capacity wait and the room's total number of waiting starts.
+/// Starts held by one cause needing a fix, with the oldest start's reason.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CapacityWaitSummary {
-    pub kinds: Vec<crate::ids::AgentKind>,
-    pub since: jiff::Timestamp,
-    pub gives_up_at: Option<jiff::Timestamp>,
+pub struct ThrottleNotice {
+    pub kind: crate::ids::HoldKind,
+    pub reason: String,
     pub count: usize,
 }
 
