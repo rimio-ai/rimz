@@ -372,6 +372,7 @@ fn topology_writer(
 ) -> rimz::mux::zellij::pane_topology::TopologyWriter {
     rimz::mux::zellij::pane_topology::TopologyWriter {
         plugin_id,
+        client_id: None,
         loaded_at_ms,
         build: None,
         config: None,
@@ -385,6 +386,7 @@ fn identified_topology_writer(
 ) -> rimz::mux::zellij::pane_topology::TopologyWriter {
     rimz::mux::zellij::pane_topology::TopologyWriter {
         plugin_id,
+        client_id: None,
         loaded_at_ms,
         build: Some(build.to_owned()),
         config: Some(format!("{build}-config")),
@@ -745,7 +747,7 @@ fn tmux_poll_presence_warns_when_sidebar_lacks_watch() {
 }
 
 #[test]
-fn newer_cache_writer_supersedes_only_older_conflicts() {
+fn a_different_cache_writer_supersedes_the_conflict() {
     let older = Some(topology_writer(1, 100));
     let newer = Some(topology_writer(2, 200));
 
@@ -755,10 +757,8 @@ fn newer_cache_writer_supersedes_only_older_conflicts() {
         older.as_ref(),
         older.as_ref()
     ));
-    assert!(!topology_conflict_superseded(
-        older.as_ref(),
-        newer.as_ref()
-    ));
+    assert!(topology_conflict_superseded(older.as_ref(), newer.as_ref()));
+    assert!(topology_conflict_superseded(None, newer.as_ref()));
     assert!(!topology_conflict_superseded(None, None));
 }
 

@@ -2,10 +2,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::pane_topology::{
-    PaneTopologyCache, PaneTopologyPane, pane_topology_cache_is_fresh, read_pane_topology_cache,
+    PaneTopologyCache, PaneTopologyPane, TopologyWriter, pane_topology_cache_is_fresh,
+    read_pane_topology_cache,
 };
 use super::parse::{is_no_active_sessions, session_state_from_line};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend};
@@ -14,6 +16,48 @@ use crate::ids::WorkspaceId;
 use crate::mux::{CommandSpec, MuxErr, PaneReadConsistency, Result, SessionLiveness};
 use crate::utils::time::unix_now_ms;
 use crate::workspace::{self, KnownWorkspace};
+
+const DETACHED_WRITER_DUMP_INTERVAL: Duration = Duration::from_secs(5);
+
+struct TopologyDumpAttempt {
+    runtime: PathBuf,
+    session: String,
+    writer: TopologyWriter,
+    sent_at: Instant,
+}
+
+// Backends are reconstructed per read. Share attempts across them, evicting
+// entries after the recovery interval so departed rooms retain no state.
+static TOPOLOGY_DUMP_ATTEMPTS: Mutex<Vec<TopologyDumpAttempt>> = Mutex::new(Vec::new());
+
+fn detached_writer_dump_due(runtime: &RuntimePaths, cache: &PaneTopologyCache) -> bool {
+    let Some(writer) = cache.writer.as_ref() else {
+        return false;
+    };
+    let clients = cache.clients.as_ref().filter(|_| !cache.clients_withheld);
+    if writer.attached_to(clients) != Some(false) {
+        return false;
+    }
+    let mut attempts = TOPOLOGY_DUMP_ATTEMPTS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    let now = Instant::now();
+    attempts.retain(|attempt| now.duration_since(attempt.sent_at) < DETACHED_WRITER_DUMP_INTERVAL);
+    if attempts.iter().any(|attempt| {
+        attempt.runtime == runtime.root
+            && attempt.session == cache.session_name
+            && &attempt.writer == writer
+    }) {
+        return false;
+    }
+    attempts.push(TopologyDumpAttempt {
+        runtime: runtime.root.clone(),
+        session: cache.session_name.clone(),
+        writer: writer.clone(),
+        sent_at: now,
+    });
+    true
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PresenceProbe {
@@ -268,6 +312,9 @@ impl ZellijBackend {
         if let Some(cache) =
             Self::fresh_cached_topology(runtime, &session, now_ms, min_topology_produced_at_ms)
         {
+            if detached_writer_dump_due(runtime, &cache) {
+                self.request_topology_dump(&known);
+            }
             return Ok(cache);
         }
         if self.session_state(&session) != SessionLiveness::Live {
@@ -402,13 +449,6 @@ impl ZellijBackend {
     }
 
     fn request_topology_dump(&self, known: &KnownWorkspace) {
-        if self.presence_plugin_path().is_none() {
-            tracing::debug!(
-                session = %known.session_name,
-                "Zellij topology refresh skipped because the presence plugin artifact is unavailable",
-            );
-            return;
-        }
         if let Err(err) = self.dump_topology_for(&known.session_name) {
             tracing::debug!(
                 session = %known.session_name,

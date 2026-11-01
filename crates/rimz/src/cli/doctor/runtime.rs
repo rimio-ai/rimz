@@ -972,10 +972,7 @@ fn topology_conflict_superseded(
     cache_writer: Option<&pane_topology::TopologyWriter>,
     accepted_writer: Option<&pane_topology::TopologyWriter>,
 ) -> bool {
-    let generation = |writer: Option<&pane_topology::TopologyWriter>| {
-        writer.map_or((0, 0), |writer| writer.generation())
-    };
-    generation(cache_writer) > generation(accepted_writer)
+    cache_writer != accepted_writer
 }
 
 fn topology_writer_id(writer: pane_topology::TopologyWriter) -> model::TopologyWriterId {

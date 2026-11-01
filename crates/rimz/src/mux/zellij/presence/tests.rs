@@ -54,6 +54,7 @@ fn current_writer(plugin_id: u32, loaded_at_ms: u64) -> TopologyWriter {
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
     TopologyWriter {
         plugin_id,
+        client_id: None,
         loaded_at_ms,
         build: Some(presence_plugin_build().to_owned()),
         config: Some(presence_plugin_identity(&opts).config_hash),
@@ -342,6 +343,7 @@ fn presence_plugin_gate_requires_fresh_matching_build_and_config() {
         produced_at_ms,
         writer: Some(TopologyWriter {
             plugin_id: 7,
+            client_id: None,
             loaded_at_ms: 10,
             build: build.map(str::to_owned),
             config: config.map(str::to_owned),

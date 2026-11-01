@@ -140,6 +140,8 @@ pub enum ClientPaneId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopologyWriter {
     pub plugin_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<u16>,
     pub loaded_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,

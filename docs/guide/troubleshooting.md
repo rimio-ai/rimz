@@ -281,7 +281,7 @@ The updater clears the skew by itself. Its next successful hourly pass restarts 
 
 On Zellij, RimZ loads a small presence plugin so the sidebar learns which panes exist and where. Its permission grant is seeded for you on the first attach, and revoking it in Zellij's plugin manager stops pane discovery until you restore it. Re-grant the plugin's permissions in Zellij, then run `rimz reload`. The plugin ships no pane content anywhere, and the next room start seeds the grant again either way; [the Zellij presence plugin](./security.md#the-zellij-presence-plugin) has the full model.
 
-Doctor's `presence plugin` row says what each loaded plugin is doing for the sidebar: writing pane topology, superseded by a newer plugin, or loaded and idle. When wakes are failing it names the cause the plugin host itself reported, drawn from the same window as the counts beside it. A stale writer, a second loaded plugin, and an outdated build all point at the same fix:
+Doctor's `presence plugin` row says what each loaded plugin is doing for the sidebar: writing pane topology, superseded by another writer, or loaded and idle. When wakes are failing it names the cause the plugin host itself reported, drawn from the same window as the counts beside it. A stale writer, a second loaded plugin, and an outdated build all point at the same fix:
 
 ```sh
 rimz reload

@@ -23,17 +23,16 @@ pub trait Host {
 pub enum Effect {
     /// Fire-and-forget host fork: wake pokes and focus-sidebar. The shell pins
     /// its cwd to `/` so a deleted launch worktree cannot strand the plugin.
-    RunCommand(Vec<String>),
+    RunCommand {
+        argv: Vec<String>,
+        topology_issued_at: Option<u64>,
+    },
     /// Suppress this plugin's own pane.
     HideSelf,
     /// Runtime `reconfigure(kdl, false)`.
     Reconfigure(String),
     /// Close this plugin instance.
     CloseSelf,
-    /// Drop every subscription until a topology dump revives the same-id clone.
-    Unsubscribe,
-    /// Restore every subscription after a topology dump revives a clone.
-    Resubscribe,
     /// Arm one host timer, in milliseconds from now.
     SetTimeout(u64),
     /// Ask Zellij to deliver focused client panes via `Event::ListClients`.
@@ -52,6 +51,7 @@ enum ClientQueryPurpose {
 struct InFlightClientQuery {
     purpose: ClientQueryPurpose,
     issued_at: u64,
+    roster_invalidated: bool,
     deadline: u64,
 }
 
@@ -338,6 +338,9 @@ struct FocusSync {
 impl FocusSync {
     fn invalidate_client_sample(&mut self, now: u64) {
         self.roster_changed_at = Some(now);
+        if let Some(query) = self.in_flight.as_mut() {
+            query.roster_invalidated = true;
+        }
         self.request_general_observation();
     }
 
@@ -390,9 +393,9 @@ impl FocusSync {
             clients,
         );
         let cleared_roster_mark = self.mode == FocusMode::Stable
-            && self
-                .roster_changed_at
-                .is_some_and(|at| query.is_some_and(|query| query.issued_at >= at));
+            && self.roster_changed_at.is_some_and(|at| {
+                query.is_some_and(|query| !query.roster_invalidated && query.issued_at >= at)
+            });
         if cleared_roster_mark {
             self.roster_changed_at = None;
         }
@@ -400,7 +403,7 @@ impl FocusSync {
         update
     }
 
-    fn drive_due_query(&mut self, now: u64) -> Option<FocusWork> {
+    fn drive_due_query(&mut self, now: u64, query_allowed: bool) -> Option<FocusWork> {
         self.expire_query(now);
         if let FocusMode::Switching(pending) = self.mode
             && self.active_tab == Some(pending.tab)
@@ -414,13 +417,14 @@ impl FocusSync {
                 self.queue(purpose);
             }
         }
-        if self.in_flight.is_some() {
+        if self.in_flight.is_some() || !query_allowed {
             return None;
         }
         let purpose = self.queued.take()?;
         self.in_flight = Some(InFlightClientQuery {
             purpose,
             issued_at: now,
+            roster_invalidated: false,
             deadline: now.saturating_add(policy::KEEPALIVE_MS),
         });
         Some(FocusWork::ListClients)
@@ -524,6 +528,7 @@ pub struct EngineConfig {
     pub session_name: Option<String>,
     pub rimz_bin: Option<String>,
     pub plugin_id: Option<u32>,
+    pub client_id: Option<u16>,
     pub plugin_build: Option<String>,
     pub plugin_config: Option<String>,
     pub focus_key: Option<String>,
@@ -543,13 +548,14 @@ pub struct Engine {
     pending_pregrant_change: bool,
     timer_gate: TimerGate,
     loaded_at_ms: u64,
-    retired: bool,
+    muted: bool,
     wake_fork_failures: u32,
     stale_writer_rejections: u32,
+    latest_accepted_topology_at: Option<u64>,
 }
 
 const WAKE_FORK_FALLBACK_THRESHOLD: u32 = 3;
-const STALE_WRITER_RETIRE_THRESHOLD: u32 = 3;
+const STALE_WRITER_MUTE_THRESHOLD: u32 = 3;
 impl Engine {
     pub fn new(now: u64, config: EngineConfig) -> Self {
         Self {
@@ -564,9 +570,10 @@ impl Engine {
             pending_pregrant_change: false,
             timer_gate: TimerGate::default(),
             loaded_at_ms: now,
-            retired: false,
+            muted: false,
             wake_fork_failures: 0,
             stale_writer_rejections: 0,
+            latest_accepted_topology_at: None,
         }
     }
 
@@ -579,16 +586,10 @@ impl Engine {
     }
 
     pub fn on_load(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         self.finish_update(now, host, Vec::new())
     }
 
     pub fn on_permission_granted(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let mut effects = vec![Effect::HideSelf];
         self.mark_granted(now, host, &mut effects);
         self.apply_runtime_reconfigure(&mut effects);
@@ -596,9 +597,6 @@ impl Engine {
     }
 
     pub fn on_permission_denied(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         self.granted = false;
         self.finish_update(now, host, Vec::new())
     }
@@ -610,9 +608,6 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let mut effects = Vec::new();
         // Application state flowing proves the (possibly cached) grant covers
         // us: Zellij sends no PermissionRequestResult when the grant comes from
@@ -662,9 +657,6 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         self.tab_names = tab_names;
@@ -703,9 +695,6 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let effects = Vec::new();
         let changed = match policy::foreground_command_update(&command, is_foreground) {
             ForegroundCommandUpdate::Remember(command_text) => {
@@ -729,9 +718,6 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let ProjectedPaneId::Terminal(_) = pane else {
             return self.finish_update(now, host, Vec::new());
         };
@@ -748,9 +734,6 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         let changed = self.room.close_pane(pane);
@@ -765,9 +748,6 @@ impl Engine {
     }
 
     pub fn on_timer(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         self.timer_gate.on_fire(now);
         self.finish_update(now, host, Vec::new())
     }
@@ -778,9 +758,6 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let mut effects = Vec::new();
         // Attaching reloads the client's config, replacing runtime bindings
         // that a clientless plugin already applied. Replay them once per attach.
@@ -805,9 +782,6 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let mut effects = Vec::new();
         let update = self.focus.accept_client_sample(clients, now);
         if let Some(settled) = update.settled {
@@ -828,7 +802,7 @@ impl Engine {
     }
 
     pub fn on_focus_sidebar_pipe(&mut self) -> Vec<Effect> {
-        if self.retired {
+        if self.muted {
             return Vec::new();
         }
         let mut effects = Vec::new();
@@ -837,7 +811,7 @@ impl Engine {
     }
 
     pub fn on_zoom_pane_pipe(&mut self) -> Vec<Effect> {
-        if self.retired {
+        if self.muted {
             return Vec::new();
         }
         let mut effects = Vec::new();
@@ -846,7 +820,7 @@ impl Engine {
     }
 
     pub fn on_toggle_fullscreen_pipe(&mut self, payload: Option<&str>) -> Vec<Effect> {
-        if self.retired || !self.granted {
+        if self.muted || !self.granted {
             return Vec::new();
         }
         wire::fullscreen_pane(payload)
@@ -857,10 +831,11 @@ impl Engine {
 
     pub fn on_dump_topology_pipe(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
         let mut effects = Vec::new();
-        if self.retired {
-            self.retired = false;
-            self.last_raw_stable_hash = None;
-            effects.push(Effect::Resubscribe);
+        if self.muted {
+            self.muted = false;
+            self.stale_writer_rejections = 0;
+            self.timer_gate = TimerGate::default();
+            self.focus.invalidate_client_sample(now);
         }
         if !self.granted {
             self.pending_pregrant_change = true;
@@ -868,14 +843,14 @@ impl Engine {
         }
         self.room.probe_missing_pids(host);
         self.poke(Poke::Alive, now, host, &mut effects);
+        if self.focus.drive_due_query(now, !self.muted) == Some(FocusWork::ListClients) {
+            effects.push(Effect::ListClients);
+        }
         self.rearm(now, &mut effects);
         effects
     }
 
     pub fn on_retire_pipe(&mut self, payload: Option<&str>) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let Some(generation) = wire::retire_generation(payload) else {
             return Vec::new();
         };
@@ -889,8 +864,8 @@ impl Engine {
             return Vec::new();
         }
         if own.plugin_id == generation.plugin_id {
-            self.retired = true;
-            vec![Effect::Unsubscribe]
+            self.muted = true;
+            Vec::new()
         } else {
             vec![Effect::CloseSelf]
         }
@@ -899,27 +874,42 @@ impl Engine {
     pub fn on_run_command_result(
         &mut self,
         exit_code: Option<i32>,
-        published_topology: bool,
+        topology_issued_at: Option<u64>,
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
-        if published_topology && exit_code == Some(wire::STALE_WRITER_EXIT_CODE) {
+        if let (Some(issued_at), Some(wire::STALE_WRITER_EXIT_CODE)) =
+            (topology_issued_at, exit_code)
+        {
+            if self
+                .latest_accepted_topology_at
+                .is_some_and(|accepted_at| issued_at <= accepted_at)
+            {
+                return Vec::new();
+            }
             self.stale_writer_rejections = self.stale_writer_rejections.saturating_add(1);
-            if self.stale_writer_rejections >= STALE_WRITER_RETIRE_THRESHOLD {
-                self.retired = true;
+            if self.stale_writer_rejections >= STALE_WRITER_MUTE_THRESHOLD {
+                self.muted = true;
                 // `close_self()` unloads the accepted same-id clone too; this
-                // retired clone stays revivable through `rimz:dump_topology`.
-                return vec![Effect::Unsubscribe];
+                // muted copy stays revivable through `rimz:dump_topology`.
+                return Vec::new();
             }
             return Vec::new();
         }
         if exit_code == Some(0) {
             self.wake_fork_failures = 0;
-            if published_topology {
+            if let Some(issued_at) = topology_issued_at {
+                self.latest_accepted_topology_at = Some(
+                    self.latest_accepted_topology_at
+                        .map_or(issued_at, |accepted_at| accepted_at.max(issued_at)),
+                );
                 self.stale_writer_rejections = 0;
+                if self.muted {
+                    self.muted = false;
+                    // Pokes that fell due while muted were spent unpublished.
+                    self.signal_change(now);
+                }
+                return self.finish_update(now, host, Vec::new());
             }
             return Vec::new();
         }
@@ -942,7 +932,7 @@ impl Engine {
         mut effects: Vec<Effect>,
     ) -> Vec<Effect> {
         self.dispatch_due(now, host, &mut effects);
-        if self.focus.drive_due_query(now) == Some(FocusWork::ListClients) {
+        if self.focus.drive_due_query(now, !self.muted) == Some(FocusWork::ListClients) {
             effects.push(Effect::ListClients);
         }
         self.rearm(now, &mut effects);
@@ -1038,18 +1028,10 @@ impl Engine {
     }
 
     fn run_wake(&self, request: wire::WakeRequest, now: u64, effects: &mut Vec<Effect>) -> bool {
-        if !self.granted {
+        if !self.granted || self.muted {
             return false;
         }
-        let writer = self
-            .config
-            .plugin_id
-            .map(|plugin_id| policy::TopologyWriter {
-                plugin_id,
-                loaded_at_ms: self.loaded_at_ms,
-                build: self.config.plugin_build.clone(),
-                config: self.config.plugin_config.clone(),
-            });
+        let writer = self.config.plugin_id.map(|_| self.writer());
         let mut panes = self.room.published_panes();
         for pane in &mut panes {
             pane.tab_viewed = pane
@@ -1067,13 +1049,17 @@ impl Engine {
         let Some(argv) = wire::wake_argv(&self.wake_context(), request, topology.as_deref()) else {
             return false;
         };
-        effects.push(Effect::RunCommand(argv));
+        effects.push(Effect::RunCommand {
+            topology_issued_at: wire::publishes_topology(&argv).then_some(now),
+            argv,
+        });
         true
     }
 
     fn writer(&self) -> policy::TopologyWriter {
         policy::TopologyWriter {
             plugin_id: self.config.plugin_id.unwrap_or_default(),
+            client_id: self.config.client_id,
             loaded_at_ms: self.loaded_at_ms,
             build: self.config.plugin_build.clone(),
             config: self.config.plugin_config.clone(),
@@ -1098,18 +1084,20 @@ impl Engine {
         if !self.granted {
             return;
         }
-        effects.push(Effect::RunCommand(wire::focus_sidebar_argv(
-            &self.wake_context(),
-        )));
+        effects.push(Effect::RunCommand {
+            argv: wire::focus_sidebar_argv(&self.wake_context()),
+            topology_issued_at: None,
+        });
     }
 
     fn run_zoom_pane(&self, effects: &mut Vec<Effect>) {
         if !self.granted {
             return;
         }
-        effects.push(Effect::RunCommand(wire::zoom_pane_argv(
-            &self.wake_context(),
-        )));
+        effects.push(Effect::RunCommand {
+            argv: wire::zoom_pane_argv(&self.wake_context()),
+            topology_issued_at: None,
+        });
     }
 }
 

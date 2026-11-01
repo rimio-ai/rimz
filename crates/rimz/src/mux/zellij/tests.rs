@@ -21,6 +21,7 @@ fn presence_probe_detects_only_proven_terminal_ghosts() {
             pane_topology::read_pane_topology_cache(&room.runtime, "rimz-test").unwrap();
         cache.writer = Some(pane_topology::TopologyWriter {
             plugin_id: 7,
+            client_id: None,
             loaded_at_ms: 50,
             build: None,
             config: None,
@@ -632,7 +633,6 @@ impl TestRoom {
 
     fn backend(&self, shim: &std::path::Path) -> ZellijBackend {
         ZellijBackend::with_program_and_runtime_for_test(shim, self.runtime_root.path())
-            .with_presence_plugin_for_test(shim)
     }
 
     fn publish_workspace(&self) {
@@ -2556,6 +2556,130 @@ exit 1
             ..Default::default()
         })
         .expect_err("explicit floor rejects pre-floor cache");
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_writer_reads_dump_once_per_identity_and_recovery_interval() {
+    let room = TestRoom::new();
+    room.write_cache(
+        unix_now_ms(),
+        None,
+        Some(TopologyClients {
+            human_clients: Some(1),
+            viewed_panes: None,
+            views: vec![pane_topology::TopologyClientView {
+                client_id: 1,
+                pane_id: pane_topology::ZellijPaneId::Terminal(7),
+            }],
+        }),
+        vec![terminal_pane(7, 0, 100, 0, "work")],
+    );
+    let mut cache = pane_topology::read_pane_topology_cache(&room.runtime, "rimz-test").unwrap();
+    cache.writer = Some(pane_topology::TopologyWriter {
+        plugin_id: 9,
+        client_id: Some(2),
+        loaded_at_ms: 200,
+        build: None,
+        config: None,
+    });
+    write_pane_topology_cache(&room.runtime, &cache).unwrap();
+    let (temp, shim) = support::failing_roster_shim();
+    let read = || {
+        room.backend(&shim)
+            .list_panes(PaneListOptions {
+                session_name: Some("rimz-test".to_owned()),
+                workspace_id: Some(room.workspace_id.clone()),
+                ..Default::default()
+            })
+            .expect("detached writer still supplies the cached listing")
+    };
+    assert_eq!(read().panes.len(), 1);
+    let count =
+        || support::command_count(&support::shim_log(&temp), "pipe --name rimz:dump_topology");
+    assert_eq!(count(), 1, "{}", support::shim_log(&temp));
+    let _ = read();
+    assert_eq!(
+        count(),
+        1,
+        "a fresh backend shares the limiter, even after a failed pipe"
+    );
+    cache.writer.as_mut().unwrap().loaded_at_ms += 1;
+    write_pane_topology_cache(&room.runtime, &cache).unwrap();
+    let _ = read();
+    assert_eq!(
+        count(),
+        2,
+        "a different writer triggers recovery immediately"
+    );
+    std::thread::sleep(Duration::from_millis(5_010));
+    let _ = read();
+    assert_eq!(count(), 3, "{}", support::shim_log(&temp));
+    assert!(
+        !support::shim_log(&temp).contains("--plugin"),
+        "recovery never loads a plugin"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn attached_or_unknown_writer_reads_never_request_recovery() {
+    for (client_id, clients, withheld) in [
+        (Some(1), Some(vec![1]), false),
+        (Some(2), Some(vec![]), false),
+        (Some(2), None, false),
+        (Some(2), Some(vec![1]), true),
+        (None, Some(vec![1]), false),
+    ] {
+        let room = TestRoom::new();
+        room.write_cache(
+            unix_now_ms(),
+            None,
+            None,
+            vec![terminal_pane(7, 0, 100, 0, "work")],
+        );
+        let mut cache =
+            pane_topology::read_pane_topology_cache(&room.runtime, "rimz-test").unwrap();
+        cache.writer = Some(pane_topology::TopologyWriter {
+            plugin_id: 9,
+            client_id,
+            loaded_at_ms: 200,
+            build: None,
+            config: None,
+        });
+        cache.clients = clients.map(|ids| TopologyClients {
+            human_clients: Some(ids.len() as u32),
+            viewed_panes: None,
+            views: ids
+                .into_iter()
+                .map(|id| pane_topology::TopologyClientView {
+                    client_id: id,
+                    pane_id: pane_topology::ZellijPaneId::Terminal(7),
+                })
+                .collect(),
+        });
+        cache.clients_withheld = withheld;
+        write_pane_topology_cache(&room.runtime, &cache).unwrap();
+        let (temp, shim) = support::failing_roster_shim();
+        assert_eq!(
+            room.backend(&shim)
+                .list_panes(PaneListOptions {
+                    session_name: Some("rimz-test".to_owned()),
+                    workspace_id: Some(room.workspace_id.clone()),
+                    ..Default::default()
+                })
+                .unwrap()
+                .panes
+                .len(),
+            1
+        );
+        let log = support::shim_log(&temp);
+        assert_eq!(
+            support::command_count(&log, "pipe --name rimz:dump_topology"),
+            0,
+            "{log}"
+        );
+    }
 }
 
 #[cfg(unix)]

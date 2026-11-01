@@ -4,6 +4,7 @@ use crate::ids::MuxName;
 fn writer(plugin_id: u32, loaded_at_ms: u64) -> TopologyWriter {
     TopologyWriter {
         plugin_id,
+        client_id: None,
         loaded_at_ms,
         build: None,
         config: None,
@@ -18,6 +19,7 @@ fn identified_writer(
 ) -> TopologyWriter {
     TopologyWriter {
         plugin_id,
+        client_id: None,
         loaded_at_ms,
         build: Some(build.to_owned()),
         config: Some(config.to_owned()),
@@ -419,6 +421,139 @@ fn same_writer_topologies_are_ordered_by_observation_time() {
     );
 }
 
+fn client_roster(ids: &[u32]) -> crate::mux::zellij::pane_topology::TopologyClients {
+    crate::mux::zellij::pane_topology::TopologyClients {
+        human_clients: Some(ids.len() as u32),
+        viewed_panes: None,
+        views: ids
+            .iter()
+            .map(|id| crate::mux::zellij::pane_topology::TopologyClientView {
+                client_id: *id,
+                pane_id: ZellijPaneId::Terminal(7),
+            })
+            .collect(),
+    }
+}
+
+fn client_writer(client_id: u16, loaded_at_ms: u64) -> TopologyWriter {
+    TopologyWriter {
+        client_id: Some(client_id),
+        ..identified_writer(9, loaded_at_ms, "desired-build", "desired-config")
+    }
+}
+
+#[test]
+fn older_attached_writer_beats_newer_detached_writer() {
+    let mut existing = topology(100_000, Some(client_writer(2, 200)));
+    existing.clients = Some(client_roster(&[1]));
+    let incoming = topology(100_000, Some(client_writer(1, 100)));
+    assert_eq!(
+        topology_decision(Some(&existing), &incoming, Some(&desired()), 100_000),
+        TopologyDecision::Accept
+    );
+}
+
+#[test]
+fn attached_non_desired_writer_beats_detached_desired_writer() {
+    let mut existing = topology(100_000, Some(client_writer(2, 200)));
+    existing.clients = Some(client_roster(&[1]));
+    let incoming = topology(
+        100_000,
+        Some(TopologyWriter {
+            client_id: Some(1),
+            ..identified_writer(9, 100, "old-build", "old-config")
+        }),
+    );
+    assert_eq!(
+        topology_decision(Some(&existing), &incoming, Some(&desired()), 100_000),
+        TopologyDecision::Accept
+    );
+}
+
+#[test]
+fn withheld_challenger_uses_the_incumbents_attached_client_roster() {
+    let mut existing = topology(100_000, Some(client_writer(2, 200)));
+    existing.clients = Some(client_roster(&[1]));
+    let mut incoming = topology(100_001, Some(client_writer(1, 100)));
+    incoming.clients_withheld = true;
+    incoming.clients = Some(client_roster(&[2]));
+    assert_eq!(
+        topology_decision(Some(&existing), &incoming, Some(&desired()), 100_001),
+        TopologyDecision::Accept
+    );
+}
+
+#[test]
+fn newer_or_tied_challenger_roster_can_prove_the_incumbent_attached() {
+    let mut existing = topology(100_000, Some(client_writer(1, 100)));
+    existing.clients = Some(client_roster(&[2]));
+    for stamp in [100_000, 100_001] {
+        let mut incoming = topology(stamp, Some(client_writer(2, 200)));
+        incoming.clients = Some(client_roster(&[1]));
+        assert_eq!(
+            topology_decision(Some(&existing), &incoming, Some(&desired()), stamp),
+            TopologyDecision::Reject
+        );
+    }
+}
+
+#[test]
+fn self_update_accepts_detachment_but_not_an_older_observation() {
+    let mut existing = topology(100_000, Some(client_writer(1, 100)));
+    existing.clients = Some(client_roster(&[1]));
+    let mut incoming = existing.clone();
+    incoming.clients = Some(client_roster(&[2]));
+    for stamp in [100_000, 100_001] {
+        incoming.produced_at_ms = stamp;
+        assert_eq!(
+            topology_decision(Some(&existing), &incoming, Some(&desired()), stamp),
+            TopologyDecision::Accept
+        );
+    }
+    incoming.produced_at_ms = 99_999;
+    assert_eq!(
+        topology_decision(Some(&existing), &incoming, Some(&desired()), 100_000),
+        TopologyDecision::Stale
+    );
+}
+
+#[test]
+fn unusable_rosters_preserve_generation_ranking() {
+    for (clients, withheld) in [
+        (None, false),
+        (Some(client_roster(&[])), false),
+        (Some(client_roster(&[1])), true),
+    ] {
+        let mut existing = topology(100_000, Some(client_writer(2, 200)));
+        existing.clients = clients.clone();
+        existing.clients_withheld = withheld;
+        let mut incoming = topology(100_000, Some(client_writer(1, 100)));
+        incoming.clients = clients;
+        incoming.clients_withheld = withheld;
+        assert_eq!(
+            topology_decision(Some(&existing), &incoming, Some(&desired()), 100_000),
+            TopologyDecision::Reject
+        );
+    }
+}
+
+#[test]
+fn legacy_writer_defaults_to_unknown_and_loses_to_an_attached_writer() {
+    let legacy: TopologyWriter = serde_json::from_value(serde_json::json!({
+        "plugin_id": 9, "loaded_at_ms": 200,
+        "build": "desired-build", "config": "desired-config"
+    }))
+    .unwrap();
+    assert_eq!(legacy.client_id, None);
+    let existing = topology(100_000, Some(legacy));
+    let mut incoming = topology(100_000, Some(client_writer(1, 100)));
+    incoming.clients = Some(client_roster(&[1]));
+    assert_eq!(
+        topology_decision(Some(&existing), &incoming, Some(&desired()), 100_000),
+        TopologyDecision::Accept
+    );
+}
+
 #[test]
 fn stale_same_writer_wake_keeps_cache_and_still_reports_its_settled_strand() {
     let (_dir, state, runtime) = paths();
@@ -582,7 +717,7 @@ fn newer_accepted_writer_clears_a_superseded_conflict() {
 }
 
 #[test]
-fn equal_or_older_writer_keeps_the_conflict_sidecar() {
+fn only_the_same_accepted_writer_keeps_the_conflict_sidecar() {
     let (_dir, _state, runtime) = paths();
     let conflict = TopologyWriterConflict {
         stale_writer: Some(writer(1, 100)),
@@ -593,10 +728,10 @@ fn equal_or_older_writer_keeps_the_conflict_sidecar() {
     };
     write_topology_writer_conflict(&runtime, &conflict).expect("seed writer conflict");
 
-    clear_superseded_conflict(&runtime, Some(&writer(2, 200)), None).unwrap();
+    clear_superseded_conflict(&runtime, Some(&writer(2, 200))).unwrap();
     assert!(read_topology_writer_conflict(&runtime).is_some());
-    clear_superseded_conflict(&runtime, Some(&writer(9, 100)), None).unwrap();
-    assert!(read_topology_writer_conflict(&runtime).is_some());
+    clear_superseded_conflict(&runtime, Some(&writer(9, 100))).unwrap();
+    assert!(read_topology_writer_conflict(&runtime).is_none());
 }
 
 #[test]
@@ -616,7 +751,7 @@ fn desired_writer_clears_a_newer_nonmatching_conflict() {
     .expect("seed writer conflict");
     let matching = identified_writer(1, 100, &desired.build, &desired.config);
 
-    clear_superseded_conflict(&runtime, Some(&matching), Some(&desired)).unwrap();
+    clear_superseded_conflict(&runtime, Some(&matching)).unwrap();
 
     assert!(read_topology_writer_conflict(&runtime).is_none());
 }

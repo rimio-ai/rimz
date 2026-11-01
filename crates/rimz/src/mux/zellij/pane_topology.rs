@@ -247,6 +247,8 @@ impl TryFrom<&PaneId> for ZellijPaneId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopologyWriter {
     pub plugin_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<u16>,
     pub loaded_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
@@ -255,6 +257,16 @@ pub struct TopologyWriter {
 }
 
 impl TopologyWriter {
+    pub(crate) fn attached_to(&self, clients: Option<&TopologyClients>) -> Option<bool> {
+        let client_id = self.client_id?;
+        let views = &clients?.views;
+        (!views.is_empty()).then(|| {
+            views
+                .iter()
+                .any(|view| view.client_id == u32::from(client_id))
+        })
+    }
+
     pub fn generation(&self) -> (u64, u32) {
         (self.loaded_at_ms, self.plugin_id)
     }

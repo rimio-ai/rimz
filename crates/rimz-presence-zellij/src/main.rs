@@ -77,11 +77,13 @@ mod shell {
             subscribe(&subscribed_events());
             let now = now_ms();
             self.zellij_version = get_zellij_version();
+            let plugin_ids = get_plugin_ids();
             let config = EngineConfig {
                 workspace_id: configuration.get("workspace_id").cloned(),
                 session_name: configuration.get("session_name").cloned(),
                 rimz_bin: configuration.get("rimz_bin").cloned(),
-                plugin_id: Some(get_plugin_ids().plugin_id),
+                plugin_id: Some(plugin_ids.plugin_id),
+                client_id: Some(plugin_ids.client_id),
                 plugin_build: configuration.get("plugin_build").cloned(),
                 plugin_config: configuration.get("plugin_config").cloned(),
                 focus_key: configuration.get("focus_key").cloned(),
@@ -107,12 +109,14 @@ mod shell {
         fn update(&mut self, event: Event) -> bool {
             let now = now_ms();
             if let Event::RunCommandResult(exit_code, _, stderr, context) = event {
-                let published_topology = context
+                let topology_issued_at = context
                     .get(wire::TOPOLOGY_PUBLISH_CONTEXT)
-                    .is_some_and(|value| value == "1");
+                    .and_then(|value| value.parse().ok());
                 // Zellij hands back the host's stderr with the exit code; it is
                 // the only account of why a wake failed that ever reaches here.
-                let outcome = self.commands.record(exit_code, published_topology);
+                let outcome = self
+                    .commands
+                    .record(exit_code, topology_issued_at.is_some());
                 self.last_failure =
                     wire::fold_failure(self.last_failure.take(), outcome, exit_code, &stderr, now);
                 let Some(engine) = self.engine.as_mut() else {
@@ -123,7 +127,7 @@ mod shell {
                     last_failure: self.last_failure.as_ref(),
                     zellij_version: &self.zellij_version,
                 };
-                execute(engine.on_run_command_result(exit_code, published_topology, now, &host));
+                execute(engine.on_run_command_result(exit_code, topology_issued_at, now, &host));
                 return false;
             }
             let Some(engine) = self.engine.as_mut() else {
@@ -255,11 +259,17 @@ mod shell {
     fn execute(effects: Vec<Effect>) {
         for effect in effects {
             match effect {
-                Effect::RunCommand(argv) => {
+                Effect::RunCommand {
+                    argv,
+                    topology_issued_at,
+                } => {
                     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
                     let mut context = BTreeMap::new();
-                    if wire::publishes_topology(&argv) {
-                        context.insert(wire::TOPOLOGY_PUBLISH_CONTEXT.to_owned(), "1".to_owned());
+                    if let Some(issued_at) = topology_issued_at {
+                        context.insert(
+                            wire::TOPOLOGY_PUBLISH_CONTEXT.to_owned(),
+                            issued_at.to_string(),
+                        );
                     }
                     run_command_with_env_variables_and_cwd(
                         &refs,
@@ -271,8 +281,6 @@ mod shell {
                 Effect::HideSelf => hide_self(),
                 Effect::Reconfigure(kdl) => reconfigure(kdl, false),
                 Effect::CloseSelf => close_self(),
-                Effect::Unsubscribe => unsubscribe(&subscribed_events()),
-                Effect::Resubscribe => subscribe(&subscribed_events()),
                 Effect::SetTimeout(delay_ms) => set_timeout(delay_ms as f64 / 1_000.0),
                 Effect::ListClients => list_clients(),
                 Effect::TogglePaneFullscreen(pane) => {

@@ -287,6 +287,7 @@ impl WakeEnv {
         let mut cache = self.topology_cache(produced_at_ms);
         cache.writer = Some(TopologyWriter {
             plugin_id,
+            client_id: None,
             loaded_at_ms,
             build: None,
             config: None,

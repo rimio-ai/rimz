@@ -42,6 +42,7 @@ fn topology_json_carries_writer_without_focus_verdict() {
         42,
         Some(policy::TopologyWriter {
             plugin_id: 9,
+            client_id: None,
             loaded_at_ms: 1_000,
             build: Some("wasm-build".to_owned()),
             config: Some("config-hash".to_owned()),
@@ -642,6 +643,7 @@ fn retire_generation_parses_writer_payload() {
         writer,
         policy::TopologyWriter {
             plugin_id: 9,
+            client_id: None,
             loaded_at_ms: 1000,
             build: None,
             config: None,

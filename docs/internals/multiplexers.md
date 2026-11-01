@@ -656,7 +656,7 @@ The crate splits along the wasm boundary, which makes it testable.
 
 `engine`, `policy`, and `wire` use no `zellij-tile` type, so they compile and unit-test on the host target in the ordinary workspace test run. `zellij-tile` is a wasm-only dependency, because its shims call extern functions that exist only inside Zellij's plugin host.
 
-The engine returns effects instead of performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `CloseSelf`, `Unsubscribe`, `Resubscribe`, `SetTimeout`, `ListClients`. Every decision is a pure function from event to effect list, and the shell only projects. Inside the engine one canonical pane map is the source of truth: reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
+The engine returns effects instead of performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `CloseSelf`, `SetTimeout`, `ListClients`. Every decision is a pure function from event to effect list, and the shell only projects. Inside the engine one canonical pane map is the source of truth: reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
 
 ### What it publishes
 
@@ -684,7 +684,7 @@ Five named pipes reach the plugin from the host:
 
 | Pipe | Effect |
 | --- | --- |
-| `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives and resubscribes a muted same-id clone for that publish. |
+| `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives a muted same-id copy with its current manifest and clients withheld until a post-dump client query replies. |
 | `rimz:focus_sidebar` | Fork `rimz sidebar focus --toggle`; the focus keybind sends this. |
 | `rimz:zoom_pane` | Fork `rimz pane zoom`; the zoom keybind sends this. |
 | `rimz:toggle_fullscreen` | Toggle fullscreen on the host-selected pane id (`ZellijBackend::toggle_fullscreen`). |
@@ -741,36 +741,38 @@ The wasm digest is the plugin's build identity, so each build is a distinct Zell
 
 The workspace record carries the staged `rimz_bin` and its `rimz_build` digest as one verified room target. Only the room owner claim and reload update the pair: `rimz start`, cwd-based `rimz attach`, and `rimz reload`. Attach by session name keeps the recorded owner, and other CLI re-records keep both values. Because the plugin configuration names the stable `rimz` pointer, a worktree build that asks for topology leaves the configuration string unchanged.
 
-Owner flows materialize or refresh the shared embedded wasm artifact. Read-only topology refreshes use only an existing artifact or the development fallback beside the executable. The shared artifact therefore tracks the last owner build, and another session can run those bytes until its own owner refreshes them; writer fencing makes that harmless.
+Owner flows materialize or refresh the shared embedded wasm artifact. Read-only topology refreshes broadcast by pipe name to loaded copies without locating an artifact, even if their wasm file has since been removed. The shared artifact therefore tracks the last owner build, and another session can run those bytes until its own owner refreshes them; writer fencing makes that harmless.
 
 ### Writer fencing
 
 Zellij 0.44 runs one wasm instance per connected client and can keep instances for departed clients, so one plugin id can have both the current clone and an older same-id clone. Overlapping writers are normal, and the host arbitrates.
 
-Every topology payload carries its plugin build and configuration plus the fallback generation `(loaded_at_ms, plugin_id)`. Owner launches atomically publish the desired identity in `presence-desired.json`.
+Every topology payload carries its plugin build and configuration, the fallback generation `(loaded_at_ms, plugin_id)`, and the instance's own load-time `client_id`. Older plugins omit `client_id`. Owner launches atomically publish the desired identity in `presence-desired.json`.
 
 [`sidebar::presence`](../../crates/rimz/src/sidebar/presence.rs) holds the state `locks/topology-writer.lock` for at most one second across the desired-record and cache reads, the rank comparison, cache replacement, and conflict update. A lock or write failure rejects the wake; nothing falls back to an unlocked write.
 
-A writer matching both desired fields outranks every non-matching writer; load time, then plugin id, break ties. Without a desired record, ranking is generation order, and a payload without writer identity ranks at generation zero.
+A writer whose own client is attached outranks one whose client is detached or unknown. Both writers are judged against one non-empty, non-withheld client roster: the incoming or cached sample with the newer `produced_at_ms`, incoming on a tie. Desired build and configuration identity, then load time and plugin id, break attachment ties. With no usable roster, ranking falls back to desired identity and generation; a payload without writer identity ranks at generation zero.
 
-The gate accepts a wake when the cache is absent, the same-session cache is stale, or the incoming rank is at least the cached rank. A sole non-matching writer therefore keeps refreshing its own cache, and a desired writer wins any overlap.
+The gate accepts a wake when the cache is absent or stale, or the incoming writer outranks the cached writer. A writer's own update skips the rank, even when its attachment changes. Equal-ranked observations must be at least as new as the cached observation, unless the cache stamp is ahead of the current clock. A sole non-matching writer therefore keeps refreshing its own cache, while attachment takes priority during overlap.
 
-An accepted write commits before writer-change diagnostics, conflict clearing, presence stamps, telemetry, and event broadcast. A rejected wake skips all of them: no presence stamp, no plugin-presence sample, no topology write, no sidebar event. A rejection updates `topology-writer-conflict.json` under the same lock and emits a rate-limited `topology_write_rejected` diagnostic. The reject count restarts whenever either writer changes, while the rate limit spans incidents. An accepted writer with a strictly higher rank removes the superseded conflict file, and doctor ignores an orphaned conflict file once the live cache carries a newer generation. An accepted writer change emits `topology_writer_changed`.
+An accepted write commits before writer-change diagnostics, conflict clearing, presence stamps, telemetry, and event broadcast. A rejected wake skips all of them: no presence stamp, no plugin-presence sample, no topology write, no sidebar event. A rejection updates `topology-writer-conflict.json` under the same lock and emits a rate-limited `topology_write_rejected` diagnostic. The reject count restarts whenever either writer changes, while the rate limit spans incidents. An accepted writer different from the conflict's accepted writer removes the superseded conflict file, and doctor ignores an orphaned conflict on that same inequality. An accepted writer change emits `topology_writer_changed`.
 
-The rejected plugin learns about it too. A rejected publish exits with the stale-writer status 73, and three consecutive rejections retire the losing plugin in place by muting it and unsubscribing. It mutes instead of calling `close_self()`, which would unload every clone sharing the plugin id, the current one included. Only a successful topology publish resets the streak.
+The rejected plugin learns about it too. A rejected publish exits with the stale-writer status 73, and three consecutive rejections mute the losing copy's publications and client queries. Only rejections of publications issued after the copy's newest accepted publication count; tied issue stamps do not. The issue stamp is the publication's `produced_at_ms`, carried in Zellij's command context. Its event reducers and timer bookkeeping keep running. It mutes instead of calling `close_self()`, which would unload every copy sharing the plugin id, the current one included. A successful topology publish or revival unmutes the copy and resets the rejection streak; a successful publish runs due work immediately, including any client query queued while muted. A publish that unmutes also signals a change, because the pokes that fell due while muted were spent unpublished, so a change or client sample the copy reduced while muted publishes without waiting for another change or the keepalive. Dump revival invalidates the client sample, so a reply to a pre-dump query cannot end withholding.
+
+A cached topology read that finds a known writer detached from a non-empty, non-withheld roster broadcasts `rimz:dump_topology` and returns the cache without waiting for a replacement or loading a plugin. This revives attached copies even when a newer departed copy muted them. A process-wide limiter keys attempts by runtime, session and full writer identity: a new identity sends immediately, and the same identity sends at most once per five seconds, failed pipes included. Entries expire after that interval. A production pass can spend up to the two-second pipe deadline on this recovery; separate CLI processes each have their own limiter.
 
 ### Retirement
 
 `rimz reload` touches the plugin only when it must. It reads the fresh topology cache, and when the writer echoes a `build` equal to the embedded-wasm digest and a `config` equal to the desired configuration hash, it confirms the live plugin roster contains only that writer id before counting the session current. Extra or missing ids run the retire-and-sweep path without reloading the accepted writer, and a failed live listing falls back to full convergence. An identity mismatch, a missing field, or a stale cache also converges and reports the upgrade.
 
-Retirement requires proof that the replacement is alive. Reload waits for topology from the expected build and configuration at or after the flow's freshness floor, while session birth uses any matching proof the boot pipe already published instead of adding a startup wait. The retire broadcast carries that writer identity as JSON, and each instance decides for itself:
+Retirement requires proof that the replacement is alive. Reload waits for topology from the expected build and configuration at or after the flow's freshness floor, while session birth uses any matching proof the boot pipe already published instead of adding a startup wait. The retire broadcast carries that writer identity as JSON, and each instance decides for itself, muted or not:
 
 | Instance | Response to a retire broadcast |
 | --- | --- |
 | Different build or configuration | `CloseSelf`, regardless of load time |
 | Same identity, outranks the payload generation | Ignore |
 | Same identity, different plugin id, outranked | `CloseSelf` |
-| Same identity, same plugin id, outranked | Mute and unsubscribe, revivable through `rimz:dump_topology` |
+| Same identity, same plugin id, outranked | Mute publications and client queries, keep observing, revivable through a successful topology publish or `rimz:dump_topology` |
 
 After the broadcast, the host lists every pane under a bounded deadline and closes each `rimz-presence-zellij` plugin id except the accepted writer's. That unloads later old-wasm instances and command-path zombies while keeping every same-id clone of the accepted writer. RimZ then sends the boot pipe again, which restores a writer if a retire closed the whole plugin id. A failed or timed-out listing leaves only the cooperative retire, with a manual session restart as the fallback. When a detached or degraded session cannot prove the replacement is alive, RimZ skips retirement and retries on a later owner flow.
 

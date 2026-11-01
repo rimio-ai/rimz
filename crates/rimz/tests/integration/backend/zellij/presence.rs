@@ -12,6 +12,268 @@ use crate::common::{CommandTimeoutExt, ZellijNamespace};
 use super::support::*;
 
 #[test]
+fn detached_writer_hands_off_focus_and_new_panes() {
+    assert_detached_writer_handoff(false);
+}
+
+#[test]
+fn reused_client_writer_hands_off_focus_and_new_panes() {
+    assert_detached_writer_handoff(true);
+}
+
+fn assert_detached_writer_handoff(reuse_client: bool) {
+    require_zellij!();
+    let room = LiveZellijSession::new("writer-handoff");
+    let wasm = if reuse_client {
+        let wasm = room.path().join("presence.wasm");
+        std::fs::copy(presence_wasm_artifact(), &wasm).unwrap();
+        wasm
+    } else {
+        presence_wasm_artifact()
+    };
+    seed_presence_permissions(room.path(), &wasm);
+    std::fs::write(room.path().join(".zshrc"), "").unwrap();
+    let cwd = TempDir::new().unwrap();
+    let binary = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let mut opts = sidebar_opts(room.name(), cwd.path(), binary, 160);
+    opts.workspace_id = WorkspaceId::from_project_root(cwd.path());
+    if reuse_client {
+        opts.extra_env.insert(
+            "RIMZ_PRESENCE_PLUGIN".to_owned(),
+            wasm.display().to_string(),
+        );
+    }
+    publish_room_bin(room.path(), &opts);
+    opts.runtime = rimz::RuntimePaths::under(opts.workspace_id.clone(), room.path()).unwrap();
+    room.backend().open_sidebar(&opts, None).unwrap();
+    wait_for_pane_count(room.path(), room.name(), 2);
+    let first = AttachedClient::attach(&room, 160, 45);
+    let state = rimz::StatePaths::for_project_root_under(cwd.path(), room.path()).unwrap();
+    // Load this identity with only the first human attached, so the second
+    // client cannot inherit an older instance retained during session birth.
+    room.backend()
+        .converge_presence_plugin_for(&rimz::mux::PresencePluginOptions {
+            session_name: room.name().to_owned(),
+            workspace_id: opts.workspace_id.clone(),
+            wasm: wasm.clone(),
+            rimz_bin: state.room_bin.clone(),
+            focus_key: None,
+            zoom_key: None,
+            session_options: zellij::zellij_session_options(&opts.config.zellij),
+        })
+        .unwrap();
+    let initial = poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            Ok(rimz::mux::zellij::pane_topology::read_pane_topology_cache(
+                &opts.runtime,
+                room.name(),
+            )
+            .and_then(|cache| cache.writer))
+        },
+        Option::is_some,
+        "first client's topology writer",
+    )
+    .unwrap();
+    let diag = rimz::diag::DiagSink::under(
+        state.root.clone(),
+        state.workspace_id.clone(),
+        room.name(),
+        None,
+    );
+    let first_id = first.view().clients[0].client_id.clone();
+    let second = AttachedClient::attach_beside(&room, 160, 45, 1);
+    let second_loaded_at = poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            let records = std::fs::read_to_string(diag.log_path().unwrap()).unwrap_or_default();
+            Ok(records.lines().find_map(|line| {
+                match serde_json::from_str::<rimz::diag::record::DiagEnvelope>(line)
+                    .ok()?
+                    .event
+                {
+                    rimz::diag::record::DiagEvent::TopologyWriterChanged {
+                        prior_loaded_at_ms,
+                        loaded_at_ms,
+                        ..
+                    } if prior_loaded_at_ms == initial.loaded_at_ms
+                        && loaded_at_ms > initial.loaded_at_ms =>
+                    {
+                        Some(loaded_at_ms)
+                    }
+                    _ => None,
+                }
+            }))
+        },
+        Option::is_some,
+        "second client's newer plugin becomes the topology writer",
+    )
+    .unwrap();
+    // In the reuse case `first` becomes a third client that takes the first
+    // client's id and its older retained plugin copy.
+    let mut first = if reuse_client {
+        let second_id = second
+            .view()
+            .clients
+            .into_iter()
+            .find(|client| client.client_id != first_id)
+            .unwrap()
+            .client_id;
+        drop(first);
+        poll_until(
+            SPAWN_TIMEOUT,
+            || Ok(second.view()),
+            |view| view.clients.len() == 1 && view.clients[0].client_id == second_id,
+            "only the writer remains before reusing the older copy's client id",
+        );
+        let deadline = Instant::now() + SPAWN_TIMEOUT;
+        loop {
+            let client = AttachedClient::attach_beside(&room, 160, 45, 1);
+            let view = client.view();
+            if view
+                .clients
+                .iter()
+                .any(|client| client.client_id == first_id)
+            {
+                break client;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "new client must reuse {first_id:?} before the writer detaches: {view:?}"
+            );
+            drop(client);
+            poll_until(
+                deadline.saturating_duration_since(Instant::now()),
+                || Ok(second.view()),
+                |view| view.clients.len() == 1,
+                "transient CLI clients release the older copy's id before another attach",
+            );
+        }
+    } else {
+        first
+    };
+    // Recovery revives the loaded copies by pipe name alone. Removing the wasm
+    // pins that a host which cannot locate the artifact still recovers.
+    if reuse_client {
+        std::fs::remove_file(wasm).unwrap();
+    }
+    poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            Ok(rimz::mux::zellij::pane_topology::read_pane_topology_cache(
+                &opts.runtime,
+                room.name(),
+            )
+            .and_then(|cache| cache.writer))
+        },
+        |writer| {
+            writer
+                .as_ref()
+                .is_some_and(|writer| writer.loaded_at_ms == second_loaded_at)
+        },
+        "the second client's copy still writes when its client detaches",
+    );
+    drop(second);
+    let remaining = poll_until(
+        SPAWN_TIMEOUT,
+        || Ok(first.view()),
+        |view| view.clients.len() == 1,
+        "only the non-writer client remains attached",
+    );
+    let client_id = remaining.clients[0].client_id.clone();
+    let before = PaneSnapshot::expect(room.path(), room.name());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    first.press_alt('n');
+    let native = poll_until(
+        deadline.saturating_duration_since(Instant::now()),
+        || Ok(PaneSnapshot::expect(room.path(), room.name()).panes),
+        |panes| {
+            panes.iter().any(|pane| {
+                pane.is_live_terminal()
+                    && !before
+                        .panes
+                        .iter()
+                        .any(|old| !old.is_plugin && old.id == pane.id)
+            })
+        },
+        "Alt+n creates a native pane after the writer's client detaches",
+    );
+    let added_native = native
+        .iter()
+        .find(|pane| {
+            pane.is_live_terminal()
+                && !before
+                    .panes
+                    .iter()
+                    .any(|old| !old.is_plugin && old.id == pane.id)
+        })
+        .unwrap();
+    let added = added_native.pane_ref(room.name()).pane_id;
+    let focus_key = if added_native.pane_x == 0 { 'l' } else { 'h' };
+    poll_until(
+        deadline.saturating_duration_since(Instant::now()),
+        || {
+            std::fs::read(opts.runtime.pane_frame_path())
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    serde_json::from_slice::<rimz::sidebar::frame::PaneFrame>(&bytes)
+                        .map_err(|error| error.to_string())
+                })
+        },
+        |frame| {
+            frame
+                .to_pane_refs()
+                .iter()
+                .any(|pane| pane.pane_id == added)
+                && frame
+                    .client_views
+                    .iter()
+                    .any(|view| view.client_id == client_id && view.pane_id == added)
+        },
+        &format!("host frame includes new pane {added} after the writer's client detaches"),
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    first.press_alt(focus_key);
+    let moved = poll_until(
+        deadline.saturating_duration_since(Instant::now()),
+        || Ok(first.view()),
+        |view| {
+            view.clients
+                .iter()
+                .any(|view| view.client_id == client_id && view.pane_id != added)
+        },
+        &format!("Alt+{focus_key} moves the remaining client away from the new pane"),
+    );
+    let target = &moved
+        .clients
+        .iter()
+        .find(|view| view.client_id == client_id)
+        .unwrap()
+        .pane_id;
+    poll_until(
+        deadline.saturating_duration_since(Instant::now()),
+        || {
+            std::fs::read(opts.runtime.pane_frame_path())
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    serde_json::from_slice::<rimz::sidebar::frame::PaneFrame>(&bytes)
+                        .map_err(|error| error.to_string())
+                })
+        },
+        |frame| {
+            frame
+                .client_views
+                .iter()
+                .any(|view| view.client_id == client_id && &view.pane_id == target)
+        },
+        &format!(
+            "host frame follows remaining client to {target} after native Alt+{focus_key} confirmation"
+        ),
+    );
+}
+
+#[test]
 fn live_work_boundary_resize_is_audited() {
     require_zellij!();
 

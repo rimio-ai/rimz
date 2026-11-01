@@ -411,10 +411,6 @@ pub struct ZellijBackend {
     /// Test-only command override that avoids process-global env mutation.
     #[cfg(test)]
     program: Option<PathBuf>,
-    /// Test-only presence-plugin path override that avoids process-global env
-    /// mutation while exercising topology dump pipes.
-    #[cfg(test)]
-    presence_plugin_path: Option<PathBuf>,
     /// Test-only responsiveness budget override.
     #[cfg(test)]
     health_probe_timeout: Option<Duration>,
@@ -491,20 +487,6 @@ impl ZellijBackend {
     fn with_ambient_session_for_test(mut self, session: &str) -> Self {
         self.ambient_session = Some(session.to_owned());
         self
-    }
-
-    #[cfg(test)]
-    fn with_presence_plugin_for_test(mut self, path: impl Into<PathBuf>) -> Self {
-        self.presence_plugin_path = Some(path.into());
-        self
-    }
-
-    pub(super) fn presence_plugin_path(&self) -> Option<PathBuf> {
-        #[cfg(test)]
-        if let Some(path) = &self.presence_plugin_path {
-            return Some(path.clone());
-        }
-        presence_plugin_path()
     }
 
     /// Base `CommandSpec` for every Zellij invocation — the single chokepoint,

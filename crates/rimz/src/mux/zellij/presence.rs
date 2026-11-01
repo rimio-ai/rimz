@@ -79,9 +79,9 @@ pub fn presence_plugin_path() -> Option<PathBuf> {
 }
 
 /// Materialize the embedded presence-plugin artifact for room-owner flows and
-/// return the canonical load path. Generic topology reads use
-/// [`presence_plugin_path`] so every worktree build does not rewrite the shared
-/// wasm while merely asking for a cache refresh.
+/// return the canonical load path. Generic topology reads broadcast by pipe name
+/// without finding or materializing an artifact, so a cache refresh works even
+/// after the loaded copies' wasm file is removed.
 pub fn ensure_presence_plugin_artifact() -> Option<PathBuf> {
     if let Some(path) = env::var_os("RIMZ_PRESENCE_PLUGIN") {
         return PathBuf::from(path)
