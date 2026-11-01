@@ -56,12 +56,13 @@ pub use row::{
     AgentCard, CacheClock, CardDescription, PaneAgent, ProcessCard, ProcessState, RowCallSplit,
     RowCard, SidebarRow, SidebarSubAgent, SubAgentTokens,
 };
+pub(crate) use view::sort_windows;
 pub use view::{
     AgentWorktreeGroup, HookDrainerOutage, HookDrainerOutageAgent, NeedsYou, ParkedWorkflow,
     card_status, find_agent, group_live_agents_by_worktree, needs_you,
 };
 pub use view::{
-    CapacityWaitSummary, DailyBudgetView, PipelinePosition, PrStack, PresenceSample,
+    CapacityWaitSummary, DailyBudgetView, PipelinePosition, PrStack, PresenceSample, ProviderPlan,
     RedeemForecast, RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
     SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount, SidebarUnitKey,
@@ -69,7 +70,6 @@ pub use view::{
     WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
 pub(crate) use view::{actionable_unread_count, triage_key};
-pub(crate) use view::{format_plan_label, sort_windows};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotErr {

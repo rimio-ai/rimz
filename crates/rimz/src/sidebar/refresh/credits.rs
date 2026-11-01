@@ -23,7 +23,7 @@ use crate::ids::LoginKey;
 use crate::sidebar::timing::{
     ACCOUNT_USAGE_CLAIM_TTL, IDLE_OAUTH_USAGE_TTL, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
 };
-use crate::store::snapshot::{SidebarSnapshot, format_plan_label};
+use crate::store::snapshot::{ProviderPlan, SidebarSnapshot};
 use crate::utils::time::unix_now_ms;
 
 impl ProviderCreditsEntry {
@@ -678,7 +678,10 @@ fn apply_credits_cache_with(
                     panel.plan = displayable_entry
                         .and_then(|entry| entry.plan.as_deref())
                         .filter(|plan| !plan.trim().is_empty())
-                        .map(|plan| format_plan_label(&panel.kind, plan, None));
+                        .map(|tier| ProviderPlan {
+                            tier: tier.to_owned(),
+                            name: None,
+                        });
                 }
                 panel.extra_credits = displayable_entry
                     .and_then(|entry| entry.extra_credits.clone())

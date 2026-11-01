@@ -232,7 +232,10 @@ fn panel(kind: &str) -> SidebarProviderPanel {
         color_rgb: None,
         color_role: None,
         version: Some("1.2.3".to_owned()),
-        plan: Some("Claude Max".to_owned()),
+        plan: Some(rimz::store::snapshot::ProviderPlan {
+            tier: "max".to_owned(),
+            name: None,
+        }),
         metered: true,
         undecided: false,
         alternates: Vec::new(),

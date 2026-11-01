@@ -145,6 +145,13 @@ pub enum RemoteControlBadge {
     OffForRun,
 }
 
+/// A provider's raw plan tier and optional display name, from one reading.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderPlan {
+    pub tier: String,
+    pub name: Option<String>,
+}
+
 /// One login's aggregate dashboard block, pinned to the sidebar bottom. Pi
 /// carries alternate backing credentials inside the block; the renderer picks
 /// their plan and budgets while spend and tokens stay whole-login.
@@ -182,10 +189,9 @@ pub struct SidebarProviderPanel {
     pub color_role: Option<PaletteRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// Brand plan label, preferring the provider's display name (`Claude Ultra`),
-    /// otherwise its tier vocabulary (`ChatGPT Pro 200`); `None` when unknown.
+    /// Raw plan reading; labels are derived through the adapter's vocabulary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<String>,
+    pub plan: Option<ProviderPlan>,
     /// Whether the account is metered by rate-limit windows.
     pub metered: bool,
     /// No backing credential is known yet; show neither plan nor budget bars.
@@ -235,6 +241,13 @@ pub struct SidebarProviderPanel {
 }
 
 impl SidebarProviderPanel {
+    /// The brand plan label, preferring the provider's display name when known.
+    pub fn plan_label(&self) -> Option<String> {
+        self.plan
+            .as_ref()
+            .map(|plan| super::format_plan_label(&self.kind, &plan.tier, plan.name.as_deref()))
+    }
+
     pub(crate) fn for_sub_provider(&self, provider: &str) -> Option<&Self> {
         std::iter::once(self)
             .chain(&self.alternates)

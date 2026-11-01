@@ -13,7 +13,7 @@ use crate::theme::{
     BrandColor, provider_title_case, resolve_provider_brand, resolve_provider_identity,
 };
 
-use super::{RemoteControlBadge, SidebarProviderPanel, SidebarSnapshot};
+use super::{ProviderPlan, RemoteControlBadge, SidebarProviderPanel, SidebarSnapshot};
 
 impl SidebarSnapshot {
     /// Fold each login in `logins` into its dashboard block; a live agent or a
@@ -158,14 +158,11 @@ impl SidebarSnapshot {
                 .as_ref()
                 .and_then(|account| account.plan.clone())
                 .filter(|plan| !plan.is_empty())
-                .map(|raw| {
-                    format_plan_label(
-                        &kind,
-                        &raw,
-                        account
-                            .as_ref()
-                            .and_then(|account| account.plan_name.as_deref()),
-                    )
+                .map(|tier| ProviderPlan {
+                    tier,
+                    name: account
+                        .as_ref()
+                        .and_then(|account| account.plan_name.clone()),
                 });
 
             let identity = resolve_provider_identity(&kind, &self.theme.providers);
@@ -264,12 +261,9 @@ impl SidebarSnapshot {
                     alternate.plan = credential
                         .and_then(|account| account.plan.as_deref())
                         .filter(|plan| !plan.is_empty())
-                        .map(|plan| {
-                            format_plan_label(
-                                &alternate.kind,
-                                plan,
-                                credential.and_then(|account| account.plan_name.as_deref()),
-                            )
+                        .map(|tier| ProviderPlan {
+                            tier: tier.to_owned(),
+                            name: credential.and_then(|account| account.plan_name.clone()),
                         });
                     alternate.metered = credential
                         .and_then(|account| account.metered)
@@ -533,7 +527,7 @@ pub(crate) fn sort_windows(windows: &mut [RateLimitWindow]) {
 /// Format a provider display name or raw tier per the adapter's [`crate::agents::PlanLabel`].
 /// A name wins verbatim (`Ultra` → `Claude Ultra`); without one, the tier vocabulary
 /// applies (`pro` → `ChatGPT Pro 200`). Unknown kinds just title-case the tier.
-pub(crate) fn format_plan_label(kind: &str, raw: &str, name: Option<&str>) -> String {
+pub(super) fn format_plan_label(kind: &str, raw: &str, name: Option<&str>) -> String {
     match crate::agents::spec_by_kind(kind).map(|definition| &definition.plan_label) {
         Some(label) => label.format(raw, name),
         None => provider_title_case(raw),

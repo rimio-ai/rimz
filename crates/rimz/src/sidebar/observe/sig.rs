@@ -435,7 +435,7 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
         }
         for (field, value) in [
             (PanelField::Version, panel.version.clone()),
-            (PanelField::Plan, panel.plan.clone()),
+            (PanelField::Plan, panel.plan_label()),
             (PanelField::Metered, Some(panel.metered.to_string())),
             (
                 PanelField::RemoteControl,
@@ -614,7 +614,10 @@ mod tests {
         };
         let panel = crate::store::snapshot::SidebarProviderPanel {
             version: Some("2.1.291".to_owned()),
-            plan: Some("Claude Max".to_owned()),
+            plan: Some(crate::store::snapshot::ProviderPlan {
+                tier: "max".to_owned(),
+                name: None,
+            }),
             remote_control: crate::store::snapshot::RemoteControlBadge::Healthy,
             active_sessions: 3,
             spending: Some(tally.clone().into()),

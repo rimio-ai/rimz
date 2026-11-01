@@ -943,8 +943,8 @@ fn provider_header_left(
         .map(|version| format!("v{version}"))
         .unwrap_or_else(|| "v?".to_owned());
     if tabbed {
-        if let Some(plan) = panel.plan.as_deref() {
-            left.push(Span::styled(plan.to_owned(), theme.muted()));
+        if let Some(plan) = panel.plan_label() {
+            left.push(Span::styled(plan, theme.muted()));
             if include_version {
                 left.push(Span::styled(value_seam(theme), theme.faint()));
                 left.push(Span::styled(version, theme.muted()));
@@ -960,9 +960,9 @@ fn provider_header_left(
         if include_version {
             left.push(Span::styled(format!(" {version}"), theme.muted()));
         }
-        if let Some(plan) = panel.plan.as_deref() {
+        if let Some(plan) = panel.plan_label() {
             left.push(Span::styled(value_seam(theme), theme.faint()));
-            left.push(Span::styled(plan.to_owned(), theme.muted()));
+            left.push(Span::styled(plan, theme.muted()));
         }
     }
     left

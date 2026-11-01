@@ -118,7 +118,10 @@ fn build_adversarial_snapshot(
         let mut panel = provider_panel("claude", "Claude", 5, true, false, Some((50, 75)));
         panel.product_name = provider.product;
         panel.art = provider.art;
-        panel.plan = Some(provider.plan);
+        panel.plan = Some(crate::store::snapshot::ProviderPlan {
+            tier: "max".to_owned(),
+            name: Some(provider.plan),
+        });
         snapshot.providers = vec![panel];
     }
     snapshot

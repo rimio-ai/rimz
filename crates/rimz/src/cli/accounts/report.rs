@@ -426,7 +426,7 @@ fn build_report(
         installed: context.installed.contains(kind),
         plan_label: panel
             .filter(|_| !undecided)
-            .and_then(|panel| panel.plan.clone())
+            .and_then(SidebarProviderPanel::plan_label)
             .or_else(|| {
                 raw_plan.as_deref().map(|plan| {
                     definition.plan_label.format(
