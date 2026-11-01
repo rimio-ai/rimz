@@ -1,6 +1,6 @@
 # Claude Code protocol reference
 
-This page mirrors the Claude Code surfaces RimZ binds to: hook events with their stdin payloads and stdout decisions, the statusline JSON, the launch flags and folder trust, agent view, Remote Control, project storage and managed pricing, the auth and OAuth usage surface, and the transcript JSONL. It records what upstream ships. How RimZ maps each surface onto its own types is [adapter_claude.md](../../internals/agents/adapter_claude.md); the agent-neutral model is [model.md](../../internals/agents/model.md) and the account and spend model is [providers.md](../../internals/agents/providers.md).
+This page mirrors the Claude Code surfaces RimZ binds to: hook events with their stdin payloads and stdout decisions, the statusline JSON, the launch flags and folder trust, agent view, Remote Control, project storage and managed pricing, subscription plans, the auth and OAuth usage surface, and the transcript JSONL. It records what upstream ships. How RimZ maps each surface onto its own types is [adapter_claude.md](../../internals/agents/adapter_claude.md); the agent-neutral model is [model.md](../../internals/agents/model.md) and the account and spend model is [providers.md](../../internals/agents/providers.md).
 
 Coverage is depth on what RimZ wires and breadth as an index. The hook events, statusline fields, and decision shapes the adapter parses or emits get full shapes; the rest of the upstream catalog is listed so a contributor wiring something new knows it exists.
 
@@ -747,6 +747,20 @@ The file lives at `/etc/claude-code/managed-settings.json` on Linux and WSL, `/L
 | built-in model key | applies to every dated snapshot and provider-specific ID of that model |
 | any other key | applies to that exact ID, and wins over a built-in row |
 
+## Plans
+
+User-reported on 2026-11-01: the current subscription lineup and exact weekly sizes below, relative to Claude Pro. A plan with a 5h limit has five of its own 5h windows in a week. Ultra has no 5h limit. These are reported plan facts, separate from the versioned client-protocol observations below; product context is in the vendor's [Max](https://support.claude.com/en/articles/11049741-what-is-the-max-plan) and [Ultra](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan) articles.
+
+| Plan | Weekly size | 5h limit |
+| --- | --- | --- |
+| Pro | 1x | yes |
+| Team Standard seat | 1.25x | yes |
+| Team Premium seat | 6.25x | yes |
+| Max | 5x | yes |
+| Ultra | 10x | no |
+
+The same report observed `organization.seat_tier = "team_standard"` on `GET https://api.anthropic.com/api/oauth/profile`. The Premium spelling `team_premium` is unconfirmed, matched by analogy rather than a capture. The [RimZ capacity mapping](../../internals/agents/plans.md) keeps raw tiers separate from stable keys and display names.
+
 ## Auth surface
 
 `claude auth status` prints the login as JSON by default, or text with `--text`, and exits 0 when logged in and 1 when not ([CLI reference](https://code.claude.com/docs/en/cli-reference)). The docs publish no field list. The field list was checked against the 2.1.296 Linux package's JSON construction; token-source and identity mappings below follow the 2.1.310 bundle. What RimZ reads from them is [adapter_claude.md → Account and balance](../../internals/agents/adapter_claude.md#account-and-balance).
@@ -797,7 +811,7 @@ The 2.1.306 bundle takes `rateLimitTier` from `/api/oauth/profile`'s `organizati
 
 ### OAuth profile endpoint
 
-`GET https://api.anthropic.com/api/oauth/profile` carries `account.email`, `organization.uuid`, `organization.organization_type`, and `organization.rate_limit_tier`. The [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310) maps `claude_pro`, `claude_max`, `claude_team`, and `claude_enterprise` to their subscription families; its Max 20x check also requires `default_claude_max_20x`. The Max 5x tier is `default_claude_max_5x`. An observed Pro response carried `organization_type = "claude_pro"` and `rate_limit_tier = "default_claude_ai"`; the latter alone does not establish Pro. The bundle does not use `subscription_status` or `has_claude_*` to select the plan. This is observed client protocol, not a published API contract.
+`GET https://api.anthropic.com/api/oauth/profile` carries `account.email`, `organization.uuid`, `organization.organization_type`, `organization.rate_limit_tier`, and the user-reported `organization.seat_tier` ([Plans](#plans)). The [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310) maps `claude_pro`, `claude_max`, `claude_team`, and `claude_enterprise` to their subscription families; its Max 20x check also requires `default_claude_max_20x`. The Max 5x tier is `default_claude_max_5x`. An observed Pro response carried `organization_type = "claude_pro"` and `rate_limit_tier = "default_claude_ai"`; the latter alone does not establish Pro. The bundle does not use `subscription_status` or `has_claude_*` to select the plan. This is observed client protocol, not a published API contract.
 
 On 2026-10-31, a live profile returned `organization.plan_display_name = "Ultra"` and `organization.plan_display_label = "Ultra plan"` beside `organization_type = "claude_max"` and `rate_limit_tier = "default_claude_max_20x"`. The bare name and prose label are distinct fields. Anthropic's [Ultra article](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan) and [Max article](https://support.claude.com/en/articles/11049741-what-is-the-max-plan), read the same day, describe the renamed products. No live Max 5x response was checked, and the marketing names do not establish new wire tier spellings.
 

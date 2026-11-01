@@ -1,6 +1,6 @@
 # Codex protocol reference
 
-This page records Codex CLI's hooks, launch behavior, app-server API, session files, folder trust, TUI input, authentication, and usage endpoints. The RimZ mapping is in [adapter_codex.md](../../internals/agents/adapter_codex.md). The provider-neutral model is [model.md](../../internals/agents/model.md), and accounts and spend are [providers.md](../../internals/agents/providers.md).
+This page records Codex CLI's hooks, launch behavior, app-server API, session files, folder trust, TUI input, subscription plans, authentication, and usage endpoints. The RimZ mapping is in [adapter_codex.md](../../internals/agents/adapter_codex.md). The provider-neutral model is [model.md](../../internals/agents/model.md), and accounts and spend are [providers.md](../../internals/agents/providers.md).
 
 ## Baseline and sources
 
@@ -677,6 +677,21 @@ Plan clarifications and default-mode questionnaires use the blocking `request_us
 The questionnaire (`tui/src/bottom_pane/request_user_input/mod.rs`) opens with the first option of each question selected. Down moves the selection, and the submit key (Enter by default, remappable in the keymap) commits the answer, advances to the next question, and submits after the last. Each question also accepts notes and free-form text.
 
 `request_user_input_async` is the non-blocking variant: its input is `{ "questions": [ { "title", "options"?: [string] } ] }`, it returns `{"accepted":true}` at once, and the questions appear as an `AgentMessage` item with `delivery: "async"` and `questions` that the user answers inline while the turn continues ([handler](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/tools/handlers/request_user_input_async.rs)). The [historical observations](#async-questions-observed-on-01580) distinguish current editor changes from 0.158.0 captures.
+
+## Plans
+
+User-reported on 2026-11-01: the current ChatGPT subscription lineup and exact Codex weekly sizes below, relative to Plus. A plan with a 5h limit has five of its own 5h windows in a week. The Pro plans have no 5h limit. These are reported plan facts, not a new versioned protocol enum; the [client's Pro subscription labels](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/subscription.rs#L10-L37) name the three Pro tiers.
+
+| Plan | Weekly size | 5h limit |
+| --- | --- | --- |
+| Plus | 1x | yes |
+| Team Standard seat | 1x | yes |
+| Team Premium seat | 10x | yes |
+| Pro 100 | 10x | no |
+| Pro 200 | 20x | no |
+| Pro 500 | 50x | no |
+
+The same report identifies top-level `plan_type` on `GET https://chatgpt.com/backend-api/wham/usage`: `team` or `business_standard` for a Standard seat, `premium` or `self_serve_business_prolite` for a Premium seat. `business_premium` is an unconfirmed additional spelling, not an observed answer. The [RimZ capacity mapping](../../internals/agents/plans.md) keeps raw tiers separate from stable keys and display names.
 
 ## Auth and usage endpoints
 
