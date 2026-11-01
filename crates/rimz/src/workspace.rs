@@ -192,6 +192,15 @@ pub fn known_workspaces() -> io::Result<Vec<KnownWorkspace>> {
 
 /// [`known_workspaces`] over an explicit state root, for tests against a tempdir.
 pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWorkspace>> {
+    known_workspaces_in(workspaces_root, true)
+}
+
+/// The same census without record repairs or workspace locks.
+pub fn known_workspaces_read_only() -> io::Result<Vec<KnownWorkspace>> {
+    known_workspaces_in(&crate::disk::paths::workspaces_dir(), false)
+}
+
+fn known_workspaces_in(workspaces_root: &Path, repair: bool) -> io::Result<Vec<KnownWorkspace>> {
     let entries = match std::fs::read_dir(workspaces_root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -222,7 +231,8 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
                         )
                     })?,
                 );
-                let Some(candidate) = normalize_known_workspace_record(dir_name, &paths, record)
+                let Some(candidate) =
+                    normalize_known_workspace_record(dir_name, &paths, record, repair)
                 else {
                     continue;
                 };
@@ -262,6 +272,7 @@ fn normalize_known_workspace_record(
     dir_name: crate::ids::WorkspaceDirName,
     paths: &crate::disk::paths::StatePaths,
     mut record: WorkspaceRecord,
+    repair: bool,
 ) -> Option<KnownWorkspaceCandidate> {
     let record_path = &paths.workspace_record;
     let workspace_id = record.workspace_id.clone();
@@ -281,7 +292,7 @@ fn normalize_known_workspace_record(
             return None;
         }
 
-        if record.project_root != project_root {
+        if repair && record.project_root != project_root {
             // Enumeration never waits on a writer (which may itself be enumerating).
             // Re-read under the lock so repairs preserve concurrent account switches.
             match crate::disk::lock::WorkspaceLock::try_acquire(&paths.workspace_lock) {
@@ -296,8 +307,8 @@ fn normalize_known_workspace_record(
                 Ok(None) => {}
                 Err(err) => tracing::warn!(error = %err, "skipping workspace record repair"),
             }
-            record.project_root = project_root;
         }
+        record.project_root = project_root;
     }
 
     Some(KnownWorkspaceCandidate {

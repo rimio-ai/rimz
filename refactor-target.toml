@@ -2066,7 +2066,8 @@ path = "crates/rimz/src/harness"
 # CheckKind/kind and StepKind/kind share runner selection with definition rails (+4).
 # Check::subscriptions shares derived and explicit wakes with the full node view (+1).
 # throttle::room_held shares the lock-free room ticket read with sidebar and CLI (+1).
-surface-budget = 1060
+# throttle::DiagnosticHold and diagnostic_holds share fresh read-only doctor findings (+2).
+surface-budget = 1062
 
 [[verdict]]
 kind = "item"
@@ -3818,7 +3819,8 @@ path = "crates/rimz/src/workspace.rs"
 # ResolvedWorkspace::at_launch_dir keeps the room pin while resolving launch trust (+1).
 # SkippedSetting carries the room's configuration warnings into CLI and sidebar readers (+1).
 # AgentShell carries the room-life bare-name shell lookup into launch and CLI readers (+1).
-surface-budget = 28
+# known_workspaces_read_only shares the census without repair writes or locks (+1).
+surface-budget = 29
 
 [[module]]
 path = "crates/rimz/src/wakeup"
@@ -4635,6 +4637,16 @@ reason = "Doctor reads the latest per-kind/account capacity-check errors without
 kind = "item"
 key = "harness::schedule::throttle::room_held"
 reason = "Sidebar and loop inspection read live waiting tickets for one project without locks or mutations."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::throttle::DiagnosticHold"
+reason = "Doctor serializes typed fresh throttle findings and renders their problem and repair separately."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::throttle::diagnostic_holds"
+reason = "Doctor reads disk floors, including owned fan-out checkout paths, and capped agent counts without tickets, locks, checks or writes."
 
 [[verdict]]
 kind = "item"
@@ -6970,6 +6982,11 @@ reason = "Named by the integration crate's hooks and run suites (pass 22b)."
 kind = "item"
 key = "workspace::known_workspaces_under"
 reason = "Named by the integration crate's zellij reconcile suite (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::known_workspaces_read_only"
+reason = "Throttle counts and doctor use the workspace census without its optional repair writes or locks."
 
 [[verdict]]
 kind = "item"

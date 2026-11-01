@@ -2,6 +2,7 @@
 //! then run the binary and assert the report. The JSON report is the stable
 //! contract checked here; a smoke test pins the human report's shape.
 
+use assert_cmd::assert::OutputAssertExt;
 use jiff::Timestamp;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
@@ -713,6 +714,237 @@ fn doctor_account_standing_is_cache_only_and_empty_paid_credits_are_not_exhausti
         row["usage"]["read_at"],
         json!(Timestamp::from_millisecond(credit_time.as_millisecond()).unwrap())
     );
+}
+
+#[test]
+fn doctor_reads_fresh_throttle_disk_floors_without_admitting_or_running_checks() {
+    let env = Env::new();
+    let config = env.rimz_home().join("loop.toml");
+    for (floor, free, held) in [
+        (true, 12_000_000_000u64, true),
+        (true, 20_000_000_000, false),
+        (false, 1, false),
+    ] {
+        std::fs::write(
+            &config,
+            format!(
+                concat!(
+                    "[throttle]\n{}check='touch diagnostic-check-ran'\n",
+                    "[tasks.first]\nspec='codex'\nsignal='ci.done'\nroot={:?}\n",
+                    "[tasks.second]\nspec='codex'\nsignal='ci.done'\nroot={:?}\n",
+                ),
+                if floor { "min-disk='20GB'\n" } else { "" },
+                env.project_root,
+                env.project_root,
+            ),
+        )
+        .unwrap();
+        let report = doctor_json(
+            &env.rimz()
+                .args(["doctor", "--json"])
+                .env("RIMZ_TEST_DISK_SPACE", format!("{free},100000000000"))
+                .output()
+                .unwrap(),
+        );
+        let holds = &report["loop_tasks"]["throttle_holds"];
+        let text = format!("free disk 12 GB < 20 GB at {}", env.project_root.display());
+        assert_eq!(
+            holds,
+            &if held {
+                json!([{"hold":"disk", "text":text}])
+            } else {
+                json!([])
+            }
+        );
+        assert!(!env.project_root.join("diagnostic-check-ran").exists());
+        assert!(!env.rimz_home().join("loops/throttle").exists());
+        assert!(!env.rimz_home().join("loops/throttle.lock").exists());
+        let output = env
+            .rimz()
+            .args(["doctor"])
+            .env("RIMZ_TEST_DISK_SPACE", format!("{free},100000000000"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let body = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(body.contains("disk floor"), held, "{body}");
+        if held {
+            assert!(
+                body.contains(&text) && body.contains("[throttle] min-disk"),
+                "{body}"
+            );
+        }
+    }
+}
+
+#[test]
+fn doctor_throttle_holds_include_trusted_project_tasks_in_other_rooms_without_repairs() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let other = env.home_root.join("other");
+    env.record(&other);
+    env.write_config(
+        &other,
+        "[tasks.project-only]\nagent='codex'\nprompt='review'\nsignal='ci.done'\n",
+    );
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        "[throttle]\nmin-disk='20GB'\n",
+    )
+    .unwrap();
+    let paths = env.state_path_for(&other);
+    let record = std::fs::read(&paths.workspace_record).unwrap();
+    let diagnostic_path = DiagSink::under(
+        paths.root.clone(),
+        paths.workspace_id.clone(),
+        "other",
+        None,
+    )
+    .log_path()
+    .unwrap();
+    let diagnostics = std::fs::read(&diagnostic_path).ok();
+    let text = format!("free disk 12 GB < 20 GB at {}", other.display());
+    for trusted in [false, true] {
+        if trusted {
+            env.rimz()
+                .arg("--root")
+                .arg(&other)
+                .args(["trust", "grant"])
+                .assert()
+                .success();
+        }
+        let report = doctor_json(
+            &env.rimz()
+                .args(["doctor", "--json"])
+                .env("RIMZ_TEST_DISK_SPACE", "12000000000,100000000000")
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(
+            report["loop_tasks"]["throttle_holds"],
+            if trusted {
+                json!([{"hold":"disk", "text":text}])
+            } else {
+                json!([])
+            }
+        );
+        assert_eq!(report["loop_tasks"]["tasks"], json!([]));
+        assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), record);
+        assert_eq!(std::fs::read(&diagnostic_path).ok(), diagnostics);
+    }
+    let output = env
+        .rimz()
+        .args(["doctor"])
+        .env("RIMZ_TEST_DISK_SPACE", "12000000000,100000000000")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let body = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        body.contains("disk floor") && body.contains(&text),
+        "{body}"
+    );
+
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        "[throttle]\nmax-active-per-task=1\n",
+    )
+    .unwrap();
+    if paths.events_log.exists() {
+        std::fs::remove_file(&paths.events_log).unwrap();
+    }
+    std::fs::create_dir_all(&paths.events_log).unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let holds = report["loop_tasks"]["throttle_holds"].as_array().unwrap();
+    assert_eq!(holds.len(), 1);
+    assert_eq!(holds[0]["hold"], "store");
+    assert!(
+        holds[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(&paths.workspace_id.to_string())
+    );
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), record);
+    assert_eq!(std::fs::read(&diagnostic_path).ok(), diagnostics);
+}
+
+#[test]
+fn doctor_throttle_disk_floors_sample_each_fanout_checkout() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
+    env.record(&env.project_root);
+    let mut expected = Vec::new();
+    for name in ["first", "second"] {
+        env.rimz()
+            .args(["worktree", "new", name])
+            .assert()
+            .success();
+        let checkout = env.home_root.join("project-worktrees").join(name);
+        expected.push(json!({
+            "hold": "disk",
+            "text": format!("free disk 12 GB < 20 GB at {}", checkout.display()),
+        }));
+    }
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            concat!(
+                "[throttle]\nmin-disk='20GB'\n[tasks.fanout]\nroot={:?}\n",
+                "agent='codex'\nprompt='review'\nstay=true\neach-worktree=true\n",
+                "when=['pr=open']\n",
+            ),
+            env.project_root,
+        ),
+    )
+    .unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("RIMZ_TEST_DISK_SPACE", "12000000000,100000000000")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(report["loop_tasks"]["throttle_holds"], json!(expected));
+    assert!(!env.rimz_home().join("loops/throttle").exists());
+}
+
+#[test]
+fn doctor_reports_an_unreadable_agent_count_only_with_a_cap() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    if paths.events_log.exists() {
+        std::fs::remove_file(&paths.events_log).unwrap();
+    }
+    std::fs::create_dir_all(&paths.events_log).unwrap();
+    let record = std::fs::read(&paths.workspace_record).unwrap();
+    for caps in ["max-active=2\n", "max-active-per-task=1\n", ""] {
+        std::fs::write(
+            env.rimz_home().join("loop.toml"),
+            format!(
+                "[throttle]\n{caps}[tasks.nightly]\nspec='codex'\nsignal='ci.done'\nroot={:?}\n",
+                env.project_root,
+            ),
+        )
+        .unwrap();
+        let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+        let holds = report["loop_tasks"]["throttle_holds"].as_array().unwrap();
+        assert_eq!(holds.len(), usize::from(!caps.is_empty()), "{holds:?}");
+        if !caps.is_empty() {
+            assert_eq!(holds[0]["hold"], "store");
+            let text = holds[0]["text"].as_str().unwrap();
+            assert!(
+                text.starts_with("cannot count active agents: workspace ")
+                    && text.contains("unreadable"),
+                "{text}"
+            );
+        }
+        assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), record);
+        assert!(!env.rimz_home().join("loops/throttle").exists());
+    }
 }
 
 #[test]

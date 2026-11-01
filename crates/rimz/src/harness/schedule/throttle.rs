@@ -3,9 +3,9 @@
 //! Blocking runs keep a ticket; condition fires try once and leave none when held.
 //! The turn passes on when the launch it admitted is reported and the provider
 //! then reports the new agent, or the ceiling passes, whichever is first; a later
-//! scanner releases it, so the launching process never lingers. Caps and
-//! resource limits are sampled only by the run at the head of the queue, in
-//! the pass that would admit it.
+//! scanner releases it, so the launching process never lingers. Admission samples
+//! caps and resource limits only for the run at the head of the queue, in the
+//! pass that would admit it. Inspection reads them without taking a turn.
 
 use std::fmt;
 use std::io;
@@ -283,7 +283,7 @@ impl Host for SystemHost {
     }
 
     fn workspaces(&self) -> Result<Vec<WorkspaceId>, String> {
-        Ok(crate::workspace::known_workspaces()
+        Ok(crate::workspace::known_workspaces_read_only()
             .map_err(|err| format!("cannot list workspaces: {err}"))?
             .into_iter()
             .map(|workspace| workspace.workspace_id)
@@ -1178,6 +1178,60 @@ fn name_counted(names: &mut Vec<String>, agents: &[AgentState], counted: &[&Agen
     );
 }
 
+fn machine_count(host: &dyn Host, now: Timestamp) -> Result<(usize, Vec<String>), String> {
+    let mut count = 0;
+    let mut names = Vec::new();
+    for workspace in host.workspaces()? {
+        let agents = host.agents(&workspace)?;
+        let counted: Vec<&AgentState> = agents.iter().filter(|agent| working(agent, now)).collect();
+        name_counted(&mut names, &agents, &counted);
+        count += counted.len();
+    }
+    Ok((count, names))
+}
+
+fn task_count(
+    host: &dyn Host,
+    workspace: &WorkspaceId,
+    task: &str,
+    now: Timestamp,
+) -> Result<(usize, Vec<String>), String> {
+    let agents = host.agents(workspace)?;
+    let runs = host.task_runs(workspace, task)?;
+    let workflows = host.task_workflows(workspace, task)?;
+    let counted = task_working(&agents, &runs, &workflows, task, now);
+    let mut names = Vec::new();
+    name_counted(&mut names, &agents, &counted);
+    Ok((counted.len(), names))
+}
+
+fn store_hold(text: String) -> Hold {
+    Hold {
+        kind: HoldKind::Store,
+        kinds: Vec::new(),
+        text: format!("cannot count active agents: {text}"),
+    }
+}
+
+fn disk_hold(host: &dyn Host, floor: u64, path: &Path) -> Result<Option<Hold>> {
+    let free = host
+        .disk_free(path)
+        .map_err(|detail| ThrottleError::Reading {
+            reading: "free disk",
+            detail,
+        })?;
+    Ok((free < floor).then(|| Hold {
+        kind: HoldKind::Disk,
+        kinds: Vec::new(),
+        text: format!(
+            "free disk {} < {} at {}",
+            decimal_bytes(free),
+            decimal_bytes(floor),
+            path.display()
+        ),
+    }))
+}
+
 fn cap_hold(kind: HoldKind, cap: u32, count: usize, mut names: Vec<String>) -> Option<Hold> {
     if count < cap as usize {
         return None;
@@ -1205,47 +1259,20 @@ fn cap_hold(kind: HoldKind, cap: u32, count: usize, mut names: Vec<String>) -> O
 /// a hold, never a short count.
 fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
     let now = host_time(host);
-    let store_hold = |text: String| {
-        Ok(Some(Hold {
-            kind: HoldKind::Store,
-            kinds: Vec::new(),
-            text: format!("cannot count active agents: {text}"),
-        }))
-    };
     if let Some(cap) = config.max_active_per_task {
-        let read = host.agents(&run.workspace).and_then(|agents| {
-            let runs = host.task_runs(&run.workspace, &run.task)?;
-            let workflows = host.task_workflows(&run.workspace, &run.task)?;
-            Ok((agents, runs, workflows))
-        });
-        let (agents, runs, workflows) = match read {
+        let (count, names) = match task_count(host, &run.workspace, &run.task, now) {
             Ok(read) => read,
-            Err(text) => return store_hold(text),
+            Err(text) => return Ok(Some(store_hold(text))),
         };
-        let counted = task_working(&agents, &runs, &workflows, &run.task, now);
-        let mut names = Vec::new();
-        name_counted(&mut names, &agents, &counted);
-        if let Some(hold) = cap_hold(HoldKind::TaskCap, cap, counted.len(), names) {
+        if let Some(hold) = cap_hold(HoldKind::TaskCap, cap, count, names) {
             return Ok(Some(hold));
         }
     }
     if let Some(cap) = config.max_active {
-        let workspaces = match host.workspaces() {
-            Ok(workspaces) => workspaces,
-            Err(text) => return store_hold(text),
+        let (count, names) = match machine_count(host, now) {
+            Ok(read) => read,
+            Err(text) => return Ok(Some(store_hold(text))),
         };
-        let mut count = 0;
-        let mut names = Vec::new();
-        for workspace in workspaces {
-            let agents = match host.agents(&workspace) {
-                Ok(agents) => agents,
-                Err(text) => return store_hold(text),
-            };
-            let counted: Vec<&AgentState> =
-                agents.iter().filter(|agent| working(agent, now)).collect();
-            name_counted(&mut names, &agents, &counted);
-            count += counted.len();
-        }
         if let Some(hold) = cap_hold(HoldKind::MachineCap, cap, count, names) {
             return Ok(Some(hold));
         }
@@ -1289,24 +1316,7 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
         }
     }
     if let Some(floor) = config.min_disk_bytes() {
-        let free = host
-            .disk_free(&run.disk)
-            .map_err(|detail| ThrottleError::Reading {
-                reading: "free disk",
-                detail,
-            })?;
-        if free < floor {
-            return Ok(Some(Hold {
-                kind: HoldKind::Disk,
-                kinds: Vec::new(),
-                text: format!(
-                    "free disk {} < {} at {}",
-                    decimal_bytes(free),
-                    decimal_bytes(floor),
-                    run.disk.display()
-                ),
-            }));
-        }
+        return disk_hold(host, floor, &run.disk);
     }
     Ok(None)
 }
@@ -1405,6 +1415,90 @@ pub fn readings(
     readings_in(&SystemHost, &config.r#loop.throttle, &run)
 }
 
+/// A current needs-a-fix reading, independent of tickets and cached verdicts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DiagnosticHold {
+    pub hold: HoldKind,
+    pub text: String,
+    #[serde(skip)]
+    pub disk_path: Option<PathBuf>,
+}
+
+/// Read configured disk floors and agent counts without locks, writes, tickets,
+/// or capacity checks. Unavailable disk samples are omitted, as in [`readings`].
+pub fn diagnostic_holds(
+    config: &MachineConfig,
+    tasks: &[(&str, &TaskEntry)],
+) -> Vec<DiagnosticHold> {
+    diagnostic_holds_in(&SystemHost, config, tasks)
+}
+
+fn diagnostic_holds_in(
+    host: &dyn Host,
+    config: &MachineConfig,
+    tasks: &[(&str, &TaskEntry)],
+) -> Vec<DiagnosticHold> {
+    let mut holds = Vec::new();
+    if let Err(text) = diagnostic_agent_count(host, &config.r#loop.throttle, tasks) {
+        holds.push(DiagnosticHold {
+            hold: HoldKind::Store,
+            text: store_hold(text).text,
+            disk_path: None,
+        });
+    }
+    if let Some(floor) = config.r#loop.throttle.min_disk_bytes() {
+        let paths = tasks
+            .iter()
+            .flat_map(|(_, entry)| {
+                let checkouts = if entry.each_worktree {
+                    crate::worktree::discover_owned(&entry.resolved_root())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|tree| {
+                            crate::utils::path::normalize_path_lexical(&tree.marker.worktree_path)
+                        })
+                        .collect()
+                } else {
+                    vec![entry.run_dir()]
+                };
+                checkouts
+                    .into_iter()
+                    .map(move |checkout| disk_at(entry, &config.agents.worktree, checkout))
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        for path in paths {
+            if let Ok(Some(hold)) = disk_hold(host, floor, &path) {
+                holds.push(DiagnosticHold {
+                    hold: hold.kind,
+                    text: hold.text,
+                    disk_path: Some(path),
+                });
+            }
+        }
+    }
+    holds
+}
+
+fn diagnostic_agent_count(
+    host: &dyn Host,
+    config: &ThrottleConfig,
+    tasks: &[(&str, &TaskEntry)],
+) -> Result<(), String> {
+    let now = host_time(host);
+    if config.max_active.is_some() {
+        machine_count(host, now)?;
+    }
+    if config.max_active_per_task.is_some() {
+        for (name, entry) in tasks {
+            let root = entry.resolved_root();
+            let state = StatePaths::for_project_root(&root)
+                .map_err(|err| format!("{}: {err}", root.display()))?;
+            task_count(host, &state.workspace_id, name, now)?;
+        }
+    }
+    Ok(())
+}
+
 /// Where a launch of `entry` into `checkout` writes, for the free-disk floor: a
 /// fresh worktree's target, at its nearest existing ancestor, else `checkout`.
 pub(super) fn disk_at(entry: &TaskEntry, worktrees: &WorktreeConfig, checkout: PathBuf) -> PathBuf {
@@ -1470,17 +1564,7 @@ fn readings_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Vec<(&'st
             ),
         ));
     }
-    let active = host.workspaces().and_then(|workspaces| {
-        workspaces.iter().try_fold(0, |count, workspace| {
-            Ok(count
-                + host
-                    .agents(workspace)?
-                    .iter()
-                    .filter(|agent| working(agent, now))
-                    .count())
-        })
-    });
-    if let Ok(active) = active {
+    if let Ok((active, _)) = machine_count(host, now) {
         rows.push((
             "active agents",
             limited(
@@ -1489,18 +1573,13 @@ fn readings_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Vec<(&'st
             ),
         ));
     }
-    if let Some(cap) = config.max_active_per_task {
-        let counted = host.agents(&run.workspace).and_then(|agents| {
-            let runs = host.task_runs(&run.workspace, &run.task)?;
-            let workflows = host.task_workflows(&run.workspace, &run.task)?;
-            Ok(task_working(&agents, &runs, &workflows, &run.task, now).len())
-        });
-        if let Ok(counted) = counted {
-            rows.push((
-                "task active agents",
-                limited(counted.to_string(), Some(format!("max {cap}"))),
-            ));
-        }
+    if let Some(cap) = config.max_active_per_task
+        && let Ok((counted, _)) = task_count(host, &run.workspace, &run.task, now)
+    {
+        rows.push((
+            "task active agents",
+            limited(counted.to_string(), Some(format!("max {cap}"))),
+        ));
     }
     rows
 }
