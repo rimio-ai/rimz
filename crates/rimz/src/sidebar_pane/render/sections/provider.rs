@@ -31,9 +31,9 @@ use super::{pin_right, trim_spans_to_width};
 /// Dropped (bars run full-width) below [`PROVIDER_ART_MIN_WIDTH`].
 const PROVIDER_ART_WIDTH: usize = 9;
 
-/// Emblem rows the body art column holds; an earlier row (the crest) rides the
-/// chrome line directly above the body — the header when it reserves the art
-/// column, the wide spacer otherwise — so four-row art stays height-neutral.
+/// Maximum emblem rows the body art column holds. A crest rides the chrome line
+/// directly above the body — the header when it reserves the art column, the
+/// wide spacer otherwise. Shorter right columns can raise three-row art too.
 const PROVIDER_ART_BODY_ROWS: usize = 3;
 
 /// Narrowest sidebar that still affords the art column beside a bar; below it
@@ -415,8 +415,8 @@ fn spend_token_spans(
 /// tabbed mode the top hairline becomes a tab rail — each
 /// account set into the rule, the active one a brand-filled bold chip — over
 /// the active provider's block alone, so the budgets read one account at a time;
-/// the header then drops the name the rail carries and sits beside the emblem's
-/// first row. A metered account drains "mana" bars for its selected budget windows and
+/// the header then drops the name the rail carries and shares the emblem column
+/// when a crest is raised. A metered account drains "mana" bars for its selected windows and
 /// may swap in an `ex` paid-usage row when an included cap is spent; an
 /// unmetered API-key account shows one `api` budget row. The bars share one start
 /// and one end column across every block, so the dashboard reads as one aligned
@@ -570,19 +570,31 @@ fn provider_block_lines(
         })
         .unwrap_or(panel);
     let layout = ProviderLayout::for_width(width, context.mode.allow_wide());
+    let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
+    let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
+    let bar_region = width.saturating_sub(art_column);
+    let mut rights = provider_stats_rows(context.theme, panel, bar_region, layout);
+    rights.extend(provider_bar_rows(
+        context.theme,
+        panel,
+        bar_region,
+        context.zones,
+        context.now,
+    ));
+    let crest = art_crest_row(panel, rights.len()).filter(|_| show_art);
     let mut lines = vec![provider_header_line(
         context.theme,
         panel,
         width,
         context.mode.tabbed(),
         layout.inline_art(),
+        crest,
         context.now,
     )];
     if context.mode == DashboardMode::Stacked && layout == ProviderLayout::Wide {
         // Wide stacked blocks keep the historical identity/body breathing room.
         lines.push(
-            art_crest_row(panel)
-                .filter(|_| width >= PROVIDER_ART_MIN_WIDTH)
+            crest
                 .map(|row| pad_line_to(Line::from(art_row_spans(context.theme, panel, row)), width))
                 .unwrap_or_else(|| Line::from("")),
         );
@@ -591,9 +603,8 @@ fn provider_block_lines(
         context.theme,
         panel,
         width,
-        layout,
-        context.zones,
-        context.now,
+        rights,
+        crest,
     ));
     if context.mode == DashboardMode::Pet {
         lines.extend(total_spend_lines(
@@ -794,15 +805,17 @@ const RAIL_STUB: usize = 2;
 /// reads `Claude v2.1.158 · Claude Max` — the product name in the brand color,
 /// version and plan dim. Tabbed, the rail already names the account, so the
 /// name drops and the line reads `Claude Max · v2.1.158` — plan first, the
-/// version demoted to trailing trivia — beside the emblem's first row. Plan
-/// drops out when unknown; version renders as `v?` until an out-of-band probe or
-/// live context fills it.
+/// version demoted to trailing trivia. A raised emblem row shares the header
+/// when it reserves the art column; wide stacked blocks use their spacer.
+/// Plan drops out when unknown; version renders as `v?` until an out-of-band
+/// probe or live context fills it.
 fn provider_header_line(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
     tabbed: bool,
     inline_art: bool,
+    crest: Option<usize>,
     now: Timestamp,
 ) -> Line<'static> {
     let mut right = reset_header_spans(theme, panel, now);
@@ -826,11 +839,11 @@ fn provider_header_line(
             theme.styled(component, Modifier::BOLD),
         ));
     }
-    let full = provider_header_left(theme, panel, width, tabbed, inline_art, true);
+    let full = provider_header_left(theme, panel, width, tabbed, inline_art, crest, true);
     let left = if spans_width(&full) + spans_width(&right) <= width {
         full
     } else {
-        provider_header_left(theme, panel, width, tabbed, inline_art, false)
+        provider_header_left(theme, panel, width, tabbed, inline_art, crest, false)
     };
     pin_right(left, right, width)
 }
@@ -911,12 +924,13 @@ fn provider_header_left(
     width: usize,
     tabbed: bool,
     inline_art: bool,
+    crest: Option<usize>,
     include_version: bool,
 ) -> Vec<Span<'static>> {
     let mut left = Vec::new();
     let art_fits = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
     if (tabbed || inline_art) && art_fits {
-        if let Some(row) = art_crest_row(panel) {
+        if let Some(row) = crest {
             left.extend(art_row_spans(theme, panel, row));
             left.push(Span::raw(" "));
         } else {
@@ -962,17 +976,11 @@ fn provider_body_lines(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
-    layout: ProviderLayout,
-    zones: &BudgetBarConfig,
-    now: Timestamp,
+    rights: Vec<Vec<Span<'static>>>,
+    crest: Option<usize>,
 ) -> Vec<Line<'static>> {
     let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
-    let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
-    let bar_region = width.saturating_sub(art_column);
-    let art_start = panel.art.len().saturating_sub(PROVIDER_ART_BODY_ROWS);
-
-    let mut rights = provider_stats_rows(theme, panel, bar_region, layout);
-    rights.extend(provider_bar_rows(theme, panel, bar_region, zones, now));
+    let art_start = crest.map_or(0, |row| row + 1);
 
     let art_rows = if show_art {
         panel.art.len().saturating_sub(art_start)
@@ -995,12 +1003,9 @@ fn provider_body_lines(
     lines
 }
 
-fn art_crest_row(panel: &SidebarProviderPanel) -> Option<usize> {
-    panel
-        .art
-        .len()
-        .saturating_sub(PROVIDER_ART_BODY_ROWS)
-        .checked_sub(1)
+fn art_crest_row(panel: &SidebarProviderPanel, right_rows: usize) -> Option<usize> {
+    (panel.art.len() > right_rows.min(PROVIDER_ART_BODY_ROWS))
+        .then_some(panel.art.len().saturating_sub(PROVIDER_ART_BODY_ROWS + 1))
 }
 
 fn art_row_spans(theme: &Theme, panel: &SidebarProviderPanel, row: usize) -> Vec<Span<'static>> {
