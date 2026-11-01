@@ -248,7 +248,7 @@ The unchanged-source gate on a local refresh is shared. The adapter resolves its
 
 A transcript tail is read through the provider-agnostic [`read_transcript_tail`](../../../crates/rimz/src/agents/transcript_fs.rs) or `read_transcript_tail_with_status`, and a parser on top of it follows these rules:
 
-- Bounded. The reader returns the trailing 64 KiB, so a multi-megabyte log never stalls a hook. When the newest record is larger than that window, the read extends back to the record's start and returns it whole.
+- Bounded. The reader defaults to the trailing 64 KiB; a parser may request a larger budget, as [Claude does after compaction](./adapter_claude.md#context-and-transcript). When the newest record is larger than that window, the read extends back to the record's start and returns it whole.
 - Whole records only. The reader drops a partial leading line cut by the seek and a torn final record still being written, so parsers see only complete JSONL lines.
 - Newest first. Scan lines in reverse, take the most recent usage record, and stop as soon as the needed records are in hand.
 - Forgiving. Decode as lossy UTF-8. Any IO or parse failure yields empty fields.

@@ -2,7 +2,7 @@ use super::*;
 use crate::agents::testkit::{hook_lifecycle, hook_output};
 
 #[test]
-fn transcript_tail_without_its_last_usage_reports_unknown() {
+fn transcript_tail_reaches_usage_beyond_64_kib_for_both_compaction_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session.jsonl");
     let usage = json!({
@@ -16,16 +16,59 @@ fn transcript_tail_without_its_last_usage_reports_unknown() {
     )
     .unwrap();
 
-    let obs = hook_lifecycle(
-        &ClaudeAdapter,
-        "Stop",
-        &json!({ "session_id": "sess-1", "transcript_path": path }),
-    );
-    assert_eq!(obs.usage.total_tokens, None);
-    assert_eq!(obs.usage.fresh_input_tokens, None);
-    assert_eq!(obs.usage.cache_read_input_tokens, None);
-    assert_eq!(obs.usage.cache_write_input_tokens, None);
-    assert_eq!(obs.usage.output_tokens, None);
+    let readings: Vec<_> = ["PreCompact", "PostCompact"]
+        .into_iter()
+        .map(|event| {
+            hook_lifecycle(
+                &ClaudeAdapter,
+                event,
+                &json!({ "session_id": "sess-1", "transcript_path": path }),
+            )
+            .usage
+        })
+        .collect();
+    assert_eq!(readings[0].total_tokens, Some(100_500));
+    assert_eq!(readings[0].fresh_input_tokens, Some(100_000));
+    assert_eq!(readings[0].cache_read_input_tokens, Some(0));
+    assert_eq!(readings[0].cache_write_input_tokens, Some(0));
+    assert_eq!(readings[0].output_tokens, Some(500));
+    assert_eq!(readings[0], readings[1]);
+}
+
+#[test]
+fn transcript_tail_reaches_a_compaction_boundary_beyond_64_kib() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let boundary =
+        json!({ "subtype": "compact_boundary", "compactMetadata": {"postTokens": 14_786} });
+    let padding = format!("{}\n", json!({ "content": "x".repeat(1000) })).repeat(120);
+    std::fs::write(&path, format!("{boundary}\n{padding}")).unwrap();
+
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.total_tokens, Some(14_786));
+    assert_eq!(usage.fresh_input_tokens, None);
+}
+
+#[test]
+fn transcript_tail_reaches_byte_zero_without_usage_beyond_64_kib() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    std::fs::write(&path, "{\"tool\":true}\n".repeat(10_000)).unwrap();
+    assert_eq!(usage_from_transcript(&path).total_tokens, Some(0));
+}
+
+#[test]
+fn transcript_tail_stops_at_one_mib_without_a_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let boundary =
+        json!({ "subtype": "compact_boundary", "compactMetadata": {"postTokens": 14_786} });
+    std::fs::write(
+        &path,
+        format!("{boundary}\n{}", "{\"tool\":true}\n".repeat(100_000)),
+    )
+    .unwrap();
+    assert_eq!(usage_from_transcript(&path).total_tokens, None);
 }
 
 #[test]

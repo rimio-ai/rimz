@@ -67,8 +67,8 @@ use super::{
     BackgroundShellReport, HookOutput, HookRouting, Result, RootIdentity, SanitizedPrompt,
     SessionOrigin, SpawnedSubagent, SubagentIdentity, SubagentObservation, SubagentSpawnInput,
     TranscriptMessage, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    read_transcript_tail_with_status, resolve_root_identity, resolve_subagent_identity,
-    sanitize_user_prompt, stop_payload_errored,
+    read_transcript_tail_with_budget, read_transcript_tail_with_status, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::payload::finished_task_notification_ids;
 use crate::agents::version::{CliVersion, probe_cli_version};
@@ -1913,12 +1913,22 @@ fn has_pending_background(tasks: &[BackgroundTask], crons: &[payloads::SessionCr
 /// the window actually went (fresh input vs. cache reuse vs. output).
 #[derive(Default)]
 struct TranscriptUsage {
+    source: TranscriptUsageSource,
     total_tokens: Option<u64>,
     fresh_input_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
     cache_write_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     model: Option<String>,
+}
+
+#[derive(Default)]
+enum TranscriptUsageSource {
+    #[default]
+    Unknown,
+    Fresh,
+    Usage,
+    Boundary,
 }
 
 impl TranscriptUsage {
@@ -1931,6 +1941,7 @@ impl TranscriptUsage {
     /// record supplies it.
     fn fresh() -> Self {
         Self {
+            source: TranscriptUsageSource::Fresh,
             total_tokens: Some(0),
             ..Self::default()
         }
@@ -1960,18 +1971,28 @@ fn context_window_for(model: &str, prices: &PriceBook) -> Option<u64> {
     })
 }
 
+/// The wider retry's budget: every observed boundary-to-usage gap fits within 1 MiB.
+const COMPACTION_TAIL_BYTES: u64 = 1024 * 1024;
+
 /// Derive context-window usage from the tail of a Claude transcript JSONL.
 /// Claude never puts token counts in the hook payload — they live in the
 /// transcript — so this is the only place the context gauge can be sourced.
 /// Reads a bounded tail and takes the most recent assistant `message.usage`,
 /// or the newer `compact_boundary` record's post-compaction size.
+/// If neither is in the default tail, retry once with a 1 MiB budget.
 /// Best-effort: any IO or parse failure yields empty fields (enrichment, never
 /// correctness).
 fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     let Some(tail) = read_transcript_tail_with_status(path) else {
         return TranscriptUsage::default();
     };
-    usage_from_transcript_tail(&tail.text, None, tail.whole_file)
+    let usage = usage_from_transcript_tail(&tail.text, None, tail.whole_file);
+    if tail.whole_file || !matches!(usage.source, TranscriptUsageSource::Unknown) {
+        return usage;
+    }
+    read_transcript_tail_with_budget(path, COMPACTION_TAIL_BYTES)
+        .map(|tail| usage_from_transcript_tail(&tail.text, None, tail.whole_file))
+        .unwrap_or_default()
 }
 
 fn usage_from_transcript_tail(
@@ -1999,6 +2020,7 @@ fn usage_from_transcript_tail(
         // it records for the compacted window, or with no reading.
         if value.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
             return TranscriptUsage {
+                source: TranscriptUsageSource::Boundary,
                 total_tokens: value
                     .pointer("/compactMetadata/postTokens")
                     .and_then(Value::as_u64),
@@ -2026,6 +2048,7 @@ fn usage_from_transcript_tail(
         // Raw tokens only: the window divisor is resolved downstream from the
         // folded window, which carries the `[1m]`-marked model's bump.
         return TranscriptUsage {
+            source: TranscriptUsageSource::Usage,
             total_tokens: Some(context_tokens + output),
             fresh_input_tokens: Some(fresh_input),
             cache_read_input_tokens: Some(cache_read),

@@ -197,16 +197,19 @@ fn complete_jsonl_prefix(bytes: &[u8]) -> (usize, bool) {
 /// torn-suffix bit to prove its transcript is resting at a terminal row;
 /// usage scans use the whole-file fact to distinguish zero from unknown.
 pub(super) fn read_transcript_tail_with_status(path: &Path) -> Option<TranscriptTail> {
+    read_transcript_tail_with_budget(path, 64 * 1024)
+}
+
+pub(super) fn read_transcript_tail_with_budget(path: &Path, budget: u64) -> Option<TranscriptTail> {
     use std::io::{Read, Seek, SeekFrom};
 
-    const TAIL_BYTES: u64 = 64 * 1024;
     #[cfg(any(test, feature = "testkit"))]
     super::local_session_cache::testkit::transcript_read();
     let mut file = fs::File::open(path).ok()?;
     #[cfg(any(test, feature = "testkit"))]
     super::local_session_cache::testkit::stat();
     let len = file.metadata().ok()?.len();
-    let normal_start = len.saturating_sub(TAIL_BYTES);
+    let normal_start = len.saturating_sub(budget);
     let mut whole_file = normal_start == 0;
     file.seek(SeekFrom::Start(normal_start)).ok()?;
     let mut buf = Vec::with_capacity(usize::try_from(len - normal_start).unwrap_or(0));
@@ -241,9 +244,9 @@ pub(super) fn read_transcript_tail_with_status(path: &Path) -> Option<Transcript
         } else {
             let mut record_start = 0;
             let mut scan_end = normal_start;
-            let mut chunk = Vec::with_capacity(TAIL_BYTES as usize);
+            let mut chunk = Vec::with_capacity(budget as usize);
             while scan_end > 0 {
-                let scan_start = scan_end.saturating_sub(TAIL_BYTES);
+                let scan_start = scan_end.saturating_sub(budget);
                 chunk.resize(usize::try_from(scan_end - scan_start).ok()?, 0);
                 file.seek(SeekFrom::Start(scan_start)).ok()?;
                 file.read_exact(&mut chunk).ok()?;
@@ -490,6 +493,28 @@ mod tests {
         })
         .collect();
         assert_eq!(actual, [true, true, false, true, false]);
+    }
+
+    #[test]
+    fn larger_tail_budget_returns_a_record_aligned_suffix_and_whole_file_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        let record = "{\"tool\":true}\n";
+        let content = record.repeat(10_000);
+        fs::write(&path, &content).unwrap();
+
+        let bounded = read_transcript_tail_with_budget(&path, 100_000).unwrap();
+        let expected = record.repeat(100_000 / record.len());
+        assert_eq!(bounded.text.len(), expected.len());
+        assert_eq!(bounded.text, expected);
+        assert!(!bounded.whole_file);
+        assert!(!bounded.torn_suffix);
+
+        for budget in [content.len() as u64, content.len() as u64 + 1] {
+            let whole = read_transcript_tail_with_budget(&path, budget).unwrap();
+            assert_eq!(whole.text, content);
+            assert!(whole.whole_file);
+        }
     }
 
     #[test]
