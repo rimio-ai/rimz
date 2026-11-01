@@ -840,6 +840,63 @@ mod repeats {
     }
 
     #[test]
+    fn resident_launch_repeats_require_equal_takeover_lists() {
+        let cases: [(&[&str], &[&str]); 5] = [
+            (&["@coder"], &["@coder"]),
+            (&["@coder"], &["@sweep"]),
+            (&[], &["@coder"]),
+            (&[], &[]),
+            (&["@coder", "@sweep"], &["@sweep", "@coder"]),
+        ];
+        let outputs = cases.map(|(newest, older)| {
+            let stats = repeat_stats(
+                [newest, older]
+                    .map(|stopped| {
+                        serde_json::json!({
+                            "assist": "resident_launch", "task": "fixer",
+                            "checkout": "/repo-worktrees/auth", "stopped": stopped,
+                            "handles": ["@otter"]
+                        })
+                    })
+                    .into(),
+            );
+            timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC).0
+        });
+        assert_eq!(
+            outputs.each_ref().map(|lines| lines.len()),
+            [1, 2, 2, 1, 2],
+            "{outputs:#?}"
+        );
+        assert!(outputs[0][0].contains("×2 over 1h"), "{outputs:#?}");
+        assert!(
+            outputs[1][0].contains("took over from @coder")
+                && outputs[1][1].contains("took over from @sweep"),
+            "{outputs:#?}"
+        );
+    }
+
+    #[test]
+    fn timeline_trailer_names_hidden_assists_in_singular_and_plural() {
+        let outputs = [1, 2].map(|older| {
+            let mut records = vec![keepalive_record("shown", true)];
+            records.extend((0..older).map(|_| keepalive_record("hidden", true)));
+            let stats = repeat_stats(records);
+            let mut out = Vec::new();
+            write_timeline(&mut out, &stats, 1, false, &jiff::tz::TimeZone::UTC).unwrap();
+            let output = String::from_utf8(out).unwrap();
+            (output.lines().last().unwrap_or_default().to_owned(), output)
+        });
+        assert_eq!(
+            outputs.each_ref().map(|(trailer, _)| trailer.as_str()),
+            [
+                "… 1 older assist; rimz stats --assists -n 0 for all",
+                "… 2 older assists; rimz stats --assists -n 0 for all",
+            ],
+            "{outputs:#?}"
+        );
+    }
+
+    #[test]
     fn timeline_repeats_follow_interleaved_subject_histories() {
         let stats = repeat_stats(vec![
             keepalive_record("a", true),
