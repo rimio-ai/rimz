@@ -3121,8 +3121,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         run: None,
         held: vec![held.clone()],
     };
-    let phrase = rimz::theme::fmt::capacity_wait(
-        &held.kinds,
+    let phrase = rimz::theme::fmt::held_start(
         Timestamp::from_millisecond(since_ms as i64).unwrap(),
         None,
         now,
@@ -4588,8 +4587,8 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
         waiting(43, "/repo/.worktrees/c", None, 4),
     ];
     assert_eq!(
-        in_flight_text(Some(running), &held, now),
-        "▸ running 2m · 2 held: queued: 2 starts ahead"
+        in_flight_text(Some(running), &held, 2, now),
+        "▸ running 2m · ○ 2 held"
     );
     let in_flight = InFlightRun {
         holder: Some(running),
@@ -4609,25 +4608,11 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
         waiting(42, "/repo/.worktrees/b", Some("queued: 1 start ahead"), 2),
         waiting(41, "/repo/.worktrees/a", Some("cpu pressure 41% ≥ 25%"), 3),
     ];
-    assert_eq!(
-        in_flight_text(Some(running), &held, now),
-        format!(
-            "{} · cpu pressure 41% ≥ 25% · 1 held: queued: 1 start ahead",
-            rimz::theme::fmt::capacity_wait(
-                &held[1].kinds,
-                Timestamp::from_millisecond(held[1].since_ms as i64).unwrap(),
-                None,
-                now,
-            )
-        )
-    );
+    assert_eq!(in_flight_text(Some(running), &held, 2, now), "○ 2 held");
     let (own, _) = split_held(Some(running), &held);
     assert_eq!(own.map(|held| held.pid), Some(41));
     // A holder the lock does not name owns no ticket.
-    assert_eq!(
-        in_flight_text(None, &held, now),
-        "▸ running · 2 held: queued: 1 start ahead"
-    );
+    assert_eq!(in_flight_text(None, &held, 2, now), "▸ running · ○ 2 held");
 }
 
 #[test]
@@ -4639,7 +4624,7 @@ fn a_sub_cent_run_cost_is_not_shown_as_free() {
 }
 
 #[test]
-fn capacity_blocking_display_uses_the_shared_phrase_without_changing_held_json() {
+fn capacity_blocking_json_reports_only_known_hold_kinds() {
     let since: Timestamp = "2026-06-01T15:02:00Z".parse().unwrap();
     let held = Held {
         pid: 42,
@@ -4648,14 +4633,40 @@ fn capacity_blocking_display_uses_the_shared_phrase_without_changing_held_json()
         kinds: vec![rimz::ids::AgentKind::new_unchecked("claude")],
         gives_up_ms: None,
         reason: Some("queued: 1 start ahead".into()),
-        hold: None,
+        hold: Some(rimz::ids::HoldKind::Queue),
         position: 2,
     };
-    let phrase = rimz::theme::fmt::capacity_wait(&held.kinds, since, None, since);
+    let phrase = rimz::theme::fmt::held_start(since, None, since);
     assert_eq!(
         held_run_text(&held, since),
         format!("{phrase} · queued: 1 start ahead")
     );
     assert!(held_json(&held).get("kinds").is_none());
     assert!(held_json(&held).get("gives_up_ms").is_none());
+    assert_eq!(held_json(&held)["hold"], "queue");
+    let mut unknown = held;
+    unknown.hold = None;
+    assert!(held_json(&unknown).get("hold").is_none());
+}
+
+#[test]
+fn throttle_skipped_notes_use_the_warning_tone() {
+    let mut skipped = record(10, LoopRunResult::ThrottleSkipped);
+    skipped.error = Some("gave up waiting for capacity".into());
+    let mut out = Vec::new();
+    write_runs_table(
+        &mut out,
+        &[skipped],
+        10,
+        Timestamp::from_second(30).unwrap(),
+    )
+    .unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(
+        out.contains(&ui::paint(
+            ui::palette::warn(),
+            "gave up waiting for capacity"
+        )),
+        "{out:?}"
+    );
 }

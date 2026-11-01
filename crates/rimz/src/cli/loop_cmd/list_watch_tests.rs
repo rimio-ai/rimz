@@ -275,12 +275,67 @@ fn band_priority_and_hold() {
 }
 
 #[test]
-fn throttle_held_running_row_counts_as_needs_you() {
+fn throttle_holds_count_as_held_until_a_fix_is_needed() {
+    let mut held = running("held");
+    held.held.push(Held {
+        pid: 42,
+        checkout: "/repo".into(),
+        since_ms: 99_000_000,
+        kinds: Vec::new(),
+        gives_up_ms: None,
+        reason: Some("queued: 1 start ahead".into()),
+        hold: Some(rimz::ids::HoldKind::Queue),
+        position: 2,
+    });
+    let output = frame(&room(vec![held]), 100, 24, true);
+    assert_eq!(output.lines().next(), Some("loop · ○ 1 held"));
+    assert!(
+        output.contains("○ 1 held") && !output.contains("▸ running"),
+        "{output}"
+    );
     let mut held = running("held");
     held.section = Section::NeedsYou;
     held.attention = Some(Attention::Held);
     let output = frame(&room(vec![held]), 100, 24, true);
     assert_eq!(output.lines().next(), Some("loop · ✗ 1 needs you"));
+
+    let mut mixed = row("mixed");
+    let ticket = |hold, reason: &str| Held {
+        pid: 42,
+        checkout: "/repo".into(),
+        since_ms: 99_000_000,
+        kinds: Vec::new(),
+        gives_up_ms: None,
+        reason: Some(reason.into()),
+        hold: Some(hold),
+        position: 1,
+    };
+    mixed.held = vec![
+        ticket(rimz::ids::HoldKind::Disk, "free disk 1 GB < 20 GB at /repo"),
+        ticket(rimz::ids::HoldKind::Queue, "queued: 1 start ahead"),
+    ];
+    (mixed.attention, mixed.reason) = attention(&mixed, 0, now());
+    mixed.section = Section::NeedsYou;
+    let output = frame(&room(vec![mixed]), 100, 24, true);
+    assert!(
+        output.contains("○ 1 held") && output.contains("✗ free disk 1 GB < 20 GB at /repo"),
+        "a needs-a-fix row names its cause under the self-clearing count: {output}"
+    );
+    assert_eq!(output.matches("free disk").count(), 1, "{output}");
+
+    let mut lone = running("lone");
+    lone.held = vec![ticket(
+        rimz::ids::HoldKind::Disk,
+        "free disk 1 GB < 20 GB at /repo",
+    )];
+    (lone.attention, lone.reason) = attention(&lone, 0, now());
+    lone.section = Section::NeedsYou;
+    let output = frame(&room(vec![lone]), 100, 24, true);
+    assert_eq!(
+        output.matches("free disk").count(),
+        1,
+        "a held run-lock holder's NEXT already names its reason: {output}"
+    );
 }
 
 #[test]
@@ -444,7 +499,7 @@ reason_test!(parked_reason, Parked);
 reason_test!(lost_reason, Lost);
 
 #[test]
-fn failing_and_held_have_no_reason_line() {
+fn failing_and_held_have_no_separate_reason_line() {
     let output = frame(
         &room(vec![
             attention_row("fail", Attention::Failing),
@@ -455,7 +510,13 @@ fn failing_and_held_have_no_reason_line() {
         true,
     );
     assert_eq!(output.lines().count(), 5);
-    assert!(!output.contains("reason"), "{output}");
+    assert!(
+        output
+            .lines()
+            .any(|line| line.contains("held") && line.contains("reason requiring your attention")),
+        "{output}"
+    );
+    assert!(!output.contains("✗ reason"), "{output}");
 }
 
 #[test]

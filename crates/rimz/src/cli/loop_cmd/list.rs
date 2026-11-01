@@ -381,9 +381,8 @@ pub(super) struct TaskRow {
     budget_per_day_usd: Option<f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     workflow_runs: Vec<WorkflowRunRow>,
-    capacity_wait: Option<CapacityWaitView>,
-    #[serde(skip)]
-    capacity_count: usize,
+    #[serde(rename = "capacity_wait", serialize_with = "capacity_wait_json")]
+    capacity: Vec<CapacityStart>,
     #[serde(skip)]
     head: String,
     #[serde(skip)]
@@ -411,7 +410,6 @@ pub(super) struct TaskRow {
 }
 
 struct RowContext<'a> {
-    root: &'a Path,
     run_dir: &'a Path,
     open: bool,
     stats: Option<&'a run_log::LoopRunStats>,
@@ -421,12 +419,14 @@ struct RowContext<'a> {
     now: Timestamp,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct CapacityWaitView {
     kinds: Vec<rimz::ids::AgentKind>,
     since: Timestamp,
     gives_up_at: Option<Timestamp>,
     reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hold: Option<rimz::ids::HoldKind>,
 }
 
 impl From<&launch_ledger::CapacityRecord> for CapacityWaitView {
@@ -436,14 +436,52 @@ impl From<&launch_ledger::CapacityRecord> for CapacityWaitView {
             since: record.first,
             gives_up_at: record.gives_up_at,
             reason: record.reason.clone(),
+            hold: record.hold,
         }
     }
 }
 
 impl CapacityWaitView {
     pub(super) fn text(&self, now: Timestamp) -> String {
-        rimz::theme::fmt::capacity_wait(&self.kinds, self.since, self.gives_up_at, now)
+        rimz::theme::fmt::held_start(self.since, self.gives_up_at, now)
     }
+}
+
+impl From<&Held> for CapacityWaitView {
+    fn from(held: &Held) -> Self {
+        let stamp = |ms| {
+            i64::try_from(ms)
+                .ok()
+                .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+        };
+        Self {
+            kinds: held.kinds.clone(),
+            since: stamp(held.since_ms).unwrap_or(Timestamp::UNIX_EPOCH),
+            gives_up_at: held.gives_up_ms.and_then(stamp),
+            reason: held
+                .reason
+                .clone()
+                .unwrap_or_else(|| "waiting for its turn".into()),
+            hold: held.hold,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CapacityStart {
+    checkout: PathBuf,
+    wait: CapacityWaitView,
+}
+
+fn capacity_wait_json<S: serde::Serializer>(
+    starts: &[CapacityStart],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    starts
+        .iter()
+        .min_by_key(|start| start.wait.since)
+        .map(|start| &start.wait)
+        .serialize(serializer)
 }
 
 enum LoadScope {
@@ -513,6 +551,10 @@ fn load(
         };
         let runtime = runtime_for_root(&root);
         let open = runtime.as_ref().is_some_and(fresh_sidebar_present);
+        let mut tickets: BTreeMap<String, Vec<Held>> = BTreeMap::new();
+        for (name, held) in schedule::throttle::room_held(&root) {
+            tickets.entry(name).or_default().push(held);
+        }
         let conditions = std::cell::OnceCell::new();
         let stamps = runtime
             .as_ref()
@@ -597,7 +639,6 @@ fn load(
                 timing,
                 running,
                 RowContext {
-                    root: &task_root,
                     run_dir: &run_dir,
                     open,
                     stats: stats.get(name),
@@ -620,35 +661,40 @@ fn load(
                 },
             );
             if let Some(checkouts) = capacity.get(name) {
-                row.capacity_count = checkouts.len();
-                row.capacity_wait = checkouts
-                    .values()
-                    .min_by_key(|wait| wait.first)
-                    .map(CapacityWaitView::from);
+                row.capacity
+                    .extend(checkouts.iter().map(|(checkout, wait)| CapacityStart {
+                        checkout: checkout.clone(),
+                        wait: CapacityWaitView::from(wait),
+                    }));
             }
-            for wait in workflows
+            for run in workflows
                 .iter()
                 .filter(|run| {
                     run.started_by(name)
                         && run.project_root == root
                         && run.state == rimz::store::workflow::RunState::Active
                 })
-                .filter_map(|run| run.wait.as_ref().filter(|wait| wait.outcome == "capacity"))
+                .filter(|run| {
+                    run.wait
+                        .as_ref()
+                        .is_some_and(|wait| wait.outcome == "capacity")
+                })
             {
-                row.capacity_count += 1;
-                if row
-                    .capacity_wait
-                    .as_ref()
-                    .is_none_or(|oldest| wait.first < oldest.since)
-                {
-                    row.capacity_wait = Some(CapacityWaitView {
-                        kinds: wait.kinds.clone(),
-                        since: wait.first,
-                        gives_up_at: wait.gives_up_at,
-                        reason: wait.detail.clone().unwrap_or_default(),
+                if let Some(wait) = &run.wait {
+                    row.capacity.push(CapacityStart {
+                        checkout: run.scope.path.clone(),
+                        wait: CapacityWaitView {
+                            kinds: wait.kinds.clone(),
+                            since: wait.first,
+                            gives_up_at: wait.gives_up_at,
+                            reason: wait.detail.clone().unwrap_or_default(),
+                            hold: wait.hold,
+                        },
                     });
                 }
             }
+            row.held = tickets.remove(name).unwrap_or_default();
+            row.refresh_attention(count, now);
             row.worktree_here = here
                 && workspace.is_some_and(|workspace| match task.entry().worktree.as_deref() {
                     Some(name) => {
@@ -671,7 +717,16 @@ fn load(
                 .collect::<Vec<_>>();
             for (name, holder) in locks.rowless(&names) {
                 let history = stats.get(&name);
-                tasks.push(TaskRow::rowless(name, holder, history));
+                let held = tickets.remove(&name).unwrap_or_default();
+                let mut row = TaskRow::rowless(name, holder, history);
+                row.held = held;
+                let (attention, reason) = attention(&row, 0, now);
+                if attention.is_some() {
+                    row.attention = attention;
+                    row.reason = reason;
+                    row.section = Section::NeedsYou;
+                }
+                tasks.push(row);
             }
         }
         let retired = stats
@@ -747,7 +802,6 @@ impl TaskRow {
         context: RowContext<'_>,
     ) -> Self {
         let RowContext {
-            root,
             run_dir,
             open,
             stats,
@@ -780,11 +834,6 @@ impl TaskRow {
             }),
             schedule::DeliveryOwner::SelfWait | schedule::DeliveryOwner::Loop(_) => None,
         };
-        let held = if running.is_some() {
-            schedule::throttle::held(name, root)
-        } else {
-            Vec::new()
-        };
         let mut row = Self {
             name: name.into(),
             section: Section::Routine,
@@ -814,15 +863,14 @@ impl TaskRow {
                 .and_then(|raw| raw.parse::<rimz::harness::budget::BudgetSpec>().ok())
                 .map(|budget| budget.cap_usd),
             workflow_runs: Vec::new(),
-            capacity_wait: None,
-            capacity_count: 0,
+            capacity: Vec::new(),
             head,
             continuation,
             reason: String::new(),
             task: Some(task.clone()),
             timing: Some(timing),
             running,
-            held,
+            held: Vec::new(),
             worktree_here: false,
             watcher_pid,
             launched_count: 0,
@@ -830,20 +878,29 @@ impl TaskRow {
             exit: None,
         };
         row.set_stats(stats);
-        let (attention, reason) = attention(&row, count, now);
-        row.attention = attention;
-        row.reason = reason;
-        row.section = if row.attention.is_some() {
+        row.refresh_attention(count, now);
+        row
+    }
+
+    fn refresh_attention(&mut self, count: u32, now: Timestamp) {
+        let (attention, reason) = attention(self, count, now);
+        self.attention = attention;
+        self.reason = reason;
+        self.section = if self.attention.is_some() {
             Section::NeedsYou
         } else {
-            match row.kind {
+            match self.kind {
                 TaskKind::Routine => Section::Routine,
                 TaskKind::WakeUp => Section::WakeUps,
-                TaskKind::OneOff if entry.stay && row.launch.is_some() => Section::Done,
+                TaskKind::OneOff
+                    if self.task.as_ref().is_some_and(|task| task.entry().stay)
+                        && self.launch.is_some() =>
+                {
+                    Section::Done
+                }
                 TaskKind::OneOff => Section::Waiting,
             }
         };
-        row
     }
 
     pub(super) fn subscription_last(
@@ -932,8 +989,7 @@ impl TaskRow {
             spend_today_usd: 0.0,
             budget_per_day_usd: None,
             workflow_runs: Vec::new(),
-            capacity_wait: None,
-            capacity_count: 0,
+            capacity: Vec::new(),
             head: "one-shot fired".into(),
             continuation: String::new(),
             reason: String::new(),
@@ -973,17 +1029,15 @@ impl TaskRow {
     }
 
     fn state_text(&self, now: Timestamp) -> String {
+        let count = self.self_clearing_count();
         if self.state == TaskState::Running {
-            return render::in_flight_text(self.running.flatten(), &self.held, now);
+            return render::in_flight_text(self.running.flatten(), &self.held, count, now);
         }
-        if self.state == TaskState::Live
-            && let Some(wait) = &self.capacity_wait
-        {
-            let mut text = wait.text(now);
-            if self.capacity_count > 1 {
-                text.push_str(&format!(" · +{} more", self.capacity_count - 1));
-            }
-            return text;
+        if count > 0 {
+            return format!("○ {count} held");
+        }
+        if self.attention == Some(Attention::Held) {
+            return self.reason.clone();
         }
         if self.state == TaskState::WaitsForRoom {
             return self.state.label().into();
@@ -1001,6 +1055,30 @@ impl TaskRow {
             | schedule::TaskTimingState::Watching { .. } => self.head.clone(),
             state => state.condition_label().unwrap_or_else(|| "—".into()),
         }
+    }
+
+    fn held_starts(&self) -> impl Iterator<Item = CapacityStart> + '_ {
+        self.capacity
+            .iter()
+            .cloned()
+            .chain(self.held.iter().map(|held| CapacityStart {
+                checkout: held.checkout.clone(),
+                wait: CapacityWaitView::from(held),
+            }))
+    }
+
+    fn self_clearing_count(&self) -> usize {
+        self.held_starts()
+            .filter(|start| !start.wait.hold.is_some_and(|kind| kind.needs_fix()))
+            .count()
+    }
+
+    fn running_agents(&self) -> bool {
+        self.state == TaskState::Running
+            && self.running.is_some()
+            && render::split_held(self.running.flatten(), &self.held)
+                .0
+                .is_none()
     }
 
     fn last_text(&self, now: Timestamp) -> String {
@@ -1303,6 +1381,13 @@ fn trigger_text(
 }
 
 fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, String) {
+    if let Some(start) = row
+        .held_starts()
+        .filter(|start| start.wait.hold.is_some_and(|kind| kind.needs_fix()))
+        .min_by_key(|start| start.wait.since)
+    {
+        return (Some(Attention::Held), start.wait.reason);
+    }
     let Some(task) = &row.task else {
         return (None, String::new());
     };
@@ -1332,15 +1417,6 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
         return (
             Some(Attention::Strikes),
             format!("disabled after {strikes} strikes"),
-        );
-    }
-    if render::split_held(row.running.flatten(), &row.held)
-        .0
-        .is_some()
-    {
-        return (
-            Some(Attention::Held),
-            render::in_flight_text(row.running.flatten(), &row.held, now),
         );
     }
     if row.running.is_none()

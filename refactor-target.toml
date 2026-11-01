@@ -3715,7 +3715,7 @@ upward-dependencies = ["agents"]
 # fmt::active_duration shares agent-time formatting between attribution and stats (+1).
 # Palette::model_tones shares readable provider-near model tones with renderers (+1).
 # fmt::age_label and fmt::rel_age give CLI reports and launcher entry facts one age vocabulary (+2).
-# fmt::capacity_wait shares the local-time phrase across loop, workflow and sidebar surfaces (+1).
+# fmt::held_start shares held ages and local give-up clocks across loop and workflow surfaces.
 # fmt::local_clock gives workflow and capacity instants one day-qualified clock (+1).
 surface-budget = 41
 
@@ -3726,8 +3726,8 @@ reason = "Workflow instants and capacity waits on every surface share one day-qu
 
 [[verdict]]
 kind = "item"
-key = "theme::fmt::capacity_wait"
-reason = "All capacity waits share one phrase, provider list and local-time vocabulary."
+key = "theme::fmt::held_start"
+reason = "Held starts share one age and day-qualified local give-up phrase without naming a provider as the cause."
 
 [[verdict]]
 kind = "item"

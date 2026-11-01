@@ -10344,7 +10344,7 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let show = loop {
         let show = loop_ok(&env, &["loop", "show", "queued"]);
-        if show.contains("waiting for capacity (claude)") {
+        if show.contains("held ") && show.contains("queued: 1 start ahead") {
             break show;
         }
         assert!(Instant::now() < deadline, "never shown as held: {show}");
@@ -10356,13 +10356,17 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     );
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
-        list.contains("waiting for capacity (claude)") && !list.contains("▸ running"),
+        list.contains("HELD  starts waiting for capacity")
+            && list.contains("○ 1 held")
+            && !list.contains("▸ running")
+            && !list.contains("NEEDS YOU"),
         "{list}"
     );
     let document: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
     assert_eq!(document["held"]["reason"], "queued: 1 start ahead");
     assert_eq!(document["held"]["position"], 2);
+    assert_eq!(document["held"]["hold"], "queue");
     assert_eq!(document["held"]["pid"], runner.id());
     assert!(document["held"]["since"].is_string(), "{document}");
     assert_eq!(document["running"]["pid"], runner.id());
@@ -10394,16 +10398,20 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
         show.contains(&format!(
             "pid {} · 1 held: waiting for its turn",
             runner.id()
-        )) && show.contains("waiting for capacity (claude)"),
+        )) && show.contains("held "),
         "{show}"
     );
     let list = loop_ok(&env, &["loop", "list"]);
-    assert!(list.contains("· 1 held: waiting for its turn"), "{list}");
+    assert!(
+        list.contains("○ 2 held") && list.contains("waiting for its turn"),
+        "{list}"
+    );
     let document: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
     assert_eq!(document["held"]["pid"], runner.id());
     assert_eq!(document["waiting"][0]["pid"], std::process::id());
     assert_eq!(document["waiting"][0]["checkout"], "/elsewhere/checkout-b");
+    assert!(document["waiting"][0].get("hold").is_none());
     // Another checkout's run of the task is active: it is not the held
     // runner's, which has no run yet.
     let paths = env.state_path_for(&env.project_root);
@@ -10420,8 +10428,7 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     rimz::harness::run::create(&paths, &active).unwrap();
     let show = loop_ok(&env, &["loop", "show", "queued"]);
     assert!(
-        show.contains("waiting for capacity (claude)")
-            && !show.contains(&active.run_id.to_string()),
+        show.contains("held ") && !show.contains(&active.run_id.to_string()),
         "{show}"
     );
     let document: serde_json::Value =
