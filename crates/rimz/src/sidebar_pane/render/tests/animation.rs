@@ -2,6 +2,70 @@ use super::*;
 use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot, workspace};
 
 #[test]
+fn compacting_non_actionable_rows_request_the_fast_grid() {
+    for status in [AgentStatus::Idle, AgentStatus::Success] {
+        let mut snapshot = agent_snapshot(&workspace());
+        let agent = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+        agent.status = status;
+        agent.compacting = true;
+        let view = selected_ui();
+        let mut pane_ui = UiState::default();
+        for refresh_ms in [16, 100, 1000] {
+            snapshot.theme.display.refresh_ms = refresh_ms;
+            pane_ui.theme(&snapshot.theme);
+            assert_eq!(
+                animation_cadence_for_test(&snapshot),
+                AnimationCadence::Fast,
+                "{status:?}"
+            );
+            assert_eq!(
+                animation_interval(&snapshot, &view, &pane_ui, 0, false),
+                Some(Duration::from_millis(u64::from(refresh_ms))),
+                "{status:?}, refresh {refresh_ms}"
+            );
+        }
+    }
+}
+
+#[test]
+fn compacting_actionable_rows_keep_the_status_head_and_cadence() {
+    for (status, glyph) in [(AgentStatus::Waiting, "?"), (AgentStatus::Failed, "!")] {
+        let mut snapshot = agent_snapshot(&workspace());
+        snapshot
+            .rows_mut()
+            .next()
+            .unwrap()
+            .as_agent_mut()
+            .unwrap()
+            .status = status;
+        let view = selected_ui();
+        let mut pane_ui = UiState::default();
+        let theme = pane_ui.theme(&snapshot.theme);
+        let interval = animation_interval(&snapshot, &view, &pane_ui, 0, false);
+        snapshot
+            .rows_mut()
+            .next()
+            .unwrap()
+            .as_agent_mut()
+            .unwrap()
+            .compacting = true;
+        assert_ne!(
+            animation_cadence_for_test(&snapshot),
+            AnimationCadence::Fast
+        );
+        assert_eq!(
+            animation_interval(&snapshot, &view, &pane_ui, 0, false),
+            interval
+        );
+        let screen = line_texts(&group_lines(&snapshot, &theme, 0)).join("\n");
+        assert!(
+            screen.contains(&format!("{glyph} claude")),
+            "{status:?}: {screen}"
+        );
+    }
+}
+
+#[test]
 fn wheel_ease_overrides_fast_pet_help_and_fade_grids() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);

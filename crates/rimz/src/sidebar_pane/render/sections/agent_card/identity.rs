@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::animation::shows_compacting_head;
 
 /// The agent handle's spans under the row's card emphasis, sharing the unread
 /// treatment with the lead glyph and description so the three move as one group:
@@ -57,7 +58,7 @@ pub(super) fn agent_lead_cell(
     attention: CardAttention,
     head_step: u64,
 ) -> Span<'static> {
-    let role = if !status.is_actionable() && row.as_agent().is_some_and(|agent| agent.compacting) {
+    let role = if shows_compacting_head(row) {
         AnimationRole::Compacting
     } else if status == AgentStatus::Running
         && row.as_agent().is_some_and(|agent| {

@@ -9,7 +9,7 @@ use super::compose::lead_unread;
 use crate::theme::{GlyphSet, Palette};
 
 use super::theme::{Theme, tone_color};
-use crate::store::snapshot::SidebarSnapshot;
+use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 
 const THINKING_FRAMES: &[&str] = &[
     "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",
@@ -35,7 +35,7 @@ const BREATH_CONFIG_AMPLITUDE: f32 = 0.12;
 const BLINK_PEAK_LIFT: f32 = 0.08;
 
 /// The fastest animation class currently visible in the snapshot. Fast motion
-/// changes every frame (working/thinking spinners, active process rows).
+/// changes every frame (working/thinking spinners, compacting heads, active process rows).
 /// Breath motion is the attention/result blink and the calm
 /// resting breathe, sampled near the base grid without paying the full spinner
 /// cadence for calm rooms.
@@ -46,9 +46,14 @@ pub(super) enum AnimationCadence {
     Fast,
 }
 
+pub(super) fn shows_compacting_head(row: &SidebarRow) -> bool {
+    row.as_agent()
+        .is_some_and(|agent| agent.compacting && !agent.status.is_actionable())
+}
+
 /// Whether any visible row is in an animated state — a running agent (working
-/// or pre-edit thinking), an active process spinning on real work (a build, a
-/// test, a `sudo` install), a row whose resolved status
+/// or pre-edit thinking), a compacting head, an active process spinning on real
+/// work (a build, a test, a `sudo` install), a row whose resolved status
 /// head moves, or the single lead unread `?`/`!` row whose configured effect
 /// flows. The serve loop uses this to choose the fast frame grid, the breath
 /// grid, or the slow data tick. A fully settled sidebar — quiet read idle/done
@@ -72,7 +77,7 @@ pub(super) fn animation_cadence(
         .flat_map(|group| group.rows.iter())
     {
         if row.is_agent() {
-            if row.status() == Some(AgentStatus::Running) {
+            if row.status() == Some(AgentStatus::Running) || shows_compacting_head(row) {
                 return AnimationCadence::Fast;
             }
             // The status head asks for the breath grid only when its resolved

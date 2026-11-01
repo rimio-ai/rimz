@@ -78,6 +78,30 @@ fn head_steps_hold_during_input_bursts_within_each_phase() {
 }
 
 #[test]
+fn compacting_wave_paints_every_frame_on_its_own_grid() {
+    let (mut rig, output, clock) = compacting_rig();
+    let refresh = animation_frame(rig.state.views.mirror());
+    rig.state.pane.dirty = true;
+    rig.state.paint_now(&mut rig.terminal, clock.now()).unwrap();
+    for glyph in ["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"] {
+        assert_eq!(painted_head(&output), glyph);
+        let (active, timeout) = rig.state.frame_timing();
+        assert!(
+            active,
+            "the drawn compacting head keeps the scheduler active"
+        );
+        assert_eq!(timeout, refresh, "compacting stays on the base grid");
+        clock.advance(timeout);
+        let (painted, _) = rig
+            .state
+            .advance(&mut super::scroll::queued([]), &mut rig.terminal)
+            .unwrap();
+        assert!(painted, "the scheduled frame paints without data or input");
+    }
+    assert_eq!(painted_head(&output), "▁", "the whole wave wraps");
+}
+
+#[test]
 fn tab_read_dwell_ignores_wall_steps() {
     let clock = LoopClock::play("2026-06-09T12:00:00Z".parse().unwrap());
     let own = PaneId::from_parts(MuxName::Zellij, "terminal_99");
