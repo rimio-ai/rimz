@@ -1174,6 +1174,7 @@ fn ask_defaults_report_user_and_repository_fixes() {
                 .contains("copilot config defaultPermissionMode manual")
         );
     }
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
     let repo = dir.path().join(".github/copilot");
     std::fs::create_dir_all(&repo).unwrap();
     let shared = repo.join("settings.json");
