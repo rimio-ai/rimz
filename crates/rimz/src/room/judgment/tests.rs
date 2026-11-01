@@ -305,17 +305,19 @@ fn hibernate_notice_only_for_explicit_unavailable_capability() {
         available: false,
         reason: Some("no swap".into()),
     };
-    assert_eq!(hibernate_notice(&config, &admission), None);
+    assert_eq!(hibernate_notice(&config, &admission, true), None);
     config.enabled = Some(false);
-    assert_eq!(hibernate_notice(&config, &admission), None);
+    assert_eq!(hibernate_notice(&config, &admission, true), None);
     config.enabled = Some(true);
     assert_eq!(
-        hibernate_notice(&config, &admission).as_deref(),
+        hibernate_notice(&config, &admission, true).as_deref(),
         Some("agents.hibernate.enabled is set but hibernation is skipped: no swap")
     );
+    admission.reason = Some("Linux cgroup freezing is unavailable".into());
+    assert_eq!(hibernate_notice(&config, &admission, false), None);
     admission.available = true;
     admission.reason = None;
-    assert_eq!(hibernate_notice(&config, &admission), None);
+    assert_eq!(hibernate_notice(&config, &admission, true), None);
 }
 
 #[test]

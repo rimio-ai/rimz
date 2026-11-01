@@ -2955,7 +2955,7 @@ fn ambient_isolation_uses_the_scoped_mount_pin_before_the_stamp() {
 }
 
 #[test]
-fn scoped_settings_fall_back_to_host_with_notices() {
+fn scoped_settings_fall_back_to_host_for_doctor() {
     use super::Isolation::{Host, Scoped};
     let mut config = MachineConfig::default();
     config.agents.isolation = Scoped;
@@ -2974,11 +2974,11 @@ fn scoped_settings_fall_back_to_host_with_notices() {
     assert_eq!(config.agents.isolation, Host);
     assert_eq!(config.agents.profiles.0["boxed"].isolation, Some(Host));
     assert_eq!(config.subagents.profiles.0["child"].isolation, Some(Host));
-    insta::assert_debug_snapshot!(notices.host_isolation_fallback, @r#"
+    insta::assert_debug_snapshot!(notices.scoped_fallbacks, @r#"
     [
-        "warning: agents.isolation = \"scoped\" needs Linux bubblewrap; running agents on the host instead",
-        "warning: profile `boxed` isolation = \"scoped\" needs Linux bubblewrap; running agents on the host instead",
-        "warning: profile `child` isolation = \"scoped\" needs Linux bubblewrap; running agents on the host instead",
+        "agents.isolation",
+        "profile boxed",
+        "profile child",
     ]
     "#);
 }
@@ -2990,7 +2990,7 @@ fn provider_sandbox_never_falls_back_off_linux() {
     let mut notices = ConfigNotices::default();
     config.fall_back_to_host_isolation(&mut notices);
     assert_eq!(config.agents.isolation, Isolation::Sandbox);
-    assert!(notices.host_isolation_fallback.is_empty());
+    assert!(notices.scoped_fallbacks.is_empty());
 }
 
 #[test]
@@ -3145,11 +3145,6 @@ fn hibernate_defaults_on() {
         assert_eq!(config.enabled(), enabled);
         assert_eq!(config.explicit(), explicit);
     }
-    let mut config = MachineConfig::default();
-    let mut notices = ConfigNotices::default();
-    config.disable_unavailable_hibernation(false, &mut notices);
-    assert!(!config.agents.hibernate.enabled());
-    assert!(notices.hibernate_unavailable.is_empty());
 }
 
 #[test]
@@ -3218,18 +3213,4 @@ fn hibernate_schedule_interpolates_and_caps_the_last_step() {
             if after == deep { 0 } else { u64::MAX / 2 }
         );
     }
-}
-
-#[test]
-fn hibernate_off_linux_warns_once_and_disables() {
-    let mut config: MachineConfig = toml::from_str("[agents.hibernate]\nenabled = true").unwrap();
-    let mut notices = ConfigNotices::default();
-    config.disable_unavailable_hibernation(true, &mut notices);
-    assert!(config.agents.hibernate.enabled());
-    assert!(notices.hibernate_unavailable.is_empty());
-    config.disable_unavailable_hibernation(false, &mut notices);
-    config.disable_unavailable_hibernation(false, &mut notices);
-    assert!(!config.agents.hibernate.enabled());
-    assert_eq!(notices.hibernate_unavailable.len(), 1);
-    assert!(notices.hibernate_unavailable[0].contains("agents.hibernate.enabled"));
 }

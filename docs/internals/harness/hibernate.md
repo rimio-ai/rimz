@@ -34,7 +34,7 @@ Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hiber
 
 `crates/rimz/src/config/agents.rs::HibernateConfig::schedule` validates the two durations at use. Each takes `s`, `m`, `h`, or `d`, may not exceed 24 hours, and `deep_after` may not be less than `after`. An invalid schedule makes admission unavailable with the error and its fix. RimZ never substitutes the default schedule. `rimz start` warns with the error, and `rimz doctor` shows it as an error row, the only error hibernation reports.
 
-Off Linux, the config loader (`crates/rimz/src/config.rs::MachineConfig::disable_unavailable_hibernation`) sets `enabled = false`. It adds a start warning only when `enabled = true` was explicit.
+Off Linux, the config keeps the configured `enabled` value. After validating the schedule, `crates/rimz/src/harness/hibernate.rs::inspect_with` reports `Linux cgroup freezing is unavailable` without probing capabilities, so admission is unavailable and nothing hibernates. Platform support produces no command warning or room warning record; only doctor's HIBERNATE section shows the configured value and the skip reason, as uncounted information.
 
 `crates/rimz/src/harness/hibernate.rs::inspect` probes the host's capabilities for `rimz doctor`. Each failed check is a warning row, and the first failure becomes the reason hibernation is skipped:
 
@@ -53,7 +53,7 @@ The `app.slice` path is `user.slice/user-<uid>.slice/user@<uid>.service/app.slic
 
 `crates/rimz/src/harness/hibernate.rs::admit` runs the schedule check and the capability probe, and returns an `Admission { available, reason }` without publishing it. `crates/rimz/src/room/birth.rs::RoomContext::birth` publishes it through `Admission::publish` to the runtime cache `live/hibernate/admission.json`, in normal and supervised rooms alike. It publishes twice: before session creation and resume seeding, and again after the health gate and any recovery reset. GC keeps this file regardless of age ([store.md](../store.md)).
 
-Launch planning, the producer, and the freeze helper each require `enabled` and an `available` cached verdict. An absent or unreadable cache reads as unavailable with the reason `admission unavailable; run rimz start`. A fix to the host, such as adding swap or delegating the memory controller, therefore takes effect at the next room birth or reattach, even though `rimz doctor` probes live and reports it at once. `rimz start` warns about an unavailable verdict only when `enabled = true` is explicit (`crates/rimz/src/room/judgment.rs::hibernate_notice`).
+Launch planning, the producer, and the freeze helper each require `enabled` and an `available` cached verdict. An absent or unreadable cache reads as unavailable with the reason `admission unavailable; run rimz start`. A fix to the host, such as adding swap or delegating the memory controller, therefore takes effect at the next room birth or reattach, even though `rimz doctor` probes live and reports it at once. On Linux, `rimz start` warns about an unavailable capability verdict only when `enabled = true` is explicit (`crates/rimz/src/room/judgment.rs::hibernate_notice`).
 
 ## Scopes
 
