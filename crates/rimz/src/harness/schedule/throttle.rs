@@ -521,6 +521,7 @@ fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<O
         text: String::new(),
         kinds: Vec::new(),
     };
+    let mut details = Vec::new();
     for group in &run.groups {
         let cached = {
             let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
@@ -560,7 +561,10 @@ fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<O
                     account: group.account.clone(),
                     at_ms,
                     outcome,
-                    detail: format!("{label}: {detail}"),
+                    detail: match outcome {
+                        CheckAnswer::Error => format!("capacity check failing: {label} {detail}"),
+                        _ => format!("{label}: {detail}"),
+                    },
                 };
                 let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
                 let mut verdicts = read_verdicts(host);
@@ -587,14 +591,17 @@ fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<O
         if verdict.outcome == CheckAnswer::Error {
             held.kind = HoldKind::CheckFailed;
         }
-        if !held.text.is_empty() {
-            held.text.push_str("; ");
-        }
-        held.text.push_str(&verdict.detail);
+        details.push((verdict.outcome != CheckAnswer::Error, verdict.detail));
         if !held.kinds.contains(&group.kind) {
             held.kinds.push(group.kind.clone());
         }
     }
+    details.sort_by_key(|(capacity, _)| *capacity);
+    held.text = details
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("; ");
     Ok((!held.kinds.is_empty()).then_some(held))
 }
 
@@ -607,18 +614,15 @@ fn check_answer(
         Err(error) => return (CheckAnswer::Error, error),
     };
     let detail = if checked.timed_out() {
-        format!(
-            "capacity check timed out after {}",
-            format_duration_compact(timeout)
-        )
+        format!("timed out after {}", format_duration_compact(timeout))
     } else if checked.interrupted() {
-        "capacity check interrupted".to_owned()
+        "interrupted".to_owned()
     } else {
         match checked.code() {
             Some(0) => return (CheckAnswer::Room, "capacity".to_owned()),
-            Some(75) => return (CheckAnswer::NoRoom, "no capacity (exit 75)".to_owned()),
-            Some(code) => format!("capacity check exit {code}"),
-            None => "capacity check terminated by signal".to_owned(),
+            Some(75) => return (CheckAnswer::NoRoom, "no capacity (your check)".to_owned()),
+            Some(code) => format!("exit {code}"),
+            None => "terminated by signal".to_owned(),
         }
     };
     let detail = if checked.stderr_line().is_empty() {
@@ -934,21 +938,19 @@ fn pass(
         Some(_) => queue[position].1.clone(),
         None => Ticket::new(host, run, now),
     };
-    let mut hold = match queue_hold(&queue, position, &ticket) {
-        Some(hold) => Some(hold),
-        None => match blocked {
+    let mut hold = queue_hold(&queue, position, &ticket);
+    if hold.is_none() {
+        hold = match blocked {
             Some((at, hold)) if now.saturating_sub(*at) < SAMPLE_EVERY_MS => Some(hold.clone()),
             _ => {
                 let sampled = limit_hold(host, config, run)?;
                 *blocked = sampled.clone().map(|hold| (now, hold));
                 sampled
             }
-        },
-    };
-    if let Some(hold) = &mut hold
-        && hold.kinds.is_empty()
-    {
-        hold.kinds = run.kinds();
+        };
+        if let Some(hold) = &mut hold {
+            hold.kinds = run.kinds();
+        }
     }
     let state = match &hold {
         Some(hold) => TicketState::Waiting {
@@ -961,6 +963,13 @@ fn pass(
     {
         ticket.state = state;
         write_ticket(mine, &ticket)?;
+    }
+    // The ticket keeps a propagated hold's empty kinds, so no disjoint start steps
+    // aside for it; the caller's record still names the providers this run waits for.
+    if let Some(hold) = &mut hold
+        && hold.kinds.is_empty()
+    {
+        hold.kinds = run.kinds();
     }
     Ok(hold)
 }
@@ -1005,16 +1014,25 @@ fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Op
     let mut capacity_only = true;
     let mut kind = HoldKind::Capacity;
     let mut kinds = Vec::new();
+    let mut text = None;
+    let mut needs_fix = None;
     for index in (0..position).filter(|&index| blocks_me(index)) {
         ahead += 1;
+        if let TicketState::Waiting { reason: Some(hold) } = &queue[index].1.state
+            && hold.kind.needs_fix()
+        {
+            needs_fix.get_or_insert(hold);
+        }
         match &queue[index].1.state {
             TicketState::Waiting { reason: Some(hold) }
                 if matches!(hold.kind, HoldKind::Capacity | HoldKind::CheckFailed)
                     && !hold.kinds.is_empty() =>
             {
-                if hold.kind == HoldKind::CheckFailed {
+                if hold.kind == HoldKind::CheckFailed && kind != HoldKind::CheckFailed {
                     kind = HoldKind::CheckFailed;
+                    text = Some(hold.text.clone());
                 }
+                text.get_or_insert_with(|| hold.text.clone());
                 kinds.extend(hold.kinds.iter().cloned());
             }
             _ => capacity_only = false,
@@ -1027,13 +1045,23 @@ fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Op
     if turn_held || !capacity_only {
         kind = HoldKind::Queue;
         kinds.clear();
+        text = None;
+    }
+    if let Some(hold) = needs_fix {
+        kind = hold.kind;
+        text = Some(hold.text.clone());
     }
     kinds.sort();
     kinds.dedup();
     Some(Hold {
         kind,
         kinds,
-        text: format!("{starts} start{} ahead", if starts == 1 { "" } else { "s" }),
+        text: text.unwrap_or_else(|| {
+            format!(
+                "queued: {starts} start{} ahead",
+                if starts == 1 { "" } else { "s" }
+            )
+        }),
     })
 }
 
@@ -1150,23 +1178,25 @@ fn name_counted(names: &mut Vec<String>, agents: &[AgentState], counted: &[&Agen
     );
 }
 
-fn cap_hold(
-    kind: HoldKind,
-    label: &str,
-    cap: u32,
-    count: usize,
-    mut names: Vec<String>,
-) -> Option<Hold> {
+fn cap_hold(kind: HoldKind, cap: u32, count: usize, mut names: Vec<String>) -> Option<Hold> {
     if count < cap as usize {
         return None;
     }
     if count > names.len() {
         names.push(format!("+{}", count - names.len()));
     }
+    let prefix = if kind == HoldKind::TaskCap {
+        "task at its cap: "
+    } else {
+        ""
+    };
     Some(Hold {
         kind,
         kinds: Vec::new(),
-        text: format!("{label} {count} >= {cap} ({})", names.join(", ")),
+        text: format!(
+            "{prefix}{count} of {cap} agents active ({})",
+            names.join(", ")
+        ),
     })
 }
 
@@ -1195,13 +1225,7 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
         let counted = task_working(&agents, &runs, &workflows, &run.task, now);
         let mut names = Vec::new();
         name_counted(&mut names, &agents, &counted);
-        if let Some(hold) = cap_hold(
-            HoldKind::TaskCap,
-            "task's active agents",
-            cap,
-            counted.len(),
-            names,
-        ) {
+        if let Some(hold) = cap_hold(HoldKind::TaskCap, cap, counted.len(), names) {
             return Ok(Some(hold));
         }
     }
@@ -1222,7 +1246,7 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
             name_counted(&mut names, &agents, &counted);
             count += counted.len();
         }
-        if let Some(hold) = cap_hold(HoldKind::MachineCap, "active agents", cap, count, names) {
+        if let Some(hold) = cap_hold(HoldKind::MachineCap, cap, count, names) {
             return Ok(Some(hold));
         }
     }
@@ -1241,7 +1265,7 @@ fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Opt
             return Ok(Some(Hold {
                 kind: HoldKind::Pressure,
                 kinds: Vec::new(),
-                text: format!("{} pressure {worst:.0}% >= {limit}%", resource.name()),
+                text: format!("{} pressure {worst:.0}% ≥ {limit}%", resource.name()),
             }));
         }
     }
@@ -1455,7 +1479,7 @@ fn readings_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Vec<(&'st
         });
         if let Ok(counted) = counted {
             rows.push((
-                "task's active agents",
+                "task active agents",
                 limited(counted.to_string(), Some(format!("max {cap}"))),
             ));
         }

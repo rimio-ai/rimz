@@ -3316,7 +3316,7 @@ fn a_held_resident_fire_is_skipped_at_capacity_wait_before_room_birth() {
     assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
     assert_eq!(
         done.record.error.as_deref(),
-        Some("gave up waiting for capacity after 3s; cpu pressure 41% >= 25%")
+        Some("gave up waiting for capacity after 3s; cpu pressure 41% ≥ 25%")
     );
     assert!(matches!(done.notice, TaskFireNotice::Gate { .. }));
     assert_eq!(host.tickets(), 0);
@@ -3555,7 +3555,7 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
     assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
     assert_eq!(
         done.record.error.as_deref(),
-        Some("gave up waiting for capacity after 3s; 1 start ahead")
+        Some("gave up waiting for capacity after 3s; queued: 1 start ahead")
     );
     assert_eq!(done.record.check.expect("the fired check").code, Some(0));
     assert_eq!(host.elapsed_ms(), 3_000);
