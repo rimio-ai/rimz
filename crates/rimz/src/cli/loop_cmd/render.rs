@@ -713,7 +713,11 @@ fn write_worktrees(
     let now = view.now_zoned.timestamp();
     for row in rendered {
         let state = if let Some(wait) = row.capacity {
-            list::CapacityWaitView::from(wait).text(now)
+            format!(
+                "{} · {}",
+                list::CapacityWaitView::from(wait).text(now),
+                wait.reason
+            )
         } else if let Some((since, _)) = &row.blocked {
             format!("ready · blocked {}", ui::rel_age(*since, now))
         } else {
@@ -2416,14 +2420,7 @@ pub(super) fn running_text(holder: Option<RunLockInfo>, now: Timestamp) -> Strin
 
 /// A run waiting for its turn in the start throttle, in place of running.
 fn held_run_text(held: &Held, now: Timestamp) -> String {
-    let stamp = |ms| {
-        i64::try_from(ms)
-            .ok()
-            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
-    };
-    let since = stamp(held.since_ms).unwrap_or(Timestamp::UNIX_EPOCH);
-    let text =
-        rimz::theme::fmt::capacity_wait(&held.kinds, since, held.gives_up_ms.and_then(stamp), now);
+    let text = list::CapacityWaitView::from(held).text(now);
     match &held.reason {
         Some(reason) => format!("{text} · {reason}"),
         None => text,
@@ -2454,29 +2451,41 @@ pub(super) fn others_held_text<'a>(mut others: impl Iterator<Item = &'a Held>) -
     ))
 }
 
-/// A run in flight as `list` and `watch` print it: held in place of running
-/// only when the run is itself waiting for its turn, with the task's other
-/// waiting runs beside it.
-pub(super) fn in_flight_text(holder: Option<RunLockInfo>, held: &[Held], now: Timestamp) -> String {
-    let (own, others) = split_held(holder, held);
-    let state = match own {
-        Some(own) => held_run_text(own, now),
-        None => running_text(holder, now),
-    };
-    match others_held_text(others) {
-        Some(others) => format!("{state} · {others}"),
-        None => state,
+/// List/watch NEXT: count self-clearing starts beside a genuinely running
+/// checkout, or in place of running when the holder itself is held.
+pub(super) fn in_flight_text(
+    holder: Option<RunLockInfo>,
+    held: &[Held],
+    count: usize,
+    now: Timestamp,
+) -> String {
+    if let Some(own) = split_held(holder, held).0 {
+        return if count > 0 {
+            format!("○ {count} held")
+        } else {
+            held_run_text(own, now)
+        };
+    }
+    let running = running_text(holder, now);
+    if count > 0 {
+        format!("{running} · ○ {count} held")
+    } else {
+        running
     }
 }
 
 fn held_json(held: &Held) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "pid": held.pid,
         "checkout": held.checkout,
         "since": Timestamp::from_millisecond(i64::try_from(held.since_ms).unwrap_or(i64::MAX)).ok(),
         "reason": held.reason,
         "position": held.position,
-    })
+    });
+    if let Some(hold) = held.hold {
+        value["hold"] = serde_json::json!(hold);
+    }
+    value
 }
 
 /// The running state with the holder's pid and the run's id, for `show` and `logs`.
@@ -2922,7 +2931,11 @@ fn write_runs_table(
             );
         }
         if show_note {
-            cells.push(ui::cell(row.note(now).as_deref().unwrap_or("-")).dash());
+            let mut note = ui::cell(row.note(now).as_deref().unwrap_or("-")).dash();
+            if record.result == LoopRunResult::ThrottleSkipped {
+                note = note.fg(ui::palette::warn());
+            }
+            cells.push(note);
         }
         table.row(cells);
     }

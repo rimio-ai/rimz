@@ -23,30 +23,14 @@ pub fn local_clock(at: Timestamp, now: Timestamp) -> String {
     at.strftime(format).to_string()
 }
 
-/// `waiting for capacity (claude) since 15:02, gives up at 21:02` in local
-/// time, with the day when not today; a wait without a give-up instant omits that clause.
-pub fn capacity_wait(
-    kinds: &[crate::ids::AgentKind],
-    since: Timestamp,
-    gives_up_at: Option<Timestamp>,
-    now: Timestamp,
-) -> String {
-    let kinds = kinds
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let providers = if kinds.is_empty() {
-        String::new()
-    } else {
-        format!(" ({kinds})")
-    };
+/// `held 4m, gives up 21:02`, with a day-qualified local give-up clock.
+pub fn held_start(since: Timestamp, gives_up_at: Option<Timestamp>, now: Timestamp) -> String {
     let mut text = format!(
-        "waiting for capacity{providers} since {}",
-        local_clock(since, now)
+        "held {}",
+        age_label(now.duration_since(since).as_secs().max(0) as u64)
     );
     if let Some(until) = gives_up_at {
-        text.push_str(&format!(", gives up at {}", local_clock(until, now)));
+        text.push_str(&format!(", gives up {}", local_clock(until, now)));
     }
     text
 }
@@ -441,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_wait_phrase_has_one_vocabulary_for_all_renderers() {
+    fn held_start_phrase_has_one_vocabulary_for_all_renderers() {
         let local = jiff::tz::TimeZone::system();
         let since = jiff::civil::date(2026, 6, 1)
             .at(15, 2, 0, 0)
@@ -452,38 +436,18 @@ mod tests {
         let clock = |at: Timestamp| at.to_zoned(local.clone()).strftime("%H:%M").to_string();
         assert_eq!(
             [
-                capacity_wait(
-                    &[crate::ids::AgentKind::new_unchecked("claude")],
-                    since,
-                    Some(until),
-                    since,
-                ),
-                capacity_wait(
-                    &[
-                        crate::ids::AgentKind::new_unchecked("claude"),
-                        crate::ids::AgentKind::new_unchecked("codex")
-                    ],
-                    since,
-                    None,
-                    since,
-                ),
+                held_start(since, Some(until), since,),
+                held_start(since, None, since,),
             ],
             [
-                format!(
-                    "waiting for capacity (claude) since {}, gives up at {}",
-                    clock(since),
-                    clock(until)
-                ),
-                format!(
-                    "waiting for capacity (claude, codex) since {}",
-                    clock(since)
-                ),
+                format!("held 0s, gives up {}", clock(until)),
+                "held 0s".to_owned(),
             ]
         );
     }
 
     #[test]
-    fn capacity_wait_disambiguates_both_bounds_on_other_days() {
+    fn held_start_disambiguates_a_give_up_on_another_day() {
         let zone = jiff::tz::TimeZone::system();
         let now = jiff::civil::date(2026, 10, 30)
             .at(12, 56, 0, 0)
@@ -492,13 +456,8 @@ mod tests {
         let since = now.checked_sub(jiff::Span::new().days(1)).unwrap();
         let until = now.checked_add(jiff::Span::new().days(7)).unwrap();
         assert_eq!(
-            capacity_wait(
-                &[],
-                since.timestamp(),
-                Some(until.timestamp()),
-                now.timestamp()
-            ),
-            "waiting for capacity since Thu 12:56, gives up at 2026-11-06 12:56"
+            held_start(since.timestamp(), Some(until.timestamp()), now.timestamp()),
+            "held 1d, gives up 2026-11-06 12:56"
         );
     }
 }

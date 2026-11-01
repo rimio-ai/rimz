@@ -151,14 +151,36 @@ fn capacity_workflow_wait_reaches_the_human_loop_list() {
     )
     .unwrap();
     let record = pending(&room, Some("nightly"));
-    let value = advance(&room, &record);
-    assert_capacity_phrase(&room, &["loop", "list"], &value["record"]["wait"], None);
+    let mut value = advance(&room, &record);
+    let text = success(room.command(&["loop", "list"]).output().unwrap());
+    assert!(
+        text.contains("HELD  starts waiting for capacity")
+            && text.contains("○ 1 held")
+            && text.contains(value["record"]["wait"]["detail"].as_str().unwrap())
+            && !text.contains("NEEDS YOU"),
+        "{text}"
+    );
+    let listed: Value = serde_json::from_str(&success(
+        room.command(&["loop", "list", "--json"]).output().unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(
+        listed["rooms"][0]["tasks"][0]["capacity_wait"]["hold"],
+        "capacity"
+    );
+    value["record"]["wait"]["hold"] = json!("check_failed");
+    value["record"]["wait"]["detail"] = json!("capacity check failing: codex exit 2");
+    save(&room, &value["record"]);
+    let text = success(room.command(&["loop", "list"]).output().unwrap());
+    assert!(
+        text.contains("NEEDS YOU")
+            && text.contains("capacity check failing: codex exit 2")
+            && text.contains("→ rimz doctor"),
+        "{text}"
+    );
 }
 
-/// Runs `args` and asserts its output holds the wait's capacity phrase. The phrase names
-/// the day when the wait is not today, and the binary reads its own clock, so the
-/// expected phrase is built from a clock read on each side of the command: a run that
-/// crosses local midnight matches one of the two.
+/// Bracket the binary's clock for the held age and day-qualified give-up clock.
 fn assert_capacity_phrase(
     room: &Room,
     args: &[&str],
@@ -166,8 +188,7 @@ fn assert_capacity_phrase(
     gives_up_at: Option<jiff::Timestamp>,
 ) {
     let phrase = |now| {
-        rimz::theme::fmt::capacity_wait(
-            &[rimz::ids::AgentKind::new_unchecked("codex")],
+        rimz::theme::fmt::held_start(
             wait["first"].as_str().unwrap().parse().unwrap(),
             gives_up_at,
             now,

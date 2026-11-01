@@ -36,6 +36,7 @@ pub(super) fn write(
         }
         heading(out, room, model.now, timer)?;
         needs_you(out, room, model.now, width)?;
+        held_rows(out, room, model.now, width)?;
         routine_rows(out, room, model.now, width)?;
         waiting_rows(out, room, model.now, width)?;
         done_rows(out, room, model.now, all, width)?;
@@ -138,7 +139,7 @@ fn needs_you(
         .map(|row| {
             let mut cells = name_cells(row, worktree);
             cells.extend([row.head.clone(), row.reason.clone()]);
-            let continuation = if row.capacity_wait.is_some() {
+            let continuation = if !row.capacity.is_empty() {
                 [row.continuation.as_str(), &row.state_text(now)]
                     .into_iter()
                     .filter(|text| !text.is_empty())
@@ -222,11 +223,86 @@ fn needs_you(
                     .join(" · ")
             }
             Attention::Blocked => format!("{rimz} trust grant"),
-            Attention::Held => continue,
+            Attention::Held => format!("{rimz} doctor"),
         };
         writeln!(out, "  → {command}")?;
     }
     Ok(())
+}
+
+fn held_rows(
+    out: &mut impl Write,
+    room: &Room,
+    now: Timestamp,
+    width: Option<usize>,
+) -> Result<()> {
+    let mut starts: Vec<_> = room
+        .tasks
+        .iter()
+        .flat_map(|row| row.held_starts().map(move |start| (row, start)))
+        .filter(|(_, start)| !start.wait.hold.is_some_and(|kind| kind.needs_fix()))
+        .collect();
+    if starts.is_empty() {
+        return Ok(());
+    }
+    starts.sort_by(|(a, sa), (b, sb)| a.name.cmp(&b.name).then(sa.wait.since.cmp(&sb.wait.since)));
+    section_heading(
+        out,
+        "HELD",
+        "starts waiting for capacity, retrying on their own",
+        width,
+    )?;
+    let worktree = starts
+        .iter()
+        .any(|(row, start)| row.worktree.is_some() || start.checkout != room.root);
+    let bounded = starts
+        .iter()
+        .any(|(_, start)| start.wait.gives_up_at.is_some());
+    let mut headers = columns(&["REASON", "HELD"], worktree);
+    if bounded {
+        headers.push("GIVES UP");
+    }
+    let mut table = ui::Table::new(headers).indent(2);
+    if let Some(width) = width {
+        table = table.max_width(width);
+    }
+    for (row, start) in starts {
+        let mut cells = vec![ui::cell(&row.name)];
+        if worktree {
+            cells.push(ui::cell(held_worktree(row, &start)));
+        }
+        cells.extend([
+            ui::cell(start.wait.reason),
+            ui::cell(ui::age_label(
+                now.duration_since(start.wait.since).as_secs().max(0) as u64,
+            )),
+        ]);
+        if bounded {
+            cells.push(ui::cell(
+                start
+                    .wait
+                    .gives_up_at
+                    .map(|at| rimz::theme::fmt::local_clock(at, now))
+                    .unwrap_or_else(|| "—".into()),
+            ));
+        }
+        table.row(cells);
+    }
+    table.render(out)?;
+    Ok(())
+}
+
+/// A fan-out start names its own checkout; any other start launches into the
+/// task's worktree, which a held start has not created yet.
+fn held_worktree(row: &TaskRow, start: &CapacityStart) -> String {
+    let fan_out = row
+        .task
+        .as_ref()
+        .is_some_and(|task| task.entry().each_worktree);
+    if fan_out || row.worktree.is_none() {
+        return checkout_name(&start.checkout);
+    }
+    worktree_text(row)
 }
 
 fn clipped_summary((text, age): (String, String), width: Option<usize>) -> String {
@@ -306,7 +382,9 @@ fn routine_rows(
             let mut cells = name_cells(row, worktree);
             cells.extend([
                 row.head.clone(),
-                if row.capacity_wait.is_some() {
+                if row.state != TaskState::Running
+                    && (!row.capacity.is_empty() || !row.held.is_empty())
+                {
                     row.state_text(now)
                 } else {
                     row.next_at
@@ -363,7 +441,8 @@ fn waiting_rows(
                     trigger.push_str(&format!(" · {} not read", count.not_read));
                 }
             }
-            if row.capacity_wait.is_some() {
+            if row.state != TaskState::Running && (!row.capacity.is_empty() || !row.held.is_empty())
+            {
                 trigger.push_str(&format!(" · {}", row.state_text(now)));
             }
             let mut cells = name_cells(row, worktree);

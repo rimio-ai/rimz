@@ -67,31 +67,50 @@ fn capacity_waits_reach_list_and_show_as_text_and_json() {
         &json!({"owed": {
             env.project_root.to_str().unwrap(): {
                 "since": since, "first": since, "last": since, "count": 2,
-                "kinds": ["claude"], "reason": "claude: no capacity (your check)", "gave_up": false
+                "kinds": ["claude"], "reason": "claude: no capacity (your check)", "hold": "capacity", "gave_up": false
             }
         }}),
     )
     .unwrap();
-    let phrase = rimz::theme::fmt::capacity_wait(
-        &[rimz::ids::AgentKind::new_unchecked("claude")],
-        since,
-        None,
-        jiff::Timestamp::now(),
-    );
+    let phrase = rimz::theme::fmt::held_start(since, None, jiff::Timestamp::now());
     let listed: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
     let task = &listed["rooms"][0]["tasks"][0];
     assert_eq!(
         task["capacity_wait"],
-        json!({"kinds": ["claude"], "since": since, "gives_up_at": null, "reason": "claude: no capacity (your check)"})
+        json!({"kinds": ["claude"], "since": since, "gives_up_at": null, "reason": "claude: no capacity (your check)", "hold": "capacity"})
     );
     let shown: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "owed", "--json"])).unwrap();
     assert_eq!(shown["capacity_wait"], task["capacity_wait"]);
-    for args in [vec!["loop", "list"], vec!["loop", "show", "owed"]] {
-        let output = loop_ok(&env, &args);
-        assert!(output.contains(&phrase), "{output}");
-    }
+    let output = loop_ok(&env, &["loop", "show", "owed"]);
+    assert!(output.contains(&phrase), "{output}");
+    let output = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        output.contains("HELD  starts waiting for capacity")
+            && output.contains("○ 1 held")
+            && !output.contains("NEEDS YOU"),
+        "{output}"
+    );
+    let mut waits: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let original = waits.clone();
+    waits["owed"][env.project_root.to_str().unwrap()]["hold"] = json!("disk");
+    waits["owed"][env.project_root.to_str().unwrap()]["reason"] =
+        json!("free disk low at checkout");
+    rimz::disk::atomic::write_temp_then_rename(&path, &waits).unwrap();
+    let needs_fix = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        needs_fix.contains("NEEDS YOU")
+            && needs_fix.contains("free disk low at checkout")
+            && needs_fix.contains("→ rimz doctor")
+            && !needs_fix.contains("HELD  starts"),
+        "{needs_fix}"
+    );
+    let listed: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    assert_eq!(listed["rooms"][0]["tasks"][0]["attention"], "held");
+    rimz::disk::atomic::write_temp_then_rename(&path, &original).unwrap();
     let now = Timestamp::now();
     write_loop_arming(
         &env,
@@ -210,7 +229,7 @@ fn capacity_other_checkouts_stay_visible_while_one_checkout_runs() {
     assert_eq!(waits, [json!(waiting)], "{shown:#}");
     let text = loop_ok(&env, &["loop", "show", "owed"]);
     assert!(
-        text.contains("waiting for capacity (claude) since"),
+        text.contains("held ") && text.contains("no capacity"),
         "{text}"
     );
 }

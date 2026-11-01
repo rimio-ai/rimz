@@ -129,15 +129,17 @@ pub(super) fn write(
 }
 
 fn held(row: &TaskRow) -> bool {
-    matches!(
-        row.state,
-        TaskState::Off | TaskState::NotEnabled | TaskState::Paused | TaskState::WaitsForRoom
-    ) || row.timing.as_ref().is_some_and(|timing| {
-        matches!(
-            timing.state(),
-            schedule::TaskTimingState::Disabled(_) | schedule::TaskTimingState::Paused(_)
+    (!row.running_agents() && row.self_clearing_count() > 0)
+        || matches!(
+            row.state,
+            TaskState::Off | TaskState::NotEnabled | TaskState::Paused | TaskState::WaitsForRoom
         )
-    })
+        || row.timing.as_ref().is_some_and(|timing| {
+            matches!(
+                timing.state(),
+                schedule::TaskTimingState::Disabled(_) | schedule::TaskTimingState::Paused(_)
+            )
+        })
 }
 
 fn blocked(row: &TaskRow) -> bool {
@@ -153,7 +155,7 @@ fn blocked(row: &TaskRow) -> bool {
 fn rank_key(row: &TaskRow) -> (u8, Option<Timestamp>, &str) {
     let (rank, next) = if row.section == Section::NeedsYou {
         (0, None)
-    } else if row.running.is_some() {
+    } else if row.running_agents() {
         (1, None)
     } else if held(row) {
         (5, None)
@@ -169,7 +171,7 @@ fn rank_key(row: &TaskRow) -> (u8, Option<Timestamp>, &str) {
 
 fn next_timestamp(row: &TaskRow) -> Option<Timestamp> {
     let timing = row.timing.as_ref()?;
-    if row.running.is_some() {
+    if row.running_agents() {
         return timing.scheduled_next_timestamp();
     }
     if held(row) || blocked(row) {
@@ -179,7 +181,7 @@ fn next_timestamp(row: &TaskRow) -> Option<Timestamp> {
 }
 
 fn next_style(row: &TaskRow) -> anstyle::Style {
-    if row.running.is_some() {
+    if row.running_agents() {
         return ui::palette::cool();
     }
     if held(row) || blocked(row) {
@@ -380,18 +382,22 @@ fn layout<'a>(tasks: &[&'a TaskRow], now: Timestamp, cols: usize) -> (Columns, V
         .saturating_sub(2 + columns.name + last + 4)
         .max(next_floor);
     for row in &mut rows {
+        let next_names_reason =
+            !row.task.reason.is_empty() && row.next[0].contains(&row.task.reason);
         row.next = text::wrap_trigger(&row.next[0], next_budget);
-        if matches!(
-            row.task.attention,
+        let reason_line = match row.task.attention {
             Some(
                 Attention::CheckoutGone
-                    | Attention::Strikes
-                    | Attention::Blocked
-                    | Attention::Invalid
-                    | Attention::Parked
-                    | Attention::Lost
-            )
-        ) {
+                | Attention::Strikes
+                | Attention::Blocked
+                | Attention::Invalid
+                | Attention::Parked
+                | Attention::Lost,
+            ) => true,
+            Some(Attention::Held) => !next_names_reason,
+            Some(Attention::Failing) | None => false,
+        };
+        if reason_line {
             row.reason = text::wrap_trigger(
                 &format!("✗ {}", ui::one_line(&row.task.reason)),
                 cols.saturating_sub(columns.next_start()).max(1),

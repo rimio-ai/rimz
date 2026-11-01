@@ -77,7 +77,7 @@ Adjacent check answers with the same node, origin, outcome, and condition case i
 
 ### The waiting line
 
-A run at a wait carries a shared phrase without the node; capacity waits include `since`. A single-run `show` puts the phrase in its state headline, or below a `with you` headline. Every instant, including capacity bounds, uses local `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that.
+A run at a wait carries a shared phrase without the node; capacity waits carry a held age. A single-run `show` puts the phrase in its state headline, or below a `with you` headline. Every instant, including capacity bounds, uses local `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that.
 
 ```console
 $ rimz workflow list
@@ -93,7 +93,7 @@ ACTIVE
 | `window <term>` | An agent step or judge whose provider `window` is closed, with the failing term and its reading. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot evict it yet. |
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
-| `waiting for capacity (<kinds>)` | A loop-started agent step is held by the start throttle. Its give-up time is absent for `forever`; reason and count follow ` · `. |
+| `held <age>[, gives up <clock>]` | A loop-started agent step is held by the start throttle. Its give-up time is absent for `forever`; reason and count follow ` · `. |
 | `×N` | How many advances found it still waiting. `show --history` omits this count from the waiting phrase only when exactly one history row states the wait with the same count. `workflow list` and the loop commands always retain it. |
 | `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal matching that check's subscription clears it. For a `for` hold it is when the hold completes, and subscribed signals and the minute tick re-sample the case before then. |
 
