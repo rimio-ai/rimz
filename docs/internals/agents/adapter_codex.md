@@ -428,7 +428,7 @@ The `rimz agents refresh-usage` helper runs for a metered Codex login whether or
 
 The spec's plan-label table maps raw `prolite`, `pro`, and `promax` to `ChatGPT Pro 100`, `ChatGPT Pro 200`, and `ChatGPT Pro 500`, matching [Codex 0.163.0's subscription labels](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/subscription.rs#L10-L37). Other values keep the `ChatGPT` prefix with a title-case fallback. The mapping is display only, and the raw plan strings stay unchanged.
 
-Normalization clamps and rounds percentages and orders windows short to long. When an authoritative reading carries timed windows but no 5-hour row, it adds an empty lifted 5-hour row so the dashboard still shows the expected pair. Credits map as follows:
+Normalization clamps and rounds percentages and orders windows short to long. When an authoritative reading carries timed windows but no 5-hour row, it adds an empty lifted 5-hour row so account tables and loop conditions read the window as not enforced. Credits map as follows:
 
 | Wire field | `ExtraCredits` |
 | --- | --- |

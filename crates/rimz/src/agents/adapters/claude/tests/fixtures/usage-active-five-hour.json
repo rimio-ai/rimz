@@ -1,0 +1,26 @@
+{
+  "five_hour": {
+    "utilization": 55.0,
+    "resets_at": "2026-11-01T08:59:59.812043+00:00"
+  },
+  "seven_day": {
+    "utilization": 56.0,
+    "resets_at": "2026-11-05T20:59:59.812071+00:00"
+  },
+  "limits": [
+    {
+      "kind": "session",
+      "group": "session",
+      "percent": 55,
+      "resets_at": "2026-11-01T08:59:59.812043+00:00",
+      "scope": null
+    },
+    {
+      "kind": "weekly_all",
+      "group": "weekly",
+      "percent": 56,
+      "resets_at": "2026-11-05T20:59:59.812071+00:00",
+      "scope": null
+    }
+  ]
+}

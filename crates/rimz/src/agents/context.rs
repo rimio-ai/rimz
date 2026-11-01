@@ -1134,9 +1134,9 @@ pub struct RateLimitWindow {
     /// Where the reading came from, deciding how far the fusion trusts a drop.
     #[serde(default, skip_serializing_if = "WindowSource::is_best_effort")]
     pub source: WindowSource,
-    /// An authoritative full reading omitted this previously reported duration,
-    /// so the provider is not currently enforcing the limit. The next reading
-    /// that reports the duration replaces this marker.
+    /// The provider is not enforcing this duration, inferred from an omission
+    /// in an authoritative reading or a response shape without this window.
+    /// The next reading that reports the duration replaces this marker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub lifted: bool,
     /// The clock runs on a fixed schedule whether or not anything is used, as

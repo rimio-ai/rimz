@@ -731,6 +731,113 @@ fn usage_response_maps_windows_and_extra_usage() {
 }
 
 #[test]
+fn usage_response_lifts_a_null_or_absent_five_hour_before_weekly_windows() {
+    let mut body: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/usage-no-five-hour.json")).unwrap();
+    for absent in [false, true] {
+        if absent {
+            body.as_object_mut().unwrap().remove("five_hour");
+        }
+        let windows = parse_usage_response(&body.to_string())
+            .unwrap()
+            .rate_limits
+            .unwrap()
+            .windows;
+        assert_eq!(windows.len(), 3, "lifted 5h, 7d, and model sub-cap");
+        assert_eq!(
+            serde_json::to_value(&windows[0]).unwrap(),
+            serde_json::json!({
+                "duration_mins": 300, "source": "authoritative", "lifted": true
+            })
+        );
+        assert_eq!(windows[1].duration_mins, Some(10_080));
+        assert_eq!(windows[1].used_percentage, Some(99));
+        assert_eq!(windows[2].scope.as_ref().unwrap().id, "model:fable");
+        assert_eq!(windows[2].used_percentage, Some(1));
+    }
+}
+
+#[test]
+fn usage_response_keeps_present_five_hour_objects_distinct_from_lifted() {
+    for (utilization, expected) in [
+        (serde_json::json!(0), Some(0)),
+        (serde_json::Value::Null, None),
+    ] {
+        let body = serde_json::json!({
+            "five_hour": {"utilization": utilization, "resets_at": null},
+            "seven_day": {"utilization": 40, "resets_at": null}
+        });
+        let windows = parse_usage_response(&body.to_string())
+            .unwrap()
+            .rate_limits
+            .unwrap()
+            .windows;
+        let five = windows
+            .iter()
+            .find(|window| window.duration_mins == Some(300));
+        assert_eq!(five.and_then(|window| window.used_percentage), expected);
+        assert_eq!(five.is_some(), expected.is_some());
+        assert!(windows.iter().all(|window| !window.lifted));
+    }
+}
+
+#[test]
+fn usage_response_needs_a_usable_seven_day_to_lift_five_hour() {
+    for seven in [
+        None,
+        Some(serde_json::Value::Null),
+        Some(serde_json::json!({
+            "utilization": null, "resets_at": null
+        })),
+    ] {
+        let mut body = serde_json::json!({
+            "five_hour": null,
+            "limits": [{
+                "kind": "weekly_scoped", "percent": 40,
+                "scope": {"model": {"display_name": "Fable"}}
+            }]
+        });
+        if let Some(seven) = seven {
+            body["seven_day"] = seven;
+        }
+        let windows = parse_usage_response(&body.to_string())
+            .unwrap()
+            .rate_limits
+            .unwrap()
+            .windows;
+        assert_eq!(windows.len(), 1, "only the model sub-cap remains");
+        assert!(windows[0].scope.is_some());
+        assert!(!windows[0].lifted);
+        body["limits"] = serde_json::json!([]);
+        assert!(
+            parse_usage_response(&body.to_string())
+                .unwrap()
+                .rate_limits
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn usage_response_active_session_fixture_keeps_real_windows() {
+    let windows = parse_usage_response(include_str!("fixtures/usage-active-five-hour.json"))
+        .unwrap()
+        .rate_limits
+        .unwrap()
+        .windows;
+    assert_eq!(windows.len(), 2, "session rows do not duplicate five_hour");
+    assert_eq!(windows[0].duration_mins, Some(300));
+    assert_eq!(windows[0].used_percentage, Some(55));
+    assert_eq!(windows[1].duration_mins, Some(10_080));
+    assert_eq!(windows[1].used_percentage, Some(56));
+    assert!(
+        windows
+            .iter()
+            .all(|window| !window.lifted && window.source.is_authoritative())
+    );
+}
+
+#[test]
 fn usage_response_tolerates_verified_full_payload_shape() {
     let usage = parse_usage_response(
         r#"{
