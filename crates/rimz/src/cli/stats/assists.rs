@@ -57,7 +57,7 @@ pub(super) struct AssistRollup {
     pub(super) spend_rebuilds: usize,
     pub(super) tmp_evictions: usize,
     pub(super) reclaimed_bytes: u64,
-    /// Attempts that did not take effect, keyed by the count they would have joined.
+    /// Attempts that were held or failed, keyed by the count they would have joined.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) held: BTreeMap<&'static str, usize>,
 }
@@ -393,6 +393,13 @@ pub(super) enum AssistEvent {
     },
 }
 
+#[derive(PartialEq, Eq)]
+enum AssistOutcome {
+    TookEffect,
+    Held,
+    Unchanged,
+}
+
 impl AssistStats {
     pub(super) fn load(state_root: &Path, window: Window, now: Timestamp, timezone: &str) -> Self {
         let since = window.assist_since(now, timezone);
@@ -421,9 +428,13 @@ impl AssistStats {
                     .entry(format!("{kind}/{agent_id}"))
                     .or_insert_with(|| hold.clone());
             }
-            if !event.took_effect() {
-                *rollup.held.entry(event.count_key()).or_default() += 1;
-                continue;
+            match event.outcome() {
+                AssistOutcome::TookEffect => {}
+                AssistOutcome::Held => {
+                    *rollup.held.entry(event.count_key()).or_default() += 1;
+                    continue;
+                }
+                AssistOutcome::Unchanged => continue,
             }
             match event {
                 AssistEvent::SpendRebuild { .. } => rollup.spend_rebuilds += 1,
@@ -506,7 +517,7 @@ impl AssistStats {
         let mut events: Vec<_> = self
             .events
             .iter()
-            .filter(|event| all || event.took_effect())
+            .filter(|event| all || event.outcome() == AssistOutcome::TookEffect)
             .collect();
         let shown = if limit == 0 {
             events.len()
@@ -520,8 +531,8 @@ impl AssistStats {
 }
 
 impl AssistEvent {
-    fn took_effect(&self) -> bool {
-        match self {
+    fn outcome(&self) -> AssistOutcome {
+        let effective = match self {
             // An undelivered notice is parked in the parent's queue; only an error means it failed.
             Self::StallNotice { error, .. } => error.is_none(),
             Self::Continue { delivered, .. }
@@ -530,12 +541,17 @@ impl AssistEvent {
             | Self::SoftCompact { delivered, .. }
             | Self::FlipCompact { delivered, .. } => *delivered,
             Self::IdleStop { stopped, .. } => *stopped,
-            // A deepening step reclaims memory from an agent already frozen.
             Self::Hibernate {
                 frozen,
                 reclaimed_bytes,
                 ..
-            } => *frozen || reclaimed_bytes.is_some(),
+            } => {
+                return match (frozen, reclaimed_bytes) {
+                    (true, _) | (false, Some(1..)) => AssistOutcome::TookEffect,
+                    (false, Some(0)) => AssistOutcome::Unchanged,
+                    (false, None) => AssistOutcome::Held,
+                };
+            }
             Self::LaunchRetry { relaunched, .. } => *relaunched,
             // A stamp write fails after the reset, so an error does not undo it.
             Self::Redeem { windows_reset, .. } => *windows_reset,
@@ -557,6 +573,11 @@ impl AssistEvent {
             | Self::TierFallback { .. }
             | Self::Compact { .. }
             | Self::Resume { .. } => true,
+        };
+        if effective {
+            AssistOutcome::TookEffect
+        } else {
+            AssistOutcome::Held
         }
     }
 
@@ -1341,7 +1362,7 @@ impl AssistEvent {
         }
     }
 
-    fn repeat_key(&self) -> Option<(bool, RepeatKey<'_>)> {
+    fn repeat_key(&self) -> Option<(AssistOutcome, RepeatKey<'_>)> {
         let key = match self {
             Self::Hibernate { frozen: true, .. } => RepeatKey::Hibernated,
             Self::Hibernate {
@@ -1401,7 +1422,7 @@ impl AssistEvent {
             | Self::TmpEvict { .. }
             | Self::Gc { .. } => RepeatKey::Plain,
         };
-        Some((self.took_effect(), key))
+        Some((self.outcome(), key))
     }
 }
 

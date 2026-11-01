@@ -238,7 +238,7 @@ fn deepenings(stats: &AssistStats) -> usize {
                 event,
                 AssistEvent::Hibernate {
                     frozen: false,
-                    reclaimed_bytes: Some(_),
+                    reclaimed_bytes: Some(1..),
                     ..
                 }
             )
@@ -246,14 +246,23 @@ fn deepenings(stats: &AssistStats) -> usize {
         .count()
 }
 
-/// Per kind, the effect count plus the held count equals the events of that kind.
+/// Per kind, effects plus held attempts plus unchanged steps account for every event.
 fn assert_effect_counts(stats: &AssistStats) {
     let rollup = serde_json::to_value(&stats.rollup).unwrap();
-    let mut events = BTreeMap::<&str, usize>::new();
+    let mut events = BTreeMap::<&str, (usize, usize)>::new();
     for event in &stats.events {
-        *events.entry(event.count_key()).or_default() += 1;
+        let (total, unchanged) = events.entry(event.count_key()).or_default();
+        *total += 1;
+        *unchanged += usize::from(matches!(
+            event,
+            AssistEvent::Hibernate {
+                frozen: false,
+                reclaimed_bytes: Some(0),
+                ..
+            }
+        ));
     }
-    for (key, total) in events {
+    for (&key, &(total, unchanged)) in &events {
         let mut counted = usize::try_from(rollup[key].as_u64().unwrap()).unwrap();
         if key == "redeems" {
             counted -= stats.rollup.manual_redeems;
@@ -262,10 +271,17 @@ fn assert_effect_counts(stats: &AssistStats) {
             counted += deepenings(stats);
         }
         let held = stats.rollup.held.get(key).copied().unwrap_or(0);
-        assert_eq!(counted + held, total, "{key}");
+        assert_eq!(counted + held + unchanged, total, "{key}");
     }
     let held = stats.rollup.held.values().sum::<usize>();
-    assert_eq!(stats.timeline(0, false).0.len() + held, stats.events.len());
+    let unchanged = events
+        .values()
+        .map(|(_, unchanged)| unchanged)
+        .sum::<usize>();
+    assert_eq!(
+        stats.timeline(0, false).0.len() + held + unchanged,
+        stats.events.len()
+    );
     assert_eq!(stats.timeline(0, true).0.len(), stats.events.len());
 }
 
@@ -595,6 +611,44 @@ fn hibernation_stats_sum_reclaim_and_keep_the_last_hold_per_agent() {
 }
 
 #[test]
+fn hibernation_zero_reclaim_deepening_is_neither_effective_nor_held() {
+    let records = [
+        (true, Some(0), None),
+        (false, Some(2048), None),
+        (false, Some(0), None),
+        (false, None, Some("ForeignProcess")),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (frozen, reclaimed_bytes, hold))| AssistRecord {
+        at: Timestamp::from_second(index as i64).unwrap(),
+        assist: Assist::Hibernate {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "session".into(),
+            label: "@coder".into(),
+            idle_secs: 600,
+            frozen,
+            reclaimed_bytes,
+            hold: hold.map(str::to_owned),
+            error: None,
+        },
+    })
+    .collect();
+    let stats = AssistStats::from_records("all", records);
+    assert_eq!(stats.rollup.hibernations, 1);
+    assert_eq!(stats.rollup.hibernate_reclaimed_bytes, 2048);
+    assert_eq!(stats.rollup.held["hibernations"], 1);
+    let (events, older) = stats.timeline(0, false);
+    assert_eq!(
+        events.iter().map(|event| event.at()).collect::<Vec<_>>(),
+        [Timestamp::from_second(1).unwrap(), Timestamp::UNIX_EPOCH]
+    );
+    assert_eq!(older, 0);
+    assert_eq!(stats.timeline(0, true).0.len(), 4);
+    assert_effect_counts(&stats);
+}
+
+#[test]
 fn keepalive_stats_count_deliveries_and_preserve_failures() {
     let records = [(true, false), (false, false), (true, true)]
         .into_iter()
@@ -851,6 +905,75 @@ mod repeats {
         assert_eq!((all.len(), effective.len()), (3, 1));
         assert!(all.iter().all(|line| !line.contains("×")), "{all:?}");
         assert!(effective[0].contains("×2 over 2h"), "{effective:?}");
+    }
+
+    fn deepening_record(reclaimed_bytes: u64) -> serde_json::Value {
+        serde_json::json!({
+            "assist": "hibernate", "kind": "claude", "agent_id": "a", "label": "@a",
+            "idle_secs": 3600, "frozen": false, "reclaimed_bytes": reclaimed_bytes
+        })
+    }
+
+    #[test]
+    fn timeline_zero_reclaim_deepenings_only_appear_with_all() {
+        let stats = repeat_stats(vec![
+            deepening_record(1024),
+            deepening_record(0),
+            deepening_record(2048),
+        ]);
+        let (lines, older) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert!(
+            lines.len() == 1 && lines[0].contains("hibernation deepened, 3 KB reclaimed · ×2"),
+            "{lines:?}"
+        );
+        assert_eq!(older, 0);
+        let (lines, older) = timeline_lines(&stats, 0, true, &jiff::tz::TimeZone::UTC);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[1].contains("hibernation deepened, 0 B reclaimed"),
+            "{lines:?}"
+        );
+        assert!(lines.iter().all(|line| !line.contains('×')), "{lines:?}");
+        assert_eq!(older, 0);
+        assert_effect_counts(&stats);
+
+        let stats = repeat_stats(vec![deepening_record(0), deepening_record(0)]);
+        let (lines, _) = timeline_lines(&stats, 0, true, &jiff::tz::TimeZone::UTC);
+        assert!(
+            lines.len() == 1 && lines[0].contains("hibernation deepened, 0 B reclaimed · ×2"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn timeline_json_omits_zero_reclaim_deepenings_unless_all() {
+        let stats = repeat_stats(vec![
+            deepening_record(1024),
+            deepening_record(0),
+            deepening_record(2048),
+        ]);
+        let as_of = Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC);
+        for all in [false, true] {
+            let json = crate::cli::stats::json::assists_value(&stats, 0, all, &as_of);
+            let bytes = json["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|event| event["reclaimed_bytes"].as_u64().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                bytes,
+                if all {
+                    vec![1024, 0, 2048]
+                } else {
+                    vec![1024, 2048]
+                }
+            );
+            assert_eq!(json["older"], 0);
+            let page = crate::cli::stats::json::assists_value(&stats, 1, all, &as_of);
+            assert_eq!(page["events"].as_array().unwrap().len(), 1);
+            assert_eq!(page["older"], if all { 2 } else { 1 });
+        }
     }
 
     #[test]
@@ -1166,6 +1289,12 @@ mod repeats {
                 1,
             ),
             (frozen, "frozen", serde_json::json!(false), 3),
+            (
+                deepening_record(1024),
+                "reclaimed_bytes",
+                serde_json::json!(0),
+                3,
+            ),
             (route.clone(), "to", serde_json::json!("review"), 3),
             (
                 route,

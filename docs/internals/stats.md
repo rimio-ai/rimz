@@ -199,18 +199,18 @@ The final hint is `←/→ range · t/w/m/y jump · r reload · q quit`. `--hold
 
 Every array is present even when empty, and every `share` is a fleet-dollar share. With an explicit view, `--json` emits `{as_of, window, agents|teams|subagents, roles_since?, effort_since?}` with only the selected array and the same admission (`json::roles_value`).
 
-`--assists` prints the timeline instead (`assists::render_full`), and `--window` conflicts with it. It reads both retained log generations with no date cutoff, filters through `AssistEvent::took_effect`, and folds repeated outcomes within each subject's history of an assist kind before limiting the newest-first list to 50 lines (`-n 0` shows all retained, `--all` adds the attempts that did not take effect). Each repeated line carries `×N over span` (`over span` omitted under one second); `older` counts records outside the shown lines. `--assists --json` keeps one event per record and applies its limit to records, emitting `{as_of, rollup, events, older}`, where `as_of` is the read time in `MachineConfig::time_zone`, the zone spend history uses, and the rollup covers every retained record, not just the page.
+`--assists` prints the timeline instead (`assists::render_full`), and `--window` conflicts with it. It reads both retained log generations with no date cutoff, keeps the effects classified by `AssistEvent::outcome`, and folds repeated outcomes within each subject's history of an assist kind before limiting the newest-first list to 50 lines (`-n 0` shows all retained, `--all` adds held attempts and steps that changed nothing). Each repeated line carries `×N over span` (`over span` omitted under one second); `older` counts records outside the shown lines. `--assists --json` keeps one event per record with the same outcome filter and applies its limit to records, emitting `{as_of, rollup, events, older}`, where `as_of` is the read time in `MachineConfig::time_zone`, the zone spend history uses, and the rollup covers every retained record, not just the page.
 
 ### The assist rollup
 
-The rollup counts only assists that took effect. In the held dashboard and in `--json`, the records start where the selected window starts (`Window::assist_since` at the time of the read), with Today at local midnight in the publication's timezone. One retained-log read supplies all four dashboard suffixes per repaint. `AssistEvent::took_effect` is the one predicate for the rollup and the default timeline:
+The rollup counts only assists that took effect. In the held dashboard and in `--json`, the records start where the selected window starts (`Window::assist_since` at the time of the read), with Today at local midnight in the publication's timezone. One retained-log read supplies all four dashboard suffixes per repaint. The rollup, default timeline, and repeat key share `AssistEvent::outcome`, which decides whether each record took effect, was held (including failed), or changed nothing:
 
 | Assist | Takes effect when |
 | --- | --- |
 | stall notice | it has no error once queued for the parent, including a notice later withdrawn because its child run ended before delivery |
 | auto-continue, cache keepalive, soft compaction, idle compaction, flip compaction | it was delivered |
 | idle stop | the agent's pane closed, even with a cleanup error |
-| hibernation | it froze, or a deepening step reclaimed bytes |
+| hibernation | it froze, or a deepening step reclaimed more than 0 bytes |
 | launch retry | the relaunch spawned |
 | auto-redeem | a window reset, since a stamp write that fails afterwards does not undo it |
 | GC and temp eviction | it has no top-level error, so a partial sweep counts |
@@ -227,10 +227,10 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 
 `soft_compact` counts the wrap-up steer under `soft_compacts` (`Soft compact:`), only when delivered. A miss remains in `held.soft_compacts` and the forensic timeline. Its later compact-first command counts separately under `compacts` (`Auto-compact:`); a continue record adds no assist.
 
-An attempt that did not take effect increments `held` under the count it would have joined (`AssistEvent::count_key`), and the timeline header prints it beside that count: `Auto-compact: N (M held)`. Four projections are easy to get wrong:
+A held or failed attempt increments `held` under the count it would have joined (`AssistEvent::count_key`), and the timeline header prints it beside that count: `Auto-compact: N (M held)`. A deepening step that reclaimed 0 bytes is neither counted nor held. Four projections are easy to get wrong:
 
 - A temp eviction increments `tmp_evictions`, never `sweeps`, and the timeline header's `Temp evictions:` row is separate from `Auto-gc:` and carries its held attempts. Its bytes join `reclaimed_bytes`, so the `Auto-gc:` byte detail is the combined GC and temp-eviction total. The timeline keeps the handle, workspace, allocated reclaimed bytes, optional latest owner end, measured free bytes, and floor. Temp-unit bytes count hardlinks once per tree, measured free space can lag removal, and snapshots can retain the blocks. Ordinary GC bytes are apparent sizes.
-- Only a freeze increments `hibernations`. A deepening step takes effect without one, and `hibernate_reclaimed_bytes` sums the per-step deltas of both, kept apart from GC bytes. Hibernate hold reasons enter `hibernate_holds` whether or not the record took effect.
+- Only a freeze increments `hibernations`, even when it reclaimed 0 bytes. A deepening step takes effect only when it reclaimed more than 0 bytes, and `hibernate_reclaimed_bytes` sums the per-step deltas of both, kept apart from GC bytes. Hibernate hold reasons enter `hibernate_holds` whatever the record's outcome. Under `--all`, zero-byte deepenings fold among themselves, never into a step that reclaimed bytes.
 - `redeems` includes manual redemptions, which also count in `manual_redeems`. The `Auto-redeem:` row subtracts them, and no row prints manual redemptions, so their held attempts (`held.manual_redeems`) reach JSON only.
 - The five workflow counts print as one `Workflow:` row, and the molts print as `Molts:`.
 
