@@ -650,6 +650,11 @@ fn check_answer(
 pub(in crate::harness) struct Hold {
     pub(in crate::harness) kind: HoldKind,
     pub(in crate::harness) text: String,
+    /// The providers the hold waits on, read by two consumers. On a ticket they decide
+    /// step-aside in `queue_hold`, so a propagated needs-a-fix hold keeps them empty there.
+    /// On the hold `pass` returns they are the providers of the starts ahead on the
+    /// provider-only path, else the run's own, and the run record saves them as
+    /// `capacity_wait.kinds`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::harness) kinds: Vec<AgentKind>,
 }
