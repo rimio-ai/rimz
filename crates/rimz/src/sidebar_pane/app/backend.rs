@@ -1,6 +1,13 @@
 //! Terminal backend for one sidebar pane, bound to an owned output fd rather than the process terminal, so the room host can paint a pane whose tty it does not hold.
 //!
-//! Drawing goes through crossterm's encoder; geometry is read from the fd, and the cursor query is answered from the last position set, because crossterm's own answers round-trip the controlling tty a detached host lacks. A pane the mux has not laid out yet reports `0x0`: such a pane is unsized, and everything written to it is dropped until a read finds it sized. Output that is no terminal at all (a pipe, a file) has no geometry to wait for and is written as it comes. `begin_frame` holds everything written until `end_frame`, which ships the held frame in one write, bracketed as a synchronized update when the caller asks.
+//! Drawing goes through crossterm's encoder; geometry is read from the fd, and the cursor query
+//! is answered from the last position set, because crossterm's own answers round-trip the
+//! controlling tty a detached host lacks. A pane the mux has not laid out yet reports `0x0`:
+//! such a pane is unsized, and everything written to it is dropped until a read finds it sized.
+//! Output that is no terminal at all (a pipe, a file) has no geometry to wait for and is written
+//! as it comes. `begin_frame` holds writes until `take_frame`. A non-empty frame is one
+//! synchronized update when it wrote graphics, cleared the whole pane, or changed at least half
+//! of its touched rows' drawn width. Sparse animation stays bare; there is no size floor.
 
 use std::cell::Cell;
 use std::io::{self, BufWriter, Write};
@@ -15,12 +22,20 @@ use crate::wakeup::heartbeat::SidebarSize;
 
 pub(in crate::sidebar_pane) struct PaneBackend {
     output: Box<dyn Write + Send>,
-    frame: Option<Vec<u8>>,
+    frame: Option<PendingFrame>,
     geometry: Geometry,
     sized: Cell<bool>,
     cursor: Position,
     #[cfg(any(test, feature = "testkit"))]
     captured: Option<ratatui::buffer::Buffer>,
+}
+
+#[derive(Default)]
+struct PendingFrame {
+    bytes: Vec<u8>,
+    changed_cells: u64,
+    touched_rows: u64,
+    cleared: bool,
 }
 
 enum Geometry {
@@ -67,21 +82,24 @@ impl PaneBackend {
     }
 
     pub(super) fn begin_frame(&mut self) {
-        self.frame = Some(Vec::new());
+        self.frame = Some(PendingFrame::default());
     }
 
     /// Detach the composed frame without writing, so its owner can release view state before output.
-    pub(super) fn take_frame(&mut self, bracket: bool) -> BufferedFrame {
-        let bytes = self.frame.take().unwrap_or_default();
-        let bracket = bracket && !bytes.is_empty();
+    pub(super) fn take_frame(&mut self, bracket: bool, width: u16) -> BufferedFrame {
+        let frame = self.frame.take().unwrap_or_default();
+        let dense = frame.touched_rows != 0
+            && 2 * frame.changed_cells >= frame.touched_rows * u64::from(width);
+        let bytes = frame.bytes;
+        let bracket = !bytes.is_empty() && (bracket || dense || frame.cleared);
         #[cfg(any(test, feature = "testkit"))]
         let bracket = bracket && self.captured.is_none();
         BufferedFrame { bytes, bracket }
     }
 
     #[cfg(test)]
-    pub(super) fn end_frame(&mut self, bracket: bool) -> io::Result<()> {
-        self.take_frame(bracket).write(self)
+    pub(super) fn end_frame(&mut self, bracket: bool, width: u16) -> io::Result<()> {
+        self.take_frame(bracket, width).write(self)
     }
 
     /// Paint the pane behind `fd`, the pane's own terminal output.
@@ -209,7 +227,7 @@ impl Write for PaneBackend {
             return Ok(buf.len());
         }
         if let Some(frame) = &mut self.frame {
-            return frame.write(buf);
+            return frame.bytes.write(buf);
         }
         self.output.write(buf)
     }
@@ -239,7 +257,22 @@ impl Backend for PaneBackend {
             }
             return Ok(());
         }
-        CrosstermBackend::new(self).draw(content)
+        // Ratatui supplies one row-major diff per frame.
+        let mut changed_cells = 0;
+        let mut touched_rows = 0;
+        let mut last_row = None;
+        let result = CrosstermBackend::new(&mut *self).draw(content.inspect(|(_, y, _)| {
+            changed_cells += 1;
+            if last_row != Some(*y) {
+                touched_rows += 1;
+                last_row = Some(*y);
+            }
+        }));
+        if let Some(frame) = &mut self.frame {
+            frame.changed_cells += changed_cells;
+            frame.touched_rows += touched_rows;
+        }
+        result
     }
 
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
@@ -283,6 +316,11 @@ impl Backend for PaneBackend {
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
         if !self.sized.get() {
             return Ok(());
+        }
+        if clear_type == ClearType::All
+            && let Some(frame) = &mut self.frame
+        {
+            frame.cleared = true;
         }
         CrosstermBackend::new(self).clear_region(clear_type)
     }

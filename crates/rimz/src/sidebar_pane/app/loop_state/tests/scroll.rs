@@ -1818,8 +1818,8 @@ fn dispatch(rig: &mut Rig, inbox: &mut WakeupInbox) {
 }
 
 fn paints(output: &FrameOutput) -> usize {
-    // Cell-only frames have no sync bracket. The backend flushes its output
-    // once at frame completion, even when the ratatui diff is empty.
+    // The backend flushes once at frame completion, bracketed or not,
+    // even when the ratatui diff is empty.
     output.1.load(std::sync::atomic::Ordering::SeqCst)
 }
 
@@ -2770,6 +2770,54 @@ fn wheel_run_eases_then_releases_the_animation_grid() {
     }
     paint_at(&mut rig, started + 2100);
     assert!(!rig.frame_active());
+}
+
+#[test]
+fn wheel_glide_brackets_moving_frames_but_not_still_animation() {
+    use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC};
+
+    let (mut rig, output) = scroll_rig();
+    play_clock(&mut rig);
+    {
+        let mut view = rig.view();
+        for row in
+            Arc::make_mut(&mut Arc::make_mut(&mut view.ctx().current.worktree_groups)[0].rows)
+        {
+            let agent = row.as_agent_mut().unwrap();
+            agent.status = crate::agents::AgentStatus::Running;
+            agent.phase = crate::agents::TurnPhase::Acting;
+            agent.prompt = Some("inspect auth".to_owned());
+        }
+    }
+    rig.state.pane.dirty = true;
+    paint_at(&mut rig, 0);
+    let mut inbox = queued([Wakeup::Scroll { down: true }]);
+    dispatch(&mut rig, &mut inbox);
+    let started = rig.view().ui().frame_ms;
+    let mut previous = visible(&rig);
+    let mut moving = Vec::new();
+    let mut frames = Vec::new();
+    for elapsed in (16..=160).step_by(16) {
+        output.0.lock().unwrap().clear();
+        paint_at(&mut rig, started + elapsed);
+        let offset = visible(&rig);
+        if offset != previous {
+            let bytes = output.0.lock().unwrap();
+            moving.push((
+                offset,
+                bytes.starts_with(BEGIN_SYNC) && bytes.ends_with(END_SYNC),
+            ));
+            frames.push(String::from_utf8_lossy(&bytes).escape_debug().to_string());
+        }
+        previous = offset;
+    }
+    assert_eq!(moving, vec![(1, true), (2, true), (3, true)], "{frames:?}");
+    assert!(!rig.view().ui().scroll_ease.in_flight());
+    output.0.lock().unwrap().clear();
+    paint_at(&mut rig, started + 500);
+    let bytes = output.0.lock().unwrap();
+    assert!(!bytes.is_empty(), "the animation tick must paint");
+    assert!(!bytes.windows(BEGIN_SYNC.len()).any(|b| b == BEGIN_SYNC));
 }
 
 #[test]

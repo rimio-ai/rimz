@@ -39,7 +39,7 @@ A pane paints a pet in two calls on `FramePainter` in [`app/paint.rs`](../../../
 5. `PetAssets::view` polls the loader, starts a load if the pet or its preparation changed, picks the track, samples a sprite index, and returns the `PetView`.
 6. When pets are off or the tier is not `Pixel`, `PixelPainter::release_process_payload` forgets what the pane transmitted, so the next composition deletes its resident images.
 
-`compose_frame` stages the frame in `PaneBackend` in a fixed order. It transmits any pet sprite the frame needs, then lets ratatui write its cell diff, then transmits the context meter's images, whose rasters are known only after that draw. A sprite therefore always precedes the first cell that references its image id. The frame carries a synchronized-output bracket only when it wrote kitty graphics ([Synchronized output](#synchronized-output)).
+`compose_frame` stages the frame in `PaneBackend` in a fixed order. It transmits any pet sprite the frame needs, then lets ratatui write its cell diff, then transmits the context meter's images, whose rasters are known only after that draw. A sprite therefore always precedes the first cell that references its image id. Graphics participate in the renderer's [synchronized-output policy](./sidebar.md#synchronized-output).
 
 `PetView::frame_interval` tells the pane when to wake next. While an asset loads it is the animation grid (`sidebar::timing::animation_frame`). While a body animates it is the active track's frame duration. It is `None` when the pet is static or has no body. `render::animation_interval` takes it whenever the pet is on the dashboard, and takes the faster money grid instead while a cost figure is rolling.
 
@@ -224,11 +224,7 @@ Inside tmux, one image's complete chunked transmit and its placement share one p
 
 Graphics traffic is kept to these sends because some macOS terminals re-evaluate the mouse pointer shape on every image update. `glyphs = "sextant"` removes the pet's share, and `[theme.display] pixel = "off"` removes the meter's too.
 
-### Synchronized output
-
-A frame that writes kitty graphics is one synchronized update (DECSET 2026): `BufferedFrame::write` brackets it, and only it. Mode 2026 does not nest, so the slot sweep, in-frame deletes, and meter transmits add no bracket of their own. Teardown (`FramePainter::clear`) brackets its resident deletes and writes nothing when none remain.
-
-A cell-only frame, including animation over images already resident, carries no bracket. tmux 3.7b and later repaints the whole pane at the end of every synchronized update instead of forwarding only the changed cells ([tmux reference](../../externals/mux-adapter/tmux-reference.md#releases-and-version-floors)), so a bracket on every frame would multiply the client's bytes. tmux forwards the bracket to the terminal because room setup writes `terminal-features[240]` `*:sync` (`mux/tmux/options.rs::tmux_terminal_features_commands`, applied by `apply_room_options`). The client-byte budget and its live guard are in [performance](../performance.md#live-client-byte-guard).
+Mode 2026 does not nest: under the renderer's [synchronized-output policy](./sidebar.md#synchronized-output), the slot sweep, in-frame deletes, and meter transmits add no bracket of their own. Teardown (`FramePainter::clear`) brackets its resident deletes and writes nothing when none remain.
 
 ### The context meter
 

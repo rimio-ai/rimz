@@ -239,7 +239,11 @@ impl FramePainter {
             bracket |= !graphics.is_empty();
             terminal.backend_mut().write_all(&graphics)
         })();
-        (body_result, terminal.backend_mut().take_frame(bracket))
+        let width = terminal.get_frame().area().width;
+        (
+            body_result,
+            terminal.backend_mut().take_frame(bracket, width),
+        )
     }
 
     pub(super) fn ensure_pixel_transmitted<W: Write>(
