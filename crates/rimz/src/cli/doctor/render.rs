@@ -220,6 +220,18 @@ fn render_sandbox(
     section(w, tally, "SANDBOX")?;
     let mut kv = KeyVals::new().indent(2);
     kv.push("mode", cell(sandbox.mode.to_string()));
+    if !sandbox.scoped_fallbacks.is_empty() {
+        kv.push(
+            "fallback",
+            verdict(
+                Health::Info,
+                format!(
+                    "{}: no scoped view on this platform; agents run on the host",
+                    sandbox.scoped_fallbacks.join(", ")
+                ),
+            ),
+        );
+    }
     kv.push(
         "bwrap",
         cell(

@@ -418,10 +418,9 @@ pub struct ConfigNotices {
     pub definition_errors: Vec<definitions::DefinitionErr>,
     pub definition_warnings: Vec<crate::packs::Problem>,
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
-    /// One warning per setting that asked for scoped isolation on a machine without it, now running on the host.
-    pub host_isolation_fallback: Vec<String>,
+    /// Scoped setting labels silently running on the host off Linux, for doctor only.
+    pub scoped_fallbacks: Vec<String>,
     pub skipped_loop_tasks: BTreeMap<String, String>,
-    pub hibernate_unavailable: Vec<String>,
 }
 
 /// A key ignored while loading a per-machine config file.
@@ -870,7 +869,6 @@ impl MachineConfig {
         notices: &mut ConfigNotices,
     ) -> AgentSpecSources {
         let host_only = !cfg!(target_os = "linux");
-        self.disable_unavailable_hibernation(!host_only, notices);
         if host_only {
             self.fall_back_to_host_isolation(notices);
         }
@@ -917,16 +915,13 @@ impl MachineConfig {
         sources
     }
 
-    /// Scoped isolation is Linux bubblewrap, so elsewhere a configured `scoped` falls back to `host` with a notice rather than refusing every launch. Idempotent: it runs before definitions load, for the machine policy, and again after, for the loaded profiles; the definition skill check resolves host off Linux on its own.
+    /// Off Linux, silently replace configured scoped isolation with host and retain labels only
+    /// for doctor. Idempotent: runs before definitions load for machine policy and again after for
+    /// profiles. The definition skill check resolves host off Linux on its own.
     fn fall_back_to_host_isolation(&mut self, notices: &mut ConfigNotices) {
-        let mut warn = |setting: &str| {
-            notices.host_isolation_fallback.push(format!(
-                "warning: {setting} = \"scoped\" needs Linux bubblewrap; running agents on the host instead"
-            ));
-        };
         if self.agents.isolation.is_scoped() {
             self.agents.isolation = Isolation::Host;
-            warn("agents.isolation");
+            notices.scoped_fallbacks.push("agents.isolation".into());
         }
         let profiles = self
             .agents
@@ -937,21 +932,9 @@ impl MachineConfig {
         for (name, profile) in profiles {
             if profile.isolation.is_some_and(Isolation::is_scoped) {
                 profile.isolation = Some(Isolation::Host);
-                warn(&format!("profile `{name}` isolation"));
+                notices.scoped_fallbacks.push(format!("profile {name}"));
             }
         }
-    }
-
-    fn disable_unavailable_hibernation(&mut self, linux: bool, notices: &mut ConfigNotices) {
-        if linux || !self.agents.hibernate.enabled() {
-            return;
-        }
-        if self.agents.hibernate.explicit() {
-            notices.hibernate_unavailable.push(
-                "agents.hibernate.enabled is set but hibernation is skipped: Linux cgroup freezing is unavailable".into(),
-            );
-        }
-        self.agents.hibernate.enabled = Some(false);
     }
 
     pub fn time_zone(&self) -> jiff::tz::TimeZone {

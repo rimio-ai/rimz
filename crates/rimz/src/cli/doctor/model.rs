@@ -123,6 +123,7 @@ pub(super) struct LspServer {
 #[derive(Debug, Serialize)]
 pub(super) struct Sandbox {
     pub(super) mode: rimz::config::Isolation,
+    pub(super) scoped_fallbacks: Vec<String>,
     pub(super) path: Option<std::path::PathBuf>,
     pub(super) version: Option<String>,
     pub(super) error: Option<String>,

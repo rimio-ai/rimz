@@ -88,21 +88,16 @@ pub(super) fn judge(
             warn("packs.expect".into(), message);
         }
     }
-    for message in &machine.notices.host_isolation_fallback {
-        warn(
-            "agents.isolation".into(),
-            message.trim_start_matches("warning: ").to_owned(),
-        );
-    }
     for (name, message) in &machine.notices.skipped_loop_tasks {
         warn(format!("loop.tasks.{name}"), message.clone());
     }
-    for message in &machine.notices.hibernate_unavailable {
-        warn("agents.hibernate".into(), message.clone());
-    }
     if let Err(error) = machine.agents.hibernate.schedule() {
         warn("agents.hibernate".into(), error.to_string());
-    } else if let Some(message) = hibernate_notice(&machine.agents.hibernate, hibernation) {
+    } else if let Some(message) = hibernate_notice(
+        &machine.agents.hibernate,
+        hibernation,
+        cfg!(target_os = "linux"),
+    ) {
         warn("agents.hibernate".into(), message);
     }
     if let Err(error) = crate::sandbox::preflight(machine.agents.isolation) {
@@ -394,8 +389,9 @@ fn one_line(message: &str) -> String {
 fn hibernate_notice(
     config: &crate::config::HibernateConfig,
     admission: &crate::harness::hibernate::Admission,
+    linux: bool,
 ) -> Option<String> {
-    if !config.explicit() || admission.available {
+    if !linux || !config.explicit() || admission.available {
         return None;
     }
     admission.reason.as_ref().map(|reason| {

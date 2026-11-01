@@ -359,10 +359,11 @@ fn room_state_view(state: &rimz::room::session::BackendRoomState) -> model::Room
 }
 
 pub(super) fn collect_sandbox() -> model::Sandbox {
-    let mode = crate::cli::machine_config().agents.isolation;
+    let machine = crate::cli::machine_config();
     let diagnostic = rimz::sandbox::diagnose();
     model::Sandbox {
-        mode,
+        mode: machine.agents.isolation,
+        scoped_fallbacks: machine.notices.scoped_fallbacks.clone(),
         path: diagnostic.path,
         version: diagnostic.version,
         error: diagnostic.error,

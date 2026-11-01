@@ -505,6 +505,7 @@ fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
     ] {
         let sandbox = super::super::model::Sandbox {
             mode,
+            scoped_fallbacks: Vec::new(),
             path: Some("/usr/bin/bwrap".into()),
             version: Some("bubblewrap 0.11.0".to_owned()),
             error: Some(
@@ -533,6 +534,52 @@ fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
             mode == rimz::config::Isolation::Scoped,
             "{closing}"
         );
+    }
+}
+
+#[test]
+fn sandbox_scoped_fallbacks_are_informational() {
+    for (settings, expected) in [
+        (vec![], None),
+        (
+            vec!["agents.isolation"],
+            Some("▸ agents.isolation: no scoped view on this platform; agents run on the host"),
+        ),
+        (
+            vec!["agents.isolation", "profile boxed"],
+            Some(
+                "▸ agents.isolation, profile boxed: no scoped view on this platform; agents run on the host",
+            ),
+        ),
+    ] {
+        let sandbox = super::super::model::Sandbox {
+            mode: rimz::config::Isolation::Host,
+            scoped_fallbacks: settings
+                .iter()
+                .map(|setting| (*setting).to_owned())
+                .collect(),
+            path: None,
+            version: None,
+            error: Some("scoped isolation requires Linux".into()),
+        };
+        let json = serde_json::to_value(&sandbox).unwrap();
+        assert_eq!(json["scoped_fallbacks"], serde_json::json!(settings));
+        let mut tally = Tally::default();
+        let body = strip(|w| render_sandbox(w, &sandbox, &mut tally));
+        if let Some(expected) = expected {
+            assert!(body.contains(expected), "{body}");
+            assert_eq!(body.matches("fallback").count(), 1, "{body}");
+        } else {
+            assert!(!body.contains("fallback"), "{body}");
+        }
+        assert!(tally.warns.is_empty());
+        assert!(tally.alarms.is_empty());
+        let closing = strip(|w| render_tally(w, &tally));
+        assert!(
+            closing.contains("everything checked is healthy"),
+            "{closing}"
+        );
+        assert!(!closing.contains("SANDBOX"), "{closing}");
     }
 }
 
@@ -772,6 +819,7 @@ fn report_fixture() -> DoctorReport {
         packs: Probe::Ready(rimz::packs::CheckoutReport::default()),
         sandbox: super::super::model::Sandbox {
             mode: rimz::config::Isolation::Host,
+            scoped_fallbacks: Vec::new(),
             path: None,
             version: None,
             error: Some(
@@ -2961,6 +3009,7 @@ fn semicolons_in_probe_errors_are_not_remedies() {
     let error = "transport unavailable; retry budget was 3";
     let sandbox = super::super::model::Sandbox {
         mode: rimz::config::Isolation::Scoped,
+        scoped_fallbacks: Vec::new(),
         path: None,
         version: None,
         error: Some(error.into()),
