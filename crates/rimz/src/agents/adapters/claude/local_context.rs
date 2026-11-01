@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::managed_pricing;
 use super::spend::{claude_config_dirs_from, parse_claude_spend_with_retention};
+use super::{TranscriptUsageSource, managed_pricing, usage_from_transcript};
 use crate::agents::pricing;
 use crate::agents::spending::SpendUpdate;
 use crate::agents::{
@@ -49,10 +49,18 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
             ..AgentTokenUsage::default()
         }))
     });
+    let usage = usage_from_transcript(&path);
 
     Some(LocalContextRefresh {
         context: LocalContextPatch {
             tokens,
+            post_compaction_tokens: match usage.source {
+                TranscriptUsageSource::Boundary => usage
+                    .total_tokens
+                    .map_or(FieldPatch::Clear, FieldPatch::Set),
+                TranscriptUsageSource::Usage | TranscriptUsageSource::Fresh => FieldPatch::Clear,
+                TranscriptUsageSource::Unknown => FieldPatch::Keep,
+            },
             last_cache_write: match last_cache_write {
                 Some(retention) => FieldPatch::Set(retention),
                 None if restarted => FieldPatch::Clear,

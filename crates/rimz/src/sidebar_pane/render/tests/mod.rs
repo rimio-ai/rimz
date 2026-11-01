@@ -414,6 +414,7 @@ fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
 fn claude_context(now: Timestamp) -> AgentContext {
     AgentContext {
         last_cache_write: None,
+        post_compaction_tokens: None,
         source: "claude".to_owned(),
         session_name: Some("store refactor".to_owned()),
         session_preview: None,
@@ -482,6 +483,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
 fn codex_context(now: Timestamp) -> AgentContext {
     AgentContext {
         last_cache_write: None,
+        post_compaction_tokens: None,
         source: "codex".to_owned(),
         session_name: None,
         session_preview: None,

@@ -2130,6 +2130,69 @@ fn render_agent_card_age_pin_holds_the_parent_own_clock_while_children_work() {
 }
 
 #[test]
+fn post_compaction_sidecar_estimate_renders_the_same_frame_as_a_fold_estimate() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("compact the context"),
+    );
+    claude.compacted_unmeasured = true;
+    for window in [200_000, 1_000_000] {
+        let mut context = claude_context(fixed_now());
+        context.post_compaction_tokens = Some(45_786);
+        context.tokens = Some(AgentTokenUsage {
+            context_window_size: Some(window),
+            ..Default::default()
+        });
+        claude.attach_context(Some(context));
+        let sidecar = snapshot_with(vec![claude.clone()]);
+        let mut fold = claude.clone();
+        fold.context.as_mut().unwrap().post_compaction_tokens = None;
+        fold.usage = crate::agents::AgentUsageSummary {
+            total_tokens: Some(45_786),
+            context_window: Some(window),
+            ..Default::default()
+        }
+        .merge(None, None);
+        let fold = snapshot_with(vec![fold]);
+        for set in ["unicode", "nerd_font"] {
+            let theme = Theme::fixed_for_theme(
+                false,
+                &crate::config::ThemeConfig {
+                    glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                    ..Default::default()
+                },
+            );
+            for width in [32, 45, 46, 47, 58] {
+                let actual = group_lines_at_width(&sidecar, &theme, 0, width);
+                let expected = group_lines_at_width(&fold, &theme, 0, width);
+                let rendered = line_texts(&actual).join("\n");
+                let percent = 45_786 * 100 / window;
+                assert!(rendered.contains(&format!("{percent}%")), "{rendered}");
+                assert!(rendered.contains('━'), "a flat estimate: {rendered}");
+                assert!(!rendered.contains('╺'), "no call split: {rendered}");
+                assert!(
+                    rendered.contains(theme.glyph(GlyphRole::MeterCompacted)),
+                    "{rendered}"
+                );
+                assert!(
+                    !rendered.contains(theme.glyph(GlyphRole::TokensFilled)),
+                    "{rendered}"
+                );
+                assert_eq!(actual, expected, "{set}, {width}, {window}");
+            }
+        }
+        assert_eq!(
+            snapshot_to_screen(&sidecar, 58, 17),
+            snapshot_to_screen(&fold, 58, 17)
+        );
+    }
+}
+
+#[test]
 fn completed_compaction_keeps_its_glyph_until_a_real_reading() {
     let lifecycle = |event_name: &str, signal: serde_json::Value, reading: bool| {
         let mut params = serde_json::json!({

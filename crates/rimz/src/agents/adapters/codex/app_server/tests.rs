@@ -979,6 +979,7 @@ fn transcript_tokens() -> AgentTokenUsage {
 fn app_server_context(app_at: Timestamp) -> AgentContext {
     AgentContext {
         last_cache_write: None,
+        post_compaction_tokens: None,
         source: "codex".to_owned(),
         session_name: Some("TUI prototype".to_owned()),
         session_preview: Some("Create a TUI".to_owned()),

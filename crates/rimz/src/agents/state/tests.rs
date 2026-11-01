@@ -959,6 +959,36 @@ fn statusline_context_window_outranks_the_lifecycle_window() {
 }
 
 #[test]
+fn post_compaction_sidecar_estimate_feeds_thresholds_only_during_the_fold_gap() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    agent.usage.context_window = Some(200_000);
+    let mut context = AgentContext::new("claude", Timestamp::UNIX_EPOCH);
+    context.post_compaction_tokens = Some(14_786);
+    context.tokens = Some(crate::agents::AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        ..Default::default()
+    });
+    agent.compacted_unmeasured = true;
+    agent.attach_context(Some(context));
+    for (unmeasured, fold_total, fold_pct, expected_tokens, expected_pct) in [
+        (true, None, None, Some(14_786), Some(1.0)),
+        (true, Some(25_000), Some(2), Some(25_000), Some(2.0)),
+        (false, None, None, None, None),
+    ] {
+        agent.compacted_unmeasured = unmeasured;
+        agent.usage.total_tokens = fold_total;
+        agent.usage.context_pct = fold_pct;
+        assert_eq!(agent.occupied_context_tokens(), expected_tokens);
+        assert_eq!(agent.context_fill_pct(), expected_pct);
+        assert_eq!(agent.context_used_tokens(), None);
+        assert_eq!(
+            agent.usage.total_tokens, fold_total,
+            "projection never rewrites the fold"
+        );
+    }
+}
+
+#[test]
 fn context_join_withholds_placeholder_percents_until_a_sidecar_token_reading() {
     let mut agent = test_agent(AgentStatus::Idle, 1_000);
     agent.compacted_unmeasured = true;

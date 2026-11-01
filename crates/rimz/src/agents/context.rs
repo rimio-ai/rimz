@@ -154,6 +154,9 @@ pub struct AgentContext {
     pub cost: Option<AgentCost>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_cache_write: Option<CacheWriteRetention>,
+    /// Provider-reported occupancy after compaction, before a measured call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_compaction_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<AgentTokenUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -250,6 +253,7 @@ impl Default for AgentContext {
             exceeds_200k_tokens: None,
             cost: None,
             last_cache_write: None,
+            post_compaction_tokens: None,
             tokens: None,
             rate_limits: None,
             pr: None,
@@ -380,6 +384,7 @@ pub struct LocalContextPatch {
     pub tokens: LocalTokenPatch,
     pub cost: FieldPatch<AgentCost>,
     pub last_cache_write: FieldPatch<CacheWriteRetention>,
+    pub post_compaction_tokens: FieldPatch<u64>,
     pub turn_error: FieldPatch<AgentTurnError>,
     pub settle: FieldPatch<TurnSettle>,
 }
@@ -419,6 +424,8 @@ impl LocalContextPatch {
         );
         self.cost.apply(&mut context.cost);
         self.last_cache_write.apply(&mut context.last_cache_write);
+        self.post_compaction_tokens
+            .apply(&mut context.post_compaction_tokens);
         self.turn_error.apply(&mut context.turn_error);
         self.settle.apply(&mut context.settle);
     }

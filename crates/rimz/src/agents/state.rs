@@ -2009,14 +2009,32 @@ impl AgentState {
     }
 
     /// Tokens occupying the window for a `--smart-compact <tokens>` threshold: the
-    /// precise composition when known, else the carried turn total. The gauge's
-    /// `context_used_tokens` withholds a bare total so it never legends a partial
-    /// composition; a threshold instead scales against the same numerator the
-    /// percent gauge derives from, so `--smart-compact 100000` fires for a
-    /// transcript-derived session that reports only a running total — matching
-    /// `--smart-compact 70%`, which already reads that total through the gauge.
+    /// precise composition when known, else the carried turn total or joined
+    /// post-compaction estimate. The gauge's `context_used_tokens` withholds a
+    /// bare total so it never legends a partial composition; a threshold instead
+    /// scales against the same numerator the percent gauge derives from, so
+    /// `--smart-compact 100000` fires for a transcript-derived session that
+    /// reports only a running total, matching `--smart-compact 70%`, which
+    /// already reads that total through the gauge.
     pub fn occupied_context_tokens(&self) -> Option<u64> {
-        self.context_used_tokens().or(self.usage.total_tokens)
+        self.context_used_tokens()
+            .or(self.usage.total_tokens)
+            .or_else(|| self.post_compaction_usage()?.total_tokens)
+    }
+
+    /// Project a sidecar estimate only while the unmeasured fold has no current-window total.
+    pub(crate) fn post_compaction_usage(&self) -> Option<AgentUsageSummary> {
+        if !self.compacted_unmeasured || self.usage.total_tokens.is_some() {
+            return None;
+        }
+        Some(
+            AgentUsageSummary {
+                total_tokens: Some(self.context.as_ref()?.post_compaction_tokens?),
+                context_window: self.resolved_context_window(),
+                ..self.usage.clone()
+            }
+            .merge(None, None),
+        )
     }
 
     /// The window denominator: the folded statusline's `context_window_size`,
@@ -2036,9 +2054,9 @@ impl AgentState {
 
     /// The real context-window fill (0..=100): the live token composition over
     /// the model's window. Prefers the precise used/window fraction, then the
-    /// folded statusline's `used_percentage`, then the carried `context_pct`, so
-    /// a session with no rich context still reads its last gauge. `None` when no
-    /// source has reported a fill.
+    /// folded statusline's `used_percentage`, then a post-compaction estimate
+    /// or the carried `context_pct`, so a session with no rich context still
+    /// reads its last gauge. `None` when no source has reported a fill.
     pub fn context_fill_pct(&self) -> Option<f64> {
         match (self.context_used_tokens(), self.resolved_context_window()) {
             (Some(used), Some(window)) if window > 0 => {
@@ -2049,6 +2067,7 @@ impl AgentState {
                 .as_ref()
                 .and_then(|context| context.tokens.as_ref())
                 .and_then(|tokens| tokens.used_percentage)
+                .or_else(|| self.post_compaction_usage()?.context_pct)
                 .or(self.usage.context_pct)
                 .map(f64::from),
         }

@@ -609,6 +609,7 @@ fn agent_card_session_history_requires_positive_evidence() {
 fn context_with_cost(total_cost_usd: f64) -> AgentContext {
     AgentContext {
         last_cache_write: None,
+        post_compaction_tokens: None,
         source: "claude".to_owned(),
         session_name: None,
         session_preview: None,
@@ -654,6 +655,45 @@ fn uncounted_compaction_is_session_history() {
         card.has_session_history(),
         "a retired window is not a fresh launch"
     );
+}
+
+#[test]
+fn post_compaction_sidecar_estimate_projects_only_into_an_unmeasured_card_without_a_fold_total() {
+    let mut agent = AgentState::stub("claude", "s1", AgentStatus::Idle);
+    let mut context = context_with_tokens(AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        ..Default::default()
+    });
+    context.post_compaction_tokens = Some(14_786);
+    agent.compacted_unmeasured = true;
+    agent.usage.run_total_tokens = Some(900_000);
+    agent.attach_context(Some(context));
+    for (unmeasured, fold_total, fold_pct, expected_total, expected_pct) in [
+        (true, None, None, Some(14_786), Some(1)),
+        (true, Some(25_000), Some(2), Some(25_000), Some(2)),
+        (false, None, None, None, None),
+    ] {
+        agent.compacted_unmeasured = unmeasured;
+        agent.usage.total_tokens = fold_total;
+        agent.usage.context_pct = fold_pct;
+        let card = AgentCard::from_agent(&agent, row_time());
+        assert_eq!(card.usage.total_tokens, expected_total);
+        assert_eq!(card.usage.context_pct, expected_pct);
+        assert_eq!(card.context_gauge_percent(), expected_pct);
+        assert_eq!(card.compacted_unmeasured, unmeasured);
+        assert_eq!(card.usage.run_total_tokens, Some(900_000));
+        assert_eq!(
+            card.context
+                .as_ref()
+                .unwrap()
+                .tokens
+                .as_ref()
+                .unwrap()
+                .used_tokens(),
+            None
+        );
+        assert_eq!(agent.usage.total_tokens, fold_total);
+    }
 }
 
 #[test]
