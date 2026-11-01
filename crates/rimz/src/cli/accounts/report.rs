@@ -26,10 +26,10 @@ use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet};
 use rimz::config::{AccountHistory, AccountsConfig, MachineConfig};
 use rimz::harness::spend_ladder::{SpendFacts, SpendStep};
 use rimz::ids::{AgentKind, LoginKey, LoginName};
-use rimz::room::{AccountStanding, Deciding, Scope, Scopes};
+use rimz::room::{AccountStanding, AgentStateCounts, Deciding, Scope, Scopes};
 use rimz::sidebar::enrich::{provider_panel_for_login, provider_panels_from_caches};
 use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
-use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
+use rimz::store::snapshot::{DailyBudgetView, ProviderPlan, SidebarProviderPanel};
 
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 
@@ -330,6 +330,8 @@ struct ProviderReport {
     installed: bool,
     plan: Option<String>,
     plan_label: Option<String>,
+    plan_key: Option<&'static str>,
+    capacity: Option<PlanCapacityView>,
     account_id: Option<String>,
     sub_provider: Option<String>,
     account_scope: Option<ProviderAccountScope>,
@@ -401,11 +403,28 @@ fn build_report(
     let undecided = panel.is_some_and(|panel| panel.undecided)
         || account.is_some_and(|account| account.is_undecided());
     let entitlement = panel.map_or(Entitlement::Ok, |panel| panel.entitlement);
-    let raw_plan = if undecided || matches!(entitlement, Entitlement::Lapsed { .. }) {
+    let reading = if undecided || matches!(entitlement, Entitlement::Lapsed { .. }) {
         None
     } else {
-        account.and_then(|account| account.plan.clone())
+        panel.and_then(|panel| panel.plan.clone()).or_else(|| {
+            let account = account?;
+            Some(ProviderPlan {
+                tier: account.plan.clone()?,
+                name: account.plan_name.clone(),
+            })
+        })
     };
+    let sized = reading.as_ref().and_then(|reading| {
+        let capacities = definition.plan_capacities.as_ref()?;
+        let plan = capacities.resolve(&reading.tier)?;
+        Some((
+            plan.key,
+            PlanCapacityView {
+                units: plan.units,
+                unit: capacities.unit,
+            },
+        ))
+    });
     ProviderReport {
         account: login.key(),
         pool: login.pool(),
@@ -424,18 +443,14 @@ fn build_report(
         probed_at: record.and_then(|record| timestamp_from_millis(record.probed_at_ms)),
         probe_error: record.and_then(|record| record.probe_error.as_ref().map(ToString::to_string)),
         installed: context.installed.contains(kind),
-        plan_label: panel
-            .filter(|_| !undecided)
-            .and_then(SidebarProviderPanel::plan_label)
-            .or_else(|| {
-                raw_plan.as_deref().map(|plan| {
-                    definition.plan_label.format(
-                        plan,
-                        account.and_then(|account| account.plan_name.as_deref()),
-                    )
-                })
-            }),
-        plan: raw_plan,
+        plan_label: reading.as_ref().map(|reading| {
+            definition
+                .plan_label
+                .format(&reading.tier, reading.name.as_deref())
+        }),
+        plan_key: sized.as_ref().map(|(key, _)| *key),
+        capacity: sized.map(|(_, capacity)| capacity),
+        plan: reading.map(|reading| reading.tier),
         account_id: account.and_then(|account| account.account_id.clone()),
         sub_provider: account.and_then(|account| account.sub_provider.clone()),
         account_scope: account
@@ -476,6 +491,13 @@ fn build_report(
     }
 }
 
+/// A plan's weekly capacity in its provider's unit.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+struct PlanCapacityView {
+    units: u32,
+    unit: &'static str,
+}
+
 #[derive(Serialize)]
 struct AccountRow {
     kind: AgentKind,
@@ -500,6 +522,8 @@ struct AccountRow {
     /// Live agents on this account across every live room; `None` when the
     /// rooms could not be inventoried.
     agents: Option<usize>,
+    /// `agents` split by state; `None` exactly when `agents` is.
+    agent_states: Option<AgentStateCounts>,
     /// Every reported provider window, including model-scoped limits.
     windows: Vec<RateLimitWindow>,
     /// Paid usage beyond the subscription.
@@ -520,6 +544,10 @@ struct AccountRow {
     probe_error: Option<String>,
     plan: Option<String>,
     plan_label: Option<String>,
+    /// The adapter's stable key for `plan`; `None` for a plan it does not size.
+    plan_key: Option<&'static str>,
+    /// The plan's weekly capacity; `None` exactly when `plan_key` is.
+    capacity: Option<PlanCapacityView>,
     account_id: Option<String>,
     sub_provider: Option<String>,
     account_scope: Option<ProviderAccountScope>,
@@ -544,6 +572,8 @@ impl AccountRow {
         self.probe_error = report.probe_error.clone();
         self.plan = report.plan.clone();
         self.plan_label = report.plan_label.clone();
+        self.plan_key = report.plan_key;
+        self.capacity = report.capacity;
         self.account_id = report.account_id.clone();
         self.sub_provider = report.sub_provider.clone();
         self.account_scope = report.account_scope.clone();
@@ -660,7 +690,7 @@ fn account_rows(
     catalog: &LoginCatalog,
     standing: &AccountStanding,
     ambient: &BTreeMap<String, String>,
-    agents: Option<&BTreeMap<LoginKey, usize>>,
+    agents: Option<&BTreeMap<LoginKey, AgentStateCounts>>,
     readings: &BTreeMap<LoginKey, LoginReading>,
     errors: &BTreeMap<AgentKind, rimz::agents::LoginConfigErr>,
 ) -> Vec<AccountRow> {
@@ -686,7 +716,8 @@ fn account_rows(
             login_command: None,
             active: standing.active(kind).as_ref() == Some(name),
             default_for: standing.scopes(kind, name),
-            agents: agents.map(|agents| agents.get(&key).copied().unwrap_or_default()),
+            agents: agents.map(|agents| agents.get(&key).map_or(0, AgentStateCounts::total)),
+            agent_states: agents.map(|agents| agents.get(&key).copied().unwrap_or_default()),
             windows: Vec::new(),
             extra_credits: None,
             reset_credits: None,
@@ -700,6 +731,8 @@ fn account_rows(
             probe_error: None,
             plan: None,
             plan_label: None,
+            plan_key: None,
+            capacity: None,
             account_id: None,
             sub_provider: None,
             account_scope: None,

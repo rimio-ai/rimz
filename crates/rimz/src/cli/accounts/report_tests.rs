@@ -121,6 +121,7 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             active: false,
             default_for: Scopes::default(),
             agents: None,
+            agent_states: None,
             windows: report.windows.clone(),
             extra_credits: report.extra_credits.clone(),
             reset_credits: report.reset_credits.clone(),
@@ -133,6 +134,8 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             probe_error: report.probe_error.clone(),
             plan: report.plan.clone(),
             plan_label: report.plan_label.clone(),
+            plan_key: report.plan_key,
+            capacity: report.capacity,
             account_id: report.account_id.clone(),
             sub_provider: report.sub_provider.clone(),
             account_scope: report.account_scope.clone(),
@@ -267,16 +270,7 @@ fn unlimited_credits_render_in_overview_and_detail() {
 }
 
 #[test]
-fn profile_plan_names_reach_the_report_fallback_but_do_not_override_a_panel() {
-    let login = ProviderLogin::default_for(AgentKind::new_unchecked("claude"));
-    let record = record(
-        1,
-        true,
-        Some(AgentAccount {
-            plan_name: Some("Ultra".into()),
-            ..account("max_20x", true)
-        }),
-    );
+fn plan_label_key_and_capacity_come_from_one_reading() {
     let config = MachineConfig::default();
     let context = ReportContext {
         day_cutoff_secs: None,
@@ -284,26 +278,153 @@ fn profile_plan_names_reach_the_report_fallback_but_do_not_override_a_panel() {
         installed: &BTreeSet::new(),
         spend_step: &|_| SpendStep::Subscription,
     };
-    let provider = panel("claude");
-    let actual: Vec<_> = [None, Some(&provider)]
-        .into_iter()
-        .map(|panel| {
+    let named = |plan: &str, name: Option<&str>| AgentAccount {
+        plan_name: name.map(str::to_owned),
+        ..account(plan, true)
+    };
+    let reading = |kind: &str, tier: &str| SidebarProviderPanel {
+        plan: Some(rimz::store::snapshot::ProviderPlan {
+            tier: tier.to_owned(),
+            name: None,
+        }),
+        ..panel(kind)
+    };
+    let codex_record = AgentAccount {
+        plan: None,
+        ..account("", true)
+    };
+    let cases = [
+        // The record's tier and profile name, with no panel.
+        ("claude", Some(named("max_20x", Some("Ultra"))), None),
+        ("claude", Some(named("max_20x", None)), None),
+        ("claude", Some(named("team_standard", None)), None),
+        ("claude", Some(named("team", None)), None),
+        // A panel reading wins over the record, for every field.
+        (
+            "claude",
+            Some(named("max_20x", Some("Ultra"))),
+            Some(reading("claude", "max_5x")),
+        ),
+        // Codex's tier reaches the panel from usage; its record has none.
+        (
+            "codex",
+            Some(codex_record.clone()),
+            Some(reading("codex", "pro")),
+        ),
+        (
+            "codex",
+            Some(codex_record.clone()),
+            Some(reading("codex", "team")),
+        ),
+        ("codex", Some(codex_record), Some(reading("codex", "free"))),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(kind, account, panel)| {
             let report = build_report(
-                &login,
-                Some(&record),
-                panel,
+                &ProviderLogin::default_for(AgentKind::new_unchecked(*kind)),
+                Some(&record(1, true, account.clone())),
+                panel.as_ref(),
                 &ProviderSpendingCache::default(),
                 &context,
             );
-            (report.plan, report.plan_label)
+            (
+                report.plan,
+                report.plan_label,
+                report.plan_key,
+                report
+                    .capacity
+                    .map(|capacity| (capacity.units, capacity.unit)),
+            )
         })
         .collect();
+    let claude = |units| Some((units, "claude_pro_week_percent"));
+    let codex = |units| Some((units, "chatgpt_plus_week_percent"));
+    let some = |value: &str| Some(value.to_owned());
     assert_eq!(
         actual,
         [
-            (Some("max_20x".into()), Some("Claude Ultra".into())),
-            (Some("max_20x".into()), Some("Claude Max".into())),
+            (
+                some("max_20x"),
+                some("Claude Ultra"),
+                Some("ultra"),
+                claude(1000)
+            ),
+            (
+                some("max_20x"),
+                some("Claude Max 20x"),
+                Some("ultra"),
+                claude(1000)
+            ),
+            (
+                some("team_standard"),
+                some("Claude Team Standard"),
+                Some("team_standard"),
+                claude(125)
+            ),
+            (some("team"), some("Claude Team"), None, None),
+            (
+                some("max_5x"),
+                some("Claude Max 5x"),
+                Some("max"),
+                claude(500)
+            ),
+            (
+                some("pro"),
+                some("ChatGPT Pro 200"),
+                Some("pro_200"),
+                codex(2000)
+            ),
+            (
+                some("team"),
+                some("ChatGPT Team"),
+                Some("team_standard"),
+                codex(100)
+            ),
+            (some("free"), some("ChatGPT Free"), None, None),
         ]
+    );
+    let row = &merged(&[build_report(
+        &ProviderLogin::default_for(AgentKind::new_unchecked("claude")),
+        Some(&record(1, true, Some(named("max_20x", None)))),
+        None,
+        &ProviderSpendingCache::default(),
+        &context,
+    )])[0];
+    let json = serde_json::to_value(row).unwrap();
+    assert_eq!(json["plan_key"], "ultra");
+    assert_eq!(
+        json["capacity"],
+        serde_json::json!({"units": 1000, "unit": "claude_pro_week_percent"})
+    );
+}
+
+#[test]
+fn a_plan_without_a_five_hour_limit_reports_the_lifted_window() {
+    let mut ultra = panel("claude");
+    ultra.plan = Some(rimz::store::snapshot::ProviderPlan {
+        tier: "max_20x".to_owned(),
+        name: Some("Ultra".to_owned()),
+    });
+    ultra.windows = vec![
+        RateLimitWindow {
+            duration_mins: Some(300),
+            source: rimz::agents::context::WindowSource::Authoritative,
+            lifted: true,
+            ..Default::default()
+        },
+        RateLimitWindow {
+            duration_mins: Some(10_080),
+            used_percentage: Some(40),
+            ..Default::default()
+        },
+    ];
+    let rows = group("claude", vec![("default", ultra)]);
+    let json = serde_json::to_value(&rows[0]).unwrap();
+    assert_eq!(json["plan_key"], "ultra");
+    assert_eq!(
+        json["windows"][0],
+        serde_json::json!({"duration_mins": 300, "source": "authoritative", "lifted": true})
     );
 }
 
@@ -341,10 +462,22 @@ fn undecided_report_keeps_unknown_metering_with_or_without_a_panel() {
                 &ProviderSpendingCache::default(),
                 &context,
             );
-            (report.plan, report.plan_label, report.metered)
+            (
+                report.plan,
+                report.plan_label,
+                report.plan_key,
+                report.capacity,
+                report.metered,
+            )
         })
         .collect();
-    assert_eq!(outcomes, [(None, None, None), (None, None, None)]);
+    assert_eq!(
+        outcomes,
+        [
+            (None, None, None, None, None),
+            (None, None, None, None, None)
+        ]
+    );
 }
 
 #[test]
@@ -422,7 +555,15 @@ fn lapsed_provider_report_does_not_restore_the_cached_plan() {
             spend_step: &|_| SpendStep::Subscription,
         },
     );
-    assert_eq!((report.plan, report.plan_label), (None, None));
+    assert_eq!(
+        (
+            report.plan,
+            report.plan_label,
+            report.plan_key,
+            report.capacity
+        ),
+        (None, None, None, None)
+    );
     assert_eq!(reports[0].plan_label, None);
     assert_eq!(
         serde_json::to_value(&reports[0]).unwrap()["entitlement"],
@@ -1859,7 +2000,11 @@ fn local_day_spend_uses_the_configured_timezone_and_agents_use_login_not_pool() 
     );
     let cutoff: Timestamp = "2026-10-14T04:00:00Z".parse().unwrap();
     spending.day_cutoff_secs = cutoff.as_second() as u64;
-    let agents = BTreeMap::from([(key, 3), ("claude@work".parse().unwrap(), 7)]);
+    let idle = |idle| AgentStateCounts {
+        idle,
+        ..Default::default()
+    };
+    let agents = BTreeMap::from([(key, idle(3)), ("claude@work".parse().unwrap(), idle(7))]);
     let context = ReportContext {
         day_cutoff_secs: now
             .to_zoned(config.time_zone())

@@ -390,7 +390,7 @@ fn machine(accounts: &str) -> MachineConfig {
 fn rows_at(
     machine: &MachineConfig,
     standing: &AccountStanding,
-    agents: Option<&BTreeMap<LoginKey, usize>>,
+    agents: Option<&BTreeMap<LoginKey, AgentStateCounts>>,
     readings: &BTreeMap<LoginKey, LoginReading>,
 ) -> Vec<AccountRow> {
     let catalog = LoginCatalog::from_config(&machine.accounts).unwrap();
@@ -438,7 +438,7 @@ fn text(rows: &[AccountRow], deciding: &[(&str, Deciding)], _width: Option<usize
 /// decides every kind.
 fn listed(
     accounts: &str,
-    agents: Option<&BTreeMap<LoginKey, usize>>,
+    agents: Option<&BTreeMap<LoginKey, AgentStateCounts>>,
     readings: &BTreeMap<LoginKey, LoginReading>,
 ) -> (Vec<AccountRow>, String) {
     let machine = machine(accounts);
@@ -576,7 +576,14 @@ const ACCOUNTS: &str = "[claude.alpha]\nhome = \"/srv/alpha\"\n[codex.team]\nhom
 fn list_has_provider_tables_with_bare_names_and_agent_counts() {
     let (rows, text) = listed(
         ACCOUNTS,
-        Some(&BTreeMap::from([(key("codex", "team"), 2)])),
+        Some(&BTreeMap::from([(
+            key("codex", "team"),
+            AgentStateCounts {
+                running: 1,
+                hibernated: 1,
+                ..Default::default()
+            },
+        )])),
         &BTreeMap::new(),
     );
     assert_eq!(
@@ -598,6 +605,16 @@ fn list_has_provider_tables_with_bare_names_and_agent_counts() {
     assert_eq!(team["history"], "standalone");
     assert_eq!(team["active"], true);
     assert_eq!(team["agents"], 2);
+    assert_eq!(
+        team["agent_states"],
+        serde_json::json!({"running": 1, "waiting": 0, "idle": 0, "hibernated": 1})
+    );
+    let alpha = serde_json::to_value(&rows[1]).unwrap();
+    assert_eq!(alpha["agents"], 0);
+    assert_eq!(
+        alpha["agent_states"],
+        serde_json::json!({"running": 0, "waiting": 0, "idle": 0, "hibernated": 0})
+    );
     assert_eq!(team["default_for"], serde_json::json!(["new_rooms"]));
 }
 #[test]
@@ -647,6 +664,7 @@ fn list_marks_unknown_agent_counts_and_undeclared_selections() {
     assert!(text.contains("○ new rooms"), "{text}");
     let json = serde_json::to_value(gone).unwrap();
     assert_eq!(json["agents"], serde_json::Value::Null);
+    assert_eq!(json["agent_states"], serde_json::Value::Null);
     assert_eq!(json["windows"], serde_json::json!([]));
 }
 #[test]

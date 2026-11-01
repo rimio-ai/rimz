@@ -7,8 +7,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::agents::AgentStatus;
 use crate::config::MachineConfig;
 use crate::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
+use crate::store::hibernate::Entry as HibernatedEntry;
 use crate::store::runtime::AgentLiveness;
 use crate::trust::ProjectLogins;
 use crate::{RuntimePaths, StatePaths, Store};
@@ -191,13 +193,58 @@ impl AccountStanding {
     }
 }
 
+/// Live agents on one account by state. The counts are disjoint: a hibernated
+/// agent counts as hibernated whatever its status.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AgentStateCounts {
+    /// Mid-turn, including a turn parked on a provider limit.
+    pub running: usize,
+    /// Blocked on the user.
+    pub waiting: usize,
+    /// At rest: idle, finished, failed, or sleeping on a wait.
+    pub idle: usize,
+    /// Frozen by hibernation; a wake for idle compaction or keep-warm can
+    /// still spend.
+    pub hibernated: usize,
+}
+
+impl AgentStateCounts {
+    pub fn total(&self) -> usize {
+        self.running + self.waiting + self.idle + self.hibernated
+    }
+
+    fn count(&mut self, agent: &crate::agents::AgentState, hibernated: &[HibernatedEntry]) {
+        let bucket = if hibernated
+            .iter()
+            .any(|entry| entry.kind == agent.kind && entry.agent_id == agent.agent_id)
+        {
+            &mut self.hibernated
+        } else {
+            match agent.effective_status() {
+                AgentStatus::Running | AgentStatus::Paused => &mut self.running,
+                AgentStatus::Waiting => &mut self.waiting,
+                AgentStatus::Idle
+                | AgentStatus::Success
+                | AgentStatus::Failed
+                | AgentStatus::Sleeping => &mut self.idle,
+            }
+        };
+        *bucket += 1;
+    }
+}
+
 /// Agents per account whose provider can be writing, across every live room,
-/// each room read without creating its store: for every account, the number
-/// [`other_live_agents_on`] answers with nothing launching.
-pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, usize>, super::LiveRoomErr> {
+/// each room read without creating its store, split by state: for every
+/// account, the total is the number [`other_live_agents_on`] answers with
+/// nothing launching.
+pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, AgentStateCounts>, super::LiveRoomErr> {
     let mut counts = BTreeMap::new();
-    for agents in live_room_agents(None)? {
-        count_live_logins(&mut counts, &agents);
+    for (paths, agents) in live_room_agents(None)? {
+        count_live_logins(
+            &mut counts,
+            &agents,
+            &crate::store::hibernate::read_cached(&paths),
+        );
     }
     Ok(counts)
 }
@@ -209,7 +256,7 @@ pub fn live_agents_on_machine_default(
 ) -> Result<usize, super::LiveRoomErr> {
     Ok(live_room_agents(Some((&account.kind, machine)))?
         .iter()
-        .map(|agents| count_others_on(agents, account, &[]))
+        .map(|(_, agents)| count_others_on(agents, account, &[]))
         .sum())
 }
 
@@ -231,13 +278,13 @@ pub fn other_live_agents_on(
 ) -> Result<usize, super::LiveRoomErr> {
     Ok(live_room_agents(None)?
         .iter()
-        .map(|agents| count_others_on(agents, account, launching))
+        .map(|(_, agents)| count_others_on(agents, account, launching))
         .sum())
 }
 
 fn live_room_agents(
     machine_default: Option<(&AgentKind, &MachineConfig)>,
-) -> Result<Vec<Vec<crate::agents::AgentState>>, super::LiveRoomErr> {
+) -> Result<Vec<(StatePaths, Vec<crate::agents::AgentState>)>, super::LiveRoomErr> {
     let mut rooms = Vec::new();
     for room in super::session::room_inventory()?.live {
         let unreadable = || super::LiveRoomErr::RoomAgents {
@@ -258,17 +305,24 @@ fn live_room_agents(
         }
         // An unreadable live room could hold any account: do not undercount it.
         let runtime = RuntimePaths::for_workspace(room.workspace_id).map_err(|_| unreadable())?;
-        let snapshot = Store::open_existing(paths, runtime)
+        let snapshot = Store::open_existing(paths.clone(), runtime)
             .and_then(|store| store.snapshot_cached().ok())
             .ok_or_else(unreadable)?;
-        rooms.push(std::sync::Arc::unwrap_or_clone(snapshot.agents));
+        rooms.push((paths, std::sync::Arc::unwrap_or_clone(snapshot.agents)));
     }
     Ok(rooms)
 }
 
-fn count_live_logins(counts: &mut BTreeMap<LoginKey, usize>, agents: &[crate::agents::AgentState]) {
+fn count_live_logins(
+    counts: &mut BTreeMap<LoginKey, AgentStateCounts>,
+    agents: &[crate::agents::AgentState],
+    hibernated: &[HibernatedEntry],
+) {
     for agent in agents.iter().filter(|agent| can_write(agent)) {
-        *counts.entry(agent.login_key()).or_default() += 1;
+        counts
+            .entry(agent.login_key())
+            .or_default()
+            .count(agent, hibernated);
     }
 }
 
