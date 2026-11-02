@@ -372,9 +372,9 @@ impl ReducerState {
         if payload.record.is_some() {
             state.record = payload.record.clone().map(Box::new);
             state.tier = payload.tier.clone().map(Box::new);
-            if let Some(mode) = payload.mode {
-                state.mode = Some(mode);
-            }
+        }
+        if payload.record.is_some() || payload.mode.is_some() {
+            state.mode = payload.mode;
         }
         let prior_pane = state.pane.replace(PaneRef {
             pane_pid: payload.pane_pid,
@@ -1160,6 +1160,7 @@ fn assemble_launch_state(
         state.set_launch_id(launch_id.clone());
     }
     fold_launch_params(&mut state, &payload.launch);
+    state.mode = payload.launch.mode;
     if let Some(pane_id) = &payload.pane_id {
         state.pane = Some(PaneRef::from_id(pane_id.clone()));
     }

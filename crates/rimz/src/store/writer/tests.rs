@@ -349,13 +349,50 @@ fn attach_agent_pane_records_process_owned_placement() {
             &crate::ids::LoginName::default(),
             "rimz-test",
             &pane_id,
-            owner,
+            owner.clone(),
             None,
             None,
             None,
         )
         .expect("attach under the default account");
     assert_eq!(row_key(), "codex@default");
+
+    use crate::agents::PermissionMode::Auto;
+    for (launch, expected) in [
+        (
+            Some(LaunchParams {
+                mode: Some(Auto),
+                ..Default::default()
+            }),
+            Some(Auto),
+        ),
+        (None, Some(Auto)),
+        (Some(LaunchParams::default()), Some(Auto)),
+    ] {
+        store
+            .attach_agent_pane(
+                &kind,
+                &agent_id,
+                Some(&launch_id),
+                &crate::ids::LoginName::default(),
+                "rimz-test",
+                &pane_id,
+                owner.clone(),
+                None,
+                None,
+                launch.as_ref(),
+            )
+            .unwrap();
+        let projection = store
+            .runtime_projection(crate::RuntimeScope::Audit)
+            .unwrap();
+        let row = crate::store::snapshot::find_agent(&projection.agents, &kind, &agent_id).unwrap();
+        assert_eq!(row.mode, expected, "record-less resume and fresh attach");
+        assert!(
+            row.record.is_none(),
+            "a record-less attach stays record-less"
+        );
+    }
 }
 
 #[test]

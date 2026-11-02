@@ -89,6 +89,67 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
 }
 
 #[test]
+fn recordless_resume_attach_preserves_mode_and_profile_replay() {
+    use rimz::agents::PermissionMode::Auto;
+    let h = Harness::new();
+    let mut observation = registered("saved", "worker", "terminal_2", "/repo", "main");
+    observation.launch.profile = Some("worker".to_owned());
+    observation.launch.mode = Some(Auto);
+    h.store
+        .append_event(&lifecycle(&h, "claude", "SessionStart", &observation))
+        .unwrap();
+    h.store
+        .attach_agent_pane(
+            &AgentKind::new_unchecked("claude"),
+            &"saved".into(),
+            Some(&"saved".into()),
+            &Default::default(),
+            "rimz-test",
+            &PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+            rimz::store::runtime::current_process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "saved",
+            ),
+            None,
+            None,
+            Some(&LaunchParams::default()),
+        )
+        .unwrap();
+    let projection = h
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    let row = projection.agents.first().unwrap();
+    assert_eq!(row.mode, Some(Auto));
+    assert!(row.record.is_none());
+    let profiles = serde_json::from_value(serde_json::json!({
+        "worker": {"agent": "claude", "model": "sonnet", "fast": true}
+    }))
+    .unwrap();
+    let posture = rimz::harness::resume::resolve_posture(
+        rimz::harness::resume::PostureRequest {
+            record: row.record.as_deref(),
+            profile: row.profile.as_deref(),
+            kind: &row.kind,
+            stamped_mode: row.mode,
+            stamped_tier: row.tier.as_deref(),
+        },
+        &profiles,
+    );
+    assert!(posture.degraded.is_none());
+    assert_eq!(posture.launch.model.as_deref(), Some("sonnet"));
+    assert!(posture.launch.fast);
+    let settings = posture
+        .launch
+        .args
+        .windows(2)
+        .find(|pair| pair[0] == "--settings")
+        .unwrap();
+    let settings: serde_json::Value = serde_json::from_str(&settings[1]).unwrap();
+    assert_eq!(settings["fastMode"], true);
+}
+
+#[test]
 fn empty_dir_missing_cwd_is_still_resumable_on_rebirth() {
     let h = Harness::new();
     let mut observation = registered(

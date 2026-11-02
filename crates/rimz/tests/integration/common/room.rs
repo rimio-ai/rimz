@@ -242,7 +242,10 @@ pub fn bind_child_panes(
                         agent_id: child.agent_id.clone(),
                         name: name.clone(),
                         name_explicit: false,
-                        launch: LaunchParams::default(),
+                        launch: LaunchParams {
+                            mode: child.mode,
+                            ..Default::default()
+                        },
                         run_id: Some(record.run_id.clone()),
                         prompt: None,
                     },
