@@ -2081,7 +2081,8 @@ path = "crates/rimz/src/harness"
 # throttle::DiagnosticHold and diagnostic_holds share fresh read-only doctor findings (+2).
 # stall_nudge, Decision, and decision share opt-in policy with room and host callers (+3).
 # StallNudgeRequest, nudge_stalled_teams, helper, NudgeErr, and queue share the producer/CLI seam (+5).
-surface-budget = 1070
+# workflow::cancel_args shares reason-bearing cancellation argv with removal callers (+1).
+surface-budget = 1071
 
 [[verdict]]
 kind = "item"
@@ -11014,6 +11015,11 @@ reason = "Workflow observations reuse the model-aware reset policy already used 
 kind = "item"
 key = "harness::workflow::advance_args"
 reason = "Run and room-signal helpers share workflow advance argv with the scheduler ticker."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::cancel_args"
+reason = "Worktree removal cancels through the workflow command's real attempt host with a recorded reason."
 
 [[verdict]]
 kind = "item"

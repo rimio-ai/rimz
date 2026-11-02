@@ -71,6 +71,8 @@ enum Command {
         /// Run address `<workflow>#<lane>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
         id: String,
+        #[arg(long, hide = true, allow_hyphen_values = true, value_name = "TEXT")]
+        reason: Option<String>,
     },
     /// Re-enter a parked node or extend a run's bounds.
     Resume {
@@ -126,7 +128,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             json,
             history,
         } => show(&id, node.as_deref(), json, history, globals),
-        Command::Cancel { id } => receipt::cancel(&id, globals),
+        Command::Cancel { id, reason } => receipt::cancel(&id, reason.as_deref(), globals),
         Command::Resume { id, at, extend } => receipt::resume(&id, at.as_deref(), &extend, globals),
         Command::Advance {
             id: Some(id),

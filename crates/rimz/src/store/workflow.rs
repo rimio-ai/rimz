@@ -241,6 +241,8 @@ pub struct Ending {
     pub cause: EndCause,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Verdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -609,7 +611,10 @@ pub enum JournalEvent {
     Terminal {
         state: RunState,
     },
-    Cancel,
+    Cancel {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     Resume {
         visit_grant: u64,
         deadline: Option<Timestamp>,

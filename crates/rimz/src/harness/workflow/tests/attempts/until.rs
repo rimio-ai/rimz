@@ -157,7 +157,7 @@ fn provider_exit_books_a_kept_wait_at_the_check() {
 fn end_kept_wait(canceled: bool) {
     let (dir, state, kept, host) = keeps("@wait");
     if canceled {
-        assert!(cancel(&state, &kept.id, &host).unwrap());
+        assert!(cancel(&state, &kept.id, &host, None).unwrap());
     } else {
         host.observed.borrow_mut().status = RunStatus::Completed;
         check(dir.path(), json!({"outcome":"done"}));
@@ -440,12 +440,12 @@ fn cancel_interrupts_a_held_session_or_replaces_a_staged_close() {
             let cancel_state = state.clone();
             let id = record.id.clone();
             *host.on_stop.borrow_mut() = Some(Box::new(move || {
-                cancel(&cancel_state, &id, &FakeHost::new()).unwrap();
+                cancel(&cancel_state, &id, &FakeHost::new(), None).unwrap();
             }));
             advance_ok(&state, &record.id, &host);
         } else {
             update(&state, &held(&live, true));
-            cancel(&state, &record.id, &host).unwrap();
+            cancel(&state, &record.id, &host, None).unwrap();
         }
         let ended = records::load(&state.workflow(&record.id)).unwrap();
         actual.push((

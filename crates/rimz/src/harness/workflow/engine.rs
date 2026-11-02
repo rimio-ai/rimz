@@ -543,6 +543,7 @@ fn command_step(
             outcome,
             cause,
             route: None,
+            reason: None,
         },
         code,
         head_end,
@@ -614,6 +615,7 @@ fn prepare(
                 outcome: AttemptOutcome::Canceled,
                 cause: EndCause::Lifecycle,
                 route: None,
+                reason: None,
             },
             None,
             None,
@@ -934,7 +936,12 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
     Ok(())
 }
 
-pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -> Result<bool> {
+pub fn cancel(
+    state: &StatePaths,
+    id: &WorkflowRunId,
+    host: &dyn AttemptHost,
+    reason: Option<&str>,
+) -> Result<bool> {
     let paths = state.workflow(id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let record = workflow::load(&paths)?;
@@ -989,6 +996,7 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
                 outcome: AttemptOutcome::Canceled,
                 cause: workflow::EndCause::Cancel,
                 route: None,
+                reason: reason.map(str::to_owned),
             },
             &observed,
         );
@@ -1008,6 +1016,7 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
             outcome: AttemptOutcome::Canceled,
             cause: EndCause::Cancel,
             route: None,
+            reason: reason.map(str::to_owned),
         },
         None,
         None,
@@ -1018,7 +1027,12 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) ->
     }
     t.record.state = RunState::Canceled;
     t.record.terminal_at = Some(t.now);
-    t.push(None, JournalEvent::Cancel);
+    t.push(
+        None,
+        JournalEvent::Cancel {
+            reason: reason.map(str::to_owned),
+        },
+    );
     t.push(
         None,
         JournalEvent::Terminal {

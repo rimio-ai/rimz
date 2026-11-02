@@ -101,6 +101,8 @@ ACTIVE
 
 `rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell, judge, or step attempt. It prints `canceled <address>`. An already-finished run id prints `<address> is already <state>; unchanged` and still exits 0. Both receipts end with a `workflow show` hint.
 
+A cancellation journal row may carry `reason`; `show --history` prints `cancel canceled · <reason>` when present, otherwise `cancel canceled`. Older rows without a reason still read.
+
 `rimz workflow resume <RUN> [--at <NODE>] [--extend <GRANT>]...` puts a parked run back to work, at its current node or at `--at <NODE>`, with a fresh timeout clock and a cleared check retry. `--extend` repeats:
 
 | Grant | Effect |

@@ -136,6 +136,8 @@ Single-run show renders a state headline, origin and completed cost, script read
 
 `cancel` takes the workspace lock and returns false on a terminal record, so the first terminal write wins. It kills the child of a hosted check or command step and ends the run `canceled`. For an agent step it stages a `canceled` end with cause `Cancel` and stops the attempt ([Stopping an attempt](#stopping-an-attempt)). While a live host is mid-launch or already ending the attempt, cancel leaves the stop to that host.
 
+An optional cancel reason travels through `Ending` to settlement and the `Cancel` journal row, including deferred agent stops. Both fields default to absent for older records and are omitted when no reason was supplied. The hidden `workflow cancel --reason TEXT` flag carries internal cancellation causes; `crates/rimz/src/harness/workflow/mod.rs::cancel_args` builds its argv using the machine-wide run id.
+
 `resume` refuses a terminal run, and on an active run it accepts only `--extend`. A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock) and a cleared judge retry. `--extend visits=+N` adds a run-wide `visit_grant` to every step's `max-visits` and `max-visits-per-key`, for every key, and `--extend deadline=<when>` replaces the deadline and re-arms it. The return value is the persisted record from before the detached advance was spawned, so a receipt need not reload a record that advance may already have changed.
 
 ## Storage and isolation boundary

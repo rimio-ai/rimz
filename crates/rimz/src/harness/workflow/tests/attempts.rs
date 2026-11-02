@@ -41,6 +41,126 @@ fn advance_ok(state: &StatePaths, id: &WorkflowRunId, host: &FakeHost) -> RunRec
     records::load(&state.workflow(id)).unwrap()
 }
 
+fn cancel_row(state: &StatePaths, id: &WorkflowRunId) -> Value {
+    records::journal(&state.workflow(id))
+        .unwrap()
+        .into_iter()
+        .map(|entry| serde_json::to_value(entry.event).unwrap())
+        .find(|event| event["event"] == "cancel")
+        .expect("cancel must be journaled")
+}
+
+#[test]
+fn cancel_reason_is_recorded_for_waiting_and_parked_runs() {
+    let mut rows = Vec::new();
+    for parked in [false, true] {
+        let text = if parked {
+            "[workflow]\nscope='worktree'\nstart='check'\n[checks.check]\nshell='true'\non={pass='@user',fail='@failed'}\n"
+        } else {
+            STEP
+        };
+        let (_dir, state, record) = setup(text);
+        let host = FakeHost::new();
+        if parked {
+            assert_eq!(
+                advance_ok(&state, &record.id, &host).state,
+                RunState::Parked
+            );
+        } else {
+            *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["builder".into()]);
+            assert!(advance_ok(&state, &record.id, &host).wait.is_some());
+        }
+        cancel(&state, &record.id, &host, Some("worktree removed")).unwrap();
+        rows.push(cancel_row(&state, &record.id));
+    }
+    assert_eq!(
+        rows,
+        vec![json!({"event":"cancel","reason":"worktree removed"}); 2]
+    );
+}
+
+#[test]
+fn cancel_reason_survives_agent_settlement() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    let stop_state = state.clone();
+    let id = record.id.clone();
+    *host.on_stop.borrow_mut() = Some(Box::new(move || {
+        let staged = records::load(&stop_state.workflow(&id)).unwrap();
+        let ending = serde_json::to_value(staged.attempt.unwrap().ending.unwrap()).unwrap();
+        assert_eq!(ending["reason"], "worktree removed");
+    }));
+    cancel(&state, &record.id, &host, Some("worktree removed")).unwrap();
+    assert_eq!(host.stops.get(), 1);
+    assert_eq!(
+        cancel_row(&state, &record.id),
+        json!({"event":"cancel","reason":"worktree removed"})
+    );
+}
+
+#[test]
+fn cancel_reason_is_recorded_for_script_attempts() {
+    let text =
+        "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nshell='true'\nthen='@done'\n";
+    let (_dir, state, mut record) = setup(text);
+    record.attempt = Some(
+        serde_json::from_value(json!({
+            "kind":"script", "seq":1, "node":"build", "started_at":record.entered_at,
+            "host":{"pid":u32::MAX, "start":null}
+        }))
+        .unwrap(),
+    );
+    record.visits.insert(
+        "build".into(),
+        StepVisits {
+            total: 1,
+            keys: vec![KeyVisits {
+                key: None,
+                visits: 1,
+            }],
+        },
+    );
+    update(&state, &record);
+    cancel(
+        &state,
+        &record.id,
+        &FakeHost::new(),
+        Some("worktree removed"),
+    )
+    .unwrap();
+    assert_eq!(
+        cancel_row(&state, &record.id),
+        json!({"event":"cancel","reason":"worktree removed"})
+    );
+}
+
+#[test]
+fn cancel_without_reason_keeps_the_old_journal_shape() {
+    let (_dir, state, record) = setup(STEP);
+    cancel(&state, &record.id, &FakeHost::new(), None).unwrap();
+    let old = json!({"event":"cancel"});
+    assert_eq!(cancel_row(&state, &record.id), old);
+    let decoded: JournalEvent = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), old);
+}
+
+#[test]
+fn cancel_helper_names_the_machine_wide_id_and_reason() {
+    let id = WorkflowRunId::new();
+    assert_eq!(
+        cancel_args(&id, "worktree removed"),
+        [
+            "workflow",
+            "cancel",
+            id.as_str(),
+            "--reason",
+            "worktree removed"
+        ]
+        .map(std::ffi::OsString::from)
+    );
+}
+
 #[test]
 fn launch_counts_keyed_visits_and_composes_live_signs() {
     let (dir, state, mut record) = setup(STEP);
@@ -588,7 +708,7 @@ fn stay_deadline_beats_completed_observation_and_cancel_stops() {
         let mut live = advance_ok(&state, &record.id, &host);
         host.observed.borrow_mut().status = RunStatus::Completed;
         if cause == "cancel" {
-            cancel(&state, &record.id, &host).unwrap();
+            cancel(&state, &record.id, &host, None).unwrap();
         } else {
             live.deadline = Some("2000-01-01T00:00:00Z".parse().unwrap());
             update(&state, &live);
@@ -868,8 +988,8 @@ fn timeout_deadline_and_cancel_stop_before_settlement() {
             );
         }));
         if cause == "cancel" {
-            assert!(cancel(&state, &record.id, &host).unwrap());
-            assert!(!cancel(&state, &record.id, &host).unwrap());
+            assert!(cancel(&state, &record.id, &host, None).unwrap());
+            assert!(!cancel(&state, &record.id, &host, None).unwrap());
         } else {
             if cause == "timeout" {
                 live.attempt.as_mut().unwrap().started_at =
@@ -909,10 +1029,10 @@ fn timeout_deadline_and_cancel_stop_before_settlement() {
     let launch_state = state.clone();
     let launch_id = record.id.clone();
     *host.on_launch.borrow_mut() = Some(Box::new(move || {
-        assert!(cancel(&launch_state, &launch_id, &FakeHost::new()).unwrap());
+        assert!(cancel(&launch_state, &launch_id, &FakeHost::new(), None).unwrap());
         let pending = records::load(&launch_state.workflow(&launch_id)).unwrap();
         assert!(pending.attempt.is_some());
-        assert!(cancel(&launch_state, &launch_id, &FakeHost::new()).unwrap());
+        assert!(cancel(&launch_state, &launch_id, &FakeHost::new(), None).unwrap());
         assert_eq!(
             records::load(&launch_state.workflow(&launch_id)).unwrap(),
             pending,
@@ -949,7 +1069,7 @@ fn dead_launcher_stops_the_unpublished_supervised_run() {
         crate::harness::run::create(&state, &orphan).unwrap();
         update(&state, &live);
         let ended = if canceling {
-            cancel(&state, &record.id, &host).unwrap();
+            cancel(&state, &record.id, &host, None).unwrap();
             records::load(&state.workflow(&record.id)).unwrap()
         } else {
             advance_ok(&state, &record.id, &host)
@@ -976,6 +1096,7 @@ fn live_stopper_is_left_alone_and_dead_stopper_is_retaken() {
         outcome: AttemptOutcome::Timeout,
         cause: records::EndCause::Timeout,
         route: None,
+        reason: None,
     });
     update(&state, &live);
     assert_eq!(advance_ok(&state, &record.id, &host), live);
