@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::harness::schedule::{self, signal::SignalSelector, when::WhenExpr};
 use crate::store::workflow::{Key, RunRecord, StepVisits};
@@ -12,9 +13,27 @@ pub use crate::store::workflow::ScopeKind;
 
 type Subscription = (SignalSelector, BTreeMap<String, String>);
 
+mod tolerant;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Issue {
+    pub path: String,
+    pub message: String,
+}
+
+pub(super) fn issue(path: &str, message: impl Display) -> Issue {
+    Issue {
+        path: path.into(),
+        message: format!("{path}: {message}"),
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct WorkflowSpec {
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub ignored: Vec<Issue>,
     pub workflow: Header,
     #[serde(default)]
     pub checks: BTreeMap<String, Check>,
@@ -51,7 +70,7 @@ impl WorkflowSpec {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Header {
     pub summary: Option<String>,
     pub scope: ScopeKind,
@@ -63,7 +82,8 @@ pub struct Header {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(deny_unknown_fields)]
 pub struct Limit {
     #[schemars(range(min = 1))]
     pub max_active: Option<u32>,
@@ -92,13 +112,13 @@ impl Limit {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct HeaderEdges {
     pub deadline: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct StepEdges {
     pub asked: Option<String>,
     pub cap: Option<String>,
@@ -106,7 +126,8 @@ pub struct StepEdges {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(deny_unknown_fields)]
 pub struct Check {
     pub summary: Option<String>,
     pub run: Option<String>,
@@ -129,8 +150,9 @@ pub struct Check {
     pub timeout: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(untagged, deny_unknown_fields)]
+#[derive(Clone, Debug, JsonSchema)]
+#[serde(untagged)]
+#[schemars(deny_unknown_fields)]
 pub(super) enum Wake {
     Selector(String),
     Binding {
@@ -138,6 +160,39 @@ pub(super) enum Wake {
         #[serde(default, rename = "match")]
         matches: BTreeMap<String, String>,
     },
+}
+
+impl<'de> Deserialize<'de> for Wake {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Wake;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a signal selector or a table with signal and optional match")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Wake, E> {
+                Ok(Wake::Selector(value.into()))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Wake, M::Error> {
+                #[derive(Deserialize)]
+                struct Binding {
+                    signal: String,
+                    #[serde(default, rename = "match")]
+                    matches: BTreeMap<String, String>,
+                }
+                let binding =
+                    Binding::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(Wake::Binding {
+                    signal: binding.signal,
+                    matches: binding.matches,
+                })
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 impl Wake {
@@ -155,7 +210,7 @@ impl Wake {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Case {
     pub when: Vec<String>,
     pub outcome: String,
@@ -215,7 +270,8 @@ pub(super) const RESERVED_OUTCOMES: [&str; 7] = [
 ];
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(deny_unknown_fields)]
 pub struct Step {
     pub summary: Option<String>,
     pub agent: Option<String>,
@@ -295,7 +351,11 @@ pub enum SpecErr {
         #[source]
         source: std::io::Error,
     },
-    #[error("{path}: {source}")]
+    #[error("{path}: {}", if .source.span().is_some() {
+        .source.to_string()
+    } else {
+        .source.message().to_owned()
+    })]
     Toml {
         path: String,
         #[source]
@@ -318,59 +378,15 @@ pub enum SpecErr {
 pub fn load(dir: &Path) -> Result<WorkflowSpec, SpecErr> {
     let path = crate::disk::paths::workflow_spec_file(dir);
     let text = std::fs::read_to_string(&path).map_err(|source| SpecErr::Io { path, source })?;
-    let value: toml::Value = toml::from_str(&text).map_err(|source| SpecErr::Toml {
+    parse(&text)
+}
+
+pub(super) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
+    let value: toml::Value = toml::from_str(text).map_err(|source| SpecErr::Toml {
         path: "workflow".into(),
         source,
     })?;
-    value.clone().try_into().map_err(|source| SpecErr::Toml {
-        path: schema_path(&value),
-        source,
-    })
-}
-
-fn schema_path(value: &toml::Value) -> String {
-    if let Some(table) = value.as_table()
-        && let Some(key) = table
-            .keys()
-            .find(|key| !matches!(key.as_str(), "workflow" | "checks" | "steps"))
-    {
-        return key.clone();
-    }
-    if let Some(limit) = value.get("workflow").and_then(|header| header.get("limit"))
-        && limit.clone().try_into::<Limit>().is_err()
-    {
-        return "workflow.limit".into();
-    }
-    for table in ["checks", "steps"] {
-        let Some(nodes) = value.get(table) else {
-            continue;
-        };
-        let Some(nodes) = nodes.as_table() else {
-            return table.into();
-        };
-        for (name, node) in nodes {
-            let invalid = match table {
-                "checks" => node.clone().try_into::<Check>().is_err(),
-                _ => node.clone().try_into::<Step>().is_err(),
-            };
-            if invalid {
-                if table == "steps"
-                    && let Some(limit) = node.get("limit")
-                    && limit.clone().try_into::<Limit>().is_err()
-                {
-                    return format!("{table}.{name}.limit");
-                }
-                if table == "checks"
-                    && let Some(wake) = node.get("wake")
-                    && wake.clone().try_into::<Vec<Wake>>().is_err()
-                {
-                    return format!("{table}.{name}.wake");
-                }
-                return format!("{table}.{name}");
-            }
-        }
-    }
-    "workflow".into()
+    tolerant::parse(value)
 }
 
 pub fn schema() -> schemars::Schema {

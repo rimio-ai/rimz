@@ -26,10 +26,10 @@ pub use inspect::{
 };
 pub use script::{CaseMark, CaseMarks, case_marks, unread_reasons};
 pub use spec::{
-    Case, Check, CheckKind, Header, HeaderEdges, Limit, ScopeKind, SpecErr, Step, StepEdges,
+    Case, Check, CheckKind, Header, HeaderEdges, Issue, Limit, ScopeKind, SpecErr, Step, StepEdges,
     StepKind, WorkflowSpec, load, schema,
 };
-pub use validate::{Issue, NodeRow, Validation, validate};
+pub use validate::{NodeRow, Validation, validate};
 
 fn head(path: &Path) -> Option<String> {
     let output = crate::proc::run_bounded_git_output(

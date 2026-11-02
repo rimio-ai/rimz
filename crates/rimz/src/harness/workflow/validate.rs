@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 
-use super::spec::{self, CheckKind, RESERVED_OUTCOMES, StepKind, WorkflowSpec};
+use super::spec::{self, CheckKind, Issue, RESERVED_OUTCOMES, StepKind, WorkflowSpec, issue};
 use super::{Edge, EdgeSource};
 use crate::config::definitions::LoadedDefinitions;
 use crate::store::workflow::StepLifecycle;
@@ -20,12 +20,6 @@ pub struct NodeRow {
     pub agent: Option<String>,
     pub do_background: bool,
     pub edges: Vec<Edge>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Issue {
-    pub path: String,
-    pub message: String,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -75,13 +69,12 @@ pub(super) fn validate_spec(
     definitions: &LoadedDefinitions,
     project_root: Option<&Path>,
 ) -> Validation {
-    let mut report = Validation::default();
+    let mut report = Validation {
+        warnings: spec.ignored.clone(),
+        ..Default::default()
+    };
     if let Err(err) = crate::harness::schedule::validate_name(name) {
         report.error("workflow", err);
-    }
-    report.summary("workflow", spec.workflow.summary.as_deref());
-    if let Some(limit) = &spec.workflow.limit {
-        report.limit("workflow.limit", limit);
     }
     if !spec.checks.contains_key(&spec.workflow.start)
         && !spec.steps.contains_key(&spec.workflow.start)
@@ -91,18 +84,12 @@ pub(super) fn validate_spec(
             format!("{} must name a check or a step", spec.workflow.start),
         );
     }
-    if let Some(deadline) = &spec.workflow.deadline
-        && let Err(err) = spec::parse_deadline(deadline)
-    {
-        report.error("workflow.deadline", err);
-    }
     if let Some(target) = &spec.workflow.on.deadline {
         report.target(spec, "workflow.on.deadline", target);
     }
     for (node, check) in &spec.checks {
         let path = format!("checks.{node}");
         report.node_name(&path, node);
-        report.summary(&path, check.summary.as_deref());
         if spec.steps.contains_key(node) {
             report.error(&path, "name is also used by a step");
         }
@@ -129,14 +116,6 @@ pub(super) fn validate_spec(
                     );
                 }
             }
-            for outcome in check.on.keys() {
-                if !matches!(outcome.as_str(), "pass" | "fail" | "timeout" | "invalid") {
-                    report.error(
-                        &format!("{path}.on.{outcome}"),
-                        "a shell check routes only pass, fail, timeout, and invalid",
-                    );
-                }
-            }
         }
         if matches!(check.kind(), Some(CheckKind::Agent(_))) && check.prompt_file.is_none() {
             report.error(
@@ -145,44 +124,11 @@ pub(super) fn validate_spec(
             );
         }
         let condition = matches!(check.kind(), Some(CheckKind::Condition));
-        for wake in check.wake.iter().flatten() {
-            if let Err(error) = wake.subscription() {
-                report.error(&format!("{path}.wake"), error);
-            }
-        }
-        for (field, present) in [
-            ("wake", check.wake.is_some() && condition),
-            ("else", check.else_outcome.is_some() && !condition),
-            ("provider", check.provider.is_some() && !condition),
-            ("account", check.account.is_some() && !condition),
-            (
-                "prompt-file",
-                check.prompt_file.is_some() && !matches!(check.kind(), Some(CheckKind::Agent(_))),
-            ),
-            (
-                "window",
-                check.window.is_some() && !matches!(check.kind(), Some(CheckKind::Agent(_))),
-            ),
-        ] {
-            if present {
-                report.error(
-                    &format!("{path}.{field}"),
-                    "field is not supported by this check kind",
-                );
-            }
-        }
         if condition {
             report.condition_fields(&path, check, project_root);
         }
         if let Some(CheckKind::Agent(agent)) = check.kind() {
-            report.agent_fields(
-                dir,
-                &path,
-                Some(agent),
-                check.prompt_file.as_deref(),
-                check.window.as_deref(),
-                definitions,
-            );
+            report.agent_fields(dir, &path, agent, check.prompt_file.as_deref(), definitions);
             if !definitions.failed.contains_key(agent)
                 && let Ok(profile) =
                     crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
@@ -195,7 +141,6 @@ pub(super) fn validate_spec(
                 );
             }
         }
-        report.timeout(&path, check.timeout.as_deref());
         let edges = spec.edges(node);
         let unknown_waits = condition
             && edges
@@ -223,15 +168,6 @@ pub(super) fn validate_spec(
                     "a timed-out check cannot wait on its expired timeout clock",
                 );
             }
-            if RESERVED_OUTCOMES.contains(&outcome.as_str())
-                && !matches!(outcome.as_str(), "timeout" | "invalid")
-                && !(outcome == "unknown" && condition)
-            {
-                report.error(
-                    &format!("{path}.on.{outcome}"),
-                    "reserved engine outcome; a check routes its own outcomes plus timeout and invalid",
-                );
-            }
         }
         report.rows.push(NodeRow {
             workflow: name.into(),
@@ -255,7 +191,6 @@ pub(super) fn validate_spec(
     for (node, step) in &spec.steps {
         let path = format!("steps.{node}");
         report.node_name(&path, node);
-        report.summary(&path, step.summary.as_deref());
         if step.kind().is_none() {
             report.error(&path, "set exactly one of agent, run, or shell");
         }
@@ -283,69 +218,8 @@ pub(super) fn validate_spec(
         {
             report.error(&format!("{path}.shell"), "set a nonempty shell command");
         }
-        if let Some(limit) = &step.limit {
-            report.limit(&format!("{path}.limit"), limit);
-        }
-        if command {
-            for (field, present, message) in [
-                (
-                    "limit",
-                    step.limit.is_some(),
-                    "a command step has no turn to count",
-                ),
-                (
-                    "takeover",
-                    step.takeover.is_some(),
-                    "a command step never waits for occupancy, so it has nothing to take over",
-                ),
-                (
-                    "throttle",
-                    step.throttle.is_some(),
-                    "capacity admission is only for agent steps",
-                ),
-                (
-                    "capacity-wait",
-                    step.capacity_wait.is_some(),
-                    "capacity admission is only for agent steps",
-                ),
-                (
-                    "on.capacity",
-                    step.on.capacity.is_some(),
-                    "capacity admission is only for agent steps",
-                ),
-                (
-                    "lifecycle",
-                    step.lifecycle.is_some(),
-                    "a command step ends when its command exits; lifecycle is for agent steps",
-                ),
-                (
-                    "window",
-                    step.window.is_some(),
-                    "windows gate provider usage, which a command step does not use",
-                ),
-                (
-                    "on.asked",
-                    step.on.asked.is_some(),
-                    "a command cannot ask; its outcome goes to prev_attempt",
-                ),
-                (
-                    "prompt-file",
-                    step.prompt_file.is_some(),
-                    "a command step takes no prompt; it reads context.json",
-                ),
-            ] {
-                if present {
-                    report.error(&format!("{path}.{field}"), message);
-                }
-            }
-        }
         let layout = if let Some(StepKind::Agent(agent)) = step.kind() {
-            report.prompt_window(
-                dir,
-                &path,
-                step.prompt_file.as_deref(),
-                step.window.as_deref(),
-            );
+            report.prompt(dir, &path, step.prompt_file.as_deref());
             match step_layout(dir, agent, definitions, project_root) {
                 Ok(layout) => Some(layout),
                 Err(error) => {
@@ -356,21 +230,6 @@ pub(super) fn validate_spec(
         } else {
             None
         };
-        if agent && !step.lifecycle.unwrap_or_default().is_turn() {
-            if step.timeout.is_some() {
-                report.error(
-                    &format!("{path}.timeout"),
-                    "a staying step has no step timeout; remove timeout or use lifecycle = 'turn'",
-                );
-            }
-            if step.on.asked.is_some() {
-                report.error(
-                    &format!("{path}.on.asked"),
-                    "a staying step never ends on a question; remove on.asked or use lifecycle = 'turn'",
-                );
-            }
-        }
-        report.timeout(&path, step.timeout.as_deref());
         let do_background = layout.as_ref().and_then(|layout| {
             let leader = crate::harness::spec::prompt_leader(layout, None).ok()?;
             let cell = layout.agent_cells().nth(leader)?;
@@ -396,20 +255,6 @@ pub(super) fn validate_spec(
             report.error(
                 &format!("{path}.then"),
                 "then must name a check, never a step or @done",
-            );
-        }
-        if step.max_visits == Some(0) {
-            report.error(&format!("{path}.max-visits"), "must be at least 1");
-        }
-        if step.max_visits_per_key == Some(0) {
-            report.error(&format!("{path}.max-visits-per-key"), "must be at least 1");
-        }
-        if let (Some(per_key), Some(total)) = (step.max_visits_per_key, step.max_visits)
-            && per_key >= total
-        {
-            report.error(
-                &format!("{path}.max-visits-per-key"),
-                "must be below max-visits, since the total cap trips first",
             );
         }
         if agent && let Some(target) = &step.on.capacity {
@@ -528,30 +373,7 @@ pub(super) fn validate_spec(
     report
 }
 
-fn issue(path: &str, message: impl Display) -> Issue {
-    Issue {
-        path: path.into(),
-        message: format!("{path}: {message}"),
-    }
-}
-
 impl Validation {
-    fn limit(&mut self, path: &str, limit: &super::Limit) {
-        if limit.max_active.is_none() && limit.pace.is_none() {
-            self.error(path, "set max-active or pace");
-        }
-        if limit.max_active == Some(0) {
-            self.error(&format!("{path}.max-active"), "must be at least 1");
-        }
-        match limit.pace() {
-            Ok(Some(pace)) if pace.is_zero() => {
-                self.error(&format!("{path}.pace"), "must be greater than zero");
-            }
-            Err(error) => self.error(&format!("{path}.pace"), error),
-            _ => {}
-        }
-    }
-
     fn error(&mut self, path: &str, message: impl Display) {
         self.errors.push(issue(path, message));
     }
@@ -562,15 +384,8 @@ impl Validation {
         }
     }
 
-    fn summary(&mut self, path: &str, summary: Option<&str>) {
-        if summary.is_some_and(|text| text.trim().is_empty() || text.contains(['\n', '\r'])) {
-            self.error(&format!("{path}.summary"), "a summary is one nonempty line");
-        }
-    }
-
     fn condition_fields(&mut self, path: &str, check: &spec::Check, project_root: Option<&Path>) {
         use crate::harness::schedule::{condition_stages, when::WhenExpr};
-        use crate::utils::time::{DurationUnit, parse_duration_units};
 
         let mut outcomes = BTreeSet::new();
         if let Some(outcome) = &check.else_outcome {
@@ -603,33 +418,6 @@ impl Validation {
                 }
                 Err(error) => self.error(&format!("{case_path}.when"), error),
             }
-            if let Some(hold) = &case.hold {
-                if check
-                    .on
-                    .get(&case.outcome)
-                    .is_some_and(|target| target == "@wait")
-                {
-                    self.error(
-                        &format!("{case_path}.for"),
-                        "a held case must route away from @wait",
-                    );
-                }
-                match parse_duration_units(
-                    hold,
-                    &[
-                        DurationUnit::Second,
-                        DurationUnit::Minute,
-                        DurationUnit::Hour,
-                        DurationUnit::Day,
-                    ],
-                ) {
-                    Ok(duration) if duration.is_zero() => {
-                        self.error(&format!("{case_path}.for"), "for must be nonzero")
-                    }
-                    Err(error) => self.error(&format!("{case_path}.for"), error),
-                    _ => {}
-                }
-            }
         }
         for outcome in &outcomes {
             if !check.on.contains_key(*outcome) {
@@ -639,41 +427,13 @@ impl Validation {
                 );
             }
         }
-        for outcome in check.on.keys() {
-            if !outcomes.contains(outcome.as_str())
-                && !matches!(outcome.as_str(), "unknown" | "timeout" | "invalid")
-            {
-                self.error(
-                    &format!("{path}.on.{outcome}"),
-                    "dead route: name a case outcome, else, unknown, timeout, or invalid",
-                );
-            }
-        }
         let window = expressions.iter().any(|(_, expression)| {
             expression
                 .terms()
                 .any(|term| term.key.starts_with("window."))
         });
-        match (&check.provider, window) {
-            (None, true) => {
-                self.error(&format!("{path}.provider"), "window terms require provider")
-            }
-            (Some(_), false) => self.error(
-                &format!("{path}.provider"),
-                "provider requires a window term",
-            ),
-            (Some(provider), true)
-                if crate::agents::find_definition(provider.as_str()).is_none() =>
-            {
-                self.error(
-                    &format!("{path}.provider"),
-                    format!("unknown provider {provider}"),
-                )
-            }
-            _ => {}
-        }
-        if check.account.is_some() && check.provider.is_none() {
-            self.error(&format!("{path}.account"), "account requires provider");
+        if check.provider.is_none() && window {
+            self.error(&format!("{path}.provider"), "window terms require provider");
         }
         if !expressions
             .iter()
@@ -712,68 +472,35 @@ impl Validation {
         }
     }
 
-    fn timeout(&mut self, path: &str, timeout: Option<&str>) {
-        use crate::utils::time::{DurationUnit, parse_duration_units};
-        if let Some(raw) = timeout
-            && let Err(err) = parse_duration_units(
-                raw,
-                &[
-                    DurationUnit::Second,
-                    DurationUnit::Minute,
-                    DurationUnit::Hour,
-                    DurationUnit::Day,
-                ],
-            )
-        {
-            self.error(&format!("{path}.timeout"), err);
-        }
-    }
-
     fn agent_fields(
         &mut self,
         dir: &Path,
         path: &str,
-        agent: Option<&str>,
+        agent: &str,
         prompt: Option<&str>,
-        window: Option<&str>,
         definitions: &LoadedDefinitions,
     ) {
-        if let Some(agent) = agent {
-            if definitions.failed.contains_key(agent) {
-                self.error(
-                    &format!("{path}.agent"),
-                    format!(
-                        "broken definition for {agent}: {:?}",
-                        definitions.failed[agent]
-                    ),
-                );
-            } else if let Err(err) =
-                crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
-            {
-                self.error(&format!("{path}.agent"), err);
-            }
+        if definitions.failed.contains_key(agent) {
+            self.error(
+                &format!("{path}.agent"),
+                format!(
+                    "broken definition for {agent}: {:?}",
+                    definitions.failed[agent]
+                ),
+            );
+        } else if let Err(err) =
+            crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
+        {
+            self.error(&format!("{path}.agent"), err);
         }
-        if window.is_some() && agent.is_none() {
-            self.error(&format!("{path}.window"), "window requires an agent");
-        }
-        self.prompt_window(dir, path, prompt, window);
+        self.prompt(dir, path, prompt);
     }
 
-    fn prompt_window(
-        &mut self,
-        dir: &Path,
-        path: &str,
-        prompt: Option<&str>,
-        window: Option<&str>,
-    ) {
+    fn prompt(&mut self, dir: &Path, path: &str, prompt: Option<&str>) {
         if let Some(prompt) = prompt
             && let Err(err) = spec::confined_file(dir, prompt)
         {
             self.error(&format!("{path}.prompt-file"), err);
-        }
-        let Some(window) = window else { return };
-        if let Err(err) = spec::parse_window(window) {
-            self.error(&format!("{path}.window"), err);
         }
     }
 }

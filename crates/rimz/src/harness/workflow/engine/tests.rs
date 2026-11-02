@@ -341,12 +341,14 @@ fn bound_routes_stop_when_waiting_or_inactive() {
 
 #[test]
 fn create_validates_the_spec_it_reads_before_publication() {
-    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ntimeout='tomorrow'\non.ok='@done'\n";
+    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ntimeout='tomorrow'\non.ok='missing'\n";
     let (home, state, record, _) = fixture(text);
-    fs::write(crate::disk::paths::workflow_spec_file(home.path()), text).unwrap();
+    let dir = home.path().join("example");
+    fs::create_dir(&dir).unwrap();
+    fs::write(crate::disk::paths::workflow_spec_file(&dir), text).unwrap();
     let error = create(
         &state,
-        home.path(),
+        &dir,
         ScopeRoots {
             checkout: home.path().into(),
             project: home.path().into(),
@@ -357,7 +359,7 @@ fn create_validates_the_spec_it_reads_before_publication() {
     )
     .unwrap_err();
     assert!(
-        error.to_string().contains("checks.pr.timeout"),
+        error.to_string().contains("checks.pr.on.ok"),
         "the bytes to seal must be validated first: {error}"
     );
     assert_eq!(workflow::list(&state).unwrap().len(), 1);
@@ -644,15 +646,19 @@ fn admission_after_occupancy(expires: bool) {
 }
 
 #[test]
-fn invalid_legacy_timeout_returns_an_error_without_panicking() {
-    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ntimeout='tomorrow'\non.ok='@done'\n";
+fn invalid_legacy_timeout_is_ignored_without_panicking() {
+    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nshell='true'\ntimeout='tomorrow'\non={pass='@done',fail='@failed'}\n";
     let (_home, state, record, _) = fixture(text);
     let result = std::panic::catch_unwind(|| {
         advance(&state, &record.id, &super::super::tests::FakeHost::new())
     });
     assert!(
-        matches!(result, Ok(Err(_))),
-        "an invalid sealed timeout must return an error, not panic"
+        matches!(result, Ok(Ok(()))),
+        "an invalid optional sealed timeout must be ignored: {result:?}"
+    );
+    assert_eq!(
+        workflow::load(&state.workflow(&record.id)).unwrap().state,
+        RunState::Done
     );
 }
 

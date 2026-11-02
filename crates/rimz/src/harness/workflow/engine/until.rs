@@ -16,20 +16,22 @@ fn eligible(observed: &Observed) -> Option<&LeaderTurn> {
         .filter(|turn| turn.at_rest && observed.ask.is_none() && observed.limited.is_none())
 }
 
-pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> bool {
+pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool> {
     let Some(turn) = eligible(observed) else {
-        return false;
+        return Ok(false);
     };
-    // prepare_end calls only for a published, validated agent attempt with no ending.
+    // prepare_end calls only for a published agent attempt with no ending.
     let attempt = t.record.attempt.as_mut().expect("observed agent attempt");
     if attempt.lifecycle != StepLifecycle::Until || attempt.judged.as_ref() == Some(&turn.end) {
-        return false;
+        return Ok(false);
     }
+    let check = t.spec.steps[&attempt.node].then.clone().ok_or_else(|| {
+        WorkflowErr::Refused(format!(
+            "steps.{}.then: an until step requires a then check",
+            attempt.node
+        ))
+    })?;
     attempt.judged = Some(turn.end.clone());
-    let check = t.spec.steps[&attempt.node]
-        .then
-        .clone()
-        .expect("validated agent step has a then check");
     t.record.held = Some(HeldSession {
         attempt: t.record.attempt.take().expect("observed until attempt"),
         entered_at: t.record.entered_at,
@@ -39,7 +41,7 @@ pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> bool {
     t.record.entered_at = t.now;
     t.record.check_retry = 0;
     t.record.check_retry_context = None;
-    true
+    Ok(true)
 }
 
 pub(super) fn interrupt(t: &mut Transition<'_>, reason: &str) {

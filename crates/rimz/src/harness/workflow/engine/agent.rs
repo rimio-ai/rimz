@@ -17,8 +17,12 @@ pub(super) fn compose(
     step: &super::super::Step,
     digests: &mut BTreeMap<String, String>,
 ) -> Result<String> {
-    // Only validated agent steps compose prompts.
-    let prompt_file = step.prompt_file.as_deref().expect("agent step prompt file");
+    let prompt_file = step.prompt_file.as_deref().ok_or_else(|| {
+        WorkflowErr::Refused(format!(
+            "steps.{}.prompt-file: an agent step requires prompt-file",
+            record.node
+        ))
+    })?;
     let file = spec::confined_file(&record.spec_dir, prompt_file)?;
     let prompt = std::fs::read_to_string(file)?;
     digests.insert(prompt_file.into(), script::digest(prompt.as_bytes()));
@@ -198,7 +202,7 @@ pub(super) fn prepare_end(
             })
     };
     let Some(ending) = ending else {
-        if until::begin(t, &observed) {
+        if until::begin(t, &observed)? {
             persist(t, guard)?;
             return Ok(Decision::Again);
         }
