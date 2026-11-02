@@ -285,7 +285,8 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &[],
             default: Some(crate::agents::PermissionMode::Auto),
             // Every spelling of the approval flags in rust-v0.163.0
-            // `codex-rs/utils/cli/src/shared_options.rs`, clap aliases included.
+            // `codex-rs/tui/src/cli.rs` and `codex-rs/utils/cli/src/shared_options.rs`,
+            // clap aliases included.
             flags: &[
                 "--ask-for-approval",
                 "-a",
