@@ -249,6 +249,7 @@ pub(super) fn run_one(
             worktree,
             spec,
             prompt,
+            permission_override,
             loop_reminder,
         }) => {
             let effect = (|| {
@@ -275,11 +276,7 @@ pub(super) fn run_one(
                             ..Default::default()
                         },
                         overrides: rimz::launcher::LaunchOverrides {
-                            mode: match entry.mode.as_deref() {
-                                Some("ask") => Some(rimz::agents::PermissionMode::Ask),
-                                Some("yolo") => Some(rimz::agents::PermissionMode::Yolo),
-                                _ => None,
-                            },
+                            mode: permission_override,
                             preset: rimz::agents::LaunchPreset {
                                 effort: rimz::harness::plan::normalized_preset_value(
                                     entry.effort.as_deref(),
