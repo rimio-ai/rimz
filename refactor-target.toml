@@ -2083,7 +2083,8 @@ path = "crates/rimz/src/harness"
 # stall_nudge, Decision, and decision share opt-in policy with room and host callers (+3).
 # StallNudgeRequest, nudge_stalled_teams, helper, NudgeErr, and queue share the producer/CLI seam (+5).
 # workflow::cancel_args shares reason-bearing cancellation argv with removal callers (+1).
-surface-budget = 1071
+# workflow::Limit shares the strict limit table with engine and CLI (+1).
+surface-budget = 1072
 
 [[verdict]]
 kind = "item"
@@ -10554,6 +10555,11 @@ reason = "Workflow validation and execution share one check-kind decision."
 kind = "item"
 key = "harness::workflow::spec::StepKind"
 reason = "Workflow validation and execution share one agent/run/shell step decision."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Limit"
+reason = "Workflow validation, admission, schema, and CLI share the workflow and step limit table."
 
 [[verdict]]
 kind = "item"

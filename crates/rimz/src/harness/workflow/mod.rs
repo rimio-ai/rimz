@@ -26,8 +26,8 @@ pub use inspect::{
 };
 pub use script::{CaseMark, CaseMarks, case_marks, unread_reasons};
 pub use spec::{
-    Case, Check, CheckKind, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, StepKind,
-    WorkflowSpec, load, schema,
+    Case, Check, CheckKind, Header, HeaderEdges, Limit, ScopeKind, SpecErr, Step, StepEdges,
+    StepKind, WorkflowSpec, load, schema,
 };
 pub use validate::{Issue, NodeRow, Validation, validate};
 

@@ -137,6 +137,16 @@ expression: value
             "null"
           ]
         },
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Limit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "on": {
           "$ref": "#/$defs/HeaderEdges"
         },
@@ -187,6 +197,26 @@ expression: value
         }
       ]
     },
+    "Limit": {
+      "additionalProperties": false,
+      "properties": {
+        "max-active": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ScopeKind": {
       "enum": [
         "worktree",
@@ -213,6 +243,16 @@ expression: value
           "anyOf": [
             {
               "$ref": "#/$defs/StepLifecycle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Limit"
             },
             {
               "type": "null"

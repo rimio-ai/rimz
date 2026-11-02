@@ -303,7 +303,7 @@ pub fn timeout_at(
     let Some(raw) = timeout else {
         return Ok(None);
     };
-    Ok(start.checked_add(super::state::duration(raw)?).ok())
+    Ok(start.checked_add(super::spec::duration(raw)?).ok())
 }
 
 /// The case's hold instant, measured from its first matching settlement or `now`.
@@ -326,5 +326,5 @@ pub fn hold_until(
         .as_ref()
         .filter(|wait| wait.is_hold() && wait.case == Some(case))
         .map_or(now, |wait| wait.first);
-    Ok(first.checked_add(super::state::duration(hold)?).ok())
+    Ok(first.checked_add(super::spec::duration(hold)?).ok())
 }

@@ -80,6 +80,9 @@ pub(super) fn validate_spec(
         report.error("workflow", err);
     }
     report.summary("workflow", spec.workflow.summary.as_deref());
+    if let Some(limit) = &spec.workflow.limit {
+        report.limit("workflow.limit", limit);
+    }
     if !spec.checks.contains_key(&spec.workflow.start)
         && !spec.steps.contains_key(&spec.workflow.start)
     {
@@ -280,8 +283,16 @@ pub(super) fn validate_spec(
         {
             report.error(&format!("{path}.shell"), "set a nonempty shell command");
         }
+        if let Some(limit) = &step.limit {
+            report.limit(&format!("{path}.limit"), limit);
+        }
         if command {
             for (field, present, message) in [
+                (
+                    "limit",
+                    step.limit.is_some(),
+                    "a command step has no turn to count",
+                ),
                 (
                     "takeover",
                     step.takeover.is_some(),
@@ -525,6 +536,22 @@ fn issue(path: &str, message: impl Display) -> Issue {
 }
 
 impl Validation {
+    fn limit(&mut self, path: &str, limit: &super::Limit) {
+        if limit.max_active.is_none() && limit.pace.is_none() {
+            self.error(path, "set max-active or pace");
+        }
+        if limit.max_active == Some(0) {
+            self.error(&format!("{path}.max-active"), "must be at least 1");
+        }
+        match limit.pace() {
+            Ok(Some(pace)) if pace.is_zero() => {
+                self.error(&format!("{path}.pace"), "must be greater than zero");
+            }
+            Err(error) => self.error(&format!("{path}.pace"), error),
+            _ => {}
+        }
+    }
+
     fn error(&mut self, path: &str, message: impl Display) {
         self.errors.push(issue(path, message));
     }
