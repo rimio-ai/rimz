@@ -488,6 +488,7 @@ static OMP_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--approval-mode", "write"],
             yolo: &["--approval-mode", "yolo"],
             plan: &["--approval-mode", "always-ask"],
+            ..LaunchPermissionArgs::EMPTY
         },
         compact_command: Some(CompactCommand {
             command: "/compact",

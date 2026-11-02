@@ -265,14 +265,16 @@ Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `np
 
 ### Permission modes
 
-A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` flags, or a `<kind>-<mode>` cell such as `claude-plan`. RimZ appends the arguments below. `none` means the mode adds no arguments, so the agent keeps its own default; for Auto and Yolo, the `<kind>-auto` and `<kind>-yolo` cells do not exist ([permission-mode cells](./cli/agents.md#permission-mode-cells)).
+A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` flags, or a `<kind>-<mode>` cell such as `claude-plan`. With no mode set, Claude Code, Codex, OpenCode and Pi default to Auto, mapped to the provider's available mode: OpenCode maps Ask, Auto and Plan to Auto (its own permission rules), and Pi maps every mode to Yolo (it has no permission system). Other kinds have no default. RimZ appends the arguments below; `none` means no arguments, and a mode name before it is the mapped mode RimZ records. Empty Auto or Yolo vectors have no corresponding cell except for OpenCode and Pi's mapped modes ([permission-mode cells](./cli/agents.md#permission-mode-cells)).
+
+The recorded mode is what RimZ requested, not what the provider granted. Claude Code can start in Manual when Auto is unavailable. Raw permission flags in profile `args` or provider passthrough make the recorded mode unknown: defaults yield to those flags, while an explicitly requested mode still renders its arguments. Restart, resume and rebirth settle an unknown mode again, including the kind default unless raw flags still make it unknown. RimZ does not read provider configuration to choose or infer a permission mode.
 
 | Agent | Ask | Auto | Plan | Yolo |
 | --- | --- | --- | --- | --- |
 | Claude Code | `--permission-mode default` | `--permission-mode auto` | `--permission-mode plan` | `--dangerously-skip-permissions` |
 | Codex | `--ask-for-approval on-request -c approvals_reviewer="user"` | `--ask-for-approval on-request -c approvals_reviewer="auto_review"` | none | `--dangerously-bypass-approvals-and-sandbox` |
-| Pi | none | none | none | none |
-| OpenCode | none | none | none | `--auto` |
+| Pi | yolo: none | yolo: none | yolo: none | none |
+| OpenCode | auto: none | none | auto: none | `--auto` |
 | Antigravity | none | `--mode accept-edits` | `--mode plan` | `--dangerously-skip-permissions --mode accept-edits` |
 | Copilot | `--mode interactive` | `--autopilot` | `--plan` | `--allow-all` |
 | Droid | none | `--auto medium` | `--use-spec` | none |

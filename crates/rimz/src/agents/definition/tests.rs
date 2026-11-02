@@ -5,6 +5,124 @@ use crate::agents::AskKind;
 use crate::agents::registry::BUILTINS;
 
 #[test]
+fn permission_settlement_defaults_and_maps_each_kind() {
+    use super::PermissionMode::{Ask, Auto, Plan, Yolo};
+    for (kind, default, mapped) in [
+        ("claude", Some(Auto), [Plan, Ask, Auto, Yolo]),
+        ("codex", Some(Auto), [Plan, Ask, Auto, Yolo]),
+        ("opencode", Some(Auto), [Auto, Auto, Auto, Yolo]),
+        ("pi", Some(Yolo), [Yolo; 4]),
+        ("amp", None, [Plan, Ask, Auto, Yolo]),
+    ] {
+        let launch = crate::agents::spec_by_kind(kind).unwrap().launch;
+        assert_eq!(
+            super::LaunchPermissionArgs::of_kind(kind).resolve_mode(None),
+            default,
+            "{kind} permission table"
+        );
+        let mut args = vec!["--unrelated".to_owned()];
+        assert_eq!(
+            launch.settle_permission_mode(&mut args, None, None),
+            default,
+            "{kind} default"
+        );
+        let mut expected = vec!["--unrelated".to_owned()];
+        if let Some(mode) = default {
+            expected.extend(launch.permission_args(mode));
+        }
+        assert_eq!(args, expected, "{kind} default argv");
+        for (requested, mapped) in [Plan, Ask, Auto, Yolo].into_iter().zip(mapped) {
+            let mut args = launch.permission_args(requested);
+            assert_eq!(
+                launch.settle_permission_mode(&mut args, Some(requested), Some(Yolo)),
+                Some(mapped),
+                "{kind} {requested}"
+            );
+            assert_eq!(args, launch.permission_args(mapped), "{kind} {requested}");
+        }
+    }
+    for requested in [None, Some(Plan), Some(Ask), Some(Auto), Some(Yolo)] {
+        assert_eq!(
+            super::LaunchPermissionArgs::of_kind("missing-kind").resolve_mode(requested),
+            requested
+        );
+    }
+}
+
+#[test]
+fn permission_settlement_yields_defaults_to_raw_markers_and_records_unknown() {
+    use super::PermissionMode::{Auto, Yolo};
+    for (kind, raw) in [
+        ("claude", vec!["--permission-mode", "plan"]),
+        ("claude", vec!["--permission-mode=plan"]),
+        ("claude", vec!["--dangerously-skip-permissions"]),
+        ("codex", vec!["--ask-for-approval", "never"]),
+        ("codex", vec!["--ask-for-approval=never"]),
+        ("codex", vec!["-a", "never"]),
+        ("codex", vec!["-c", "approvals_reviewer=user"]),
+        ("codex", vec!["--config=approvals_reviewer=user"]),
+        ("codex", vec!["-c", "approval_policy=never"]),
+        ("codex", vec!["--dangerously-bypass-approvals-and-sandbox"]),
+        ("codex", vec!["--yolo"]),
+        ("codex", vec!["--approve-for-me"]),
+        ("codex", vec!["--not-so-yolo"]),
+        ("opencode", vec!["--auto"]),
+        ("opencode", vec!["--yolo"]),
+        ("opencode", vec!["--dangerously-skip-permissions"]),
+    ] {
+        let launch = crate::agents::spec_by_kind(kind).unwrap().launch;
+        let raw: Vec<String> = raw.into_iter().map(str::to_owned).collect();
+        for default in [None, Some(Auto), Some(Yolo)] {
+            let mut args = raw.clone();
+            assert_eq!(
+                launch.settle_permission_mode(&mut args, None, default),
+                None,
+                "{kind} raw {raw:?}"
+            );
+            assert_eq!(args, raw, "{kind}: a default must not override raw flags");
+        }
+        let mut args = launch.permission_args(Auto);
+        args.extend(raw.iter().cloned());
+        let expected = args.clone();
+        assert_eq!(
+            launch.settle_permission_mode(&mut args, Some(Auto), None),
+            None,
+            "{kind} requested auto plus raw {raw:?}"
+        );
+        assert_eq!(args, expected);
+    }
+}
+
+#[test]
+fn permission_settlement_ignores_only_one_owned_vector_and_exact_flag_names() {
+    use super::PermissionMode::Auto;
+    for kind in ["claude", "codex"] {
+        let launch = crate::agents::spec_by_kind(kind).unwrap().launch;
+        let mut args = launch.permission_args(Auto);
+        args.extend(launch.permission_args(Auto));
+        assert_eq!(
+            launch.settle_permission_mode(&mut args, Some(Auto), None),
+            None,
+            "{kind} repeated vector is unknown"
+        );
+    }
+    for (kind, raw) in [
+        ("claude", "--permission-mode-extra"),
+        ("codex", "--ask-for-approval-extra"),
+        ("codex", "-another"),
+        ("opencode", "--automatic"),
+    ] {
+        let launch = crate::agents::spec_by_kind(kind).unwrap().launch;
+        let mut args = vec![raw.to_owned()];
+        assert_eq!(
+            launch.settle_permission_mode(&mut args, None, None),
+            Some(Auto),
+            "{kind} {raw} is not a permission flag"
+        );
+    }
+}
+
+#[test]
 fn plan_labels_use_named_tiers_with_title_case_fallbacks() {
     for (kind, raw, expected) in [
         ("codex", "prolite", "ChatGPT Pro 100"),

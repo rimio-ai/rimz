@@ -1949,11 +1949,22 @@ fn permission_mode_table_matches_the_declared_arguments() {
             .find(|adapter| adapter.spec().kind == kind)
             .unwrap_or_else(|| panic!("no built-in adapter of kind {kind}"));
         for (column, (label, mode)) in modes.iter().enumerate() {
-            let args = adapter.spec().launch.permission_args(*mode);
+            let mapped = adapter
+                .spec()
+                .launch
+                .permission
+                .resolve_mode(Some(*mode))
+                .unwrap();
+            let args = adapter.spec().launch.permission_args(mapped);
             let declared = if args.is_empty() {
                 "none".to_owned()
             } else {
                 format!("`{}`", args.join(" "))
+            };
+            let declared = if mapped == *mode {
+                declared
+            } else {
+                format!("{mapped}: {declared}")
             };
             let published = row[column + 1].as_str();
             assert_eq!(

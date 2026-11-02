@@ -283,6 +283,19 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             ],
             yolo: &["--dangerously-bypass-approvals-and-sandbox"],
             plan: &[],
+            default: Some(crate::agents::PermissionMode::Auto),
+            // Every spelling of the approval flags in rust-v0.163.0
+            // `codex-rs/utils/cli/src/shared_options.rs`, clap aliases included.
+            flags: &[
+                "--ask-for-approval",
+                "-a",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--yolo",
+                "--approve-for-me",
+                "--not-so-yolo",
+            ],
+            config_keys: &["approvals_reviewer", "approval_policy"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
         interrupt_key: Some(crate::pane::keys::NamedKey::Escape),

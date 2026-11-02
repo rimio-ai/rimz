@@ -218,6 +218,51 @@ impl LaunchSpec {
         args.iter().map(|arg| (*arg).to_owned()).collect()
     }
 
+    /// Settle final argv containing the requested mode's rendered vector, if any.
+    /// Defaults yield to raw permission markers; one owned vector is excluded
+    /// when deciding whether the recorded mode is known.
+    pub fn settle_permission_mode(
+        self,
+        args: &mut Vec<String>,
+        requested: Option<PermissionMode>,
+        default: Option<PermissionMode>,
+    ) -> Option<PermissionMode> {
+        let rendered = requested
+            .map(|mode| self.permission_args(mode))
+            .unwrap_or_default();
+        let owned = (!rendered.is_empty())
+            .then(|| {
+                args.windows(rendered.len())
+                    .position(|part| part == rendered)
+            })
+            .flatten()
+            .map(|start| start..start + rendered.len());
+        let raw = args.iter().enumerate().any(|(index, arg)| {
+            !owned.as_ref().is_some_and(|range| range.contains(&index))
+                && (self.permission.flags.iter().any(|flag| {
+                    arg == *flag
+                        || arg
+                            .strip_prefix(*flag)
+                            .is_some_and(|rest| rest.starts_with('='))
+                }) || self
+                    .permission
+                    .config_keys
+                    .iter()
+                    .any(|key| arg.contains(*key)))
+        });
+        if requested.is_none() && raw {
+            return None;
+        }
+        let mode = self.permission.resolve_mode(requested.or(default))?;
+        if requested != Some(mode) {
+            if let Some(owned) = owned {
+                args.drain(owned);
+            }
+            args.extend(self.permission_args(mode));
+        }
+        (!raw).then_some(mode)
+    }
+
     /// Remove all exact rendered permission vectors, longest first.
     pub fn strip_permission_args(self, args: &mut Vec<String>) {
         let mut vectors = [
@@ -560,6 +605,10 @@ pub struct LaunchPermissionArgs {
     pub auto: &'static [&'static str],
     pub yolo: &'static [&'static str],
     pub plan: &'static [&'static str],
+    pub(super) default: Option<PermissionMode>,
+    pub(super) mapped_modes: [PermissionMode; 4],
+    pub(super) flags: &'static [&'static str],
+    pub(super) config_keys: &'static [&'static str],
 }
 
 impl LaunchPermissionArgs {
@@ -568,7 +617,28 @@ impl LaunchPermissionArgs {
         auto: &[],
         yolo: &[],
         plan: &[],
+        default: None,
+        mapped_modes: [
+            PermissionMode::Plan,
+            PermissionMode::Ask,
+            PermissionMode::Auto,
+            PermissionMode::Yolo,
+        ],
+        flags: &[],
+        config_keys: &[],
     };
+
+    /// The kind's permission table, or identity mapping without a default for an unknown kind.
+    pub fn of_kind(kind: &str) -> Self {
+        super::registry::spec_by_kind(kind).map_or(Self::EMPTY, |spec| spec.launch.permission)
+    }
+
+    /// Resolve a requested mode or the provider default to an available mode.
+    pub fn resolve_mode(self, requested: Option<PermissionMode>) -> Option<PermissionMode> {
+        requested
+            .or(self.default)
+            .map(|mode| self.mapped_modes[usize::from(mode.rank())])
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

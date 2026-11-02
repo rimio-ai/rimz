@@ -124,6 +124,16 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &[],
             yolo: &["--auto"],
             plan: &[],
+            default: Some(crate::agents::PermissionMode::Auto),
+            mapped_modes: [
+                crate::agents::PermissionMode::Auto,
+                crate::agents::PermissionMode::Auto,
+                crate::agents::PermissionMode::Auto,
+                crate::agents::PermissionMode::Yolo,
+            ],
+            // v2.0.27 `PermissionParams`: the hidden spellings act as `--auto`.
+            flags: &["--auto", "--yolo", "--dangerously-skip-permissions"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
         interrupt_key: None,

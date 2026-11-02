@@ -335,7 +335,9 @@ upward-dependencies = ["address"]
 # PlanCapacities, PlanCapacity and PlanCapacities::resolve declare plan sizes beside PlanLabel (+3).
 # AgentState::permission_review_until and is_reviewing_permission share attention timing (+2).
 # AgentState::attention_ask shares blocking-ask visibility across attention readers (+1).
-surface-budget = 1223
+# LaunchSpec::settle_permission_mode and LaunchPermissionArgs::resolve_mode share per-kind permission settlement (+2).
+# LaunchPermissionArgs::of_kind shares permission-table lookup with identity for unknown kinds (+1).
+surface-budget = 1226
 
 [[verdict]]
 kind = "item"

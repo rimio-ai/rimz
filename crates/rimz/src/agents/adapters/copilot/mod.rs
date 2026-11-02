@@ -117,6 +117,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--autopilot"],
             yolo: &["--allow-all"],
             plan: &["--plan"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
         interrupt_key: None,

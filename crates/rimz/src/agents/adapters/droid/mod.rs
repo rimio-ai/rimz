@@ -112,6 +112,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--auto", "medium"],
             yolo: &[],
             plan: &["--use-spec"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
         interrupt_key: None,

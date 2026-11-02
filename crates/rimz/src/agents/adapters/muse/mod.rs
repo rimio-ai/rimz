@@ -83,6 +83,7 @@ static MUSE_DESCRIPTOR: AgentSpec = AgentSpec {
             ask: &["--permission-profile", ":ask-me"],
             yolo: &["--yolo"],
             plan: &["--permission-profile", ":read-only"],
+            ..crate::agents::LaunchPermissionArgs::EMPTY
         },
         compact_command: Some(crate::agents::CompactCommand {
             command: "/compact",

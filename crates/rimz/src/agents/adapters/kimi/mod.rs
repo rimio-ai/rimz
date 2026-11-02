@@ -133,6 +133,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--auto"],
             yolo: &["--yolo"],
             plan: &["--plan"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
         interrupt_key: None,
