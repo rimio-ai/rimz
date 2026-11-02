@@ -43,16 +43,8 @@ static RULES_TEXT: LazyLock<String> = LazyLock::new(|| {
     rules
 });
 
-static RULES_SOURCE: LazyLock<ManagedSource> = LazyLock::new(|| {
-    ManagedSource::new(
-        "codex",
-        &RULES_TEXT,
-        &[],
-        "rules file",
-        codex_rules_path,
-        true,
-    )
-});
+static RULES_SOURCE: LazyLock<ManagedSource> =
+    LazyLock::new(|| ManagedSource::new("codex", &RULES_TEXT, &[], "rules file", codex_rules_path));
 
 fn codex_rules_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     super::CodexAdapter
@@ -125,22 +117,30 @@ impl ManagedIntegration for CodexManagedIntegration {
             || RULES_SOURCE.installed(login_env)
     }
 
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         login_env: &BTreeMap<String, String>,
         options: crate::agents::HookInstallOptions,
-    ) -> bool {
-        if codex_config_path(login_env).is_ok_and(|path| hook_definition_drift_at(&path)) {
-            return true;
+    ) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        if let Ok(path) = codex_config_path(login_env)
+            && hook_definition_drift_at(&path)
+        {
+            files.push(path);
         }
         let Ok(path) = codex_rules_path(login_env) else {
-            return false;
+            return files;
         };
-        if options.allow_routine_rimz {
-            !path.exists() || RULES_SOURCE.upgrade_available_at(&path)
+        let outdated = if options.allow_routine_rimz {
+            matches!(read_optional_file("codex", &path), Ok(None))
+                || !RULES_SOURCE.outdated_files_at(&path).is_empty()
         } else {
             RULES_SOURCE.installed_at(&path)
+        };
+        if outdated {
+            files.push(path);
         }
+        files
     }
 
     fn wiring_input_paths(

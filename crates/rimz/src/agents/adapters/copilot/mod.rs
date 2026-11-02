@@ -330,7 +330,6 @@ const COPILOT_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     COPILOT_HOOKS,
     "hook file",
     paths::hooks_path,
-    true,
 );
 
 const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source copilot";

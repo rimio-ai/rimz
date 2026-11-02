@@ -8,6 +8,104 @@ use crate::agents::capabilities::HookCapability;
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentLifecycleObservation, AskKind, HookOutput};
 
+pub(super) fn outdated_json_source(
+    source: &super::managed_source::ManagedSource,
+    catalog: &[super::hook_types::HookEventSpec],
+    sync: super::managed_json_hooks::SyncEncoding,
+    statusline_pointer: Option<&str>,
+) {
+    use super::managed_json_hooks::SyncEncoding;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    assert!(source.outdated_files_at(&path).is_empty());
+    source.install_into(&path).unwrap();
+    assert!(source.outdated_files_at(&path).is_empty());
+    let canonical: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut with_user = canonical.clone();
+    let (event, entries) = with_user["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .iter_mut()
+        .next()
+        .unwrap();
+    let event = event.clone();
+    let entries = entries.as_array_mut().unwrap();
+    entries.insert(0, json!({"hooks":[{"command":"echo before"}]}));
+    entries.push(json!({"hooks":[{"command":"echo after"}]}));
+    with_user["theme"] = json!("user preference");
+    std::fs::write(&path, with_user.to_string()).unwrap();
+    assert!(
+        source.outdated_files_at(&path).is_empty(),
+        "user entries and formatting"
+    );
+    let sync_event = catalog.iter().find(|hook| !hook.synchronous).unwrap().event;
+    for field in [
+        "command",
+        "timeout",
+        "sync",
+        "removed event",
+        "missing event",
+        "statusline",
+    ] {
+        if field == "statusline" && statusline_pointer.is_none() {
+            continue;
+        }
+        let mut drift = canonical.clone();
+        match field {
+            "command" => drift["hooks"][&event][0]["hooks"][0]["command"] = json!("old command"),
+            "timeout" => drift["hooks"][&event][0]["hooks"][0]["timeout"] = json!(999),
+            "sync" => match sync {
+                SyncEncoding::EntryMarker => {
+                    drift["hooks"][sync_event][0]["_rimz_sync"] = json!(true)
+                }
+                SyncEncoding::HandlerAsync => {
+                    drift["hooks"][sync_event][0]["hooks"][0]["async"] = json!(true)
+                }
+                SyncEncoding::None => continue,
+            },
+            "removed event" => {
+                drift["hooks"]["RetiredEvent"] = json!([canonical["hooks"][&event][0]])
+            }
+            "missing event" => {
+                drift["hooks"].as_object_mut().unwrap().remove(&event);
+            }
+            "statusline" => {
+                *drift.pointer_mut(statusline_pointer.unwrap()).unwrap() = json!("old statusline");
+            }
+            _ => unreachable!(),
+        }
+        if field == "sync" {
+            let pointer = match sync {
+                SyncEncoding::EntryMarker => "/_rimz_sync",
+                SyncEncoding::HandlerAsync => "/hooks/0/async",
+                SyncEncoding::None => continue,
+            };
+            assert_eq!(
+                drift["hooks"][sync_event][0]
+                    .pointer(pointer)
+                    .and_then(Value::as_bool),
+                Some(true),
+                "sync fixture must change the non-blocking hook's native encoding"
+            );
+        }
+        std::fs::write(&path, drift.to_string()).unwrap();
+        assert_eq!(
+            source.outdated_files_at(&path),
+            std::slice::from_ref(&path),
+            "{field}"
+        );
+    }
+    std::fs::write(
+        &path,
+        r#"{"hooks":{"UserEvent":[{"hooks":[{"command":"echo user"}]}]}}"#,
+    )
+    .unwrap();
+    assert!(source.outdated_files_at(&path).is_empty());
+    std::fs::write(&path, "not json").unwrap();
+    assert!(source.outdated_files_at(&path).is_empty());
+}
+
 /// Check context attachment and return the native replies for adapter goldens.
 pub(crate) fn deadline_context_replies(
     kind: &str,

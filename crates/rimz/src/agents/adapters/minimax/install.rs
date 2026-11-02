@@ -232,12 +232,32 @@ impl ManagedIntegration for MiniMaxIntegration {
         package(env).is_ok_and(|path| path.exists())
     }
 
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
-    ) -> bool {
-        self.managed_artifacts_present(env) && !self.installed(env)
+    ) -> Vec<PathBuf> {
+        let Ok(package) = package(env) else {
+            return Vec::new();
+        };
+        if !package.exists() || check_package(&package).is_err() {
+            return Vec::new();
+        }
+        files()
+            .into_iter()
+            .filter_map(|(relative, expected)| {
+                let path = package.join(relative);
+                let outdated = match std::fs::read(&path) {
+                    Ok(content) => {
+                        content != expected
+                            || !std::fs::symlink_metadata(&path)
+                                .is_ok_and(|metadata| metadata.is_file())
+                    }
+                    Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+                };
+                outdated.then_some(path)
+            })
+            .collect()
     }
 
     fn wiring_input_paths(

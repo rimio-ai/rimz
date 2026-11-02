@@ -22,7 +22,7 @@ static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
     sync: SyncEncoding::HandlerAsync,
     status_lines: &[],
 };
-static SOURCE: ManagedSource = ManagedSource::json(&SPEC, settings_path);
+pub(super) static SOURCE: ManagedSource = ManagedSource::json(&SPEC, settings_path);
 
 pub(super) fn settings_path(env: &BTreeMap<String, String>) -> Result<PathBuf> {
     QoderAdapter
@@ -69,6 +69,13 @@ impl ManagedIntegration for QoderAdapter {
     }
     fn managed_artifacts_present(&self, env: &BTreeMap<String, String>) -> bool {
         SOURCE.managed_artifacts_present(env)
+    }
+    fn outdated_files(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Vec<PathBuf> {
+        SOURCE.outdated_files(env)
     }
     fn wiring_input_paths(&self, spec: &AgentSpec, env: &BTreeMap<String, String>) -> Vec<PathBuf> {
         ManagedIntegration::wiring_input_paths(&SOURCE, spec, env)

@@ -428,6 +428,33 @@ fn managed_launch_warns_when_opencode_cli_config_is_ignored() {
 }
 
 #[test]
+fn outdated_bundle_lists_changed_missing_and_legacy_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = OpencodeBundle {
+        directory: dir.path().join("plugins/rimz"),
+        legacy: Some(dir.path().join("plugin/rimz.ts")),
+    };
+    assert!(bundle.outdated_files().is_empty());
+    std::fs::create_dir_all(&bundle.directory).unwrap();
+    let index = bundle.directory.join("index.ts");
+    let tui = bundle.directory.join("tui.ts");
+    std::fs::write(&index, PLUGIN_SOURCE).unwrap();
+    std::fs::write(&tui, TUI_SOURCE).unwrap();
+    assert!(bundle.outdated_files().is_empty());
+    std::fs::write(&tui, "// _rimz_managed older client\n").unwrap();
+    assert_eq!(bundle.outdated_files(), std::slice::from_ref(&tui));
+    std::fs::remove_file(&tui).unwrap();
+    assert_eq!(bundle.outdated_files(), std::slice::from_ref(&tui));
+    std::fs::write(&tui, TUI_SOURCE).unwrap();
+    let legacy = bundle.legacy.as_ref().unwrap();
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(legacy, "// _rimz_managed older plugin\n").unwrap();
+    assert_eq!(bundle.outdated_files(), std::slice::from_ref(legacy));
+    std::fs::write(&index, "// user's plugin\n").unwrap();
+    assert!(bundle.outdated_files().is_empty());
+}
+
+#[test]
 #[cfg(unix)]
 fn install_blocker_refuses_only_old_opencode() {
     use std::os::unix::fs::PermissionsExt as _;

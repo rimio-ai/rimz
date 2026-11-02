@@ -323,7 +323,6 @@ const PI_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     PI_HOOKS,
     "extension",
     pi_extension_path,
-    true,
 );
 
 #[derive(Clone, Debug, Default)]

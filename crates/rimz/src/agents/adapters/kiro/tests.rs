@@ -1010,12 +1010,21 @@ fn hook_install_writes_reclaims_and_removes_the_managed_file() {
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
     assert!(KIRO_MANAGED_SOURCE.installed_at(&path));
+    assert!(KIRO_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
+    std::fs::write(&path, "// _rimz_managed older hooks\n").unwrap();
+    assert_eq!(
+        KIRO_MANAGED_SOURCE.outdated_files_at(&path),
+        std::slice::from_ref(&path)
+    );
     assert!(install::install_at(&path, None).unwrap().files[0].existed);
 
     let removed = install::uninstall_from(&path).unwrap();
     assert!(removed.files[0].existed);
     assert_eq!(removed.removed_events.len(), 5);
     assert!(!path.exists());
+    assert!(KIRO_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
+    std::fs::write(&path, "{}").unwrap();
+    assert!(KIRO_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
 }
 
 #[test]

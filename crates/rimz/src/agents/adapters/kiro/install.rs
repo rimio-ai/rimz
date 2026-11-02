@@ -48,12 +48,12 @@ impl ManagedIntegration for KiroManagedIntegration {
         KIRO_MANAGED_SOURCE.installed(login_env)
     }
 
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         login_env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
-    ) -> bool {
-        KIRO_MANAGED_SOURCE.upgrade_available(login_env)
+    ) -> Vec<PathBuf> {
+        KIRO_MANAGED_SOURCE.outdated_files(login_env)
     }
 
     fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {

@@ -43,7 +43,7 @@ Ownership is structural (`crates/rimz/src/agents/adapters/minimax/install.rs::ch
 | --- | --- |
 | Install | Writes each file whose bytes differ, so a repeat install writes nothing. |
 | Preview | Shows the two JSON files. The icon has no text diff. |
-| Detection (`installed`) | True only when all three paths are regular files with the embedded bytes. Any drift makes `upgrade_available` true while the directory exists. |
+| Detection (`installed`) | True only when all three paths are regular files with the embedded bytes. `outdated_files` lists differing or missing package files while the managed directory exists. |
 | Uninstall | Removes `plugins/rimz` recursively. Sibling plugins and user configuration stay. |
 
 Detection cannot see mcode's own enabled state. That state lives in a private SQLite table, which RimZ neither reads nor writes, and MiniMax implements no `hooks_disabled`. A byte-correct package therefore reports installed while mcode has the plugin disabled, and a reinstall does not change it. The fix is `mcode plugin enable rimz@local`, run with the same data-directory environment.

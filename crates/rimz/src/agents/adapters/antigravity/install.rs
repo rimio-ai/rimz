@@ -28,7 +28,75 @@ pub(super) static MANAGED_INTEGRATION: AntigravityManagedIntegration =
 
 pub(super) struct AntigravityManagedIntegration;
 
+pub(super) fn outdated_files_at(hooks: &Path, settings: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let (Ok(root), Ok(candidate)) = (
+        settings_json::read_json_object(AGENT, hooks),
+        hook_candidate(hooks),
+    ) {
+        let owned = owned_hooks(&root);
+        if !owned.is_empty() && owned != owned_hooks(&candidate) {
+            files.push(hooks.to_path_buf());
+        }
+    }
+    if let (Ok(root), Ok((candidate, _))) = (
+        settings_json::read_json_object(AGENT, settings),
+        statusline_candidate(settings),
+    ) && super::super::managed_statusline::is_managed(&root, &STATUS_LINE)
+        && super::super::managed_statusline::managed_value(&root, &STATUS_LINE)
+            != super::super::managed_statusline::managed_value(&candidate, &STATUS_LINE)
+    {
+        files.push(settings.to_path_buf());
+    }
+    files
+}
+
+fn owned_hooks(root: &Map<String, Value>) -> Map<String, Value> {
+    root.iter()
+        .filter_map(|(name, events)| {
+            let owned = super::super::managed_json_hooks::owned_hook_entries(
+                events.as_object()?,
+                owned_entry,
+            );
+            (!owned.is_empty()).then(|| (name.clone(), Value::Object(owned)))
+        })
+        .collect()
+}
+
+fn owned_entry(entry: &Value) -> Option<Value> {
+    let mut object = entry.as_object()?.clone();
+    if object
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| command.contains(RIMZ_HOOK_MARKER))
+    {
+        return Some(entry.clone());
+    }
+    let hooks: Vec<_> = object
+        .get("hooks")?
+        .as_array()?
+        .iter()
+        .filter(|hook| value_has_owned_hook(hook))
+        .cloned()
+        .collect();
+    if hooks.is_empty() {
+        return None;
+    }
+    object.insert("hooks".to_owned(), Value::Array(hooks));
+    Some(Value::Object(object))
+}
+
 impl ManagedIntegration for AntigravityManagedIntegration {
+    fn outdated_files(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Vec<PathBuf> {
+        hooks_path()
+            .and_then(|hooks| Ok(outdated_files_at(&hooks, &settings_path()?)))
+            .unwrap_or_default()
+    }
+
     fn install(
         &self,
         _login_env: &BTreeMap<String, String>,

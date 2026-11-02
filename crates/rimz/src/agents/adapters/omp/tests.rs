@@ -235,6 +235,13 @@ fn install_uses_login_home_and_xdg_does_not_move_it() {
     managed.install(&env, Default::default()).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
     assert!(managed.installed(&env));
+    assert!(managed.outdated_files(&env, Default::default()).is_empty());
+    std::fs::write(&path, "// _rimz_managed older extension\n").unwrap();
+    assert_eq!(
+        managed.outdated_files(&env, Default::default()),
+        std::slice::from_ref(&path)
+    );
+    managed.install(&env, Default::default()).unwrap();
     env.insert(
         "XDG_CONFIG_HOME".into(),
         dir.path().join("pinned").to_str().unwrap().into(),
@@ -242,6 +249,9 @@ fn install_uses_login_home_and_xdg_does_not_move_it() {
     assert!(managed.installed(&env));
     managed.uninstall(&env).unwrap();
     assert!(!path.exists());
+    assert!(managed.outdated_files(&env, Default::default()).is_empty());
+    std::fs::write(&path, "// user's extension\n").unwrap();
+    assert!(managed.outdated_files(&env, Default::default()).is_empty());
 }
 
 #[test]

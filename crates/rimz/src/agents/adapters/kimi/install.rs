@@ -20,7 +20,40 @@ pub(super) static MANAGED_INTEGRATION: KimiManagedIntegration = KimiManagedInteg
 
 pub(super) struct KimiManagedIntegration;
 
+pub(super) fn outdated_files_at(path: &Path) -> Vec<PathBuf> {
+    let (Ok(root), Ok((candidate, _))) = (read_table(path), candidate(path)) else {
+        return Vec::new();
+    };
+    let owned = owned_hooks(&root);
+    if !owned.is_empty() && owned != owned_hooks(&candidate) {
+        vec![path.to_path_buf()]
+    } else {
+        Vec::new()
+    }
+}
+
+fn owned_hooks(root: &toml::Table) -> Vec<&toml::Value> {
+    root.get("hooks")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|hook| {
+            hook.get("command")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|command| command.contains(RIMZ_COMMAND_MARKER))
+        })
+        .collect()
+}
+
 impl ManagedIntegration for KimiManagedIntegration {
+    fn outdated_files(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Vec<PathBuf> {
+        config_path().map_or_else(|_| Vec::new(), |path| outdated_files_at(&path))
+    }
+
     fn install(
         &self,
         _login_env: &BTreeMap<String, String>,

@@ -287,7 +287,6 @@ const KIRO_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     KIRO_HOOKS,
     "hook file",
     install::hooks_path,
-    true,
 );
 
 #[derive(Clone, Debug, Default)]

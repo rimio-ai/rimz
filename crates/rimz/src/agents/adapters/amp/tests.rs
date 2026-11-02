@@ -247,8 +247,13 @@ fn install_preview_drift_and_uninstall_only_touch_managed_source() {
     assert_eq!(installed.installed_events, events());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), PLUGIN_SOURCE);
     assert!(AMP_MANAGED_SOURCE.installed_at(&path));
+    assert!(AMP_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
 
     std::fs::write(&path, "// stale _rimz_managed plugin\n").unwrap();
+    assert_eq!(
+        AMP_MANAGED_SOURCE.outdated_files_at(&path),
+        std::slice::from_ref(&path)
+    );
     let preview = AMP_MANAGED_SOURCE.preview_at(&path).unwrap();
     assert!(preview.files[0].existed);
     assert_eq!(preview.files[0].candidate, PLUGIN_SOURCE);
@@ -258,9 +263,11 @@ fn install_preview_drift_and_uninstall_only_touch_managed_source() {
     let removed = AMP_MANAGED_SOURCE.uninstall_from(&path).unwrap();
     assert_eq!(removed.removed_events, events());
     assert!(!path.exists());
+    assert!(AMP_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
 
     let user_path = dir.path().join("user.ts");
     std::fs::write(&user_path, "// user plugin\n").unwrap();
+    assert!(AMP_MANAGED_SOURCE.outdated_files_at(&user_path).is_empty());
     assert!(matches!(
         AMP_MANAGED_SOURCE.install_into(&user_path),
         Err(AgentErr::Install { agent: "amp", .. })

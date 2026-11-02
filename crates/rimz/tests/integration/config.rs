@@ -2048,6 +2048,15 @@ fn setup_pty_preserves_a_lone_loop_file_when_config_is_kept() {
 fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
     let env = Env::new();
     let files = seed_setup_agents(&env);
+    let claude_bin = files.bin_dir.join("claude");
+    std::fs::write(&claude_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&claude_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    env.install_agent_hooks("claude");
+    let settings = env.home_root.join(".claude/settings.json");
+    let mut root: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    root["hooks"]["Stop"][0]["hooks"][0]["timeout"] = serde_json::json!(999);
+    std::fs::write(&settings, root.to_string()).unwrap();
     let output = run_setup_agents_pty(&env, "y\nn\nn\nn\nn\n", &files);
 
     assert!(
@@ -2056,7 +2065,7 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
             .any(|line| line.contains("not installed:") && line.contains("antigravity")),
         "{output}"
     );
-    for name in ["pi", "opencode"] {
+    for name in ["pi", "opencode", "claude"] {
         assert!(
             output.lines().any(|line| line.contains("installed:")
                 && line.contains(&format!("{name} (upgrade available)"))),

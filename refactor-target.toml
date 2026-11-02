@@ -9068,7 +9068,7 @@ reason = "The binary's account and provider tests construct known credit reading
 [[verdict]]
 kind = "item"
 key = "agents::managed_source::ManagedSource::managed_artifacts_present"
-reason = "The ManagedSource inherent methods (install, preview, uninstall, resolved_path, upgrade_available_at, wrapped_status_line_command, wrapped_subagent_status_line_command) are the seam held adapters call; their pass-through shape is the ManagedIntegration impl, pinned by 417721973 and e566d6b44 (pass 24b)."
+reason = "The ManagedSource inherent methods (install, preview, uninstall, resolved_path, outdated_files_at, wrapped_status_line_command, wrapped_subagent_status_line_command) are the seam held adapters call; their pass-through shape is the ManagedIntegration impl, pinned by 417721973 and e566d6b44 (pass 24b)."
 
 [[verdict]]
 kind = "item"

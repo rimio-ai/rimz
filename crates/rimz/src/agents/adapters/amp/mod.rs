@@ -255,14 +255,8 @@ const AMP_HOOKS: &[HookEventSpec] = &[
     .synchronous(),
 ];
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
-const AMP_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
-    "amp",
-    PLUGIN_SOURCE,
-    AMP_HOOKS,
-    "plugin",
-    amp_plugin_path,
-    false,
-);
+const AMP_MANAGED_SOURCE: ManagedSource =
+    ManagedSource::new("amp", PLUGIN_SOURCE, AMP_HOOKS, "plugin", amp_plugin_path);
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::agents) struct AmpAdapter;

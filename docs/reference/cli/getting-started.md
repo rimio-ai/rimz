@@ -221,7 +221,7 @@ With no rows, human output leaves stdout empty and prints a hint on stderr. If t
 rimz setup [--config-only]
 ```
 
-`rimz setup` prints a report (multiplexer and version, project path and its kind, project trust, config path and whether it exists, and hooks grouped into installed, not installed, and not on PATH) and then acts according to how it was run. Paths under your home use `~`. Installed hooks with a newer version available carry `(upgrade available)` after the agent name. Empty hook groups are omitted; agents found without hook-install support are omitted too. Agents with blocked hook installation stay under `not installed`, but are excluded from the `rimz hooks install` hint.
+`rimz setup` prints a report (multiplexer and version, project path and its kind, project trust, config path and whether it exists, and hooks grouped into installed, not installed, and not on PATH) and then acts according to how it was run. Paths under your home use `~`. Installed integrations with out-of-date RimZ-owned content carry `(upgrade available)` after the agent name. Empty hook groups are omitted; agents found without hook-install support are omitted too. Agents with blocked hook installation stay under `not installed`, but are excluded from the `rimz hooks install` hint.
 
 | Run | What it changes |
 | --- | --- |

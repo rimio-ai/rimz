@@ -4,6 +4,17 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::*;
+
+#[test]
+fn outdated_files_compare_only_owned_json() {
+    crate::agents::testkit::outdated_json_source(
+        &install::SOURCE,
+        QODER_HOOKS,
+        crate::agents::managed_json_hooks::SyncEncoding::HandlerAsync,
+        None,
+    );
+}
+
 use crate::agents::lifecycle::{AskKind, LifecycleSignal, PriorTurnIds, step};
 use crate::agents::testkit::{hook_lifecycle, hook_output, hook_signal};
 use crate::agents::{AgentStatus, FolderTrust, HookReply, SessionOrigin, TurnErrorClass};

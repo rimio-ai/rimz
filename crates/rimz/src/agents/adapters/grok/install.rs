@@ -67,12 +67,15 @@ impl ManagedIntegration for GrokManagedIntegration {
         MANAGED_SOURCE.managed_artifacts_present(env)
     }
 
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
-    ) -> bool {
-        MANAGED_SOURCE.upgrade_available(env)
+    ) -> Vec<PathBuf> {
+        if policy_blocker(env).is_some() {
+            return Vec::new();
+        }
+        MANAGED_SOURCE.outdated_files(env)
     }
 
     fn wiring_input_paths(

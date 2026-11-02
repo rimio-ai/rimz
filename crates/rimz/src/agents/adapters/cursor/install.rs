@@ -27,7 +27,60 @@ pub(super) static MANAGED_INTEGRATION: CursorManagedIntegration = CursorManagedI
 
 pub(super) struct CursorManagedIntegration;
 
+pub(super) fn outdated_files_at(hooks: &Path, configs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let (Ok(root), Ok((candidate, _))) = (read_existing_json(hooks), install_candidate(hooks)) {
+        let owned = owned_hooks(&root);
+        if !owned.is_empty()
+            && (owned != owned_hooks(&candidate) || root.get("version") != candidate.get("version"))
+        {
+            files.push(hooks.to_path_buf());
+        }
+    }
+    for path in configs {
+        let (Ok(root), Ok((candidate, _))) =
+            (read_existing_json(path), statusline_install_candidate(path))
+        else {
+            continue;
+        };
+        if root
+            .get(STATUS_LINE_KEY)
+            .and_then(statusline_command)
+            .is_some_and(|command| command.contains(RIMZ_STATUS_LINE_MARKER))
+            && root.get(STATUS_LINE_KEY) != candidate.get(STATUS_LINE_KEY)
+        {
+            files.push(path.clone());
+        }
+    }
+    files
+}
+
+fn owned_hooks(root: &Map<String, Value>) -> Map<String, Value> {
+    root.get("hooks")
+        .and_then(Value::as_object)
+        .map_or_else(Map::new, |hooks| {
+            super::super::managed_json_hooks::owned_hook_entries(hooks, |entry| {
+                entry_is_owned(entry).then(|| entry.clone())
+            })
+        })
+}
+
 impl ManagedIntegration for CursorManagedIntegration {
+    fn outdated_files(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Vec<PathBuf> {
+        cursor_hooks_path()
+            .and_then(|hooks| {
+                Ok(outdated_files_at(
+                    &hooks,
+                    &cursor_cli_config_paths(login_env)?,
+                ))
+            })
+            .unwrap_or_default()
+    }
+
     fn install(
         &self,
         login_env: &BTreeMap<String, String>,

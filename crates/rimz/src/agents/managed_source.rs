@@ -35,13 +35,15 @@ pub trait ManagedIntegration: Sync {
         self.installed(login_env)
     }
 
-    fn upgrade_available(
+    /// Provider files whose owned content differs from what install writes,
+    /// creates, or removes. Reads files only; never spawns or writes. Unreadable,
+    /// unparsable, and refused files are not refresh candidates. A nonempty list
+    /// does not imply that the integration is installed.
+    fn outdated_files(
         &self,
-        _login_env: &BTreeMap<String, String>,
-        _options: super::HookInstallOptions,
-    ) -> bool {
-        false
-    }
+        login_env: &BTreeMap<String, String>,
+        options: super::HookInstallOptions,
+    ) -> Vec<PathBuf>;
 
     /// Why an install into this login's provider home would be refused before
     /// touching any file, such as an installed CLI too old for the hook surface
@@ -94,7 +96,6 @@ enum ManagedSourceBackend {
         source: &'static str,
         catalog: &'static [HookEventSpec],
         artifact_noun: &'static str,
-        upgradeable: bool,
     },
     JsonHooks(&'static ManagedJsonHookSpec),
 }
@@ -113,7 +114,6 @@ impl ManagedSource {
         catalog: &'static [HookEventSpec],
         artifact_noun: &'static str,
         path: fn(&BTreeMap<String, String>) -> Result<PathBuf>,
-        upgradeable: bool,
     ) -> Self {
         Self {
             agent,
@@ -122,7 +122,6 @@ impl ManagedSource {
                 source,
                 catalog,
                 artifact_noun,
-                upgradeable,
             },
         }
     }
@@ -162,8 +161,8 @@ impl ManagedSource {
         (self.path)(login_env).is_ok_and(|path| self.installed_at(&path))
     }
 
-    pub fn upgrade_available(&self, login_env: &BTreeMap<String, String>) -> bool {
-        (self.path)(login_env).is_ok_and(|path| self.upgrade_available_at(&path))
+    pub fn outdated_files(&self, login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
+        (self.path)(login_env).map_or_else(|_| Vec::new(), |path| self.outdated_files_at(&path))
     }
 
     pub fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
@@ -288,21 +287,19 @@ impl ManagedSource {
         }
     }
 
-    /// Whether a RimZ-owned source differs from the source embedded in this
-    /// build. Best-effort: missing, unreadable, and user-owned files are not
-    /// upgrade candidates.
-    pub fn upgrade_available_at(&self, path: &Path) -> bool {
-        let ManagedSourceBackend::WholeFile {
-            source,
-            upgradeable,
-            ..
-        } = &self.backend
-        else {
-            return false;
+    /// List this source when its owned content differs from the install
+    /// candidate. Missing, unreadable, and user-owned sources are not outdated.
+    pub fn outdated_files_at(&self, path: &Path) -> Vec<PathBuf> {
+        let outdated = match &self.backend {
+            ManagedSourceBackend::WholeFile { source, .. } => std::fs::read_to_string(path)
+                .is_ok_and(|content| file_is_rimz_managed(&content) && content != *source),
+            ManagedSourceBackend::JsonHooks(spec) => spec.outdated_at(path),
         };
-        *upgradeable
-            && std::fs::read_to_string(path)
-                .is_ok_and(|content| file_is_rimz_managed(&content) && content != *source)
+        if outdated {
+            vec![path.to_path_buf()]
+        } else {
+            Vec::new()
+        }
     }
 
     fn refuse_unmarked(&self, path: &Path, original: Option<&str>) -> Result<()> {
@@ -359,12 +356,12 @@ impl ManagedIntegration for ManagedSource {
         ManagedSource::managed_artifacts_present(self, login_env)
     }
 
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         login_env: &BTreeMap<String, String>,
         _options: super::HookInstallOptions,
-    ) -> bool {
-        ManagedSource::upgrade_available(self, login_env)
+    ) -> Vec<PathBuf> {
+        ManagedSource::outdated_files(self, login_env)
     }
 
     fn wiring_input_paths(

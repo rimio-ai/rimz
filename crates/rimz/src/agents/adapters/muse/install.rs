@@ -74,12 +74,42 @@ impl ManagedIntegration for MuseManagedIntegration {
         })
     }
 
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
-    ) -> bool {
-        self.managed_artifacts_present(env) && !self.installed(env)
+    ) -> Vec<PathBuf> {
+        if !self.managed_artifacts_present(env) || self.installed(env) {
+            return Vec::new();
+        }
+        let Ok(home) = home(env) else {
+            return Vec::new();
+        };
+        let (Ok(settings), Ok(expected), Ok(hooks)) = (
+            settings_json::read_json_object(AGENT, &home.join("settings.json")),
+            settings_candidate(&home),
+            render_hooks(),
+        ) else {
+            return Vec::new();
+        };
+        let mut files = Vec::new();
+        let hooks_path = home.join("rimz-hooks.json");
+        if read_optional_file(AGENT, &hooks_path)
+            .is_ok_and(|original| original.as_deref() != Some(hooks.as_str()))
+        {
+            files.push(hooks_path);
+        }
+        if [
+            "schema_version",
+            "managed_hooks_path",
+            "managed_hooks_env_vars",
+        ]
+        .iter()
+        .any(|key| settings.get(*key) != expected.get(*key))
+        {
+            files.push(home.join("settings.json"));
+        }
+        files
     }
 
     fn install_blocker(&self, env: &BTreeMap<String, String>) -> Option<String> {
