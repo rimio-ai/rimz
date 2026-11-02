@@ -382,9 +382,12 @@ pub(super) fn steer_failure(
         return render_verdict(&verdict, target, None, Timestamp::now());
     }
     if check.ask.waiting {
-        return format!(
-            "{target} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
-        );
+        let reason = if check.ask.permission_review {
+            rimz::message::InputWait::PermissionReview
+        } else {
+            rimz::message::InputWait::Human
+        };
+        return format!("{target} ({message_id}) {reason}");
     }
     if !check.agent.present {
         return format!("receiver {target} is gone; cannot steer {message_id}");
@@ -1028,6 +1031,7 @@ mod tests {
             ask: deliver::AskCheck {
                 waiting: false,
                 force: false,
+                permission_review: false,
             },
             pane: deliver::PaneCheck {
                 present: true,

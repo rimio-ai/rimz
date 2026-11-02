@@ -105,7 +105,7 @@ pub(super) enum AttemptOutcome {
     },
     Queued,
     CompactionPending,
-    SkippedWaiting,
+    SkippedWaiting(super::InputWait),
 }
 
 pub(super) struct Attempt<'a> {
@@ -536,7 +536,7 @@ pub(super) fn execute_attempt(
             interrupt,
         }),
         Ok(send::Receipt::ClaimLost) => Ok(AttemptOutcome::Queued),
-        Ok(send::Receipt::SkippedWaiting) => {
+        Ok(send::Receipt::SkippedWaiting(reason)) => {
             const WAITING: &str = "agent is waiting on input in its pane";
             if matches!(source, AttemptSource::Fresh { .. })
                 && live_send.kind != DeliveryKind::Boundary
@@ -548,7 +548,7 @@ pub(super) fn execute_attempt(
                 )
             {
                 store.record_send_error(head, WAITING, &workspace.session_name)?;
-                return Ok(AttemptOutcome::SkippedWaiting);
+                return Ok(AttemptOutcome::SkippedWaiting(reason));
             }
             store.record_message_delivery_failures(
                 records,
@@ -1040,6 +1040,8 @@ pub struct GateCheck {
 pub struct AskCheck {
     pub waiting: bool,
     pub force: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub permission_review: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -1197,6 +1199,7 @@ fn evaluate_delivery<'a>(
         ask: AskCheck {
             waiting,
             force: message.force,
+            permission_review: agent.is_some_and(|agent| agent.is_reviewing_permission(now)),
         },
         pane: PaneCheck {
             present: binding.is_some(),
@@ -1225,12 +1228,18 @@ pub(super) fn evaluate_when_condition(
         .agents
         .iter()
         .find(|agent| condition.card_ref().matches(agent.card_ref()));
-    let status = agent.map(|agent| agent.status);
-    let matching = agent.filter(|agent| agent.status == condition.status);
+    let status = agent.map(|agent| {
+        if agent.is_reviewing_permission(now) {
+            AgentStatus::Running
+        } else {
+            agent.status
+        }
+    });
+    let matching = agent.filter(|_| status == Some(condition.status));
     let base = matching.map(|agent| {
         match condition.status {
             AgentStatus::Running => agent.turn_started_at,
-            AgentStatus::Waiting => agent.waiting_since,
+            AgentStatus::Waiting => agent.permission_review_until().or(agent.waiting_since),
             AgentStatus::Idle
             | AgentStatus::Success
             | AgentStatus::Sleeping
@@ -1240,10 +1249,18 @@ pub(super) fn evaluate_when_condition(
         .unwrap_or(agent.last_activity)
     });
     let dwell_so_far_secs = base.map(|base| now.duration_since(base).as_secs().max(0) as u64);
-    let trip_at = base.and_then(|base| {
-        base.checked_add(Duration::from_secs(condition.dwell_secs))
-            .ok()
-    });
+    let trip_at = base
+        .or_else(|| {
+            agent
+                .filter(|agent| {
+                    condition.status == AgentStatus::Waiting && agent.is_reviewing_permission(now)
+                })
+                .and_then(AgentState::permission_review_until)
+        })
+        .and_then(|base| {
+            base.checked_add(Duration::from_secs(condition.dwell_secs))
+                .ok()
+        });
     let met = condition.met_at.is_some()
         || dwell_so_far_secs.is_some_and(|elapsed| elapsed >= condition.dwell_secs);
     let agent_gone = condition.met_at.is_none() && agent.is_none();

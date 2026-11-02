@@ -67,10 +67,7 @@ pub fn needs_you(
             &fallback
         }
     };
-    let ask = agent
-        .open_ask
-        .as_ref()
-        .filter(|_| agent.is_awaiting_input());
+    let ask = agent.attention_ask(now);
     let reason = ask
         .and_then(|ask| ask.detail.clone())
         .or_else(|| match card.description(now) {
@@ -84,7 +81,7 @@ pub fn needs_you(
         reason,
         since: ask.map_or_else(
             || row.map_or(agent.last_activity, |row| row.last_activity),
-            |ask| ask.since,
+            |ask| agent.permission_review_until().unwrap_or(ask.since),
         ),
     })
 }

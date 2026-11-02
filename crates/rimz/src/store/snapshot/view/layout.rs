@@ -331,16 +331,21 @@ fn agent_rank_facts(
     now: jiff::Timestamp,
     windows: AttentionWindows,
 ) -> RankFacts<'_> {
+    let status = if agent.is_reviewing_permission(now) {
+        AgentStatus::Running
+    } else {
+        agent.status
+    };
     let age_secs = score::age_secs(now, agent.last_activity);
     let (inactive, archived, score) =
-        score::attention_facts(Some(agent.status), age_secs, windows, false);
+        score::attention_facts(Some(status), age_secs, windows, false);
     RankFacts {
         is_process: false,
         inactive,
         archived,
-        status: Some(agent.status),
+        status: Some(status),
         score,
-        factor_milli: score::recovered_time_factor_milli(Some(agent.status), score),
+        factor_milli: score::recovered_time_factor_milli(Some(status), score),
         last_activity: agent.last_activity,
         pane_ordinal: agent_ordinal(agent),
         cohort: agent_launch_cohort(agent),

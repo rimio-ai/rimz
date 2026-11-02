@@ -212,6 +212,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         hook_context: Some(HookContextReply::HookSpecificOutput { event_name: true }),
         prompt_context: true,
         native_ask_ui: true,
+        permission_before_auto_review: true,
         transcript_tail_context: true,
         // Codex has no background-task parking.
         // Codex fires no `SessionStart` on a plain CLI launch — it rides the

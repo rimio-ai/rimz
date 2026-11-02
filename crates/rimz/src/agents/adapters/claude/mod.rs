@@ -147,6 +147,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         hook_context: Some(HookContextReply::HookSpecificOutput { event_name: true }),
         prompt_context: true,
         native_ask_ui: true,
+        permission_before_auto_review: false,
         transcript_tail_context: false,
         // Claude stamps a live pane on every session, so it opts out of the
         // lazy dead-stamp rebind. A genuinely paneless session can still be

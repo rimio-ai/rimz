@@ -334,8 +334,8 @@ pub(crate) fn report_dispatch(
 fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {
     for outcome in outcomes {
         let line = match outcome {
-            DispatchOutcome::SkippedWaiting { label, .. } => {
-                bail!("{label} is waiting on your input in its pane; answer it or pass --force")
+            DispatchOutcome::SkippedWaiting { label, reason, .. } => {
+                bail!("{label} {reason}")
             }
             DispatchOutcome::Sent {
                 label, interrupt, ..
@@ -409,7 +409,9 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
             DispatchOutcome::CompactionPending { label, message_id } => {
                 queued.push(format!("{label} ({message_id}; waiting for compaction)"));
             }
-            DispatchOutcome::SkippedWaiting { label, message_id } => {
+            DispatchOutcome::SkippedWaiting {
+                label, message_id, ..
+            } => {
                 pending.push(format!("{label} ({message_id})"));
             }
         }
@@ -439,9 +441,13 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
             return Ok(());
         }
         match outcomes.first() {
-            Some(DispatchOutcome::SkippedWaiting { label, message_id }) => bail!(
-                "{label} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
-            ),
+            Some(DispatchOutcome::SkippedWaiting {
+                label,
+                message_id,
+                reason,
+            }) => {
+                bail!("{label} ({message_id}) {reason}")
+            }
             Some(DispatchOutcome::CompactionPending { .. }) => {
                 unreachable!("compaction-pending outcomes are included in queued summary")
             }

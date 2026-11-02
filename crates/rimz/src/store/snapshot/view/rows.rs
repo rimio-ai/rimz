@@ -4,8 +4,8 @@ use crate::agents::AgentState;
 use crate::store::snapshot::row::{AgentCard, RowCard, SidebarRow};
 
 pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
-    // `SidebarRow.status` is the *displayed* status. It starts as the raw rollup
-    // value and is projected in `project_display_status` once the row knows its
+    // `SidebarRow.status` is the *displayed* status. The seed hides permission
+    // review; `project_display_status` projects it once the row knows its
     // subagents and its account's rate-limit budget (stall → `failed`,
     // spent-budget → `paused`); native prompts already live on the rollup.
     // The rollup in `snapshot.agents` always keeps the true status.

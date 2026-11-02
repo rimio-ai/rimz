@@ -656,6 +656,7 @@ pub(crate) enum WaitingResolution {
     Interrupted,
     Held,
     Answered,
+    InReview,
 }
 
 impl WaitingResolution {
@@ -664,7 +665,7 @@ impl WaitingResolution {
         context: Option<&AgentContext>,
         last_activity: Timestamp,
         source_agent: Option<&AgentState>,
-        _now: Timestamp,
+        now: Timestamp,
     ) -> Self {
         if status != AgentStatus::Waiting {
             return Self::NotWaiting;
@@ -683,6 +684,9 @@ impl WaitingResolution {
         }) {
             return Self::Answered;
         }
+        if source_agent.is_some_and(|agent| agent.is_reviewing_permission(now)) {
+            return Self::InReview;
+        }
         Self::Held
     }
 }
@@ -694,6 +698,8 @@ impl WaitingResolution {
 /// also expires it past this window. Generous: a large context can take a while
 /// to condense.
 pub const COMPACTING_WINDOW_SECS: i64 = 90;
+
+const PERMISSION_REVIEW_WINDOW_SECS: u64 = 60;
 
 const PROMPT_LABEL_MAX_CHARS: usize = 160;
 
@@ -1651,7 +1657,9 @@ impl AgentState {
     /// rows to `idle`, and a clean turn parked on background work reads as
     /// `success`, which opens message delivery gates. Budget-aware callers may
     /// still upgrade a paused projection to `failed`. Resting rows with an
-    /// armed one-shot delivery read as `sleeping`.
+    /// armed one-shot delivery read as `sleeping`. Permissions under automatic
+    /// review read as `running` until their attention deadline, without
+    /// releasing the raw pane-input guard.
     pub fn effective_status(&self, now: Timestamp) -> AgentStatus {
         let status = self.rested_status(now);
         if matches!(status, AgentStatus::Idle | AgentStatus::Success)
@@ -1671,7 +1679,9 @@ impl AgentState {
             Some(self),
             now,
         ) {
-            WaitingResolution::Answered => (AgentStatus::Running, TurnPhase::Reasoning),
+            WaitingResolution::Answered | WaitingResolution::InReview => {
+                (AgentStatus::Running, TurnPhase::Reasoning)
+            }
             _ => (self.status, self.phase),
         }
     }
@@ -1884,6 +1894,40 @@ impl AgentState {
                 || self
                     .waiting_since
                     .is_some_and(|waiting_since| self.last_activity <= waiting_since)))
+    }
+
+    /// When an auto-reviewed permission first needs attention. The raw ask
+    /// still reserves pane input throughout review; other asks return `None`.
+    pub fn permission_review_until(&self) -> Option<Timestamp> {
+        let ask = self.open_ask.as_ref()?;
+        if ask.kind != AskKind::Permission
+            || self.mode != Some(super::PermissionMode::Auto)
+            || !self.is_awaiting_input()
+            || !super::registry::spec_by_kind(self.kind.as_str())
+                .is_some_and(|spec| spec.capabilities.permission_before_auto_review)
+        {
+            return None;
+        }
+        ask.since
+            .checked_add(std::time::Duration::from_secs(
+                PERMISSION_REVIEW_WINDOW_SECS,
+            ))
+            .ok()
+    }
+
+    /// Whether a permission is still under automatic review, before its
+    /// attention deadline. Pane-input guards keep using the raw ask.
+    pub fn is_reviewing_permission(&self, now: Timestamp) -> bool {
+        self.permission_review_until()
+            .is_some_and(|until| now < until)
+    }
+
+    /// The blocking ask visible to attention readers, excluding automatic review.
+    /// Pane-input guards and explicit ask access keep using the raw ask.
+    pub fn attention_ask(&self, now: Timestamp) -> Option<&OpenAsk> {
+        self.open_ask
+            .as_ref()
+            .filter(|_| self.is_awaiting_input() && !self.is_reviewing_permission(now))
     }
 
     /// Provider API error currently explaining this row's displayed state. The

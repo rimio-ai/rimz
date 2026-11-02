@@ -13,6 +13,135 @@ const QUESTION_CONTEXT: &str = concat!(
 );
 
 #[test]
+fn codex_auto_review_hides_list_but_preserves_explicit_ask() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode};
+    use rimz::store::event::EventEnvelope;
+
+    for age in [10, 61] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let ask_id = AskId::new();
+        let mut observation = AgentLifecycleObservation::new(
+            Some("review".into()),
+            LifecycleSignal::AwaitingInput {
+                kind: AskKind::Permission,
+                ask_id: Some(ask_id.clone()),
+                detail: Some("shell: cargo test".to_owned()),
+                native_key: None,
+            },
+        );
+        observation.launch.mode = Some(PermissionMode::Auto);
+        observation.worktree_path = Some(env.project_root.display().to_string());
+        let workspace = env.resolve_workspace(&env.project_root);
+        let mut event = EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            workspace.session_name,
+            "codex",
+            "PermissionRequest",
+            &observation,
+        );
+        event.timestamp = jiff::Timestamp::now() - std::time::Duration::from_secs(age);
+        env.store().append_event(&event).unwrap();
+        let mut transcript_ask = TranscriptEntry::new(
+            event.timestamp,
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            "review".into(),
+            TranscriptKind::Ask,
+            "shell: cargo test".to_owned(),
+        );
+        transcript_ask.id = Some(ask_id.clone());
+        rimz::transcript::append(env.store().paths(), &transcript_ask).unwrap();
+        let output = env
+            .rimz()
+            .args(["asks", "--json"])
+            .bounded_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let asks: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            asks.as_array().unwrap().len(),
+            usize::from(age >= 60),
+            "{asks}"
+        );
+        let output = env.rimz().args(["asks"]).bounded_output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(stdout.contains("cargo test"), age >= 60, "{stdout}");
+        let output = env
+            .rimz()
+            .args(["asks", "show", "@codex", "--json"])
+            .bounded_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let ask: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(ask["ask_id"], ask_id.as_str());
+        assert_eq!(ask["kind"], "permission");
+        let output = env
+            .rimz()
+            .args(["answer", "@codex"])
+            .bounded_output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("can only be answered in its pane"),
+            "{output:?}"
+        );
+        let output = env
+            .rimz()
+            .args(["agents", "show", "@codex", "--json"])
+            .bounded_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            shown["agent"]["status"],
+            if age >= 60 { "waiting" } else { "running" }
+        );
+        assert_eq!(!shown["agent"]["ask"].is_null(), age >= 60, "{shown}");
+        assert_eq!(!shown["ask"].is_null(), age >= 60, "{shown}");
+        let output = env
+            .rimz()
+            .args(["agents", "show", "@codex"])
+            .bounded_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(stdout.contains("  waiting:"), age >= 60, "{stdout}");
+        let snapshot = env.store().snapshot_cached().unwrap();
+        let source = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == "review")
+            .unwrap();
+        assert_eq!(source.status, AgentStatus::Waiting);
+        assert!(source.is_awaiting_input());
+        observation.signal = LifecycleSignal::ToolUsed {
+            name: Some("shell".to_owned()),
+            mutates: false,
+            edits: false,
+            native_key: None,
+            turn_id: None,
+        };
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "rimz-test",
+                "codex",
+                "PostToolUse",
+                &observation,
+            ))
+            .unwrap();
+        let snapshot = env.store().snapshot_cached().unwrap();
+        let source = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == "review")
+            .unwrap();
+        assert_eq!(source.status, AgentStatus::Running);
+        assert!(source.open_ask.is_none());
+    }
+}
+
+#[test]
 fn human_question_routes_and_missing_selector_show_options() {
     let env = Env::new();
     env.record(&env.project_root);

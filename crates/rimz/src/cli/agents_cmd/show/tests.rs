@@ -17,6 +17,79 @@ fn entry() -> AgentReportEntry {
 }
 
 #[test]
+fn permission_ask_visibility_uses_the_show_snapshot_clock() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = rimz::ResolvedWorkspace {
+        workspace_id: WorkspaceId::from_project_root(dir.path()),
+        project_root: dir.path().to_owned(),
+        cwd_project_root: None,
+        root_class: rimz::workspace::RootClass::Directory,
+        worktree_root: dir.path().to_owned(),
+        worktree_branch: None,
+        session_name: "room".to_owned(),
+        mux_hint: None,
+    };
+    let paths =
+        rimz::StatePaths::under(workspace.workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let runtime =
+        rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("runtime"))
+            .unwrap();
+    let store = rimz::Store::open(paths, runtime.clone()).unwrap();
+    let since = jiff::Timestamp::from_second(1_000).unwrap();
+    let mut state = rimz::testkit::agent_state("codex", "review", since);
+    state.status = AgentStatus::Waiting;
+    state.mode = Some(PermissionMode::Auto);
+    state.waiting_since = Some(since);
+    state.open_ask = Some(rimz::agents::OpenAsk {
+        id: rimz::ids::AskId::new(),
+        kind: rimz::agents::AskKind::Permission,
+        detail: Some("approve this?".to_owned()),
+        native_key: None,
+        since,
+    });
+    let mut pane = rimz::pane::PaneRef::from_id(PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
+    pane.command = Some("codex".to_owned());
+    state.pane = Some(pane.clone());
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        workspace.workspace_id.clone(),
+        vec![state.clone()],
+        jiff::Timestamp::from_second(1_059).unwrap(),
+    )
+    .with_live_panes(vec![pane.clone()], None);
+    let (report, error) = collect_show_report(
+        &store, &workspace, &runtime, &snapshot, "@codex", false, false,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    assert_eq!(report.agent.as_ref().unwrap().status, AgentStatus::Running);
+    assert!(report.ask_next_step.is_none(), "{:?}", report.ask_next_step);
+    assert!(report.ask.is_none());
+    assert!(report.agent.as_ref().unwrap().ask.is_none());
+
+    // A queued async question still gets its next step with no blocking ask.
+    state.status = AgentStatus::Running;
+    state.open_ask = None;
+    state.waiting_since = None;
+    state.queued_asks.push(rimz::agents::QueuedAsk {
+        id: rimz::ids::AskId::new(),
+        detail: "Which branch?".to_owned(),
+        native_key: "question".to_owned(),
+        since,
+    });
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        workspace.workspace_id.clone(),
+        vec![state],
+        jiff::Timestamp::from_second(1_059).unwrap(),
+    )
+    .with_live_panes(vec![pane], None);
+    let (report, _) = collect_show_report(
+        &store, &workspace, &runtime, &snapshot, "@codex", false, false,
+    )
+    .unwrap();
+    assert!(report.ask_next_step.is_some());
+}
+
+#[test]
 fn fast_show_header_marks_only_a_resolved_model() {
     let config = crate::cli::machine_config();
     let glyph = rimz::theme::theme_glyphs(&config.theme);
