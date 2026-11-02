@@ -103,6 +103,8 @@ ACTIVE
 
 A cancellation journal row may carry `reason`; `show --history` prints `cancel canceled · <reason>` when present, otherwise `cancel canceled`. Older rows without a reason still read.
 
+An unfinished run holds its scoped worktree against removal, even while parked with no agent. `rimz worktree remove NAME --force` removes the checkout and then cancels its unfinished runs with reason `worktree removed`. A failed cancellation leaves the removal standing, exits non-zero, and prints the run id's `rimz workflow cancel` command to finish it.
+
 `rimz workflow resume <RUN> [--at <NODE>] [--extend <GRANT>]...` puts a parked run back to work, at its current node or at `--at <NODE>`, with a fresh timeout clock and a cleared check retry. `--extend` repeats:
 
 | Grant | Effect |
