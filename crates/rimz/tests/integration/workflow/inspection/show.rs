@@ -335,7 +335,7 @@ fn timeout_shows_the_flushed_wait_and_shell_log() {
         .workflow(&record.id);
     fs::write(
         paths.spec,
-        SPEC.replace(
+        SPEC.replacen("run='true'", "shell='true'", 1).replace(
             "on.ok='build'",
             "on.pass='@done'\non.fail='@wait'\non.invalid='@wait'",
         ),

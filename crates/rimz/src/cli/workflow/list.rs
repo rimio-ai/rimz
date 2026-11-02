@@ -10,6 +10,7 @@ use super::*;
 
 struct Row<'a> {
     record: &'a RunRecord,
+    ignored: &'a [workflow::Issue],
     address: String,
     glyph: String,
     state: RunState,
@@ -55,18 +56,29 @@ pub(super) fn render(
         .iter()
         .filter(|run| !run.record.state.is_terminal())
         .collect::<Vec<_>>();
+    let specs = live
+        .iter()
+        .map(|run| workflow::load(&run.paths.home).ok())
+        .collect::<Vec<_>>();
     let details = live
         .iter()
-        .map(|run| {
-            let spec = workflow::load(&run.paths.home).ok();
-            workflow_view::detail(&run.record, spec.as_ref(), now)
-        })
+        .zip(&specs)
+        .map(|(run, spec)| workflow_view::detail(&run.record, spec.as_ref(), now))
         .collect::<Vec<_>>();
     if json {
         let rows = live
             .iter()
             .zip(&details)
-            .map(|(run, detail)| json_row(&run.record, detail))
+            .zip(&specs)
+            .map(|((run, detail), spec)| {
+                let mut row = json_row(&run.record, detail);
+                if let Some(spec) = spec
+                    && !spec.ignored.is_empty()
+                {
+                    row["warnings"] = serde_json::json!(spec.ignored);
+                }
+                row
+            })
             .collect::<Vec<_>>();
         return render::json_pretty(&rows);
     }
@@ -86,7 +98,7 @@ pub(super) fn render(
     let mut rooms = BTreeMap::new();
     let machine = super::super::machine_config();
     let glyph = rimz::theme::theme_glyphs(&machine.theme);
-    for (run, detail) in live.into_iter().zip(details) {
+    for ((run, detail), spec) in live.into_iter().zip(details).zip(&specs) {
         let record = &run.record;
         let asking = workflow_view::asking(record).is_some();
         let capacity = capacity_wait(record).filter(|_| !asking);
@@ -115,6 +127,7 @@ pub(super) fn render(
             .or_insert_with(Vec::new)
             .push(Row {
                 record,
+                ignored: spec.as_ref().map_or(&[], |spec| spec.ignored.as_slice()),
                 address: record.address().to_string(),
                 glyph: glyph(role),
                 state: record.state,
@@ -215,9 +228,17 @@ fn write_rows(out: &mut impl Write, rows: &[Row], width: Option<usize>) -> std::
         .without_headers()
         .indent(2);
     for row in rows {
+        let mut mark = if row.ignored.is_empty() {
+            String::new()
+        } else {
+            format!(" · {} ignored", row.ignored.len())
+        };
+        if detail_width.is_some_and(|width| mark.width() > width) {
+            mark.clear();
+        }
         let detail = detail_width.map_or_else(
             || row.detail.clone(),
-            |width| render::clip_to_width(&row.detail, width),
+            |width| render::clip_to_width(&row.detail, width.saturating_sub(mark.width())),
         );
         table.row([
             render::cell(&row.glyph)
@@ -228,7 +249,7 @@ fn write_rows(out: &mut impl Write, rows: &[Row], width: Option<usize>) -> std::
                 })
                 .suffix(&row.address, render::palette::body()),
             render::cell(&row.node),
-            render::cell(detail),
+            render::cell(format!("{detail}{mark}")),
             render::cell(&row.age).fg(render::palette::muted()),
         ]);
     }
@@ -284,8 +305,9 @@ mod tests {
             "deadline_fired":false, "next_seq":1,
         }))
         .unwrap();
-        let rows = [Row {
+        let mut rows = [Row {
             record: &record,
+            ignored: &[],
             address: "review#feature".into(),
             glyph: "?".into(),
             state: RunState::Parked,
@@ -295,13 +317,30 @@ mod tests {
             age: "47m".into(),
             since: Timestamp::UNIX_EPOCH,
         }];
-        let mut out = anstream::StripStream::new(Vec::new());
-        write_rows(&mut out, &rows, Some(60)).unwrap();
-        let text = String::from_utf8(out.into_inner()).unwrap();
-        assert!(
-            text.contains('…') && text.trim_end().ends_with("47m"),
-            "{text}"
-        );
-        assert!(text.lines().all(|line| line.width() <= 60), "{text}");
+        let ignored = [workflow::Issue {
+            path: "workflow.future".into(),
+            message: "ignored field: unknown field".into(),
+        }];
+        for ignored in [ignored.as_slice(), &[]] {
+            rows[0].ignored = ignored;
+            for width in [40, 60] {
+                let mut out = anstream::StripStream::new(Vec::new());
+                write_rows(&mut out, &rows, Some(width)).unwrap();
+                let text = String::from_utf8(out.into_inner()).unwrap();
+                assert!(
+                    text.lines().all(|line| line.width() <= width),
+                    "{width}: {text}"
+                );
+                assert!(
+                    text.contains('…') && text.trim_end().ends_with("47m"),
+                    "{text}"
+                );
+                assert_eq!(
+                    text.contains("· 1 ignored"),
+                    !ignored.is_empty() && width == 60,
+                    "{text}"
+                );
+            }
+        }
     }
 }

@@ -53,20 +53,26 @@ fn checks_without_subscriptions_keep_their_backoff_and_wait_count() {
 }
 
 #[test]
-fn invalid_wakes_refuse_validation_and_run_with_the_same_message() {
+fn invalid_wakes_warn_during_validation_and_run_with_the_same_message() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['agent.idle']\n"), PENDING);
     let validation = command(&env, &["workflow", "validate", "--json"]);
     let report: Value = serde_json::from_slice(&validation.stdout).unwrap();
-    let errors = report["errors"].as_array().unwrap();
-    assert_eq!(errors.len(), 1, "{report}");
-    assert_eq!(errors[0]["path"], "checks.pr.wake");
+    assert!(validation.status.success(), "{report}");
+    assert_eq!(report["errors"], json!([]));
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["path"], "checks.pr.wake.0");
     let run = command(&env, &["workflow", "run", "review"]);
-    assert!(!run.status.success());
+    assert!(run.status.success(), "{run:?}");
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains(errors[0]["message"].as_str().unwrap()),
+        String::from_utf8_lossy(&run.stderr).contains(warnings[0]["message"].as_str().unwrap()),
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );
+    let receipt = String::from_utf8(run.stdout).unwrap();
+    let id = receipt.lines().next().unwrap();
+    until(&env, id, |value| value["record"]["wait"].is_object());
+    success(command(&env, &["workflow", "cancel", id]));
 }
 
 #[test]

@@ -12,6 +12,7 @@ mod judges;
 mod scope;
 mod shells;
 mod ticks;
+mod tolerance;
 mod wakes;
 
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
