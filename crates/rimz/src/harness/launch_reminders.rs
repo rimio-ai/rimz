@@ -17,6 +17,7 @@ pub(super) struct LaunchReminders {
     pub worktree: Option<crate::worktree::LinkedWorktree>,
     /// The launch gets its memory-file listing and sampled git state at prompt submit, so the reminder carries neither.
     pub runtime_env: bool,
+    pub long_cache: bool,
     /// The configured `[agents] shell`, which the launch runs under in place
     /// of the user's own shell.
     pub agent_shell: Option<std::path::PathBuf>,
@@ -61,6 +62,7 @@ impl Default for LaunchReminders {
             env: false,
             worktree: None,
             runtime_env: false,
+            long_cache: false,
             agent_shell: None,
             settings: None,
             routine_rimz: None,

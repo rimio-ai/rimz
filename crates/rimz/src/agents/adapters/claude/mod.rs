@@ -174,6 +174,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        long_cache_env: None,
         picker: Some(&["claude", "--resume"]),
         headless: Some(&headless::ClaudeHeadless),
         definitions: DEFINITIONS,

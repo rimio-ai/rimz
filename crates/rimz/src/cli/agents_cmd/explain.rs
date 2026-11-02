@@ -239,6 +239,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         runtime: &runtime,
         state: &state,
         effective: Some(&effective),
+        machine: &machine,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         isolation,

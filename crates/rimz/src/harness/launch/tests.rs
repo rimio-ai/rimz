@@ -194,6 +194,7 @@ fn muse_managed_hook_passthrough_covers_host_and_sandbox_launch_environment() {
                 runtime: &runtime,
                 state: &state,
                 effective: None,
+                machine: &machine,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
                 isolation,
