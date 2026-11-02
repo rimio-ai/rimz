@@ -14,7 +14,6 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -22,6 +21,7 @@ use sha2::{Digest, Sha256};
 use tracing::debug;
 
 use crate::disk::atomic;
+use crate::disk::parse_cache::FileStamp;
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -156,16 +156,19 @@ fn read_one(path: PathBuf) -> Option<AgentActivity> {
 /// for a file that read or parsed as garbage, so a corrupt touch costs one
 /// parse attempt, not one per tick.
 struct ParsedTouch {
-    mtime: SystemTime,
-    len: u64,
+    stamp: FileStamp,
     record: Option<AgentActivity>,
 }
 
 thread_local! {
     /// Per-thread parse cache for the keyed read. Every touch lands via atomic
-    /// rename of a freshly-written temp file, so `(mtime, len)` validates
-    /// content. Normal reads cost one stat per key; deferred caller checks
-    /// retain the parse without metadata IO.
+    /// rename of a temp file created while the old version is still linked, so
+    /// each rewrite brings a new inode and the full `FileStamp` validates
+    /// content even when two equal-length writes share one timestamp tick.
+    /// The residual is the stamp's own: two rewrites inside one tick, the
+    /// second reusing the cached version's freed inode at equal length, stay
+    /// hidden until the next touch. Normal reads cost one stat per key;
+    /// deferred caller checks retain the parse without metadata IO.
     /// Pruned to the queried key set on every read, so it stays bounded by
     /// the live agent set.
     static TOUCH_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedTouch>> =
@@ -177,7 +180,7 @@ thread_local! {
 /// outlive their sessions until `rimz gc`, so a keyed read avoids parsing a
 /// directory full of stale sidecars on every renderer tick — and the per-key
 /// stat gate (`TOUCH_PARSE_CACHE`) caps the steady-state cost at one stat
-/// per key, re-parsing only a file whose stat moved.
+/// per key, re-parsing only a file whose full file stamp moved.
 pub fn read_for_keys<'a>(
     runtime: &RuntimePaths,
     keys: impl IntoIterator<Item = (&'a str, &'a str)>,
@@ -210,19 +213,15 @@ pub(crate) fn read_for_keys_with_holds<'a>(
                     cache.remove(&path);
                     return None;
                 };
-                let mtime = meta.modified().ok()?;
-                let len = meta.len();
+                let stamp = FileStamp::from_metadata(&meta);
                 match cache.get(&path) {
-                    Some(parsed) if parsed.mtime == mtime && parsed.len == len => {
-                        parsed.record.clone()
-                    }
+                    Some(parsed) if parsed.stamp == stamp => parsed.record.clone(),
                     _ => {
                         let record = read_one(path.clone());
                         cache.insert(
                             path,
                             ParsedTouch {
-                                mtime,
-                                len,
+                                stamp,
                                 record: record.clone(),
                             },
                         );
@@ -504,9 +503,9 @@ mod tests {
         let original_at = first[0].at;
 
         // Rewrite the touch in place with a different identity but identical
-        // length, restoring the original mtime: the stat gate serves the
-        // cached parse — the contract, since every real touch is an atomic
-        // rename of a fresh temp file.
+        // length, restoring the original mtime: an in-place write keeps the
+        // inode, so the file stamp is unchanged and the stat gate serves the
+        // cached parse. A real touch never does this; it renames a new inode in.
         let path = activity_path(&runtime, "claude", "sess-1");
         let bytes = std::fs::read(&path).unwrap();
         let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
@@ -521,7 +520,7 @@ mod tests {
         assert_eq!(cached[0].at, original_at);
         assert_eq!(
             cached[0].agent_id, "sess-1",
-            "same (mtime, len) serves the cached parse — one stat, no read"
+            "an unchanged file stamp serves the cached parse — one stat, no read"
         );
 
         // A moved mtime invalidates: the rewrite is now visible.
@@ -531,6 +530,53 @@ mod tests {
         drop(f);
         let fresh = read_for_keys(&runtime, [("claude", "sess-1")]);
         assert_eq!(fresh[0].agent_id, "sess-9");
+    }
+
+    #[test]
+    fn keyed_read_sees_an_atomic_rewrite_inside_one_timestamp_tick() {
+        let (_dir, runtime) = runtime();
+        let path = activity_path(&runtime, "claude", "sess-1");
+        touch(
+            &runtime,
+            "claude",
+            "sess-1",
+            ToolRun::Reset,
+            false,
+            Timestamp::from_second(100).unwrap(),
+        )
+        .expect("first touch");
+        read_for_keys(&runtime, [("claude", "sess-1")]);
+        // Holding the first version open keeps its inode from being handed to
+        // the replacement, as a filesystem may do once it is freed.
+        let _first = std::fs::File::open(&path).unwrap();
+        let first = std::fs::metadata(&path).unwrap();
+
+        touch(
+            &runtime,
+            "claude",
+            "sess-1",
+            ToolRun::Reset,
+            false,
+            Timestamp::from_second(101).unwrap(),
+        )
+        .expect("second touch");
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), first.len());
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_modified(first.modified().unwrap()).unwrap();
+        drop(f);
+        let second = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            (second.modified().unwrap(), second.len()),
+            (first.modified().unwrap(), first.len()),
+            "the rewrite forges the cached (mtime, len), as two writes inside one tick do"
+        );
+
+        let reread = read_for_keys(&runtime, [("claude", "sess-1")]);
+        assert_eq!(
+            reread[0].at,
+            Timestamp::from_second(101).unwrap(),
+            "the replacement's new inode invalidates the cached parse"
+        );
     }
 
     #[test]
@@ -544,7 +590,7 @@ mod tests {
         read_for_keys(&runtime, [("claude", "sess-dead"), ("claude", "sess-live")]);
         read_for_keys(&runtime, [("claude", "sess-live")]);
 
-        // Rewrite the dead touch in place with identical (mtime, len) — the
+        // Rewrite the dead touch in place under an unchanged file stamp — the
         // same gate `keyed_read_serves_an_unchanged_stat_from_cache` proves
         // would serve a *cached* entry. Seeing the rewrite proves the entry
         // was pruned when its key left the queried set.
