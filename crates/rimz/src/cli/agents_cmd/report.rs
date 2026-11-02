@@ -171,6 +171,7 @@ pub(super) struct SubAgentReport {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ReportOverrides<'a> {
+    pub attention_now: Option<Timestamp>,
     pub child: Option<&'a SidebarSubAgent>,
     pub runtime: Option<&'a rimz::RuntimePaths>,
     pub effort: Option<rimz::agents::spending::SlotEffort>,
@@ -259,6 +260,7 @@ pub(super) fn build_list_report(
                     me,
                     now,
                     ReportOverrides {
+                        attention_now: Some(snapshot.now),
                         child: child_for_agent(snapshot, agent),
                         runtime,
                         active_secs: rimz::agents::attribution::seat_active_secs(
@@ -302,6 +304,7 @@ pub(super) fn build_entry(
     now: Timestamp,
     overrides: ReportOverrides<'_>,
 ) -> AgentReportEntry {
+    let attention_now = overrides.attention_now.unwrap_or(now);
     let card = row.and_then(SidebarRow::as_agent);
     let child = overrides.child;
     let (status, phase) = card_status(agent, row, child, demotion, now);
@@ -384,17 +387,13 @@ pub(super) fn build_entry(
         me: me == Some(&agent.agent_id),
         status,
         pending_waits: agent.pending_waits.clone(),
-        needs_you: rimz::store::snapshot::needs_you(agent, row, demotion, now),
+        needs_you: rimz::store::snapshot::needs_you(agent, row, demotion, attention_now),
         idle_stop: agent.idle_stop.clone(),
         hibernation: agent.hibernation.clone(),
         background_shells: agent.background_shells.clone(),
         phase,
         turn_error,
-        ask: agent
-            .open_ask
-            .as_ref()
-            .filter(|_| agent.is_awaiting_input())
-            .map(AskReport::from),
+        ask: agent.attention_ask(attention_now).map(AskReport::from),
         unread: row.is_some_and(|row| row.unread),
         attention_score: row.map_or(0, |row| row.attention_score),
         description,

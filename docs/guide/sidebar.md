@@ -169,6 +169,8 @@ Every card wears one state, and seven cover the life of a session:
 
 The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on handed-off work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
+Codex launched in `auto` mode keeps Running while a permission request is under automatic review. If no later event clears it, `?` appears 60 seconds after arrival, on the next refresh; questions and plan approvals show `?` immediately. A pane glance during review does not silence that later ask. [Codex's limits](../internals/agents/adapter_codex.md#asks-and-answers) cover native children and mid-session permission-mode changes.
+
 A session's life traces one loop through those states:
 
 ```

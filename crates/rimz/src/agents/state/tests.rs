@@ -1644,6 +1644,10 @@ fn open_turn_and_effective_status_are_consistent() {
     ] {
         assert_consistent(&test_agent(status, 1_000), false, now);
     }
+    let reviewing = auto_review_permission();
+    for second in [1_059, 1_060] {
+        assert_consistent(&reviewing, false, Timestamp::from_second(second).unwrap());
+    }
     for class in [
         TurnErrorClass::PausedSpendLimit,
         TurnErrorClass::PausedRateLimit,
@@ -1705,6 +1709,108 @@ fn answered_waiting_reads_running_and_reasoning() {
     assert_eq!(
         agent.rowless_status(&ParkDemotion::default(), now),
         (AgentStatus::Running, TurnPhase::Reasoning)
+    );
+}
+
+fn auto_review_permission() -> AgentState {
+    let mut agent = test_agent(AgentStatus::Waiting, 1_000);
+    agent.kind = AgentKind::new_unchecked("codex");
+    agent.mode = Some(crate::agents::PermissionMode::Auto);
+    agent.waiting_since = Some(agent.last_activity);
+    agent.open_ask = Some(OpenAsk {
+        id: AskId::new(),
+        kind: AskKind::Permission,
+        detail: Some("shell: cargo test".to_owned()),
+        native_key: None,
+        since: agent.last_activity,
+    });
+    agent
+}
+
+#[test]
+fn codex_auto_permission_waits_for_review_before_attention() {
+    let agent = auto_review_permission();
+    for (second, status, phase) in [
+        (1_000, AgentStatus::Running, TurnPhase::Reasoning),
+        (1_059, AgentStatus::Running, TurnPhase::Reasoning),
+        (1_060, AgentStatus::Waiting, TurnPhase::Idle),
+        (1_061, AgentStatus::Waiting, TurnPhase::Idle),
+    ] {
+        let now = Timestamp::from_second(second).unwrap();
+        assert_eq!(agent.effective_status(now), status, "at {second}");
+        assert_eq!(agent.rested_status(now), status, "at {second}");
+        assert_eq!(
+            agent.rowless_status(&ParkDemotion::default(), now),
+            (status, phase)
+        );
+        assert!(agent.is_awaiting_input());
+        assert!(agent.holds_open_turn());
+        assert_eq!(agent.actionable_asks().count(), 1);
+        assert_eq!(
+            agent.attention_ask(now),
+            (second >= 1_060).then(|| agent.open_ask.as_ref().unwrap())
+        );
+    }
+
+    for (kind, mode, ask_kind) in [
+        (
+            "claude",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::Permission,
+        ),
+        ("codex", None, AskKind::Permission),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Ask),
+            AskKind::Permission,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Yolo),
+            AskKind::Permission,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Plan),
+            AskKind::Permission,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::Question,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::PlanApproval,
+        ),
+    ] {
+        let mut other = agent.clone();
+        other.kind = AgentKind::new_unchecked(kind);
+        other.mode = mode;
+        other.open_ask.as_mut().unwrap().kind = ask_kind;
+        assert_eq!(
+            other.effective_status(agent.last_activity),
+            AgentStatus::Waiting
+        );
+        assert_eq!(
+            other.attention_ask(agent.last_activity),
+            other.open_ask.as_ref()
+        );
+    }
+
+    let mut answered = agent.clone();
+    answered.last_activity = Timestamp::from_second(1_010).unwrap();
+    assert!(!answered.is_awaiting_input());
+    assert!(answered.attention_ask(answered.last_activity).is_none());
+    assert_eq!(
+        answered.effective_status(answered.last_activity),
+        AgentStatus::Running
+    );
+    answered.context = Some(context_settle(Some(1_020), TurnSettleOutcome::Interrupted));
+    assert_eq!(
+        answered.effective_status(Timestamp::from_second(1_030).unwrap()),
+        AgentStatus::Idle
     );
 }
 

@@ -65,6 +65,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
         prompt_context: false,
         // Native prompts are visible through the session store, not RimZ asks.
         native_ask_ui: true,
+        permission_before_auto_review: false,
         transcript_tail_context: true,
         registers_lazily: true,
         local_session_discovery: LocalSessionDiscovery::FullScan,

@@ -71,6 +71,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         // announces them without an id or options, so the pane stays the
         // answer surface.
         native_ask_ui: true,
+        permission_before_auto_review: false,
         transcript_tail_context: true,
         registers_lazily: false,
         local_session_discovery: LocalSessionDiscovery::Unsupported,

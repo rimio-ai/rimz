@@ -91,7 +91,7 @@ pub(super) fn project_display_status(
             WaitingResolution::NotWaiting => (agent.status, false),
             WaitingResolution::Interrupted => (AgentStatus::Idle, true),
             WaitingResolution::Held => continue,
-            WaitingResolution::Answered => {
+            WaitingResolution::Answered | WaitingResolution::InReview => {
                 agent.phase = TurnPhase::Reasoning;
                 (AgentStatus::Running, false)
             }

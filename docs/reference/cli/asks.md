@@ -12,6 +12,8 @@ rimz asks --json          # the same rows as JSON
 
 `rimz asks` and `rimz asks list` are the same command and take the same flags.
 
+For Codex launched in `auto` mode, permission requests under automatic review are omitted from both the table and `--json` for 60 seconds after arrival. If no later event clears the ask, it appears on the next read at or after 60 seconds. Questions and plan approvals are not delayed. Explicit `rimz asks show` and `rimz answer` still resolve the raw ask during review; pane-input guards still apply. See [Codex's mode and native-child limits](../../internals/agents/adapter_codex.md#asks-and-answers).
+
 | Flag | Effect |
 | --- | --- |
 | `--all` | Include asks from every channel. Outside a channel the list already covers every channel. |

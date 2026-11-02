@@ -1103,6 +1103,7 @@ fn interactive_live_status(agent: &AgentState) -> rimz::harness::run::RunLiveSta
             .map(|pct| pct.round().clamp(0.0, 100.0) as u8),
         // An interactive agent has no supervised run to be parked.
         parked_at: None,
+        permission_review_until: agent.permission_review_until(),
     }
 }
 
@@ -1153,6 +1154,41 @@ fn wait_run_stream(
                 write_timeout_header(&mut render::err(), typed_reference, Some(text))?;
             }
             std::process::exit(RunStatus::TimedOut.exit_code());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::agents::AgentStatus;
+
+    #[test]
+    fn interactive_status_keeps_raw_waiting_with_permission_review_evidence() {
+        let since = jiff::Timestamp::from_second(1_000).unwrap();
+        let mut agent = rimz::testkit::agent_state("codex", "review", since);
+        agent.status = AgentStatus::Waiting;
+        agent.waiting_since = Some(since);
+        agent.open_ask = Some(rimz::agents::OpenAsk {
+            id: rimz::ids::AskId::new(),
+            kind: rimz::agents::AskKind::Permission,
+            detail: None,
+            native_key: None,
+            since,
+        });
+        for mode in [Some(PermissionMode::Auto), None] {
+            agent.mode = mode;
+            let live = interactive_live_status(&agent);
+            assert_eq!(live.agent_status, AgentStatus::Waiting);
+            let json = serde_json::to_value(live).unwrap();
+            if mode.is_some() {
+                assert_eq!(
+                    json["permission_review_until"],
+                    serde_json::json!(since + Duration::from_secs(60))
+                );
+            } else {
+                assert!(json.get("permission_review_until").is_none());
+            }
         }
     }
 }

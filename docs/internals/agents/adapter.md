@@ -69,6 +69,7 @@ The optional `launch.headless` form is a [`HeadlessForm`](../../../crates/rimz/s
 | `hook_context` | the reply shape (`HookSpecificOutput` or a `TopLevel` key) in which a native post-tool hook reply carries additive model context such as a deadline rung. `AgentDefinition::attach_hook_context` is its one writer, and `None` sends the rung through the pane |
 | `prompt_context` | a native prompt-submit reply can carry additive model context ([below](#hook-stdout-is-the-decision-channel)). Claude and Codex declare it |
 | `native_ask_ui` | the agent draws its own permission and question prompts, so RimZ can mark the row waiting and route you to the pane. Every built-in declares it, and a process plugin may not |
+| `permission_before_auto_review` | permission hooks precede an automatic reviewer. Codex alone declares it; recorded Auto launches hide permission attention for 60 seconds without releasing pane input ([waiting and asks](./model.md#waiting-and-asks)) |
 | `transcript_tail_context` | a local transcript tail is a live context source, refreshable on a producer tick |
 | `registers_lazily` | a session can exist before its pane stamp does, so binding goes through the [recovery ladder](./instances.md#binding-a-session), and a stamp must also pass kind, activity, and process-start guards |
 | `local_session_discovery` | `Unsupported`: no provider-local discovery; `FullScan`: scan admitted workspaces; `PerPane`: read only sessions live panes can bind. Observations may supply identity alone or lifecycle |
@@ -162,11 +163,11 @@ Claude, Qwen, and Qoder take a permission ask's detail text from the shared `cra
 
 ### Two channels
 
-`decode_hook` sorts each native event into the lifecycle channel or the awaiting-user channel, or classifies it unknown, which records nothing. The two channels differ in whether the hook is a prompt the agent is holding open.
+`decode_hook` sorts each native event into the lifecycle channel or the awaiting-user channel, or classifies it unknown, which records nothing. The two channels differ in whether the hook reports a native-input request.
 
 Lifecycle hooks are fast and non-blocking. They drive status, turn phase, task, and enrichment, and they return the neutral reply.
 
-Awaiting-user hooks queue their payload and return neutral before the deferred state write. When the agent's spec declares `native_ask_ui`, the drainer turns a permission request, plan approval, or user question into an `awaiting_input` signal: the row goes `waiting` and the question text lands as a transcript `Ask` entry. The prompt stays visible in the agent's pane throughout. Without `native_ask_ui` the drainer records no ask, because there is no native prompt a waiting row could route you to. Every built-in declares the flag, and a process plugin can declare it off.
+Awaiting-user hooks queue their payload and return neutral before the deferred state write. When the agent's spec declares `native_ask_ui`, the drainer turns a permission request, plan approval, or user question into an `awaiting_input` signal: the row goes `waiting` and the question text lands as a transcript `Ask` entry. Native prompts stay in the agent's pane. Codex automatic review can emit a permission hook before a human prompt exists, so its attention projection initially stays Running ([waiting and asks](./model.md#waiting-and-asks)). Without `native_ask_ui` the drainer records no ask, because there is no native prompt a waiting row could route you to. Every built-in declares the flag, and a process plugin can declare it off.
 
 Blocking decision hooks install synchronous, because an async hook ignores the reply printed on stdout. The adapter's hook catalog marks which events must block, and the JSON-merge installer refuses, as a hard error, a config whose RimZ-owned entry for such an event is async (`crates/rimz/src/agents/managed_json_hooks.rs::ManagedJsonHookSpec::reject_async_blocking`).
 

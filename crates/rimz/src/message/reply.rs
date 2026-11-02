@@ -41,7 +41,7 @@ pub enum ReplyProgress {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReplyFailure {
-    WaitingForInput,
+    WaitingForInput(super::InputWait),
     DeliveryFailed {
         status: MessageStatus,
         reason: Option<String>,
@@ -448,11 +448,13 @@ impl Leg {
             | DispatchOutcome::CompactionPending { message_id, .. } => {
                 (message_id.clone(), MessageStatus::Queued, None, None)
             }
-            DispatchOutcome::SkippedWaiting { message_id, .. } => (
+            DispatchOutcome::SkippedWaiting {
+                message_id, reason, ..
+            } => (
                 message_id.clone(),
                 MessageStatus::Errored,
                 Some(RunStatus::Failed),
-                Some(ReplyFailure::WaitingForInput),
+                Some(ReplyFailure::WaitingForInput(*reason)),
             ),
         };
         let cursor = target.cursor.take().filter(|_| {

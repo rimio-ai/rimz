@@ -122,6 +122,7 @@ fn collect_show_report(
             me.as_ref(),
             now,
             ReportOverrides {
+                attention_now: Some(snapshot.now),
                 child: child_for_agent(snapshot, agent),
                 runtime: Some(runtime),
                 effort: effort.map(|(effort, _)| effort),
@@ -131,11 +132,11 @@ fn collect_show_report(
         )
     });
     let (ask, ask_next_step) = match agent.as_ref().zip(report_agent.as_ref()) {
-        Some((agent, entry)) => (
+        Some((agent, entry)) if !agent.is_reviewing_permission(snapshot.now) => (
             crate::cli::transcript::latest_ask_view(workspace, agent)?,
             show_ask_next_step(store.paths(), agent, &entry.handle)?,
         ),
-        None => (None, None),
+        _ => (None, None),
     };
     Ok((
         ShowReport {

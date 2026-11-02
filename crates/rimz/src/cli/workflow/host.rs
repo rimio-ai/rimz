@@ -270,6 +270,7 @@ impl workflow::AttemptHost for Host<'_> {
             let peers = rimz::address::addressable_agents(&snapshot);
             for current in std::iter::once(root).chain(stopped) {
                 if observed.ask.is_none()
+                    && !current.is_reviewing_permission(snapshot.now)
                     && let Some(ask) = rimz::agents::read_open_ask(self.state, current, None)?
                     && ask.delivery != AskDelivery::Async
                 {
@@ -280,7 +281,7 @@ impl workflow::AttemptHost for Host<'_> {
                         .collect::<Vec<_>>()
                         .join("\n\n");
                     observed.ask = Some(Asking {
-                        since: ask.open.since,
+                        since: current.permission_review_until().unwrap_or(ask.open.since),
                         ask: Asked {
                             text,
                             kind: match ask.open.kind {

@@ -556,6 +556,47 @@ fn when_evaluation_handles_exact_boundary_clock_skew_and_expiry() {
     assert_eq!(gone.archive_reason, Some(condition.expiry_reason()));
 }
 
+#[test]
+fn waiting_dwell_starts_when_permission_review_becomes_visible() {
+    let at = Timestamp::from_second(1_000).unwrap();
+    let mut watched = crate::testkit::agent_state("codex", "review", at);
+    watched.status = AgentStatus::Waiting;
+    watched.mode = Some(crate::agents::PermissionMode::Auto);
+    watched.waiting_since = Some(at);
+    watched.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::new(),
+        kind: crate::agents::AskKind::Permission,
+        detail: None,
+        native_key: None,
+        since: at,
+    });
+    let condition = WhenCondition {
+        kind: watched.kind.clone(),
+        agent_id: watched.agent_id.clone(),
+        agent_name: None,
+        address: "@codex".to_owned(),
+        status: AgentStatus::Waiting,
+        dwell_secs: 10,
+        met_at: None,
+    };
+    for (second, status, dwell, met) in [
+        (1_059, AgentStatus::Running, None, false),
+        (1_060, AgentStatus::Waiting, Some(0), false),
+        (1_069, AgentStatus::Waiting, Some(9), false),
+        (1_070, AgentStatus::Waiting, Some(10), true),
+    ] {
+        let now = Timestamp::from_second(second).unwrap();
+        let live = snapshot(watched.clone(), false, now);
+        let evaluation = evaluate_when_condition(&condition, &live, now, Duration::from_secs(30));
+        assert_eq!(evaluation.check.status, Some(status), "at {second}");
+        assert_eq!(evaluation.check.dwell_so_far_secs, dwell);
+        assert_eq!(evaluation.check.met, met);
+        let trip_at = Timestamp::from_second(1_070).unwrap();
+        assert_eq!(evaluation.check.trip_at, Some(trip_at));
+        assert_eq!(evaluation.retry_at, (!met).then_some(trip_at));
+    }
+}
+
 fn ready_check() -> DeliveryCheck {
     DeliveryCheck {
         register_by: None,
@@ -589,6 +630,7 @@ fn ready_check() -> DeliveryCheck {
         ask: AskCheck {
             waiting: false,
             force: false,
+            permission_review: false,
         },
         pane: PaneCheck {
             present: true,

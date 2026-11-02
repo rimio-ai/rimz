@@ -356,6 +356,13 @@ fn stay_renders_with_you_or_asking_you_until_session_exit() {
             .output()
             .unwrap(),
     );
+    assert!(show(&room.env, &id)["record"]["attempt"]["asking"].is_null());
+    room.expire_permission_review(&run);
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
     let asking = show(&room.env, &id);
     assert_eq!(asking["record"]["state"], "active", "{asking:#}");
     assert_eq!(asking["record"]["attempt"]["asking"]["kind"], "permission");
@@ -1179,13 +1186,20 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
             .iter()
             .any(|row| row["result"] == "workflow_skipped" && row["run_id"] == id)
     );
-    // A supported permission prompt parks the active run, and still blocks a duplicate.
+    // A visible permission prompt parks the active run, and still blocks a duplicate.
     let run = room.attempt(&id);
     room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
     room.hook(
         &id,
         &run,
         serde_json::from_str(&crate::common::codex_permission_payload()).unwrap(),
+    );
+    assert_eq!(show(&room.env, &id)["record"]["state"], "active");
+    room.expire_permission_review(&run);
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
     );
     until(&room.env, &id, |v| v["record"]["state"] == "parked");
     let list: Value = serde_json::from_str(&success(
@@ -1451,6 +1465,35 @@ impl Room {
 
     fn hook(&self, id: &str, run: &RunRecord, payload: Value) {
         self.hook_with_owner(id, run, self.env.agent_owner_pid(), payload);
+    }
+
+    fn expire_permission_review(&self, run: &RunRecord) {
+        let snapshot = self.env.store().snapshot_cached().unwrap();
+        let source = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.name == run.agent_name)
+            .unwrap();
+        let ask = source.open_ask.as_ref().unwrap();
+        let observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(source.agent_id.clone()),
+            rimz::agents::LifecycleSignal::AwaitingInput {
+                kind: ask.kind,
+                ask_id: Some(ask.id.clone()),
+                detail: ask.detail.clone(),
+                native_key: ask.native_key.clone(),
+            },
+        );
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
+        let mut event = rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            workspace.session_name,
+            "codex",
+            "PermissionRequest",
+            &observation,
+        );
+        event.timestamp = ask.since - Duration::from_secs(60);
+        self.env.store().append_event(&event).unwrap();
     }
 
     fn hook_with_owner(&self, id: &str, run: &RunRecord, owner_pid: u32, payload: Value) {
@@ -1721,6 +1764,19 @@ fn permission_stays_live_and_explicit_question_routes_with_evidence() {
         let (id, run) = room.launch();
         room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
         room.hook(&id, &run, payload);
+        if held {
+            success(
+                room.command(&["workflow", "advance", &id])
+                    .output()
+                    .unwrap(),
+            );
+            let current = show(&room.env, &id);
+            assert!(
+                current["record"]["attempt"]["asking"].is_null(),
+                "{current:#}"
+            );
+            room.expire_permission_review(&run);
+        }
         success(
             room.command(&["workflow", "advance", &id])
                 .output()
@@ -1753,7 +1809,10 @@ fn permission_stays_live_and_explicit_question_routes_with_evidence() {
                 .find(|agent| agent.name == run.agent_name)
                 .and_then(|agent| agent.open_ask.as_ref())
                 .unwrap();
-            assert_eq!(asked["since"], json!(source.since));
+            assert_eq!(
+                asked["since"],
+                json!(source.since + std::time::Duration::from_secs(60))
+            );
             let list: Value = serde_json::from_str(&success(command(
                 &room.env,
                 &["workflow", "list", "--json"],

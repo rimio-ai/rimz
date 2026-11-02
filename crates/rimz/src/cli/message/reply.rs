@@ -108,7 +108,7 @@ fn present_update(
         }
         if total == 1
             && let Some(failure) = &result.failure
-            && matches!(failure, ReplyFailure::WaitingForInput)
+            && matches!(failure, ReplyFailure::WaitingForInput(_))
         {
             bail!(failure_message(&result, failure));
         }
@@ -234,10 +234,9 @@ fn write_prose(out: &mut impl Write, message: &str, prose: Prose) -> Result<()> 
 
 fn failure_message(result: &ReplyResult, failure: &ReplyFailure) -> String {
     match failure {
-        ReplyFailure::WaitingForInput => format!(
-            "{} ({}) is waiting on your input in its pane; answer it or pass --force",
-            result.label, result.message_id
-        ),
+        ReplyFailure::WaitingForInput(reason) => {
+            format!("{} ({}) {reason}", result.label, result.message_id)
+        }
         ReplyFailure::DeliveryFailed { status, reason } => format!(
             "message {} for {} ({}){}",
             status.as_str(),
