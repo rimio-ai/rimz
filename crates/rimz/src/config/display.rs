@@ -195,8 +195,10 @@ impl DisplayConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ContextMeterConfig {
-    /// Log-warp the drawn fill with strength scaled by the context window: up
-    /// to 256k stays linear and 1M reaches the full curve. Display-only;
+    /// Measure against native compaction when configured, or the full window.
+    pub scale: ContextMeterScale,
+    /// Log-warp the drawn fill with strength scaled by its denominator: up to
+    /// 256k stays linear and 1M reaches the full curve. Display-only;
     /// `false` restores linear fill geometry.
     pub log_scale: bool,
     /// Where the meter leaves calm green and starts warming toward yellow.
@@ -212,6 +214,7 @@ pub struct ContextMeterConfig {
 impl Default for ContextMeterConfig {
     fn default() -> Self {
         Self {
+            scale: ContextMeterScale::Compaction,
             log_scale: true,
             green: ContextBand {
                 percent: 50,
@@ -233,11 +236,21 @@ impl Default for ContextMeterConfig {
     }
 }
 
+/// The denominator for the context meter's fill, percentage and severity.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ContextMeterScale {
+    /// Use the native compaction point when known and below the window.
+    Compaction,
+    /// Use the full model context window.
+    Window,
+}
+
 /// One context color stop's thresholds: the stop is reached once *either* axis
 /// reaches its value (`value >= threshold`, inclusive).
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ContextBand {
-    /// Fill percentage (0-100) of the context window.
+    /// Fill percentage (0-100) on the selected meter scale.
     pub percent: u8,
     /// Absolute tokens occupying the window.
     pub tokens: u64,

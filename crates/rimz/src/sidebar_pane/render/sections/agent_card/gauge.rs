@@ -86,11 +86,11 @@ pub(super) fn bar_row(
 /// the **percent used** on the right, the bar between. The window size is on the
 /// identity line. The fill amount and its calm-blue →
 /// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
-/// `[theme.display.context_meter]`) come from the used percentage and the
-/// absolute tokens. Fill geometry is log-scaled by default, with curve strength
-/// scaling from linear at windows up to 256k to the full curve at 1M, so
-/// large-window working ranges stay visible; the displayed percentage remains
-/// the raw measurement. When the statusline reports the per-message token
+/// `[theme.display.context_meter]`) come from the selected scale's percentage
+/// and the absolute tokens. Fill geometry is log-scaled by default, with curve
+/// strength scaling from linear at denominators up to 256k to the full curve
+/// at 1M, so large-window working ranges stay visible; the displayed percentage
+/// remains unwarped. When the statusline reports the per-message token
 /// breakdown, every severity splits the fill into cache-read / cache-write /
 /// fresh-input segments while the prompt cache is warm. An expired cache draws
 /// one flat run in the fixed expired-cache tone. Components below 0.5% of the
@@ -102,7 +102,7 @@ pub(super) fn bar_row(
 /// exactly empty drawn fraction reads the hollow `▢`; any usage fills it to
 /// `▣`. A completed compaction keeps its own glyph until the first real
 /// reading. A provider estimate fills the track flat in its ordinary tone from
-/// its own fraction ([`compacted_estimate_pct`]) with a percentage, `<1%` for a
+/// its own fraction with a percentage, `<1%` for a
 /// positive estimate under one percent; without one, the glyph is healthy green
 /// and the empty track stays muted, without a percentage.
 ///
@@ -131,18 +131,12 @@ pub(super) fn gauge_line(
     let compacted_unmeasured = row
         .as_agent()
         .is_some_and(|agent| agent.compacted_unmeasured);
-    let percent = if compacted_unmeasured {
-        row.as_agent().and_then(|agent| agent.usage.context_pct)
-    } else {
-        row.context_gauge_percent()
-    };
+    let meter = row.context_meter(bands.scale);
+    let percent = meter.percent;
     let compacted_empty = compacted_unmeasured && percent.is_none();
     let percent = percent.unwrap_or(0);
-    let (precise, estimate) = if compacted_unmeasured {
-        (None, compacted_estimate_pct(row))
-    } else {
-        (precise_context_pct(row), None)
-    };
+    let precise = meter.precise_percent;
+    let estimate = meter.estimated_percent;
     let value = if compacted_empty {
         String::new()
     } else if estimate.is_some_and(|pct| pct > 0.0 && pct < 1.0) {
@@ -152,7 +146,7 @@ pub(super) fn gauge_line(
     };
     let drawn = precise.or(estimate).unwrap_or_else(|| f64::from(percent));
     let fill = if bands.log_scale {
-        log_scaled_fill(drawn, display_context_window(row))
+        log_scaled_fill(drawn, meter.compact_at.or(meter.window))
     } else {
         drawn
     };
@@ -231,17 +225,6 @@ pub(super) fn gauge_line(
     line
 }
 
-/// The compaction-gap estimate as a fraction (0..=100) over the window its
-/// integer `context_pct` was taken against, kept only when it floors to that
-/// integer: a provider's explicit percentage over another window, or one with
-/// no token count behind it, keeps the integer fill and label.
-fn compacted_estimate_pct(row: &SidebarRow) -> Option<f64> {
-    let usage = &row.as_agent()?.usage;
-    let window = usage.context_window.filter(|window| *window > 0)? as f64;
-    let pct = (usage.total_tokens? as f64 * 100.0 / window).clamp(0.0, 100.0);
-    (pct.floor() == f64::from(usage.context_pct?)).then_some(pct)
-}
-
 /// Window below which the drawn fill stays linear.
 const LOG_SCALE_LINEAR_FLOOR_TOKENS: f64 = 256_000.0;
 /// Window at which the curve reaches full strength ([`LOG_SCALE_MAX_K`]).
@@ -249,7 +232,7 @@ const LOG_SCALE_FULL_CURVE_TOKENS: f64 = 1_000_000.0;
 /// Log-curve strength ceiling (`ln(1 + K·f) / ln(1 + K)` at a 1M window).
 const LOG_SCALE_MAX_K: f64 = 4.0;
 
-/// Scale the drawn fill's log-curve strength with the resolved context window.
+/// Scale the drawn fill's log-curve strength with the meter's denominator.
 fn log_scaled_fill(pct: f64, window: Option<u64>) -> f64 {
     let Some(window) = window else { return pct };
     let ramp = ((window as f64 - LOG_SCALE_LINEAR_FLOOR_TOKENS)
@@ -308,7 +291,7 @@ pub(super) fn row_severity(row: &SidebarRow, bands: &ContextMeterConfig) -> Cont
         .and_then(|agent| agent.context_severity)
         .unwrap_or_else(|| {
             ContextSeverity::classify(
-                row.context_gauge_percent().unwrap_or(0),
+                row.context_meter(bands.scale).percent.unwrap_or(0),
                 row.context_used_tokens(),
                 bands,
             )
@@ -324,27 +307,10 @@ fn row_severity_color(
     severity_heat_color(
         theme,
         severity,
-        row.context_gauge_percent().unwrap_or(0),
+        row.context_meter(bands.scale).percent.unwrap_or(0),
         row.context_used_tokens(),
         bands,
     )
-}
-
-/// A precise context-used fraction (0..=100) from the current-message token
-/// composition over the window size, so the `ctx` value can read a decimal
-/// (`78.2%`). The composition (`input + cache_creation + cache_read`) is exactly
-/// what `used_percentage` measures, so the decimal refines the same number a
-/// statusline reports. `None` (no breakdown, or no window size) falls the value
-/// back to the integer gauge percent — which the fold now derives from the same
-/// window the card displays, so a hook-only agent still reads a consistent
-/// (integer) percentage.
-pub(super) fn precise_context_pct(row: &SidebarRow) -> Option<f64> {
-    let window = ctx(row)?.tokens.as_ref()?.context_window_size? as f64;
-    if window <= 0.0 {
-        return None;
-    }
-    let used = row.context_used_tokens()? as f64;
-    Some((used / window * 100.0).clamp(0.0, 100.0))
 }
 
 fn correlated_current_usage(row: &SidebarRow) -> Option<&AgentCurrentUsage> {

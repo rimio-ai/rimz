@@ -337,7 +337,8 @@ upward-dependencies = ["address"]
 # AgentState::attention_ask shares blocking-ask visibility across attention readers (+1).
 # LaunchSpec::settle_permission_mode and LaunchPermissionArgs::resolve_mode share per-kind permission settlement (+2).
 # LaunchPermissionArgs::of_kind shares permission-table lookup with identity for unknown kinds (+1).
-surface-budget = 1226
+# native_compaction_point and its facade export share provider caps with the read model (+2).
+surface-budget = 1228
 
 [[verdict]]
 kind = "item"
@@ -408,6 +409,11 @@ reason = "Definition checks and scoped views retain conflicts separately from ab
 kind = "item"
 key = "agents::registry::ResumeProbe"
 reason = "Pane repair distinguishes resumed, settled and retryable process-chain answers."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::native_compaction_point"
+reason = "The snapshot read model applies provider-owned native compaction caps without importing private adapters."
 
 [[verdict]]
 kind = "item"
@@ -3690,6 +3696,11 @@ reason = "Dispatch's resume enqueue checks for a newly live card and decides joi
 kind = "item"
 key = "store::snapshot::row::SidebarRow::attention_pane"
 reason = "The inbox walk and later jump readers share the waiting child's live-pane target without changing ordinary card focus."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::ContextMeterReading"
+reason = "Producer severity and renderer geometry share one context denominator and its measured or estimated fraction."
 
 [[verdict]]
 kind = "item"
@@ -9055,6 +9066,11 @@ reason = "Named by the public SessionCapability::daemon_session_evidence (capabi
 kind = "item"
 key = "config::display::DisplayConfig"
 reason = "Pass 24a: representative of every section record the config façade re-exports. The façade line decides reach, so the declaration stays `pub` as a field type of MachineConfig; narrowing the declaration to pub(crate) moves no budget once the façade has narrowed, because pub(crate) still reaches the crate root. Do not re-propose the child declarations."
+
+[[verdict]]
+kind = "item"
+key = "config::display::ContextMeterScale"
+reason = "The theme setting selects one shared scale for producer severity and renderer fill without changing window-based API values."
 
 [[verdict]]
 kind = "item"

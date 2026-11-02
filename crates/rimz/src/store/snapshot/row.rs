@@ -14,6 +14,7 @@ use crate::agents::{
     PendingWaitClass,
 };
 use crate::agents::{AgentStatus, ContextSeverity};
+use crate::config::ContextMeterScale;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
 use crate::pane::PaneRef;
 
@@ -241,10 +242,119 @@ impl SidebarRow {
         self.as_agent().and_then(AgentCard::context_used_tokens)
     }
 
+    /// One scale shared by the context meter, identity label and severity stamp.
+    pub(crate) fn context_meter(&self, scale: ContextMeterScale) -> ContextMeterReading {
+        let Some(agent) = self.as_agent() else {
+            return ContextMeterReading::default();
+        };
+        let window = display_context_window(self);
+        let compact_at = match scale {
+            ContextMeterScale::Compaction => window.and_then(|window| {
+                crate::agents::native_compaction_point(&self.name, agent.auto_compact?, window)
+            }),
+            ContextMeterScale::Window => None,
+        };
+        let compacted = agent.compacted_unmeasured;
+        let percent = if compacted {
+            agent.usage.context_pct
+        } else {
+            self.context_gauge_percent()
+        };
+        let mut reading = ContextMeterReading {
+            window,
+            compact_at,
+            percent,
+            precise_percent: (!compacted).then(|| precise_context_pct(self)).flatten(),
+            estimated_percent: compacted.then(|| compacted_estimate_pct(self)).flatten(),
+        };
+        let Some(point) = compact_at else {
+            return reading;
+        };
+        let used = if compacted {
+            percent.and(agent.usage.total_tokens)
+        } else {
+            self.context_used_tokens()
+        };
+        let sidecar = agent
+            .context
+            .as_ref()
+            .and_then(|context| context.tokens.as_ref());
+        let measured_window = sidecar
+            .filter(|tokens| {
+                !compacted && (tokens.used_percentage.is_some() || tokens.used_tokens().is_some())
+            })
+            .and_then(|tokens| tokens.context_window_size)
+            .or(agent.usage.context_window)
+            .or(window);
+        let scaled = used
+            .map(|used| used as f64 * 100.0 / point as f64)
+            .or_else(|| Some(f64::from(percent?) * measured_window? as f64 / point as f64))
+            .map(|percent| percent.clamp(0.0, 100.0));
+        reading.percent = scaled.map(|percent| percent as u8);
+        reading.precise_percent = (!compacted && used.is_some()).then_some(scaled).flatten();
+        reading.estimated_percent = compacted.then_some(scaled).flatten();
+        reading
+    }
+
     /// The latest call's composition when the rich token blob is absent.
     pub fn call_split(&self) -> Option<RowCallSplit> {
         self.as_agent().and_then(AgentCard::call_split)
     }
+}
+
+/// The model window, native point when selected, and fractions on that scale.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ContextMeterReading {
+    pub(crate) window: Option<u64>,
+    pub(crate) compact_at: Option<u64>,
+    pub(crate) percent: Option<u8>,
+    pub(crate) precise_percent: Option<f64>,
+    pub(crate) estimated_percent: Option<f64>,
+}
+
+/// The model's context window, preferring the runtime sidecar, then the carried
+/// usage window and the kind's fallback.
+fn display_context_window(row: &SidebarRow) -> Option<u64> {
+    row.as_agent()
+        .and_then(|agent| {
+            agent
+                .context
+                .as_ref()
+                .and_then(|context| context.tokens.as_ref())
+                .and_then(|tokens| tokens.context_window_size)
+                .or(agent.usage.context_window)
+                .or_else(|| {
+                    crate::agents::spec_by_kind(row.name.as_str())
+                        .and_then(|definition| definition.default_context_window)
+                })
+        })
+        .filter(|window| *window > 0)
+}
+
+/// A precise context-used fraction over the sidecar's own window, refining
+/// the integer window gauge without changing its denominator.
+fn precise_context_pct(row: &SidebarRow) -> Option<f64> {
+    let window = row
+        .as_agent()?
+        .context
+        .as_ref()?
+        .tokens
+        .as_ref()?
+        .context_window_size? as f64;
+    if window <= 0.0 {
+        return None;
+    }
+    let used = row.context_used_tokens()? as f64;
+    Some((used / window * 100.0).clamp(0.0, 100.0))
+}
+
+/// Keep a compaction-gap estimate only when it floors to the provider's
+/// integer percentage over the same window.
+fn compacted_estimate_pct(row: &SidebarRow) -> Option<f64> {
+    let usage = &row.as_agent()?.usage;
+    let window = usage.context_window.filter(|window| *window > 0)? as f64;
+    let pct = (usage.total_tokens? as f64 * 100.0 / window).clamp(0.0, 100.0);
+    (pct.floor() == f64::from(usage.context_pct?)).then_some(pct)
 }
 
 /// A live agent pane the producer bound during the pane fold: a running agent

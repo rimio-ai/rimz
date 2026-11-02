@@ -1390,7 +1390,7 @@ fn stamp_context_severity(
         for row in Arc::make_mut(&mut group.rows) {
             if row.is_agent() {
                 let severity = crate::agents::ContextSeverity::classify(
-                    row.context_gauge_percent().unwrap_or(0),
+                    row.context_meter(bands.scale).percent.unwrap_or(0),
                     row.context_used_tokens(),
                     bands,
                 );

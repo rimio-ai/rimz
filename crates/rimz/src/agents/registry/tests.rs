@@ -1,6 +1,28 @@
 use super::*;
 use crate::agents::{AgentStatus, ConcernCoverage, IntegrationConcern};
 use crate::ids::AgentKind;
+
+#[test]
+fn native_compaction_point_applies_provider_caps() {
+    let cases = [
+        ("claude", 372_000, 1_000_000, Some(372_000)),
+        ("claude", 200_000, 200_000, None),
+        ("claude", 272_000, 200_000, None),
+        ("codex", 272_000, 258_400, Some(244_800)),
+        ("codex", 272_000, 272_000, Some(244_800)),
+        ("codex", 200_000, 258_400, Some(200_000)),
+        ("codex", 200_000, 272_000, Some(200_000)),
+        ("codex", 1_000_000, 950_000, Some(900_000)),
+        ("amp", 100_000, 200_000, None),
+        ("process-plugin", 100_000, 200_000, None),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|&(kind, configured, window, _)| native_compaction_point(kind, configured, window))
+        .collect();
+    assert_eq!(actual, cases.map(|(_, _, _, expected)| expected));
+}
+
 #[test]
 fn prompt_cache_lifetimes_are_provider_defaults() {
     use crate::agents::context::SignIn;

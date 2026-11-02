@@ -651,6 +651,52 @@ fn set_context_meter_log_scale_round_trips_through_scalar_path() {
 }
 
 #[test]
+fn set_context_meter_scale_round_trips_through_scalar_path() {
+    let mut doc = Kind::Theme.template().parse::<DocumentMut>().unwrap();
+    let key = parse_key("theme.display.context_meter.scale").unwrap();
+    let agents_home = std::path::Path::new("missing-agents-home");
+    let actual: Vec<_> = ["window", "compaction"]
+        .map(|value| {
+            apply_logical_key(
+                &mut doc,
+                std::path::Path::new("theme.toml"),
+                &key,
+                parse_set_value(&key, value),
+                agents_home,
+            )
+            .unwrap();
+            MachineConfig::parse_text(
+                std::path::Path::new("theme.toml"),
+                &doc.to_string(),
+                agents_home,
+            )
+            .unwrap()
+            .theme
+            .display
+            .context_meter
+            .scale
+        })
+        .into();
+    assert_eq!(
+        actual,
+        [
+            super::super::ContextMeterScale::Window,
+            super::super::ContextMeterScale::Compaction
+        ]
+    );
+    assert!(
+        apply_logical_key(
+            &mut doc,
+            std::path::Path::new("theme.toml"),
+            &key,
+            parse_set_value(&key, "compact"),
+            agents_home,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn round_trip_validation_reports_the_logical_key_value_and_message() {
     let mut doc = Kind::Core
         .template()
