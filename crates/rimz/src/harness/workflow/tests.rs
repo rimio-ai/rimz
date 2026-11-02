@@ -198,7 +198,7 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 
 #[test]
 fn validation_carries_check_and_step_summaries() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     let text = VALID
         .replace(
             "[checks.pick]",
@@ -209,7 +209,7 @@ fn validation_carries_check_and_step_summaries() {
             "[steps.build]\nsummary = ' Build the chosen item '",
         );
     fs::write(dir.join("workflow.toml"), text).unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
     let rows = serde_json::to_value(&report.rows).unwrap();
     assert_eq!(rows[0]["summary"], "Choose the next item");
@@ -218,11 +218,11 @@ fn validation_carries_check_and_step_summaries() {
 
 #[test]
 fn validation_carries_workflow_summary() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     let summary = " Build the next item, then check it ";
     let text = VALID.replace("[workflow]", &format!("[workflow]\nsummary = '{summary}'"));
     fs::write(dir.join("workflow.toml"), text).unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report.errors.is_empty(),
         "workflow summaries must load: {report:?}"
@@ -235,7 +235,7 @@ fn validation_carries_workflow_summary() {
 
 #[test]
 fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     let mut actual = Vec::new();
     for (kind, node) in [
         ("workflow", None),
@@ -260,7 +260,7 @@ fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
                 .unwrap()
                 .insert("summary".into(), summary.into());
             fs::write(dir.join("workflow.toml"), toml::to_string(&text).unwrap()).unwrap();
-            let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+            let report = validate(&dir, &LoadedDefinitions::default(), None);
             let path = match node {
                 Some(node) => format!("{kind}.{node}.summary"),
                 None => format!("{kind}.summary"),
@@ -345,7 +345,7 @@ fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
     let results: Vec<_> = cases
         .into_iter()
         .map(|(label, text, path)| {
-            let (home, dir) = fixture();
+            let (_home, dir) = fixture();
             fs::write(dir.join("workflow.toml"), text).unwrap();
             let mut definitions = LoadedDefinitions::default();
             definitions.teams.0.insert(
@@ -355,7 +355,7 @@ fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
                     ..Default::default()
                 },
             );
-            let report = validate(&dir, home.path(), &definitions, None);
+            let report = validate(&dir, &definitions, None);
             let valid = match path {
                 Some(path) => report.errors.iter().any(|issue| {
                     issue.path == path
@@ -378,7 +378,7 @@ fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
 
 #[test]
 fn until_warns_about_unreported_background_work_but_not_auto_continue() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
         format!(
@@ -387,7 +387,7 @@ fn until_warns_about_unreported_background_work_but_not_auto_continue() {
         ),
     )
     .unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
     assert!(
         report
@@ -804,9 +804,9 @@ fn validation_rejects_each_invalid_spec() {
         .chain(keyed_cases)
         .chain(command_cases)
     {
-        let (home, dir) = fixture();
+        let (_home, dir) = fixture();
         fs::write(dir.join("workflow.toml"), text).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
         if !report.errors.iter().any(|issue| {
             (issue.path.contains(path) || issue.message.contains(path))
                 && issue.message.contains(message)
@@ -822,7 +822,7 @@ fn validation_accepts_command_steps_without_agent_warnings() {
     let results: Vec<_> = ["run", "shell"]
         .into_iter()
         .map(|runner| {
-            let (home, dir) = fixture();
+            let (_home, dir) = fixture();
             let text = VALID
                 .replace(
                     "agent = \"claude\"",
@@ -830,7 +830,7 @@ fn validation_accepts_command_steps_without_agent_warnings() {
                 )
                 .replace("prompt-file = \"prompts/build.md\"", "");
             fs::write(dir.join("workflow.toml"), text).unwrap();
-            let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+            let report = validate(&dir, &LoadedDefinitions::default(), None);
             let valid = report.errors.is_empty()
                 && report.warnings.is_empty()
                 && report.rows.iter().all(|row| {
@@ -852,12 +852,12 @@ fn validation_accepts_command_steps_without_agent_warnings() {
 
 #[test]
 fn validation_accepts_shell_checks_without_confining_the_command() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
         "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@user',invalid='@done',timeout='@user'}\n",
     ).unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report.errors.is_empty(),
         "shell checks must accept shell syntax and external paths: {report:?}"
@@ -867,7 +867,7 @@ fn validation_accepts_shell_checks_without_confining_the_command() {
 
 #[test]
 fn validation_refuses_judges_without_a_headless_launch() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
         VALID.replace(
@@ -876,7 +876,7 @@ fn validation_refuses_judges_without_a_headless_launch() {
         ),
     )
     .unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report
             .errors
@@ -888,13 +888,13 @@ fn validation_refuses_judges_without_a_headless_launch() {
 
 #[test]
 fn validation_resolves_edges_and_warns_about_auto_continue() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     let text = VALID.replace(
         "run = \"python3 checks/pick.py\"",
         "agent = 'claude'\nprompt-file = 'prompts/build.md'\nwindow = '5h.left>=42 && 7d.left>=10'",
     );
     fs::write(dir.join("workflow.toml"), text).unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
     assert_eq!(report.rows.len(), 2);
     assert_eq!(report.warnings.len(), 2, "{report:?}");
@@ -925,7 +925,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
         .iter()
         .map(|(extra, _)| {
             fs::write(dir.join("workflow.toml"), format!("{VALID}\n{extra}\n")).unwrap();
-            let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+            let report = validate(&dir, &LoadedDefinitions::default(), None);
             assert!(report.errors.is_empty(), "{report:?}");
             report
                 .rows
@@ -952,26 +952,16 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
 }
 
 #[test]
-fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
-    let (home, dir) = fixture();
+fn validation_takes_any_directory_confines_symlinks_and_reports_broken_profiles() {
+    let (_home, dir) = fixture();
     fs::write(dir.join("workflow.toml"), VALID).unwrap();
-    let report = validate(
-        &dir.join("checks/.."),
-        home.path(),
-        &LoadedDefinitions::default(),
-        None,
-    );
+    let report = validate(&dir.join("checks/.."), &LoadedDefinitions::default(), None);
     assert!(
         report.errors.is_empty(),
-        "a confined directory alias is valid: {report:?}"
+        "a directory outside the workflows home is valid: {report:?}"
     );
     assert!(report.rows.iter().all(|row| row.workflow == "example"));
     let outside = tempfile::tempdir().unwrap();
-    assert!(
-        !validate(&dir, outside.path(), &LoadedDefinitions::default(), None)
-            .errors
-            .is_empty()
-    );
     std::os::unix::fs::symlink(outside.path(), dir.join("escape")).unwrap();
     fs::write(outside.path().join("prompt.md"), "outside").unwrap();
     fs::write(
@@ -980,7 +970,7 @@ fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
     )
     .unwrap();
     assert!(
-        validate(&dir, home.path(), &LoadedDefinitions::default(), None)
+        validate(&dir, &LoadedDefinitions::default(), None)
             .errors
             .iter()
             .any(|issue| issue.path == "steps.build.prompt-file")
@@ -995,7 +985,7 @@ fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
         .failed
         .insert("broken".into(), [dir.join("broken.md")].into());
     assert!(
-        validate(&dir, home.path(), &definitions, None)
+        validate(&dir, &definitions, None)
             .errors
             .iter()
             .any(|issue| issue.message.contains("broken definition"))
@@ -1004,7 +994,7 @@ fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
 
 #[test]
 fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     let mut actual = Vec::new();
     for (extra, field) in [
         (
@@ -1018,7 +1008,7 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
         ("on.capacity='@wait'", Some("steps.build.on.capacity")),
     ] {
         fs::write(dir.join("workflow.toml"), format!("{VALID}{extra}\n")).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
         actual.push(match field {
             Some(field) => report.errors.iter().any(|issue| issue.path == field),
             None => {
@@ -1047,7 +1037,7 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
         ("on.capacity='@failed'", "steps.build.on.capacity"),
     ] {
         fs::write(dir.join("workflow.toml"), format!("{command}{extra}\n")).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
         actual.push(report.errors.iter().any(|issue| issue.path == field));
     }
     assert_eq!(actual, vec![true; 9]);

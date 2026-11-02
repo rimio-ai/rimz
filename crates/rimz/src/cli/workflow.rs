@@ -172,13 +172,20 @@ fn start(
     globals: &super::GlobalFlags,
 ) -> Result<()> {
     let dir = definition_dir(&name);
+    let home = paths::workflows_dir();
+    let deployed = dir.canonicalize().is_ok_and(|dir| {
+        home.canonicalize()
+            .is_ok_and(|home| dir != home && dir.starts_with(home))
+    });
+    if !deployed {
+        bail!(
+            "{}: directory must exist inside {}",
+            name.display(),
+            home.display()
+        );
+    }
     let project_root = validation_root(globals);
-    let report = workflow::validate(
-        &dir,
-        &paths::workflows_dir(),
-        &definitions(),
-        project_root.as_deref(),
-    );
+    let report = workflow::validate(&dir, &definitions(), project_root.as_deref());
     if !report.errors.is_empty() {
         bail!(
             "{}",
@@ -321,7 +328,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
     let project_root = validation_root(globals);
     let mut report = Validation::default();
     for dir in dirs {
-        let result = workflow::validate(&dir, &home, &loaded, project_root.as_deref());
+        let result = workflow::validate(&dir, &loaded, project_root.as_deref());
         report.rows.extend(result.rows);
         report.errors.extend(result.errors);
         report.warnings.extend(result.warnings);

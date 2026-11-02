@@ -1508,6 +1508,21 @@ fn validate_json_shape_errors_and_exit_status() {
             .unwrap()
             .success()
     );
+    let source = tempfile::tempdir().unwrap();
+    let outside = source.path().join("review");
+    fs::create_dir(&outside).unwrap();
+    fs::copy(dir.join("workflow.toml"), outside.join("workflow.toml")).unwrap();
+    let outside = outside.to_str().unwrap();
+    success(command(&env, &["workflow", "validate", outside]));
+    let run = command(&env, &["workflow", "run", outside]);
+    assert_eq!(run.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr).trim(),
+        format!(
+            "error: {outside}: directory must exist inside {}",
+            env.rimz_home().join("workflows").display()
+        )
+    );
     let schema = env.rimz().args(["workflow", "schema"]).output().unwrap();
     assert!(schema.status.success());
     let schema: Value = serde_json::from_slice(&schema.stdout).unwrap();

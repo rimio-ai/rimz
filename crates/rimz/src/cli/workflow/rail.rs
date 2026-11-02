@@ -543,8 +543,7 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("workflow.toml"), LAND).unwrap();
         let spec = rimz::harness::workflow::load(&dir).unwrap();
-        let report =
-            rimz::harness::workflow::validate(&dir, home.path(), &Default::default(), None);
+        let report = rimz::harness::workflow::validate(&dir, &Default::default(), None);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         let mut out = anstream::StripStream::new(Vec::new());
         let rail = Rail::definition(&spec);
