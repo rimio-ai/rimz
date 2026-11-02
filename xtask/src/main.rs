@@ -132,7 +132,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "sandbox",
         summary: "Run a command with disposable HOME, XDG, tmux, and Zellij roots.",
-        runs: "sandbox [--] <command> runs in disposable roots; sandbox room holds a private room; sandbox in <root> [--cwd <dir>] [--as <@handle> | --as-ancestor <@handle>] [--] <command> joins it",
+        runs: "sandbox [--] <command> runs in disposable roots; sandbox room --mux <tmux|zellij> [--for <duration>] holds a private room; sandbox in <root> [--cwd <dir>] [--as <@handle> | --as-ancestor <@handle>] [--] <command> joins it",
     },
     TaskInfo {
         name: "deny",
