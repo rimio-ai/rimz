@@ -117,6 +117,19 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    StallNudge {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        team: String,
+        stage: String,
+        quiet_secs: u64,
+        message_id: String,
+        delivered: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     ResidentLaunch {
         task: String,
         checkout: PathBuf,

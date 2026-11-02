@@ -124,6 +124,7 @@ fn render_history(
                         HarnessNotice::Stage => "stage".to_owned(),
                         HarnessNotice::SubagentPaused => "paused".to_owned(),
                         HarnessNotice::SubagentStalled => "stalled".to_owned(),
+                        HarnessNotice::TeamStalled => "nudge".to_owned(),
                         HarnessNotice::MessageUndelivered => "undelivered".to_owned(),
                         HarnessNotice::MessageQueued => "queued".to_owned(),
                     },
@@ -276,6 +277,11 @@ mod tests {
                 "Type: SUBAGENT_STALLED\nFrom: @rimz\nContent:\nchild stalled",
                 "stalled",
                 "child stalled",
+            ),
+            (
+                "Type: TEAM_STALLED\nFrom: @rimz\nContent:\nteam quiet",
+                "nudge",
+                "team quiet",
             ),
             (
                 "Type: MESSAGE_UNDELIVERED\nFrom: @rimz\nContent:\nmessage failed",

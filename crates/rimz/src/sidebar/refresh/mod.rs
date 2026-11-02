@@ -339,6 +339,9 @@ pub(super) fn refresh_heavy_lanes(
         SeatPolicy::default()
     };
     let teams = &policy.teams;
+    steps.step("stall_nudge", || {
+        crate::harness::stall_nudge::nudge_stalled_teams(base, runtime, config, teams)
+    });
     steps.step("idle_compact", || {
         crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &policy)
     });

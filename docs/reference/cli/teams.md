@@ -170,6 +170,8 @@ A cohort uses the sidebar's shared unit verdict. Attention from any member takes
 
 With no projected rows, the same ownerless rule uses the live members' display statuses. An all-resting stage past the [stall window](../../guide/configuration.md#sidebar-rendering) makes its owner `failed`, so the cohort reads `blocked`.
 
+Optional [`harness.stall_nudge`](../../guide/configuration.md#stalled-team-nudge), default off, adds one `TEAM_STALLED` boundary notice to the last-active teammate after 55 minutes of quiet in an unfinished stage visit, only with no pending wait or real message. It does not change the earlier `!` or the cohort verdict.
+
 ### Board stage
 
 The stage comes from the first line starting `Stage:` in `<worktree>/.rimz/team/blackboard.md`, for example `Stage: Implement (@coder)`. Only a final ` (@owner)` splits off as the owner; other parenthesized text stays part of the stage name. A missing or unreadable board shows no stage, even when the team declares a pipeline. [`flip`](#flip-the-board-to-the-next-stage) writes this line, and a hand-edited board parses the same way. The stage is advisory: RimZ never infers it from member status, and it is not proof that work finished.

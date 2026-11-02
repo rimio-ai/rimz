@@ -13,26 +13,7 @@ use super::Ctx;
 pub(super) fn run(request: StallNoticeRequest) -> Result<()> {
     let ctx = Ctx::for_workspace(request.workspace_id, None)
         .context("resolving stall notice workspace")?;
-    let mut audit = ctx
-        .store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .context("reading agent history")?;
-    rimz::store::agent_context::attach_rest_certificates(ctx.runtime(), audit.agents.iter_mut());
-    let heartbeats = rimz::agent_activity::read_for_keys(
-        ctx.runtime(),
-        audit
-            .agents
-            .iter()
-            .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
-    );
-    let now = Timestamp::now();
-    let agents = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
-        ctx.workspace.workspace_id.clone(),
-        audit.agents,
-        now,
-    )
-    .with_agent_activity(&heartbeats)
-    .agents;
+    let (agents, now) = super::read_heartbeat_agents(&ctx).context("reading agent history")?;
     let paths = ctx.store.paths();
     let run =
         rimz::harness::run::load(paths, &request.run_id).context("loading silent child run")?;

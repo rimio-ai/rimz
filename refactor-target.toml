@@ -2074,7 +2074,8 @@ path = "crates/rimz/src/harness"
 # throttle::room_held shares the lock-free room ticket read with sidebar and CLI (+1).
 # throttle::DiagnosticHold and diagnostic_holds share fresh read-only doctor findings (+2).
 # stall_nudge, Decision, and decision share opt-in policy with room and host callers (+3).
-surface-budget = 1065
+# StallNudgeRequest, nudge_stalled_teams, helper, NudgeErr, and queue share the producer/CLI seam (+5).
+surface-budget = 1070
 
 [[verdict]]
 kind = "item"
@@ -2090,6 +2091,31 @@ reason = "Room entry and the live evaluator share the off, on, and shadowed flag
 kind = "item"
 key = "harness::stall_nudge::decision"
 reason = "The entry warning and live evaluator agree when the stall window shadows the fixed 55-minute nudge."
+
+[[verdict]]
+kind = "item"
+key = "harness::stall_nudge::StallNudgeRequest"
+reason = "The detached helper rechecks the projected unit and stage visit before enqueueing its one nudge."
+
+[[verdict]]
+kind = "item"
+key = "harness::stall_nudge::nudge_stalled_teams"
+reason = "Sidebar refresh delegates read-only selection and runtime-cache spawn pacing to the harness."
+
+[[verdict]]
+kind = "item"
+key = "harness::stall_nudge::helper"
+reason = "The locked recheck and durable queue write live outside the sidebar import graph."
+
+[[verdict]]
+kind = "item"
+key = "harness::stall_nudge::helper::NudgeErr"
+reason = "The hidden CLI reports typed board and store failures from the locked nudge enqueue."
+
+[[verdict]]
+kind = "item"
+key = "harness::stall_nudge::helper::queue"
+reason = "The CLI invokes the harness-owned locked recheck and enqueue with fresh heartbeat-folded rows."
 
 [[verdict]]
 kind = "item"

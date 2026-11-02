@@ -97,6 +97,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Team report | `crates/rimz/src/cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
 | Child parked on a provider limit | `crates/rimz/src/cli/agents_cmd/park_notice.rs::run`, text from `crates/rimz/src/harness/park_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentPaused }` / `Prompt` |
 | Launched child silent mid-turn or never started | `crates/rimz/src/cli/agents_cmd/stall_notice.rs::run`, text from `crates/rimz/src/harness/stall_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |
+| Unfinished team at rest | `crates/rimz/src/harness/stall_nudge/helper.rs::queue`, through `SyntheticMessage`, called by the hidden stall-nudge helper | `Harness { notice: TeamStalled }` / `Prompt` |
 | Agent-sent message ended undelivered | `crates/rimz/src/store/writer/queue.rs::QueueTxn::close` collects endings, `Store::commit_queue` composes through `crates/rimz/src/store/message/sender_notice.rs::undelivered` | `Harness { notice: MessageUndelivered }` / `Prompt` |
 | Agent-sent message still queued | `crates/rimz/src/message/deliver.rs::sweep`, text from `crates/rimz/src/store/message/sender_notice.rs::still_queued` | `Harness { notice: MessageQueued }` / `Prompt` |
 | Prompt-cache keepalive | `crates/rimz/src/cli/agents_cmd/cache_keepalive.rs::run`, text from `crates/rimz/src/harness/cache_keepalive.rs::prompt`, through `deliver_now` | `Harness { notice: CacheKeepalive }` / `Prompt` |
@@ -534,6 +535,7 @@ Content:
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
 | `SUBAGENT_PAUSED` | A launched child parked on a provider limit, queued for its parent once per park and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `SUBAGENT_STALLED` | A launched child silent mid-turn or not yet started past the same stall window, queued for its parent once per run and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
+| `TEAM_STALLED` | An unfinished team quiet for 55m, queued once per stage visit to its last-active member when enabled | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message stays queued past its receiver-class delay, sent once to its live sender | `@rimz` |
 | `DEADLINE` | A deadline-ladder rung steered to the supervised child | `@rimz` |

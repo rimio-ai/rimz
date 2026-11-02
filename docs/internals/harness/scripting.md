@@ -26,6 +26,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 | [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | Producer-side deadline detection and spawning the detached timeout helper. |
 | [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) | Pure deadline policy: the warning and stop rungs, the stop channel, and the grace-bound kill time. |
 | [`harness/park_notice.rs`](../../../crates/rimz/src/harness/park_notice.rs), [`harness/stall_notice.rs`](../../../crates/rimz/src/harness/stall_notice.rs) | Producer-side detection of a launched child parked on a provider limit or gone silent, the notice text, and spawning the detached notice helper ([backstops](./subagents.md#backstops)). |
+| [`harness/stall_nudge.rs`](../../../crates/rimz/src/harness/stall_nudge.rs), [`stall_nudge/helper.rs`](../../../crates/rimz/src/harness/stall_nudge/helper.rs) | Read-only stalled-team selection and pacing; the separate helper owns the locked once-per-visit recheck and enqueue. |
 | [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) | `plan_supervised_launch`: lane qualification, isolation inheritance, route, resolve, single-cell refusals and the child permission cap before finalize, then the isolation cap. Warnings and child-mode notes return as values. |
 | [`harness/prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | `retry_prompt` and `verify_reprompt`, beside the system-prompt composition [fleet.md](./fleet.md#system-prompt-composition) owns. |
 | [`launcher/`](../../../crates/rimz/src/launcher) | Layout and supervised preparation, shared identity and pane execution, checkout and room entry, and run publication. |
@@ -40,6 +41,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 | [`cli/agents_cmd/run_command.rs`](../../../crates/rimz/src/cli/agents_cmd/run_command.rs) | Thin run-bound command-cell supervision and own-pane cleanup. |
 | [`cli/agents_cmd/run_timeout.rs`](../../../crates/rimz/src/cli/agents_cmd/run_timeout.rs) | The hidden `agents run-timeout` helper that settles an overdue run. |
 | [`cli/agents_cmd/park_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/park_notice.rs), [`stall_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/stall_notice.rs) | The hidden `agents park-notice` and `agents stall-notice` helpers that claim a child's notice on its run record and tell its parent. |
+| [`cli/agents_cmd/stall_nudge.rs`](../../../crates/rimz/src/cli/agents_cmd/stall_nudge.rs) | The hidden `agents stall-nudge` helper: call the locked harness enqueue, attempt boundary delivery, and append the assist. |
 | [`cli/agents_cmd/wait.rs`](../../../crates/rimz/src/cli/agents_cmd/wait.rs), [`stop.rs`](../../../crates/rimz/src/cli/agents_cmd/stop.rs) | Joining on runs started elsewhere, and cancelling them. |
 
 ## The record

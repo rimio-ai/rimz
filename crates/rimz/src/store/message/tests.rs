@@ -275,6 +275,7 @@ fn submitted_sections_cover_every_sender_and_body() {
         HarnessNotice::CacheKeepalive,
         HarnessNotice::SubagentPaused,
         HarnessNotice::SubagentStalled,
+        HarnessNotice::TeamStalled,
         HarnessNotice::MessageUndelivered,
         HarnessNotice::MessageQueued,
         HarnessNotice::Other("future".to_owned()),
@@ -2222,6 +2223,7 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
         HarnessNotice::TeamReport,
         HarnessNotice::SubagentPaused,
         HarnessNotice::SubagentStalled,
+        HarnessNotice::TeamStalled,
         HarnessNotice::MessageUndelivered,
         HarnessNotice::MessageQueued,
     ];
@@ -2237,6 +2239,7 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
             | HarnessNotice::TeamReport
             | HarnessNotice::SubagentPaused
             | HarnessNotice::SubagentStalled
+            | HarnessNotice::TeamStalled
             | HarnessNotice::MessageUndelivered
             | HarnessNotice::MessageQueued => {}
             // `Other` preserves unknown future notices; it names no header of its own.
