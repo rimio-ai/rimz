@@ -89,7 +89,12 @@ pub fn register_agent(
 }
 
 pub fn agent_wait(env: &Env) -> std::process::Command {
-    let mut command = env.rimz();
+    agent_wait_at(env, &env.rimz_bin())
+}
+
+/// `agent_wait` through `bin`, a wrapper around the RimZ binary.
+pub fn agent_wait_at(env: &Env, bin: &std::path::Path) -> std::process::Command {
+    let mut command = env.rimz_at(bin);
     command
         .env("RIMZ_AGENT_KIND", "claude")
         .env("RIMZ_AGENT_ID", "launch-session")

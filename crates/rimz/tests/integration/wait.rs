@@ -1,7 +1,7 @@
 //! Integration coverage for the agent-facing `rimz wait` doorway.
 
 use crate::common::wait::{
-    agent_wait, loop_instances_path, register_agent, register_calling_agent,
+    agent_wait, agent_wait_at, loop_instances_path, register_agent, register_calling_agent,
     register_calling_agent_with_launch, wait_instances, wait_ok,
 };
 use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
@@ -41,6 +41,107 @@ fn overlay_failure_leaves_no_wait() {
         serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
     assert_eq!(pending, serde_json::json!([]));
     assert!(!loop_instances_path(&env).exists() || wait_instances(&env).0.is_empty());
+}
+
+fn read_only_home_wait(env: &Env, bwrap: &std::path::Path) -> std::process::Command {
+    let quote = |path: &std::path::Path| {
+        shlex::try_quote(path.to_str().unwrap())
+            .unwrap()
+            .into_owned()
+    };
+    let wrapper = crate::common::write_path_shim(
+        &env.home_root,
+        "rimz-read-only-home",
+        &format!(
+            "exec {} --dev-bind / / --ro-bind {home} {home} \
+             --ro-bind {runtime} {runtime} -- {} \"$@\"",
+            quote(bwrap),
+            quote(&env.rimz_bin()),
+            home = quote(&env.rimz_home()),
+            runtime = quote(&env.runtime_root),
+        ),
+    );
+    agent_wait_at(env, &wrapper)
+}
+
+fn bubblewrap() -> Option<std::path::PathBuf> {
+    match rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
+        Ok(path) => Some(path.expect("scoped isolation uses bubblewrap")),
+        Err(err) => {
+            crate::common::skip(&format!("bubblewrap unusable: {err}"));
+            None
+        }
+    }
+}
+
+#[test]
+fn read_only_home_arm_shows_hint_and_leaves_no_wait() {
+    let Some(bwrap) = bubblewrap() else {
+        return;
+    };
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let output = read_only_home_wait(&env, &bwrap)
+        .args(["wait", "--run", "true"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.lines().next().is_some_and(|line| {
+            line.starts_with("error: nothing was armed: this command cannot write the RimZ home")
+        }),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Read-only file system (os error 30)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("nothing was canceled"), "{stderr}");
+    let pending: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(pending, serde_json::json!([]));
+    assert!(!loop_instances_path(&env).exists() || wait_instances(&env).0.is_empty());
+}
+
+#[test]
+fn read_only_home_cancel_shows_hint_and_keeps_wait_pending() {
+    let Some(bwrap) = bubblewrap() else {
+        return;
+    };
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let receipt: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    let before = wait_instances(&env);
+    let output = read_only_home_wait(&env, &bwrap)
+        .args(["wait", "cancel", name])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.lines().next().is_some_and(|line| {
+            line.starts_with("error: nothing was canceled: this command cannot write the RimZ home")
+        }),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Read-only file system (os error 30)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("nothing was armed"), "{stderr}");
+    assert_eq!(wait_instances(&env), before);
+    let pending: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(pending.as_array().unwrap().len(), 1);
+    assert_eq!(pending[0]["name"], name);
+    wait_ok(&env, &["wait", "cancel", name]);
+    assert!(wait_instances(&env).0.is_empty());
 }
 
 #[test]
