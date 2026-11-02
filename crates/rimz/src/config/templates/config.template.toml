@@ -287,7 +287,7 @@ aggressive_resize = true
 # An agent's own split cache write overrides settings, even off; at/below margin means no action.
 # prompt_cache_margin = "1m"
 # The floor covers every ping, including sleeping agents; idle compaction has no lifetime floor.
-# keep_warm_min_ttl = "15m"       # off admits any lifetime above the margin
+# keep_warm_min_ttl = "30m"       # off admits any lifetime above the margin
 ## flip_compact = "180k"          # compact on stage hand-off at this context threshold; "off" disables it; unset = 120k for a Plan owner, 180k otherwise
 
 ## [harness.prompt_cache_ttl]

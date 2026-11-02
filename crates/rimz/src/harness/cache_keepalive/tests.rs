@@ -606,7 +606,9 @@ fn keep_warm_horizon_follows_role_or_profile_and_ttl_admission() {
     for (kind, harness, expected) in [
         ("amp", "[prompt_cache_ttl]\nfallback = 'off'", None),
         ("codex", "", Some(TWO_HOURS)),
-        ("amp", "[prompt_cache_ttl]\namp = \"20m\"", Some(TWO_HOURS)),
+        ("amp", "[prompt_cache_ttl]\namp = \"20m\"", None),
+        ("amp", "[prompt_cache_ttl]\namp = \"1799s\"", None),
+        ("amp", "[prompt_cache_ttl]\namp = \"30m\"", Some(TWO_HOURS)),
         ("claude", "[prompt_cache_ttl]\nclaude = \"5m\"", None),
         (
             "claude",
