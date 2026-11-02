@@ -139,3 +139,62 @@ fn parse_on(raw: Option<&str>) -> CheckOn {
         Some(_) => unreachable!("clap restricts --on values"),
     }
 }
+
+fn home_write_hint(error: anyhow::Error, action: &str) -> anyhow::Error {
+    if !error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::ReadOnlyFilesystem)
+    }) {
+        return error;
+    }
+    error.context(format!(
+        "nothing was {action}: this command cannot write the RimZ home, for example inside a \
+         provider's command sandbox. Run `rimz wait …` as its own command, without a chain, pipe, \
+         redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
+         `allow-routine-rimz` is off, approve the sandbox's escalation"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_write_hint_only_for_read_only_filesystem() {
+        for action in ["armed", "canceled"] {
+            for kind in [
+                std::io::ErrorKind::ReadOnlyFilesystem,
+                std::io::ErrorKind::PermissionDenied,
+            ] {
+                let error = anyhow::Error::from(rimz::harness::schedule::arm::ArmFailure::State(
+                    Box::new(rimz::disk::lock::LockErr::Open {
+                        path: "rimz-home/loops/loop-arming.lock".into(),
+                        source: std::io::Error::from(kind),
+                    }),
+                ))
+                .context("updating wait");
+                let original = format!("{error:#}");
+                let report = format!("{:#}", home_write_hint(error, action));
+                if kind != std::io::ErrorKind::ReadOnlyFilesystem {
+                    assert_eq!(report, original);
+                    continue;
+                }
+                assert!(
+                    report.contains(&format!("nothing was {action}")),
+                    "{report}"
+                );
+                assert!(report.contains(&original), "{report}");
+                for text in [
+                    "provider's command sandbox",
+                    "own command",
+                    "chain, pipe, redirect, or `VAR=` prefix",
+                    "allow-routine-rimz",
+                    "escalation",
+                ] {
+                    assert!(report.contains(text), "{report}");
+                }
+            }
+        }
+    }
+}

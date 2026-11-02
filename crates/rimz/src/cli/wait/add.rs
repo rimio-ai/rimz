@@ -122,7 +122,8 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             max_strikes: None,
             surplus: None,
         },
-    )?
+    )
+    .map_err(|error| home_write_hint(error.into(), "armed"))?
     else {
         unreachable!("timer, process, and command waits are not subscriptions")
     };
