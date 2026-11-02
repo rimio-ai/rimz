@@ -1051,6 +1051,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             own_view_is_daemon: daemon,
         });
         snap.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+            stalled_since: None,
             pr_stack: Default::default(),
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),

@@ -229,6 +229,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         ),
     };
     snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+        stalled_since: None,
         pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
@@ -381,6 +382,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     snapshot.panes_produced_at_ms = Some(1);
     snapshot.worktree_groups = vec![
         crate::store::snapshot::SidebarWorktreeGroup {
+            stalled_since: None,
             pr_stack: Default::default(),
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
@@ -423,6 +425,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             pr_url: None,
         },
         crate::store::snapshot::SidebarWorktreeGroup {
+            stalled_since: None,
             pr_stack: Default::default(),
             key: "/repo/feature".to_owned(),
             label: "feature".to_owned(),

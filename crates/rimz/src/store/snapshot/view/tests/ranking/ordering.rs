@@ -371,6 +371,7 @@ fn inactive_groups_sink_below_process_groups() {
         agent_in("fresh-idle", "/repo/c", AgentStatus::Idle, 2_000),
     ]);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(SidebarWorktreeGroup {
+        stalled_since: None,
         pr_stack: Default::default(),
         key: "/repo/b".to_owned(),
         label: "b".to_owned(),
@@ -709,6 +710,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
 
     let mut row_snapshot = room(Vec::new());
     row_snapshot.worktree_groups = vec![SidebarWorktreeGroup {
+        stalled_since: None,
         pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),

@@ -241,6 +241,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     slow.theme.animations.waiting =
         Some(toml::from_str("effect = \"breathe\"\n").expect("animation spec"));
     slow.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+        stalled_since: None,
         pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),

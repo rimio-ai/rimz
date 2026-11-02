@@ -190,3 +190,22 @@ fn stuck_stage_requires_resting_members_and_an_unfinished_owned_board() {
         );
     }
 }
+
+#[test]
+fn stuck_stage_stamps_the_latest_work_clock_and_clears_ineligible_groups() {
+    let results = ["member", "stage", "window", "done"].map(|source| {
+        let mut snapshot = staged(AgentStatus::Idle, AgentStatus::Success, 4_000);
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+        group.stalled_since = Some(ago(5_000));
+        match source {
+            "member" => std::sync::Arc::make_mut(&mut group.rows)[1].last_activity = ago(3_600),
+            "stage" => group.pipeline.as_mut().unwrap().stage_started_at = Some(ago(3_600)),
+            "window" => group.pipeline.as_mut().unwrap().stage_started_at = Some(ago(1)),
+            "done" => group.pipeline.as_mut().unwrap().stage = "Done".into(),
+            _ => unreachable!(),
+        }
+        snapshot.project_stuck_stages();
+        snapshot.worktree_groups[0].stalled_since
+    });
+    assert_eq!(results, [Some(ago(3_600)), Some(ago(3_600)), None, None]);
+}

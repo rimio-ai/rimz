@@ -203,6 +203,7 @@ impl SidebarSnapshot {
                 )
                 .map(ToOwned::to_owned);
                 SidebarWorktreeGroup {
+                    stalled_since: None,
                     pr_stack: Default::default(),
                     key,
                     label,

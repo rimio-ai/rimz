@@ -446,6 +446,9 @@ pub struct SidebarWorktreeGroup {
     pub cohort_effort: Option<SidebarCohortEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<SidebarPipeline>,
+    /// Latest work clock of an unfinished unit projected as stuck; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stalled_since: Option<jiff::Timestamp>,
     pub status_counts: Vec<SidebarStatusCount>,
     pub rows: std::sync::Arc<Vec<SidebarRow>>,
     /// Total insertions and deletions relative to trunk.
@@ -839,6 +842,7 @@ mod tests {
 
     fn collapse_test_group(rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
         SidebarWorktreeGroup {
+            stalled_since: None,
             pr_stack: Default::default(),
             key: "group".to_owned(),
             label: "group".to_owned(),

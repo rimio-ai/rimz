@@ -651,6 +651,7 @@ mod tests {
 
     fn group(rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
         SidebarWorktreeGroup {
+            stalled_since: None,
             pr_stack: Default::default(),
             key: "group-0".to_owned(),
             label: "main".to_owned(),
