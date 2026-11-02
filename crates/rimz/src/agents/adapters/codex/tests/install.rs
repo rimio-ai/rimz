@@ -309,6 +309,7 @@ fn install_includes_shared_routine_rules_golden() {
         prefix_rule(pattern=["rimz", "lsp", "callees"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "symbols"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "find"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "show"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "check"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "list"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "status"], decision="allow")

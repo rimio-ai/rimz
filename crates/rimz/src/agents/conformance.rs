@@ -24,6 +24,7 @@ use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
 fn routine_rimz_prefixes_match_documented_list() {
+    assert!(super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz lsp show"));
     assert!(super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz packs diff"));
     assert!(!super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz packs customize"));
     assert!(!super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz packs reset"));

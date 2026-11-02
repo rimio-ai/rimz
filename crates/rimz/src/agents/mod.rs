@@ -191,6 +191,7 @@ const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
     "rimz lsp callees",
     "rimz lsp symbols",
     "rimz lsp find",
+    "rimz lsp show",
     "rimz lsp check",
     "rimz lsp list",
     "rimz lsp status",
