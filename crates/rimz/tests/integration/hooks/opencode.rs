@@ -82,10 +82,11 @@ fn bundle_migrates_repairs_and_uninstalls_only_owned_files() {
     );
     for name in ["index.ts", "tui.ts"] {
         std::fs::write(bundle.join(name), STALE).unwrap();
-        assert_eq!(doctor_hook_state(&env), "installed");
+        assert_eq!(doctor_hook_state(&env), "outdated");
         let result = install(&env);
         assert!(result.status.success());
         assert!(String::from_utf8_lossy(&result.stdout).contains("refreshed"));
+        assert_eq!(doctor_hook_state(&env), "installed");
         std::fs::remove_file(bundle.join(name)).unwrap();
         assert_eq!(doctor_hook_state(&env), "not_installed");
         let result = command(&env).args(["hooks", "uninstall"]).output().unwrap();

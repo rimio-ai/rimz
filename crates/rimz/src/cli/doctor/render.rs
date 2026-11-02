@@ -2185,6 +2185,11 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
     for row in &report.hooks {
         match &row.status {
             HookStatus::Installed => installed.push(row.kind.as_str()),
+            // Stale hooks still report, so the agent counts in the roll-up too.
+            HookStatus::Outdated { .. } => {
+                installed.push(row.kind.as_str());
+                needs_action.push(row);
+            }
             HookStatus::InstalledUntrusted { .. }
             | HookStatus::InstalledDisabled { .. }
             | HookStatus::NotInstalled { .. }
@@ -2226,7 +2231,9 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         let mut table = Table::new(["", "AGENT", "STATUS"]);
         for row in needs_action {
             let (severity, fix) = match &row.status {
-                HookStatus::InstalledDisabled { fix } => (Severity::Warning, fix.clone()),
+                HookStatus::InstalledDisabled { fix } | HookStatus::Outdated { fix, .. } => {
+                    (Severity::Warning, fix.clone())
+                }
                 HookStatus::InstalledUntrusted { events, fix } => (
                     Severity::Warning,
                     format!(
@@ -2365,6 +2372,18 @@ fn render_accounts(
                 counted(tally, severity, format!("{name}: {text}{agents}"), fix),
                 format!("{text}{agents}"),
                 severity.parts().1,
+            )
+        } else if let Some(outdated) = &row.outdated {
+            let text = "integration out of date";
+            (
+                counted(
+                    tally,
+                    Severity::Warning,
+                    format!("{name}: {text}{agents}"),
+                    &outdated.fix,
+                ),
+                format!("{text}{agents}"),
+                Severity::Warning.parts().1,
             )
         } else if let Some(usage) = &row.usage {
             match usage.standing {
