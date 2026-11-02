@@ -292,6 +292,14 @@ pub fn workflow_spec_file(dir: &Path) -> PathBuf {
 }
 
 pub fn workflow_runs_under(home: &Path) -> Result<Vec<(StatePaths, WorkflowPaths)>> {
+    workflow_runs_under_impl(home, false)
+}
+
+pub(crate) fn workflow_runs_under_strict(home: &Path) -> Result<Vec<(StatePaths, WorkflowPaths)>> {
+    workflow_runs_under_impl(home, true)
+}
+
+fn workflow_runs_under_impl(home: &Path, strict: bool) -> Result<Vec<(StatePaths, WorkflowPaths)>> {
     let ws = workspaces_dir_under(home);
     let mut runs = Vec::new();
     for name in workspace_dir_names(&ws)? {
@@ -303,10 +311,11 @@ pub fn workflow_runs_under(home: &Path) -> Result<Vec<(StatePaths, WorkflowPaths
         let state = StatePaths::under_named(id, name, home);
         let homes = match state.workflow_runs() {
             Ok(homes) => homes,
-            Err(error) => {
+            Err(error) if !strict => {
                 tracing::warn!(path = %state.root.display(), %error, "skipping room with unreadable workflow homes");
                 continue;
             }
+            Err(error) => return Err(error),
         };
         for paths in homes {
             runs.push((state.clone(), paths));

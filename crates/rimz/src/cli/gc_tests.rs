@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn workflow_run_skip_names_the_source_in_text_and_json() {
+    let error = "workflow JSON at /runs/broken/record.json: bad JSON";
+    let skip = WorktreeSkip::WorkflowRunsUnavailable(error.into());
+    assert_eq!(
+        (skip.text(std::path::Path::new("/project")), skip.json()),
+        (
+            format!("workflow runs unavailable: {error}"),
+            "workflow_runs_unavailable"
+        )
+    );
+}
+
+#[test]
 fn auto_gc_assist_bounds_paths_in_sweep_order_without_truncating_count() {
     let mut outcome = full_outcome(false);
     let WorktreeSweepStatus::Swept(sweep) = &mut outcome.worktrees else {

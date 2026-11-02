@@ -469,6 +469,12 @@ fn holder_chips(holders: &Holders, limit: usize) -> String {
             .map(|name| format!("loop task {name}")),
     );
     chips.extend(holders.teams.iter().map(|name| format!("team {name}")));
+    chips.extend(
+        holders
+            .workflow_runs
+            .iter()
+            .map(|run| format!("workflow run {}", run.address)),
+    );
     if chips.is_empty() {
         return "-".to_owned();
     }
@@ -506,10 +512,21 @@ fn remove_worktree(
     );
     memo.save();
     let removed = match result {
-        Err(rimz::worktree::WorktreeErr::InUse { .. }) => bail!(
-            "worktree `{name}` is in use by {}; use --force to remove it",
-            guard.protections.holders(&path)
-        ),
+        Err(rimz::worktree::WorktreeErr::InUse { .. }) => {
+            let holders = guard.protections.holders(&path);
+            let fix = if holders.workflow_runs.is_empty() {
+                String::new()
+            } else {
+                let commands = holders
+                    .workflow_runs
+                    .iter()
+                    .map(|run| format!("`rimz workflow cancel {}`", run.id))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                format!("cancel with {commands}, or ")
+            };
+            bail!("worktree `{name}` is in use by {holders}; {fix}use --force to remove it");
+        }
         result => named_worktree_result(result, workspace, config, &name)?,
     };
     let retirement = rimz::worktree::retire_removal(
@@ -636,6 +653,12 @@ fn in_use_details(holders: &Holders) -> Vec<String> {
             .map(|name| format!("loop task {name}")),
     );
     details.extend(holders.teams.iter().map(|name| format!("team {name}")));
+    details.extend(
+        holders
+            .workflow_runs
+            .iter()
+            .map(|run| format!("workflow run {}", run.address)),
+    );
     details
 }
 
@@ -835,8 +858,7 @@ fn merge_worktree(
             return Ok(());
         }
     }
-    let guard =
-        super::worktree_protection::for_explicit_removal(&[&workspace.project_root], globals);
+    let guard = super::worktree_protection::for_merge(&[&workspace.project_root], globals);
     let memo = rimz::worktree::LandedMemo::load(&workspace.project_root);
     let result = rimz::worktree::land(&plan, &guard.protections, &memo);
     memo.save();
@@ -881,7 +903,10 @@ pub(super) fn cleanup_worktree(
         match super::worktree_protection::for_wrapper_cleanup(&workspace, path, globals) {
             Ok(protection) => protection.protections,
             Err(error) => {
-                tracing::debug!(%error, "loop tasks unavailable; wrapper checkout kept");
+                tracing::debug!(
+                    error = %format_args!("{error:#}"),
+                    "protection facts unavailable; wrapper checkout kept"
+                );
                 return Ok(());
             }
         };
@@ -1073,11 +1098,15 @@ mod tests {
             agents: vec!["@coder".into(), "@reviewer".into()],
             loop_tasks: vec!["nightly".into()],
             teams: vec!["forge".into()],
+            workflow_runs: vec![rimz::worktree::WorkflowRunHolder {
+                id: rimz::ids::WorkflowRunId::new(),
+                address: "land#demo".into(),
+            }],
             ..Holders::default()
         };
         assert_eq!(
             holder_chips(&holders, 1),
-            "@coder +1 loop task nightly team forge"
+            "@coder +1 loop task nightly team forge workflow run land#demo"
         );
         assert_eq!(holder_chips(&Holders::default(), 3), "-");
     }
@@ -1089,10 +1118,20 @@ mod tests {
             panes: 2,
             loop_tasks: vec!["nightly".into()],
             teams: vec!["forge".into()],
+            workflow_runs: vec![rimz::worktree::WorkflowRunHolder {
+                id: rimz::ids::WorkflowRunId::new(),
+                address: "land#demo".into(),
+            }],
         };
         assert_eq!(
             in_use_details(&holders),
-            ["@coder", "2 open panes", "loop task nightly", "team forge"]
+            [
+                "@coder",
+                "2 open panes",
+                "loop task nightly",
+                "team forge",
+                "workflow run land#demo"
+            ]
         );
     }
 
@@ -1154,7 +1193,10 @@ mod tests {
                     "dirty": false,
                     "landed": landed,
                     "reasons": reasons,
-                    "holders": {"agents": [], "panes": 0, "loop_tasks": [], "teams": []},
+                    "holders": {
+                        "agents": [], "panes": 0, "loop_tasks": [],
+                        "teams": [], "workflow_runs": []
+                    },
                 })
             );
         }

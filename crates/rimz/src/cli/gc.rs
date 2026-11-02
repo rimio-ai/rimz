@@ -486,6 +486,7 @@ enum WorktreeSkip {
     NoStore,
     RosterUnavailable,
     LoopTasksUnavailable(String),
+    WorkflowRunsUnavailable(String),
     ListFailed,
 }
 
@@ -496,6 +497,7 @@ impl WorktreeSkip {
             Self::NoStore => super::no_room(format_args!("at {}", root.display())),
             Self::RosterUnavailable => "agent roster unavailable".to_owned(),
             Self::LoopTasksUnavailable(error) => format!("loop tasks unavailable: {error}"),
+            Self::WorkflowRunsUnavailable(error) => format!("workflow runs unavailable: {error}"),
             Self::ListFailed => "worktree listing failed".to_owned(),
         }
     }
@@ -506,6 +508,7 @@ impl WorktreeSkip {
             Self::NoStore => "no_store",
             Self::RosterUnavailable => "roster_unavailable",
             Self::LoopTasksUnavailable(_) => "loop_tasks_unavailable",
+            Self::WorkflowRunsUnavailable(_) => "workflow_runs_unavailable",
             Self::ListFailed => "list_failed",
         }
     }
@@ -548,6 +551,9 @@ fn sweep_worktrees(
                 }
                 super::worktree_protection::ProtectionErr::LoopTasks(error) => {
                     WorktreeSkip::LoopTasksUnavailable(format!("{error:#}"))
+                }
+                super::worktree_protection::ProtectionErr::WorkflowRuns(error) => {
+                    WorktreeSkip::WorkflowRunsUnavailable(format!("{error:#}"))
                 }
                 super::worktree_protection::ProtectionErr::WorktreeListing(_) => {
                     WorktreeSkip::ListFailed

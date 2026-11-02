@@ -16,6 +16,129 @@ fn record() -> RunRecord {
     })).unwrap()
 }
 
+fn pin_record(
+    home: &std::path::Path,
+    project: &str,
+    run_state: RunState,
+) -> (StatePaths, RunRecord) {
+    let root = home.join(project);
+    let state = StatePaths::for_project_root_under(&root, home).unwrap();
+    fs::create_dir_all(&state.root).unwrap();
+    fs::write(
+        &state.workspace_record,
+        serde_json::to_vec(&json!({"workspace_id":state.workspace_id})).unwrap(),
+    )
+    .unwrap();
+    let mut run = record();
+    run.id = WorkflowRunId::new();
+    run.state = run_state;
+    run.project_root = root.clone();
+    run.scope.path = root.join("tree");
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    initialize(&state, &run, b"[workflow]", &guard).unwrap();
+    (state, run)
+}
+
+#[test]
+fn unfinished_run_reader_pins_active_and_parked_but_not_terminal_states() {
+    let home = tempfile::tempdir().unwrap();
+    let mut expected = std::collections::BTreeSet::new();
+    for run_state in [
+        RunState::Active,
+        RunState::Parked,
+        RunState::Done,
+        RunState::Failed,
+        RunState::Canceled,
+    ] {
+        let (state, mut run) = pin_record(home.path(), "project", run_state);
+        if run_state == RunState::Parked {
+            run.scope.kind = ScopeKind::Project;
+            let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            write(&state.workflow(&run.id), &run, &guard).unwrap();
+        }
+        if !run_state.is_terminal() {
+            expected.insert(run.id.to_string());
+        }
+    }
+    for mode in [RunRead::Strict, RunRead::BestEffort] {
+        let actual: std::collections::BTreeSet<_> = unfinished_under(home.path(), mode)
+            .unwrap()
+            .into_iter()
+            .map(|run| run.id.to_string())
+            .collect();
+        assert_eq!(expected, actual, "{mode:?}");
+    }
+}
+
+#[test]
+fn strict_run_reader_refuses_bad_json_and_unknown_versions_with_the_record_path() {
+    let mut failures = Vec::new();
+    for version in [None, Some(999)] {
+        let home = tempfile::tempdir().unwrap();
+        let (state, run) = pin_record(home.path(), "project", RunState::Active);
+        let path = state.workflow(&run.id).record;
+        let text = match version {
+            None => "{".into(),
+            Some(version) => {
+                let mut value = serde_json::to_value(&run).unwrap();
+                value["version"] = json!(version);
+                value.to_string()
+            }
+        };
+        fs::write(&path, text).unwrap();
+        let result = unfinished_under(home.path(), RunRead::Strict);
+        failures.push((
+            version,
+            result
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .is_some_and(|error| error.contains(path.to_str().unwrap())),
+            format!("{result:?}"),
+        ));
+    }
+    assert!(failures.iter().all(|(_, named, _)| *named), "{failures:?}");
+}
+
+#[test]
+fn best_effort_run_reader_keeps_both_rooms_past_bad_and_recordless_homes() {
+    let home = tempfile::tempdir().unwrap();
+    let (state, first) = pin_record(home.path(), "first", RunState::Active);
+    let (_, second) = pin_record(home.path(), "second", RunState::Parked);
+    let (bad_state, bad) = pin_record(home.path(), "first", RunState::Active);
+    fs::write(bad_state.workflow(&bad.id).record, "{").unwrap();
+    fs::create_dir_all(state.workflow(&WorkflowRunId::new()).home).unwrap();
+    let actual: std::collections::BTreeSet<_> = unfinished_under(home.path(), RunRead::BestEffort)
+        .unwrap()
+        .into_iter()
+        .map(|run| run.id.to_string())
+        .collect();
+    assert_eq!(actual, [first.id.to_string(), second.id.to_string()].into());
+}
+
+#[test]
+fn strict_run_reader_refuses_an_unreadable_room_directory_but_best_effort_keeps_others() {
+    let home = tempfile::tempdir().unwrap();
+    let (_, first) = pin_record(home.path(), "first", RunState::Active);
+    let (state, run) = pin_record(home.path(), "broken", RunState::Active);
+    let dir = state.workflow(&run.id).home.parent().unwrap().to_owned();
+    fs::remove_dir_all(&dir).unwrap();
+    fs::write(&dir, "not a directory").unwrap();
+    let strict = unfinished_under(home.path(), RunRead::Strict);
+    let best = unfinished_under(home.path(), RunRead::BestEffort).unwrap();
+    assert!(
+        strict
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.to_string().contains(dir.to_str().unwrap())),
+        "{strict:?}"
+    );
+    assert_eq!(
+        best.into_iter().map(|run| run.id).collect::<Vec<_>>(),
+        [first.id]
+    );
+}
+
 #[test]
 fn run_address_round_trips_and_matches_requested_lanes() {
     let address: RunAddress = "review#feat-x".parse().unwrap();

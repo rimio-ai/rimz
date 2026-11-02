@@ -748,5 +748,34 @@ pub fn list(state: &StatePaths) -> Result<Vec<RunRecord>> {
     Ok(records)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunRead {
+    Strict,
+    BestEffort,
+}
+
+/// Read unfinished runs in every recorded room without resolving their checkout paths.
+pub fn unfinished_under(home: &std::path::Path, mode: RunRead) -> Result<Vec<RunRecord>> {
+    let homes = match mode {
+        RunRead::Strict => crate::disk::paths::workflow_runs_under_strict(home)?,
+        RunRead::BestEffort => crate::disk::paths::workflow_runs_under(home)?,
+    };
+    let mut records = Vec::new();
+    for (_, paths) in homes {
+        match load(&paths) {
+            Ok(record) if !record.state.is_terminal() => records.push(record),
+            Ok(_) => {}
+            Err(WorkflowStoreErr::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if mode == RunRead::BestEffort => {
+                tracing::warn!(path = %paths.record.display(), %error,
+                    "skipping workflow with unreadable record");
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(records)
+}
+
 #[cfg(test)]
 mod tests;

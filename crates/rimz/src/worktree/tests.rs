@@ -645,10 +645,14 @@ fn holders_render_loop_tasks_after_agents_and_panes() {
         panes: 1,
         loop_tasks: vec!["nightly".into()],
         teams: vec!["forge".into()],
+        workflow_runs: vec![WorkflowRunHolder {
+            id: WorkflowRunId::new(),
+            address: "land#demo".into(),
+        }],
     };
     assert_eq!(
         holders.to_string(),
-        "@coder, an open pane, loop task nightly, team forge"
+        "@coder, an open pane, loop task nightly, team forge, workflow run land#demo"
     );
     assert_eq!(
         serde_json::to_value(Holders::default()).unwrap()["loop_tasks"],
@@ -661,6 +665,72 @@ fn holders_render_loop_tasks_after_agents_and_panes() {
     assert_eq!(
         serde_json::to_value(Holders::default()).unwrap()["teams"],
         serde_json::json!([])
+    );
+}
+
+#[test]
+fn workflow_run_pins_hold_containing_trees_and_deduplicate_ids() {
+    let mut protections = ProtectionSet::default();
+    let id = WorkflowRunId::new();
+    protections.insert_workflow_run(&id, "land#demo", Path::new("/trees/demo/src/../src"));
+    protections.insert_workflow_run(&id, "land#duplicate", Path::new("/trees/demo"));
+    protections.insert_workflow_run(
+        &WorkflowRunId::new(),
+        "land#other",
+        Path::new("/trees/other"),
+    );
+    let holders = protections.holders(Path::new("/trees/demo"));
+    assert_eq!(
+        holders.workflow_runs,
+        [WorkflowRunHolder {
+            id: id.clone(),
+            address: "land#demo".into()
+        }]
+    );
+    assert!(!holders.is_empty());
+    assert_eq!(holders.to_string(), "workflow run land#demo");
+    assert!(protections.holders(Path::new("/trees/dem")).is_empty());
+    let json = serde_json::to_string(&holders).unwrap();
+    assert!(json.find("\"teams\"").unwrap() < json.find("\"workflow_runs\"").unwrap());
+    assert_eq!(
+        serde_json::to_value(&holders).unwrap()["workflow_runs"],
+        serde_json::json!([{"id":id,"address":"land#demo"}])
+    );
+    assert_eq!(
+        serde_json::to_value(Holders::default()).unwrap()["workflow_runs"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn every_pin_matches_a_candidate_through_its_symlinked_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    let alias = dir.path().join("alias");
+    let tree = real.join("tree");
+    std::fs::create_dir_all(tree.join("src")).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let mut protections = ProtectionSet::default();
+    protections.insert(Some(&tree.join("src")), Holder::Agent("@coder".into()));
+    protections.insert(Some(&tree), Holder::Pane("tmux:%1".parse().unwrap()));
+    protections.insert_loop_task("nightly", &tree);
+    protections.insert_team("forge", &tree);
+    protections.insert_workflow_run(&WorkflowRunId::new(), "land#tree", &tree);
+    let holders = protections.holders(&alias.join("tree"));
+    assert_eq!(
+        (
+            holders.agents.len(),
+            holders.panes,
+            holders.loop_tasks.len(),
+            holders.teams.len(),
+            holders.workflow_runs.len()
+        ),
+        (1, 1, 1, 1, 1)
+    );
+    protections.insert_loop_task("future", &alias.join("missing/src"));
+    assert_eq!(
+        protections.holders(&alias.join("missing")).loop_tasks,
+        ["future"]
     );
 }
 

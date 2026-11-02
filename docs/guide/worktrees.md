@@ -183,11 +183,11 @@ RimZ reclaims a tree only after proving its work landed, so a merged feature cle
 
 What happens when the last agent in a tree exits depends on how it exits, and the three cases differ enough to be worth knowing:
 
-- **The pane closes, or you kill it.** RimZ checks the tree. A clean one whose work has landed and has no remaining holders goes, branch and all, and says so on stderr: `rimz: removed clean worktree <path>`. A dirty or unproven one raises a `Choose (keep/remove/shell) [keep]:` prompt if you are there to answer it, and is kept if you are not. Another agent, pane, armed loop task, or team board short of `Done` keeps the tree without a prompt.
+- **The pane closes, or you kill it.** RimZ checks the tree. A clean one whose work has landed and has no remaining holders goes, branch and all, and says so on stderr: `rimz: removed clean worktree <path>`. A dirty or unproven one raises a `Choose (keep/remove/shell) [keep]:` prompt if you are there to answer it, and is kept if you are not. Another agent, pane, armed loop task, team board short of `Done`, or unfinished workflow run keeps the tree without a prompt.
 - **An unattended run finishes.** Same check, same outcomes. This is the path a [scripted `-p` run](./scripting.md) or a [scheduled loop turn](./loops.md) takes, and it is why a fleet that works while you sleep does not leave trees behind.
 - **You quit the agent normally.** Nothing is reclaimed. The pane prints how to resume or relaunch the agent, then drops to a shell inside the tree so you can commit, push, or look around. `rimz worktree sweep` reclaims the tree once its work lands.
 
-`rimz worktree list` is the status read, and bare `rimz worktree` does the same. `STATE` says `landed`, `unlanded`, or `unknown`, appending ` · dirty` for uncommitted changes. The summary counts what is removable and what is occupied. Agent handles are the live holders that sweeping uses, not ended sessions; a pane with no agent reads `pane`, a booked loop task reads `loop task NAME`, and a holding team board reads `team NAME`.
+`rimz worktree list` is the status read, and bare `rimz worktree` does the same. `STATE` says `landed`, `unlanded`, or `unknown`, appending ` · dirty` for uncommitted changes. The summary counts what is removable and what is occupied. Agent handles are the live holders that sweeping uses, not ended sessions; a pane with no agent reads `pane`, a booked loop task reads `loop task NAME`, a holding team board reads `team NAME`, and an unfinished workflow reads `workflow run ADDRESS`.
 
 ```console
 $ rimz worktree list
@@ -237,7 +237,7 @@ $ rimz worktree remove feat-a
 removed feat-a
 ```
 
-The first refusal is for an agent or an open pane still working in the tree, naming what holds it. A stale record left by a crashed agent does not count, so a crash never leaves you unable to reclaim the tree. Once the tree is empty, uncommitted changes refuse with the file count and a commit-or-stash fix. Unlanded work refuses with the commit count, comparison ref, and `rimz worktree merge NAME` hint; unknown landing asks you to land the work yourself. Sweeping shows every keep reason, grouped under the first; use `sweep --json` or `list --json` for reason ids and full holders.
+The first refusal is for an agent, an open pane, or an unfinished workflow run scoped inside the tree, naming what holds it. A workflow keeps its tree while active or parked, even with no agent there; cancel it with the refusal's `rimz workflow cancel <run-id>` command, or use `--force`. A stale record left by a crashed agent does not count, so a crash never leaves you unable to reclaim the tree. Once the tree has no holders, uncommitted changes refuse with the file count and a commit-or-stash fix. Unlanded work refuses with the commit count, comparison ref, and `rimz worktree merge NAME` hint; unknown landing asks you to land the work yourself. Sweeping shows every keep reason, grouped under the first; use `sweep --json` or `list --json` for reason ids and full holders.
 
 Removal deletes the branch with the tree when Git considers it merged or RimZ proves its work landed. Otherwise the branch stays and the report adds `branch kept: its work is not proven landed on TARGET`, so the commits are still reachable by name. `--force` skips the refusals and deletes the branch regardless, printing its full tip and a `git branch BRANCH OID` restore command when the tip could be read; when a live agent is in the tree it warns first, then removes anyway.
 

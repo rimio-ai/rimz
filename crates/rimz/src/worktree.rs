@@ -3,7 +3,8 @@
 //! Worktrees are identified by a marker stored in the linked worktree's git
 //! admin directory, not in the checkout. The checkout remains pristine, and
 //! removal only ever removes marked worktrees. Removal assessment combines Git
-//! safety with normalized pane and agent occupancy facts, loop-task pins, and team-board pins.
+//! safety with normalized pane and agent occupancy facts, loop-task pins,
+//! team-board pins, and workflow-run pins.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
@@ -19,7 +20,7 @@ use crate::agents::AgentState;
 use crate::agents::attribution::{LaneLifetime, LaneLifetimes};
 use crate::config::{WorktreeBase, WorktreeConfig, WorktreeHooks};
 use crate::forge::PrTarget;
-use crate::ids::PaneId;
+use crate::ids::{PaneId, WorkflowRunId};
 use crate::pane::PaneRef;
 use crate::store::runtime::AgentLiveness;
 use crate::utils::path::normalize_path_lexical;
@@ -429,6 +430,13 @@ pub struct Holders {
     pub panes: u32,
     pub loop_tasks: Vec<String>,
     pub teams: Vec<String>,
+    pub workflow_runs: Vec<WorkflowRunHolder>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct WorkflowRunHolder {
+    pub id: WorkflowRunId,
+    pub address: String,
 }
 
 impl Holders {
@@ -437,6 +445,7 @@ impl Holders {
             && self.panes == 0
             && self.loop_tasks.is_empty()
             && self.teams.is_empty()
+            && self.workflow_runs.is_empty()
     }
 }
 
@@ -454,6 +463,11 @@ impl std::fmt::Display for Holders {
                 .map(|name| format!("loop task {name}")),
         );
         parts.extend(self.teams.iter().map(|name| format!("team {name}")));
+        parts.extend(
+            self.workflow_runs
+                .iter()
+                .map(|run| format!("workflow run {}", run.address)),
+        );
         f.write_str(&parts.join(", "))
     }
 }
@@ -540,7 +554,7 @@ struct AgentProtectionFact {
     process_cwd: Option<PathBuf>,
 }
 
-/// Normalized paths whose panes, agents, loop tasks, or team boards prevent checkout removal.
+/// Normalized paths whose panes, agents, loop tasks, team boards, or workflow runs hold a checkout.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProtectionSet {
     paths: Vec<(PathBuf, Holder)>,
@@ -552,6 +566,7 @@ enum Holder {
     Pane(PaneId),
     LoopTask(String),
     Team(String),
+    WorkflowRun(WorkflowRunHolder),
 }
 
 /// Which agent records keep a checkout occupied.
@@ -568,7 +583,7 @@ pub enum Occupancy {
 
 /// Fold current pane and agent state into worktree removal protection policy.
 ///
-/// Callers add task and team pins separately through [`ProtectionSet`].
+/// Callers add task, team, and workflow-run pins separately through [`ProtectionSet`].
 pub fn protection_set_from_runtime(
     panes: &[PaneRef],
     agents: &[AgentState],
@@ -604,6 +619,16 @@ pub fn protection_set_from_runtime(
 }
 
 impl ProtectionSet {
+    pub fn insert_workflow_run(&mut self, id: &WorkflowRunId, address: &str, path: &Path) {
+        self.insert(
+            Some(path),
+            Holder::WorkflowRun(WorkflowRunHolder {
+                id: id.clone(),
+                address: address.to_owned(),
+            }),
+        );
+    }
+
     /// Add a task's pinned path without importing the scheduler's policy.
     pub fn insert_loop_task(&mut self, name: &str, path: &Path) {
         self.insert(Some(path), Holder::LoopTask(name.to_owned()));
@@ -615,11 +640,16 @@ impl ProtectionSet {
     }
 
     pub fn holders(&self, candidate: &Path) -> Holders {
+        let canonical = std::fs::canonicalize(candidate).ok();
         let candidate = normalize_path_lexical(candidate);
         let mut holders = Holders::default();
         let mut panes = HashSet::new();
         for (path, holder) in &self.paths {
-            if !path.starts_with(&candidate) {
+            if !path.starts_with(&candidate)
+                && !canonical
+                    .as_ref()
+                    .is_some_and(|candidate| path.starts_with(candidate))
+            {
                 continue;
             }
             match holder {
@@ -641,13 +671,18 @@ impl ProtectionSet {
                         holders.teams.push(name.clone());
                     }
                 }
+                Holder::WorkflowRun(run) => {
+                    if !holders.workflow_runs.iter().any(|held| held.id == run.id) {
+                        holders.workflow_runs.push(run.clone());
+                    }
+                }
             }
         }
         holders.panes = panes.len().try_into().unwrap_or(u32::MAX);
         holders
     }
 
-    /// Fold already-probed occupancy facts before adding loop-task and team-board pins.
+    /// Fold already-probed occupancy before adding task, team-board, and workflow-run pins.
     fn from_facts(
         panes: &[PaneProtectionFact],
         agents: &[AgentProtectionFact],

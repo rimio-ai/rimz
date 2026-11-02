@@ -345,7 +345,10 @@ fn worktree_new_list_and_remove_round_trip() {
             "dirty": false,
             "landed": true,
             "reasons": [],
-            "holders": {"agents": [], "panes": 0, "loop_tasks": [], "teams": []},
+            "holders": {
+                "agents": [], "panes": 0, "loop_tasks": [],
+                "teams": [], "workflow_runs": []
+            },
         })
     );
 
@@ -571,6 +574,114 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
         .collect();
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0]["payload"]["name"], "landed");
+}
+
+fn parked_workflow(
+    env: &Env,
+    tree: &str,
+) -> (rimz::ids::WorkflowRunId, rimz::disk::paths::WorkflowPaths) {
+    let dir = env.rimz_home().join("workflows/hold");
+    std::fs::create_dir_all(&dir).unwrap();
+    let spec = "[workflow]\nscope='worktree'\nstart='check'\n\
+        [checks.check]\nshell='true'\non={pass='@user',fail='@failed'}\n";
+    std::fs::write(dir.join("workflow.toml"), spec).unwrap();
+    let output = env
+        .rimz()
+        .args(["workflow", "run", "hold", "-w", tree])
+        .assert()
+        .success();
+    let text = std::str::from_utf8(&output.get_output().stdout).unwrap();
+    let id = rimz::ids::WorkflowRunId::parse(text.lines().next().unwrap()).unwrap();
+    let paths = env.state_path_for(&env.project_root).workflow(&id);
+    let started = std::time::Instant::now();
+    loop {
+        let run = rimz::store::workflow::load(&paths).unwrap();
+        if run.state == rimz::store::workflow::RunState::Parked {
+            return (id, paths);
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(15),
+            "run did not park: {run:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn workflow_runs_hold_listing_sweeps_cleanup_and_removal_but_not_merge() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/followup");
+    let (id, _) = parked_workflow(&env, "followup");
+    for args in [
+        vec!["worktree", "sweep", "--dry-run", "--json"],
+        vec!["worktree", "sweep", "--json"],
+        vec!["gc", "--dry-run", "--json"],
+    ] {
+        let output = env.rimz().args(&args).assert().success();
+        let report: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+        let sweep = if args[0] == "gc" {
+            &report["worktrees"]
+        } else {
+            &report
+        };
+        assert_eq!(sweep["kept"][0]["reasons"], serde_json::json!(["in_use"]));
+        assert_eq!(
+            sweep["kept"][0]["holders"]["workflow_runs"],
+            serde_json::json!([{"id":id,"address":"hold#followup"}])
+        );
+    }
+    let output = env
+        .rimz()
+        .args(["worktree", "list", "--json"])
+        .assert()
+        .success();
+    let rows: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(rows[0]["holders"]["workflow_runs"][0]["id"], id.as_str());
+    for verb in ["list", "sweep"] {
+        env.rimz()
+            .args(["worktree", verb])
+            .assert()
+            .success()
+            .stdout(contains("workflow run hold#followup"));
+    }
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(path.exists());
+    env.rimz()
+        .args(["worktree", "remove", "followup"])
+        .assert()
+        .failure()
+        .stderr(
+            contains("is in use by workflow run hold#followup")
+                .and(contains(format!("rimz workflow cancel {id}")))
+                .and(contains("--force")),
+        );
+    env.rimz()
+        .args(["worktree", "merge", "followup", "--yes"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["workflow", "cancel", id.as_str()])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["worktree", "remove", "followup"])
+        .assert()
+        .success();
+    assert!(!path.exists());
 }
 
 #[test]

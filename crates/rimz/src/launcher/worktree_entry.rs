@@ -171,10 +171,26 @@ pub(super) fn remove(
             )))?;
             return Ok(());
         }
-        Err(crate::worktree::WorktreeErr::InUse { .. }) => bail!(
-            "worktree `{name}` is in use by {}; nothing removed; nothing launched",
-            protections.holders(path)
-        ),
+        Err(crate::worktree::WorktreeErr::InUse { .. }) => {
+            let holders = protections.holders(path);
+            let fix = if holders.workflow_runs.is_empty() {
+                String::new()
+            } else {
+                let commands = holders
+                    .workflow_runs
+                    .iter()
+                    .map(|run| format!("`rimz workflow cancel {}`", run.id))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                format!(
+                    "; cancel with {commands}, or remove with \
+                     `rimz worktree remove {name} --force` before relaunching"
+                )
+            };
+            bail!(
+                "worktree `{name}` is in use by {holders}; nothing removed; nothing launched{fix}"
+            );
+        }
         result => result?,
     };
     let retirement = crate::worktree::retire_removal(
@@ -288,6 +304,23 @@ fn alive_snapshot(
 }
 
 pub fn explicit_removal_protections(
+    repo_roots: &[&Path],
+    root: Option<&Path>,
+    mux: Option<crate::ids::MuxName>,
+) -> crate::worktree::ProtectionSet {
+    let mut protections = occupancy_protections(repo_roots, root, mux);
+    if let Ok(runs) = crate::store::workflow::unfinished_under(
+        &crate::disk::paths::rimz_home(),
+        crate::store::workflow::RunRead::BestEffort,
+    ) {
+        for run in runs {
+            protections.insert_workflow_run(&run.id, &run.address().to_string(), &run.scope.path);
+        }
+    }
+    protections
+}
+
+pub fn occupancy_protections(
     repo_roots: &[&Path],
     root: Option<&Path>,
     mux: Option<crate::ids::MuxName>,
