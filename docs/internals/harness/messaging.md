@@ -680,13 +680,13 @@ No team or context-size gate applies. A window missed entirely is skipped for go
 
 ### The keep-warm hold
 
-Keep-warm extends the same reflex to an agent with nothing pending, for a configured horizon after its turn ends. `SeatPolicy` resolves the horizon from the trusted effective definitions:
+Keep-warm extends the same reflex to an agent with nothing pending, for a configured horizon after its turn ends. `SeatPolicy` resolves the horizon from the trusted effective definitions and the machine default:
 
-- A team seat resolves `max` and `while` per field through `Team::keep_warm`, role over team, where `off` cancels.
-- A solo seat takes its profile's `max`. A TOML profile with no `keep-warm` of its own takes the nearest one up its `agent` base chain, and an explicit `off` stops the walk. Markdown definitions arrive with inheritance resolved.
+- A team seat resolves `max` and `while` per field through `Team::keep_warm_with_default`, role over team, then `harness.keep_warm` for an unset `max`; `off` cancels before the fallback can replace it. The profile behind the seat is ignored. `Team::keep_warm` keeps display rows declared-only, without the global default.
+- A solo seat takes its profile's `max`. A TOML profile with no `keep-warm` of its own takes the nearest one up its `agent` base chain, and an explicit `off` stops the walk. Markdown definitions arrive with inheritance resolved. An unset maximum, including on an unnamed seat, takes `harness.keep_warm` (default `off`).
 - A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) never resolves a horizon. An agent-launched peer resolves like any other seat.
 
-The horizon is admitted only when `ping_lifetime` admits the agent's lifetime, under the same margin and floor as sleeping pings. `SeatPolicy::horizon` evaluates a resolved `while` with the shared `WhenExpr` evaluator against the seat's `lane_path`. Only `team.stage` is admitted, at load in `prepare_team`. A false known reading returns no horizon, and an unknown reading passes. A while-only hold takes `harness.cache_keepalive_max` as its horizon, and has none when that cap is off.
+The horizon is admitted only when `ping_lifetime` admits the agent's lifetime, under the same margin and floor as sleeping pings. `SeatPolicy::horizon` evaluates a resolved `while` with the shared `WhenExpr` evaluator against the seat's `lane_path`. Only `team.stage` is admitted, at load in `prepare_team`. A false known reading returns no horizon, and an unknown reading passes. A `while` with no resolved maximum takes `harness.cache_keepalive_max` as its horizon, and has none when that cap is off. This includes an explicit `max: off` with an active `while`; an unset `max` first takes the global maximum when enabled.
 
 The horizon is anchored at `AgentState::turn_ended_at`, which a ping never moves. A ping-only turn is not agent activity ([model.md § Edges](../agents/model.md#edges)): its open and close leave status, phase, activity, turn stamps, turn ids, team signals, and the supervised run as they were, and stamp only `pinged_at`. The lifecycle hook skips its activity heartbeat, active time, and run settle on those edges too.
 

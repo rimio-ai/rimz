@@ -1521,6 +1521,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_harness_flip_compact_edit(path)
         || is_harness_compact_instruction_edit(path)
         || is_harness_idle_compact_edit(path)
+        || is_harness_keep_warm_edit(path)
         || is_harness_keep_warm_min_ttl_edit(path)
         || is_harness_prompt_cache_ttl_edit(path)
         || is_harness_cache_keepalive_max_edit(path)
@@ -1656,6 +1657,13 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
             );
         }
     }
+    if is_harness_keep_warm_edit(path)
+        && value
+            .as_str()
+            .is_none_or(|horizon| horizon.parse::<super::KeepWarm>().is_err())
+    {
+        invalid_value!("harness.keep_warm must be off or a duration such as 2h");
+    }
     if is_harness_keep_warm_min_ttl_edit(path)
         && value
             .as_str()
@@ -1720,6 +1728,10 @@ fn is_harness_compact_instruction_edit(path: &[String]) -> bool {
 
 fn is_harness_idle_compact_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "idle_compact")
+}
+
+fn is_harness_keep_warm_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "keep_warm")
 }
 
 fn is_harness_keep_warm_min_ttl_edit(path: &[String]) -> bool {

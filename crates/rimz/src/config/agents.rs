@@ -373,6 +373,19 @@ pub enum LaunchPlacement {
 pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 
 impl ProfilesConfig {
+    /// The nearest profile maximum, else `fallback`; explicit `off` stops inheritance.
+    pub fn keep_warm(&self, name: Option<&str>, fallback: super::KeepWarm) -> super::KeepWarm {
+        name.and_then(|name| {
+            self.setting(name, |profile| {
+                profile
+                    .keep_warm
+                    .as_ref()
+                    .and_then(|policy| policy.fields().max)
+            })
+        })
+        .unwrap_or(fallback)
+    }
+
     /// The nearest declared value; explicit off values stop the walk. Markdown chains arrive
     /// resolved, while TOML chains follow `agent` references within this table.
     pub(crate) fn setting<T>(&self, name: &str, pick: impl Fn(&Profile) -> Option<T>) -> Option<T> {
@@ -508,7 +521,8 @@ pub struct Profile {
     pub fast: Option<bool>,
     #[serde(default)]
     pub budget: Option<String>,
-    /// A solo agent's keep-warm maximum (shorthand or max-only block); unset inherits through the `agent` base chain.
+    /// A solo agent's keep-warm maximum (shorthand or max-only block); unset inherits through
+    /// the `agent` base chain, then falls back to the machine default.
     #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
     pub keep_warm: Option<super::KeepWarmPolicy>,
     /// The context size at which this seat is compacted while idle; unset
@@ -637,6 +651,15 @@ pub const DONE_STAGE: &str = "Done";
 impl Team {
     /// Resolve each keep-warm field from role over team; explicit `off` cancels it.
     pub fn keep_warm(&self, role: Option<&str>) -> Option<super::KeepWarmFields> {
+        self.keep_warm_with_default(role, super::KeepWarm::Off)
+    }
+
+    /// Resolve role over team, then `fallback` for an unset maximum, before cancelling `off`.
+    pub fn keep_warm_with_default(
+        &self,
+        role: Option<&str>,
+        fallback: super::KeepWarm,
+    ) -> Option<super::KeepWarmFields> {
         let role = self
             .roles
             .iter()
@@ -652,6 +675,7 @@ impl Team {
         let max = role
             .max
             .or(team.max)
+            .or(Some(fallback))
             .filter(|max| *max != super::KeepWarm::Off);
         let while_clause = role
             .while_clause

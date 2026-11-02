@@ -153,7 +153,7 @@ A script that blocks until the work is done runs [`rimz teams wait`](#wait-for-a
 
 The definition includes a `(prompt stack: rimz teams show <team> --json)` hint when roles have prompt files or the team has a consensus.
 
-Roles with a resolved [keep-warm](../definitions.md#keep-warm) policy also show their `max` and `while` values. These resolve each field from the role, then the team, with `off` cancelling inheritance.
+Roles with a declared [keep-warm](../definitions.md#keep-warm) policy also show their `max` and `while` values. These resolve each field from the role, then the team, with `off` cancelling inheritance; the display does not include the global `harness.keep_warm` default.
 
 ### Cohort state
 
@@ -188,7 +188,7 @@ PR and CI facts come from the room's sidebar cache. `rimz teams list` and `show`
 | `append_system_prompt_files` | Team-level files composed after the consensus, as absolute paths. Omitted when empty. |
 | `roles[]` | `role`, `profile`, and `signals`, plus optional `kind`, `model`, `effort`, `tier`, `tier_fallback`, `mode`, `system_prompt_file`, and `append_system_prompt_files`. |
 | `roles[].append_system_prompt_files` | The role's own resolved profile-chain and role fragments, excluding the team layer. Omitted when empty. |
-| `roles[].keep_warm` | Resolved `{ "max": "<duration>" or null, "while": "<condition>" or null }`. Omitted when both are unset. |
+| `roles[].keep_warm` | Declared `{ "max": "<duration>" or null, "while": "<condition>" or null }`, resolved role over team without the global default. Omitted when both are unset. |
 | `roles[].signals[]` | Declared bindings: `signal`, `match` (an object), and `prompt` (nullable). |
 | `instances[]` | One record per live cohort, below. |
 

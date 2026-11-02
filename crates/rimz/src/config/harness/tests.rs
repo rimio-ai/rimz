@@ -360,6 +360,44 @@ fn keep_warm_floor_defaults_to_thirty_minutes_and_takes_off() {
 }
 
 #[test]
+fn global_keep_warm_defaults_off_and_round_trips_shorthand() {
+    let defaults = toml::Value::try_from(HarnessConfig::default()).unwrap();
+    assert_eq!(
+        defaults.get("keep_warm").and_then(toml::Value::as_str),
+        Some("off")
+    );
+    for raw in ["off", "2h"] {
+        let config: HarnessConfig = toml::from_str(&format!("keep_warm = {raw:?}")).unwrap();
+        let value = toml::Value::try_from(&config).unwrap();
+        assert_eq!(
+            value.get("keep_warm").and_then(toml::Value::as_str),
+            Some(raw)
+        );
+        assert_eq!(
+            toml::from_str::<HarnessConfig>(&toml::to_string(&config).unwrap()).unwrap(),
+            config
+        );
+    }
+}
+
+#[test]
+fn global_keep_warm_refuses_blocks_and_invalid_shorthand() {
+    for raw in [
+        "{max = '2h'}",
+        "{while = 'team.stage!=Done'}",
+        "true",
+        "42",
+        "'0s'",
+        "'2x'",
+    ] {
+        assert!(
+            toml::from_str::<HarnessConfig>(&format!("keep_warm = {raw}")).is_err(),
+            "global keep-warm must refuse {raw}"
+        );
+    }
+}
+
+#[test]
 fn smart_compact_deserializes_percent() {
     let config: HarnessConfig =
         toml::from_str("smart_compact = \"70%\"").expect("parse harness config");

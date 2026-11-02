@@ -2435,6 +2435,29 @@ fn harness_idle_compact_validation_accepts_off_and_token_floors() {
 }
 
 #[test]
+fn harness_global_keep_warm_validation_accepts_only_off_and_durations() {
+    let key = parse_key("harness.keep_warm").unwrap();
+    for raw in ["off", "15m", "2h"] {
+        assert_eq!(parse_set_value(&key, raw).as_str(), Some(raw));
+        validate_set_value(&key, &Value::from(raw)).unwrap();
+    }
+    for raw in [
+        "on",
+        "0s",
+        "15",
+        "{ max = '2h' }",
+        "{ while = 'team.stage!=Done' }",
+    ] {
+        let result = validate_set_value(&key, &parse_set_value(&key, raw));
+        assert!(result.is_err(), "invalid global keep-warm accepted: {raw}");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "harness.keep_warm must be off or a duration such as 2h"
+        );
+    }
+}
+
+#[test]
 fn harness_keep_warm_floor_validation_accepts_off_and_durations() {
     let floor = parse_key("harness.keep_warm_min_ttl").expect("floor key");
     for value in ["off", "15m", "1h"] {
