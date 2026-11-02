@@ -16,6 +16,36 @@ fn command_fixture(runner: &str, command: &str) -> (Env, PathBuf) {
     )
 }
 
+#[test]
+fn command_step_start_runs_without_an_initial_check() {
+    let (env, dir) = command_fixture("shell", "printf started");
+    let path = dir.join("workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("start = 'pr'", "start = 'build'"),
+    )
+    .unwrap();
+    let id = start(&env);
+    let value = settled(&env, &id, "done");
+    let attempts = events(&value, "attempt");
+    assert_eq!(attempts.len(), 1, "{value:#}");
+    assert_eq!(attempts[0]["node"], "build");
+    assert_eq!(attempts[0]["seq"], 1);
+    assert_eq!(attempts[0]["outcome"], "ended");
+    let log = fs::read_to_string(attempts[0]["log"].as_str().unwrap()).unwrap();
+    assert_eq!(log, "started");
+    let history = success(command(&env, &["workflow", "show", &id, "--history"]));
+    assert!(
+        history
+            .find("build attempt ended")
+            .zip(history.find("report said pass"))
+            .is_some_and(|(build, report)| build < report),
+        "{history}"
+    );
+}
+
 fn edit_record(env: &Env, id: &str, edit: impl FnOnce(&mut RunRecord)) {
     let state = env.state_path_for(&env.project_root);
     let paths = state.workflow(&id.parse().unwrap());

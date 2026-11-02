@@ -23,6 +23,67 @@ fn dummy_agent_process() -> std::process::Child {
 }
 
 #[test]
+fn agent_step_start_launches_with_null_context_and_counts_the_null_key() {
+    let room = Room::new("max-visits-per-key=1\n");
+    let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("start = 'pr'", "start = 'build'")
+            .replace("on.done = '@done'", "on.done = 'build'"),
+    )
+    .unwrap();
+    let definition = success(command(&room.env, &["workflow", "show", "review"]));
+    assert!(definition.contains("○ build"), "{definition}");
+    assert!(
+        definition
+            .find("○ build")
+            .zip(definition.find("○ after"))
+            .is_some_and(|(build, after)| build < after),
+        "{definition}"
+    );
+    assert!(
+        definition.contains("unreachable from build"),
+        "{definition}"
+    );
+    let node = success(command(&room.env, &["workflow", "show", "review", "build"]));
+    assert!(node.contains("build · step in review · agent"), "{node}");
+    assert!(node.contains("workflow start"), "{node}");
+
+    let (id, run) = room.launch();
+    let value = show(&room.env, &id);
+    let ctx = context(&value);
+    assert_eq!(ctx["node"], "build");
+    assert_eq!(ctx["seq"], 1);
+    assert_eq!(ctx["visit"], 1);
+    assert_eq!(ctx["visits"], 1);
+    for field in ["input", "key", "prev_attempt"] {
+        assert_eq!(ctx.get(field), Some(&Value::Null), "{ctx:#}");
+    }
+    assert_eq!(
+        value["record"]["visits"]["build"]["keys"],
+        json!([{"key":null,"visits":1}])
+    );
+    assert_eq!(run.workflow.as_ref().unwrap().seq, 1);
+    assert!(events(&value, "evaluation").is_empty(), "{value:#}");
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let value = settled(&room.env, &id, "parked");
+    assert_eq!(value["record"]["park"]["reason"], "cap");
+    assert_eq!(value["record"]["input"]["bound"], "max-visits-per-key");
+    assert_eq!(events(&value, "attempt").len(), 1, "{value:#}");
+    let history = success(command(&room.env, &["workflow", "show", &id, "--history"]));
+    assert!(
+        history
+            .find("build attempt ended")
+            .zip(history.find("after said done"))
+            .is_some_and(|(build, after)| build < after),
+        "{history}"
+    );
+}
+
+#[test]
 fn missing_leader_hooks_refuse_before_runs_or_panes() {
     let room = Room::with_kind("", "claude");
     fs::remove_file(room.env.agent_config_path("claude")).unwrap();

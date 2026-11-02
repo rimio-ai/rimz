@@ -80,10 +80,12 @@ pub(super) fn validate_spec(
         report.error("workflow", err);
     }
     report.summary("workflow", spec.workflow.summary.as_deref());
-    if !spec.checks.contains_key(&spec.workflow.start) {
+    if !spec.checks.contains_key(&spec.workflow.start)
+        && !spec.steps.contains_key(&spec.workflow.start)
+    {
         report.error(
             "workflow.start",
-            format!("{} must name a check", spec.workflow.start),
+            format!("{} must name a check or a step", spec.workflow.start),
         );
     }
     if let Some(deadline) = &spec.workflow.deadline
