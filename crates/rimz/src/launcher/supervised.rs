@@ -181,9 +181,11 @@ fn prepare(
             if index == leader_index && cell.launch.mode.is_none() {
                 let adapter = crate::agents::find_definition(&cell.kind)
                     .with_context(|| format!("unknown agent kind `{}`", cell.kind))?;
-                cell.args
-                    .extend(adapter.spec().launch.permission_args(PermissionMode::Auto));
-                cell.launch.mode = Some(PermissionMode::Auto);
+                cell.launch.mode = adapter.spec().launch.settle_permission_mode(
+                    &mut cell.args,
+                    None,
+                    Some(PermissionMode::Auto),
+                );
             }
         }
         (layout, None, finalized.inferred_lane, leader_index)

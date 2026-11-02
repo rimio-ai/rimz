@@ -10,6 +10,17 @@ use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 
+fn with_auto_args(kind: &str, args: &[&str]) -> Vec<String> {
+    let mut args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    args.extend(
+        crate::agents::spec_by_kind(kind)
+            .unwrap()
+            .launch
+            .permission_args(PermissionMode::Auto),
+    );
+    args
+}
+
 #[test]
 fn finalized_launch_warns_once_per_moved_cell_with_full_passes() {
     let stamp: crate::agents::TierStamp = serde_json::from_value(serde_json::json!({
@@ -109,13 +120,16 @@ fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
     assert!(cell.launch.record.as_deref().unwrap().fast);
     assert_eq!(
         cell.args,
-        [
-            "--search",
-            "-c",
-            "service_tier=fast",
-            "-c",
-            "features.fast_mode=true"
-        ]
+        with_auto_args(
+            "codex",
+            &[
+                "--search",
+                "-c",
+                "service_tier=fast",
+                "-c",
+                "features.fast_mode=true"
+            ]
+        )
     );
 
     // `--no-fast` over a profile that rendered fast removes the switch.
@@ -2803,6 +2817,106 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
 }
 
 #[test]
+fn fresh_permission_modes_default_and_map_at_finalization() {
+    use PermissionMode::{Ask, Auto, Yolo};
+    for (spec, choice, expected) in [
+        ("claude", None, Some(Auto)),
+        ("codex", None, Some(Auto)),
+        ("opencode", None, Some(Auto)),
+        ("pi", None, Some(Yolo)),
+        ("qwen", None, None),
+        (
+            "opencode",
+            Some(PermissionModeChoice::Explicit(Ask)),
+            Some(Auto),
+        ),
+        ("pi", Some(PermissionModeChoice::Explicit(Ask)), Some(Yolo)),
+        ("claude-plan", None, Some(PermissionMode::Plan)),
+    ] {
+        let mut layout = crate::harness::spec::parse_layout_spec(
+            spec,
+            &crate::config::ProfilesConfig::default(),
+            &crate::config::CommandsConfig::default(),
+        )
+        .unwrap();
+        finalize_launch_layout(
+            &mut layout,
+            LaunchFinalizeOptions {
+                smart_compact: None,
+                agent_base: None,
+                permission_mode: choice,
+                isolation: None,
+                preset: &crate::agents::LaunchPreset::default(),
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.launch.mode, expected, "{spec} {choice:?}");
+        let launch = crate::agents::spec_by_kind(&cell.kind).unwrap().launch;
+        assert_eq!(
+            cell.args,
+            expected
+                .map(|mode| launch.permission_args(mode))
+                .unwrap_or_default()
+        );
+    }
+}
+
+#[test]
+fn raw_permission_flags_in_profiles_and_passthrough_keep_the_mode_unknown() {
+    for (kind, raw) in [
+        ("codex", "-c approvals_reviewer=user"),
+        ("claude", "--permission-mode plan"),
+        ("opencode", "--auto"),
+    ] {
+        for passthrough in [false, true] {
+            for mode in [None, Some(PermissionMode::Auto)] {
+                let mut machine = MachineConfig::default();
+                machine.agents.profiles.0.insert(
+                    "worker".into(),
+                    configured_profile(kind, mode, None, None, None, (!passthrough).then_some(raw)),
+                );
+                let dir = tempfile::tempdir().unwrap();
+                let launch = effective_launch(&machine, dir.path());
+                let mut resolved =
+                    resolve_launch(&launch, &machine.agents.commands, Some("worker"), None)
+                        .unwrap();
+                let raw = shlex::split(raw).unwrap();
+                finalize_launch_layout(
+                    &mut resolved.layout,
+                    LaunchFinalizeOptions {
+                        smart_compact: None,
+                        agent_base: None,
+                        permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
+                        isolation: None,
+                        preset: &crate::agents::LaunchPreset::default(),
+                        passthrough: if passthrough { &raw } else { &[] },
+                        budget: None,
+                        max_turns: None,
+                    },
+                )
+                .unwrap();
+                let cell = resolved.layout.agent_cells().next().unwrap();
+                assert_eq!(cell.launch.mode, None, "{kind} {passthrough} {mode:?}");
+                let mut expected = mode
+                    .map(|mode| {
+                        crate::agents::spec_by_kind(kind)
+                            .unwrap()
+                            .launch
+                            .permission_args(mode)
+                    })
+                    .unwrap_or_default();
+                expected.extend(raw);
+                assert_eq!(cell.args, expected, "{kind} {passthrough} {mode:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();
@@ -3117,13 +3231,16 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         let mut cell = Cell::agent(AgentKind::new_unchecked(kind));
         if let Cell::Agent(cell) = &mut cell {
             cell.launch.record = Some(Box::default());
+            cell.launch.mode = Some(PermissionMode::Auto);
+            cell.args = with_auto_args(kind, &[]);
         }
         cell
     };
     assert_eq!(layout.columns[0].rows[0], recorded_bare("codex"));
     assert!(matches!(&layout.columns[0].rows[1],
         Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
-            if model == "gpt-6-astra" && args == &["--model", "gpt-6-astra"]));
+            if model == "gpt-6-astra"
+                && args == &with_auto_args("codex", &["--model", "gpt-6-astra"])));
     assert_eq!(layout.columns[0].rows[2], recorded_bare("claude"));
 }
 
@@ -3143,7 +3260,7 @@ fn args_only_model_becomes_identity_and_suppresses_default() {
     assert!(matches!(&layout.columns[0].rows[0],
         Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
             if model == "gpt-5.6-sol"
-                && args == &["--debug", "--model", "gpt-5.6-sol"]));
+                && args == &with_auto_args("codex", &["--debug", "--model", "gpt-5.6-sol"])));
 }
 
 #[test]
@@ -3165,7 +3282,8 @@ fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
         ]
     );
     assert!(matches!(&different.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, .. }) if args == &["--model", "gpt-5.6-max"]));
+        Cell::Agent(AgentCell { args, .. })
+            if args == &with_auto_args("codex", &["--model", "gpt-5.6-max"])));
 
     let mut equal = LayoutSpec::single(preset_cell(
         "codex",
@@ -3179,7 +3297,8 @@ fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
             .is_empty()
     );
     assert!(matches!(&equal.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, .. }) if args == &["--model", "gpt-5.6-max"]));
+        Cell::Agent(AgentCell { args, .. })
+            if args == &with_auto_args("codex", &["--model", "gpt-5.6-max"])));
 }
 
 #[test]
@@ -3210,7 +3329,7 @@ fn declared_prompt_removes_raw_replacement_args_before_process_compilation() {
         ]
     );
     assert!(matches!(&layout.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, .. }) if args == &["--debug"]));
+        Cell::Agent(AgentCell { args, .. }) if args == &with_auto_args("claude", &["--debug"])));
 }
 
 #[test]
@@ -3229,7 +3348,8 @@ fn args_only_model_uses_last_short_or_joined_occurrence() {
     );
     assert!(matches!(&layout.columns[0].rows[0],
         Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
-            if model == "second" && args == &["--debug", "-m", "second"]));
+            if model == "second"
+                && args == &with_auto_args("codex", &["--debug", "-m", "second"])));
 }
 
 #[test]
@@ -3252,7 +3372,8 @@ fn launch_model_override_wins_over_profile_and_args_models_silently() {
     assert!(warnings.is_empty());
     assert!(matches!(&layout.columns[0].rows[0],
         Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
-            if model == "override" && args == &["--model", "override"]));
+            if model == "override"
+                && args == &with_auto_args("codex", &["--model", "override"])));
 
     let mut args_only = LayoutSpec::single(preset_cell(
         "codex",
@@ -3272,7 +3393,8 @@ fn launch_model_override_wins_over_profile_and_args_models_silently() {
     assert!(warnings.is_empty());
     assert!(matches!(&args_only.columns[0].rows[0],
         Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
-            if model == "override" && args == &["--model", "override"]));
+            if model == "override"
+                && args == &with_auto_args("codex", &["--model", "override"])));
 }
 
 #[test]
@@ -3297,12 +3419,12 @@ fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags()
     );
     assert!(matches!(&codex.columns[0].rows[0],
     Cell::Agent(AgentCell { args, launch: LaunchParams { model: None, .. }, .. })
-        if args == &[
+        if args == &with_auto_args("codex", &[
             "-c",
             "web_search=cached",
             "-c",
             "model_reasoning_effort=high",
-        ]));
+        ])));
 
     let mut claude = LayoutSpec::single(preset_cell("claude", &["--effort", "high"], None, None));
     assert!(
@@ -3311,7 +3433,8 @@ fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags()
             .is_empty()
     );
     assert!(matches!(&claude.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, launch: LaunchParams { effort: None, .. }, .. }) if args == &["--effort", "high"]));
+        Cell::Agent(AgentCell { args, launch: LaunchParams { effort: None, .. }, .. })
+            if args == &with_auto_args("claude", &["--effort", "high"])));
 }
 
 #[test]
@@ -3350,8 +3473,10 @@ fn auto_compact_reconciles_declared_fields_without_touching_other_args() {
         assert!(
             matches!(warnings.as_slice(), [LaunchFinalizeWarning::DeclaredFieldWins { field: "auto-compact", value, .. }] if value == "200000")
         );
+        let finalized = with_auto_args(kind, &expected);
         assert!(
-            matches!(&layout.columns[0].rows[0], Cell::Agent(AgentCell { args, .. }) if args == &expected)
+            matches!(&layout.columns[0].rows[0], Cell::Agent(AgentCell { args, .. })
+                if args == &finalized)
         );
 
         let mut undeclared = LayoutSpec::single(preset_cell(kind, &expected, None, None));
@@ -3361,7 +3486,8 @@ fn auto_compact_reconciles_declared_fields_without_touching_other_args() {
                 .is_empty()
         );
         assert!(
-            matches!(&undeclared.columns[0].rows[0], Cell::Agent(AgentCell { args, .. }) if args == &expected)
+            matches!(&undeclared.columns[0].rows[0], Cell::Agent(AgentCell { args, .. })
+                if args == &finalized)
         );
     }
 }
@@ -3385,7 +3511,8 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     )
     .expect("claude supports max turns");
     assert!(matches!(&layout.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, .. }) if args == &["--max-turns", "3"]));
+        Cell::Agent(AgentCell { args, .. })
+            if args == &["--permission-mode", "auto", "--max-turns", "3"]));
 
     let mut layout = LayoutSpec::single(preset_cell(
         "codex",
@@ -4859,7 +4986,7 @@ fn supervised_permission_cap_identifies_profile_and_mode_cell_defaults() {
 }
 
 #[test]
-fn supervised_permission_cap_keeps_passthrough_permission_vectors_opaque() {
+fn supervised_permission_cap_keeps_passthrough_vectors_but_records_unknown() {
     let dir = tempfile::tempdir().unwrap();
     let mut request = supervised_request("codex-yolo", "work");
     request.subagent = true;
@@ -4875,7 +5002,7 @@ fn supervised_permission_cap_keeps_passthrough_permission_vectors_opaque() {
     }
     .run(dir.path());
     let launch = planned.unwrap();
-    assert_eq!(planned_cell(&launch).launch.mode, Some(PermissionMode::Ask));
+    assert_eq!(planned_cell(&launch).launch.mode, None);
     let mut expected = crate::agents::find_definition("codex")
         .unwrap()
         .spec()

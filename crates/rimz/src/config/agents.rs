@@ -473,7 +473,7 @@ pub struct Profile {
     /// Complete family renders exist only for Markdown definitions.
     #[serde(skip)]
     pub definition_renders: Option<super::tiers::DefinitionRenders>,
-    /// Whether unwritten mode and effort take the definition defaults of the kind and model
+    /// Whether unwritten effort takes the definition default of the kind and model
     /// the launch finally runs on.
     #[serde(skip)]
     pub kind_defaults: bool,

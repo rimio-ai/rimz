@@ -32,6 +32,29 @@ fn grants(profile: Profile, machine: Isolation) -> EffectiveGrants {
 }
 
 #[test]
+fn review_defaults_and_maps_modes_and_marks_dropping_codex_ask_widened() {
+    use PermissionMode::{Ask, Auto, Yolo};
+    for (kind, expected) in [
+        ("claude", Auto),
+        ("codex", Auto),
+        ("opencode", Auto),
+        ("pi", Yolo),
+    ] {
+        let mut declared = profile(None, None, None, &[]);
+        declared.agent = kind.into();
+        let default = grants(declared.clone(), Isolation::Host);
+        assert_eq!(default.mode, expected, "{kind}");
+        declared.mode = Some(Ask);
+        let ask = grants(declared, Isolation::Host);
+        if kind == "codex" {
+            assert_eq!(default.widened_from(&ask), ["mode"]);
+        } else if kind == "opencode" || kind == "pi" {
+            assert_eq!(ask.mode, expected, "{kind} ask maps");
+        }
+    }
+}
+
+#[test]
 fn widening_compares_effective_grants_in_both_directions() {
     use Isolation::{Host, Sandbox, Scoped};
     use PermissionMode::{Ask, Auto};
@@ -102,7 +125,7 @@ fn widening_compares_effective_grants_in_both_directions() {
         .collect();
     let expected = vec![
         (vec!["mode"], vec![]),
-        (vec![], vec![]),
+        (vec![], vec!["mode"]),
         (vec!["isolation"], vec![]),
         (vec![], vec!["isolation"]),
         (vec!["tools"], vec![]),
@@ -335,5 +358,5 @@ fn a_new_kind_base_is_reported_once_for_both_launch_surfaces() {
             .collect::<Vec<_>>()
     );
     assert_eq!(review.profiles[0].namespace, "agents/subagents");
-    assert!(review.profiles[0].widened.is_empty());
+    assert_eq!(review.profiles[0].widened, ["mode"]);
 }

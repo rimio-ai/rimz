@@ -94,7 +94,10 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             kind: AgentKind::new_unchecked(kind),
             action: crate::harness::launch::ExecAction::Resume {
                 session_id: id.to_owned(),
-                extra_args: Vec::new(),
+                extra_args: crate::agents::spec_by_kind(kind)
+                    .unwrap()
+                    .launch
+                    .permission_args(PermissionMode::Auto),
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
@@ -113,6 +116,10 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             headless: None,
             identity: crate::harness::launch::ExecIdentity {
                 launch_id: Some(id.to_owned()),
+                params: crate::agents::LaunchParams {
+                    mode: Some(PermissionMode::Auto),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         },

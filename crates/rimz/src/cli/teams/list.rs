@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
 use rimz::agents::attribution::LaneLifetimes;
+use rimz::agents::definition::LaunchPermissionArgs;
 use rimz::agents::{AgentState, AgentStatus, TurnPhase};
 use rimz::config::{
     AgentSpecSources, CommandsConfig, Isolation, MachineConfig, ProfilesConfig, PromptSource,
@@ -496,7 +497,9 @@ fn role_report(role: String, cell: &AgentCell) -> RoleReport {
         model: cell.launch.model.clone(),
         effort: cell.launch.effort.clone(),
         fast: cell.launch.fast,
-        mode: cell.launch.mode.map(|mode| mode.to_string()),
+        mode: LaunchPermissionArgs::of_kind(&cell.kind)
+            .resolve_mode(cell.launch.mode)
+            .map(|mode| mode.to_string()),
         system_prompt_file: cell
             .system_prompt_file
             .as_ref()
@@ -535,7 +538,10 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
                     == Some(true),
                 mode: resolved
                     .as_ref()
-                    .and_then(|profile| profile.launch.mode)
+                    .and_then(|profile| {
+                        LaunchPermissionArgs::of_kind(&profile.kind)
+                            .resolve_mode(profile.launch.mode)
+                    })
                     .or(binding.mode)
                     .map(|mode| mode.to_string()),
                 system_prompt_file: resolved

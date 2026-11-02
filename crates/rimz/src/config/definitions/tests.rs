@@ -2153,7 +2153,7 @@ fn runtime_resolution_aliases_and_defaults() {
             mode,
             written.then(|| effort.to_owned()),
             Some(effort.to_owned()),
-            mode.or_else(|| (kind == "claude").then_some(crate::agents::PermissionMode::Auto)),
+            mode,
             Some(effort.to_owned()),
         ));
         assert_eq!(

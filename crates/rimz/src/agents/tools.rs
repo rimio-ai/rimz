@@ -1,7 +1,7 @@
 //! Definition model defaults and provider-neutral tool vocabulary.
 
 use super::definition::{DefinitionSpec, DefinitionTools};
-use super::{PermissionMode, all_definitions, spec_by_kind};
+use super::{all_definitions, spec_by_kind};
 
 /// RimZ tool names beside Pi's, read forward by Pi's renderer and backward by parsing.
 pub(super) const PI_TOOL_NAMES: &[(&str, &str)] = &[
@@ -131,7 +131,6 @@ impl ToolSet {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DefinitionDefaults {
-    pub mode: Option<PermissionMode>,
     pub effort: Option<&'static str>,
 }
 
@@ -165,13 +164,9 @@ pub fn definition_model_kind(model: &str) -> Option<&'static str> {
 }
 
 pub(crate) fn definition_defaults(kind: &str, requested_model: Option<&str>) -> DefinitionDefaults {
-    spec_by_kind(kind).map_or(
-        DefinitionDefaults {
-            mode: None,
-            effort: None,
-        },
-        |spec| defaults_for_launch(&spec.launch, requested_model),
-    )
+    spec_by_kind(kind).map_or(DefinitionDefaults { effort: None }, |spec| {
+        defaults_for_launch(&spec.launch, requested_model)
+    })
 }
 
 fn defaults_for_launch(
@@ -198,10 +193,7 @@ fn defaults_for_launch(
                 .preset_arg_matcher(super::PresetField::Effort)
                 .is_some()
         });
-    DefinitionDefaults {
-        mode: spec.mode,
-        effort,
-    }
+    DefinitionDefaults { effort }
 }
 
 pub(crate) fn tools_required(kind: &str) -> bool {
@@ -555,24 +547,19 @@ mod tests {
         assert_eq!(
             definition_defaults("claude", Some("fable")),
             DefinitionDefaults {
-                mode: Some(PermissionMode::Auto),
                 effort: Some("high")
             }
         );
         assert_eq!(
             definition_defaults("codex", Some("astra")),
             DefinitionDefaults {
-                mode: None,
                 effort: Some("xhigh")
             }
         );
         assert_eq!(definition_defaults("pi", None).effort, Some("xhigh"));
         assert_eq!(
             definition_defaults("unregistered", None),
-            DefinitionDefaults {
-                mode: None,
-                effort: None
-            }
+            DefinitionDefaults { effort: None }
         );
     }
 
@@ -580,7 +567,6 @@ mod tests {
     fn definition_effort_defaults_require_a_matcher() {
         let mut launch = super::super::LaunchSpec {
             definitions: DefinitionSpec {
-                mode: Some(PermissionMode::Auto),
                 effort: Some("xhigh"),
                 ..DefinitionSpec::EMPTY
             },
@@ -592,12 +578,8 @@ mod tests {
         assert_eq!(
             [unsupported, supported],
             [
+                DefinitionDefaults { effort: None },
                 DefinitionDefaults {
-                    mode: Some(PermissionMode::Auto),
-                    effort: None,
-                },
-                DefinitionDefaults {
-                    mode: Some(PermissionMode::Auto),
                     effort: Some("xhigh"),
                 },
             ]

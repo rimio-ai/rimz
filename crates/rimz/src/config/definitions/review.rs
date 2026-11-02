@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::PermissionMode;
+use crate::agents::definition::LaunchPermissionArgs;
 use crate::config::{Isolation, MachineConfig, PromptSource};
 use crate::harness::spec::ResolvedProfile;
 use crate::ids::AgentKind;
@@ -51,7 +52,9 @@ impl EffectiveGrants {
     fn of(profile: &ResolvedProfile, machine: Isolation) -> Self {
         Self {
             kind: profile.kind.clone(),
-            mode: profile.launch.mode.unwrap_or(PermissionMode::Ask),
+            mode: LaunchPermissionArgs::of_kind(&profile.kind)
+                .resolve_mode(profile.launch.mode)
+                .unwrap_or(PermissionMode::Ask),
             isolation: profile.isolation_default.unwrap_or(machine),
             tools: profile.tools.as_ref().map(|tools| {
                 tools

@@ -1596,7 +1596,7 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
 
 #[test]
 fn kind_defaults_follow_the_final_kind_and_model() {
-    use PermissionMode::{Auto, Plan, Yolo};
+    use PermissionMode::{Plan, Yolo};
 
     let profiles = profiles([
         (
@@ -1651,7 +1651,7 @@ fn kind_defaults_follow_the_final_kind_and_model() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for (source, target, kind, model, mode, effort) in [
-        ("markdown", None, "claude", None, Some(Auto), Some("xhigh")),
+        ("markdown", None, "claude", None, None, Some("xhigh")),
         ("markdown", Some("opencode"), "opencode", None, None, None),
         ("markdown", Some("qwen"), "qwen", None, None, None),
         (
@@ -1668,7 +1668,7 @@ fn kind_defaults_follow_the_final_kind_and_model() {
             Some("claude"),
             "claude",
             None,
-            Some(Auto),
+            None,
             Some("xhigh"),
         ),
         ("toml", Some("codex"), "codex", None, None, None),
@@ -1717,7 +1717,7 @@ fn kind_defaults_follow_the_final_kind_and_model() {
             Some("fable-base"),
             "claude",
             Some("fable"),
-            Some(Auto),
+            None,
             Some("high"),
         ),
     ] {
@@ -1788,22 +1788,8 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
             Some("high"),
         ),
         ("qwen", None, Some(Auto), None, Some(Auto), None),
-        (
-            "fable",
-            None,
-            None,
-            Some("xhigh"),
-            Some(Auto),
-            Some("xhigh"),
-        ),
-        (
-            "claude",
-            Some("fable"),
-            None,
-            None,
-            Some(Auto),
-            Some("high"),
-        ),
+        ("fable", None, None, Some("xhigh"), None, Some("xhigh")),
+        ("claude", Some("fable"), None, None, None, Some("high")),
     ] {
         let binding = RoleBinding {
             model: model.map(str::to_owned),
@@ -2201,12 +2187,35 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
     assert_eq!(ask.launch.mode, Some(PermissionMode::Ask));
     assert_eq!(ask.args, vec!["--profile-arg".to_owned()]);
 
-    assert!(matches!(
-        parse_layout_spec("pi-yolo", &profiles, &no_commands()),
-        Err(LayoutErr::UnknownCell(unknown))
-            if unknown.word == "pi-yolo"
-                && !unknown.candidates.iter().any(|candidate| candidate.name == "pi-yolo")
-    ));
+    let yolo = agent_cell("pi-yolo", &profiles, &no_commands());
+    assert_eq!(yolo.launch.mode, Some(PermissionMode::Yolo));
+    assert_eq!(yolo.args, vec!["--profile-arg".to_owned()]);
+}
+
+#[test]
+fn mapped_permission_cells_accept_empty_vectors_without_widening_other_kinds() {
+    for spec in ["opencode-auto", "pi-auto", "pi-yolo"] {
+        for suffix in ["", "-fast"] {
+            let layout =
+                parse_layout_spec(&format!("{spec}{suffix}"), &no_profiles(), &no_commands());
+            assert!(layout.is_ok(), "{spec}{suffix}: {layout:?}");
+        }
+    }
+    for spec in [
+        "amp-auto",
+        "kiro-auto",
+        "hermes-auto",
+        "droid-yolo",
+        "amp-yolo",
+    ] {
+        for suffix in ["", "-fast"] {
+            assert!(
+                parse_layout_spec(&format!("{spec}{suffix}"), &no_profiles(), &no_commands())
+                    .is_err(),
+                "{spec}{suffix}"
+            );
+        }
+    }
 }
 
 #[test]

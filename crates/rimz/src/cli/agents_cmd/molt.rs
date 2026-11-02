@@ -301,7 +301,11 @@ fn replacement_posture(
         adapter.spec().launch.strip_permission_args(&mut cell.args);
         cell.args
             .extend(adapter.spec().launch.permission_args(mode));
-        cell.launch.mode = Some(mode);
+        cell.launch.mode =
+            adapter
+                .spec()
+                .launch
+                .settle_permission_mode(&mut cell.args, Some(mode), None);
     }
     cell.launch.isolation = agent.isolation;
     cell.launch
@@ -421,6 +425,22 @@ mod tests {
         assert_eq!(
             posture.launch.record.as_ref().unwrap().agent.as_deref(),
             Some("replacement")
+        );
+
+        machine
+            .agents
+            .profiles
+            .0
+            .get_mut("replacement")
+            .unwrap()
+            .args = Some("-c approvals_reviewer=user".into());
+        let effective = rimz::config::effective::load(&machine, dir.path()).unwrap();
+        agent.mode = Some(PermissionMode::Auto);
+        let (_, posture) =
+            replacement_posture(&agent, &machine, &effective, "replacement", None).unwrap();
+        assert_eq!(
+            posture.launch.mode, None,
+            "raw reviewer makes the replay unknown"
         );
     }
 

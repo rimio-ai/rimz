@@ -4,6 +4,87 @@
 use super::*;
 
 #[test]
+fn null_mode_resumes_default_with_or_without_records_profiles_and_degradation() {
+    for (kind, expected) in [
+        ("claude", PermissionMode::Auto),
+        ("codex", PermissionMode::Auto),
+        ("opencode", PermissionMode::Auto),
+        ("pi", PermissionMode::Yolo),
+    ] {
+        for recorded in [false, true] {
+            for (name, configured_kind, degraded) in [
+                (None, kind, false),
+                (Some("worker"), kind, false),
+                (Some("gone"), kind, true),
+                (Some("worker"), "qwen", true),
+            ] {
+                let record = crate::agents::LaunchRecord::default();
+                let posture = resolve_posture(
+                    PostureRequest {
+                        record: recorded.then_some(&record),
+                        profile: name,
+                        kind: &AgentKind::new_unchecked(kind),
+                        stamped_mode: None,
+                        stamped_tier: None,
+                    },
+                    &profiles("worker", profile(configured_kind)),
+                );
+                assert_eq!(
+                    posture.degraded.is_some(),
+                    degraded,
+                    "{kind} {name:?} {recorded}"
+                );
+                assert_eq!(
+                    posture.launch.mode,
+                    Some(expected),
+                    "{kind} {name:?} {recorded}"
+                );
+                assert_eq!(
+                    posture.launch.args,
+                    crate::agents::spec_by_kind(kind)
+                        .unwrap()
+                        .launch
+                        .permission_args(expected)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn replayed_modes_map_and_raw_profile_flags_make_the_replay_unknown() {
+    for (kind, expected) in [
+        ("opencode", PermissionMode::Auto),
+        ("pi", PermissionMode::Yolo),
+    ] {
+        let posture = posture_for(kind, None, Some(PermissionMode::Ask), &no_profiles());
+        assert_eq!(posture.launch.mode, Some(expected));
+        assert!(posture.launch.args.is_empty());
+    }
+    for stamped in [None, Some(PermissionMode::Auto)] {
+        let mut worker = profile("codex");
+        worker.args = Some("-c approvals_reviewer=user".into());
+        let posture = posture_for(
+            "codex",
+            Some("worker"),
+            stamped,
+            &profiles("worker", worker),
+        );
+        assert_eq!(posture.launch.mode, None, "{stamped:?}");
+        let mut expected = vec!["-c".to_owned(), "approvals_reviewer=user".to_owned()];
+        if let Some(mode) = stamped {
+            expected.extend(
+                crate::agents::spec_by_kind("codex")
+                    .unwrap()
+                    .launch
+                    .permission_args(mode),
+            );
+        }
+        assert_eq!(posture.launch.args, expected);
+    }
+}
+
+#[test]
 fn recorded_agent_override_resolves_defaults_for_its_kind() {
     let mut worker = profile("claude");
     worker.kind_defaults = true;
@@ -693,9 +774,10 @@ fn resume_replays_the_profile_declared_posture() {
 
     assert!(plan.warnings.is_empty());
     let request = decode_exec_request(&single_pane_argv(&plan));
-    let expected = crate::harness::spec::profile_cell("planner", &profiles)
+    let mut expected = crate::harness::spec::profile_cell("planner", &profiles)
         .expect("planner profile resolves")
         .args;
+    expected.extend(["--permission-mode".to_owned(), "auto".to_owned()]);
     assert!(
         expected.iter().any(|arg| arg == "opus"),
         "profile argv should carry the model: {expected:?}"
@@ -814,7 +896,7 @@ fn resume_degrades_to_bare_when_the_profile_is_gone() {
         decode_exec_request(&single_pane_argv(&plan))
             .action
             .extra_args(),
-        &[] as &[String]
+        &["--permission-mode", "auto"]
     );
 }
 
@@ -860,7 +942,13 @@ fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
 
     let posture = posture_for("codex", Some("planner"), None, &profiles);
 
-    assert!(posture.launch.args.is_empty());
+    assert_eq!(
+        posture.launch.args,
+        crate::agents::spec_by_kind("codex")
+            .unwrap()
+            .launch
+            .permission_args(PermissionMode::Auto)
+    );
     assert!(matches!(
         posture.degraded,
         Some(PostureDegrade::PromptFileMissing { .. })
