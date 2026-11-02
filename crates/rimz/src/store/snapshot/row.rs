@@ -398,6 +398,9 @@ pub struct AgentCard {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fast: bool,
+    /// The launch's configured native compaction count, before the provider's runtime cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact: Option<u64>,
     /// The agent's display handle — the team role it launched as (`planner`,
     /// `coder`), else its explicit name, else its profile, copied from the
     /// rollup. The card and notification labels render this in the provider
@@ -521,6 +524,7 @@ impl Default for AgentCard {
             tier_moved: false,
             effort: None,
             fast: false,
+            auto_compact: None,
             handle: None,
             team: None,
             launch_group: None,
@@ -597,6 +601,7 @@ impl AgentCard {
             tier_moved: agent.tier.as_ref().is_some_and(|tier| tier.moved()),
             effort: agent.effort.clone(),
             fast: agent.fast_mode(),
+            auto_compact: agent.record.as_ref().and_then(|record| record.auto_compact),
             handle: agent
                 .role
                 .clone()

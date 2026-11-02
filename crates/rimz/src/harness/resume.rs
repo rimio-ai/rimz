@@ -651,6 +651,21 @@ fn resolve_posture_with_role(
             },
         });
     }
+    let auto_compact = cell
+        .auto_compact
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok());
+    if auto_compact.is_some() || cell.launch.record.is_some() {
+        let record = cell.launch.record.get_or_insert_with(|| {
+            crate::agents::LaunchRecord::replay_or_new(
+                None,
+                cell.launch.model.as_deref(),
+                cell.launch.effort.as_deref(),
+                cell.launch.fast,
+            )
+        });
+        record.auto_compact = auto_compact;
+    }
     let mut posture = ResumeLaunchPosture::from(&cell);
     // Recorded launches replay the last grant; legacy rows retain profile precedence.
     if (request.record.is_some() || posture.mode.is_none())
@@ -3142,6 +3157,7 @@ fn restore_resume_cell(
                 effort: rebased.launch.effort.clone(),
                 agent: Some(base_name.to_owned()),
                 fast: rebased.launch.fast,
+                auto_compact: None,
             })),
             ..ResumeLaunchPosture::from(&rebased)
         }
@@ -3248,9 +3264,7 @@ fn restore_resume_cell(
         preset.model.is_some() || overrides.tier.is_some() || overrides.agent.is_some();
     cell.args = posture.args;
     cell.notices = posture.notices;
-    if is_resume {
-        cell.auto_compact = None;
-    }
+    cell.auto_compact = posture.auto_compact;
     cell.system_prompt_file = posture.system_prompt_file;
     cell.append_system_prompt_files = posture.append_system_prompt_files;
     cell.skills = posture.skills;

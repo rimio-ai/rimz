@@ -424,7 +424,7 @@ pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell 
         resume_model_override: false,
         kind: agent.kind.clone(),
         args: posture.launch.args.clone(),
-        auto_compact: None,
+        auto_compact: posture.launch.auto_compact.clone(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,

@@ -146,6 +146,43 @@ fn restart_reports_only_the_waits_no_registration_arms_again() {
 }
 
 #[test]
+fn restart_cell_carries_the_current_postures_auto_compact_count() {
+    let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
+    agent.profile = Some("worker".into());
+    let profiles = serde_json::from_value(serde_json::json!({
+        "worker": {"agent": "claude", "auto-compact": "372k"}
+    }))
+    .unwrap();
+    let posture = rimz::harness::resume::resolve_posture(
+        rimz::harness::resume::PostureRequest {
+            record: None,
+            profile: agent.profile.as_deref(),
+            kind: &agent.kind,
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &profiles,
+    );
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    let Cell::Agent(cell) = restart_cell(&agent, &posture) else {
+        panic!("agent cell")
+    };
+    let request = fresh_launch_request(&agent, Cell::Agent(cell.clone()), None).unwrap();
+    assert_eq!(
+        (
+            cell.auto_compact.as_deref(),
+            serde_json::to_value(request.launch.record.unwrap()).unwrap()["auto_compact"].as_u64(),
+        ),
+        (Some("372000"), Some(372_000))
+    );
+    assert!(
+        cell.args
+            .windows(2)
+            .any(|args| args == ["--autocompact", "372000"])
+    );
+}
+
+#[test]
 fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
     let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
     agent.name = Some("otter".to_owned());

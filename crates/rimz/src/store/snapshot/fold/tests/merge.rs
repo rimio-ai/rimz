@@ -412,6 +412,12 @@ fn first_post_rotation_event_reduces_against_the_carried_agent() {
     carried.profile = Some("claude-coder".into());
     carried.model = Some("opus".into());
     carried.effort = Some("high".into());
+    carried.record = Some(Box::new(
+        serde_json::from_value(serde_json::json!({
+            "model": "opus", "effort": "high", "agent": null, "auto_compact": 372_000
+        }))
+        .unwrap(),
+    ));
     carried.usage.context_window = Some(200_000);
     carried.last_compact_command_tokens = Some(180_000);
     let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
@@ -444,6 +450,15 @@ fn first_post_rotation_event_reduces_against_the_carried_agent() {
     assert_eq!(agent.profile, carried.profile);
     assert_eq!(agent.model, carried.model);
     assert_eq!(agent.effort, carried.effort);
+    assert_eq!(agent.record, carried.record);
+    assert_eq!(
+        serde_json::to_value(crate::store::snapshot::AgentCard::from_agent(
+            agent,
+            epoch()
+        ))
+        .unwrap()["auto_compact"],
+        372_000
+    );
     assert_eq!(agent.usage.context_window, carried.usage.context_window);
     assert_eq!(
         agent.last_compact_command_tokens,
@@ -473,7 +488,15 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
             launch_id: None,
             agent_name: "lucid-atlas".to_owned(),
             agent_name_explicit: false,
-            launch: LaunchParams::default(),
+            launch: LaunchParams {
+                record: Some(Box::new(
+                    serde_json::from_value(serde_json::json!({
+                        "model": null, "effort": null, "agent": null, "auto_compact": 200_000
+                    }))
+                    .unwrap(),
+                )),
+                ..Default::default()
+            },
             state: AgentLaunchState::Bound,
             run_id: None,
             pane_id: None,
@@ -484,7 +507,8 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
             description: None,
         },
     );
-    let launched = agent_rollup_with_carryover(&[launch], vec![carried.clone()]);
+    let launched =
+        agent_rollup_with_carryover(std::slice::from_ref(&launch), vec![carried.clone()]);
     assert_eq!(launched[0].launch_id, carried.launch_id);
     assert_eq!(launched[0].parent_agent_id, carried.parent_agent_id);
     assert_eq!(launched[0].parent_agent_kind, carried.parent_agent_kind);
@@ -498,7 +522,12 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
         &kind,
         AgentAttachPayload {
             login: None,
-            record: None,
+            record: Some(
+                serde_json::from_value(serde_json::json!({
+                    "model": null, "effort": null, "agent": null, "auto_compact": 372_000
+                }))
+                .unwrap(),
+            ),
             tier: None,
             mode: None,
             effective_isolation: None,
@@ -510,7 +539,7 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
             runtime_owner: owner.clone(),
         },
     );
-    let attached = agent_rollup_with_carryover(&[attach], vec![carried.clone()]);
+    let attached = agent_rollup_with_carryover(&[attach], launched.clone());
     assert_eq!(attached[0].launch_id, carried.launch_id);
     assert_eq!(attached[0].parent_agent_id, carried.parent_agent_id);
     assert_eq!(attached[0].parent_agent_kind, carried.parent_agent_kind);
@@ -520,6 +549,22 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
         Some(&pane_id)
     );
     assert_eq!(attached[0].runtime_owner.as_ref(), Some(&owner));
+
+    let mut relaunch = launch;
+    relaunch.timestamp = attached[0].last_seen + std::time::Duration::from_secs(1);
+    let mut payload: AgentLaunchPayload = serde_json::from_str(relaunch.params.get()).unwrap();
+    payload.launch.record = Some(Box::default());
+    relaunch.params = serde_json::value::to_raw_value(&payload).unwrap();
+    let cleared = agent_rollup_with_carryover(&[relaunch], attached.clone());
+    let actual = [&launched, &attached, &cleared].map(|agents| {
+        serde_json::to_value(crate::store::snapshot::AgentCard::from_agent(
+            &agents[0],
+            epoch(),
+        ))
+        .unwrap()["auto_compact"]
+            .as_u64()
+    });
+    assert_eq!(actual, [Some(200_000), Some(372_000), None]);
 }
 
 #[test]
