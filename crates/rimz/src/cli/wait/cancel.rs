@@ -35,7 +35,9 @@ pub(super) fn run(
     };
     let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
     for name in &names {
-        catalog.remove(name)?;
+        catalog
+            .remove(name)
+            .map_err(|error| home_write_hint(error, "canceled"))?;
         stop_watcher(ctx.runtime(), name)?;
     }
     let pending = list::pending_rows(&ctx, Some(agent), &snapshot)?;
