@@ -77,6 +77,8 @@ Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during a
 | `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
 | `the calling agent has not registered a real session yet` | The agent has not reported its provider session yet. |
 
+A failed arm leaves no wait row. If the RimZ home is read-only, the error keeps its original cause and adds a hint: run `rimz wait` as its own command, without a chain, pipe, redirect, or `VAR=` prefix, so its [routine permission rule](../agent-support.md#permission-modes) runs it outside the provider's command sandbox. With routine permissions off, approve the sandbox's escalation instead.
+
 ## Triggers
 
 ### Timer: `--in`
@@ -211,7 +213,7 @@ From a user shell, text is read-only and starts with `<home-relative project roo
 
 `rimz wait cancel <name>` cancels any one pending wait or subscription targeting the caller. `rimz wait cancel --all` cancels only waits you armed with `rimz wait`, leaving loop and team subscriptions intact. Give a name or `--all`, not both. Cancel refuses a user shell (`canceling a wait requires an agent RimZ can identify; run this command from an agent pane`) and a name not in the caller's list (``no pending wait named `<name>`; see `rimz wait list` ``).
 
-Cancel removes each selected row, then sends SIGTERM to its watcher's process group, which stops a watched command with it. It prints `canceled <name>, ...` followed by your self view. The canceled line is omitted when `--all` found no self waits. `--json` prints `{"canceled": [...], "pending": [...]}` with all remaining instance deliveries, including subscriptions.
+Cancel removes each selected row, then sends SIGTERM to its watcher's process group, which stops a watched command with it. If RimZ cannot write the wait's home-wide state, cancellation refuses before removing the row or stopping its watcher. It prints `canceled <name>, ...` followed by your self view. The canceled line is omitted when `--all` found no self waits. `--json` prints `{"canceled": [...], "pending": [...]}` with all remaining instance deliveries, including subscriptions.
 
 ## What a wait writes on your machine
 

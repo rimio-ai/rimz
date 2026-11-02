@@ -316,7 +316,7 @@ fn routine_rimz_settings_union_and_idempotence() {
             "teams",
             "asks",
             "answer",
-            "wait --in",
+            "wait",
             "pane list",
             "pane capture",
             "loop show",
@@ -350,9 +350,17 @@ fn routine_rimz_settings_union_and_idempotence() {
             json!("Skill(rimz-d)"),
         ]);
         assert_eq!(value["permissions"]["allow"], json!(expected));
+        assert!(
+            value["sandbox"]["excludedCommands"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("rimz wait *"))
+        );
         let env = value["autoMode"]["environment"].as_array().unwrap();
         assert_eq!(env.iter().filter(|entry| **entry == "$defaults").count(), 1);
         let text = env.last().unwrap().as_str().unwrap();
+        assert!(text.contains("rimz wait,"), "{text}");
+        assert!(!text.contains("rimz wait --in"), "{text}");
         for name in [
             format!("$TMPDIR ({})", dirs[0].display()),
             format!("$RIMZ_SHARED ({})", dirs[1].display()),

@@ -176,7 +176,7 @@ const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
     "rimz teams",
     "rimz asks",
     "rimz answer",
-    "rimz wait --in",
+    "rimz wait",
     "rimz pane list",
     "rimz pane capture",
     "rimz loop show",
