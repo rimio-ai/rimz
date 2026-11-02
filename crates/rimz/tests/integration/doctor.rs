@@ -1898,6 +1898,20 @@ fn doctor_reports_outdated_named_claude_only_in_accounts_and_deduplicates_shared
         .env("PATH", &stub_dir)
         .assert()
         .success();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    let work = report["accounts"]["ready"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "claude" && row["name"] == "work")
+        .unwrap();
+    assert!(work.get("outdated").is_none(), "{work}");
 }
 
 #[test]
