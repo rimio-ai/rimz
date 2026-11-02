@@ -166,11 +166,14 @@ pub fn arm_delivery(
     if duplicate {
         return Ok(ArmOutcome::AlreadySubscribed { name });
     }
-    if entry.team.is_none() && entry.loop_task.is_none() {
-        super::config_edit::remove_machine_at_root(&name, &entry.resolved_root())
-            .map_err(|err| ArmFailure::State(err.into()))?;
-    }
-    if entry.watch.is_some() {
+    let finish = || -> Result<(), ArmFailure> {
+        if entry.team.is_none() && entry.loop_task.is_none() {
+            super::config_edit::remove_machine_at_root(&name, &entry.resolved_root())
+                .map_err(|err| ArmFailure::State(err.into()))?;
+        }
+        if entry.watch.is_none() {
+            return Ok(());
+        }
         let spawn = || -> std::io::Result<()> {
             let path = super::signal::wait_output_path(&paths, &name, entry);
             for dir in [
@@ -200,11 +203,12 @@ pub fn arm_delivery(
             crate::child_process::spawn_detached_reaped_as_agent(&mut command, "wait-watch")?;
             Ok(())
         };
-        if let Err(error) = spawn() {
-            super::instances::remove(&paths, &name, Some(entry))
-                .map_err(|err| ArmFailure::State(Box::new(err)))?;
-            return Err(ArmFailure::Watcher(error));
-        }
+        spawn().map_err(ArmFailure::Watcher)
+    };
+    if let Err(error) = finish() {
+        super::instances::remove(&paths, &name, Some(entry))
+            .map_err(|err| ArmFailure::State(Box::new(err)))?;
+        return Err(error);
     }
     Ok(ArmOutcome::Armed {
         name,
