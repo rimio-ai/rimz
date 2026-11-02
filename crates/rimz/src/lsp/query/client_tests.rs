@@ -10,6 +10,70 @@ fn entry(root: &Path) -> Entry {
     .unwrap()
 }
 
+#[test]
+fn failed_liveness_checks_command_sandbox() {
+    let root = Path::new("/checkout");
+    for denied in [true, false] {
+        let error = select_with_probe(
+            root,
+            vec![entry(root)],
+            &BTreeMap::new(),
+            Some("rust"),
+            None,
+            || denied,
+        )
+        .unwrap_err();
+        if denied {
+            assert!(
+                matches!(&error, QueryErr::Failed(LspErr::CommandSandbox)),
+                "{error}"
+            );
+            assert_eq!(error.exit_code(), 1);
+            continue;
+        }
+        assert!(
+            matches!(
+                &error,
+                QueryErr::Unavailable {
+                    reason: UnavailableReason::Crashed,
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert_eq!(error.exit_code(), 3);
+    }
+    let error = select_with_probe(root, Vec::new(), &BTreeMap::new(), None, None, || {
+        panic!("an absent entry must not probe")
+    })
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        QueryErr::Unavailable {
+            reason: UnavailableReason::NoneConfigured,
+            ..
+        }
+    ));
+    let stopped = Entry {
+        state: State::Stopped {
+            reason: registry::StopReason::Released,
+            at_ms: 0,
+        },
+        ..entry(root)
+    };
+    let error = select_with_probe(root, vec![stopped], &BTreeMap::new(), None, None, || {
+        panic!("a stopped entry must not probe")
+    })
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        QueryErr::Unavailable {
+            reason: UnavailableReason::Stopped(registry::StopReason::Released),
+            ..
+        }
+    ));
+}
+
 fn query_reply(response: Value) -> QueryErr {
     query_reply_with_wait(Some(response), 110_000)
 }

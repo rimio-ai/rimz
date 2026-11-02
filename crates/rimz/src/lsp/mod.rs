@@ -42,6 +42,15 @@ pub enum LspErr {
     #[error("language-server protocol: {0}")]
     Protocol(String),
     #[error(
+        "this command ran inside the agent's command sandbox, which blocks the socket connection \
+         to RimZ's language-server broker: Operation not permitted. Rerun it bare, with no \
+         redirect, pipe, `;` or `&&` chain, `$?`, or `VAR=` prefix, so a command with a \
+         routine-command rule runs outside the sandbox. `rimz lsp stop` and `rimz lsp attach` \
+         have no such rule, nor does any command when `[agents] allow-routine-rimz = false`: \
+         approve running those outside the sandbox."
+    )]
+    CommandSandbox,
+    #[error(
         "file not found: {path}; looked in {readings}{rule}",
         path = path.display(),
         rule = if path.is_absolute() { "" } else {

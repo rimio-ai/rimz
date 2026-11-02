@@ -235,10 +235,38 @@ fn directory_at(base: &Path, root: &Path, server: &str) -> Result<PathBuf> {
 }
 
 pub(super) fn lock() -> Result<crate::disk::lock::WorkspaceLock> {
-    ensure_runtime()?;
-    Ok(crate::disk::lock::WorkspaceLock::acquire(
-        &crate::disk::paths::lsp_runtime_dir().join("admission.lock"),
-    )?)
+    lock_with_probe(
+        || {
+            ensure_runtime()?;
+            Ok(crate::disk::lock::WorkspaceLock::acquire(
+                &crate::disk::paths::lsp_runtime_dir().join("admission.lock"),
+            )?)
+        },
+        socket_denied,
+    )
+}
+
+fn lock_with_probe(
+    acquire: impl FnOnce() -> Result<crate::disk::lock::WorkspaceLock>,
+    probe: impl FnOnce() -> bool,
+) -> Result<crate::disk::lock::WorkspaceLock> {
+    acquire().map_err(|error| {
+        if probe() {
+            LspErr::CommandSandbox
+        } else {
+            error
+        }
+    })
+}
+
+pub(super) fn socket_denied() -> bool {
+    // A device cannot contain a socket, so the probe never reaches a listener.
+    socket_denied_with(|| UnixStream::connect("/dev/null/rimz-lsp-probe"))
+}
+
+fn socket_denied_with(connect: impl FnOnce() -> std::io::Result<UnixStream>) -> bool {
+    connect()
+        .is_err_and(|error| error.raw_os_error() == Some(rustix::io::Errno::PERM.raw_os_error()))
 }
 
 pub(super) fn publish(entry: &Entry) -> Result<()> {
@@ -510,6 +538,79 @@ fn acknowledge_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn socket_probe_only_classifies_eperm() {
+        use rustix::io::Errno;
+        for (errno, denied) in [
+            (Errno::PERM, true),
+            (Errno::NOENT, false),
+            (Errno::CONNREFUSED, false),
+            (Errno::ACCESS, false),
+            (Errno::NOTDIR, false),
+        ] {
+            assert_eq!(
+                socket_denied_with(|| Err(std::io::Error::from_raw_os_error(errno.raw_os_error()))),
+                denied,
+                "{errno}"
+            );
+        }
+    }
+
+    #[test]
+    fn lock_failure_checks_command_sandbox() {
+        use crate::disk::lock::LockErr;
+        use rustix::io::Errno;
+        for denied in [true, false] {
+            let error = lock_with_probe(
+                || {
+                    Err(LockErr::Open {
+                        path: "/runtime/admission.lock".into(),
+                        source: std::io::Error::from_raw_os_error(Errno::ROFS.raw_os_error()),
+                    }
+                    .into())
+                },
+                || denied,
+            )
+            .err()
+            .unwrap();
+            if denied {
+                assert!(matches!(&error, LspErr::CommandSandbox), "{error}");
+                continue;
+            }
+            assert!(
+                matches!(&error, LspErr::Lock(LockErr::Open { path, source })
+                    if path == Path::new("/runtime/admission.lock")
+                        && source.raw_os_error() == Some(Errno::ROFS.raw_os_error())),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_sandbox_error_names_recovery() {
+        let text = LspErr::CommandSandbox.to_string();
+        for required in [
+            "Operation not permitted",
+            "agent's command sandbox",
+            "blocks the socket connection to RimZ's language-server broker",
+            "Rerun it bare",
+            "redirect",
+            "pipe",
+            "`;`",
+            "`&&`",
+            "`$?`",
+            "`VAR=`",
+            "a command with a routine-command rule runs outside the sandbox",
+            "`rimz lsp stop` and `rimz lsp attach` have no such rule",
+            "`[agents] allow-routine-rimz = false`: approve running those outside the sandbox",
+        ] {
+            assert!(text.contains(required), "missing {required}: {text}");
+        }
+        for wrong in ["use grep", "`rimz lsp` ran", "commands outside `rimz lsp`"] {
+            assert!(!text.contains(wrong), "has {wrong}: {text}");
+        }
+    }
 
     #[test]
     fn only_checkout_removal_and_lease_expiry_are_terminal() {
