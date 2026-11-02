@@ -307,6 +307,7 @@ Refactor candidates a pass judged real but could not land, each with its concret
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
 - `disk`: `PathErr` and `StatePaths::under_named` measure as narrowable to `pub(crate)` (`inspect --brief`); a `disk` pass that takes visibility in scope checks the integration and bench reach first.
 - `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Waits for a `store/snapshot` or `disk` pass that takes cache identity in scope.
+- `agent_activity` ↔ `store/sidecar`: `agent_activity::read_for_keys_with_holds` and `store::sidecar::read_for_keys_with_holds` are near-duplicate keyed stat-gated readers (per-path stamp, deferred holds, prune to the queried keys); the copy that drifted kept a `(mtime, len)` key and made the held-sidecar enrich test flaky. One keyed stamp cache in `disk::parse_cache` needs a crate-visible type and atlas admissions, and the store keeps its sidecar cache private. Waits for a pass that owns `disk::parse_cache` with both callers.
 - `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
 - Reported, not fixed: substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
