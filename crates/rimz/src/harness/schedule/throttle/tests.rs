@@ -258,6 +258,35 @@ fn config(text: &str) -> ThrottleConfig {
     toml::from_str(text).expect("throttle config")
 }
 
+#[test]
+fn ticket_scopes_preserve_legacy_machine_turns_and_round_trip_limited_turns() {
+    let legacy = serde_json::json!({
+        "owner":{"pid":1,"start":null}, "task":"nightly", "root":"/repo",
+        "checkout":"/repo", "enqueued_ms":1, "state":"admitted"
+    });
+    let mut limited = legacy.clone();
+    limited["machine_gated"] = serde_json::json!(false);
+    limited["limit"] = serde_json::json!({"workflow":"review", "step":"build"});
+    let results: Vec<_> = [legacy, limited]
+        .into_iter()
+        .map(|value| {
+            let ticket: Ticket = serde_json::from_value(value).unwrap();
+            let value = serde_json::to_value(ticket).unwrap();
+            (value["machine_gated"].clone(), value["limit"].clone())
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            (serde_json::json!(true), serde_json::Value::Null),
+            (
+                serde_json::json!(false),
+                serde_json::json!({"workflow":"review", "step":"build"})
+            )
+        ]
+    );
+}
+
 fn workspace() -> WorkspaceId {
     WorkspaceId::from_project_root(Path::new("/repo"))
 }
