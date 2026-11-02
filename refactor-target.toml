@@ -3608,7 +3608,8 @@ path = "crates/rimz/src/store"
 # MessageRecord::idle_compaction_lapsed shares idle-decision expiry with delivery and repeat refusal (+1).
 # idle_compaction_edge keeps idle stamps and lapse checks on the same turn boundaries (+1).
 # ProviderPlan and SidebarProviderPanel::plan_label replace the shared formatter (+1).
-surface-budget = 528
+# agent_idle_since shares the row-or-child idle origin across CLI scenes (+1).
+surface-budget = 529
 
 [[verdict]]
 kind = "item"
@@ -6494,6 +6495,11 @@ reason = "Read-only attention value shared by agents and teams; never persisted.
 kind = "item"
 key = "store::snapshot::view::model::needs_you"
 reason = "CLI scenes use the sidebar's attention membership, ask age, and rowless demotion."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::agent_idle_since"
+reason = "CLI idle cells share the card's own cache clock, with real activity for rowless children."
 
 [[verdict]]
 kind = "item"

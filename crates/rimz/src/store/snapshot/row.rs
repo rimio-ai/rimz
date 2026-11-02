@@ -137,17 +137,26 @@ impl SidebarRow {
         self.as_agent().map(|agent| agent.status)
     }
 
-    /// Quiet-since for this agent's own provider session, the clock a prompt
-    /// cache ages on. `last_activity` after the child fold answers "when did
-    /// this agent or its delegated work last move", which every stall, sink,
-    /// ranking, and unread reader wants; a parent waiting on subagent reports
-    /// is silent to its provider the whole time its children tick, and this is
-    /// the clock that shows it. Process rows have no delegated work, so they
-    /// fall through to the row clock.
+    /// Real activity for this agent's own provider session. `last_activity`
+    /// after the child fold answers "when did this agent or its delegated work
+    /// last move", which every stall, sink, ranking, and unread reader wants;
+    /// a parent waiting on subagent reports is silent to its provider the whole
+    /// time its children tick, and this is the real-work origin
+    /// [`Self::idle_since`] raises by cache requests. Process rows have no
+    /// delegated work, so they fall through to the row clock.
     pub fn own_last_activity(&self) -> Timestamp {
         self.as_agent()
             .and_then(|agent| agent.own_last_activity)
             .unwrap_or(self.last_activity)
+    }
+
+    /// The displayed idle origin: own activity or a later cache request, pings included.
+    pub fn idle_since(&self) -> Timestamp {
+        let own = self.own_last_activity();
+        self.as_agent()
+            .and_then(|agent| agent.cache)
+            .and_then(|clock| clock.last_request_at)
+            .map_or(own, |request| own.max(request))
     }
 
     /// Status that determines row-level attention. A current child's waiting or a provider-native child's failure lifts the parent card without changing its displayed lifecycle status; the parent's own actionable status takes precedence.

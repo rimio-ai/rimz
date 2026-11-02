@@ -49,6 +49,60 @@ fn default_stall_secs() -> i64 {
     )
 }
 
+#[test]
+fn displayed_idle_origin_uses_own_activity_and_closed_cache_requests() {
+    use crate::store::snapshot::{CacheClock, agent_idle_since};
+
+    let mut state = agent("claude", "parent", AgentStatus::Success, 1200);
+    state.last_activity = ago(1200);
+    state.last_seen = ago(1);
+    let mut row = row_from_agent(&state, epoch());
+    row.last_activity = ago(10);
+    row.as_agent_mut().unwrap().own_last_activity = Some(ago(1200));
+    for request in [None, Some(ago(1800)), Some(ago(120))] {
+        row.as_agent_mut().unwrap().cache = Some(CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: request,
+            warm_until: None,
+            held_since: None,
+            rewarm_cost_usd: None,
+        });
+        let expected = if request == Some(ago(120)) {
+            ago(120)
+        } else {
+            ago(1200)
+        };
+        assert_eq!(row.idle_since(), expected, "request {request:?}");
+        assert_eq!(agent_idle_since(&state, Some(&row)), expected);
+    }
+}
+
+#[test]
+fn displayed_idle_origin_without_a_cache_excludes_children_and_liveness() {
+    use crate::store::snapshot::agent_idle_since;
+
+    let mut state = agent("claude", "parent", AgentStatus::Success, 1200);
+    state.last_activity = ago(1200);
+    state.last_seen = ago(1);
+    state.pinged_at = Some(ago(120));
+    let mut row = row_from_agent(&state, epoch());
+    row.last_activity = ago(10);
+    row.as_agent_mut().unwrap().own_last_activity = Some(ago(1200));
+    assert_eq!(row.idle_since(), ago(1200));
+    assert_eq!(agent_idle_since(&state, Some(&row)), ago(1200));
+}
+
+#[test]
+fn displayed_idle_origin_for_a_rowless_child_is_real_activity() {
+    use crate::store::snapshot::agent_idle_since;
+
+    let mut state = agent("claude", "child", AgentStatus::Success, 1200);
+    state.last_activity = ago(1200);
+    state.last_seen = ago(1);
+    state.pinged_at = Some(ago(120));
+    assert_eq!(agent_idle_since(&state, None), ago(1200));
+}
+
 fn paneless_codex(id: &str, worktree: &str, rank: i64) -> AgentState {
     // The app-server daemon fires the hook with no mux pane env, so the
     // agent carries its worktree but never stamps a pane.
