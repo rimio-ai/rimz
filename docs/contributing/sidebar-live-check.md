@@ -437,6 +437,26 @@ rz sidebar mark-read '@coder#probe'
 
 After a minute the card shrinks to its stale line, and a minute past the last request its cache expires. Capture with `rz pane capture --ansi <sidebar>` to keep the colours: plain capture drops the SGR runs a tone check compares. Selecting the stale card expands it to show the meter's age clock, and the layout freeze holds that shape for a while after selection moves away, so capture each shape after the frame settles. `rz config set harness.prompt_cache_ttl.claude off` takes the stub's cache clock away for the unresolved-lifetime case.
 
+### Hold a card in the compaction gap with an estimate
+
+After a compaction the meter shows `↻` and the compacted size as an estimate until the first real reading. A Claude stub reaches that state from a transcript whose last line is a `compact_boundary` carrying `postTokens`, read by the compaction hooks. Give the card its window through a statusline without `current_usage` first: a nonzero `current_usage` is a real reading and ends the gap. With `$ROOT` and `$BIN` from the room card, this draws 6,092 tokens in a 1M window:
+
+```sh
+s=$(uuidgen); w="$ROOT/home/room-worktrees/probe"; t="$ROOT/tmp/compacted.jsonl"
+printf '%s\n' '{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":90000,"postTokens":6092}}' > "$t"
+feed() { target/debug/xtask sandbox in "$ROOT" --as '@reviewer#probe' -- "$BIN" --tmux "$@"; }
+jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"SessionStart",session_id:$s,cwd:$w,source:"startup"}' | feed hooks feed --source claude
+jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"UserPromptSubmit",session_id:$s,cwd:$w,prompt:"estimate probe"}' | feed hooks feed --source claude
+jq -nc --arg s "$s" '{session_id:$s,model:{id:"claude-sonnet-4-6",display_name:"Sonnet 4.6"},context_window:{context_window_size:1000000,used_percentage:0},cost:{total_cost_usd:0.01}}' | feed statusline feed --source claude
+for event in PreCompact PostCompact; do
+  jq -nc --arg e "$event" --arg s "$s" --arg w "$w" --arg t "$t" '{hook_event_name:$e,session_id:$s,cwd:$w,transcript_path:$t,trigger:"manual"}' | feed hooks feed --source claude
+done
+jq -nc --arg s "$s" --arg w "$w" --arg t "$t" '{hook_event_name:"SessionStart",session_id:$s,cwd:$w,transcript_path:$t,source:"compact"}' | feed hooks feed --source claude
+jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"Stop",session_id:$s,cwd:$w,last_assistant_message:"done"}' | feed hooks feed --source claude
+```
+
+The `#probe` sidebar then draws the reviewer's meter as `↻ ╸───…   <1%`, with no stats line beneath it. Change `postTokens` or `context_window_size` for another estimate.
+
 ### Check a provider account
 
 A held room's account cache is `$ROOT/home/.rimz/cache/providers/accounts.json`, under the room's `RIMZ_HOME` rather than its runtime root; `jq '.logins'` on it shows each login's `probed_at_ms`, `inputs_stamp`, and `account`. `sandbox room` and `sandbox in` remove every ambient `RIMZ_*` variable from the room's environment, so a switch such as `RIMZ_OAUTH_USAGE_OFFLINE` set in your shell never reaches the room's sidebar host. To keep a Pi usage probe off the network, write fake OAuth entries with `"expires": 1` to `$ROOT/home/.pi/agent/auth.json`: the account probe still selects and scopes the login, while the usage probe refuses the expired token before any fetch and settles as a no-credentials result. Write fake tokens only, never a copy of a real credential file.
