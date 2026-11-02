@@ -119,7 +119,7 @@ A child session reports only its start, its model, and its terminal execution. W
 
 Permission and form asks raise waiting cards that keep their structured questions. `decode_hook` takes at most four questions from a form. Each question's text comes from the field's description, then its title, then its key, and its header from the field's title. The adapter declares `native_ask_ui`, so attention goes to OpenCode's own dialog. The asks carry no native key (keyless, [model.md](./model.md#edges)). A reply event records the native answer and emits `ToolUsed`, which clears waiting ([model.md](./model.md#waiting-and-asks)). `rimz answer` is unsupported: RimZ has no mapped transport to answer OpenCode.
 
-Plan approval is derived from the agent the plugin remembers. A root execution that succeeds or is interrupted while that agent is `plan` sends `session_idle` with `plan_proposed`, and `decode_hook` raises `PlanApproval`. The next prompt clears it. A launch in Plan mode selects no agent (see [Launch and resume](#launch-and-resume)), so only a plan agent the user picks in the TUI raises the gate.
+Plan approval is derived from the agent the plugin remembers. A root execution that succeeds or is interrupted while that agent is `plan` sends `session_idle` with `plan_proposed`, and `decode_hook` raises `PlanApproval`. The next prompt clears it. A Plan launch request maps to Auto and selects no agent (see [Launch and resume](#launch-and-resume)), so only a plan agent the user picks in the TUI raises the gate.
 
 ## Launch and resume
 
@@ -133,9 +133,10 @@ Plan approval is derived from the agent the plugin remembers. A root execution t
 
 | Permission mode | Arguments |
 | --- | --- |
-| Ask, Auto | none: OpenCode's default |
-| Plan | none: no agent is selected |
+| Ask, Auto, Plan | mapped to Auto, no flags: OpenCode's own permission rules; no agent is selected |
 | Yolo | `--auto` |
+
+An unset mode defaults to Auto through the common [permission settlement](../../reference/agent-support.md#permission-modes). The recorded mode is the mapped request, not a reading of OpenCode's configuration or an in-session switch.
 
 Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `rimz doctor` refuse a binary whose readable version is below 2.0.0, with the fix "run `opencode upgrade --major`" (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). A version RimZ cannot read does not refuse. Model and effort selection is verified on 2.2.0, without raising the 2.0.0 floor. Fork is unsupported; unsupported fast and auto-compact settings warn and launch without the setting.
 

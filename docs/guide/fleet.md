@@ -325,13 +325,13 @@ Where profiles live, how they inherit from each other, and the per-field rules a
 
 ## Set a permission mode
 
-The permission mode is the setting you change per task rather than per profile: the reviewer you trust to read should still ask before it writes. A `<kind>-<mode>` cell sets it at launch, and like every profile field it renders into the provider's own flags, so the suffix is shorthand for a flag you already know:
+The permission mode is the setting you change per task rather than per profile: the reviewer you trust to read should still ask before it writes. A `<kind>-<mode>` cell requests it at launch, and each provider maps that choice onto modes it actually has. For Claude, the suffix is shorthand for a flag you already know:
 
 | Suffix | What the agent may do | For Claude |
 | --- | --- | --- |
-| `-ask` | keep the provider's native permission prompts | no flag at all |
+| `-ask` | keep native permission prompts where supported | `--permission-mode default` |
 | `-auto` | auto-accept the provider's routine actions | `--permission-mode auto` |
-| `-plan` | start in plan mode | `--permission-mode plan` |
+| `-plan` | start in plan mode where supported | `--permission-mode plan` |
 | `-yolo` | skip the provider's prompts entirely | `--dangerously-skip-permissions` |
 
 For Claude and Codex, RimZ also allows routine coordination so it need not stop for permission: messages, agent, subagent, and team commands, asks and answers, timed waits, pane inspection, loop inspection, and read-only LSP queries. Claude gets launch-only `--settings`; the same settings add your agent's scratch/shared directories and describe their use for redirected output to auto mode while retaining its built-in defaults. Codex gets an installed rules file; matching commands run unsandboxed without Guardian review. This is not a blanket permission for `rimz`: commands such as `pane send`, `wait --run`, and `loop add` get no grant from RimZ. Because agent, subagent, and team launches are allowed, an agent can start another agent with `--yolo` or a bypass flag, resume a team with `--yolo`, and it can answer another agent's prompts ([what that allows](./security.md#what-can-run-a-command)). See the [exact command list](../reference/agent-support.md#permission-modes), inspect Claude's flags with `rimz agents explain claude` or Codex's rules with `rimz hooks install --dry-run codex`, or [turn the additions off](./configuration.md#routine-rimz-commands).
@@ -344,7 +344,7 @@ rimz agents codex-yolo      # codex --dangerously-bypass-approvals-and-sandbox
 rimz agents claude --yolo   # the same mode as a flag
 ```
 
-The same choice is `--ask` or `--yolo` on the command line, and the `mode` field in a profile, where it becomes that profile's default. Every kind takes `-ask` and `-plan`; `-auto` and `-yolo` exist wherever the provider ships a flag for them, and a mode a provider has no equivalent for launches with that provider's own default. The exact flag each mode becomes, per agent, is the [permission-mode table](../reference/agent-support.md#permission-modes).
+The same choice is `--ask` or `--yolo` on the command line, and the `mode` field in a profile, where it becomes that profile's default. Without a selected mode, Claude, Codex and OpenCode launch Auto; Pi always maps to Yolo without flags because it has no permission system. Other kinds keep their existing defaults. Every kind takes `-ask` and `-plan`; OpenCode also takes `-auto`, and Pi takes `-auto` and `-yolo`, even though those cells need no flag. Availability is in the [cell reference](../reference/cli/agents.md#permission-mode-cells), and the exact flags and mappings are in the [permission-mode table](../reference/agent-support.md#permission-modes).
 
 ## See also
 

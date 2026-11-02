@@ -521,7 +521,7 @@ Headless output has these versioned behaviors ([release notes](https://github.co
 
 ### Per-launch permissions and auto mode
 
-When no permission mode is configured, interactive terminal and VS Code sessions start in auto mode from 2.1.284. Headless sessions on third-party providers or with telemetry disabled also default to auto mode from 2.1.285. `permissions.defaultMode` and `--permission-mode` override the default ([release notes](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21285)).
+When no permission mode is configured, interactive terminal and VS Code sessions start in auto mode from [2.1.283](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21283). Headless sessions on third-party providers or with telemetry disabled also default to auto mode from 2.1.285. `permissions.defaultMode` and `--permission-mode` override the default ([release notes](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21285)).
 
 The [CLI reference](https://code.claude.com/docs/en/cli-reference) accepts a JSON file or inline JSON through `--settings`. These settings support launch-local coordination permissions without permission hooks:
 
