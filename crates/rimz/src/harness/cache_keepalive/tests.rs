@@ -442,6 +442,123 @@ fn policy(solo: Option<KeepWarm>, role: Option<KeepWarm>) -> SeatPolicy {
 }
 
 #[test]
+fn keep_warm_global_default_yields_to_the_profile_chain_and_excludes_children() {
+    let held = SeatPolicy {
+        profiles: toml::from_str(
+            r#"
+[base]
+agent = 'claude'
+[warm]
+agent = 'base'
+keep-warm = '1h'
+[inherited]
+agent = 'warm'
+[cold]
+agent = 'warm'
+keep-warm = 'off'
+[inherited-cold]
+agent = 'cold'
+[nearest]
+agent = 'cold'
+keep-warm = '1h'
+"#,
+        )
+        .unwrap(),
+        ..SeatPolicy::default()
+    };
+    let harness = toml::from_str("keep_warm = '2h'").unwrap();
+    let mut agent = idle();
+    let actual: Vec<_> = [
+        None,
+        Some("base"),
+        Some("unlisted"),
+        Some("warm"),
+        Some("inherited"),
+        Some("cold"),
+        Some("inherited-cold"),
+        Some("nearest"),
+    ]
+    .into_iter()
+    .map(|profile| {
+        agent.profile = profile.map(str::to_owned);
+        held.horizon(&agent, &harness)
+            .map(|duration| duration.as_secs())
+    })
+    .collect();
+    assert_eq!(
+        actual,
+        [
+            Some(7200),
+            Some(7200),
+            Some(7200),
+            Some(3600),
+            Some(3600),
+            None,
+            None,
+            Some(3600)
+        ]
+    );
+    agent.profile = None;
+    agent.launch_depth = Some(1);
+    assert_eq!(held.horizon(&agent, &harness), Some(TWO_HOURS));
+    agent.parent_agent_id = Some("parent".into());
+    assert_eq!(held.horizon(&agent, &harness), None);
+    agent.parent_agent_id = None;
+    let disabled = toml::from_str("keep_warm = '2h'\ncache_keepalive = false").unwrap();
+    assert_eq!(held.holding(&agent, &disabled, ts(3540)), None);
+}
+
+#[test]
+fn keep_warm_global_team_default_preserves_overrides_and_while_only_fallback() {
+    let harness = toml::from_str("keep_warm = '2h'").unwrap();
+    let mut held = policy(Some(KeepWarm::For(Duration::from_secs(3600))), None);
+    let mut agent = idle();
+    agent.profile = Some("warm".into());
+    agent.team = Some("forge".into());
+    agent.role = Some("coder".into());
+    let actual: Vec<_> = [
+        (None, None),
+        (Some("'1h'"), None),
+        (Some("'off'"), None),
+        (Some("'off'"), Some("'1h'")),
+        (Some("'1h'"), Some("'off'")),
+        (None, Some("{while = 'team.stage!=Done'}")),
+        (Some("{max = 'off', while = 'team.stage!=Done'}"), None),
+    ]
+    .into_iter()
+    .map(|(team_max, role_max)| {
+        let team = held.teams.0.get_mut("forge").unwrap();
+        team.keep_warm = team_max.map(|raw| {
+            toml::from_str::<Team>(&format!("keep-warm = {raw}"))
+                .unwrap()
+                .keep_warm
+                .unwrap()
+        });
+        team.roles[0].keep_warm = role_max.map(|raw| {
+            toml::from_str::<Team>(&format!("keep-warm = {raw}"))
+                .unwrap()
+                .keep_warm
+                .unwrap()
+        });
+        held.horizon(&agent, &harness)
+            .map(|duration| duration.as_secs())
+    })
+    .collect();
+    assert_eq!(
+        actual,
+        [
+            Some(7200),
+            Some(3600),
+            None,
+            Some(3600),
+            None,
+            Some(7200),
+            Some(21600)
+        ]
+    );
+}
+
+#[test]
 fn keep_warm_team_default_holds_seats_without_role_bindings() {
     let team: Team =
         toml::from_str("keep-warm = '2h'\nlayout = 'claude,codex'\nroles = []").unwrap();
@@ -558,6 +675,8 @@ roles = [{role = "coder", profile = "claude"}]"#,
     assert_eq!(held.horizon(&seat, &harness), harness.cache_keepalive_max);
     let off = toml::from_str("cache_keepalive_max = 'off'").unwrap();
     assert_eq!(held.horizon(&seat, &off), None);
+    let global = toml::from_str("keep_warm = '2h'\ncache_keepalive_max = 'off'").unwrap();
+    assert_eq!(held.horizon(&seat, &global), Some(TWO_HOURS));
     seat.keepalive_since = Some(ts(0));
     seat.pinged_at = Some(ts(5 * 3600 + 60));
     assert_eq!(

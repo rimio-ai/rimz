@@ -460,6 +460,9 @@ pub struct HarnessConfig {
     /// Compact a team member on hand-off: the role's `flip-compact` overrides this setting, then unset falls back to 120k for a Plan owner or 180k otherwise; `off` disables compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_compact: Option<FlipCompact>,
+    /// Default idle keep-warm maximum; profiles, teams, and roles override it.
+    #[serde(default)]
+    pub keep_warm: KeepWarm,
     /// The shortest lifetime admitted for any cache ping; `None` (`off`) removes the floor.
     #[serde(with = "keep_warm_min_ttl_serde")]
     pub keep_warm_min_ttl: Option<Duration>,
@@ -483,6 +486,7 @@ impl Default for HarnessConfig {
             compact_instruction: None,
             idle_compact: IdleCompact::default(),
             flip_compact: None,
+            keep_warm: KeepWarm::Off,
             keep_warm_min_ttl: Some(DEFAULT_KEEP_WARM_MIN_TTL),
             prompt_cache_margin: DEFAULT_PROMPT_CACHE_MARGIN,
         }

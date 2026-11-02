@@ -994,7 +994,8 @@ upward-dependencies = [
 # DefinitionOrigin and AgentSpecSources::profile_origin carry listing provenance (+2).
 # SmartCompactSeat, its explicit/resolve methods and ProfilesConfig::setting share seat lines (+4).
 # load_seat_tables shares effective-or-machine fallback with dispatch and harness policy (+1).
-surface-budget = 263
+# ProfilesConfig::keep_warm and Team::keep_warm_with_default share horizon fallback with validation (+2).
+surface-budget = 265
 
 [[verdict]]
 kind = "item"

@@ -46,23 +46,25 @@ impl SeatPolicy {
         }
     }
 
-    /// The role-over-team maximum (or solo profile's), admitted by the TTL floor and the
-    /// current stage condition. Unknown board readings permit a hold; a while-only hold
-    /// takes the ping cap. A `rimz subagents` child never resolves one; an agent-launched
-    /// peer resolves like any other seat.
+    /// The role-over-team or solo profile maximum, falling back to the harness default and
+    /// admitted by the TTL floor and current stage condition. Unknown board readings permit
+    /// a hold; a while with no resolved maximum takes the ping cap. A `rimz subagents` child
+    /// never resolves one; an agent-launched peer resolves like any other seat.
     pub fn horizon(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<Duration> {
         if agent.is_launched_child() {
             return None;
         }
         let setting = match &agent.team {
-            Some(team) => self.teams.0.get(team)?.keep_warm(agent.role.as_deref())?,
+            Some(team) => self
+                .teams
+                .0
+                .get(team)?
+                .keep_warm_with_default(agent.role.as_deref(), harness.keep_warm)?,
             None => crate::config::KeepWarmFields {
-                max: self.profiles.setting(agent.profile.as_deref()?, |profile| {
-                    profile
-                        .keep_warm
-                        .as_ref()
-                        .and_then(|policy| policy.fields().max)
-                }),
+                max: Some(
+                    self.profiles
+                        .keep_warm(agent.profile.as_deref(), harness.keep_warm),
+                ),
                 while_clause: None,
             },
         };

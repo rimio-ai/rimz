@@ -58,6 +58,71 @@ fn keep_warm_lifetime_warnings_name_sign_in_and_static_scope() {
 }
 
 #[test]
+fn keep_warm_warnings_resolve_global_defaults_without_changing_declared_rows() {
+    let root = tempfile::tempdir().unwrap();
+    for directory in ["agents", "subagents", "teams"] {
+        std::fs::create_dir(root.path().join(directory)).unwrap();
+    }
+    for (name, fields) in [
+        ("claude", ""),
+        ("warm", "agent: claude\ntools: []\n"),
+        ("cold", "agent: warm\nkeep-warm: off\n"),
+        ("heir", "agent: cold\n"),
+        ("explicit", "agent: warm\nkeep-warm: 1h\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\n{fields}---\nBase."),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("subagents/child.md"),
+        "---\ndescription: Child\nagent: claude\ntools: []\n---\nChild.",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("teams/probe.md"), "---\nleader: lead\nstages: [Plan]\nroles:\n  - agent: cold\n    role: lead\n    owns: [Plan]\n  - agent: warm\n    role: cold\n    keep-warm: off\n  - agent: cold\n    role: short\n    keep-warm: 1h\n---\nPipeline.").unwrap();
+    let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let harness = toml::from_str("keep_warm = '2h'\ncache_keepalive_max = '30m'").unwrap();
+    let warnings = keep_warm_warnings(&loaded, &harness);
+    let mut paths: Vec<_> = warnings
+        .iter()
+        .map(|warning| {
+            warning
+                .path
+                .strip_prefix(root.path())
+                .unwrap()
+                .to_str()
+                .unwrap()
+        })
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            "agents/claude.md",
+            "agents/explicit.md",
+            "agents/warm.md",
+            "teams/probe.md",
+            "teams/probe.md"
+        ]
+    );
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.message.contains("is capped"))
+    );
+    for name in ["warm", "probe.lead"] {
+        let row = loaded.rows.iter().find(|row| row.name == name).unwrap();
+        assert_eq!(
+            row.keep_warm, None,
+            "global defaults must not change declared rows"
+        );
+    }
+}
+
+#[test]
 fn keep_warm_rows_report_resolved_fields_and_warn_on_an_unbounded_while() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
@@ -105,6 +170,11 @@ fn keep_warm_rows_report_resolved_fields_and_warn_on_an_unbounded_while() {
     assert!(warnings[0].message.contains("set `max`"));
     assert!(!warnings[0].message.contains("settings and defaults only"));
     assert!(!warnings[0].message.contains("own cache writes"));
+    let global = keep_warm_warnings(
+        &loaded,
+        &toml::from_str("keep_warm = '2h'\ncache_keepalive_max = 'off'").unwrap(),
+    );
+    assert!(global.is_empty(), "the global max bounds a while-only role");
     for cap in ["6h", "off"] {
         for (config, expected) in [
             (

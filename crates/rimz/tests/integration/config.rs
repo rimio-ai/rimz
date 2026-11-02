@@ -48,6 +48,61 @@ fn machine_config_load_hook_records_strict_and_lenient_builds() {
 }
 
 #[test]
+fn global_keep_warm_config_round_trips_and_rejects_invalid_values() {
+    let env = Env::new();
+    env.rimz()
+        .args(["config", "get", "harness.keep_warm"])
+        .assert()
+        .success()
+        .stdout("off\n");
+    env.rimz()
+        .args(["config", "get", "harness.keep_warm_min_ttl"])
+        .assert()
+        .success()
+        .stdout("30m\n");
+    for value in ["2h", "off"] {
+        env.rimz()
+            .args(["config", "set", "harness.keep_warm", value])
+            .assert()
+            .success();
+        env.rimz()
+            .args(["config", "get", "harness.keep_warm"])
+            .assert()
+            .success()
+            .stdout(format!("{value}\n"));
+        let output = env
+            .rimz()
+            .args(["config", "get", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let effective: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(effective["harness"]["keep_warm"], value);
+    }
+    let saved = std::fs::read_to_string(machine_config_path(&env)).unwrap();
+    for value in [
+        "0s",
+        "on",
+        "15",
+        "true",
+        "{ max = '2h' }",
+        "{ while = 'team.stage!=Done' }",
+    ] {
+        env.rimz()
+            .args(["config", "set", "harness.keep_warm", value])
+            .assert()
+            .failure()
+            .stderr(contains(
+                "harness.keep_warm must be off or a duration such as 2h",
+            ));
+        assert_eq!(
+            std::fs::read_to_string(machine_config_path(&env)).unwrap(),
+            saved
+        );
+    }
+}
+
+#[test]
 fn team_notes_retention_config_round_trips_and_names_invalid_values() {
     let env = Env::new();
     let key = "gc.team_notes_retention";

@@ -266,16 +266,31 @@ fn effort_label(row: &definitions::DefinitionRow) -> String {
 /// a `subagents` definition (no seat reads it), cache pings switched off, a static
 /// lifetime that is off or shorter than the floor, or a horizon the ping cap cuts
 /// short. Sign-in modes are checked separately; an agent's writes can override them.
-/// A while-only policy needs a finite ping cap.
+/// A while with no resolved maximum needs a finite ping cap.
 fn keep_warm_warnings(
     loaded: &LoadedDefinitions,
     harness: &rimz::config::HarnessConfig,
 ) -> Vec<Warning> {
     use rimz::agents::context::SignIn;
-    use rimz::config::{KeepWarm, LifetimeSource};
+    use rimz::config::{KeepWarm, KeepWarmFields, LifetimeSource};
     let mut warnings = Vec::new();
     for row in &loaded.rows {
-        let Some(setting) = &row.keep_warm else {
+        let setting = if let Some(team) = &row.team {
+            loaded.teams.0.get(team).and_then(|team| {
+                team.keep_warm_with_default(row.role.as_deref(), harness.keep_warm)
+            })
+        } else if row.namespace == "subagents" {
+            row.keep_warm.clone()
+        } else {
+            let max = loaded
+                .agent_profiles
+                .keep_warm(Some(&row.name), harness.keep_warm);
+            (max != KeepWarm::Off).then_some(KeepWarmFields {
+                max: Some(max),
+                while_clause: None,
+            })
+        };
+        let Some(setting) = setting else {
             continue;
         };
         if let (None, Some(clause), None) = (
