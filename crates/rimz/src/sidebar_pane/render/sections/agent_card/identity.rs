@@ -246,7 +246,7 @@ pub(super) fn stale_line(
     if !right.is_empty() {
         right.push(Span::raw("  "));
     }
-    let age = crate::sidebar_pane::render::fmt::age_label(age_secs(row.last_activity, ctx.now));
+    let age = crate::sidebar_pane::render::fmt::age_label(age_secs(row.idle_since(), ctx.now));
     right.push(Span::styled(
         format!("{age:>3}"),
         cache_age_style(theme, row, ctx.now),

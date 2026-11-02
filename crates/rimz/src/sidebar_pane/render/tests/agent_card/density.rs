@@ -190,28 +190,30 @@ fn stale_age_wears_the_cache_clock_tone() {
         ceiling_secs: 1800,
         last_request_at: None,
         warm_until: None,
-        held_since: None,
         rewarm_cost_usd: None,
     };
-    for (cache, expected) in [
+    for (cache, label, expected) in [
         (
             Some(clock),
+            " 2d",
             theme.style(theme.component(Component::CacheExpired), Modifier::empty()),
         ),
         (
             Some(CacheClock {
                 warm_until: Some(fixed_now() + Duration::from_secs(600)),
-                held_since: Some(fixed_now() - Duration::from_secs(3600)),
+                last_request_at: Some(fixed_now() - Duration::from_secs(120)),
                 ..clock
             }),
+            " 2m",
             theme.good(Modifier::empty()),
         ),
-        (None, theme.muted()),
+        (None, " 2d", theme.muted()),
         (
             Some(CacheClock {
-                last_request_at: Some(fixed_now() - Duration::from_secs(600)),
+                last_request_at: Some(fixed_now() - Duration::from_secs(120)),
                 ..clock
             }),
+            " 2m",
             theme.muted(),
         ),
         (
@@ -219,6 +221,7 @@ fn stale_age_wears_the_cache_clock_tone() {
                 last_request_at: Some(fixed_now() - Duration::from_secs(1500)),
                 ..clock
             }),
+            "25m",
             theme.style(theme.warm_heat_tone(600.0 / 900.0), Modifier::empty()),
         ),
     ] {
@@ -230,16 +233,54 @@ fn stale_age_wears_the_cache_clock_tone() {
         row.as_agent_mut().unwrap().cache = cache;
         for width in [36, 70] {
             let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+            assert!(
+                !lines.iter().any(|line| line.to_string().contains('▣')),
+                "a ping does not reopen stale history"
+            );
             let age = lines
                 .iter()
                 .find(|line| line.to_string().contains("claude"))
                 .unwrap()
                 .spans
                 .iter()
-                .find(|span| span.content == " 2d")
-                .expect("bare three-cell quiet age, even after a cache ping or hold");
+                .find(|span| span.content == label)
+                .expect("the collapsed card shows its own cache age, even after a ping or hold");
             assert_eq!(age.style, expected, "{cache:?} at width {width}");
         }
+    }
+}
+
+#[test]
+fn stale_parent_age_excludes_fresh_child_activity() {
+    let theme = Theme::fixed(false);
+    let mut parent = density_agent(
+        "parent",
+        "claude",
+        AgentStatus::Success,
+        Some("old task"),
+        40,
+    );
+    parent.last_activity = fixed_now() - Duration::from_secs(1200);
+    let mut snapshot = snapshot_with(vec![parent]);
+    snapshot.theme.display.stale_after_secs = 5;
+    let row = snapshot.rows_mut().next().unwrap();
+    row.unread = false;
+    row.as_agent_mut().unwrap().own_last_activity = Some(row.last_activity);
+    row.last_activity = fixed_now() - Duration::from_secs(10);
+    for width in [36, 70] {
+        let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+        let identity = lines
+            .iter()
+            .find(|line| line.to_string().contains("claude"))
+            .unwrap();
+        assert!(
+            identity.spans.iter().any(|span| span.content == "20m"),
+            "{identity}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.to_string().contains('▣')),
+            "the card stays stale: {identity}"
+        );
     }
 }
 

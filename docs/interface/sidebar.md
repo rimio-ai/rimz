@@ -470,7 +470,7 @@ A waiting or failed card looks like any other card with `?` or `!` in the lead. 
 ```
 ▌? codex · GPT 5.5 · xhigh · 272k               $4.36▐
 ▌  Allow the pricing cache write?                    ▐
-▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━──────────   71% ◉ 40m▐
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━──────────   71% ◑ 40m▐
 ▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        ▐
 ▌  ◉ cache expired                                   ▐
 ```

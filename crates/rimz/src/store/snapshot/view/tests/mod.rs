@@ -64,7 +64,6 @@ fn displayed_idle_origin_uses_own_activity_and_closed_cache_requests() {
             ceiling_secs: 1800,
             last_request_at: request,
             warm_until: None,
-            held_since: None,
             rewarm_cost_usd: None,
         });
         let expected = if request == Some(ago(120)) {

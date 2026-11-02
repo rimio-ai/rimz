@@ -488,8 +488,8 @@ pub struct AgentCard {
 }
 
 /// How long a card's prompt cache stays warm: the resolved agent lifetime and
-/// last request (pings included), plus the last real turn and finite maximum
-/// while keep-warm holds. A stage condition can release the hold before that maximum.
+/// last request (pings included), plus the finite maximum while keep-warm holds.
+/// A stage condition can release the hold before that maximum.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CacheClock {
     pub ceiling_secs: u32,
@@ -497,8 +497,6 @@ pub struct CacheClock {
     pub last_request_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warm_until: Option<Timestamp>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub held_since: Option<Timestamp>,
     /// Producer-priced cache write of the card's current context at its observed write tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewarm_cost_usd: Option<f64>,
