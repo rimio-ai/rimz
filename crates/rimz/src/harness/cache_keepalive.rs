@@ -174,7 +174,7 @@ pub(crate) fn holds(
         && agent.idle_stop.is_none()
         && harness.cache_keepalive
         && matches!(
-            agent.effective_status(),
+            agent.effective_status(now),
             AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
         )
         && agent.rests_in_lifecycle()
@@ -389,7 +389,7 @@ fn should_keepalive(
     now: Timestamp,
 ) -> bool {
     if !config.cache_keepalive
-        || !(agent.effective_status() == AgentStatus::Sleeping || holding.is_some())
+        || !(agent.effective_status(now) == AgentStatus::Sleeping || holding.is_some())
         || !pingable(agent)
     {
         return false;

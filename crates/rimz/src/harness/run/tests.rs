@@ -2241,6 +2241,49 @@ fn live_status_joins_agent_state() {
 }
 
 #[test]
+fn live_status_keeps_raw_waiting_with_permission_review_evidence() {
+    let since = Timestamp::from_second(1_000).unwrap();
+    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+    let mut record = RunRecord::new(
+        workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        PathBuf::from("/tmp/rimz-run"),
+    );
+    record.agent_id = Some("review".into());
+    let mut agent = agent_state("codex", "review", AgentStatus::Waiting);
+    agent.last_activity = since;
+    agent.waiting_since = Some(since);
+    agent.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::new(),
+        kind: crate::agents::AskKind::Permission,
+        detail: None,
+        native_key: None,
+        since,
+    });
+    for mode in [Some(PermissionMode::Auto), None] {
+        agent.mode = mode;
+        let snapshot = SidebarSnapshot::build_with_agents(
+            workspace_id.clone(),
+            vec![agent.clone()],
+            Timestamp::from_second(1_059).unwrap(),
+        );
+        let live = live_status(&record, &snapshot).unwrap();
+        assert_eq!(live.agent_status, AgentStatus::Waiting);
+        let json = serde_json::to_value(live).unwrap();
+        if mode.is_some() {
+            assert_eq!(
+                json["permission_review_until"],
+                serde_json::json!(since + Duration::from_secs(60))
+            );
+        } else {
+            assert!(json.get("permission_review_until").is_none());
+        }
+    }
+}
+
+#[test]
 fn live_status_is_absent_for_unbound_or_terminal_runs() {
     let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
     let mut record = RunRecord::new(

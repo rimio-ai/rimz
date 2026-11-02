@@ -30,14 +30,18 @@ pub struct UnnoticedPark<'a> {
 /// The park `run` owes its parent a notice for: an open subagent run that
 /// reports to its launcher, whose child's live turn died on a limit marker,
 /// with a live parent, and no notice claimed since the child last acted. `agents` must carry joined context.
-pub fn unnoticed_park<'a>(run: &RunRecord, agents: &'a [AgentState]) -> Option<UnnoticedPark<'a>> {
+pub fn unnoticed_park<'a>(
+    run: &RunRecord,
+    agents: &'a [AgentState],
+    now: Timestamp,
+) -> Option<UnnoticedPark<'a>> {
     if !run.subagent || run.report_to != ReportTo::Launcher || run.status.is_terminal() {
         return None;
     }
     let child = find_agent(agents, run.kind.as_str(), run.agent_id.as_ref()?)?;
     if child.ended_at.is_some()
         || child.status != AgentStatus::Running
-        || !limit_marker_active(child)
+        || !limit_marker_active(child, now)
         || run
             .park_noticed_activity
             .is_some_and(|noticed| noticed >= child.last_activity)
@@ -53,10 +57,11 @@ fn notify_parents_with(
     runs: &[RunRecord],
     agents: &[AgentState],
     workspace_id: &WorkspaceId,
+    now: Timestamp,
     mut spawn: impl FnMut(&ParkNoticeRequest),
 ) {
     for run in runs {
-        if unnoticed_park(run, agents).is_some() {
+        if unnoticed_park(run, agents, now).is_some() {
             spawn(&ParkNoticeRequest {
                 workspace_id: workspace_id.clone(),
                 run_id: run.run_id.clone(),
@@ -67,8 +72,13 @@ fn notify_parents_with(
 
 /// Ask one short-lived helper per unnoticed park to tell the child's parent.
 /// The helper's locked claim settles a race between ticks.
-pub(crate) fn notify_parents(runs: &[RunRecord], agents: &[AgentState], runtime: &RuntimePaths) {
-    notify_parents_with(runs, agents, &runtime.workspace_id, |request| {
+pub(crate) fn notify_parents(
+    runs: &[RunRecord],
+    agents: &[AgentState],
+    runtime: &RuntimePaths,
+    now: Timestamp,
+) {
+    notify_parents_with(runs, agents, &runtime.workspace_id, now, |request| {
         let args = crate::child_process::agent_helper_argv("park-notice", request);
         if let Err(err) =
             crate::child_process::spawn_detached_rimz(runtime, args, "subagent-park-notice")
@@ -92,7 +102,7 @@ pub fn text(child: &AgentState, run: &RunRecord, now: Timestamp) -> String {
             .clone()
             .unwrap_or_else(|| child.agent_id.to_string())
     );
-    let reason = match child.displayed_turn_error() {
+    let reason = match child.displayed_turn_error(now) {
         Some((class, error)) => match &error.label {
             Some(label) => format!("\"{label}\""),
             None => format!("a {}", class.words()),
@@ -156,7 +166,7 @@ mod tests {
     }
 
     fn eligible(run: &RunRecord, agents: &[AgentState]) -> bool {
-        unnoticed_park(run, agents).is_some()
+        unnoticed_park(run, agents, agents[0].last_activity).is_some()
     }
 
     #[test]
@@ -166,7 +176,8 @@ mod tests {
             TurnErrorClass::PausedSpendLimit,
         ] {
             let (mut agents, mut run) = parked(class, Some("Usage limit reached"));
-            let park = unnoticed_park(&run, &agents).expect("a fresh park is owed a notice");
+            let park = unnoticed_park(&run, &agents, agents[0].last_activity)
+                .expect("a fresh park is owed a notice");
             assert_eq!(park.child.agent_id.as_str(), "child");
             assert_eq!(park.parent.agent_id.as_str(), "parent");
 
@@ -251,6 +262,7 @@ mod tests {
             &[told, parked_run.clone(), settled],
             &agents,
             &workspace_id,
+            agents[0].last_activity,
             |request| asked.push(request.clone()),
         );
         assert_eq!(

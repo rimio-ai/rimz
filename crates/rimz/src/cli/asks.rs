@@ -140,13 +140,22 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.cached_snapshot()?;
     let channel = ctx.channel();
     let peers = rimz::address::addressable_agents(&snapshot);
+    let visibility_now = snapshot.now;
     let mut views = snapshot
         .agents
         .iter()
         .filter(|agent| {
             all || channel.is_none_or(|channel| agent.channel().as_deref() == Some(channel))
         })
-        .flat_map(|agent| agent.actionable_asks().map(move |(ask, _)| (agent, ask.id)))
+        .flat_map(|agent| {
+            agent
+                .actionable_asks()
+                .filter(move |(_, delivery)| {
+                    *delivery == rimz::agents::AskDelivery::Async
+                        || agent.attention_ask(visibility_now).is_some()
+                })
+                .map(move |(ask, _)| (agent, ask.id))
+        })
         .map(|(agent, id)| {
             view_for_agent(store.paths(), agent, &snapshot.agents, &peers, Some(&id))
         })

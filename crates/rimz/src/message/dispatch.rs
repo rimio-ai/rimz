@@ -123,6 +123,7 @@ pub enum DispatchOutcome {
     SkippedWaiting {
         label: String,
         message_id: MessageId,
+        reason: super::InputWait,
     },
 }
 
@@ -247,8 +248,11 @@ pub enum DispatchErr {
     },
     #[error("`{label}` cannot receive now and has no durable session to park")]
     NoDurableSession { label: String },
-    #[error("{label} is waiting on your input in its pane; answer it or pass --force")]
-    WaitingOnInput { label: String },
+    #[error("{label} {reason}")]
+    WaitingOnInput {
+        label: String,
+        reason: super::InputWait,
+    },
     #[error(transparent)]
     Login(#[from] crate::agents::RoomLoginErr),
 }
@@ -701,8 +705,14 @@ fn prepare_mode(
             .ok_or_else(|| DispatchErr::NoDurableSession {
                 label: label.clone(),
             })?;
-            if !request.force && agent.effective_status() == AgentStatus::Waiting {
-                return Err(DispatchErr::WaitingOnInput { label });
+            if !request.force
+                && (agent.effective_status(resolution.snapshot.now) == AgentStatus::Waiting
+                    || agent.is_reviewing_permission(resolution.snapshot.now))
+            {
+                return Err(DispatchErr::WaitingOnInput {
+                    label,
+                    reason: super::InputWait::for_agent(agent, resolution.snapshot.now),
+                });
             }
         }
     }
@@ -1152,9 +1162,10 @@ fn dispatch_one(
                 interrupt,
             })
         }
-        deliver::AttemptOutcome::SkippedWaiting => Ok(DispatchOutcome::SkippedWaiting {
+        deliver::AttemptOutcome::SkippedWaiting(reason) => Ok(DispatchOutcome::SkippedWaiting {
             label: handle,
             message_id,
+            reason,
         }),
         deliver::AttemptOutcome::Queued => Ok(DispatchOutcome::Queued {
             label: handle,

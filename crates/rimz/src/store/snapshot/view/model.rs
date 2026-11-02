@@ -17,6 +17,7 @@ pub fn card_status(
     row: Option<&SidebarRow>,
     child: Option<&SidebarSubAgent>,
     demotion: &ParkDemotion,
+    now: jiff::Timestamp,
 ) -> (AgentStatus, TurnPhase) {
     if let Some(card) = row.and_then(SidebarRow::as_agent) {
         return (card.status, card.phase);
@@ -24,7 +25,7 @@ pub fn card_status(
     if let Some(child) = child {
         return (child.status, child.phase);
     }
-    agent.rowless_status(demotion)
+    agent.rowless_status(demotion, now)
 }
 
 /// An actionable card, shared by the agent and team command scenes.
@@ -46,7 +47,7 @@ pub fn needs_you(
 
     let status = row
         .and_then(SidebarRow::attention_status)
-        .unwrap_or_else(|| card_status(agent, row, None, demotion).0);
+        .unwrap_or_else(|| card_status(agent, row, None, demotion, now).0);
     if !status.is_attention() {
         return None;
     }
@@ -54,22 +55,19 @@ pub fn needs_you(
     let card = match row.and_then(SidebarRow::as_agent) {
         Some(card) => card,
         None => {
-            let (status, phase) = card_status(agent, row, None, demotion);
+            let (status, phase) = card_status(agent, row, None, demotion, now);
             fallback = AgentCard {
                 status,
                 phase,
                 turn_error_label: agent
-                    .displayed_turn_error()
+                    .displayed_turn_error(now)
                     .and_then(|(_, error)| error.label.clone()),
                 ..AgentCard::from_agent(agent, now)
             };
             &fallback
         }
     };
-    let ask = agent
-        .open_ask
-        .as_ref()
-        .filter(|_| agent.is_awaiting_input());
+    let ask = agent.attention_ask(now);
     let reason = ask
         .and_then(|ask| ask.detail.clone())
         .or_else(|| match card.description(now) {
@@ -83,7 +81,7 @@ pub fn needs_you(
         reason,
         since: ask.map_or_else(
             || row.map_or(agent.last_activity, |row| row.last_activity),
-            |ask| ask.since,
+            |ask| agent.permission_review_until().unwrap_or(ask.since),
         ),
     })
 }

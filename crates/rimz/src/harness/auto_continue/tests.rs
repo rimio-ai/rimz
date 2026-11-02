@@ -1614,7 +1614,11 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
             std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at =
                 Some(ts(activity));
             snapshot.now = ts(activity);
-            assert!(snapshot.agents[0].displayed_turn_error().is_none());
+            assert!(
+                snapshot.agents[0]
+                    .displayed_turn_error(snapshot.now)
+                    .is_none()
+            );
             resume_parked(
                 |_| false,
                 &snapshot,
@@ -1720,7 +1724,11 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
         std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at = Some(ts(6_001));
         snapshot.now = ts(6_001);
         assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
-        assert!(snapshot.agents[0].displayed_turn_error().is_none());
+        assert!(
+            snapshot.agents[0]
+                .displayed_turn_error(snapshot.now)
+                .is_none()
+        );
         resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
         assert_eq!(
             read_park(&path),
@@ -1731,7 +1739,11 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
         std::sync::Arc::make_mut(&mut snapshot.agents)[0].status = settled_status;
         std::sync::Arc::make_mut(&mut snapshot.agents)[0].last_activity = ts(6_100);
         snapshot.now = ts(6_100);
-        assert!(snapshot.agents[0].displayed_turn_error().is_none());
+        assert!(
+            snapshot.agents[0]
+                .displayed_turn_error(snapshot.now)
+                .is_none()
+        );
         resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
         assert!(read_park(&path).is_none(), "real progress kept the park");
 
@@ -1794,7 +1806,11 @@ fn overload_replies_preserve_backoff_and_retry_cap() {
             std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at =
                 Some(ts(activity));
             snapshot.now = ts(activity);
-            assert!(snapshot.agents[0].displayed_turn_error().is_none());
+            assert!(
+                snapshot.agents[0]
+                    .displayed_turn_error(snapshot.now)
+                    .is_none()
+            );
             resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
             assert_eq!(
                 read_park(&path),
@@ -1885,7 +1901,11 @@ fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
                 "usage limit",
             )
             .context;
-            assert!(stopped.agents[0].displayed_turn_error().is_some());
+            assert!(
+                stopped.agents[0]
+                    .displayed_turn_error(stopped.now)
+                    .is_some()
+            );
             resume_parked(|_| false, &stopped, &runtime, &logins, &config, &messages);
             let fresh = read_park(&path).unwrap();
             assert_eq!(
@@ -1973,7 +1993,11 @@ fn in_flight_turn_holds_park_when_resume_message_is_not_visible() {
         ],
     );
     assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
-    assert!(snapshot.agents[0].displayed_turn_error().is_none());
+    assert!(
+        snapshot.agents[0]
+            .displayed_turn_error(snapshot.now)
+            .is_none()
+    );
     let config = ResumeConfig {
         auto_continue: true,
         ..ResumeConfig::default()
@@ -2014,7 +2038,11 @@ fn failed_turn_holds_park_until_its_limit_marker_is_visible() {
     assert_eq!(snapshot.agents[0].status, AgentStatus::Failed);
     assert_eq!(snapshot.agents[0].turn_started_at, Some(ts(6_001)));
     assert_eq!(snapshot.agents[0].last_activity, ts(6_002));
-    assert!(snapshot.agents[0].displayed_turn_error().is_none());
+    assert!(
+        snapshot.agents[0]
+            .displayed_turn_error(snapshot.now)
+            .is_none()
+    );
     let config = ResumeConfig {
         auto_continue: true,
         ..ResumeConfig::default()
@@ -2031,7 +2059,11 @@ fn failed_turn_holds_park_until_its_limit_marker_is_visible() {
     );
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].context =
         parked_agent(1_000, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
-    assert!(snapshot.agents[0].displayed_turn_error().is_some());
+    assert!(
+        snapshot.agents[0]
+            .displayed_turn_error(snapshot.now)
+            .is_some()
+    );
     resume_parked(|_| false, &snapshot, &runtime, &logins, &config, &messages);
     record.parked_at_activity = ts(6_002);
     assert_eq!(

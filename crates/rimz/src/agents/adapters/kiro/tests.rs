@@ -156,6 +156,7 @@ fn refreshed_running_agent(path: &Path) -> crate::agents::AgentState {
 #[test]
 fn cancelled_refresh_releases_the_turn_waiter() {
     use crate::agents::{AgentStatus, FieldPatch, TurnCompletion, TurnSettleOutcome};
+    let now = "2025-01-01T00:00:10Z".parse().unwrap();
     let root = tempfile::tempdir().unwrap();
     let path = refresh_fixture(
         root.path(),
@@ -167,9 +168,9 @@ fn cancelled_refresh_releases_the_turn_waiter() {
         ],
     );
     let agent = refreshed_running_agent(&path);
-    assert_eq!(agent.effective_status(), AgentStatus::Idle);
+    assert_eq!(agent.effective_status(now), AgentStatus::Idle);
     assert_eq!(
-        TurnCompletion::of(agent.effective_status(), agent.turn_started_at),
+        TurnCompletion::of(agent.effective_status(now), agent.turn_started_at),
         TurnCompletion::Completed
     );
     let settle = agent.context.unwrap().settle.unwrap();
@@ -188,6 +189,7 @@ fn cancelled_refresh_releases_the_turn_waiter() {
 #[test]
 fn question_refresh_keeps_the_turn_waiter_open() {
     use crate::agents::{AgentStatus, TurnCompletion, TurnSettleOutcome};
+    let now = "2025-01-01T00:00:10Z".parse().unwrap();
     let root = tempfile::tempdir().unwrap();
     let path = refresh_fixture(
         root.path(),
@@ -198,9 +200,9 @@ fn question_refresh_keeps_the_turn_waiter_open() {
         ],
     );
     let agent = refreshed_running_agent(&path);
-    assert_eq!(agent.effective_status(), AgentStatus::Waiting);
+    assert_eq!(agent.effective_status(now), AgentStatus::Waiting);
     assert_eq!(
-        TurnCompletion::of(agent.effective_status(), agent.turn_started_at),
+        TurnCompletion::of(agent.effective_status(now), agent.turn_started_at),
         TurnCompletion::Open
     );
     let settle = agent.context.unwrap().settle.unwrap();
@@ -211,6 +213,7 @@ fn question_refresh_keeps_the_turn_waiter_open() {
 #[test]
 fn failed_refresh_records_error_without_releasing_the_turn_waiter() {
     use crate::agents::{AgentStatus, TurnCompletion, TurnErrorClass};
+    let now = "2025-01-01T00:00:10Z".parse().unwrap();
     let root = tempfile::tempdir().unwrap();
     for reason in ["error", "refusal"] {
         let path = refresh_fixture(
@@ -224,9 +227,9 @@ fn failed_refresh_records_error_without_releasing_the_turn_waiter() {
         );
         let agent = refreshed_running_agent(&path);
         assert!(agent.context.as_ref().unwrap().turn_error.is_some());
-        assert_eq!(agent.effective_status(), AgentStatus::Running);
+        assert_eq!(agent.effective_status(now), AgentStatus::Running);
         assert_eq!(
-            TurnCompletion::of(agent.effective_status(), agent.turn_started_at),
+            TurnCompletion::of(agent.effective_status(now), agent.turn_started_at),
             TurnCompletion::Open
         );
         let context = agent.context.unwrap();

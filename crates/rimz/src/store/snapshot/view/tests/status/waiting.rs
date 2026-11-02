@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn codex_auto_permission_card_and_ladder_wait_for_review() {
+    for (age, expected, phase) in [
+        (59, AgentStatus::Running, TurnPhase::Reasoning),
+        (60, AgentStatus::Waiting, TurnPhase::Idle),
+    ] {
+        let mut session = agent("codex", "review", AgentStatus::Waiting, 0)
+            .worktree("/repo/main")
+            .active_ago(age);
+        session.mode = Some(crate::agents::PermissionMode::Auto);
+        session.waiting_since = Some(ago(age));
+        session.open_ask = Some(crate::agents::OpenAsk {
+            id: crate::ids::AskId::new(),
+            kind: crate::agents::AskKind::Permission,
+            detail: Some("shell: cargo test".to_owned()),
+            native_key: None,
+            since: ago(age),
+        });
+        let seed = crate::store::snapshot::AgentCard::from_agent(&session, epoch());
+        assert_eq!(seed.status, expected, "seed at {age}s");
+        assert_eq!(seed.phase, phase);
+        assert_eq!(seed.open_ask().is_some(), age == 60);
+
+        let mut child = child_state("review", "child", AgentStatus::Running, 0);
+        child.kind = AgentKind::new_unchecked("codex");
+        let snapshot = room_with_agent_panes(vec![session, child]);
+        let row = row(&snapshot, "review");
+        if age == 59 {
+            assert_eq!(row.last_activity, epoch());
+        }
+        assert_eq!(row.status(), Some(expected), "ladder at {age}s");
+        assert_eq!(row.phase(), phase);
+        let source = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == "review")
+            .unwrap();
+        let needs = crate::store::snapshot::needs_you(
+            source,
+            Some(row),
+            &crate::agents::ParkDemotion::default(),
+            epoch(),
+        );
+        assert_eq!(needs.is_some(), age == 60);
+        if let Some(needs) = needs {
+            assert_eq!(needs.since, epoch());
+        }
+    }
+}
+
+#[test]
 fn awaiting_input_outranks_derived_statuses() {
     let mut session = agent("claude", "claude-ask", AgentStatus::Waiting, 0)
         .worktree("/repo/main")

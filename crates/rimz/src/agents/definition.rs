@@ -1385,6 +1385,9 @@ pub struct Capabilities {
     /// only through the extension) resolves the same ask neutrally with no
     /// waiting state: there is no native prompt to route the human to.
     pub native_ask_ui: bool,
+    /// Permission hooks precede the provider's automatic reviewer, rather
+    /// than necessarily opening a human prompt.
+    pub permission_before_auto_review: bool,
     /// Local transcript/rollout tail is a live context source refreshable
     /// outside hooks. Drives producer ticks and renderer transcript watches.
     pub transcript_tail_context: bool,

@@ -86,11 +86,12 @@ pub(super) fn project_display_status(
             agent.context.as_ref(),
             last_activity,
             source_agent,
+            now,
         ) {
             WaitingResolution::NotWaiting => (agent.status, false),
             WaitingResolution::Interrupted => (AgentStatus::Idle, true),
             WaitingResolution::Held => continue,
-            WaitingResolution::Answered => {
+            WaitingResolution::Answered | WaitingResolution::InReview => {
                 agent.phase = TurnPhase::Reasoning;
                 (AgentStatus::Running, false)
             }
@@ -106,7 +107,7 @@ pub(super) fn project_display_status(
         // Keep the source agent's own activity clock for this fallback; the
         // row clock above is child-folded and drives the other ladder rungs.
         let effective_status = source_agent
-            .map(AgentState::rested_status)
+            .map(|state| state.rested_status(now))
             .unwrap_or(status);
         let budget_park_label = source_agent
             .and_then(|state| state.budget_park.as_ref())

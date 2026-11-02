@@ -266,7 +266,7 @@ fn target_work_class(
         return PendingWaitClass::Inert;
     }
     let agent = &agents[index];
-    let status = agent.rowless_status(&Default::default()).0;
+    let status = agent.rowless_status(&Default::default(), now).0;
     let class = if agent.silent_child_for(now, stalled_after_secs).is_some() {
         PendingWaitClass::Inert
     } else if status == AgentStatus::Running {

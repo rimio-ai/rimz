@@ -24,7 +24,7 @@ fn entitlement_failure_takes_attention_without_a_resume_park() {
             .any(|count| count.status == AgentStatus::Failed && count.count == 1)
     );
     assert_eq!(
-        session.rowless_status(&crate::agents::ParkDemotion::default()),
+        session.rowless_status(&crate::agents::ParkDemotion::default(), snapshot.now),
         (AgentStatus::Failed, crate::agents::TurnPhase::Idle)
     );
 }

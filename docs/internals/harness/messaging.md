@@ -200,7 +200,7 @@ Steer still writes a `Queued` record first and moves it to `Sent` when the paste
 Internal callers pick a mode too:
 
 - Self-only timer and watched-command waits steer. When a native prompt is open at the pane-write check, the `HarnessNotice::Wait` record stays `Queued` with gate `Any` and delivers at the turn boundary after the prompt is answered. Check-ins behave the same way.
-- Human steers and deadline notices refuse an agent waiting on input with the waiting-input error.
+- Human steers and deadline notices refuse an agent waiting on input with the waiting-input error; a permission still under automatic review gets the review-specific explanation instead.
 - Scheduled loop and signal deliveries, team bindings included, use boundary with the `Done` gate.
 - `rimz message @me` resolves the calling agent to its pinned session through the shared CLI resolver, and refuses an unidentified, provisional, or ended caller.
 
@@ -211,7 +211,7 @@ Two flags add cross-agent conditions to boundary and schedule sends, and they co
 - `--after <ADDR>` holds until that agent finishes its queued work. Each address must resolve to exactly one durable card, and repeats form an all-of set. The recipient itself and fan-out addresses are rejected.
 - `--when '@handle <status> <duration>'` holds until one agent stays continuously in a raw lifecycle status for the dwell. Self-reference is allowed, which is what makes keep-warm messages (`@codex --when '@codex idle 58m'`) work.
 
-Delivery gates and `when` conditions read status differently, on purpose. Gates read `effective_status()`, which projects budget parks to `Paused`, settles hookless turns, and reads a clean turn parked on background work as `Success`. `when` conditions read the stored `status` field, so a projection never trips a dwell the event log cannot justify.
+Delivery gates and `when` conditions read status differently, on purpose. Gates read `effective_status(now)`, which projects budget parks to `Paused`, settles hookless turns, and reads a clean turn parked on background work as `Success`. `when` conditions otherwise read the stored `status` field, so display-only parks and sleeping work never trip a dwell. The exception is an auto-reviewed permission: it matches Running during review, and Waiting from `open_ask.since + 60s`, with the waiting dwell anchored there rather than at hook arrival. Its raw ask still reserves pane input ([waiting and asks](../agents/model.md#waiting-and-asks)).
 
 A condition is met for delivery only once its `met_at` stamp is written (`MessageRecord::conditions_met`). Dispatch stamps a condition already satisfied at send time, and the sweep stamps the rest ([Scheduling and wakeups](#scheduling-and-wakeups)). Upstream work must therefore be queued before the message that waits on it.
 
@@ -282,7 +282,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 2 | A queued follow-up with `register_by` has a live receiver row or one ended after enqueue | `WaitingForRegistration` | Registration, a later end (check 8), or registration expiry |
 | 3 | `not_before` has passed | `Scheduled` | The clock, through the host sweep |
 | 4 | Every `after` condition is met | `WaitingOnAfter` | The referenced agent reaching its gate with no deliverable queued work |
-| 5 | Every `when` condition is met | `WaitingOnWhen` | The watched agent completing its dwell in the raw status |
+| 5 | Every `when` condition is met | `WaitingOnWhen` | The watched agent completing its dwell in the raw status, after automatic review when waiting |
 | 6 | The record is the oldest holder of its card's lane | `BehindFifo` | The blocking record settling, or a blocking `Sent` prompt's acknowledgement or hold deadline |
 | 7 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
 | 8 | The receiver has not ended | `ReceiverEnded` | The sweep archives open records for the card and unmet `when` conditions watching it |
@@ -290,7 +290,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 10 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
 | 11 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation (normally `Registered`), or one delivery window. Lazy-registering providers skip this check |
 | 12 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting, or the overload marker clearing |
-| 13 | No open blocking prompt reserves the input | `AskWaiting` | Answering the ask, or `--force` |
+| 13 | No open blocking prompt reserves the input, including a permission still under automatic review | `AskWaiting` | The ask clearing, or `--force` |
 | 14 | A live pane can receive a paste | `NoPane` | A bindable pane appearing. A pinned record waits for its pinned pane |
 
 All fourteen pass and the verdict is `Ready`.

@@ -269,8 +269,9 @@ impl AmbiguityRow {
         });
         Self {
             address,
-            status: agent
-                .map(|agent| card.map_or_else(|| agent.effective_status(), |card| card.status)),
+            status: agent.map(|agent| {
+                card.map_or_else(|| agent.effective_status(snapshot.now), |card| card.status)
+            }),
             phase: card.map_or(rimz::agents::TurnPhase::Idle, |card| card.phase),
             activity: agent.map(|agent| agent.last_activity),
             description: agent.and_then(|agent| agent_activity_line(agent, card)),

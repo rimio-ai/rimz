@@ -50,7 +50,7 @@ pub(super) enum Receipt {
         compacted: bool,
         interrupt: InterruptConfirmation,
     },
-    SkippedWaiting,
+    SkippedWaiting(super::InputWait),
     CompactionPending,
     ClaimLost,
 }
@@ -119,7 +119,7 @@ pub(super) fn send_batch_to_live_pane(
             .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none())
             .filter(|agent| {
                 matches!(
-                    agent.effective_status(),
+                    agent.effective_status(current.now),
                     AgentStatus::Running | AgentStatus::Waiting
                 )
             })
@@ -223,7 +223,7 @@ fn write_live(
                     compacted: false,
                     interrupt: InterruptConfirmation::NotChecked,
                 },
-                PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
+                PaneWrite::SkippedWaiting(reason) => Receipt::SkippedWaiting(reason),
                 PaneWrite::ClaimLost => Receipt::ClaimLost,
             },
         );
@@ -270,13 +270,13 @@ fn write_live(
                     return Ok(Receipt::CompactionPending);
                 }
             }
-            Ok(PaneWrite::SkippedWaiting) => {
+            Ok(PaneWrite::SkippedWaiting(reason)) => {
                 store.release_message_claims(
                     std::slice::from_ref(&command),
                     "agent is waiting on input in its pane",
                     &workspace.session_name,
                 )?;
-                return Ok(Receipt::SkippedWaiting);
+                return Ok(Receipt::SkippedWaiting(reason));
             }
             Ok(PaneWrite::ClaimLost) => {
                 store.release_message_claims(
@@ -298,7 +298,7 @@ fn write_live(
                 compacted,
                 interrupt: InterruptConfirmation::NotChecked,
             },
-            PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
+            PaneWrite::SkippedWaiting(reason) => Receipt::SkippedWaiting(reason),
             PaneWrite::ClaimLost => Receipt::ClaimLost,
         },
     )
@@ -383,8 +383,13 @@ fn write_batch(
         )?;
         return Ok(PaneWrite::ClaimLost);
     }
-    if !send.force && bound.is_some_and(AgentState::is_awaiting_input) {
-        return Ok(PaneWrite::SkippedWaiting);
+    if !send.force
+        && let Some(agent) = bound.filter(|agent| agent.is_awaiting_input())
+    {
+        return Ok(PaneWrite::SkippedWaiting(super::InputWait::for_agent(
+            agent,
+            jiff::Timestamp::now(),
+        )));
     }
     send.pacer.tick();
     match head.body {
@@ -475,7 +480,7 @@ fn type_command_with<E>(
 
 enum PaneWrite {
     Sent,
-    SkippedWaiting,
+    SkippedWaiting(super::InputWait),
     ClaimLost,
 }
 

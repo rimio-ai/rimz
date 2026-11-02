@@ -501,6 +501,45 @@ fn interrupt_waiting_refuses_before_record() {
 }
 
 #[test]
+fn auto_review_permission_refuses_steer_and_interrupt_with_review_wording() {
+    for flag in ["--steer", "--interrupt"] {
+        let (env, panes) = interrupt_fixture("codex");
+        append_lifecycle(
+            &env,
+            "codex",
+            "PermissionRequest",
+            "sess-interrupt",
+            LifecycleSignal::AwaitingInput {
+                kind: AskKind::Permission,
+                ask_id: Some(rimz::ids::AskId::new()),
+                detail: Some("shell: cargo test".to_owned()),
+                native_key: None,
+            },
+            |observation| observation.launch.mode = Some(rimz::agents::PermissionMode::Auto),
+        );
+        let trace = env.project_root.join("review-refused.log");
+        let output = traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", panes)
+            .args(["message", flag, "@codex", "new direction"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("provider's automatic review"),
+            "{flag}: {stderr}"
+        );
+        assert!(stderr.contains("retry shortly or pass --force"), "{stderr}");
+        assert!(!stderr.contains("waiting on your input"), "{stderr}");
+        assert!(trace_lines(&trace).is_empty());
+        if flag == "--interrupt" {
+            assert!(env.store().list_messages().unwrap().is_empty());
+            assert!(env.store().list_message_history().unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
 fn interrupt_idle_skips_escape() {
     let (env, panes) = interrupt_fixture("claude");
     append_lifecycle(
@@ -4399,7 +4438,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
                 .iter()
                 .map(|agent| (
                     &agent.agent_id,
-                    agent.effective_status(),
+                    agent.effective_status(current.now),
                     agent.last_request_at(),
                     &agent.pending_waits
                 ))

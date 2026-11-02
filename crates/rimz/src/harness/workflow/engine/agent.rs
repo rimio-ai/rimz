@@ -93,7 +93,7 @@ pub(super) fn fold_limited(observed: &mut Observed, outcome: AttemptOutcome) {
 }
 
 /// Folds one observation's blocking ask into the attempt's hold and reports whether it changed.
-/// A new hold opens at the ask's own open time, clamped to the attempt; a kept hold keeps its
+/// A new hold opens at the ask's visibility time, clamped to the attempt; a kept hold keeps its
 /// start; the first observation without an ask closes it into `asked_ms`.
 pub(super) fn hold(
     attempt: &mut workflow::LiveAttempt,

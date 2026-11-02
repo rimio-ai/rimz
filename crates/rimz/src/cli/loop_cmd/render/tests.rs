@@ -1763,7 +1763,7 @@ fn show_attention_names_failed_live_leaders_but_not_ended_leaders() {
     let mut failed = rimz::testkit::agent_state("codex", "live", view.now_zoned.timestamp());
     failed.name = Some("new-leader".into());
     failed.status = rimz::agents::AgentStatus::Failed;
-    view.leader_statuses = leader_statuses(&view.launches, &[failed]);
+    view.leader_statuses = leader_statuses(&view.launches, &[failed], view.now_zoned.timestamp());
     let text = show_text(&view);
     assert_eq!(
         text.lines().nth(2),
@@ -1816,7 +1816,11 @@ fn leader_lookup_uses_ledger_petnames_and_effective_status() {
     let mut unrelated = live.clone();
     unrelated.name = Some("sweeper".into());
     unrelated.status = rimz::agents::AgentStatus::Failed;
-    let statuses = leader_statuses(&view.launches, &[live, unrelated]);
+    let statuses = leader_statuses(
+        &view.launches,
+        &[live, unrelated],
+        view.now_zoned.timestamp(),
+    );
     assert_eq!(
         statuses,
         BTreeMap::from([("new-leader".into(), rimz::agents::AgentStatus::Success)])

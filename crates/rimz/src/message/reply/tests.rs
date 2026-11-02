@@ -202,6 +202,42 @@ fn turn_wait_reason_projects_each_open_status() {
 }
 
 #[test]
+fn turn_wait_reason_defers_person_until_permission_review_expires() {
+    let at = Timestamp::from_second(1_000).unwrap();
+    let mut agent = crate::testkit::agent_state("codex", "child", at);
+    agent.status = AgentStatus::Waiting;
+    agent.parent_agent_id = Some("parent".into());
+    agent.launch_depth = Some(1);
+    agent.mode = Some(crate::agents::PermissionMode::Auto);
+    agent.waiting_since = Some(at);
+    let ask = crate::agents::OpenAsk {
+        id: crate::ids::AskId::new(),
+        kind: crate::agents::AskKind::Permission,
+        detail: None,
+        native_key: None,
+        since: at,
+    };
+    agent.open_ask = Some(ask.clone());
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    for (second, reason) in [
+        (1_059, TurnWaitReason::Running),
+        (1_060, TurnWaitReason::WaitingOnPerson(Some(ask))),
+    ] {
+        let now = Timestamp::from_second(second).unwrap();
+        let view = TurnWaitView {
+            snapshot: SidebarSnapshot::build_with_agents(
+                workspace.clone(),
+                vec![agent.clone()],
+                now,
+            ),
+            messages: vec![],
+            now,
+        };
+        assert_eq!(view.reason(&agent), Some(reason));
+    }
+}
+
+#[test]
 fn overdue_sent_wake_releases_sleeping_without_reconciliation() {
     let now = Timestamp::from_second(1_700_000_100).unwrap();
     let mut agent = crate::testkit::agent_state("claude", "sess-wake", now);
@@ -432,6 +468,7 @@ fn construction_settled_leg_is_reported_before_store_poll() {
     let outcome = DispatchOutcome::SkippedWaiting {
         label: "@coder".to_owned(),
         message_id: MessageId::new(),
+        reason: crate::message::InputWait::Human,
     };
     let mut wait = ReplyWait {
         legs: vec![Leg::new(target, &outcome, 0)],
@@ -447,7 +484,9 @@ fn construction_settled_leg_is_reported_before_store_poll() {
     assert_eq!(update.settled.len(), 1);
     assert_eq!(
         update.settled[0].failure,
-        Some(ReplyFailure::WaitingForInput)
+        Some(ReplyFailure::WaitingForInput(
+            crate::message::InputWait::Human
+        ))
     );
     assert_eq!(update.join.unwrap().status, RunStatus::Failed);
 }

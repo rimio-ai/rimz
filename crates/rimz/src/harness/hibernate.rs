@@ -289,7 +289,7 @@ fn cheap_hold(
     now: jiff::Timestamp,
     focused: bool,
 ) -> Option<Hold> {
-    if let Err(hold) = super::idle_stop::resting(agent) {
+    if let Err(hold) = super::idle_stop::resting(agent, now) {
         return Some(shared_hold(hold));
     }
     if now.duration_since(rested_at(agent)).as_nanos() < config.schedule.after.as_nanos() as i128 {

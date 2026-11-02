@@ -835,11 +835,11 @@ fn child_reports(
                 channel: child.channel(),
                 lane_label: child.lane_label(),
                 kind: child.kind.to_string(),
-                status: child.rowless_status(demotion).0.as_str().to_owned(),
+                status: child.rowless_status(demotion, now).0.as_str().to_owned(),
                 description: child.activity_line(),
-                turn_error_label: child.displayed_turn_error_label(),
+                turn_error_label: child.displayed_turn_error_label(now),
                 turn_error: child
-                    .displayed_turn_error()
+                    .displayed_turn_error(now)
                     .map(|(class, error)| ChildTurnError {
                         class,
                         label: error.label.clone(),

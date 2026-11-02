@@ -308,7 +308,7 @@ impl RoomAgents {
             .filter(|agent| live_agent_ids.contains(&agent.agent_id))
         {
             *by_kind.entry(agent.kind.clone()).or_insert(0) += 1;
-            attention += usize::from(agent.effective_status().is_attention());
+            attention += usize::from(agent.effective_status(snapshot.now).is_attention());
         }
         Self {
             by_kind: by_kind.into_iter().collect(),

@@ -39,6 +39,57 @@ fn card_row(card: AgentCard) -> SidebarRow {
 }
 
 #[test]
+fn permission_ask_visibility_uses_the_list_snapshot_clock() {
+    let since = Timestamp::from_second(1_000).unwrap();
+    let mut state = agent("review");
+    state.status = AgentStatus::Waiting;
+    state.last_activity = since;
+    state.mode = Some(rimz::agents::PermissionMode::Auto);
+    state.waiting_since = Some(since);
+    state.open_ask = Some(OpenAsk {
+        id: rimz::ids::AskId::new(),
+        kind: rimz::agents::AskKind::Permission,
+        detail: Some("approve this?".to_owned()),
+        native_key: None,
+        since,
+    });
+    let mut pane = rimz::pane::PaneRef::from_id(PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
+    pane.command = Some("codex".to_owned());
+    state.pane = Some(pane.clone());
+    for second in [1_059, 1_060] {
+        let snapshot_now = Timestamp::from_second(second).unwrap();
+        let snapshot = SidebarSnapshot::build_with_agents(
+            rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            vec![state.clone()],
+            snapshot_now,
+        )
+        .with_live_panes(vec![pane.clone()], None);
+        let agents = rimz::address::addressable_agents(&snapshot);
+        let report = build_list_report(
+            &Default::default(),
+            &snapshot,
+            &agents,
+            Timestamp::from_second(1_061).unwrap(),
+            None,
+            &[],
+            &Default::default(),
+            &crate::cli::CurrentChannel::Unscoped.address_context(),
+        );
+        assert_eq!(report.agents.len(), 1);
+        let entry = &report.agents[0];
+        assert_eq!(
+            entry.status,
+            if second == 1_059 {
+                AgentStatus::Running
+            } else {
+                AgentStatus::Waiting
+            }
+        );
+        assert_eq!(entry.ask.is_some(), second == 1_060, "at {second}");
+    }
+}
+
+#[test]
 fn model_report_carries_the_launch_tier_only_when_stamped() {
     let mut state = agent("model");
     assert!(

@@ -113,7 +113,7 @@ fn silent_child_excludes_rested_unprompted_and_nonworking_children() {
             _ => {
                 child.status = AgentStatus::Running;
                 child.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
-                assert_eq!(child.effective_status(), AgentStatus::Idle);
+                assert_eq!(child.effective_status(now), AgentStatus::Idle);
             }
         }
         assert_eq!(
@@ -290,6 +290,7 @@ fn ended_labels_preserve_short_session_name_prefix_decisions() {
 
 #[test]
 fn hibernation_preserves_real_status_and_armed_waits() {
+    let now = Timestamp::from_second(2_000).unwrap();
     for status in [
         AgentStatus::Idle,
         AgentStatus::Success,
@@ -302,7 +303,7 @@ fn hibernation_preserves_real_status_and_armed_waits() {
             reclaimed_bytes: 200,
             wake_error: None,
         });
-        assert_eq!(agent.effective_status(), status);
+        assert_eq!(agent.effective_status(now), status);
         agent.pending_waits.push(PendingWait {
             class: crate::agents::PendingWaitClass::Working,
             name: "watch".into(),
@@ -321,8 +322,8 @@ fn hibernation_preserves_real_status_and_armed_waits() {
         } else {
             "sleeping"
         };
-        assert_eq!(projected.effective_status().as_str(), expected);
-        assert!(!projected.effective_status().is_attention());
+        assert_eq!(projected.effective_status(now).as_str(), expected);
+        assert!(!projected.effective_status(now).is_attention());
     }
 }
 
@@ -522,6 +523,7 @@ fn agent_status_labels_are_stable() {
 
 #[test]
 fn effective_status_projects_pending_wait_to_sleeping() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let wait = PendingWait {
         class: crate::agents::PendingWaitClass::Working,
         name: "watch".into(),
@@ -545,14 +547,14 @@ fn effective_status_projects_pending_wait_to_sleeping() {
         } else {
             status
         };
-        assert_eq!(agent.effective_status(), expected, "{status:?}");
+        assert_eq!(agent.effective_status(now), expected, "{status:?}");
         agent.pending_waits.clear();
-        assert_eq!(agent.effective_status(), status);
+        assert_eq!(agent.effective_status(now), status);
     }
     let mut parked = test_agent(AgentStatus::Running, 1_000);
     parked.phase = TurnPhase::Parked;
     parked.pending_waits.push(wait);
-    assert_eq!(parked.effective_status(), AgentStatus::Sleeping);
+    assert_eq!(parked.effective_status(now), AgentStatus::Sleeping);
     assert!(!parked.holds_open_turn());
     assert!(!AgentStatus::Sleeping.is_attention());
     assert!(!AgentStatus::Sleeping.is_actionable());
@@ -561,6 +563,7 @@ fn effective_status_projects_pending_wait_to_sleeping() {
 
 #[test]
 fn turn_completion_requires_a_rested_turn_without_armed_waits() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let started = Some(Timestamp::from_second(1_000).unwrap());
     for (status, stamp, expected) in [
         (AgentStatus::Failed, None, TurnCompletion::Failed),
@@ -579,14 +582,14 @@ fn turn_completion_requires_a_rested_turn_without_armed_waits() {
     let mut registered = test_agent(AgentStatus::Idle, 1_000);
     registered.turn_started_at = None;
     assert_eq!(
-        TurnCompletion::of(registered.effective_status(), registered.turn_started_at),
+        TurnCompletion::of(registered.effective_status(now), registered.turn_started_at),
         TurnCompletion::Open
     );
 
     let mut sleeping = test_agent(AgentStatus::Success, 1_000);
     sleeping.turn_started_at = started;
     assert_eq!(
-        TurnCompletion::of(sleeping.effective_status(), sleeping.turn_started_at),
+        TurnCompletion::of(sleeping.effective_status(now), sleeping.turn_started_at),
         TurnCompletion::Completed
     );
     sleeping.pending_waits.push(PendingWait {
@@ -598,7 +601,7 @@ fn turn_completion_requires_a_rested_turn_without_armed_waits() {
         armed_at: None,
     });
     assert_eq!(
-        TurnCompletion::of(sleeping.effective_status(), sleeping.turn_started_at),
+        TurnCompletion::of(sleeping.effective_status(now), sleeping.turn_started_at),
         TurnCompletion::Open
     );
 }
@@ -626,7 +629,7 @@ fn team_wait_wire_sleeps_until_the_named_instance_reaches_done() {
         let decoded: AgentState =
             serde_json::from_value(serde_json::to_value(agent).unwrap()).unwrap();
         assert_eq!(decoded.pending_waits, vec![wait]);
-        assert_eq!(decoded.effective_status(), AgentStatus::Sleeping);
+        assert_eq!(decoded.effective_status(now), AgentStatus::Sleeping);
     }
 }
 
@@ -797,7 +800,7 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
         let value = serde_json::to_value(&agent).unwrap();
         let decoded: AgentState = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.pending_waits, vec![wait]);
-        assert_eq!(decoded.effective_status(), AgentStatus::Sleeping);
+        assert_eq!(decoded.effective_status(now), AgentStatus::Sleeping);
     }
     assert_eq!(
         serde_json::from_value::<PendingWaitTrigger>(serde_json::json!({
@@ -827,7 +830,7 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
     let decoded: AgentState =
         serde_json::from_value(serde_json::to_value(&parked).unwrap()).unwrap();
     assert_eq!(decoded.background_shells, parked.background_shells);
-    assert_eq!(decoded.effective_status(), AgentStatus::Success);
+    assert_eq!(decoded.effective_status(now), AgentStatus::Success);
     let empty = serde_json::to_value(test_agent(AgentStatus::Success, 1_000)).unwrap();
     assert!(empty.get("pending_waits").is_none());
     assert!(empty.get("background_shells").is_none());
@@ -1203,6 +1206,7 @@ fn effective_turn_error_class_parks_legacy_limit_labels() {
 
 #[test]
 fn effective_turn_error_class_keeps_usage_cap_failed() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let error = AgentTurnError {
         class: TurnErrorClass::Failed,
         at: Timestamp::from_second(1_010).unwrap(),
@@ -1221,7 +1225,7 @@ fn effective_turn_error_class_keeps_usage_cap_failed() {
         });
         actual.push((
             effective_turn_error_class(&error),
-            agent.displayed_turn_error().map(|(class, _)| class),
+            agent.displayed_turn_error(now).map(|(class, _)| class),
         ));
     }
     assert_eq!(
@@ -1258,6 +1262,7 @@ fn context_settle(at: Option<i64>, outcome: TurnSettleOutcome) -> AgentContext {
 
 #[test]
 fn effective_status_projects_active_provider_parks_to_paused() {
+    let now = Timestamp::from_second(2_000).unwrap();
     for class in [
         TurnErrorClass::PausedSpendLimit,
         TurnErrorClass::PausedRateLimit,
@@ -1265,12 +1270,17 @@ fn effective_status_projects_active_provider_parks_to_paused() {
     ] {
         let mut agent = test_agent(AgentStatus::Running, 1_000);
         agent.context = Some(context_error(class, 1_010));
-        assert_eq!(agent.effective_status(), AgentStatus::Paused, "{class:?}");
+        assert_eq!(
+            agent.effective_status(now),
+            AgentStatus::Paused,
+            "{class:?}"
+        );
     }
 }
 
 #[test]
 fn effective_status_projects_terminal_provider_parks_to_paused() {
+    let now = Timestamp::from_second(2_000).unwrap();
     for class in [
         TurnErrorClass::PausedSpendLimit,
         TurnErrorClass::PausedRateLimit,
@@ -1279,9 +1289,13 @@ fn effective_status_projects_terminal_provider_parks_to_paused() {
         let mut failed = test_agent(AgentStatus::Failed, 1_100);
         failed.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
         failed.context = Some(context_error(class, 1_000));
-        assert_eq!(failed.effective_status(), AgentStatus::Paused, "{class:?}");
         assert_eq!(
-            failed.rowless_status(&crate::agents::ParkDemotion::default()),
+            failed.effective_status(now),
+            AgentStatus::Paused,
+            "{class:?}"
+        );
+        assert_eq!(
+            failed.rowless_status(&crate::agents::ParkDemotion::default(), now),
             (AgentStatus::Paused, TurnPhase::Idle)
         );
     }
@@ -1289,6 +1303,7 @@ fn effective_status_projects_terminal_provider_parks_to_paused() {
 
 #[test]
 fn effective_status_keeps_raw_status_without_active_park() {
+    let now = Timestamp::from_second(2_000).unwrap();
     for class in [
         TurnErrorClass::PausedSpendLimit,
         TurnErrorClass::PausedRateLimit,
@@ -1299,20 +1314,20 @@ fn effective_status_keeps_raw_status_without_active_park() {
         let mut failed = test_agent(AgentStatus::Failed, 1_100);
         failed.context = Some(context_error(class, 1_000));
         assert_eq!(
-            failed.effective_status(),
+            failed.effective_status(now),
             AgentStatus::Failed,
             "unstamped {class:?}"
         );
         failed.turn_started_at = Some(Timestamp::from_second(1_001).unwrap());
         assert_eq!(
-            failed.effective_status(),
+            failed.effective_status(now),
             AgentStatus::Failed,
             "stale {class:?}"
         );
         if !class.pauses_turn() {
             failed.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
             assert_eq!(
-                failed.effective_status(),
+                failed.effective_status(now),
                 AgentStatus::Failed,
                 "fatal {class:?}"
             );
@@ -1321,15 +1336,16 @@ fn effective_status_keeps_raw_status_without_active_park() {
 
     let mut running = test_agent(AgentStatus::Running, 1_000);
     running.context = Some(context_error(TurnErrorClass::Failed, 1_010));
-    assert_eq!(running.effective_status(), AgentStatus::Running);
+    assert_eq!(running.effective_status(now), AgentStatus::Running);
 
     let mut unknown = test_agent(AgentStatus::Running, 1_000);
     unknown.context = Some(context_error(TurnErrorClass::Unknown, 1_010));
-    assert_eq!(unknown.effective_status(), AgentStatus::Running);
+    assert_eq!(unknown.effective_status(now), AgentStatus::Running);
 }
 
 #[test]
 fn rowless_status_prioritizes_native_input_over_provider_parks() {
+    let now = Timestamp::from_second(2_000).unwrap();
     for outcome in [
         TurnSettleOutcome::NativeWait,
         TurnSettleOutcome::PlanProposed,
@@ -1342,7 +1358,7 @@ fn rowless_status_prioritizes_native_input_over_provider_parks() {
         ));
         running.context = Some(context);
         assert_eq!(
-            running.rowless_status(&crate::agents::ParkDemotion::default()),
+            running.rowless_status(&crate::agents::ParkDemotion::default(), now),
             (AgentStatus::Waiting, TurnPhase::Idle),
             "{outcome:?}"
         );
@@ -1351,12 +1367,13 @@ fn rowless_status_prioritizes_native_input_over_provider_parks() {
 
 #[test]
 fn effective_status_settles_background_park_to_success() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut parked = test_agent(AgentStatus::Running, 1_000);
     parked.phase = TurnPhase::Parked;
-    assert_eq!(parked.effective_status(), AgentStatus::Success);
+    assert_eq!(parked.effective_status(now), AgentStatus::Success);
 
     parked.phase = TurnPhase::Reasoning;
-    assert_eq!(parked.effective_status(), AgentStatus::Running);
+    assert_eq!(parked.effective_status(now), AgentStatus::Running);
 }
 
 #[test]
@@ -1448,6 +1465,7 @@ fn budget_park_serializes_verbatim_in_persisted_state() {
 
 #[test]
 fn waiting_and_interruption_outrank_a_budget_park() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut waiting = test_agent(AgentStatus::Waiting, 1_000);
     waiting.budget_park = Some(crate::agents::BudgetPark {
         cap_usd: 5.0,
@@ -1459,61 +1477,62 @@ fn waiting_and_interruption_outrank_a_budget_park() {
         resets_at: None,
         reset_window: None,
     });
-    assert_eq!(waiting.effective_status(), AgentStatus::Waiting);
+    assert_eq!(waiting.effective_status(now), AgentStatus::Waiting);
 
     waiting.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
-    assert_eq!(waiting.effective_status(), AgentStatus::Idle);
+    assert_eq!(waiting.effective_status(now), AgentStatus::Idle);
 }
 
 #[test]
 fn effective_status_projects_hookless_turn_settle_markers() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut plan = test_agent(AgentStatus::Running, 1_000);
     let plan_context = context_settle(Some(1_010), TurnSettleOutcome::PlanProposed);
     plan.context = Some(plan_context);
-    assert_eq!(plan.effective_status(), AgentStatus::Waiting);
+    assert_eq!(plan.effective_status(now), AgentStatus::Waiting);
     assert!(plan.is_awaiting_input());
 
     let mut native = test_agent(AgentStatus::Running, 1_000);
     let native_context = context_settle(Some(1_010), TurnSettleOutcome::NativeWait);
     native.context = Some(native_context);
-    assert_eq!(native.effective_status(), AgentStatus::Waiting);
+    assert_eq!(native.effective_status(now), AgentStatus::Waiting);
     assert!(native.is_awaiting_input());
 
     let mut stale_native = test_agent(AgentStatus::Running, 1_000);
     let stale_native_context = context_settle(Some(990), TurnSettleOutcome::NativeWait);
     stale_native.context = Some(stale_native_context);
-    assert_eq!(stale_native.effective_status(), AgentStatus::Running);
+    assert_eq!(stale_native.effective_status(now), AgentStatus::Running);
     assert!(!stale_native.is_awaiting_input());
 
     let mut stale_plan = test_agent(AgentStatus::Running, 1_000);
     let stale_plan_context = context_settle(Some(990), TurnSettleOutcome::PlanProposed);
     stale_plan.context = Some(stale_plan_context);
-    assert_eq!(stale_plan.effective_status(), AgentStatus::Running);
+    assert_eq!(stale_plan.effective_status(now), AgentStatus::Running);
     assert!(!stale_plan.is_awaiting_input());
 
     let mut complete = test_agent(AgentStatus::Running, 1_000);
     complete.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Complete));
-    assert_eq!(complete.effective_status(), AgentStatus::Success);
+    assert_eq!(complete.effective_status(now), AgentStatus::Success);
 
     let mut interrupted = test_agent(AgentStatus::Running, 1_000);
     interrupted.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
-    assert_eq!(interrupted.effective_status(), AgentStatus::Idle);
+    assert_eq!(interrupted.effective_status(now), AgentStatus::Idle);
 
     let mut interrupted_waiting = test_agent(AgentStatus::Waiting, 1_000);
     interrupted_waiting.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
-    assert_eq!(interrupted_waiting.effective_status(), AgentStatus::Idle);
+    assert_eq!(interrupted_waiting.effective_status(now), AgentStatus::Idle);
 
     let mut stale_waiting = test_agent(AgentStatus::Waiting, 1_000);
     stale_waiting.context = Some(context_settle(Some(990), TurnSettleOutcome::Interrupted));
-    assert_eq!(stale_waiting.effective_status(), AgentStatus::Waiting);
+    assert_eq!(stale_waiting.effective_status(now), AgentStatus::Waiting);
 
     let mut stale = test_agent(AgentStatus::Running, 1_000);
     stale.context = Some(context_settle(Some(990), TurnSettleOutcome::Complete));
-    assert_eq!(stale.effective_status(), AgentStatus::Running);
+    assert_eq!(stale.effective_status(now), AgentStatus::Running);
 
     let mut non_running = test_agent(AgentStatus::Idle, 1_000);
     non_running.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Complete));
-    assert_eq!(non_running.effective_status(), AgentStatus::Idle);
+    assert_eq!(non_running.effective_status(now), AgentStatus::Idle);
 
     let mut parked = test_agent(AgentStatus::Running, 1_000);
     let mut context = context_error(TurnErrorClass::PausedRateLimit, 1_010);
@@ -1522,7 +1541,7 @@ fn effective_status_projects_hookless_turn_settle_markers() {
         TurnSettleOutcome::Complete,
     ));
     parked.context = Some(context);
-    assert_eq!(parked.effective_status(), AgentStatus::Paused);
+    assert_eq!(parked.effective_status(now), AgentStatus::Paused);
 }
 
 #[test]
@@ -1592,9 +1611,10 @@ fn open_turn_predicate_follows_lifecycle_and_rest_certificates() {
 
 #[test]
 fn open_turn_and_effective_status_are_consistent() {
-    fn assert_consistent(agent: &AgentState, resting_running_exception: bool) {
+    let now = Timestamp::from_second(2_000).unwrap();
+    fn assert_consistent(agent: &AgentState, resting_running_exception: bool, now: Timestamp) {
         let status_is_open = matches!(
-            agent.effective_status(),
+            agent.effective_status(now),
             AgentStatus::Running | AgentStatus::Waiting
         );
         assert!(
@@ -1622,7 +1642,11 @@ fn open_turn_and_effective_status_are_consistent() {
         AgentStatus::Failed,
         AgentStatus::Paused,
     ] {
-        assert_consistent(&test_agent(status, 1_000), false);
+        assert_consistent(&test_agent(status, 1_000), false, now);
+    }
+    let reviewing = auto_review_permission();
+    for second in [1_059, 1_060] {
+        assert_consistent(&reviewing, false, Timestamp::from_second(second).unwrap());
     }
     for class in [
         TurnErrorClass::PausedSpendLimit,
@@ -1636,6 +1660,7 @@ fn open_turn_and_effective_status_are_consistent() {
         assert_consistent(
             &agent,
             matches!(class, TurnErrorClass::Unknown | TurnErrorClass::Failed),
+            now,
         );
     }
     for outcome in [
@@ -1646,7 +1671,7 @@ fn open_turn_and_effective_status_are_consistent() {
     ] {
         let mut agent = test_agent(AgentStatus::Running, 1_000);
         agent.context = Some(context_settle(Some(1_010), outcome));
-        assert_consistent(&agent, false);
+        assert_consistent(&agent, false, now);
     }
 
     let budget_park = crate::agents::BudgetPark {
@@ -1666,34 +1691,138 @@ fn open_turn_and_effective_status_are_consistent() {
         let mut budget_parked = test_agent(AgentStatus::Running, 1_000);
         budget_parked.budget_park = Some(budget_park.clone());
         budget_parked.context = Some(context_settle(Some(1_010), outcome));
-        assert_consistent(&budget_parked, false);
+        assert_consistent(&budget_parked, false, now);
 
         let mut background_parked = budget_parked;
         background_parked.budget_park = None;
         background_parked.phase = TurnPhase::Parked;
-        assert_consistent(&background_parked, false);
+        assert_consistent(&background_parked, false, now);
     }
 }
 
 #[test]
 fn answered_waiting_reads_running_and_reasoning() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut agent = test_agent(AgentStatus::Waiting, 1_010);
     agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
-    assert_eq!(agent.effective_status(), AgentStatus::Running);
+    assert_eq!(agent.effective_status(now), AgentStatus::Running);
     assert_eq!(
-        agent.rowless_status(&ParkDemotion::default()),
+        agent.rowless_status(&ParkDemotion::default(), now),
         (AgentStatus::Running, TurnPhase::Reasoning)
+    );
+}
+
+fn auto_review_permission() -> AgentState {
+    let mut agent = test_agent(AgentStatus::Waiting, 1_000);
+    agent.kind = AgentKind::new_unchecked("codex");
+    agent.mode = Some(crate::agents::PermissionMode::Auto);
+    agent.waiting_since = Some(agent.last_activity);
+    agent.open_ask = Some(OpenAsk {
+        id: AskId::new(),
+        kind: AskKind::Permission,
+        detail: Some("shell: cargo test".to_owned()),
+        native_key: None,
+        since: agent.last_activity,
+    });
+    agent
+}
+
+#[test]
+fn codex_auto_permission_waits_for_review_before_attention() {
+    let agent = auto_review_permission();
+    for (second, status, phase) in [
+        (1_000, AgentStatus::Running, TurnPhase::Reasoning),
+        (1_059, AgentStatus::Running, TurnPhase::Reasoning),
+        (1_060, AgentStatus::Waiting, TurnPhase::Idle),
+        (1_061, AgentStatus::Waiting, TurnPhase::Idle),
+    ] {
+        let now = Timestamp::from_second(second).unwrap();
+        assert_eq!(agent.effective_status(now), status, "at {second}");
+        assert_eq!(agent.rested_status(now), status, "at {second}");
+        assert_eq!(
+            agent.rowless_status(&ParkDemotion::default(), now),
+            (status, phase)
+        );
+        assert!(agent.is_awaiting_input());
+        assert!(agent.holds_open_turn());
+        assert_eq!(agent.actionable_asks().count(), 1);
+        assert_eq!(
+            agent.attention_ask(now),
+            (second >= 1_060).then(|| agent.open_ask.as_ref().unwrap())
+        );
+    }
+
+    for (kind, mode, ask_kind) in [
+        (
+            "claude",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::Permission,
+        ),
+        ("codex", None, AskKind::Permission),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Ask),
+            AskKind::Permission,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Yolo),
+            AskKind::Permission,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Plan),
+            AskKind::Permission,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::Question,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::PlanApproval,
+        ),
+    ] {
+        let mut other = agent.clone();
+        other.kind = AgentKind::new_unchecked(kind);
+        other.mode = mode;
+        other.open_ask.as_mut().unwrap().kind = ask_kind;
+        assert_eq!(
+            other.effective_status(agent.last_activity),
+            AgentStatus::Waiting
+        );
+        assert_eq!(
+            other.attention_ask(agent.last_activity),
+            other.open_ask.as_ref()
+        );
+    }
+
+    let mut answered = agent.clone();
+    answered.last_activity = Timestamp::from_second(1_010).unwrap();
+    assert!(!answered.is_awaiting_input());
+    assert!(answered.attention_ask(answered.last_activity).is_none());
+    assert_eq!(
+        answered.effective_status(answered.last_activity),
+        AgentStatus::Running
+    );
+    answered.context = Some(context_settle(Some(1_020), TurnSettleOutcome::Interrupted));
+    assert_eq!(
+        answered.effective_status(Timestamp::from_second(1_030).unwrap()),
+        AgentStatus::Idle
     );
 }
 
 #[test]
 fn waiting_without_answer_evidence_stays_waiting() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut agent = test_agent(AgentStatus::Waiting, 1_010);
     for waiting_since in [None, Some(agent.last_activity)] {
         agent.waiting_since = waiting_since;
-        assert_eq!(agent.effective_status(), AgentStatus::Waiting);
+        assert_eq!(agent.effective_status(now), AgentStatus::Waiting);
         assert_eq!(
-            agent.rowless_status(&ParkDemotion::default()),
+            agent.rowless_status(&ParkDemotion::default(), now),
             (AgentStatus::Waiting, TurnPhase::Idle)
         );
     }
@@ -1705,15 +1834,16 @@ fn waiting_without_answer_evidence_stays_waiting() {
         native_key: Some("ask-call".to_owned()),
         since: agent.waiting_since.unwrap(),
     });
-    assert_eq!(agent.effective_status(), AgentStatus::Waiting);
+    assert_eq!(agent.effective_status(now), AgentStatus::Waiting);
     assert_eq!(
-        agent.rowless_status(&ParkDemotion::default()),
+        agent.rowless_status(&ParkDemotion::default(), now),
         (AgentStatus::Waiting, TurnPhase::Idle)
     );
 }
 
 #[test]
 fn answered_waiting_admits_running_settle_markers() {
+    let now = Timestamp::from_second(2_000).unwrap();
     for (outcome, expected) in [
         (TurnSettleOutcome::Complete, AgentStatus::Success),
         (TurnSettleOutcome::Interrupted, AgentStatus::Idle),
@@ -1723,9 +1853,9 @@ fn answered_waiting_admits_running_settle_markers() {
         let mut agent = test_agent(AgentStatus::Waiting, 1_010);
         agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
         agent.context = Some(context_settle(Some(1_020), outcome));
-        assert_eq!(agent.effective_status(), expected, "{outcome:?}");
+        assert_eq!(agent.effective_status(now), expected, "{outcome:?}");
         assert_eq!(
-            agent.rowless_status(&ParkDemotion::default()),
+            agent.rowless_status(&ParkDemotion::default(), now),
             (expected, TurnPhase::Idle),
             "{outcome:?}"
         );
@@ -1734,6 +1864,7 @@ fn answered_waiting_admits_running_settle_markers() {
 
 #[test]
 fn answered_waiting_admits_running_turn_errors() {
+    let now = Timestamp::from_second(2_000).unwrap();
     for (class, effective, rowless) in [
         (
             TurnErrorClass::PausedOverloaded,
@@ -1749,13 +1880,13 @@ fn answered_waiting_admits_running_turn_errors() {
         let mut agent = test_agent(AgentStatus::Waiting, 1_010);
         agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
         agent.context = Some(context_error(class, 1_020));
-        assert_eq!(agent.effective_status(), effective, "{class:?}");
+        assert_eq!(agent.effective_status(now), effective, "{class:?}");
         assert_eq!(
-            agent.displayed_turn_error().map(|(class, _)| class),
+            agent.displayed_turn_error(now).map(|(class, _)| class),
             Some(class)
         );
         assert_eq!(
-            agent.rowless_status(&ParkDemotion::default()),
+            agent.rowless_status(&ParkDemotion::default(), now),
             (rowless, TurnPhase::Idle),
             "{class:?}"
         );
@@ -1766,7 +1897,7 @@ fn answered_waiting_admits_running_turn_errors() {
                 agent.last_activity,
             );
             assert_eq!(
-                agent.rowless_status(&demotion),
+                agent.rowless_status(&demotion, now),
                 (AgentStatus::Failed, TurnPhase::Idle)
             );
         }
@@ -1775,6 +1906,7 @@ fn answered_waiting_admits_running_turn_errors() {
 
 #[test]
 fn answered_waiting_admits_budget_parks() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut agent = test_agent(AgentStatus::Waiting, 1_010);
     agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
     agent.budget_park = Some(BudgetPark {
@@ -1787,9 +1919,9 @@ fn answered_waiting_admits_budget_parks() {
         resets_at: None,
         reset_window: None,
     });
-    assert_eq!(agent.effective_status(), AgentStatus::Paused);
+    assert_eq!(agent.effective_status(now), AgentStatus::Paused);
     assert_eq!(
-        agent.rowless_status(&ParkDemotion::default()),
+        agent.rowless_status(&ParkDemotion::default(), now),
         (AgentStatus::Paused, TurnPhase::Idle)
     );
 }
@@ -1861,11 +1993,12 @@ fn an_admitted_interruption_marker_releases_a_waiting_ask() {
 
 #[test]
 fn displayed_turn_error_projects_active_running_marker() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     agent.context = Some(context_error(TurnErrorClass::PausedOverloaded, 1_010));
 
     assert_eq!(
-        agent.displayed_turn_error().map(|(class, error)| (
+        agent.displayed_turn_error(now).map(|(class, error)| (
             class,
             error.label.as_deref(),
             error.at.as_second()
@@ -1880,12 +2013,13 @@ fn displayed_turn_error_projects_active_running_marker() {
 
 #[test]
 fn displayed_turn_error_projects_terminal_marker_in_current_turn() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut agent = test_agent(AgentStatus::Failed, 1_100);
     agent.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
     agent.context = Some(context_error(TurnErrorClass::Failed, 1_010));
 
     assert_eq!(
-        agent.displayed_turn_error().map(|(class, error)| (
+        agent.displayed_turn_error(now).map(|(class, error)| (
             class,
             error.label.as_deref(),
             error.at.as_second()
@@ -1896,14 +2030,15 @@ fn displayed_turn_error_projects_terminal_marker_in_current_turn() {
 
 #[test]
 fn displayed_turn_error_self_clears_when_marker_is_stale() {
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut running = test_agent(AgentStatus::Running, 1_100);
     running.context = Some(context_error(TurnErrorClass::PausedOverloaded, 1_000));
-    assert_eq!(running.displayed_turn_error(), None);
+    assert_eq!(running.displayed_turn_error(now), None);
 
     let mut failed = test_agent(AgentStatus::Failed, 1_100);
     failed.turn_started_at = Some(Timestamp::from_second(1_050).unwrap());
     failed.context = Some(context_error(TurnErrorClass::Failed, 1_000));
-    assert_eq!(failed.displayed_turn_error(), None);
+    assert_eq!(failed.displayed_turn_error(now), None);
 }
 
 /// The bands come from `[theme.display.context_meter]`, so a custom set moves every

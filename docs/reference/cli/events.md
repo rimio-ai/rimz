@@ -172,6 +172,8 @@ error: signal name `ci.passed` is reserved for RimZ
 | `worktree` | `worktree.created`, `worktree.removed` | `worktree` |
 | `wait` | `wait.<task-name>` | `watch` |
 
+`agent.waiting` and `team.waiting` follow the raw hook-time lifecycle transition. They still fire immediately for Codex permission requests under automatic review, even while attention surfaces show Running for the first 60 seconds. Promotion to visible waiting emits no second signal ([Codex asks](../../internals/agents/adapter_codex.md#asks-and-answers)).
+
 The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the nine `ci` and `pr` names above. The hidden `--source git` accepts only `trunk.moved`; there is no CLI `worktree` source. These flags perform no caller check, so reserved families prevent name collisions, not authenticated provenance. What each built-in signal's payload carries is in [the loops guide](../../guide/loops.md#signals-the-rooms-event-bus) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
 
 `pr.opened` reports a newly observed open PR after a successful prior probe, not a PR already present when monitoring starts. `trunk.moved` reports a changed commit on the same trunk ref. Worktree signals follow successful managed operations, with creation after its hook succeeds; reuse and failed-creation rollback are silent. See [trunk and worktree signals](../../internals/harness/loops.md#trunk-and-worktree-signals) for the producer contract.

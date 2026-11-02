@@ -396,7 +396,10 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
         3,
         "two fleet rows and one team run"
     );
-    assert_eq!(snapshot.agents[0].effective_status(), AgentStatus::Sleeping);
+    assert_eq!(
+        snapshot.agents[0].effective_status(snapshot.now),
+        AgentStatus::Sleeping
+    );
     for wait in &snapshot.agents[0].pending_waits[..2] {
         assert_eq!(wait.armed_at, Some(jiff::Timestamp::UNIX_EPOCH));
         let PendingWaitTrigger::Subagent {
@@ -479,7 +482,10 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
     }
     project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
     assert!(snapshot.agents[0].pending_waits.is_empty());
-    assert_ne!(snapshot.agents[0].effective_status(), AgentStatus::Sleeping);
+    assert_ne!(
+        snapshot.agents[0].effective_status(snapshot.now),
+        AgentStatus::Sleeping
+    );
 }
 
 #[test]

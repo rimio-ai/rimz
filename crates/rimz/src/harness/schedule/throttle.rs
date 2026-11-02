@@ -1171,7 +1171,7 @@ fn provider_reported(agents: &[AgentState], reference: &AgentSessionId) -> bool 
 /// compaction window, and its owner not gone.
 fn working(agent: &AgentState, now: Timestamp) -> bool {
     agent.ended_at.is_none()
-        && agent.effective_status() == AgentStatus::Running
+        && agent.effective_status(now) == AgentStatus::Running
         && !agent.is_compacting(now)
         && crate::store::runtime::agent_liveness(agent)
             != crate::store::runtime::AgentLiveness::Dead
