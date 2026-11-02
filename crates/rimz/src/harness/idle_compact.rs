@@ -65,7 +65,7 @@ fn fire_point(
     })
 }
 
-fn eligible_seat(agent: &AgentState, floor: u64) -> bool {
+fn eligible_seat(agent: &AgentState, floor: u64, now: Timestamp) -> bool {
     !agent.is_provider_subagent()
         && !agent.agent_id.is_empty()
         && agent.compacting_since.is_none()
@@ -73,7 +73,7 @@ fn eligible_seat(agent: &AgentState, floor: u64) -> bool {
         && agent.budget_park.is_none()
         && !agent.is_awaiting_input()
         && matches!(
-            agent.effective_status(),
+            agent.effective_status(now),
             AgentStatus::Idle | AgentStatus::Success
         )
         && agent.occupied_context_tokens().is_some_and(|tokens| {
@@ -91,7 +91,7 @@ fn should_compact(
         return false;
     };
     let idle = now.as_second() - last_request_at.as_second();
-    eligible_seat(agent, window.floor)
+    eligible_seat(agent, window.floor, now)
         && command.is_some()
         && idle >= window.fire_after.as_secs().min(i64::MAX as u64) as i64
         && idle < window.cache_expires.as_secs().min(i64::MAX as u64) as i64

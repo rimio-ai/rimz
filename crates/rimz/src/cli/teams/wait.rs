@@ -335,7 +335,7 @@ fn poll(
                 let attention = rimz::store::snapshot::needs_you(agent, row, demotion, now);
                 let status = row
                     .and_then(|row| row.status())
-                    .unwrap_or_else(|| agent.rowless_status(demotion).0);
+                    .unwrap_or_else(|| agent.rowless_status(demotion, snapshot.now).0);
                 statuses.push(status);
                 activity = activity.max(Some(
                     row.map_or(agent.last_activity, |row| row.last_activity),

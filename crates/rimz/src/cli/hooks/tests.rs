@@ -580,9 +580,9 @@ fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
         now,
     )
     .with_agent_activity(&activity);
-    let park = rimz::harness::park_notice::unnoticed_park(&run, &snapshot.agents)
+    let park = rimz::harness::park_notice::unnoticed_park(&run, &snapshot.agents, snapshot.now)
         .expect("delayed hook apply must not hide the child's credit-limit park");
-    let (class, error) = park.child.displayed_turn_error().unwrap();
+    let (class, error) = park.child.displayed_turn_error(snapshot.now).unwrap();
     assert_eq!(class, TurnErrorClass::PausedRateLimit);
     assert_eq!(error.label.as_deref(), Some(label));
     assert_eq!(park.child.last_activity, ingress_at);

@@ -270,7 +270,7 @@ fn warm_auto_continue_over_200_agents_reads_no_unchanged_park_bytes() {
                 label: None,
             });
             agent.context = Some(context);
-            assert!(agent.displayed_turn_error().is_some());
+            assert!(agent.displayed_turn_error(now).is_some());
         }
         agents.push(agent);
     }

@@ -382,7 +382,7 @@ fn predicate_skips_busy_parked_compacting_and_child_agents() {
         },
         armed_at: Some(ts(6_000)),
     });
-    assert_eq!(sleeping.effective_status(), AgentStatus::Sleeping);
+    assert_eq!(sleeping.effective_status(ts(6_000)), AgentStatus::Sleeping);
     assert!(!due(&sleeping));
 
     for status in [

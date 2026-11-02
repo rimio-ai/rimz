@@ -1042,7 +1042,7 @@ fn record_projection_clears_stale_state_and_preserves_real_status() {
     .unwrap();
     project_hibernation(&mut snapshot, store.paths());
     assert_eq!(
-        snapshot.agents[0].effective_status(),
+        snapshot.agents[0].effective_status(snapshot.now),
         crate::agents::AgentStatus::Idle
     );
     assert_eq!(
@@ -1056,7 +1056,7 @@ fn record_projection_clears_stale_state_and_preserves_real_status() {
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].status = crate::agents::AgentStatus::Running;
     project_hibernation(&mut snapshot, store.paths());
     assert_eq!(
-        snapshot.agents[0].effective_status(),
+        snapshot.agents[0].effective_status(snapshot.now),
         crate::agents::AgentStatus::Running
     );
     crate::store::hibernate::withdraw(store.paths(), &agent.kind, &agent.agent_id).unwrap();

@@ -479,7 +479,9 @@ impl TargetOutcome {
                 last_message,
             } => WaitEntryJson::new(
                 self.name.clone(),
-                if agent.effective_status() == rimz::agents::AgentStatus::Failed {
+                if agent.effective_status(jiff::Timestamp::now())
+                    == rimz::agents::AgentStatus::Failed
+                {
                     RunStatus::Failed
                 } else {
                     RunStatus::Completed

@@ -150,7 +150,7 @@ pub fn leader_turn(
         },
         at_rest: false,
     };
-    if super::idle_stop::resting(leader).is_err() {
+    if super::idle_stop::resting(leader, jiff::Timestamp::now()).is_err() {
         return Ok(Some(turn));
     }
     let messages = store.list_messages()?;

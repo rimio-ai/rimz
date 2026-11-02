@@ -4399,7 +4399,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
                 .iter()
                 .map(|agent| (
                     &agent.agent_id,
-                    agent.effective_status(),
+                    agent.effective_status(current.now),
                     agent.last_request_at(),
                     &agent.pending_waits
                 ))

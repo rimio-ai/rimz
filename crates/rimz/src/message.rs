@@ -248,7 +248,7 @@ fn gate_open_for_agent(
     now: Timestamp,
 ) -> bool {
     !agent.is_compacting(now)
-        && (gate_open(gate, agent.effective_status())
+        && (gate_open(gate, agent.effective_status(now))
             || (force && gate != DeliveryGate::Resume && agent.is_awaiting_input()))
 }
 

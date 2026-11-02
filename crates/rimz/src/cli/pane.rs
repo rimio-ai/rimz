@@ -415,6 +415,9 @@ fn list(
     };
 
     if json {
+        let now = overlay
+            .as_ref()
+            .map_or_else(jiff::Timestamp::now, |snapshot| snapshot.now);
         let tabs = group_by_tab(&panes);
         let payload = PaneListJson {
             session: &session,
@@ -429,7 +432,7 @@ fn list(
                         .iter()
                         .map(|pane| {
                             let is_self = self_pane.as_ref() == Some(&pane.pane_id);
-                            pane_json(pane, agent_for(pane), &agents, is_self)
+                            pane_json(pane, agent_for(pane), &agents, is_self, now)
                         })
                         .collect(),
                 })
@@ -520,6 +523,7 @@ fn pane_row(
     agent: Option<&AgentState>,
     peers: &[&AgentState],
     is_self: bool,
+    now: jiff::Timestamp,
 ) -> Vec<render::Cell> {
     let agent = agent.filter(|_| !pane.is_rimz_sidebar());
     let occupant_cell = if pane.is_rimz_sidebar() {
@@ -533,7 +537,7 @@ fn pane_row(
     };
     let status_cell = match agent {
         Some(agent) => {
-            let status = agent.effective_status();
+            let status = agent.effective_status(now);
             let phase = if status == rimz::agents::AgentStatus::Running {
                 agent.phase
             } else {
@@ -613,6 +617,7 @@ fn pane_json<'a>(
     agent: Option<&AgentState>,
     peers: &[&AgentState],
     is_self: bool,
+    now: jiff::Timestamp,
 ) -> PaneJson<'a> {
     let agent = agent.filter(|_| !pane.is_rimz_sidebar());
     PaneJson {
@@ -628,7 +633,7 @@ fn pane_json<'a>(
         agent: agent.map(|agent| AgentJson {
             kind: agent.kind.to_string(),
             handle: rimz::address::agent_handle(agent, peers, true),
-            status: agent.effective_status().as_str().to_owned(),
+            status: agent.effective_status(now).as_str().to_owned(),
             worktree: agent.channel(),
         }),
         command: pane.command.as_deref(),
@@ -865,6 +870,7 @@ fn pane_table(
     self_pane: Option<&PaneId>,
     all: bool,
 ) -> (render::Table, usize) {
+    let now = overlay.map_or_else(jiff::Timestamp::now, |snapshot| snapshot.now);
     let mut table = render::Table::new(["AGENT", "STATUS", "COMMAND", "CWD", "PANE"]);
     let peers: Vec<_> = overlay.map(pane_handle_peers).unwrap_or_default();
     let mut headings = HashMap::new();
@@ -895,6 +901,7 @@ fn pane_table(
                 agent,
                 &peers,
                 self_pane == Some(&pane.pane_id),
+                now,
             ));
         }
     }

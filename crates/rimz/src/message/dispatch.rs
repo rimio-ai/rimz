@@ -701,7 +701,9 @@ fn prepare_mode(
             .ok_or_else(|| DispatchErr::NoDurableSession {
                 label: label.clone(),
             })?;
-            if !request.force && agent.effective_status() == AgentStatus::Waiting {
+            if !request.force
+                && agent.effective_status(resolution.snapshot.now) == AgentStatus::Waiting
+            {
                 return Err(DispatchErr::WaitingOnInput { label });
             }
         }

@@ -304,8 +304,8 @@ pub(super) fn build_entry(
 ) -> AgentReportEntry {
     let card = row.and_then(SidebarRow::as_agent);
     let child = overrides.child;
-    let (status, phase) = card_status(agent, row, child, demotion);
-    let displayed_error = agent.displayed_turn_error();
+    let (status, phase) = card_status(agent, row, child, demotion, now);
+    let displayed_error = agent.displayed_turn_error(now);
     let turn_error = displayed_error.map(|(class, error)| TurnErrorReport {
         class,
         label: row

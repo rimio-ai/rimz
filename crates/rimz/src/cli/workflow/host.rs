@@ -294,12 +294,14 @@ impl workflow::AttemptHost for Host<'_> {
                     });
                 }
                 if observed.limited.is_none()
-                    && current.displayed_turn_error().is_some_and(|(class, _)| {
-                        matches!(
-                            class,
-                            TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
-                        )
-                    })
+                    && current
+                        .displayed_turn_error(snapshot.now)
+                        .is_some_and(|(class, _)| {
+                            matches!(
+                                class,
+                                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
+                            )
+                        })
                 {
                     observed.limited = Some(Limited {
                         reset_at: ProviderCapacity::read(ctx.runtime(), &current.login_key())

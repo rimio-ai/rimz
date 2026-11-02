@@ -213,14 +213,19 @@ impl AgentStateCounts {
         self.running + self.waiting + self.idle + self.hibernated
     }
 
-    fn count(&mut self, agent: &crate::agents::AgentState, hibernated: &[HibernatedEntry]) {
+    fn count(
+        &mut self,
+        agent: &crate::agents::AgentState,
+        hibernated: &[HibernatedEntry],
+        now: jiff::Timestamp,
+    ) {
         let bucket = if hibernated
             .iter()
             .any(|entry| entry.kind == agent.kind && entry.agent_id == agent.agent_id)
         {
             &mut self.hibernated
         } else {
-            match agent.effective_status() {
+            match agent.effective_status(now) {
                 AgentStatus::Running | AgentStatus::Paused => &mut self.running,
                 AgentStatus::Waiting => &mut self.waiting,
                 AgentStatus::Idle
@@ -318,11 +323,12 @@ fn count_live_logins(
     agents: &[crate::agents::AgentState],
     hibernated: &[HibernatedEntry],
 ) {
+    let now = jiff::Timestamp::now();
     for agent in agents.iter().filter(|agent| can_write(agent)) {
         counts
             .entry(agent.login_key())
             .or_default()
-            .count(agent, hibernated);
+            .count(agent, hibernated, now);
     }
 }
 

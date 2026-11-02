@@ -1437,7 +1437,10 @@ fn a_ping_on_a_row_parked_on_background_work_moves_only_the_cache_clock() {
         (rested.status, rested.phase),
         (AgentStatus::Running, TurnPhase::Parked)
     );
-    assert_eq!(rested.effective_status(), AgentStatus::Success);
+    assert_eq!(
+        rested.effective_status(rested.last_activity),
+        AgentStatus::Success
+    );
     let observable = |state: &AgentState| {
         (
             state.status,

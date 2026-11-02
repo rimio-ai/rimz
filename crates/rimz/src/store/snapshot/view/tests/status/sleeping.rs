@@ -104,7 +104,7 @@ fn completed_turn_working_wait_keeps_its_wait_description() {
         card.description(snapshot.now),
         crate::store::snapshot::CardDescription::Wait("wakes after cargo test".into())
     );
-    let (status, phase) = session.rowless_status(&Default::default());
+    let (status, phase) = session.rowless_status(&Default::default(), snapshot.now);
     let fallback = crate::store::snapshot::AgentCard {
         status,
         phase,
@@ -130,7 +130,7 @@ fn resting_shell_displays_running_without_changing_delivery_status() {
     let snapshot = room_with_agent_panes(vec![session]);
     assert_eq!(row(&snapshot, "shell").status(), Some(AgentStatus::Running));
     assert_eq!(
-        rollup_agent(&snapshot, "shell").effective_status(),
+        rollup_agent(&snapshot, "shell").effective_status(snapshot.now),
         AgentStatus::Success
     );
 }
