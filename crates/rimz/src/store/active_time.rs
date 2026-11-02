@@ -201,7 +201,8 @@ fn update_record(
 
 thread_local! {
     /// The long-lived consumer pays one stat per queried live identity and
-    /// reparses only records whose atomic rename changed `(mtime, len)`.
+    /// reparses only records an atomic rename replaced: each rename brings a
+    /// new inode, which the full file stamp catches.
     static ACTIVE_TIME_PARSE_CACHE:
         sidecar::ParseCache<ActiveTimeRecord> = sidecar::ParseCache::default();
 }
