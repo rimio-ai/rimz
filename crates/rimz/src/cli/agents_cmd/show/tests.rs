@@ -186,7 +186,8 @@ fn card_projection_show_turn_elapsed_is_a_duration() {
     entry.status = AgentStatus::Running;
     entry.phase = TurnPhase::Acting;
     entry.timeline.turn_started_at = Some(jiff::Timestamp::UNIX_EPOCH);
-    entry.timeline.last_seen = jiff::Timestamp::from_second(119).unwrap();
+    entry.timeline.last_seen = jiff::Timestamp::from_second(120).unwrap();
+    entry.timeline.idle_since = jiff::Timestamp::from_second(119).unwrap();
     let text = strip(|w| {
         render_activity_section(
             w,
@@ -198,14 +199,14 @@ fn card_projection_show_turn_elapsed_is_a_duration() {
         )
     });
     assert!(
-        text.contains("running (acting) · turn 2m · last seen 1s ago · stale"),
+        text.contains("running (acting) · turn 2m · last request 1s ago · stale"),
         "{text}"
     );
     assert!(!text.contains("2m ago"), "{text}");
     for status in [AgentStatus::Idle, AgentStatus::Success] {
         entry.status = status;
         entry.phase = TurnPhase::Idle;
-        entry.timeline.last_seen = jiff::Timestamp::from_second(120).unwrap();
+        entry.timeline.idle_since = jiff::Timestamp::from_second(120).unwrap();
         let text = strip(|w| {
             render_activity_section(
                 w,
@@ -217,7 +218,7 @@ fn card_projection_show_turn_elapsed_is_a_duration() {
             )
         });
         assert!(!text.contains(" · turn "), "{text}");
-        assert!(text.contains("last seen 58m ago"), "{text}");
+        assert!(text.contains("last request 58m ago"), "{text}");
     }
 }
 

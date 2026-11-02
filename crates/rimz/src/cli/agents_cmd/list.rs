@@ -217,7 +217,7 @@ fn render_projected_agents_table(
     let mut entries = grouped_entries.iter();
     let glyph = theme_glyphs(theme);
     let mut table = render::Table::new([
-        "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "SEEN",
+        "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
     ])
     .right(&[5, 6, 7])
     .max_width(max_width);
@@ -460,7 +460,7 @@ fn agent_row(
         model,
         context_cell(agent.context.fill_pct),
         render::cell(tokens).dash(),
-        render::cell(render::age_short(agent.timeline.last_seen, now)),
+        render::cell(render::age_short(agent.timeline.idle_since, now)),
     ]
 }
 
@@ -588,16 +588,17 @@ mod tests {
     }
 
     #[test]
-    fn card_projection_list_tokens_are_window_occupancy() {
+    fn card_projection_list_tokens_are_window_occupancy_and_age_is_idle() {
         let mut report = entry(AgentStatus::Running);
         report.context.used_tokens = Some(81_234);
         report.stats.total_tokens = Some(3_000_000);
+        report.timeline.idle_since = jiff::Timestamp::from_second(1880).unwrap();
         let mut table = render::Table::new([
-            "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "SEEN",
+            "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
         ]);
         table.row(agent_row(
             &report,
-            jiff::Timestamp::UNIX_EPOCH,
+            jiff::Timestamp::from_second(2000).unwrap(),
             &theme_glyphs(&ThemeConfig::default()),
         ));
         let mut out = anstream::StripStream::new(Vec::new());
@@ -605,6 +606,7 @@ mod tests {
         let text = String::from_utf8(out.into_inner()).unwrap();
         assert!(text.contains("81k"), "{text}");
         assert!(!text.contains("3M"), "{text}");
+        assert!(text.lines().last().unwrap().ends_with("2m"), "{text}");
     }
 
     #[test]

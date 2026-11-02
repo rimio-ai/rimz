@@ -11,7 +11,7 @@ use rimz::agents::{
 use rimz::ids::{AgentKind, AgentSessionId, LoginKey, PaneId};
 use rimz::store::snapshot::{
     AgentCard, CardDescription, SidebarRow, SidebarSnapshot, SidebarSubAgent, SubAgentTokens,
-    WorktreeCi, WorktreePrState, card_status, group_live_agents_by_worktree,
+    WorktreeCi, WorktreePrState, agent_idle_since, card_status, group_live_agents_by_worktree,
 };
 #[cfg(test)]
 use rimz::store::snapshot::{PaneAgent, RowCard};
@@ -129,6 +129,7 @@ pub(super) struct TimelineReport {
     pub turn_started_at: Option<Timestamp>,
     pub last_activity: Timestamp,
     pub last_seen: Timestamp,
+    pub idle_since: Timestamp,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -434,6 +435,7 @@ pub(super) fn build_entry(
             turn_started_at: agent.turn_started_at,
             last_activity: agent.last_activity,
             last_seen: agent.last_seen,
+            idle_since: agent_idle_since(agent, row),
         },
         placement: PlacementReport {
             lane_label: agent.lane_label(),

@@ -14,7 +14,7 @@ use rimz::agents::AgentStatus;
 use rimz::ids::AgentSessionId;
 use rimz::pane::PaneRef;
 use rimz::proc::TreeTotals;
-use rimz::store::snapshot::card_status;
+use rimz::store::snapshot::{agent_idle_since, card_status};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 use rimz::workspace::WorkspaceResolver;
@@ -158,6 +158,7 @@ fn sample_snapshot(
     let mut rows = BTreeMap::new();
     for agent in agents {
         let handle = address::paste_address(agent, snapshot, reader);
+        let row = row_for_agent(snapshot, agent);
         let live_pane_pid = in_room.get(&agent.agent_id).copied().flatten();
         let metrics =
             metrics_root_pid(live_pane_pid, agent.pane.as_ref()).and_then(rimz::proc::tree_totals);
@@ -168,7 +169,7 @@ fn sample_snapshot(
                 handle,
                 status: card_status(
                     agent,
-                    row_for_agent(snapshot, agent),
+                    row,
                     child_for_agent(snapshot, agent),
                     demotion,
                     snapshot.now,
@@ -176,7 +177,7 @@ fn sample_snapshot(
                 .0,
                 context_pct: agent.context_fill_pct(),
                 tokens: agent.usage.total_tokens.unwrap_or(0),
-                age: render::age_short(agent.last_seen, now),
+                age: render::age_short(agent_idle_since(agent, row), now),
                 metrics,
                 parent_id: agent.parent_agent_id.as_ref().map(ToString::to_string),
             },
@@ -351,7 +352,7 @@ fn render_top(w: &mut impl Write, sample: &TopSample, rows: &[TopRow]) -> std::i
     )?;
     let show_io = rows.iter().any(|row| row.io_bps.is_some());
     let mut headers = vec![
-        "AGENT", "STATUS", "CPU", "MEM", "PROCS", "CTX", "SPENT", "SEEN",
+        "AGENT", "STATUS", "CPU", "MEM", "PROCS", "CTX", "SPENT", "AGE",
     ];
     if show_io {
         headers.insert(4, "IO/S");
@@ -527,6 +528,33 @@ mod tests {
     }
 
     #[test]
+    fn top_age_uses_cache_origin_or_rowless_child_activity() {
+        let now = jiff::Timestamp::now();
+        let mut snapshot = stalled_child_snapshot();
+        snapshot.now = now;
+        for agent in std::sync::Arc::make_mut(&mut snapshot.agents) {
+            agent.last_activity = now - Duration::from_secs(600);
+        }
+        let row = snapshot.rows_mut().next().unwrap();
+        let card = row.as_agent_mut().unwrap();
+        card.own_last_activity = Some(now - Duration::from_secs(1200));
+        card.cache = Some(rimz::store::snapshot::CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: Some(now - Duration::from_secs(120)),
+            warm_until: None,
+            rewarm_cost_usd: None,
+        });
+        let sample = sample_snapshot(
+            &snapshot,
+            None,
+            &crate::cli::CurrentChannel::Unscoped.address_context(),
+            &Default::default(),
+        );
+        assert_eq!(sample.rows["parent"].age, "2m");
+        assert_eq!(sample.rows["child"].age, "10m");
+    }
+
+    #[test]
     fn card_projection_stalled_child_show_uses_parent_projection() {
         let snapshot = stalled_child_snapshot();
         let child = snapshot
@@ -656,7 +684,7 @@ mod tests {
         assert!(!text.contains("IO/S"), "{text}");
         assert!(text.lines().nth(1).unwrap().contains("SPENT"), "{text}");
         assert!(!text.contains("TOKENS"), "{text}");
-        assert!(text.lines().nth(1).unwrap().ends_with("SEEN"), "{text}");
+        assert!(text.lines().nth(1).unwrap().ends_with("AGE"), "{text}");
     }
 
     #[test]

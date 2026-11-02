@@ -269,12 +269,8 @@ fn write_cohort_table(w: &mut impl Write, report: &TeamReport, now: jiff::Timest
                 .and_then(|pr| pr.ci)
                 .map_or_else(render::palette::accent, ci_style))
             .dash(),
-            render::cell(state_with_age(
-                instance.state,
-                instance.last_activity_at,
-                now,
-            ))
-            .fg(state_style(instance.state)),
+            render::cell(state_with_age(instance.state, instance.idle_since, now))
+                .fg(state_style(instance.state)),
         ]);
     }
     table.render(w)?;
@@ -292,10 +288,10 @@ pub(super) fn stage_with_age(instance: &LiveInstance, now: jiff::Timestamp) -> O
 
 pub(super) fn state_with_age(
     state: CohortState,
-    activity: Option<jiff::Timestamp>,
+    idle_since: Option<jiff::Timestamp>,
     now: jiff::Timestamp,
 ) -> String {
-    match activity.filter(|_| state != CohortState::Working) {
+    match idle_since.filter(|_| state != CohortState::Working) {
         Some(at) => {
             format!("{} {}", state.as_str(), render::age_short(at, now))
         }
@@ -360,7 +356,7 @@ fn write_lane(
         " · {}",
         render::paint(
             state_style(instance.state),
-            &state_with_age(instance.state, instance.last_activity_at, now)
+            &state_with_age(instance.state, instance.idle_since, now)
         )
     )?;
 
@@ -562,7 +558,7 @@ fn member_cells(member: &LiveMember, now: jiff::Timestamp) -> [render::Cell; 6] 
     [
         render::cell(&member.handle).fg(render::palette::identity(&member.kind)),
         render::cell(member.status.as_str()).fg(render::status::agent(member.status, member.phase)),
-        render::cell(render::age_short(member.last_activity_at, now)).fg(render::palette::muted()),
+        render::cell(render::age_short(member.idle_since, now)).fg(render::palette::muted()),
         render::cell(member.activity.as_deref().unwrap_or("-")).dash(),
         render::cell(
             member
@@ -663,6 +659,7 @@ mod tests {
             state: CohortState::Working,
             status_counts: BTreeMap::from([("running".to_owned(), 1)]),
             last_activity_at: Some(jiff::Timestamp::UNIX_EPOCH),
+            idle_since: Some(jiff::Timestamp::UNIX_EPOCH),
             worktree: Some("/repo/worktrees/feat-x".into()),
             branch: Some("feat-x".to_owned()),
             isolation: Isolation::Host,
@@ -696,6 +693,7 @@ mod tests {
                 phase: TurnPhase::Reasoning,
                 activity: Some("reading show.rs".into()),
                 last_activity_at: jiff::Timestamp::UNIX_EPOCH,
+                idle_since: jiff::Timestamp::UNIX_EPOCH,
                 context_fill_pct: Some(42.0),
                 cost_usd: Some(0.25),
             }],
@@ -723,8 +721,10 @@ mod tests {
     }
 
     #[test]
-    fn human_show_brackets_the_board_stage_and_uses_last_activity() {
+    fn human_show_brackets_the_board_stage_and_uses_idle_age() {
         let mut instance = live_instance();
+        instance.idle_since = Some(jiff::Timestamp::from_second(60).unwrap());
+        instance.members[0].idle_since = jiff::Timestamp::from_second(60).unwrap();
         instance.pr = Some(super::super::list::PrReport {
             number: Some(412),
             state: Some(WorktreePrState::Open),
@@ -751,7 +751,7 @@ mod tests {
         assert!(output.lines().any(|line| {
             line.split_whitespace()
                 .take(3)
-                .eq(["@planner", "running", "2m"])
+                .eq(["@planner", "running", "1m"])
         }));
         instance.state = CohortState::Idle;
         let stageless = LiveInstance {
@@ -759,7 +759,7 @@ mod tests {
             ..instance.clone()
         };
         let output = rendered(&report(vec![stageless]), Some("feat-x"));
-        assert!(output.starts_with("forge#feat-x · idle 2m\n"));
+        assert!(output.starts_with("forge#feat-x · idle 1m\n"));
         assert_eq!(stage_value(&output), "none");
         instance.stage.as_mut().unwrap().name = "Done".into();
         assert!(

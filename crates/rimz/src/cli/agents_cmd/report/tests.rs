@@ -39,6 +39,40 @@ fn card_row(card: AgentCard) -> SidebarRow {
 }
 
 #[test]
+fn timeline_idle_origin_uses_the_card_without_repointing_liveness() {
+    let now = Timestamp::from_second(2000).unwrap();
+    let mut state = agent("cache");
+    state.last_activity = Timestamp::from_second(1000).unwrap();
+    state.last_seen = Timestamp::from_second(1999).unwrap();
+    let row = card_row(AgentCard {
+        own_last_activity: Some(state.last_activity),
+        cache: Some(rimz::store::snapshot::CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: Some(Timestamp::from_second(1880).unwrap()),
+            warm_until: None,
+            rewarm_cost_usd: None,
+        }),
+        ..Default::default()
+    });
+    let entry = build_entry(
+        &Default::default(),
+        &state,
+        Some(&row),
+        None,
+        "@cache".into(),
+        None,
+        now,
+        ReportOverrides::default(),
+    );
+    assert_eq!(
+        entry.timeline.idle_since,
+        Timestamp::from_second(1880).unwrap()
+    );
+    assert_eq!(entry.timeline.last_seen, state.last_seen);
+    assert_eq!(entry.timeline.last_activity, state.last_activity);
+}
+
+#[test]
 fn permission_ask_visibility_uses_the_list_snapshot_clock() {
     let since = Timestamp::from_second(1_000).unwrap();
     let mut state = agent("review");
