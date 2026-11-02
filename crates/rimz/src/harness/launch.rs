@@ -36,6 +36,8 @@ const ENV_LAUNCH_REMINDERS: &str = "RIMZ_LAUNCH_REMINDERS";
 /// `1` when RimZ's extension requests priority serving for this launch;
 /// cleared on every other launch so a nested launch never inherits it.
 const ENV_LAUNCH_FAST: &str = "RIMZ_LAUNCH_FAST";
+/// The exact `KEY=VALUE` pair this launch set for long prompt-cache retention.
+const ENV_LONG_CACHE_ENV: &str = "RIMZ_LONG_CACHE_ENV";
 /// Stable RimZ launch identity. The provider may replace the provisional
 /// session key after startup, so launch ancestry resolves this value through
 /// the durable `AgentState::launch_id` stamp.
@@ -1090,7 +1092,7 @@ fn compile_agent_process_with_extra_env(
         None => (user_shell, BTreeMap::new()),
     };
     let trusted_env = trusted_agent_env(project_root, kind)?;
-    let secret_keys = trusted_env.keys().cloned().collect();
+    let secret_keys: BTreeSet<_> = trusted_env.keys().cloned().collect();
     let mut launch_env = extra_env.clone();
     launch_env.extend(shell_env);
     let mut env = compose_agent_env(trusted_env, adapter, request, &launch_env)?;
@@ -1304,6 +1306,28 @@ fn compile_agent_process_with_extra_env(
     } else {
         env.remove(ENV_LAUNCH_FAST);
         unset.insert(ENV_LAUNCH_FAST.to_owned());
+    }
+    let inherited_cache = skill_env
+        .get(ENV_LONG_CACHE_ENV)
+        .and_then(|marker| marker.split_once('='))
+        .filter(|(key, value)| {
+            !secret_keys.contains(*key) && skill_env.get(*key).map(String::as_str) == Some(*value)
+        });
+    if let Some((key, _)) = inherited_cache {
+        env.remove(key);
+        unset.insert(key.to_owned());
+    }
+    env.remove(ENV_LONG_CACHE_ENV);
+    unset.insert(ENV_LONG_CACHE_ENV.to_owned());
+    if reminders.long_cache
+        && let Some((key, value)) = adapter.spec().launch.long_cache_env
+        && (!skill_env.contains_key(key)
+            || inherited_cache.is_some_and(|(owned_key, _)| owned_key == key))
+    {
+        env.insert(key.to_owned(), value.to_owned());
+        unset.remove(key);
+        env.insert(ENV_LONG_CACHE_ENV.to_owned(), format!("{key}={value}"));
+        unset.remove(ENV_LONG_CACHE_ENV);
     }
     // A launch carries its own model, team, and role, never its caller's.
     let params = &request.identity.params;

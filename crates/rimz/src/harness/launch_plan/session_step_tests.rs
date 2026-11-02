@@ -209,6 +209,7 @@ fn the_step_is_inside_the_login_shell_scoped_view_and_hibernation_scope() {
                 runtime: &runtime,
                 state: &state,
                 effective: None,
+                machine: &machine,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
                 isolation,

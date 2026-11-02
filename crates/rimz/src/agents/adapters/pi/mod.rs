@@ -127,6 +127,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        long_cache_env: Some(("PI_CACHE_RETENTION", "long")),
         picker: Some(&["pi", "--resume"]),
         definitions: DEFINITIONS,
         program: Some("pi"),

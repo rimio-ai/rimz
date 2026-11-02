@@ -228,6 +228,14 @@ Unlike launch reminders, fast stays in `process.env`: each in-process session an
 
 `FAST_ROUTES` lives beside the gate in `extension.ts`, and each route lists only the ids its own evidence covers; [model upgrades](../../contributing/model-upgrades.md#pi-fast-capable-models) names that evidence. `openai-codex` lists the ids the Codex catalog advertises with priority. `openai` lists the ids with an OpenAI Fast price, so it leaves out `gpt-6-sol`, which Codex advertises but OpenAI publishes no Fast price for, and adds `gpt-5.4`, `gpt-5.5`, and `gpt-5.3-codex`, which neither Codex's catalog nor Pi's `openai-codex` models carry.
 
+### Long prompt cache
+
+Pi's `LaunchSpec::long_cache_env` declares `PI_CACHE_RETENTION=long`. `crates/rimz/src/harness/launch_plan.rs::compile` requests it when `harness.cache_keepalive` is on and the seat's declared keep-warm horizon resolves through `crates/rimz/src/config/effective.rs::KeepWarmSeat::declared_horizon`, excluding headless launches and launched children. A `while`-only rule uses the ping cap; the current board stage and observed TTL are deliberately not launch gates, since the stage can reopen and the long write is what meets the usual TTL floor. Nothing new is stored, and a policy change takes effect on the next launch or restart.
+
+The process compiler sets the pair only if the key is absent or RimZ-owned, and stamps `RIMZ_LONG_CACHE_ENV=PI_CACHE_RETENTION=long`. A key set in trusted project `[[agents]]` env is always user-owned, even when an inherited marker matches its value. Otherwise, ownership requires both a marker naming the key and its current value matching the marker's value, split at the first `=`. Every launch, of any kind, removes an inherited RimZ-owned pair it does not request; user-owned values are untouched. A launch that does not set the marker removes it and lists it in `unset`.
+
+The compiler sees ambient, account and trusted `[[agents]]` environment, not shell-rc-only exports; its assignments run after rc. Pi's `auth.json` credential `env` can override process env. Native Pi children inherit the retention, including in-process subagents and shell-tool launches; on an Anthropic API key, one-hour writes cost about 2× base input rather than 1.25× for five minutes ([user configuration](../../guide/configuration.md#keep-warm)). The extension does not mutate or strip either variable.
+
 ### Modes the extension cannot see
 
 `--no-extensions` disables discovered extensions, so a session started with it feeds RimZ nothing. An explicit `-e` path still loads ([pi-reference.md](../../externals/agent-adapter/pi-reference.md#extensions)). `-p` and `--mode json` run extensions without a UI: the extension stamps `has_ui: false`, so the questionnaire raises no ask, and rpiv itself fails the call with `no_custom_ui`. RPC mode forwards no dialog waits.
@@ -239,6 +247,8 @@ Pi's live context needs no transcript read (`transcript_tail_context: false`). `
 The extension pushes a value change immediately on `model_select`, `thinking_level_select`, `session_info_changed`, `turn_end`, and `after_provider_response`. `message_update` fires per streaming delta, so `pushMessageUpdate` feeds it at most once per second per session, and only when the rounded gauge or the running cost differs from the last push. A change inside the second is sent by a trailing timer.
 
 ### Prompt-cache retention
+
+An unoverridden keep-warm launch requests the one-hour cache through `PI_CACHE_RETENTION=long`, making its Anthropic cache writes report `1h`; an ordinary launch leaves Pi's default retention unchanged. Observation, not the requested environment, still decides the live lifetime.
 
 The extension hydrates the newest write while walking `getBranch()` at session start, updates it on `turn_end`, and recomputes it on `session_tree`. Only assistant usage with `cacheWrite > 0` counts: missing `cacheWrite1h` is `unsplit`, a count at least as large as `cacheWrite` is `1h`, and anything smaller (including a mixed write) is `5m`. Pi's Anthropic Messages route turns a missing split into zero, so that case conservatively reads as five minutes. Read-only requests keep the last write.
 

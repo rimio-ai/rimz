@@ -178,6 +178,8 @@ pub struct LaunchSpec {
     pub interrupt_key: Option<crate::pane::keys::NamedKey>,
     pub confirm_interrupt: bool,
     pub presets: PresetMatchers,
+    /// Provider env pair requesting long prompt-cache retention for a keep-warm launch.
+    pub long_cache_env: Option<(&'static str, &'static str)>,
     pub headless: Option<&'static dyn super::HeadlessForm>,
 }
 
@@ -199,6 +201,7 @@ impl LaunchSpec {
         interrupt_key: None,
         confirm_interrupt: false,
         presets: PresetMatchers::EMPTY,
+        long_cache_env: None,
         headless: None,
     };
 

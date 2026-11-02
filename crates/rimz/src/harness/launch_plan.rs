@@ -30,6 +30,7 @@ pub struct LaunchPlanInputs<'a> {
     pub rimz_bin: &'a Path,
     pub runtime: &'a RuntimePaths,
     pub state: &'a StatePaths,
+    pub machine: &'a crate::config::MachineConfig,
     pub effective: Option<&'a LaunchAgents>,
     pub commands: &'a CommandsConfig,
     pub accounts: &'a AccountsConfig,
@@ -368,6 +369,7 @@ pub fn prepare_exec(
             runtime: &runtime,
             state: &state,
             effective,
+            machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation,
@@ -569,6 +571,29 @@ pub(super) fn resolve_model(
     Ok((warnings, movement, refresh_failure))
 }
 
+fn long_cache_requested(
+    request: &ExecRequest,
+    machine: &crate::config::MachineConfig,
+    effective: Option<&LaunchAgents>,
+) -> bool {
+    if request.headless.is_some() || !machine.harness.cache_keepalive {
+        return false;
+    }
+    let (teams, profiles) = effective.map_or(
+        (&machine.agents.teams, &machine.agents.profiles),
+        |effective| (&effective.teams, &effective.profiles),
+    );
+    let params = &request.identity.params;
+    crate::config::effective::KeepWarmSeat {
+        team: params.team.as_deref(),
+        role: params.role.as_deref(),
+        profile: params.profile.as_deref(),
+        launched_child: params.parent_agent_id.is_some() && params.launch_depth.is_some(),
+    }
+    .declared_horizon(teams, profiles, &machine.harness)
+    .is_some()
+}
+
 pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr> {
     let mut request = inputs.request.clone();
     let adapter = crate::agents::find_definition(request.kind.as_str())
@@ -590,6 +615,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     )?;
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
+    reminders.long_cache = long_cache_requested(&request, inputs.machine, inputs.effective);
     if request
         .allowed_tools
         .as_ref()
@@ -1224,6 +1250,7 @@ pub mod testkit {
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,

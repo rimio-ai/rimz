@@ -5,6 +5,398 @@ use crate::ids::AgentKind;
 #[path = "session_step_tests.rs"]
 mod session_step;
 
+fn long_cache_env(
+    project: &Path,
+    machine: &crate::config::MachineConfig,
+    effective: Option<&LaunchAgents>,
+    request: &ExecRequest,
+    ambient: &BTreeMap<String, String>,
+) -> (Option<String>, bool, Option<String>, bool) {
+    let id = crate::WorkspaceId::from_project_root(project);
+    let runtime = RuntimePaths::under(id.clone(), project).unwrap();
+    let state = StatePaths::under(id, project).unwrap();
+    let plan = compile(LaunchPlanInputs {
+        request,
+        cwd: project,
+        project_root: project,
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        machine,
+        effective,
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        isolation: Isolation::Host,
+        bwrap: None,
+        agents: Ok(&[]),
+        ambient_env: ambient,
+        agent_shell: None,
+        hibernate: false,
+        recorded_system_prompt_digest: None,
+    })
+    .unwrap();
+    let process = plan.process();
+    (
+        process.env.get("PI_CACHE_RETENTION").cloned(),
+        process.unset.contains("PI_CACHE_RETENTION"),
+        process.env.get("RIMZ_LONG_CACHE_ENV").cloned(),
+        process.unset.contains("RIMZ_LONG_CACHE_ENV"),
+    )
+}
+
+#[test]
+fn long_cache_follows_the_declared_seat_horizon() {
+    let project = tempfile::tempdir().unwrap();
+    let mut machine = crate::config::MachineConfig::default();
+    machine.agents.profiles = toml::from_str(
+        "[warm]\nagent = 'pi'\nkeep-warm = '2h'\n\
+         [cold]\nagent = 'warm'\nkeep-warm = 'off'",
+    )
+    .unwrap();
+    machine.agents.teams = toml::from_str(
+        "[forge]\nkeep-warm = 'off'\nroles = [\
+         {role = 'warm', profile = 'cold', keep-warm = '2h'}]\n\
+         [held]\nkeep-warm = '2h'\nroles = [\
+         {role = 'cold', profile = 'warm', keep-warm = 'off'}]\n\
+         [staged]\nkeep-warm = {while = 'team.stage!=Done'}",
+    )
+    .unwrap();
+    let cases = [
+        ("profile", "", Some("warm"), None, (false, false), true),
+        (
+            "global",
+            "keep_warm = '2h'",
+            None,
+            None,
+            (false, false),
+            true,
+        ),
+        (
+            "profile off",
+            "keep_warm = '2h'",
+            Some("cold"),
+            None,
+            (false, false),
+            false,
+        ),
+        (
+            "role on",
+            "",
+            None,
+            Some(("forge", "warm")),
+            (false, false),
+            true,
+        ),
+        (
+            "role off",
+            "",
+            Some("warm"),
+            Some(("held", "cold")),
+            (false, false),
+            false,
+        ),
+        (
+            "team",
+            "",
+            Some("cold"),
+            Some(("held", "other")),
+            (false, false),
+            true,
+        ),
+        (
+            "missing team",
+            "keep_warm = '2h'",
+            Some("warm"),
+            Some(("missing", "warm")),
+            (false, false),
+            false,
+        ),
+        (
+            "while cap",
+            "",
+            None,
+            Some(("staged", "warm")),
+            (false, false),
+            true,
+        ),
+        (
+            "while uncapped",
+            "cache_keepalive_max = 'off'",
+            None,
+            Some(("staged", "warm")),
+            (false, false),
+            false,
+        ),
+        (
+            "pings off",
+            "cache_keepalive = false",
+            Some("warm"),
+            None,
+            (false, false),
+            false,
+        ),
+        ("child", "", Some("warm"), None, (true, true), false),
+        ("peer", "", Some("warm"), None, (false, true), true),
+        ("parent only", "", Some("warm"), None, (true, false), true),
+        ("off", "", None, None, (false, false), false),
+        (
+            "floor above 1h",
+            "keep_warm_min_ttl = '2h'",
+            Some("warm"),
+            None,
+            (false, false),
+            true,
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(label, harness, profile, seat, (parent, depth), _)| {
+            machine.harness = toml::from_str(harness).unwrap();
+            let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("pi"), Vec::new());
+            request.identity.params.profile = profile.map(str::to_owned);
+            request.identity.params.team = seat.map(|(team, _)| team.to_owned());
+            request.identity.params.role = seat.map(|(_, role)| role.to_owned());
+            request.identity.params.parent_agent_id = parent.then(|| "parent".into());
+            request.identity.params.launch_depth = depth.then_some(1);
+            // Effective tables override a cold machine snapshot; failure falls back to it.
+            let mut effective =
+                crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+                    .unwrap();
+            effective
+                .profiles
+                .0
+                .insert("effective".into(), effective.profiles.0["warm"].clone());
+            let mut effective_request = request.clone();
+            if *profile == Some("warm") && seat.is_none() {
+                effective_request.identity.params.profile = Some("effective".into());
+            }
+            (
+                *label,
+                long_cache_env(
+                    project.path(),
+                    &machine,
+                    Some(&effective),
+                    &effective_request,
+                    &BTreeMap::new(),
+                ),
+                long_cache_env(project.path(), &machine, None, &request, &BTreeMap::new()),
+            )
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|(label, _, _, _, _, enabled)| {
+            let env = if *enabled {
+                (
+                    Some("long".into()),
+                    false,
+                    Some("PI_CACHE_RETENTION=long".into()),
+                    false,
+                )
+            } else {
+                (None, false, None, true)
+            };
+            (*label, env.clone(), env)
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn long_cache_ownership_is_recomputed_on_every_launch() {
+    let project = tempfile::tempdir().unwrap();
+    let mut machine = crate::config::MachineConfig {
+        harness: toml::from_str("keep_warm = '2h'").unwrap(),
+        ..Default::default()
+    };
+    let untouched = (None, false, None, true);
+    let cleared = (None, true, None, true);
+    let stamped = (
+        Some("long".into()),
+        false,
+        Some("PI_CACHE_RETENTION=long".into()),
+        false,
+    );
+    let cases = [
+        ("pi", false, None, None, stamped.clone()),
+        (
+            "pi",
+            false,
+            Some("long"),
+            Some("PI_CACHE_RETENTION=long"),
+            stamped,
+        ),
+        (
+            "pi",
+            true,
+            Some("long"),
+            Some("PI_CACHE_RETENTION=long"),
+            cleared.clone(),
+        ),
+        ("pi", false, Some("short"), None, untouched.clone()),
+        ("pi", false, Some("long"), None, untouched.clone()),
+        (
+            "pi",
+            false,
+            Some("short"),
+            Some("PI_CACHE_RETENTION=long"),
+            untouched.clone(),
+        ),
+        ("pi", false, Some(""), None, untouched.clone()),
+        (
+            "pi",
+            false,
+            Some("short"),
+            Some("broken marker"),
+            untouched.clone(),
+        ),
+        ("claude", false, None, None, untouched.clone()),
+        (
+            "claude",
+            false,
+            Some("long"),
+            Some("PI_CACHE_RETENTION=long"),
+            cleared.clone(),
+        ),
+        (
+            "claude",
+            false,
+            Some("long=extra"),
+            Some("PI_CACHE_RETENTION=long=extra"),
+            cleared.clone(),
+        ),
+        (
+            "claude",
+            false,
+            Some("short"),
+            Some("PI_CACHE_RETENTION=long"),
+            untouched,
+        ),
+    ];
+    let mut actual: Vec<_> = cases
+        .iter()
+        .map(|(kind, child, value, marker, _)| {
+            let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(*kind), Vec::new());
+            if *child {
+                request.identity.params.parent_agent_id = Some("parent".into());
+                request.identity.params.launch_depth = Some(1);
+            }
+            let ambient = [
+                ("PI_CACHE_RETENTION", *value),
+                ("RIMZ_LONG_CACHE_ENV", *marker),
+            ]
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
+            .collect();
+            long_cache_env(project.path(), &machine, None, &request, &ambient)
+        })
+        .collect();
+    let mut expected: Vec<_> = cases.iter().map(|(_, _, _, _, env)| env.clone()).collect();
+    machine.harness.keep_warm = crate::config::KeepWarm::Off;
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("pi"), Vec::new());
+    let ambient = BTreeMap::from([
+        ("PI_CACHE_RETENTION".into(), "long".into()),
+        (
+            "RIMZ_LONG_CACHE_ENV".into(),
+            "PI_CACHE_RETENTION=long".into(),
+        ),
+    ]);
+    actual.push(long_cache_env(
+        project.path(),
+        &machine,
+        None,
+        &request,
+        &ambient,
+    ));
+    expected.push(cleared);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn long_cache_is_not_requested_for_headless_pi() {
+    let machine = crate::config::MachineConfig {
+        harness: toml::from_str("keep_warm = '2h'").unwrap(),
+        ..Default::default()
+    };
+    let actual = [false, true].map(|headless| {
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("pi"), Vec::new());
+        request.headless = headless.then(|| crate::agents::HeadlessRequest {
+            schema_open: false,
+            schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+            schema_file: "/check/schema.json".into(),
+            verdict_file: "/check/verdict.json".into(),
+        });
+        long_cache_requested(&request, &machine, None)
+    });
+    assert_eq!(actual, [true, false]);
+}
+
+#[test]
+fn long_cache_preserves_trusted_project_retention_over_an_inherited_pair() {
+    if std::env::var_os("RIMZ_TEST_LONG_CACHE_ENV").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch_plan::tests::long_cache_preserves_trusted_project_retention_over_an_inherited_pair",
+                "--nocapture",
+            ])
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path().join(".rimz"))
+            .env("RIMZ_TEST_LONG_CACHE_ENV", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    let ambient = BTreeMap::from([
+        ("PI_CACHE_RETENTION".into(), "long".into()),
+        (
+            "RIMZ_LONG_CACHE_ENV".into(),
+            "PI_CACHE_RETENTION=long".into(),
+        ),
+    ]);
+    let cases = [
+        ("short", false, true),
+        ("long", true, true),
+        ("long", false, false),
+        ("long", false, true),
+    ];
+    let actual = cases.map(|(value, child, warm)| {
+        std::fs::write(
+            project.path().join(".rimz/config.toml"),
+            format!("[[agents]]\nname = 'pi'\nenv = {{PI_CACHE_RETENTION = '{value}'}}\n"),
+        )
+        .unwrap();
+        crate::trust::grant_with_roots(project.path(), &crate::disk::paths::rimz_home()).unwrap();
+        let machine = crate::config::MachineConfig {
+            harness: toml::from_str(if warm {
+                "keep_warm = '2h'"
+            } else {
+                "keep_warm = 'off'"
+            })
+            .unwrap(),
+            ..Default::default()
+        };
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("pi"), Vec::new());
+        if child {
+            request.identity.params.parent_agent_id = Some("parent".into());
+            request.identity.params.launch_depth = Some(1);
+        }
+        long_cache_env(project.path(), &machine, None, &request, &ambient)
+    });
+    assert_eq!(
+        actual,
+        cases.map(|(value, _, _)| (Some(value.into()), false, None, true))
+    );
+}
+
 fn compile_prompt_request(
     project: &Path,
     request: &ExecRequest,
@@ -33,6 +425,7 @@ fn compile_isolated_request(
         runtime: &runtime,
         state: &state,
         effective: None,
+        machine: &machine,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         isolation,
@@ -82,6 +475,7 @@ fn named_launches_share_rewritten_skill_copies() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Scoped,
@@ -294,6 +688,7 @@ fn workflow_env_pins_survive_both_isolations() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: if sandboxed {
@@ -378,6 +773,7 @@ fn scoped_empty_directory_does_not_inherit_ancestor_git_protection() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Scoped,
@@ -425,6 +821,7 @@ fn unreadable_checkout_metadata_refuses_only_scoped_launches() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation,
@@ -688,6 +1085,7 @@ fn hibernation_scopes_ready_providers_outside_bwrap() {
                 runtime: &runtime,
                 state: &state,
                 effective: None,
+                machine: &machine,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
                 isolation,
@@ -780,6 +1178,7 @@ fn hibernation_leaves_qwen_reentry_outside_the_final_provider_scope() {
                 runtime: &runtime,
                 state: &state,
                 effective: None,
+                machine: &machine,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
                 isolation: Isolation::Host,
@@ -950,6 +1349,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -1082,6 +1482,7 @@ fn team_archive_grant_follows_a_childs_checkout_and_rejects_foreign_runs() {
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -1204,6 +1605,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         runtime: &runtime,
                         state: &state,
                         effective: Some(&effective),
+                        machine: &machine,
                         commands: &machine.agents.commands,
                         accounts: &machine.accounts,
                         isolation,
@@ -1299,6 +1701,7 @@ fn sandbox_settings_artifact_is_written_only_on_apply() {
         runtime: &runtime,
         state: &state,
         effective: None,
+        machine: &machine,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         isolation: Isolation::Scoped,
@@ -1342,6 +1745,7 @@ fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -1413,6 +1817,7 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
         runtime: &runtime,
         state: &state,
         effective: None,
+        machine: &machine,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         isolation: Isolation::Host,
@@ -1624,6 +2029,7 @@ fn malformed_opencode_delegation_config_surfaces_as_a_launch_warning() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -1670,6 +2076,7 @@ fn malformed_opencode_cli_config_warns_on_every_launch_after_delegation_config()
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -2001,6 +2408,7 @@ fn opencode_file_prompt_reaches_launch_and_resume_as_an_artifact_without_prompt_
                 runtime: &runtime,
                 state: &state,
                 effective: None,
+                machine: &machine,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
                 isolation: Isolation::Host,
@@ -2090,6 +2498,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -2220,6 +2629,7 @@ fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
                 runtime: &runtime,
                 state: &state,
                 effective: Some(&effective),
+                machine: &machine,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
                 isolation: Isolation::Host,
@@ -2272,6 +2682,7 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                     runtime: &runtime,
                     state: &state,
                     effective: Some(&effective),
+                    machine: &machine,
                     commands: &machine.agents.commands,
                     accounts: &machine.accounts,
                     isolation: Isolation::Host,
@@ -2361,6 +2772,7 @@ fn runtime_env_compile_stamps_the_switch_and_moves_the_listing_out_of_the_remind
             runtime: &runtime,
             state: &state,
             effective: configured.then_some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -2453,6 +2865,7 @@ fn the_stamped_account_sets_the_provider_home_after_the_room_switches() {
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -2498,6 +2911,7 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -2545,6 +2959,7 @@ fn default_launch_unsets_only_an_exported_declared_home() {
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,
@@ -2614,6 +3029,7 @@ fn default_launch_keeps_a_trusted_project_home_over_an_exported_declared_one() {
         runtime: &runtime,
         state: &state,
         effective: Some(&effective),
+        machine: &machine,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         isolation: Isolation::Host,
@@ -2658,6 +3074,7 @@ fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
         runtime: &runtime,
         state: &state,
         effective: Some(&effective),
+        machine: &machine,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         isolation: Isolation::Host,
@@ -2715,6 +3132,7 @@ fn the_scoped_view_binds_and_pins_the_stamped_account_home() {
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Scoped,
@@ -2746,6 +3164,7 @@ fn the_scoped_view_binds_and_pins_the_stamped_account_home() {
         runtime: &runtime,
         state: &state,
         effective: Some(&effective),
+        machine: &machine,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         isolation: Isolation::Scoped,
@@ -2847,6 +3266,7 @@ fn a_launch_saves_the_user_tmpdir_it_replaces() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             agent_shell: None,
@@ -2922,6 +3342,7 @@ fn a_provider_temp_root_follows_tmpdir() {
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             agent_shell: None,
@@ -2950,7 +3371,10 @@ fn a_provider_temp_root_follows_tmpdir() {
                 .filter(|key| {
                     !matches!(
                         *key,
-                        "RIMZ_WORKFLOW_RUN" | "RIMZ_WORKFLOW_DIR" | "RIMZ_LAUNCH_FAST"
+                        "RIMZ_WORKFLOW_RUN"
+                            | "RIMZ_WORKFLOW_DIR"
+                            | "RIMZ_LAUNCH_FAST"
+                            | "RIMZ_LONG_CACHE_ENV"
                     )
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV
                         && *key != crate::harness::launch::ENV_AGENT_MODEL
@@ -2995,6 +3419,7 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             agent_shell: None,
@@ -3206,6 +3631,7 @@ fn a_shared_codex_account_points_its_databases_at_the_default_home_without_touch
             runtime: &runtime,
             state: &state,
             effective: Some(&effective),
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation: Isolation::Host,

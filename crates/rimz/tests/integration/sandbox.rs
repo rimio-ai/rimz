@@ -3190,6 +3190,7 @@ fn scoped_child_skill_view_withholds_only_delegation_without_a_profile_list() {
                 runtime: &runtime,
                 state: state.paths(),
                 effective: None,
+                machine: &machine,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
                 isolation: Isolation::Scoped,

@@ -1350,6 +1350,7 @@ fn headless_compile_maps_artifacts_and_clears_agent_identity_in_both_isolations(
             runtime: &runtime,
             state: &state,
             effective: None,
+            machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation,
