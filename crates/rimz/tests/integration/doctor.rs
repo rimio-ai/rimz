@@ -2683,9 +2683,12 @@ fn doctor_clear_cuts_the_multiplexer_log_at_the_watermark() {
         .join("zellij.log");
     std::fs::create_dir_all(log_path.parent().expect("log parent")).expect("mkdir log dir");
 
-    // Zellij stamps records in local wall-clock time with no offset.
+    // Zellij stamps records in local wall-clock time with no offset. The test
+    // writes UTC and runs doctor under `TZ=UTC`, since a local stamp in the hour
+    // a daylight-saving change repeats names two instants.
     let stamp = |offset: jiff::Span| {
-        jiff::Zoned::now()
+        jiff::Timestamp::now()
+            .to_zoned(jiff::tz::TimeZone::UTC)
             .checked_add(offset)
             .expect("shifted time")
             .strftime("%Y-%m-%d %H:%M:%S%.3f")
@@ -2707,6 +2710,7 @@ fn doctor_clear_cuts_the_multiplexer_log_at_the_watermark() {
         .args(["doctor", "--clear", "--json"])
         .env("PATH", path_with_only(std::slice::from_ref(&stub_dir)))
         .env("TMPDIR", &tmp)
+        .env("TZ", "UTC")
         .output()
         .expect("spawn clear doctor");
     let cleared = doctor_json(&cleared);
@@ -2726,6 +2730,7 @@ fn doctor_clear_cuts_the_multiplexer_log_at_the_watermark() {
             .args(["doctor", "--json"])
             .env("PATH", path_with_only(&[stub_dir]))
             .env("TMPDIR", &tmp)
+            .env("TZ", "UTC")
             .output()
             .expect("spawn doctor after clear"),
     );
