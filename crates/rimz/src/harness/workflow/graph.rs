@@ -308,7 +308,10 @@ impl WorkflowSpec {
         if outcome != "capacity" {
             return (Fireability::Yes, None);
         }
-        if step.throttle == Some(ThrottleSwitch::Off) {
+        if step.throttle == Some(ThrottleSwitch::Off)
+            && self.workflow.limit.is_none()
+            && step.limit.is_none()
+        {
             return (Fireability::Never, Some(NeverReason::ThrottleOff));
         }
         if !matches!(step.capacity_wait, Some(CapacityWait::Duration(_))) {

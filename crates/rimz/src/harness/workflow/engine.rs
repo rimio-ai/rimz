@@ -654,13 +654,15 @@ fn prepare(
             return Ok(Decision::Again);
         }
         if let Some(spec::StepKind::Agent(agent)) = step.kind() {
-            let gated = t.record.task.is_some()
-                && !t.record.manual
-                && step.throttle != Some(crate::config::ThrottleSwitch::Off);
-            if gated && let Some((_, _, Err(reason))) = &admission.capacity {
+            let admits = spec.workflow.limit.is_some()
+                || step.limit.is_some()
+                || (t.record.task.is_some()
+                    && !t.record.manual
+                    && step.throttle != Some(crate::config::ThrottleSwitch::Off));
+            if admits && let Some((_, _, Err(reason))) = &admission.capacity {
                 launch_error = Some(reason.clone());
             }
-            let groups = if gated || step.window.is_some() {
+            let groups = if admits || step.window.is_some() {
                 match launch_groups(&t.record, agent) {
                     Ok(groups) => groups,
                     Err(error) => {
@@ -823,19 +825,33 @@ fn prepare_capacity(
     admission: &mut Admission,
     guard: &WorkspaceLock,
 ) -> Result<Option<Decision>> {
-    let Some(task) =
-        t.record.task.as_ref().filter(|_| {
-            !t.record.manual && step.throttle != Some(crate::config::ThrottleSwitch::Off)
-        })
-    else {
+    let may_wait = t.record.task.is_some() && !t.record.manual;
+    let machine_gated = may_wait && step.throttle != Some(crate::config::ThrottleSwitch::Off);
+    let limits = (t.spec.workflow.limit.is_some() || step.limit.is_some()).then(|| {
+        throttle::WorkflowStart {
+            workflow: t.record.workflow.clone(),
+            step: t.record.node.clone(),
+            run: t.record.id.clone(),
+            arrival: t
+                .record
+                .wait
+                .as_ref()
+                .filter(|wait| wait.outcome == "capacity")
+                .map_or(t.now, |wait| wait.first),
+            workflow_limit: t.spec.workflow.limit.clone(),
+            step_limit: step.limit.clone(),
+            may_wait,
+        }
+    });
+    if !machine_gated && limits.is_none() {
         admission.capacity = None;
         return Ok(None);
-    };
+    }
     if let Some(wait) = t
         .record
         .wait
         .as_ref()
-        .filter(|wait| wait.outcome == "capacity")
+        .filter(|wait| may_wait && wait.outcome == "capacity")
         && wait.gives_up_at.is_some_and(|at| t.now >= at)
     {
         let object = json!({
@@ -857,9 +873,9 @@ fn prepare_capacity(
             t.record.next_seq,
             t.record.node.clone(),
             throttle::Run {
-                machine_gated: true,
-                limits: None,
-                task: task.clone(),
+                machine_gated,
+                limits,
+                task: t.record.task.clone().unwrap_or_default(),
                 root: t.record.project_root.clone(),
                 checkout: t.record.scope.path.clone(),
                 disk: t.record.scope.path.clone(),
@@ -869,6 +885,7 @@ fn prepare_capacity(
                     .record
                     .wait
                     .as_ref()
+                    .filter(|_| may_wait)
                     .and_then(|wait| wait.gives_up_at)
                     .and_then(|at| u64::try_from(at.as_millisecond()).ok()),
             },
