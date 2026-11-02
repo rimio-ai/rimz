@@ -84,9 +84,8 @@ pub(super) fn team_launch_context(
     let team_name = params.team.as_ref()?;
     let role = params.role.as_ref()?;
     let leader = team
-        .leader
-        .clone()
-        .or_else(|| team.roles.first().map(|seat| seat.role.clone()))
+        .leader_role()
+        .map(str::to_owned)
         .unwrap_or_else(|| role.clone());
     let scratch_patterns = scratch::memory_patterns(team);
     let scratch = scratch::scan(cwd, &scratch_patterns);

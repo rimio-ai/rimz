@@ -425,6 +425,8 @@ impl<'de> Deserialize<'de> for KeepWarmPolicy {
 pub struct HarnessConfig {
     /// Keep waiting agents' provider prompt caches warm.
     pub cache_keepalive: bool,
+    /// Nudge a resting unfinished team once per stage visit after 55 minutes.
+    pub stall_nudge: bool,
     /// Stop keepalive pings that would start this long after the agent's last request of its own; `None` (`off`) never stops them.
     #[serde(with = "cache_keepalive_max_serde")]
     pub cache_keepalive_max: Option<Duration>,
@@ -477,6 +479,7 @@ impl Default for HarnessConfig {
     fn default() -> Self {
         Self {
             cache_keepalive: true,
+            stall_nudge: false,
             cache_keepalive_max: Some(Duration::from_secs(6 * 3600)),
             prompt_cache_ttl: BTreeMap::new(),
             budget: None,

@@ -38,6 +38,7 @@ pub mod soft_compact;
 pub mod spec;
 pub mod spend_ladder;
 pub mod stall_notice;
+pub mod stall_nudge;
 pub mod subagent_policy;
 pub mod team_notes;
 pub mod team_prompt;
