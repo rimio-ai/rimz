@@ -6,7 +6,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System,
 use super::{ProcInfo, StatMetrics};
 
 pub fn list_processes() -> Vec<ProcInfo> {
-    let system = refreshed_system(ProcessesToUpdate::All, process_refresh_list());
+    let Some(system) = refreshed_system(ProcessesToUpdate::All, process_refresh_list()) else {
+        return Vec::new();
+    };
     system
         .processes()
         .values()
@@ -132,7 +134,9 @@ pub(crate) fn stat_metrics(pid: u32) -> Option<StatMetrics> {
 
 pub fn children(pid: u32) -> Vec<u32> {
     let parent = Pid::from_u32(pid);
-    let system = refreshed_system(ProcessesToUpdate::All, process_refresh_identity());
+    let Some(system) = refreshed_system(ProcessesToUpdate::All, process_refresh_identity()) else {
+        return Vec::new();
+    };
     system
         .processes()
         .values()
@@ -172,15 +176,17 @@ fn process_with<T>(
     f: impl FnOnce(&sysinfo::Process) -> Option<T>,
 ) -> Option<T> {
     let pid = Pid::from_u32(pid);
-    let mut system = System::new();
-    system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh);
+    let system = refreshed_system(ProcessesToUpdate::Some(&[pid]), refresh)?;
     f(system.process(pid)?)
 }
 
-fn refreshed_system(processes: ProcessesToUpdate<'_>, refresh: ProcessRefreshKind) -> System {
-    let mut system = System::new();
+fn refreshed_system(
+    processes: ProcessesToUpdate<'_>,
+    refresh: ProcessRefreshKind,
+) -> Option<System> {
+    let mut system = System::new().ok()?;
     system.refresh_processes_specifics(processes, true, refresh);
-    system
+    Some(system)
 }
 
 fn process_refresh_identity() -> ProcessRefreshKind {
