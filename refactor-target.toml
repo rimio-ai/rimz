@@ -1004,7 +1004,8 @@ upward-dependencies = [
 # load_seat_tables shares effective-or-machine fallback with dispatch and harness policy (+1).
 # ProfilesConfig::keep_warm and Team::keep_warm_with_default share horizon fallback with validation (+2).
 # Team::leader_role shares the declared-or-first-role fallback with launch reminders and nudges (+1).
-surface-budget = 266
+# KeepWarmSeat and declared_horizon share the declared hold rule with launch compilation (+2).
+surface-budget = 268
 
 [[verdict]]
 kind = "item"
@@ -1055,6 +1056,11 @@ reason = "Dispatch and harness seat policy share the trusted-table load and mach
 kind = "item"
 key = "config::effective::SmartCompactSeat"
 reason = "Dispatch and harness consumers resolve the same role/profile threshold; launch warnings also distinguish a seat declaration from the harness fallback."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::KeepWarmSeat"
+reason = "Runtime holds and launch compilation share the declared team/profile horizon and child exclusion without evaluating live stage or TTL inputs."
 
 [[verdict]]
 kind = "item"

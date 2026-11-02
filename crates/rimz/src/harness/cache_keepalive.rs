@@ -9,9 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::schedule::when::{WhenExpr, WindowReadings, evaluate};
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
-use crate::config::{
-    HarnessConfig, IdleCompact, KeepWarm, MachineConfig, ProfilesConfig, TeamsConfig,
-};
+use crate::config::{HarnessConfig, IdleCompact, MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::utils::time::{format_duration_coarse, format_duration_compact};
@@ -51,32 +49,10 @@ impl SeatPolicy {
     /// a hold; a while with no resolved maximum takes the ping cap. A `rimz subagents` child
     /// never resolves one; an agent-launched peer resolves like any other seat.
     pub fn horizon(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<Duration> {
-        if agent.is_launched_child() {
-            return None;
-        }
-        let setting = match &agent.team {
-            Some(team) => self
-                .teams
-                .0
-                .get(team)?
-                .keep_warm_with_default(agent.role.as_deref(), harness.keep_warm)?,
-            None => crate::config::KeepWarmFields {
-                max: Some(
-                    self.profiles
-                        .keep_warm(agent.profile.as_deref(), harness.keep_warm),
-                ),
-                while_clause: None,
-            },
-        };
-        let horizon = match setting.max {
-            Some(KeepWarm::For(max)) => Some(max),
-            _ => setting
-                .while_clause
-                .as_ref()
-                .and(harness.cache_keepalive_max),
-        }?;
+        let (horizon, while_clause) = crate::config::effective::KeepWarmSeat::from(agent)
+            .declared_horizon(&self.teams, &self.profiles, harness)?;
         harness.ping_lifetime(agent)?;
-        if let Some(clause) = setting.while_clause
+        if let Some(clause) = while_clause
             && let Some(root) = agent.lane_path()
         {
             let expr = WhenExpr::parse(&[clause]).ok()?;
