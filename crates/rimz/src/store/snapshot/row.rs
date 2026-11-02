@@ -347,7 +347,7 @@ pub enum RowCard {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentCard {
     pub status: AgentStatus,
-    /// The blocking ask's summary while the source agent awaits input.
+    /// The visible blocking ask's summary, omitted during automatic review.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ask_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -551,7 +551,9 @@ pub enum CardDescription {
 impl AgentCard {
     /// Project the base card before pane, child, and display-status enrichment.
     pub fn from_agent(agent: &crate::agents::AgentState, now: Timestamp) -> Self {
-        let (status, phase, ask_detail) = if agent.is_awaiting_input() {
+        let (status, phase, ask_detail) = if agent.is_reviewing_permission(now) {
+            (AgentStatus::Running, TurnPhase::Reasoning, None)
+        } else if agent.is_awaiting_input() {
             (
                 AgentStatus::Waiting,
                 TurnPhase::Idle,

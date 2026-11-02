@@ -82,6 +82,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
         hook_context: None,
         prompt_context: false,
         native_ask_ui: true,
+        permission_before_auto_review: false,
         transcript_tail_context: false,
         registers_lazily: true,
         local_session_discovery: LocalSessionDiscovery::Unsupported,

@@ -104,6 +104,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
         // Pi itself runs tools unasked; the rpiv questionnaire extension owns
         // a native blocking question UI on the same awaited `tool_call` gate.
         native_ask_ui: true,
+        permission_before_auto_review: false,
         transcript_tail_context: false,
         registers_lazily: false,
         local_session_discovery: LocalSessionDiscovery::Unsupported,

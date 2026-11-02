@@ -69,6 +69,8 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 
 `?` is always yellow, `!` always red, and `⏸︎` always blue, whatever the card's age. What each status means in an agent's life is [the agent lifecycle](../guide/sidebar.md#the-agent-lifecycle). The mux tab bar reuses `!`, `?`, `⏸︎`, `⢿`, and `✓` as a static suffix on the tab name ([the sidebar guide](../guide/sidebar.md#glance-jump-answer)). A suffix always draws in these compact Unicode shapes, even when the column runs a configured [glyph set](../guide/theme.md#glyphs). A tab RimZ named after its agents goes back to the shell's name once they all exit; a tab you named yourself keeps its name.
 
+An auto-launched Codex permission stays Running during its first 60 seconds of automatic review. If still open, it becomes `?` on the next refresh, with a fresh unread episode at the 60-second visibility instant rather than the hook time. Questions and plan approvals remain immediate ([Codex asks](../internals/agents/adapter_codex.md#asks-and-answers)).
+
 On a process row, `!` means the process is stuck ([process rows](#process-rows)).
 
 A running agent can show a head in place of `⢿`. Whichever head it shows, it counts as working in the cockpit.

@@ -436,6 +436,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
             hook_context: None,
             prompt_context: false,
             native_ask_ui: manifest.capabilities.native_ask_ui,
+            permission_before_auto_review: false,
             transcript_tail_context: false,
             registers_lazily: manifest.capabilities.registers_lazily,
             local_session_discovery: LocalSessionDiscovery::Unsupported,

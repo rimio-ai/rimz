@@ -52,7 +52,7 @@ A plugin's spec must outlive the process like a built-in's `static` spec, becaus
 | `capabilities.native_ask_ui`, `registers_lazily` | from `[capabilities]` |
 | `capabilities.direct_account_usage` | true when an account probe is declared |
 | `capabilities.local_session_discovery` | `Unsupported` |
-| `capabilities.transcript_tail_context`, `daemon_hooked_sessions`, `prompt_context`, `hook_context`, `remote_control` | off |
+| `capabilities.transcript_tail_context`, `daemon_hooked_sessions`, `prompt_context`, `hook_context`, `remote_control`, `permission_before_auto_review` | off |
 | `capabilities.same_pane_session` | `KeepPrimary` |
 | `launch` | `LaunchSpec::EMPTY` without a `[launch]` table: no program, so `launch_command` returns `None`; the three `launch.*` rows below hold only with one |
 | `launch.prompt` | positional after `--` |

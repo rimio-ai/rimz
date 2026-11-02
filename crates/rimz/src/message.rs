@@ -21,6 +21,35 @@ pub enum DeliveryKind {
     Interrupt,
 }
 
+/// Why native pane input is reserved, even when attention still reads running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputWait {
+    Human,
+    PermissionReview,
+}
+
+impl InputWait {
+    fn for_agent(agent: &AgentState, now: Timestamp) -> Self {
+        if agent.is_reviewing_permission(now) {
+            Self::PermissionReview
+        } else {
+            Self::Human
+        }
+    }
+}
+
+impl std::fmt::Display for InputWait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Human => "is waiting on your input in its pane; answer it or pass --force",
+            Self::PermissionReview => concat!(
+                "has a permission request under the provider's automatic review; ",
+                "its pane may be busy; retry shortly or pass --force"
+            ),
+        })
+    }
+}
+
 /// Transient stop evidence, independent of the durable message receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InterruptConfirmation {

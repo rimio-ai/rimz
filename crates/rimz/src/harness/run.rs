@@ -360,6 +360,8 @@ pub struct RunLiveStatus {
     /// Set while the run is open only because its session is owed a wake.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parked_at: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_review_until: Option<Timestamp>,
 }
 
 pub fn create(paths: &StatePaths, record: &RunRecord) -> Result<()> {
@@ -1426,6 +1428,7 @@ pub fn live_status(record: &RunRecord, snapshot: &SidebarSnapshot) -> Option<Run
             .or_else(|| record.pane_id.clone()),
         context_pct: agent_context_pct(agent),
         parked_at: record.parked_at,
+        permission_review_until: agent.permission_review_until(),
     })
 }
 

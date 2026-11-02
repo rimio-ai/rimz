@@ -180,13 +180,23 @@ impl UnreadEpisodes {
             let Some(status) = row.status() else {
                 continue;
             };
-            if !status.needs_a_look()
-                || live_open.contains(&row.id)
-                || receipt_reaches(marks, &row.id, row.last_activity)
-            {
+            if !status.needs_a_look() || live_open.contains(&row.id) {
                 continue;
             }
-            let episode_ms = row.last_activity.as_millisecond();
+            let episode_at = (status == AgentStatus::Waiting)
+                .then(|| {
+                    snapshot
+                        .agents
+                        .iter()
+                        .find(|agent| agent.kind == row.name && agent.agent_id == row.id)
+                        .and_then(crate::agents::AgentState::permission_review_until)
+                })
+                .flatten()
+                .unwrap_or(row.last_activity);
+            if receipt_reaches(marks, &row.id, episode_at) {
+                continue;
+            }
+            let episode_ms = episode_at.as_millisecond();
             self.episodes.insert(row.id.clone(), episode_ms);
             changed = true;
             let mut unread = opened_unread(row, episode_ms, silent_opens);
@@ -604,6 +614,39 @@ mod tests {
             out.cleared.is_empty(),
             "the read-mark writer owns focus/mark_read clear tracing"
         );
+    }
+
+    #[test]
+    fn promoted_permission_opens_after_a_receipt_during_review() {
+        let at = jiff::Timestamp::from_second(1_000).unwrap();
+        let mut source = crate::testkit::agent_state("codex", "review", at);
+        source.status = AgentStatus::Waiting;
+        source.mode = Some(crate::agents::PermissionMode::Auto);
+        source.waiting_since = Some(at);
+        source.open_ask = Some(crate::agents::OpenAsk {
+            id: crate::ids::AskId::new(),
+            kind: crate::agents::AskKind::Permission,
+            detail: None,
+            native_key: None,
+            since: at,
+        });
+        let mut episodes = UnreadEpisodes::default();
+        let marks = ReadMarks::from_entries([("review".to_owned(), 1_010_000)]);
+        for second in [1_059, 1_060] {
+            let now = jiff::Timestamp::from_second(second).unwrap();
+            let mut row = row("review", AgentStatus::Waiting, at.as_millisecond());
+            row.name = "codex".to_owned();
+            row.card = RowCard::Agent(std::sync::Arc::new(AgentCard::from_agent(&source, now)));
+            let mut snapshot = snapshot(vec![row]);
+            snapshot.agents = vec![source.clone()].into();
+            snapshot.now = now;
+            let out = episodes.reconcile(&mut snapshot, &marks, false);
+            assert_eq!(out.opened.len(), usize::from(second == 1_060));
+            if second == 1_060 {
+                assert_eq!(out.opened[0].episode_ms, 1_060_000);
+                assert!(snapshot.worktree_groups[0].rows[0].unread);
+            }
+        }
     }
 
     #[test]

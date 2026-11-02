@@ -88,7 +88,7 @@ The send prints one line per target:
 | `compacted @coder` | Printed before the delivery line when `--smart-compact` fired. |
 | `compacting @coder; queued msg_… (delivers when compaction completes)` | The compact command landed; the prompt follows once compaction ends. Steer prints `queued for @coder (msg_…; waiting for compaction)`. |
 
-A status in a receipt comes from the agent's last recorded state and does not prove its pane is still live. A steer that reaches several agents prints one summary instead: `sent 2 agent(s): @claude (msg_…), @codex (msg_…); queued: …; compacted: …; waiting in pane: …`, with empty parts left out. A single `--steer` to an agent with an open prompt fails with `@coder (msg_…) is waiting on your input in its pane; answer it or pass --force`.
+A status in a receipt comes from the agent's last recorded state and does not prove its pane is still live. A steer that reaches several agents prints one summary instead: `sent 2 agent(s): @claude (msg_…), @codex (msg_…); queued: …; compacted: …; waiting in pane: …`, with empty parts left out. A single `--steer` to an agent with an open prompt fails with `@coder (msg_…) is waiting on your input in its pane; answer it or pass --force`. During Codex's first 60 seconds of automatic permission review, steer and interrupt still refuse without `--force`, but explain that the provider's automatic review may occupy the pane and suggest retrying shortly instead of asking for your answer ([Codex asks](../../internals/agents/adapter_codex.md#asks-and-answers)).
 
 ## Conditions
 
@@ -111,6 +111,8 @@ A status in a receipt comes from the agent's last recorded state and does not pr
 | Duration | `s`, `m`, `h`, or `d`; zero is rejected. |
 | Once met | The condition stays met, even if the watched agent changes status before the recipient takes the message. |
 | Watched agent ends | While the condition is unmet, the message is archived with the reason. |
+
+Codex automatic permission review is the exception to raw status matching: during the first 60 seconds it matches `running`, not `waiting`. A `waiting` dwell starts at the 60-second visibility instant, not at hook arrival.
 
 ## Targets and fan-out
 
@@ -215,7 +217,7 @@ The exit code is the first non-completed target's run status, in target order:
 
 At the deadline, stderr starts with `rimz: wait timed out` (naming unfinished targets for a fan-out), then explains each unfinished message. Queued or claimed text stays queued and will deliver; withdraw it with `rimz message cancel <id>`. Text already typed but not acknowledged must not be resent. A delivered message is still being worked on. Read later replies with `rimz agents logs @handle`. These hints also accompany the JSON map.
 
-A wait is refused before sending when a target has no lifecycle state, is not running, or lacks installed and trusted hooks. It is also refused with `--create`, `--schedule`, or `--no-enter`. A wait that would deadlock, because the target is waiting on the caller's own reply, is refused or aborted with the blocking handle and message named; any parked text stays queued. A single target holding an open prompt fails with the `waiting on your input` error.
+A wait is refused before sending when a target has no lifecycle state, is not running, or lacks installed and trusted hooks. It is also refused with `--create`, `--schedule`, or `--no-enter`. A wait that would deadlock, because the target is waiting on the caller's own reply, is refused or aborted with the blocking handle and message named; any parked text stays queued. A single target holding an open prompt fails with the `waiting on your input` error, or the automatic-review explanation above while a Codex permission is still under review.
 
 ## Message statuses
 
@@ -294,6 +296,8 @@ DELIVERY CHECK
 ```
 
 A scheduled message suggests `rimz message edit <id> --no-schedule` as well. An open prompt points to `rimz asks show @coder` and `rimz answer @coder <choice>`, just like the send receipt. `--json` prints `{"message": <row>, "timeline": [{"method", "at", "attempts", "reason"}], "delivery": {"check", "verdict"}}`, with `delivery` present only for open messages. Every sender class is reachable, including system messages the list hides.
+
+During automatic permission review, `delivery.check.ask.permission_review` is `true`; it is omitted otherwise. The raw `ask.waiting` can therefore remain true while the gate's status reads Running: the provider may still own pane input.
 
 Adjacent `queued` timeline events fold when they agree on attempt number and on whether they carry a reason. A folded row adds `×N` to EVENT, keeps the newest event's WHEN, and starts NOTE with `over <span>` followed by the newest reason, if any. Events inside one second omit the span. The original reasonless enqueue stays separate from later requeues with reasons. Other events keep one row each, since their reasons name different conditions or edited fields. `--json` keeps one timeline entry per event, without folding.
 

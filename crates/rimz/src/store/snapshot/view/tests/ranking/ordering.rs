@@ -5,6 +5,49 @@ use crate::store::snapshot::SidebarWorktreeGroup;
 use crate::store::snapshot::group_live_agents_by_worktree;
 
 #[test]
+fn auto_review_permission_listing_ranks_with_running_until_visible() {
+    for age in [59, 60] {
+        let mut review = agent("codex", "review", AgentStatus::Waiting, 0)
+            .worktree("/repo/main")
+            .active_ago(age);
+        review.mode = Some(crate::agents::PermissionMode::Auto);
+        review.waiting_since = Some(ago(age));
+        review.open_ask = Some(crate::agents::OpenAsk {
+            id: crate::ids::AskId::new(),
+            kind: crate::agents::AskKind::Permission,
+            detail: None,
+            native_key: None,
+            since: ago(age),
+        });
+        review.pane = Some(pane("%9", "codex", "/repo/main"));
+        let mut running = agent("claude", "running", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .active_ago(age);
+        running.pane = Some(pane("%1", "claude", "/repo/main"));
+        let waiting = agent("claude", "waiting", AgentStatus::Waiting, 0)
+            .worktree("/repo/main")
+            .active_ago(30);
+        let snapshot = room_with_agent_panes(vec![review, running, waiting]);
+        let agents = snapshot.agents.iter().collect::<Vec<_>>();
+        let groups = group_live_agents_by_worktree(&agents, &snapshot);
+        let order = groups[0]
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            if age == 59 {
+                vec!["waiting", "running", "review"]
+            } else {
+                vec!["review", "waiting", "running"]
+            },
+            "at {age}s"
+        );
+    }
+}
+
+#[test]
 fn delegated_park_ranks_and_counts_as_paused() {
     let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
     let mut child =

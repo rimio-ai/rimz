@@ -333,7 +333,9 @@ upward-dependencies = ["address"]
 # AgentState::has_native_turn_started shares the compaction marker's native-hook gate (+1).
 # AgentState::post_compaction_usage shares the post-compaction estimate between hooks (+1).
 # PlanCapacities, PlanCapacity and PlanCapacities::resolve declare plan sizes beside PlanLabel (+3).
-surface-budget = 1220
+# AgentState::permission_review_until and is_reviewing_permission share attention timing (+2).
+# AgentState::attention_ask shares blocking-ask visibility across attention readers (+1).
+surface-budget = 1223
 
 [[verdict]]
 kind = "item"
@@ -558,7 +560,7 @@ reason = "The CLI and sidebar card share one live-over-launch fast-mode decision
 [[verdict]]
 kind = "item"
 key = "agents::state::WaitingResolution"
-reason = "Agent and sidebar projections share held, answered, and interrupted waiting verdicts."
+reason = "Agent and sidebar projections share held, answered, interrupted, and auto-review waiting verdicts."
 
 [[verdict]]
 kind = "item"
@@ -2814,7 +2816,13 @@ upward-dependencies = [
 # spawn_queued_head shares the FIFO selection and delivery argv across hooks and resumed wrappers (+1).
 # soft_compact exposes its module, both sends and the wrap-up delivery outcome to the helper (+4).
 # TurnWaitView::soft_compact_in_flight shares queued-cycle debt without another queue read (+1).
-surface-budget = 90
+# InputWait carries native-input refusal reasons from the write decision to CLI receipts (+1).
+surface-budget = 91
+
+[[verdict]]
+kind = "item"
+key = "message::InputWait"
+reason = "Pane writes, dispatch, reply waits and CLI receipts share human-input and automatic-review refusals."
 
 [[verdict]]
 kind = "item"
