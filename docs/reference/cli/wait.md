@@ -77,7 +77,7 @@ Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during a
 | `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
 | `the calling agent has not registered a real session yet` | The agent has not reported its provider session yet. |
 
-A failed arm leaves no wait row. If the RimZ home is read-only, the error keeps its original cause and adds a hint: run `rimz wait` as its own command, without a chain, pipe, redirect, or `VAR=` prefix, so its [routine permission rule](../agent-support.md#permission-modes) runs it outside the provider's command sandbox. With routine permissions off, approve the sandbox's escalation instead.
+A failed arm leaves no wait row. If the RimZ home is read-only, the error keeps its original cause and adds a hint: run `rimz wait` as its own command, without a chain, pipe, redirect, or `VAR=` prefix, so its [routine permission rule](../agent-support.md#permission-modes) runs it outside the provider's command sandbox. With routine permissions off, approve the sandbox's escalation instead. Codex reads its routine rules from `rules/rimz.rules`, which RimZ rewrites at the next `rimz start` consent or `rimz hooks install codex`: if that file predates the `rimz wait` rule, refresh it from a user shell and restart the agent.
 
 ## Triggers
 
