@@ -6,6 +6,70 @@ use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
+fn keep_warm_declared_horizon_resolves_seats_without_live_admission() {
+    let profiles: ProfilesConfig = toml::from_str(
+        "[base]\nagent = 'pi'\nkeep-warm = '1h'\n\
+         [worker]\nagent = 'base'\n[off]\nagent = 'worker'\nkeep-warm = 'off'",
+    )
+    .unwrap();
+    let teams: TeamsConfig = toml::from_str(
+        "[forge]\nkeep-warm = '2h'\nroles = [\
+         {role = 'lead', profile = 'worker', keep-warm = '3h'},\
+         {role = 'quiet', profile = 'worker', keep-warm = 'off'}]\n\
+         [staged]\nkeep-warm = {max = 'off', while = 'team.stage!=Done'}",
+    )
+    .unwrap();
+    let harness = toml::from_str("keep_warm = '4h'\ncache_keepalive_max = '5h'").unwrap();
+    let actual: Vec<_> = [
+        (Some("forge"), None, None, false),
+        (Some("forge"), Some("lead"), None, false),
+        (Some("forge"), Some("quiet"), None, false),
+        (Some("missing"), None, Some("worker"), false),
+        (None, None, Some("worker"), false),
+        (None, None, Some("off"), false),
+        (None, None, None, false),
+        (Some("staged"), None, None, false),
+        (None, None, Some("worker"), true),
+    ]
+    .map(|(team, role, profile, launched_child)| {
+        KeepWarmSeat {
+            team,
+            role,
+            profile,
+            launched_child,
+        }
+        .declared_horizon(&teams, &profiles, &harness)
+        .map(|(max, clause)| (max.as_secs(), clause))
+    })
+    .into();
+    assert_eq!(
+        actual,
+        [
+            Some((7200, None)),
+            Some((10800, None)),
+            None,
+            None,
+            Some((3600, None)),
+            None,
+            Some((14400, None)),
+            Some((18000, Some("team.stage!=Done".into()))),
+            None,
+        ]
+    );
+    let harness = toml::from_str("cache_keepalive_max = 'off'").unwrap();
+    assert_eq!(
+        KeepWarmSeat {
+            team: Some("staged"),
+            role: None,
+            profile: None,
+            launched_child: false,
+        }
+        .declared_horizon(&teams, &profiles, &harness),
+        None
+    );
+}
+
+#[test]
 fn smart_compact_resolves_role_profile_scope_and_explicit_off() {
     use crate::store::message::AutoCompact;
     let profiles: ProfilesConfig = toml::from_str(

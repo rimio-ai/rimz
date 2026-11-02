@@ -815,6 +815,56 @@ pub enum ProfileScope {
     Subagents,
 }
 
+/// A seat's declared keep-warm rule, before TTL admission and live stage evaluation.
+pub(crate) struct KeepWarmSeat<'a> {
+    pub team: Option<&'a str>,
+    pub role: Option<&'a str>,
+    pub profile: Option<&'a str>,
+    pub launched_child: bool,
+}
+
+impl<'a> From<&'a crate::agents::AgentState> for KeepWarmSeat<'a> {
+    fn from(agent: &'a crate::agents::AgentState) -> Self {
+        Self {
+            team: agent.team.as_deref(),
+            role: agent.role.as_deref(),
+            profile: agent.profile.as_deref(),
+            launched_child: agent.is_launched_child(),
+        }
+    }
+}
+
+impl KeepWarmSeat<'_> {
+    pub fn declared_horizon(
+        &self,
+        teams: &TeamsConfig,
+        profiles: &ProfilesConfig,
+        harness: &super::HarnessConfig,
+    ) -> Option<(std::time::Duration, Option<String>)> {
+        if self.launched_child {
+            return None;
+        }
+        let setting = match self.team {
+            Some(team) => teams
+                .0
+                .get(team)?
+                .keep_warm_with_default(self.role, harness.keep_warm)?,
+            None => super::KeepWarmFields {
+                max: Some(profiles.keep_warm(self.profile, harness.keep_warm)),
+                while_clause: None,
+            },
+        };
+        let horizon = match setting.max {
+            Some(super::KeepWarm::For(max)) => Some(max),
+            _ => setting
+                .while_clause
+                .as_ref()
+                .and(harness.cache_keepalive_max),
+        }?;
+        Some((horizon, setting.while_clause))
+    }
+}
+
 /// A seat's live configuration identity, also constructible before a launch has a row.
 pub(crate) struct SmartCompactSeat<'a> {
     pub team: Option<&'a str>,
