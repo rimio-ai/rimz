@@ -167,7 +167,7 @@ pub(super) fn agent_identity_line(
         // the magnitude reads at a glance; the context-meter severity ramp
         // keeps the loud color slot.
         if status != AgentStatus::Idle
-            && let Some(window) = display_context_window(row)
+            && let Some(window) = row.context_meter(row_ctx.bands.scale).window
         {
             left.push(Span::styled(value_seam(theme), theme.muted()));
             left.push(Span::styled(
@@ -275,26 +275,6 @@ pub(super) fn stale_line(
         left.push(span);
     }
     pin_right(left, right, width)
-}
-
-/// The model's context window for the identity line (`258k`, `1M`). Prefers the
-/// out-of-band runtime reading and falls back to the row's carried/default
-/// window.
-pub(super) fn display_context_window(row: &SidebarRow) -> Option<u64> {
-    row.as_agent()
-        .and_then(|agent| {
-            agent
-                .context
-                .as_ref()
-                .and_then(|context| context.tokens.as_ref())
-                .and_then(|tokens| tokens.context_window_size)
-                .or(agent.usage.context_window)
-                .or_else(|| {
-                    crate::agents::spec_by_kind(row.name.as_str())
-                        .and_then(|definition| definition.default_context_window)
-                })
-        })
-        .filter(|window| *window > 0)
 }
 
 #[cfg(test)]

@@ -82,7 +82,9 @@ pub use color::{ColorDepth, ThemeColor, ThemeMode};
 pub(crate) use color::{PaletteRole, Semantic, nearest_xterm_index, parse_hex, xterm_rgb};
 pub(crate) use daemon::{DaemonConfig, DaemonPane};
 pub use diagnosis::ConfigFileDiagnosis;
-pub use display::{BudgetBarConfig, ContextMeterConfig, PixelMode, ProviderTabsMode};
+pub use display::{
+    BudgetBarConfig, ContextMeterConfig, ContextMeterScale, PixelMode, ProviderTabsMode,
+};
 pub(crate) use display::{
     BudgetBurnRateConfig, CardDensityMode, ContextBand, DisplayConfig, HighlightStepsConfig,
     ScrollbarMode,

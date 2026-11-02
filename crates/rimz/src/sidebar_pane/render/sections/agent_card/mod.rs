@@ -40,7 +40,7 @@ mod waits;
 
 use self::{description::*, gauge::*};
 use entry::{Entry, push_entry};
-use identity::{display_context_window, identity_line, stale_line};
+use identity::{identity_line, stale_line};
 use template::{CardSlot, CardStage, template};
 
 use super::process::{process_detail_line, process_row_line};

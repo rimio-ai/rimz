@@ -5,6 +5,171 @@ fn row_time() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
 }
 
+fn meter_row() -> SidebarRow {
+    SidebarRow {
+        id: "agent:meter".into(),
+        name: "claude".into(),
+        pane: None,
+        worktree_path: None,
+        checkout: None,
+        worktree_branch: None,
+        channel: None,
+        unread: false,
+        inactive: false,
+        archived: false,
+        attention_score: 0,
+        last_activity: row_time(),
+        card: RowCard::Agent(Arc::new(AgentCard {
+            auto_compact: Some(200_000),
+            usage: AgentUsageSummary {
+                context_window: Some(1_000_000),
+                context_pct: Some(16),
+                ..Default::default()
+            },
+            context: Some(context_with_tokens(AgentTokenUsage {
+                context_window_size: Some(1_000_000),
+                current_context_tokens: Some(160_000),
+                used_percentage: Some(16),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })),
+    }
+}
+
+#[test]
+fn context_meter_scales_tokens_rebased_percentages_and_compaction_estimates() {
+    let measured = meter_row();
+    let mut scalar = measured.clone();
+    scalar.as_agent_mut().unwrap().context = None;
+    let mut differently_paired = measured.clone();
+    let card = differently_paired.as_agent_mut().unwrap();
+    card.usage.context_window = Some(500_000);
+    card.context = Some(context_with_tokens(AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        ..Default::default()
+    }));
+    let mut estimated = scalar.clone();
+    let card = estimated.as_agent_mut().unwrap();
+    card.compacted_unmeasured = true;
+    card.usage.context_pct = Some(5);
+    card.usage.total_tokens = Some(51_000);
+    let mut empty = estimated.clone();
+    empty.as_agent_mut().unwrap().usage.context_pct = None;
+    empty.as_agent_mut().unwrap().usage.total_tokens = None;
+    let mut over = measured.clone();
+    over.as_agent_mut().unwrap().auto_compact = Some(100_000);
+    let mut token_precedence = measured.clone();
+    token_precedence
+        .as_agent_mut()
+        .unwrap()
+        .context
+        .as_mut()
+        .unwrap()
+        .tokens
+        .as_mut()
+        .unwrap()
+        .used_percentage = Some(10);
+    let actual: Vec<_> = [
+        measured,
+        scalar,
+        differently_paired,
+        estimated,
+        empty,
+        over,
+        token_precedence,
+    ]
+    .iter()
+    .map(|row| row.context_meter(ContextMeterScale::Compaction))
+    .collect();
+    let reading = |percent, precise_percent, estimated_percent| ContextMeterReading {
+        window: Some(1_000_000),
+        compact_at: Some(200_000),
+        percent,
+        precise_percent,
+        estimated_percent,
+    };
+    assert_eq!(
+        actual,
+        [
+            reading(Some(80), Some(80.0), None),
+            reading(Some(80), None, None),
+            reading(Some(40), None, None),
+            reading(Some(25), None, Some(25.5)),
+            reading(None, None, None),
+            ContextMeterReading {
+                compact_at: Some(100_000),
+                ..reading(Some(100), Some(100.0), None)
+            },
+            reading(Some(80), Some(80.0), None),
+        ]
+    );
+}
+
+#[test]
+fn context_meter_fallbacks_preserve_window_readings_and_window_priority() {
+    let base = meter_row();
+    let window_reading = ContextMeterReading {
+        window: Some(1_000_000),
+        compact_at: None,
+        percent: Some(16),
+        precise_percent: Some(16.0),
+        estimated_percent: None,
+    };
+    let mut cases = vec![base.context_meter(ContextMeterScale::Window)];
+    for (kind, count) in [
+        ("claude", None),
+        ("claude", Some(1_000_000)),
+        ("claude", Some(2_000_000)),
+        ("amp", Some(200_000)),
+        ("process-plugin", Some(200_000)),
+    ] {
+        let mut row = base.clone();
+        row.name = kind.into();
+        row.as_agent_mut().unwrap().auto_compact = count;
+        cases.push(row.context_meter(ContextMeterScale::Compaction));
+    }
+    assert_eq!(
+        cases,
+        (0..6)
+            .map(|_| ContextMeterReading { ..window_reading })
+            .collect::<Vec<_>>()
+    );
+
+    let mut unresolved = base.clone();
+    unresolved.name = "process-plugin".into();
+    unresolved.as_agent_mut().unwrap().context = None;
+    unresolved.as_agent_mut().unwrap().usage.context_window = None;
+    let mut default_window = unresolved.clone();
+    default_window.name = "claude".into();
+    let mut carried_window = default_window.clone();
+    carried_window.as_agent_mut().unwrap().usage.context_window = Some(500_000);
+    let mut process = unresolved.clone();
+    process.card = RowCard::Process(ProcessCard::default());
+    let actual = [
+        &base,
+        &carried_window,
+        &default_window,
+        &unresolved,
+        &process,
+    ]
+    .map(|row| row.context_meter(ContextMeterScale::Compaction).window);
+    assert_eq!(
+        actual,
+        [Some(1_000_000), Some(500_000), Some(200_000), None, None]
+    );
+    assert_eq!(
+        unresolved
+            .context_meter(ContextMeterScale::Compaction)
+            .compact_at,
+        None
+    );
+    assert_eq!(
+        process.context_meter(ContextMeterScale::Compaction).percent,
+        None
+    );
+}
+
 #[test]
 fn card_fast_projects_live_precedence_and_omits_standard() {
     let mut agent = AgentState::stub("codex", "session", AgentStatus::Idle);

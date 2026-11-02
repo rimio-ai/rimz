@@ -1887,6 +1887,7 @@ fn display_enums_lists_and_nested_bands_parse() {
     assert_eq!(defaults.provider_tabs, ProviderTabsMode::Auto);
     assert!(defaults.provider_list.is_empty());
     assert!(defaults.context_meter.log_scale);
+    assert_eq!(defaults.context_meter.scale, ContextMeterScale::Compaction);
     assert_eq!(
         (
             defaults.context_meter.green.percent,
@@ -1951,6 +1952,7 @@ fn display_enums_lists_and_nested_bands_parse() {
              provider_tabs = \"always\"\n\
              provider_list = [\"codex\", \"all\"]\n\
              [theme.display.context_meter]\n\
+             scale = \"window\"\n\
              log_scale = false\n\
              red = { percent = 50, tokens = 100000 }\n\
              [theme.display.budget_bar]\n\
@@ -1970,6 +1972,7 @@ fn display_enums_lists_and_nested_bands_parse() {
     assert_eq!(display.provider_list, vec!["codex", "all"]);
     assert_eq!(display.max_provider_blocks, 3);
     assert!(!display.context_meter.log_scale);
+    assert_eq!(display.context_meter.scale, ContextMeterScale::Window);
     assert_eq!(
         display.context_meter.red,
         ContextBand {

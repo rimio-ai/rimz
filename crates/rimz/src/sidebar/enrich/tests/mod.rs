@@ -740,12 +740,17 @@ fn config_fold_stamps_agent_context_severity() {
         row.as_agent_mut().unwrap().usage.context_pct = pct;
         row
     };
+    let mut scaled_row = agent_row(Some(8));
+    let card = scaled_row.as_agent_mut().unwrap();
+    card.auto_compact = Some(100_000);
+    card.usage.context_window = Some(1_000_000);
     let mut groups = vec![worktree_group(
         path,
         vec![
             agent_row(Some(85)),
             agent_row(Some(5)),
             activity_row(false, None, Timestamp::now(), path),
+            scaled_row,
         ],
     )];
 
@@ -765,6 +770,23 @@ fn config_fold_stamps_agent_context_severity() {
         rows[2].as_agent().and_then(|agent| agent.context_severity),
         None,
         "a process row carries no context verdict"
+    );
+    let scaled = rows[3].as_agent().unwrap().context_severity;
+    let bands = crate::config::ContextMeterConfig {
+        scale: crate::config::ContextMeterScale::Window,
+        ..Default::default()
+    };
+    stamp_context_severity(&mut groups, &bands);
+    assert_eq!(
+        (
+            scaled,
+            groups[0].rows[3].as_agent().unwrap().context_severity
+        ),
+        (
+            Some(crate::agents::ContextSeverity::Amber),
+            Some(crate::agents::ContextSeverity::Calm)
+        ),
+        "the same row is amber against compaction and calm against the window"
     );
 }
 

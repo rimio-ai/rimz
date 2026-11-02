@@ -102,6 +102,28 @@ pub fn spec_by_kind(kind: &str) -> Option<&'static AgentSpec> {
     find_definition(kind).map(AgentDefinition::spec)
 }
 
+/// Cap a configured native compaction count against the card's runtime window.
+pub(crate) fn native_compaction_point(kind: &str, configured: u64, window: u64) -> Option<u64> {
+    let point = match kind {
+        "claude" => configured,
+        "codex" => {
+            // The adapter starts with its raw 272k fallback, then carries the
+            // rollout's usable window unchanged. Assume it is 95% of the raw
+            // window and never equals that fallback; a remote model catalog
+            // can violate either premise. Compaction caps at
+            // 90% of the raw window, not 90% of the usable window.
+            let raw = if Some(window) == spec_by_kind(kind)?.default_context_window {
+                u128::from(window)
+            } else {
+                u128::from(window) * 100 / 95
+            };
+            u128::from(configured).min(raw * 9 / 10) as u64
+        }
+        _ => return None,
+    };
+    (point < window).then_some(point)
+}
+
 /// The compaction command for `agent`, carrying the harness brief for its
 /// seat; `None` when its adapter has no native compaction command.
 pub fn compact_command(agent: &AgentState, harness: &HarnessConfig) -> Option<String> {
