@@ -14,6 +14,160 @@ use rimz::store::message::{
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
+fn overlay_failure_leaves_no_wait() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let loops = env.rimz_home().join("loops");
+    std::fs::create_dir_all(&loops).unwrap();
+    let permissions = std::fs::metadata(&loops).unwrap().permissions();
+    std::fs::set_permissions(&loops, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(loops.join("write-probe"), b"").is_ok() {
+        std::fs::set_permissions(&loops, permissions).unwrap();
+        crate::common::skip("this user bypasses directory write permissions");
+        return;
+    }
+    let output = agent_wait(&env).args(["wait", "--run", "true"]).output();
+    std::fs::set_permissions(&loops, permissions).unwrap();
+    let output = output.unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("loop-arming.lock"),
+        "{output:?}"
+    );
+    let pending: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(pending, serde_json::json!([]));
+    assert!(!loop_instances_path(&env).exists() || wait_instances(&env).0.is_empty());
+}
+
+#[test]
+fn watcher_spawn_failure_leaves_no_wait() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let output = agent_wait(&env)
+        .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
+        .args(["wait", "--run", "true"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("starting watched command"),
+        "{output:?}"
+    );
+    let pending: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(pending, serde_json::json!([]));
+    assert!(wait_instances(&env).0.is_empty());
+}
+
+#[test]
+fn config_edit_failure_leaves_no_delivery_instance() {
+    use rimz::config::{LoopConfig, TaskEntry, Tasks};
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let machine = LoopConfig {
+        tasks: Tasks(BTreeMap::from([(
+            "replacement".into(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                agent: Some("claude".into()),
+                prompt: Some("original".into()),
+                at: Some("07:00".into()),
+                ..Default::default()
+            },
+        )])),
+        ..Default::default()
+    };
+    let home = env.rimz_home();
+    let path = home.join("loop.toml");
+    let original = toml::to_string(&machine).unwrap();
+    std::fs::write(&path, &original).unwrap();
+    std::fs::create_dir_all(home.join("loops")).unwrap();
+    let permissions = std::fs::metadata(&home).unwrap().permissions();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(home.join("write-probe"), b"").is_ok() {
+        std::fs::set_permissions(&home, permissions).unwrap();
+        crate::common::skip("this user bypasses directory write permissions");
+        return;
+    }
+    let output = agent_wait(&env)
+        .args(["loop", "add", "replacement", "--wait", "--at", "07:00"])
+        .output();
+    std::fs::set_permissions(&home, permissions).unwrap();
+    let output = output.unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("loop.toml"),
+        "{output:?}"
+    );
+    assert!(wait_instances(&env).0.is_empty());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+}
+
+#[test]
+fn cancel_overlay_failure_keeps_wait_pending() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let receipt: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    let before = wait_instances(&env);
+    let loops = env.rimz_home().join("loops");
+    let mut paths = vec![loops.clone()];
+    paths.extend(
+        std::fs::read_dir(&loops)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "lock")),
+    );
+    let permissions: Vec<_> = paths
+        .iter()
+        .map(|path| std::fs::metadata(path).unwrap().permissions())
+        .collect();
+    for path in &paths {
+        let mode = if path == &loops { 0o555 } else { 0o444 };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let bypasses_permissions = std::fs::OpenOptions::new()
+        .write(true)
+        .open(loops.join("loop-arming.lock"))
+        .is_ok();
+    let output =
+        (!bypasses_permissions).then(|| agent_wait(&env).args(["wait", "cancel", name]).output());
+    for (path, permissions) in paths.iter().zip(permissions) {
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+    if bypasses_permissions {
+        crate::common::skip("this user bypasses directory write permissions");
+        return;
+    }
+    let output = output.unwrap().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("loop-arming.lock"),
+        "{output:?}"
+    );
+    assert_eq!(wait_instances(&env), before);
+    let pending: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(pending.as_array().unwrap().len(), 1);
+    assert_eq!(pending[0]["name"], name);
+    wait_ok(&env, &["wait", "cancel", name]);
+    assert!(wait_instances(&env).0.is_empty());
+}
+
+#[test]
 fn self_waits_put_lost_first_and_keep_long_redirects_whole() {
     let env = Env::new();
     env.record(&env.project_root);

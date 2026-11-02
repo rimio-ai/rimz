@@ -453,6 +453,11 @@ impl TaskCatalog {
         if task.entry().workflow.is_some() {
             super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
         }
+        let key = task.key(name);
+        let cleared_overlays = match task.source() {
+            TaskSource::Instance => Some(clear_overlays(&key)?),
+            _ => None,
+        };
         let changed = remove_definition(name, task)?;
         if changed && task.entry().stay {
             super::launch_ledger_store::remove(&StatePaths::for_project_root(&root)?, name)?;
@@ -477,8 +482,10 @@ impl TaskCatalog {
             super::launch_ledger_store::remove_capacity(&paths, name)?;
             crate::harness::workflow::reassign_task(&paths, name, None)?;
         }
-        let key = task.key(name);
-        let cleared_overlays = clear_overlays(&key)?;
+        let cleared_overlays = match cleared_overlays {
+            Some(cleared) => cleared,
+            None => clear_overlays(&key)?,
+        };
         Ok(TaskMutation {
             changed,
             cleared_overlays,

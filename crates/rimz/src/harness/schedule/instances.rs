@@ -196,10 +196,10 @@ pub(super) fn insert_delivery(
         super::catalog::TaskSource::Instance,
         &entry.resolved_root(),
     );
-    tasks.insert(name.clone(), entry.clone());
-    write_temp_then_rename(&path(&paths.root), &tasks)?;
     super::arming::remove(&key)?;
     super::strikes::clear(&key)?;
+    tasks.insert(name.clone(), entry.clone());
+    write_temp_then_rename(&path(&paths.root), &tasks)?;
     Ok((name, false))
 }
 
@@ -301,6 +301,40 @@ mod tests {
         let paths = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
         assert!(insert_delivery(&paths, Some("probe"), &task(), &BTreeSet::new()).is_err());
         assert!(!paths.root.exists());
+    }
+
+    #[test]
+    fn failed_overlay_clear_writes_no_delivery() {
+        if std::env::var_os("RIMZ_TEST_DELIVERY_OVERLAY_HOME").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "harness::schedule::instances::tests::failed_overlay_clear_writes_no_delivery",
+                    "--nocapture",
+                ])
+                .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
+                .env("RIMZ_TEST_DELIVERY_OVERLAY_HOME", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let paths = StatePaths::for_project_root(dir.path()).unwrap();
+        record_room(&paths, dir.path());
+        let lock = crate::disk::paths::loops_dir().join("loop-arming.lock");
+        std::fs::create_dir_all(&lock).unwrap();
+        let result = insert_delivery(&paths, Some("probe"), &task(), &BTreeSet::new());
+        std::fs::remove_dir(&lock).unwrap();
+        assert!(matches!(result, Err(InstanceErr::Arming(_))), "{result:?}");
+        assert!(load_strict_from(&paths.root).unwrap().0.is_empty());
+        assert!(!path(&paths.root).exists());
     }
 
     #[test]
