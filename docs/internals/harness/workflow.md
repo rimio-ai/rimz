@@ -51,7 +51,7 @@ Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Every table reject
 | Field | Rule |
 | --- | --- |
 | `scope` | Required. `worktree` runs every node in the selected checkout, and `project` runs every node at the room's project root. |
-| `start` | Required. Names a check. |
+| `start` | Required. Names a check or a step, never a special target. |
 | `summary` | Optional. One nonempty line describing the workflow. Omission never warns. |
 | `deadline` | Optional. An RFC 3339 instant, or a local civil date or datetime. A bare date is local midnight. The record stores the resolved instant. |
 | `on.deadline` | The one header edge. Defaults to `@user`. |

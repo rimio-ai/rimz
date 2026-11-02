@@ -438,6 +438,43 @@ fn deadline_wait_does_not_require_a_check_timeout_or_allow_a_check_only_cycle() 
 }
 
 #[test]
+fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
+    let results = [
+        "pick", "build", "missing", "@done", "@user", "@wait", "@failed",
+    ]
+    .map(|start| {
+        let (_home, dir) = fixture();
+        fs::write(
+            dir.join("workflow.toml"),
+            VALID.replace("start = \"pick\"", &format!("start = {start:?}")),
+        )
+        .unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        report
+            .errors
+            .into_iter()
+            .map(|issue| (issue.path, issue.message))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        results,
+        [
+            "pick", "build", "missing", "@done", "@user", "@wait", "@failed"
+        ]
+        .map(|start| {
+            if matches!(start, "pick" | "build") {
+                Vec::new()
+            } else {
+                vec![(
+                    "workflow.start".into(),
+                    format!("example: workflow.start: {start} must name a check or a step"),
+                )]
+            }
+        })
+    );
+}
+
+#[test]
 fn validation_rejects_each_invalid_spec() {
     let shell = "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='true'\non={pass='@done',fail='@user'}\n";
     let cases = [
@@ -510,8 +547,8 @@ fn validation_rejects_each_invalid_spec() {
             "checks.pick",
         ),
         (
-            "start step",
-            VALID.replace("start = \"pick\"", "start = \"build\""),
+            "unknown start",
+            VALID.replace("start = \"pick\"", "start = \"missing\""),
             "workflow.start",
         ),
         (
@@ -824,6 +861,7 @@ fn validation_accepts_command_steps_without_agent_warnings() {
         .map(|runner| {
             let (_home, dir) = fixture();
             let text = VALID
+                .replace("start = \"pick\"", "start = \"build\"")
                 .replace(
                     "agent = \"claude\"",
                     &format!("{runner} = 'echo ready'\ntimeout='1m'"),

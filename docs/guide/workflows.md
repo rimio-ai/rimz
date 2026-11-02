@@ -48,6 +48,8 @@ The workflow runs it again after your turn.
 
 Read the graph from `start`. The run begins at the `tests` check. An answer of `pass` goes to `@done`, which ends the run. An answer of `fail` goes to the `fix` step, which starts Claude Code in the checkout with the prompt file. When that agent's turn ends, RimZ stops the agent and follows `then` back to `tests`. The check decides whether the work is done, never the agent. The check's whole answer, `outcome` and `reason` included, becomes the next node's `input`. That is how `log` reaches the agent.
 
+`start` may name a check or a step. To do work before the first check, name the agent or command step directly; no placeholder check is needed. A first step's `context.json` has `input`, `key`, and `prev_attempt` set to null, and `visit` and `visits` both set to 1. That launch counts toward `max-visits-per-key` under the null key. An agent step still waits for its window, checkout occupancy, and any applicable capacity admission.
+
 Two fields bound the loop. `max-visits = 3` refuses a fourth launch of `fix`, and the run parks to wait for you. `timeout = "1h"` ends an attempt that runs longer than an hour and follows `then` as if the turn had ended. Time the step's agent, or a subagent it launched, spends waiting on a blocking question or permission prompt does not count toward that hour. Durations take `s`, `m`, `h`, and `d`.
 
 For distinct failures to get their own tries while the same failure stops retrying, add `max-visits-per-key = 2` to the step. A `run` script's answer can name the failure in `key`, and a condition case can fix its `key`; a shell check passes the run's key through unchanged. A key's count never resets during the run, even after the run works on other keys; without a key, all visits share one count. Keep `max-visits` to cap the total: a check naming a new key each time must not retry forever, and a per-key bound alone does not bound a cycle. Both fields must be positive, and when both are set the per-key bound must be below the total. The total cap is checked first and wins if both trip. Either cap follows `on.cap` (default `@user`), and its `input.bound` names the field that tripped, `"max-visits"` or `"max-visits-per-key"`, so a `run` or agent check can route the two apart. The reference gives the [whole cap input](../reference/cli/workflow.md#json-shapes).
@@ -91,7 +93,7 @@ Then start the run:
    RUN=$(rimz workflow run fix-tests -w feat-x | sed -n 1p)
    ```
 
-`run` validates again, creates the run, and prints the run id (`wf_` and 32 hexadecimal digits), the run's work directory, then a `workflow show` hint for that run. The first two lines keep their scripting format. The first check starts in the background. If the suite already passes, the run ends at `@done` at once. Break a test first to watch the loop.
+`run` validates again, creates the run, and prints the run id (`wf_` and 32 hexadecimal digits), the run's work directory, then a `workflow show` hint for that run. The first two lines keep their scripting format. The first node starts in the background. In this example, if the suite already passes, the run ends at `@done` at once. Break a test first to watch the loop.
 
 Without `-w` the run uses the checkout you are in. `-w` selects an existing RimZ worktree and never creates one. A workflow holds at most one active or parked run per checkout, so a second `run` there refuses and names the run that holds it. `--prompt 'keep the public API unchanged'` adds text to the end of every agent step's prompt for this run.
 
@@ -415,7 +417,7 @@ A condition answer carries `outcome`, the zero-based winning `case` (absent for 
 | --- | --- |
 | `run`, `node`, `seq` | The run id, the current node, and this evaluation's sequence number. |
 | `prompt` | The run's `--prompt`, or null. |
-| `input` | The answer that routed here, or the engine's object after a cap, timeout, or deadline. |
+| `input` | The answer that routed here, the engine's object after a cap, timeout, or deadline, or null at the start. |
 | `key` | The current item key, or null. |
 | `visit`, `visits` | Steps only: this step's visits for the current key, and its visits in total, both including this launch. `max-visits-per-key` caps `visit`; `max-visits` caps `visits`. |
 | `output_path` | Judges only: the file to write the answer to. Null for other checks and steps. |
