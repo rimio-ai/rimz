@@ -87,8 +87,11 @@ pub(super) fn agent_lead_cell(
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
 /// The fast-mode bolt follows the model in bold amber, still at rest and
 /// crackling only while running.
-/// The window token is the model's context window (`258k`, `1M`) — the
-/// context-sidecar reading first, the row's carried/default fallback second.
+/// The context label pairs the compaction point and model window (`372k/1M`)
+/// when the meter scales to native compaction, else shows the window (`258k`,
+/// `1M`). The window takes the context-sidecar reading first, then the row's
+/// carried/default fallback. A paired label yields width after the other
+/// capabilities and cost: point/window, point alone, then nothing, never cut.
 /// It rides only non-idle cards; idle cards keep model and reasoning configuration but drop the
 /// window until work starts.
 /// The whole capability cluster rides behind a resolved model: with none named,
@@ -162,18 +165,37 @@ pub(super) fn agent_identity_line(
             left.push(Span::styled(value_seam(theme), theme.muted()));
             left.push(Span::styled(reasoning.to_owned(), theme.muted()));
         }
-        // The window token keeps the capability tokens' DIM weight — metadata,
-        // not a status signal — but tints by size class (`window_style`) so
-        // the magnitude reads at a glance; the context-meter severity ramp
-        // keeps the loud color slot.
+        let meter = row.context_meter(row_ctx.bands.scale);
         if status != AgentStatus::Idle
-            && let Some(window) = row.context_meter(row_ctx.bands.scale).window
+            && let Some(window) = meter.window
         {
-            left.push(Span::styled(value_seam(theme), theme.muted()));
-            left.push(Span::styled(
-                window_short(window),
-                window_style(theme, window),
-            ));
+            if let Some(point) = meter.compact_at {
+                let point = window_short(point);
+                let window = format!("/{}", window_short(window));
+                let available = width.saturating_sub(
+                    spans_width(&left)
+                        + spans_width(&right)
+                        + usize::from(!right.is_empty())
+                        + text_width(&value_seam(theme)),
+                );
+                if text_width(&point) <= available {
+                    left.push(Span::styled(value_seam(theme), theme.muted()));
+                    let full = text_width(&point) + text_width(&window) <= available;
+                    left.push(Span::styled(
+                        point,
+                        theme.styled(Component::CompactionPoint, Modifier::DIM),
+                    ));
+                    if full {
+                        left.push(Span::styled(window, theme.muted()));
+                    }
+                }
+            } else {
+                left.push(Span::styled(value_seam(theme), theme.muted()));
+                left.push(Span::styled(
+                    window_short(window),
+                    window_style(theme, window),
+                ));
+            }
         }
     }
     pin_right(left, right, width)

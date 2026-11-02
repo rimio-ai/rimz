@@ -64,6 +64,7 @@ fn compose_test_meters(ui: &mut UiState, frame: u32) {
                     [frame as u8, (frame >> 8) as u8, meter as u8],
                     Vec::new(),
                     [1, 2, 3],
+                    None,
                 ))
                 .expect("room for visible meters");
             ratatui::text::Line::from(ratatui::text::Span::styled(
@@ -675,6 +676,7 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
         [1, 2, 3],
         Vec::new(),
         [4, 5, 6],
+        None,
     );
     let first_id = ui
         .meter_pixels
@@ -724,6 +726,7 @@ fn meter_transmission_paints_visible_rasters_once() {
             [1, 2, 3],
             Vec::new(),
             [4, 5, 6],
+            None,
         ))
         .expect("meter raster");
     let placeholder = ratatui::text::Line::from(ratatui::text::Span::styled(

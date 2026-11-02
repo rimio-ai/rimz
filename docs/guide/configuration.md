@@ -995,7 +995,7 @@ An opt-in animated companion in the provider dashboard. The pet question in `rim
 
 ### Sidebar bands
 
-The agent card's context meter and the provider budget bar interpolate across color stops you can tune, in `[theme.display.context_meter]` and `[theme.display.budget_bar]`. `[theme.display] pixel` is the master kitty-graphics switch for the context meter and for pets, `auto` or `off`. The model, the terminal requirements, the fallbacks, and the shipped numbers are in [theme → display](./theme.md#display).
+The agent card's context meter and the provider budget bar interpolate across color stops you can tune, in `[theme.display.context_meter]` and `[theme.display.budget_bar]`. The context meter defaults to the configured native compaction point when known below the window; `scale = "window"` restores a window-scaled view ([meter settings](./theme.md#meter-color-stops)). `[theme.display] pixel` is the master kitty-graphics switch for the context meter and for pets, `auto` or `off`. The model, the terminal requirements, the fallbacks, and the shipped numbers are in [theme → display](./theme.md#display).
 
 ### Provider dashboard
 

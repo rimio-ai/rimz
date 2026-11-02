@@ -782,7 +782,14 @@ fn expired_truecolor_context_meter_interns_one_flat_raster() {
     assert_eq!(raster.health, health);
     assert_eq!(
         *raster,
-        MeterRaster::new(raster.width_cells, 0.4, health, Vec::new(), raster.track),
+        MeterRaster::new(
+            raster.width_cells,
+            0.4,
+            health,
+            Vec::new(),
+            raster.track,
+            None
+        ),
         "expired raster has no composition runs and keeps fill geometry"
     );
 }
@@ -1539,7 +1546,14 @@ fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
 
     pixels.begin_frame();
     let earlier_id = pixels
-        .intern(MeterRaster::new(3, 0.25, [9, 8, 7], Vec::new(), [4, 5, 6]))
+        .intern(MeterRaster::new(
+            3,
+            0.25,
+            [9, 8, 7],
+            Vec::new(),
+            [4, 5, 6],
+            None,
+        ))
         .expect("an earlier visible meter id");
     let mut repeated = vec![Line::from(Span::styled(
         crate::sidebar_pane::pixel::placeholder_cluster(0, 0),
@@ -2330,12 +2344,26 @@ fn post_compaction_estimates_use_fractional_pixel_fill() {
                 let health = theme.pixel_rgb(glyph.style.fg.unwrap()).unwrap();
                 assert_eq!(
                     *raster,
-                    MeterRaster::new(raster.width_cells, fill, health, Vec::new(), raster.track),
+                    MeterRaster::new(
+                        raster.width_cells,
+                        fill,
+                        health,
+                        Vec::new(),
+                        raster.track,
+                        None
+                    ),
                     "{set}, {width}, {tokens}/{window}"
                 );
                 assert_ne!(
                     *raster,
-                    MeterRaster::new(raster.width_cells, 0.0, health, Vec::new(), raster.track)
+                    MeterRaster::new(
+                        raster.width_cells,
+                        0.0,
+                        health,
+                        Vec::new(),
+                        raster.track,
+                        None
+                    )
                 );
             }
         }

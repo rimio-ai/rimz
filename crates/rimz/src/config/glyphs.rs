@@ -82,6 +82,7 @@ glyph_roles! {
         MeterCompacted => "context_compacted",
         MeterBarFilled => "bar_filled",
         MeterBarTrack => "bar_track",
+        MeterCompactionWall => "compaction_wall",
         MeterBarCap => "bar_cap",
         MeterBarHalf => "bar_half",
         MeterManaFilled => "mana_filled",
