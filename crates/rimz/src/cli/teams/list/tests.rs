@@ -3,6 +3,44 @@ use rimz::agents::AgentStatus;
 use rimz::config::RoleBinding;
 
 #[test]
+fn role_mode_reports_show_kind_defaults_and_mappings_even_with_invalid_peers() {
+    for (kind, expected) in [
+        ("claude", "auto"),
+        ("codex", "auto"),
+        ("opencode", "auto"),
+        ("pi", "yolo"),
+    ] {
+        for broken in [false, true] {
+            let profiles: ProfilesConfig = serde_json::from_value(serde_json::json!({
+                "worker": {"agent": kind}
+            }))
+            .unwrap();
+            let mut team: Team =
+                toml::from_str("roles = [{role = 'lead', profile = 'worker'}]").unwrap();
+            if broken {
+                let mut ghost = team.roles[0].clone();
+                ghost.role = "ghost".into();
+                ghost.profile = "missing".into();
+                team.roles.push(ghost);
+            }
+            let report = definition_report(
+                "pair",
+                &team,
+                &profiles,
+                &CommandsConfig::default(),
+                None,
+                Vec::new(),
+            );
+            assert_eq!(
+                report.roles[0].mode.as_deref(),
+                Some(expected),
+                "{kind} {broken}"
+            );
+        }
+    }
+}
+
+#[test]
 fn keep_warm_reports_use_resolved_role_over_team_fields() {
     let team: Team = toml::from_str("keep-warm = {max = '6h', while = 'team.stage!=Done'}\nroles = [{role = 'lead', profile = 'claude'}, {role = 'helper', profile = 'claude', keep-warm = {max = 'off'}}, {role = 'cold', profile = 'claude', keep-warm = 'off'}]").unwrap();
     let report = definition_report(

@@ -414,18 +414,24 @@ impl ResumePosture {
     }
 }
 
-/// A bare posture that replays only the permission mode stamped on the
-/// original launch event, so an agent launched with no profile still comes
-/// back with the posture the user granted it.
+/// Replay a bare row's requested mode, or settle its provider default.
 fn bare_posture(stamped_mode: Option<PermissionMode>, kind: &AgentKind) -> ResumeLaunchPosture {
-    ResumeLaunchPosture {
+    let mut posture = ResumeLaunchPosture {
         args: stamped_mode
             .zip(find_definition(kind.as_str()))
             .map(|(mode, adapter)| adapter.spec().launch.permission_args(mode))
             .unwrap_or_default(),
         mode: stamped_mode,
         ..Default::default()
+    };
+    if let Some(adapter) = find_definition(kind.as_str()) {
+        posture.mode =
+            adapter
+                .spec()
+                .launch
+                .settle_permission_mode(&mut posture.args, stamped_mode, None);
     }
+    posture
 }
 
 /// The durable facts a resumed session offers when looking up its posture.
@@ -659,6 +665,13 @@ fn resolve_posture_with_role(
             .args
             .extend(adapter.spec().launch.permission_args(mode));
         posture.mode = Some(mode);
+    }
+    if let Some(adapter) = find_definition(request.kind.as_str()) {
+        posture.mode =
+            adapter
+                .spec()
+                .launch
+                .settle_permission_mode(&mut posture.args, posture.mode, None);
     }
     Ok(posture)
 }
@@ -3121,7 +3134,7 @@ fn restore_resume_cell(
         ResumeLaunchPosture {
             mode: base
                 .as_ref()
-                .and_then(|base| base.written_mode())
+                .and_then(|base| base.launch.mode)
                 .or(request.stamped_mode)
                 .or(rebased.launch.mode),
             record: Some(Box::new(crate::agents::LaunchRecord {

@@ -181,7 +181,6 @@ pub(super) fn agent_pane_name(profile: Option<&str>, kind: &AgentKind) -> String
 pub struct ResolvedProfile {
     notices: Vec<CellNotice>,
     kind_defaults: bool,
-    filled_mode: bool,
     filled_effort: bool,
     pub empty_dir: Option<bool>,
     pub isolation_default: Option<crate::config::Isolation>,
@@ -209,20 +208,10 @@ impl ResolvedProfile {
         self.layers
     }
 
-    /// The chain or role's written mode, excluding a filled kind default.
-    pub(super) fn written_mode(&self) -> Option<PermissionMode> {
-        if self.filled_mode {
-            None
-        } else {
-            self.launch.mode
-        }
-    }
-
     fn bare(kind: &str) -> Self {
         Self {
             notices: Vec::new(),
             kind_defaults: false,
-            filled_mode: false,
             filled_effort: false,
             kind: AgentKind::new_unchecked(kind),
             empty_dir: None,
@@ -292,10 +281,6 @@ impl ResolvedProfile {
             return;
         }
         let defaults = crate::agents::definition_defaults(&self.kind, self.launch.model.as_deref());
-        if self.launch.mode.is_none() {
-            self.launch.mode = defaults.mode;
-            self.filled_mode = self.launch.mode.is_some();
-        }
         if self.launch.effort.is_none() {
             self.launch.effort = defaults.effort.map(str::to_owned);
             self.filled_effort = self.launch.effort.is_some();
@@ -303,10 +288,6 @@ impl ResolvedProfile {
     }
 
     fn clear_kind_defaults(&mut self) {
-        if self.filled_mode {
-            self.launch.mode = None;
-            self.filled_mode = false;
-        }
         if self.filled_effort {
             self.launch.effort = None;
             self.filled_effort = false;
@@ -1834,12 +1815,9 @@ fn virtual_agent_cell(
     let Some(resolved) = resolved else {
         return Ok(None);
     };
-    let adapter = crate::agents::find_definition(resolved.kind.as_str())
-        .expect("resolved profile terminal kind is known");
-    let posture = adapter.spec().launch.permission_args(mode);
-    if mode != PermissionMode::Ask && mode != PermissionMode::Plan && posture.is_empty() {
+    let Some(posture) = supported_virtual_agent_args(&resolved.kind, mode) else {
         return Ok(None);
-    }
+    };
     Ok(Some(virtual_cell_from(
         resolved,
         profile_name,
@@ -1856,7 +1834,6 @@ fn virtual_cell_from(
 ) -> Result<Cell> {
     let mut base = resolved.clone();
     base.launch.mode = None;
-    base.filled_mode = false;
     let error_origin = profile_name
         .as_deref()
         .unwrap_or_else(|| resolved.kind.as_str());
@@ -1933,8 +1910,6 @@ fn fast_suffix_cell(
     } else {
         return Ok(None);
     };
-    let adapter = crate::agents::find_definition(resolved.kind.as_str())
-        .expect("resolved profile terminal kind is known");
     resolved.fast = Some(true);
     let Some(mode) = mode else {
         return Ok(Some(match profile_name {
@@ -1948,10 +1923,9 @@ fn fast_suffix_cell(
             )),
         }));
     };
-    let posture = adapter.spec().launch.permission_args(mode);
-    if mode != PermissionMode::Ask && mode != PermissionMode::Plan && posture.is_empty() {
+    let Some(posture) = supported_virtual_agent_args(&resolved.kind, mode) else {
         return Ok(None);
-    }
+    };
     Ok(Some(virtual_cell_from(
         resolved,
         profile_name,
@@ -1976,7 +1950,16 @@ fn virtual_agent_shape(raw: &str) -> bool {
 fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<String>> {
     let adapter = crate::agents::find_definition(kind)?;
     let args = adapter.spec().launch.permission_args(mode);
-    if mode == PermissionMode::Ask || mode == PermissionMode::Plan || !args.is_empty() {
+    if mode == PermissionMode::Ask
+        || mode == PermissionMode::Plan
+        || !args.is_empty()
+        || adapter
+            .spec()
+            .launch
+            .permission
+            .resolve_mode(None)
+            .is_some()
+    {
         Some(args)
     } else {
         None
@@ -2442,7 +2425,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     // Keep the role-field merge aligned with ResolvedProfile::fill_missing.
     original.isolation_default = original.isolation_default.or(base.isolation_default);
     original.empty_dir = original.empty_dir.or(base.empty_dir);
-    original.launch.mode = original.launch.mode.or(base.written_mode());
+    original.launch.mode = original.launch.mode.or(base.launch.mode);
     if original.launch.budget.is_none() {
         original.launch.budget.clone_from(&base.launch.budget);
     }

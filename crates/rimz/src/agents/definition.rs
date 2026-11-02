@@ -531,7 +531,6 @@ pub(super) enum DefinitionTools {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DefinitionSpec {
-    pub mode: Option<PermissionMode>,
     pub effort: Option<&'static str>,
     pub models: &'static [DefinitionModel],
     pub runs_other_providers_models: bool,
@@ -541,7 +540,6 @@ pub(super) struct DefinitionSpec {
 
 impl DefinitionSpec {
     pub const EMPTY: Self = Self {
-        mode: None,
         effort: None,
         models: &[],
         runs_other_providers_models: false,

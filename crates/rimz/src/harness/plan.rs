@@ -1485,22 +1485,13 @@ pub(super) fn finalize_agent_cell(
     if options.isolation.is_some() {
         cell.launch.isolation = options.isolation;
     }
-    let permission_mode = match options.permission_mode {
-        Some(PermissionModeChoice::Explicit(mode)) => {
-            if let Some(adapter) = adapter {
-                adapter.spec().launch.strip_permission_args(&mut cell.args);
-            }
-            Some(mode)
-        }
-        Some(PermissionModeChoice::Default(mode)) if cell.launch.mode.is_none() => Some(mode),
-        _ => None,
-    };
-    if let Some(permission_mode) = permission_mode
+    if let Some(PermissionModeChoice::Explicit(mode)) = options.permission_mode
         && let Some(adapter) = adapter
     {
+        adapter.spec().launch.strip_permission_args(&mut cell.args);
         cell.args
-            .extend(adapter.spec().launch.permission_args(permission_mode));
-        cell.launch.mode = Some(permission_mode);
+            .extend(adapter.spec().launch.permission_args(mode));
+        cell.launch.mode = Some(mode);
     }
     let mut overridden = Vec::new();
     if !options.preset.is_empty() {
@@ -1583,6 +1574,17 @@ pub(super) fn finalize_agent_cell(
                 .map_err(unsupported_preset_error)?,
         );
         cell.launch.model = Some(default);
+    }
+    if let Some(adapter) = adapter {
+        let default = match options.permission_mode {
+            Some(PermissionModeChoice::Default(mode)) => Some(mode),
+            _ => None,
+        };
+        cell.launch.mode =
+            adapter
+                .spec()
+                .launch
+                .settle_permission_mode(&mut cell.args, cell.launch.mode, default);
     }
     cell.launch.record = Some(Box::new(crate::agents::LaunchRecord {
         model: cell.launch.model.clone(),

@@ -231,7 +231,10 @@ fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
             kind: AgentKind::new_unchecked(kind),
             action: ExecAction::Resume {
                 session_id: id.to_owned(),
-                extra_args: Vec::new(),
+                extra_args: rimz::agents::spec_by_kind(kind)
+                    .unwrap()
+                    .launch
+                    .permission_args(rimz::agents::PermissionMode::Auto),
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
@@ -251,6 +254,10 @@ fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
             identity: ExecIdentity {
                 name: Some(name.to_owned()),
                 launch_id: Some(id.to_owned()),
+                params: LaunchParams {
+                    mode: Some(rimz::agents::PermissionMode::Auto),
+                    ..Default::default()
+                },
                 ..ExecIdentity::default()
             },
         },
@@ -2033,7 +2040,7 @@ fn resume_replays_role_and_team() {
         request.action,
         ExecAction::Resume {
             session_id: "sess-claude".to_owned(),
-            extra_args: Vec::new(),
+            extra_args: vec!["--permission-mode".to_owned(), "auto".to_owned()],
         }
     );
     assert_eq!(request.identity.name.as_deref(), Some("warm-drift"));
@@ -2043,6 +2050,10 @@ fn resume_replays_role_and_team() {
     );
     assert_eq!(request.identity.params.role.as_deref(), Some("planner"));
     assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
+    assert_eq!(
+        request.identity.params.mode,
+        Some(rimz::agents::PermissionMode::Auto)
+    );
     assert!(request.close_pane_on_exit);
 }
 

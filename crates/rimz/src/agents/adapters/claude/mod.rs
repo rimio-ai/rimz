@@ -472,7 +472,6 @@ pub(in crate::agents) struct ClaudeAdapter;
 const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
         runs_other_providers_models: false,
-        mode: Some(crate::agents::PermissionMode::Auto),
         effort: Some("xhigh"),
         models: &[
             crate::agents::definition::DefinitionModel {

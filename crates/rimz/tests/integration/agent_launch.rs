@@ -3484,7 +3484,11 @@ fn explain_kind_override_uses_only_the_final_kinds_defaults() {
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(report["kind"], kind);
         assert!(report["effort"].is_null(), "{report}");
-        assert!(report["mode"].is_null(), "{report}");
+        assert_eq!(
+            report["mode"].as_str(),
+            (kind == "opencode").then_some("auto"),
+            "{report}"
+        );
         let argv = report["provider_argv"].as_array().unwrap();
         assert!(
             !argv
