@@ -57,8 +57,38 @@ pub struct Header {
     pub scope: ScopeKind,
     pub start: String,
     pub deadline: Option<String>,
+    pub limit: Option<Limit>,
     #[serde(default)]
     pub on: HeaderEdges,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Limit {
+    #[schemars(range(min = 1))]
+    pub max_active: Option<u32>,
+    pub pace: Option<String>,
+}
+
+pub(super) fn duration(raw: &str) -> Result<std::time::Duration, crate::utils::time::TimeInputErr> {
+    use crate::utils::time::{DurationUnit, parse_duration_units};
+    parse_duration_units(
+        raw,
+        &[
+            DurationUnit::Second,
+            DurationUnit::Minute,
+            DurationUnit::Hour,
+            DurationUnit::Day,
+        ],
+    )
+}
+
+impl Limit {
+    pub(in crate::harness) fn pace(
+        &self,
+    ) -> Result<Option<std::time::Duration>, crate::utils::time::TimeInputErr> {
+        self.pace.as_deref().map(duration).transpose()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
@@ -199,6 +229,7 @@ pub struct Step {
     pub throttle: Option<crate::config::ThrottleSwitch>,
     #[schemars(with = "Option<String>")]
     pub capacity_wait: Option<crate::config::CapacityWait>,
+    pub limit: Option<Limit>,
     #[schemars(required)]
     pub then: Option<String>,
     #[serde(default)]
@@ -305,6 +336,11 @@ fn schema_path(value: &toml::Value) -> String {
     {
         return key.clone();
     }
+    if let Some(limit) = value.get("workflow").and_then(|header| header.get("limit"))
+        && limit.clone().try_into::<Limit>().is_err()
+    {
+        return "workflow.limit".into();
+    }
     for table in ["checks", "steps"] {
         let Some(nodes) = value.get(table) else {
             continue;
@@ -318,6 +354,12 @@ fn schema_path(value: &toml::Value) -> String {
                 _ => node.clone().try_into::<Step>().is_err(),
             };
             if invalid {
+                if table == "steps"
+                    && let Some(limit) = node.get("limit")
+                    && limit.clone().try_into::<Limit>().is_err()
+                {
+                    return format!("{table}.{name}.limit");
+                }
                 if table == "checks"
                     && let Some(wake) = node.get("wake")
                     && wake.clone().try_into::<Vec<Wake>>().is_err()

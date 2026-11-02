@@ -1083,10 +1083,69 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
 }
 
 #[test]
+fn limits_validate_both_scopes_and_reject_invalid_values_at_the_limit() {
+    let (_home, dir) = fixture();
+    let mut actual = Vec::new();
+    for scope in ["workflow", "steps.build"] {
+        for (value, suffix) in [
+            ("max-active=3", None),
+            ("pace='10m'", None),
+            ("max-active=4\npace='2m'", None),
+            ("", Some("")),
+            ("max-active=0", Some(".max-active")),
+            ("pace='0s'", Some(".pace")),
+            ("pace='soon'", Some(".pace")),
+            ("unknown=1", Some("")),
+        ] {
+            fs::write(
+                dir.join("workflow.toml"),
+                format!("{VALID}\n[{scope}.limit]\n{value}\n"),
+            )
+            .unwrap();
+            let report = validate(&dir, &LoadedDefinitions::default(), None);
+            let valid = match suffix {
+                None => report.errors.is_empty(),
+                Some(suffix) => report
+                    .errors
+                    .iter()
+                    .any(|issue| issue.path == format!("{scope}.limit{suffix}")),
+            };
+            actual.push((scope, value, valid, report.errors));
+        }
+    }
+    let command = VALID
+        .replace("agent = \"claude\"", "shell='true'\ntimeout='1m'")
+        .replace("prompt-file = \"prompts/build.md\"", "");
+    fs::write(
+        dir.join("workflow.toml"),
+        format!("{command}\n[steps.build.limit]\nmax-active=1\n"),
+    )
+    .unwrap();
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
+    actual.push((
+        "command",
+        "max-active=1",
+        report.errors.iter().any(|issue| {
+            issue.path == "steps.build.limit"
+                && issue
+                    .message
+                    .contains("a command step has no turn to count")
+        }),
+        report.errors,
+    ));
+    assert!(actual.iter().all(|(_, _, valid, _)| *valid), "{actual:#?}");
+}
+
+#[test]
 fn schema_is_derived_from_the_loader_types() {
     let value = serde_json::to_value(schema()).unwrap();
     assert_eq!(value["additionalProperties"], false);
     assert!(value["properties"]["workflow"].is_object());
+    assert_eq!(value["$defs"]["Limit"]["additionalProperties"], false);
+    assert_eq!(
+        value["$defs"]["Limit"]["properties"]["max-active"]["minimum"],
+        1
+    );
     assert_eq!(
         value["$defs"]["Step"]["properties"]["max-visits-per-key"]["minimum"],
         1

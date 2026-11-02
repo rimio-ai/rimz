@@ -9,7 +9,7 @@ use crate::store::workflow::{
     JournalEvent, Key, LiveAttempt, Park, ParkReason, PreviousAttempt, RunRecord, RunState,
     TurnEndAction, Verdict, Wait,
 };
-use crate::utils::time::{DurationUnit, TimeInputErr, parse_duration_units};
+use crate::utils::time::TimeInputErr;
 
 pub(super) struct Transition<'a> {
     pub record: RunRecord,
@@ -807,18 +807,6 @@ impl Transition<'_> {
             );
         }
     }
-}
-
-pub(super) fn duration(raw: &str) -> Result<std::time::Duration, TimeInputErr> {
-    parse_duration_units(
-        raw,
-        &[
-            DurationUnit::Second,
-            DurationUnit::Minute,
-            DurationUnit::Hour,
-            DurationUnit::Day,
-        ],
-    )
 }
 
 fn case_index(object: &Value) -> Option<u32> {
