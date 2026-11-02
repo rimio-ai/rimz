@@ -3197,6 +3197,18 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         "soft-compaction attempts must be recognized: {soft_compacts:?}"
     );
     records.extend(soft_compacts.into_iter().map(Result::unwrap));
+    let nudges = [None, Some("delivery failed")].map(|error| {
+        serde_json::from_value::<AssistRecord>(serde_json::json!({
+            "at": ts(4_170), "assist": "stall_nudge", "kind": "claude",
+            "agent_id": "session-2", "label": "@planner", "team": "crew", "stage": "Build",
+            "quiet_secs": 3300, "message_id": "msg_nudge", "delivered": false, "error": error,
+        }))
+    });
+    assert!(
+        nudges.iter().all(Result::is_ok),
+        "stall nudges are assist records: {nudges:?}"
+    );
+    records.extend(nudges.into_iter().map(Result::unwrap));
     let stats = AssistStats::from_records("7d", records);
 
     assert_eq!(
@@ -3209,6 +3221,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             workflow_ends: 0,
             port_forwards: 1,
             stall_notices: 0,
+            stall_nudges: 1,
             resident_launches: 0,
             judge_declines: 0,
             model_aliases: 0,
@@ -3240,18 +3253,19 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
                 ("resumes", 1),
                 ("sweeps", 1),
                 ("port_forwards", 1),
-                ("soft_compacts", 1)
+                ("soft_compacts", 1),
+                ("stall_nudges", 1)
             ]
             .into(),
         }
     );
     assert_eq!(
         stats.events.len(),
-        12,
+        14,
         "every assist outcome stays forensic"
     );
-    assert_eq!(stats.timeline(0, false).0.len(), 8);
-    assert_eq!(stats.timeline(0, true).0.len(), 12);
+    assert_eq!(stats.timeline(0, false).0.len(), 9);
+    assert_eq!(stats.timeline(0, true).0.len(), 14);
     assert_eq!(
         serde_json::to_value(&stats.rollup).unwrap()["soft_compacts"],
         1

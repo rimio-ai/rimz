@@ -272,6 +272,8 @@ Switching tabs with the multiplexer's own keys moves the highlight without scrol
 
 Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent, native and launched children included, or an unfinished stage with nothing running escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (calm and parked cards cool, one hour), and `archive_after_secs` (those cards archive, 24 hours). Details in [configuration](./configuration.md#sidebar-rendering).
 
+An opt-in [`harness.stall_nudge`](./configuration.md#stalled-team-nudge) leaves that `!` unchanged and sends the last-active teammate one notice at 55 minutes of quiet per unfinished stage visit, with no pending wait or real message. Keep-warm pings and reading the card move neither stall mark.
+
 ## See also
 
 - [The sidebar on screen](../interface/sidebar.md): every glyph, meter, and frame drawn exactly, with the key table.

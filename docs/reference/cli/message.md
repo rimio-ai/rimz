@@ -163,6 +163,7 @@ Read plan.md when the planner finishes.
 | `TEAM_REPORT` | The leader's final response, sent to the agent that launched a [team](./teams.md#team-reports) when its board reaches `Done` or the cohort ends before `Done` | `@rimz` |
 | `SUBAGENT_PAUSED` | A [subagent parked on a provider limit](./subagents.md#a-child-paused-on-a-provider-limit), queued for its parent once per park; withdrawn if its run ends before delivery | `@rimz` |
 | `SUBAGENT_STALLED` | A [subagent silent mid-turn or not yet started past the stall window](./subagents.md#a-child-silent-past-the-stall-window), queued for its parent once per run; withdrawn if its run ends before delivery | `@rimz` |
+| `TEAM_STALLED` | An opt-in [stalled-team nudge](../../guide/configuration.md#stalled-team-nudge), queued to the last-active teammate at 55 minutes of quiet, once per unfinished stage visit | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message remains queued past five minutes with a receiver not working, or twenty minutes with a busy receiver, sent once to its live sender | `@rimz` |
 | `DEADLINE` | A [deadline](./subagents.md#configure-the-deadline-ladder) warning or stop request, sent to the subagent | `@rimz` |

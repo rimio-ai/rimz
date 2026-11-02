@@ -326,6 +326,17 @@ flip_compact = "180k"
 
 `flip_compact` compacts a [team](./teams.md) member at the stage flip that hands its own stage to another role, once its context is at least this full. It takes the same thresholds as `smart_compact`, or `"off"` to disable hand-off compaction. Unset uses the built-in role defaults: `120k` for a role owning `Plan`, `180k` otherwise. A role's own `flip-compact` field overrides the machine setting, including `"off"`, and the built-in defaults.
 
+### Stalled-team nudge
+
+```toml
+[harness]
+stall_nudge = true
+```
+
+`stall_nudge` defaults to `false`. When enabled, an unfinished [team](./teams.md) that has raised the sidebar's stuck-stage `!` gets one `TEAM_STALLED` notice after 55 minutes without real member activity or a stage flip. RimZ addresses the last-active teammate at its next turn boundary, only while everyone is at rest with no armed wait or real message pending. The notice asks it to check the board and stage file and continue, or reach the leader when the user is needed. The leader asks the user. Reading or focusing a card and keep-warm pings do not restart this clock.
+
+The delay is fixed, and the `!` still comes first at `[agents.attention] stalled_after_secs`. If that window is `3300` seconds (55m) or more, room entry warns, records the warning for the sidebar and `rimz doctor`, and disables the nudge; lower the window below `3300` or turn `stall_nudge` off. Flipping away and back opens a new visit; re-flipping the same stage does not. Even a failed delivery attempt consumes the visit's nudge. [`rimz stats`](../reference/cli/stats.md) records it under `stall_nudges`.
+
 ### Garbage collection
 
 ```toml
@@ -412,6 +423,8 @@ archive_after_secs = 86400
 | `archive_after_secs` | `86400` | When calm and parked cards sink below hot and warm work. Asks and failures do not archive. |
 
 Keep `archive_after_secs` above `inactive_after_secs`: a lower value is lifted to the first second after the inactive window.
+
+The stuck-stage `!` is independent of the optional [55-minute stalled-team nudge](#stalled-team-nudge).
 
 ### Multiplexer room options
 

@@ -32,6 +32,7 @@ pub(super) struct AssistRollup {
     pub(super) empty_dir_grants: usize,
     pub(super) molts: usize,
     pub(super) stall_notices: usize,
+    pub(super) stall_nudges: usize,
     pub(super) resident_launches: usize,
     pub(super) judge_declines: usize,
     pub(super) model_aliases: usize,
@@ -161,6 +162,20 @@ pub(super) enum AssistEvent {
         label: Option<String>,
         parent: String,
         silent_secs: u64,
+        message_id: String,
+        delivered: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    StallNudge {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        team: String,
+        stage: String,
+        quiet_secs: u64,
         message_id: String,
         delivered: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -467,6 +482,7 @@ impl AssistStats {
                     rollup.recovered_secs += recovered_secs(*parked_since, *at);
                 }
                 AssistEvent::StallNotice { .. } => rollup.stall_notices += 1,
+                AssistEvent::StallNudge { .. } => rollup.stall_nudges += 1,
                 AssistEvent::Compact { .. } => rollup.compacts += 1,
                 AssistEvent::SoftCompact { .. } => rollup.soft_compacts += 1,
                 AssistEvent::CacheKeepalive { .. } => rollup.keepalives += 1,
@@ -533,8 +549,8 @@ impl AssistStats {
 impl AssistEvent {
     fn outcome(&self) -> AssistOutcome {
         let effective = match self {
-            // An undelivered notice is parked in the parent's queue; only an error means it failed.
-            Self::StallNotice { error, .. } => error.is_none(),
+            // A queued notice took effect; only an error means it failed.
+            Self::StallNotice { error, .. } | Self::StallNudge { error, .. } => error.is_none(),
             Self::Continue { delivered, .. }
             | Self::CacheKeepalive { delivered, .. }
             | Self::IdleCompact { delivered, .. }
@@ -595,6 +611,7 @@ impl AssistEvent {
             Self::Molt { .. } => "molts",
             Self::JudgeDecline { .. } => "judge_declines",
             Self::StallNotice { .. } => "stall_notices",
+            Self::StallNudge { .. } => "stall_nudges",
             Self::ResidentLaunch { .. } => "resident_launches",
             Self::ModelAlias { .. } => "model_aliases",
             Self::TierFallback { .. } => "tier_fallbacks",
@@ -781,6 +798,28 @@ impl AssistEvent {
                 label,
                 parent,
                 silent_secs,
+                message_id,
+                delivered,
+                error,
+            },
+            Assist::StallNudge {
+                kind,
+                agent_id,
+                label,
+                team,
+                stage,
+                quiet_secs,
+                message_id,
+                delivered,
+                error,
+            } => Self::StallNudge {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                team,
+                stage,
+                quiet_secs,
                 message_id,
                 delivered,
                 error,
@@ -1134,6 +1173,7 @@ impl AssistEvent {
             | Self::WorkflowPark { at, .. }
             | Self::WorkflowEnd { at, .. }
             | Self::StallNotice { at, .. }
+            | Self::StallNudge { at, .. }
             | Self::ResidentLaunch { at, .. }
             | Self::JudgeDecline { at, .. }
             | Self::ModelAlias { at, .. }
@@ -1310,6 +1350,7 @@ enum RepeatKey<'a> {
     Tier(&'a str, &'a str),
     Molt(&'a AgentSessionId),
     Stall(&'a str, bool),
+    TeamStall(&'a str, &'a str, bool),
     Retry(Option<i32>),
     Judge(&'a str),
     Resident(&'a [String]),
@@ -1338,7 +1379,8 @@ impl AssistEvent {
             | Self::Hibernate { kind, agent_id, .. }
             | Self::TierFallback { kind, agent_id, .. }
             | Self::Molt { kind, agent_id, .. }
-            | Self::StallNotice { kind, agent_id, .. } => RepeatSubject::Agent(kind, agent_id),
+            | Self::StallNotice { kind, agent_id, .. }
+            | Self::StallNudge { kind, agent_id, .. } => RepeatSubject::Agent(kind, agent_id),
             Self::LaunchRetry {
                 kind,
                 label,
@@ -1414,6 +1456,12 @@ impl AssistEvent {
             Self::StallNotice {
                 parent, delivered, ..
             } => RepeatKey::Stall(parent, *delivered),
+            Self::StallNudge {
+                team,
+                stage,
+                delivered,
+                ..
+            } => RepeatKey::TeamStall(team, stage, *delivered),
             Self::LaunchRetry { exit_code, .. } => RepeatKey::Retry(*exit_code),
             Self::JudgeDecline { profile, .. } => RepeatKey::Judge(profile),
             Self::ResidentLaunch { stopped, .. } => RepeatKey::Resident(stopped),
@@ -1456,6 +1504,7 @@ impl AssistRow {
             | AssistEvent::IdleCompact { idle_secs, .. }
             | AssistEvent::IdleStop { idle_secs, .. } => Some(*idle_secs),
             AssistEvent::StallNotice { silent_secs, .. } => Some(*silent_secs),
+            AssistEvent::StallNudge { quiet_secs, .. } => Some(*quiet_secs),
             AssistEvent::LaunchRetry { startup_ms, .. } => Some(*startup_ms),
             _ => None,
         };
@@ -1611,6 +1660,7 @@ pub(super) fn category_entries(
         rows.push((label, value));
     };
     row("Stall notice:", "stall_notices", rollup.stall_notices, None);
+    row("Stall nudge:", "stall_nudges", rollup.stall_nudges, None);
     row(
         "Empty-dir trust:",
         "empty_dir_grants",
@@ -1823,6 +1873,24 @@ fn row_benefit_line(
                 .map(|error| format!(" ({})", first_line(error)))
                 .unwrap_or_default();
             format!("{time} {agent} silent {silence} — stall notice to {parent}{error}")
+        }
+        AssistEvent::StallNudge {
+            kind,
+            label,
+            team,
+            stage,
+            quiet_secs,
+            error,
+            ..
+        } => {
+            let agent = label.as_deref().unwrap_or(kind.as_str());
+            let quiet =
+                repeat_duration_range(*quiet_secs, duration, rimz::theme::fmt::active_duration);
+            let error = error
+                .as_deref()
+                .map(|error| format!(" ({})", first_line(error)))
+                .unwrap_or_default();
+            format!("{time} {agent} quiet {quiet} — stall nudge for {team} / {stage}{error}")
         }
         AssistEvent::ResidentLaunch { task, handles, .. } => {
             format!("{time} ▶ loop {task} opened {}", handles.join(", "))
@@ -2307,6 +2375,12 @@ fn forensic_row_line(event: &AssistEvent, zone: &jiff::tz::TimeZone, benefit: &s
             reset_facts(window_resets, zone),
         ),
         AssistEvent::StallNotice {
+            agent_id,
+            message_id,
+            delivered,
+            ..
+        }
+        | AssistEvent::StallNudge {
             agent_id,
             message_id,
             delivered,

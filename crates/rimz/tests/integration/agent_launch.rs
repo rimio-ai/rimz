@@ -3261,6 +3261,127 @@ fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
 
 #[cfg(unix)]
 #[test]
+fn stalled_team_gets_one_notice_and_one_assist_per_visit() {
+    use rimz::harness::stall_nudge::StallNudgeRequest;
+
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).unwrap();
+    let team: rimz::config::Team = toml::from_str(concat!(
+        "stages = ['Build']\nleader = 'lead'\n",
+        "[[roles]]\nrole = 'lead'\nprofile = 'claude'\nowns = ['Build']",
+    ))
+    .unwrap();
+    rimz::harness::team_notes::register(
+        &store,
+        &env.project_root,
+        "crew",
+        &team,
+        rimz::harness::team_notes::Launch::Fresh,
+    )
+    .unwrap();
+    let started = jiff::Timestamp::now() - std::time::Duration::from_secs(4_000);
+    let stamp = started
+        .to_zoned(jiff::tz::TimeZone::system())
+        .strftime("%Y-%m-%d %H:%M")
+        .to_string();
+    let visit = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M", &stamp)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::system())
+        .unwrap()
+        .timestamp();
+    std::fs::write(
+        env.project_root.join(".rimz/team/blackboard.md"),
+        format!("Stage: Build (@lead)\n## Progress\n- {stamp} @user: opened Build\n"),
+    )
+    .unwrap();
+    let kind = AgentKind::new_unchecked("claude");
+    let agent_id = AgentSessionId::from("lead-session");
+    let mut event = EventEnvelope::agent_launched(
+        workspace.workspace_id.clone(),
+        &workspace.session_name,
+        &kind,
+        AgentLaunchPayload {
+            system_prompt_digest: None,
+            agent_id: agent_id.clone(),
+            launch_id: None,
+            agent_name: "lead".into(),
+            agent_name_explicit: true,
+            launch: LaunchParams {
+                team: Some("crew".into()),
+                role: Some("lead".into()),
+                ..Default::default()
+            },
+            state: AgentLaunchState::Bound,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: Some(env.project_root.display().to_string()),
+            worktree_branch: None,
+            prompt: None,
+            description: None,
+        },
+    );
+    event.timestamp = started;
+    store.append_event(&event).unwrap();
+    let request = StallNudgeRequest {
+        workspace_id: workspace.workspace_id.clone(),
+        checkout: env.project_root.clone(),
+        team: "crew".into(),
+        leader_role: Some("lead".into()),
+        stage: "Build".into(),
+        visit_started_at: visit,
+        stalled_since: started,
+        target: (kind.clone(), agent_id.clone()),
+        members: vec![(kind, agent_id)],
+    };
+    let mut counts = Vec::new();
+    for _ in 0..2 {
+        env.rimz()
+            .args(rimz::child_process::agent_helper_argv(
+                "stall-nudge",
+                &request,
+            ))
+            .assert()
+            .success();
+        let messages = store.list_messages().unwrap();
+        let notices = messages
+            .iter()
+            .filter(|message| {
+                serde_json::to_value(&message.sender).unwrap()["notice"] == "team_stalled"
+            })
+            .collect::<Vec<_>>();
+        let output = env
+            .rimz()
+            .args(["stats", "--assists", "--all", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        counts.push((
+            notices.len(),
+            stats["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|event| event["assist"] == "stall_nudge")
+                .count(),
+        ));
+    }
+    assert_eq!(
+        counts,
+        [(1, 1), (1, 1)],
+        "one TEAM_STALLED notice and assist per visit"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn registered_child_that_never_starts_tells_its_parent_once_and_records_the_queued_assist() {
     never_started_child_notice(true);
 }

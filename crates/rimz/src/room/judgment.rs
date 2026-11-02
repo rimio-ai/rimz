@@ -91,6 +91,19 @@ pub(super) fn judge(
     for (name, message) in &machine.notices.skipped_loop_tasks {
         warn(format!("loop.tasks.{name}"), message.clone());
     }
+    if crate::harness::stall_nudge::decision(machine)
+        == crate::harness::stall_nudge::Decision::Shadowed
+    {
+        warn(
+            "harness.stall_nudge".into(),
+            format!(
+                "harness.stall_nudge is off because agents.attention.stalled_after_secs ({}) \
+                 is not below the nudge's 55m; lower stalled_after_secs below 3300 or turn \
+                 harness.stall_nudge off",
+                machine.agents.attention.stalled_after_secs,
+            ),
+        );
+    }
     if let Err(error) = machine.agents.hibernate.schedule() {
         warn("agents.hibernate".into(), error.to_string());
     } else if let Some(message) = hibernate_notice(

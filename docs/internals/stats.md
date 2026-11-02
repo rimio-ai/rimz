@@ -209,6 +209,7 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 | Assist | Takes effect when |
 | --- | --- |
 | stall notice | it has no error once queued for the parent, including a notice later withdrawn because its child run ended before delivery |
+| stall nudge | it has no error once queued for the teammate; counts under `stall_nudges`, even when the immediate boundary attempt misses |
 | auto-continue, cache keepalive, soft compaction, idle compaction, flip compaction | it was delivered |
 | idle stop | the agent's pane closed, even with a cleanup error |
 | hibernation | it froze, or a deepening step reclaimed more than 0 bytes |

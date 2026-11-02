@@ -37,6 +37,7 @@ mod runs_lookup;
 mod session_step;
 mod show;
 mod stall_notice;
+mod stall_nudge;
 mod stop;
 mod subagent_report;
 pub(in crate::cli) mod team_report;
@@ -118,6 +119,28 @@ use supervised::OutputFormat;
 use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};
 pub(in crate::cli) use wait::wait_agent;
+
+fn read_heartbeat_agents(
+    ctx: &Ctx,
+) -> std::result::Result<(Vec<AgentState>, jiff::Timestamp), rimz::store::StoreErr> {
+    let mut audit = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    rimz::store::agent_context::attach_rest_certificates(ctx.runtime(), audit.agents.iter_mut());
+    let heartbeats = rimz::agent_activity::read_for_keys(
+        ctx.runtime(),
+        audit
+            .agents
+            .iter()
+            .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
+    );
+    let now = jiff::Timestamp::now();
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        ctx.workspace.workspace_id.clone(),
+        audit.agents,
+        now,
+    )
+    .with_agent_activity(&heartbeats);
+    Ok((Arc::unwrap_or_clone(snapshot.agents), now))
+}
 
 fn agent_session_resumable(kind: &AgentKind, agent_id: &AgentSessionId, cwd: &Path) -> bool {
     !agent_id.is_provisional()
@@ -791,6 +814,9 @@ enum AgentsSubcmd {
     /// Hidden helper that tells a parent its child went silent past the stall window.
     #[command(hide = true)]
     StallNotice(HelperRequestArgs<rimz::harness::stall_notice::StallNoticeRequest>),
+    /// Hidden helper that nudges a resting unfinished team once per stage visit.
+    #[command(hide = true)]
+    StallNudge(HelperRequestArgs<rimz::harness::stall_nudge::StallNudgeRequest>),
     /// Hidden helper that settles a supervised run after its durable deadline.
     #[command(hide = true)]
     RunTimeout(HelperRequestArgs<RunTimeoutRequest>),
@@ -939,6 +965,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),
         Some(AgentsSubcmd::ParkNotice(args)) => return park_notice::run(args.request),
         Some(AgentsSubcmd::StallNotice(args)) => return stall_notice::run(args.request),
+        Some(AgentsSubcmd::StallNudge(args)) => return stall_nudge::run(args.request),
         Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args.request, globals),
         Some(AgentsSubcmd::OrphanSubagent(args)) => {
             return repair_orphan(args.request, globals);

@@ -176,7 +176,7 @@ pub(crate) fn board_run(root: &Path, zone: &TimeZone) -> Option<BoardRun> {
     parse_board_run(&board, zone)
 }
 
-fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
+pub(super) fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
     let mut run = BoardRun {
         stage: parse_board_stage(board)?,
         started_at: None,

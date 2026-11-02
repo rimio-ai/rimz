@@ -134,6 +134,8 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 
 The two shorthands write the full key: `rimz config set theme <name>` sets `theme.scheme`, and `rimz config set theme.glyphs <set>` sets `theme.glyphs.set`.
 
+`harness.stall_nudge` is a boolean, default `false`: `rimz config set harness.stall_nudge true` enables one [stalled-team nudge](../../guide/configuration.md#stalled-team-nudge) per stage visit after 55 minutes. `agents.attention.stalled_after_secs` must be below `3300`; otherwise room entry warns and the nudge stays off.
+
 ### What set refuses
 
 | Attempt | Error |

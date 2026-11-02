@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn judgment_warns_only_when_stall_nudge_is_shadowed() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let warnings =
+        [(false, 3_300), (true, 3_299), (true, 3_300), (true, 3_301)].map(|(enabled, window)| {
+            let mut machine = MachineConfig::default();
+            machine.harness.stall_nudge = enabled;
+            machine.agents.attention =
+                toml::from_str(&format!("stalled_after_secs = {window}")).unwrap();
+            let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+            judge(&machine, &workspace, MuxName::Tmux, &admission, false, None)
+                .unwrap()
+                .skipped
+                .into_iter()
+                .filter(|entry| entry.setting == "harness.stall_nudge")
+                .map(|entry| entry.message)
+                .collect::<Vec<_>>()
+        });
+    assert_eq!(warnings.each_ref().map(Vec::len), [0, 0, 1, 1]);
+    for (message, value) in warnings[2..].iter().zip(["3300", "3301"]) {
+        let message = &message[0];
+        for text in [value, "55m", "below 3300", "off"] {
+            assert!(message.contains(text), "{message}");
+        }
+    }
+}
+
+#[test]
 fn judgment_retains_skipped_loop_task_warning() {
     let root = tempfile::tempdir().unwrap();
     let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();

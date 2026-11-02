@@ -93,6 +93,8 @@ pub enum HarnessNotice {
     SubagentPaused,
     /// A launched child silent past the stall window; queued for its parent once per run.
     SubagentStalled,
+    /// An unfinished team at rest; queued once per stage visit.
+    TeamStalled,
     /// An agent-sent message ended without delivery.
     MessageUndelivered,
     /// An agent-sent message is still queued past its class delay.
@@ -115,6 +117,7 @@ impl HarnessNotice {
             | Self::Stage
             | Self::SubagentPaused
             | Self::SubagentStalled
+            | Self::TeamStalled
             | Self::MessageUndelivered
             | Self::MessageQueued
             | Self::Other(_) => SectionOrigin::Notice(sender),
@@ -133,6 +136,7 @@ impl HarnessNotice {
             Self::TeamReport => "TEAM_REPORT".to_owned(),
             Self::SubagentPaused => "SUBAGENT_PAUSED".to_owned(),
             Self::SubagentStalled => "SUBAGENT_STALLED".to_owned(),
+            Self::TeamStalled => "TEAM_STALLED".to_owned(),
             Self::MessageUndelivered => "MESSAGE_UNDELIVERED".to_owned(),
             Self::MessageQueued => "MESSAGE_QUEUED".to_owned(),
             Self::Deadline => "DEADLINE".to_owned(),
