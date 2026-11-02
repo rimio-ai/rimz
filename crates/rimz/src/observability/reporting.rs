@@ -30,10 +30,10 @@ use std::time::Instant;
 use sentry::ClientInitGuard;
 use sentry::protocol::Event;
 use sentry::types::Dsn;
-use sentry_tracing::EventFilter;
-use tracing::{Level, Metadata};
+use sentry_tracing::{BreadcrumbLayer, ErrorLayer, SpanLayer};
+use tracing::Level;
 use tracing_subscriber::Layer;
-use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::filter::{LevelFilter, filter_fn};
 use tracing_subscriber::registry::LookupSpan;
 
 use super::{BREADCRUMB_TARGET, SIDEBAR_HEALTH_TARGET, ScopeFacts};
@@ -313,13 +313,21 @@ pub fn sentry_tracing_layer<S>() -> impl Layer<S>
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
-    sentry_tracing::layer()
-        .event_filter(event_filter)
+    SpanLayer::new()
+        .and_then(BreadcrumbLayer::new().with_filter(filter_fn(|metadata| {
+            classify(*metadata.level(), metadata.target()) == EventRoute::Breadcrumb
+        })))
+        .and_then(ErrorLayer::new().with_filter(filter_fn(|metadata| {
+            classify(*metadata.level(), metadata.target()) == EventRoute::Event
+        })))
         .with_filter(LevelFilter::INFO)
 }
 
-fn event_filter(metadata: &Metadata<'_>) -> EventFilter {
-    classify(*metadata.level(), metadata.target())
+#[derive(Debug, PartialEq, Eq)]
+enum EventRoute {
+    Ignore,
+    Event,
+    Breadcrumb,
 }
 
 /// `warn!`/`error!` map to Sentry events (the event level mirrors the tracing
@@ -327,12 +335,12 @@ fn event_filter(metadata: &Metadata<'_>) -> EventFilter {
 /// are already durable local diagnostics; an `info!` on [`BREADCRUMB_TARGET`]
 /// maps to a breadcrumb; everything else is ignored, so an unmarked `info!`
 /// never carries its fields off-box.
-fn classify(level: Level, target: &str) -> EventFilter {
+fn classify(level: Level, target: &str) -> EventRoute {
     match level {
-        Level::ERROR | Level::WARN if target == SIDEBAR_HEALTH_TARGET => EventFilter::Ignore,
-        Level::ERROR | Level::WARN => EventFilter::Event,
-        Level::INFO if target == BREADCRUMB_TARGET => EventFilter::Breadcrumb,
-        _ => EventFilter::Ignore,
+        Level::ERROR | Level::WARN if target == SIDEBAR_HEALTH_TARGET => EventRoute::Ignore,
+        Level::ERROR | Level::WARN => EventRoute::Event,
+        Level::INFO if target == BREADCRUMB_TARGET => EventRoute::Breadcrumb,
+        _ => EventRoute::Ignore,
     }
 }
 
@@ -475,21 +483,33 @@ mod tests {
     #[test]
     fn classify_maps_levels_and_gates_breadcrumbs_to_the_trail_target() {
         // WARN/ERROR are events regardless of target.
-        assert!(classify(Level::ERROR, "rimz::anything").contains(EventFilter::Event));
-        assert!(classify(Level::WARN, "rimz::anything").contains(EventFilter::Event));
-        assert!(classify(Level::ERROR, SIDEBAR_HEALTH_TARGET).is_empty());
-        assert!(classify(Level::WARN, SIDEBAR_HEALTH_TARGET).is_empty());
+        assert_eq!(classify(Level::ERROR, "rimz::anything"), EventRoute::Event);
+        assert_eq!(classify(Level::WARN, "rimz::anything"), EventRoute::Event);
+        assert_eq!(
+            classify(Level::ERROR, SIDEBAR_HEALTH_TARGET),
+            EventRoute::Ignore
+        );
+        assert_eq!(
+            classify(Level::WARN, SIDEBAR_HEALTH_TARGET),
+            EventRoute::Ignore
+        );
         // INFO is a breadcrumb only on the dedicated trail target.
-        let trail = classify(Level::INFO, BREADCRUMB_TARGET);
-        assert!(trail.contains(EventFilter::Breadcrumb));
-        assert!(!trail.contains(EventFilter::Event));
+        assert_eq!(
+            classify(Level::INFO, BREADCRUMB_TARGET),
+            EventRoute::Breadcrumb
+        );
         // An unmarked INFO (e.g. a broker socket-path log) is ignored — its
-        // fields never ride off-box as breadcrumb data. (`EventFilter::Ignore`
-        // is the empty flag set.)
-        assert!(classify(Level::INFO, "rimz::agents::runtime_control").is_empty());
+        // fields never ride off-box as breadcrumb data.
+        assert_eq!(
+            classify(Level::INFO, "rimz::agents::runtime_control"),
+            EventRoute::Ignore,
+        );
         // DEBUG/TRACE are always ignored, even on the trail target.
-        assert!(classify(Level::DEBUG, BREADCRUMB_TARGET).is_empty());
-        assert!(classify(Level::TRACE, "rimz::anything").is_empty());
+        assert_eq!(
+            classify(Level::DEBUG, BREADCRUMB_TARGET),
+            EventRoute::Ignore
+        );
+        assert_eq!(classify(Level::TRACE, "rimz::anything"), EventRoute::Ignore);
     }
 
     #[test]

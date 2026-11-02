@@ -97,6 +97,12 @@ criteria = "safe-to-deploy"
 delta = "0.2.37 -> 0.2.38"
 notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from 0.2.37 to 0.2.38: version metadata only (Cargo.toml, Cargo.toml.orig, VCS info) and the bundled lockfile's resolution of `jiff-tzdb` to 0.1.9; no source, proc-macro, or dependency-requirement changes. No unsafe code, build script, I/O, network, process, or filesystem access was added. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.notify]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "8.2.0 -> 8.2.1"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives. Read every production and manifest delta. Inotify watch removal now tolerates already-removed descriptors and logs failures; kqueue, polling and Windows production behavior is unchanged. The optional FSEvents backend replaces fsevent-sys with objc2 Core Foundation/Services bindings: retained CF objects replace manual releases, callback ABI/types follow those bindings, path conversion preserves the existing file-reference algorithm, empty watch sets succeed, and stream startup errors propagate with cleanup. Existing unsafe stream transfer and callback ownership remain, with separate Send wrappers; no new process or network capability or build script is introduced. Filesystem access, watcher threads and callbacks remain the library's purpose. MSRV rises to 1.85 and windows-sys to 0.61. This workspace disables default features and selects macos_kqueue, so neither objc2 dependency nor FSEvents is in its deployment graph; that backend was source-reviewed, not runtime-tested. Added test-only code and ancillary documentation were skimmed. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.proc-macro-crate]]
 who = "GPT 6.1 Sol <noreply@openai.com>"
 criteria = "safe-to-run"
@@ -114,6 +120,12 @@ who = "GPT 6.1 Sol <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "0.13.4 -> 0.13.5"
 notes = "AI source review by a GPT 6.1 Sol subagent. Obtained both releases with cargo vet diff --mode=local; independently matched the updated archive SHA-256 to Cargo.lock and compared the reviewed sources with cargo-vet's extracted packages. Delta: 23 files changed, 1474 insertions and 1237 deletions, mostly tests. Reviewed all production source, build-script and manifest changes. List tightness and previous-blank-line flags move into Cell to avoid repeated deep-spine walks; speculative scans do not advance those flags. Definition offsets use scanned bytes rather than indentation columns, paragraph interruption retains str boundaries, blank lazy continuations terminate, wikilinks guard inverted spans and synthesize empty display nodes, and underscore matching advances both relevant lower bounds. Copy removal is replaced with explicit clones. The gen-tests-only build script adds definition-list fixtures to its existing local test generator; it remains inert without that feature. No new unsafe code, runtime I/O, network, process, or dependency requirements. Ancillary tests and documentation were skimmed. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.pulldown-cmark]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.13.5 -> 0.13.6"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives. Read the complete production and manifest delta: after accepting the deepest wikilink, clear enclosing wikilink openers so nested image links cannot repeatedly rescan the same body. The only other changes are package versions and regression tests. No unsafe code, build script, dependency change, or filesystem, network, environment or process operation is added. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.regex]]
 who = "Opus 5.5 <noreply@anthropic.com>"
@@ -133,6 +145,12 @@ criteria = "safe-to-deploy"
 delta = "1.1.4 -> 1.1.5"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production/build deltas and compared the renamed experimental runtime module separately. Timespec rounding carries microseconds with checked second addition; socket-timeout callers preserve zero rejection and saturation. Inspected libc/linux_raw callers, cfg corrections, statx imports, open flags, Unix-address formatting, FFI reexports, scalar-range attribute removal and assembly gating. The runtime module rename changes an experimental API; its contents otherwise change only test macro qualification. MSRV rises to 1.65, below this workspace floor. Read the complete build script: new cleanup removes only its fixed probe artifact beneath OUT_DIR. Production dependency requirements are unchanged. No platform execution or full baseline audit performed. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.rustix]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.5 -> 1.1.6"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives. Read every production and manifest delta, the new Padding type and unchanged build.rs. Changes correct 32-bit uid/gid/chown/groups syscall selection, inotify and statvfs flag values, IPv6 socket option level, zero foreground process groups and controlling-terminal ioctl arguments; extend FreeBSD sleep and Android sendfile availability; adjust termios target flags; require complete macOS preallocation and document truncation. Extended-attribute buffer APIs no longer interpret a size-only result as initialized data, and separate query APIs pass null/zero buffers. Ancillary-message decoding clamps kernel lengths to remaining buffer space, rejects short headers and rounds descriptor payloads down to whole descriptors before unsafe reads. Repr-transparent MaybeUninit padding replaces integer padding in kernel-written structures without reading it. Unsafe changes remain explicit syscall/FFI and buffer handling; no autonomous filesystem, network or process path is added. The unchanged build script reads Cargo target/compiler settings, probes rustc through direct subprocesses and removes its OUT_DIR probe artifact. Dependency changes raise bitflags and rustc workspace minimums. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.scip]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-run"
@@ -145,11 +163,23 @@ criteria = "safe-to-deploy"
 delta = "0.49.2 -> 0.49.3"
 notes = "AI source review by an Opus 5.5 subagent, spot-checked by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the full delta. A configurable transport channel capacity is threaded from ClientOptions through the curl, reqwest and ureq transports into TransportThreadOptions, replacing the fixed sync_channel(30); 0 is clamped to 1 and the default stays 30. A new optional, non-default minidump feature re-exports sentry-minidump on Linux, macOS and Windows; this workspace does not enable it and sentry-minidump was not reviewed. The optional rustls minimum rises to 0.23.45, already the locked version. Other changes are sibling version bumps and lint attributes. No unsafe code, build script logic, or new file, network, process or environment access. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.sentry]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.3 -> 0.49.5"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives. Read the complete production/build and manifest delta. Library and transport implementations are unchanged; manifests raise the sibling SDK versions and MSRV to 1.89, and rename the legacy tracing test target. Read the unchanged build.rs, which only declares cfg aliases through cfg_aliases. Other changes update documentation and the tracing example for the split layers. No unsafe code or new filesystem, network, environment or process operation is added. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.sentry-backtrace]]
 who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-deploy"
 delta = "0.49.2 -> 0.49.3"
 notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version bump, sentry-core 0.49.3 requirement, and the missing_docs lint moved from src/lib.rs into manifest lint tables with a new clippy lint. No code change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sentry-backtrace]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.3 -> 0.49.5"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives and read the complete delta. Only the package and sentry-core versions, MSRV (1.89), and README branding change. No production code, unsafe code, build script or new filesystem, network, environment or process operation changes. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.sentry-core]]
 who = "Opus 5.5 <noreply@anthropic.com>"
@@ -157,11 +187,23 @@ criteria = "safe-to-deploy"
 delta = "0.49.2 -> 0.49.3"
 notes = "AI source review by an Opus 5.5 subagent, spot-checked by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the full delta. A new transport_channel_capacity option (Option<NonZeroUsize>, 0 clamped to 1) passes through TransportOptions and build_envelope_sender. Transaction and span sampling move from a bool to a new TracingState and FinishAction enum in performance/sampling.rs, pure logic with no I/O; disabled tracing no longer buffers spans, and propagation headers keep an incoming sampled decision. The existing MAX_SPANS cap still applies. is_sampled is deprecated. The optional rand requirement moves from 0.9 to 0.10 with no source change; the workspace builds against the locked rand 0.10. No unsafe code or new powerful imports. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.sentry-core]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.3 -> 0.49.5"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives and read the complete delta. Runtime code is unchanged: TransactionData::iter documentation now correctly ties empty metadata to the absence of a bound client rather than sampling. The remaining changes raise package/sentry-types versions and MSRV to 1.89, and update README links/branding. No unsafe code, build script or new filesystem, network, environment or process operation changes. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.sentry-panic]]
 who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-deploy"
 delta = "0.49.2 -> 0.49.3"
 notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version bump, sentry-backtrace and sentry-core 0.49.3 requirements, and the missing_docs lint moved into manifest lint tables with a new clippy lint. #![deny(unsafe_code)] remains. No code change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sentry-panic]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.3 -> 0.49.5"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives and read the complete delta. Only the package/sentry-backtrace/sentry-core versions, MSRV (1.89), and README branding change. The panic integration implementation is unchanged. No unsafe code, build script or new filesystem, network, environment or process operation changes. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.sentry-tracing]]
 who = "Opus 5.5 <noreply@anthropic.com>"
@@ -169,11 +211,23 @@ criteria = "safe-to-deploy"
 delta = "0.49.2 -> 0.49.3"
 notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version bump, sentry sibling 0.49.3 requirements, removal of the shared test target, lint tables in the manifest, #[expect(clippy::impl_trait_in_params)] on breadcrumb_from_event, event_from_event and log_from_event, a README link version, and test lint attributes. No behaviour change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.sentry-tracing]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.3 -> 0.49.5"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives. Read the complete production and manifest delta, including all new breadcrumb, error, log and span layer implementations and the old combined span implementation. The combined layer/filter/mapper APIs are deprecated in favor of separate layers with caller-supplied tracing filters. Span hub guards, thread-local stack and field handling move without a new ownership scheme; converter wrappers forward to shared generic implementations and legacy custom mapping precedence is retained. SDK requirements and MSRV rise together. No unsafe code, build script or new autonomous filesystem, network, environment or process operation is added; event submission still delegates to the existing Sentry SDK. Tests and documentation were skimmed. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.sentry-types]]
 who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-deploy"
 delta = "0.49.2 -> 0.49.3"
 notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version bump, the rand requirement raised from 0.9.3 to 0.10.2 with no source change (the workspace builds against the locked rand 0.10), the missing_docs lint moved into manifest lint tables, and test lint attributes. No other code change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sentry-types]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.3 -> 0.49.5"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives and read the complete delta. Only the package version, MSRV (1.89), and README branding change. Protocol types, parsing and dependencies are unchanged. No unsafe code, build script or new filesystem, network, environment or process operation changes. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.serde]]
 who = "GPT 6 Astra <noreply@openai.com>"
@@ -222,6 +276,12 @@ who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.18 -> 0.4.5"
 notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta for signal-hook 0.3.18 -> 0.4.5: build.rs, Cargo.toml, src/low_level/pipe.rs, signal_details.rs, iterator/backend.rs, iterator/mod.rs, flag.rs, lib.rs, tests and example. The production changes move the pipe registration API from raw file descriptors to OwnedFd, which removes a manual close and fixes a double-close on unregister. register_raw now sets FD_CLOEXEC correctly. A hand-written 32-bit Android sigset fallback is replaced by sigemptyset/sigaddset, and Windows cfg gates are added. The remaining unsafe is the same fcntl/write/send libc calls as before, now in one helper, and net unsafe goes down. build.rs only adds a Windows skip around the existing optional cc compile of an unchanged extract.c. No new network, process, filesystem or proc-macro capability. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.similar]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "3.2.0 -> 3.2.1"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives. Read every production and manifest delta, including the new gap buffer, histogram scratch/task storage, dense/sparse integer maps and content hashing. Large edit lists use a gap buffer; histogram avoids recursive stack growth and one-sided/unbalanced over-indexing; Myers trims common edges and byte line/word scanning preserves UTF-8 and CRLF boundaries. Hashing uses SipHash-1-3 seeded from standard RandomState with a process cache (fixed keys without std); equality still disambiguates collisions and cheap integer hashing only receives prehashed/dense IDs. Unified labels strip CR/LF. The crate remains safe Rust with build disabled and no new dependency or autonomous filesystem/network/process operation; standard-library entropy is used for hash seeding and output stays on caller-provided writers. Tests and ancillary documentation were skimmed. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.syn]]
 who = "GPT 6 Astra <noreply@openai.com>"
@@ -276,6 +336,12 @@ who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "1.1.1+spec-1.1.0 -> 1.1.2+spec-1.1.0"
 notes = "Reviewed the published crate delta, manifests, lockfile, VCS metadata and src/string.rs, including ValueMetrics::calculate and its formatting consumers. Archive SHA-256 values match the old and new workspace lockfile checksums. Quote-run counters now use Saturating<u8>, preventing overflow while preserving the consumers' zero and two thresholds. The scan remains linear and resets counters on other bytes. Remaining changes affect package inclusion paths, version, lint settings and development lockfile dependencies; build remains disabled. No new I/O or unsafe code is introduced. This is a delta review from the existing exempted version, not a full audit."
+
+[[audits.unicode-width]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.2 -> 0.2.3"
+notes = "AI source review by GPT 6.1 Sol. Both published archive SHA-256 values match the baseline and updated workspace lockfiles; compared freshly extracted archives. Read the handwritten production and manifest delta and generated lookup/state-machine code. Unicode data advances from 17 to 18, split property/width tables support generalized CJK state handling and iterator APIs, and Katakana width handling changes. Inspected generated table declarations, layout and bounded safe indexing; numeric Unicode datasets were not individually revalidated or regenerated. The crate remains no_std with forbidden unsafe code, build disabled, no dependencies and no filesystem, network, environment or process operations. Test-only tables and ancillary documentation were skimmed. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.ureq]]
 who = "GPT 6 Astra <noreply@openai.com>"
