@@ -22,6 +22,7 @@ pub(in crate::sidebar_pane) struct MeterRaster {
     pub(in crate::sidebar_pane) health: [u8; 3],
     runs: Vec<(u32, [u8; 3])>,
     pub(in crate::sidebar_pane) track: [u8; 3],
+    wall: Option<[u8; 3]>,
 }
 
 impl MeterRaster {
@@ -31,11 +32,20 @@ impl MeterRaster {
         mut health: [u8; 3],
         segments: Vec<(u64, [u8; 3])>,
         mut track: [u8; 3],
+        wall: Option<[u8; 3]>,
     ) -> Self {
-        let width = u32::from(width_cells).saturating_mul(CELL_W).max(1);
+        let width = if wall.is_some() {
+            u32::from(width_cells.saturating_sub(1)).saturating_mul(CELL_W)
+        } else {
+            u32::from(width_cells).saturating_mul(CELL_W).max(1)
+        };
         let fill = fill.clamp(0.0, 1.0);
         let fill_px = (fill * f64::from(width)).round() as u32;
-        let fill_px = if fill > 0.0 { fill_px.max(1) } else { 0 };
+        let fill_px = if fill > 0.0 && width > 0 {
+            fill_px.max(1)
+        } else {
+            0
+        };
         let active = segments
             .into_iter()
             .filter(|(weight, _)| *weight > 0)
@@ -63,6 +73,7 @@ impl MeterRaster {
             health,
             runs,
             track,
+            wall,
         }
     }
 }
@@ -188,7 +199,16 @@ fn rasterize(raster: &MeterRaster) -> RgbaImage {
         height: CELL_H,
         data: vec![0; width as usize * CELL_H as usize * 4],
     };
-    paint_rect(&mut image, 0, 7, width, 1, raster.track);
+    let track_width = if let Some(wall) = raster.wall {
+        let start = width.saturating_sub(CELL_W);
+        let stop = start + CELL_W / 2;
+        paint_rect(&mut image, start, 7, CELL_W / 2 + 1, 1, wall);
+        paint_rect(&mut image, stop, 3, 1, 9, wall);
+        start
+    } else {
+        width
+    };
+    paint_rect(&mut image, 0, 7, track_width, 1, raster.track);
     if raster.fill_px == 0 {
         return image;
     }
@@ -299,7 +319,7 @@ mod tests {
     use ratatui::text::Span;
 
     fn raster(fill: f64) -> MeterRaster {
-        MeterRaster::new(2, fill, [1, 2, 3], Vec::new(), [4, 5, 6])
+        MeterRaster::new(2, fill, [1, 2, 3], Vec::new(), [4, 5, 6], None)
     }
 
     fn distinct_raster(index: u32) -> MeterRaster {
@@ -313,6 +333,7 @@ mod tests {
             ],
             Vec::new(),
             [4, 5, 6],
+            None,
         )
     }
 
@@ -339,6 +360,44 @@ mod tests {
     }
 
     #[test]
+    fn compaction_wall_reserves_the_last_cell_and_keys_the_raster() {
+        for segments in [Vec::new(), vec![(1, [1, 2, 3]), (1, [7, 8, 9])]] {
+            for fill in [0.0, 0.5, 1.0] {
+                let open = MeterRaster::new(3, fill, [1, 2, 3], segments.clone(), [4, 5, 6], None);
+                let walled = MeterRaster::new(
+                    3,
+                    fill,
+                    [1, 2, 3],
+                    segments.clone(),
+                    [4, 5, 6],
+                    Some([9, 8, 7]),
+                );
+                assert_ne!(
+                    open, walled,
+                    "a walled and an open image cannot share a key"
+                );
+                let image = rasterize(&walled);
+                assert_eq!(image.width, 24);
+                assert_eq!(walled.fill_px, (fill * 16.0).round() as u32);
+                for y in 3..12 {
+                    assert_eq!(pixel(&image, 20, y), [9, 8, 7, 255], "fill={fill}, y={y}");
+                }
+                assert_eq!(pixel(&image, 19, 6), [0, 0, 0, 0]);
+                assert_eq!(pixel(&image, 23, 7), [0, 0, 0, 0]);
+                if fill == 1.0 {
+                    assert_eq!(
+                        pixel(&image, 15, 7)[3],
+                        255,
+                        "100% fills up to the wall cell"
+                    );
+                }
+                let mut pixels = MeterPixels::new(0x120000);
+                assert_ne!(pixels.intern(open), pixels.intern(walled));
+            }
+        }
+    }
+
+    #[test]
     fn rasterize_uses_each_segment_color_and_carves_notch() {
         let image = rasterize(&MeterRaster::new(
             2,
@@ -346,6 +405,7 @@ mod tests {
             [1, 2, 3],
             vec![(1, [9, 9, 9]), (1, [7, 8, 9])],
             [4, 5, 6],
+            None,
         ));
         assert_eq!(
             pixel(&image, 0, 6),
@@ -363,6 +423,7 @@ mod tests {
             [9, 9, 9],
             vec![(1, [1, 2, 3])],
             [4, 5, 6],
+            None,
         ));
         assert_eq!(
             pixel(&seeded, 0, 6),
@@ -374,13 +435,13 @@ mod tests {
     #[test]
     fn raster_key_ignores_colors_hidden_by_quantized_pixels() {
         assert_eq!(
-            MeterRaster::new(2, 0.0, [1, 2, 3], Vec::new(), [4, 5, 6]),
-            MeterRaster::new(2, 0.0, [9, 8, 7], Vec::new(), [4, 5, 6]),
+            MeterRaster::new(2, 0.0, [1, 2, 3], Vec::new(), [4, 5, 6], None),
+            MeterRaster::new(2, 0.0, [9, 8, 7], Vec::new(), [4, 5, 6], None),
             "an empty fill does not paint the health color"
         );
         assert_eq!(
-            MeterRaster::new(2, 1.0, [1, 2, 3], Vec::new(), [4, 5, 6]),
-            MeterRaster::new(2, 1.0, [1, 2, 3], Vec::new(), [9, 8, 7]),
+            MeterRaster::new(2, 1.0, [1, 2, 3], Vec::new(), [4, 5, 6], None),
+            MeterRaster::new(2, 1.0, [1, 2, 3], Vec::new(), [9, 8, 7], None),
             "a full fill covers the track color"
         );
         assert_ne!(
@@ -390,6 +451,7 @@ mod tests {
                 [1, 2, 3],
                 vec![(1, [9, 9, 9]), (1, [4, 5, 6])],
                 [7, 8, 9],
+                None,
             ),
             MeterRaster::new(
                 2,
@@ -397,6 +459,7 @@ mod tests {
                 [1, 2, 3],
                 vec![(1, [5, 5, 5]), (1, [8, 8, 8])],
                 [7, 8, 9],
+                None,
             ),
             "the visible first run keeps its supplied segment color"
         );
@@ -407,6 +470,7 @@ mod tests {
                 [1, 2, 3],
                 vec![(1, [9, 9, 9]), (1, [4, 5, 6])],
                 [7, 8, 9],
+                None,
             ),
             MeterRaster::new(
                 2,
@@ -414,6 +478,7 @@ mod tests {
                 [9, 8, 7],
                 vec![(1, [9, 9, 9]), (1, [4, 5, 6])],
                 [7, 8, 9],
+                None,
             ),
             "the fallback health color is absent from a composed raster"
         );

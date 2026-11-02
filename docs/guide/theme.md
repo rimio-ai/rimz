@@ -113,7 +113,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
 | `accent` | data: the `◎` sessions glyph and the `↗` output marker |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
-| `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker |
+| `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker, and the context meter's `┤` compaction wall and matching point label |
 | `body` | body text: stat figures, subagent lines, worktree headers |
 | `muted` | chrome: labels, ages, subordinate values, and the compacted-context meter's empty track while it has no size estimate |
 | `faint` | faintest chrome: measured bar tracks, `·` separators, dotted dividers |
@@ -146,7 +146,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `status` | the leading status heads, one per state an agent can be in, plus the `⟲` repeated-tool marker |
 | `cockpit` | the workspace, sessions, agents, and open-PR counters at the top |
 | `tokens` | the token-accounting markers |
-| `meter` | the drawn gauges, bars, and scrollbar; `context_compacted` marks a compacted context until the first real reading (`↻` in Unicode, `` in Nerd Font), independently of `tokens.compaction`; it takes the fill's tone when an estimate fills the track, otherwise the healthy green start of the heat ramp, leaving the empty track `muted` |
+| `meter` | the drawn gauges, bars, and scrollbar; `compaction_wall` is the `┤` end-stop in both sets (override it with `"\|"` for a straight wall); `context_compacted` marks a compacted context until the first real reading (`↻` in Unicode, `` in Nerd Font), independently of `tokens.compaction`; it takes the fill's tone when an estimate fills the track, otherwise the healthy green start of the heat ramp, leaving the empty track `muted` |
 | `clock` | age faces: cards and waits fill over an hour and stay full; `over` (`◉`) marks the cache-expired line or child quiet past its stall window, never a card age face or long wait |
 | `value` | compact value qualifiers, such as the active-time `approx` marker, and the `seam` separator between values (`·`) |
 | `worktree` | the group header's git story: branch and merge, ahead and behind, trunk state, PR and CI state; a collapsed finished group's `expand`; the `dotted` rule that seals the selected header, draws the `external` divider, and flanks the landed chip; and the landed chip's `landed_closed` / `landed_open` |
@@ -234,16 +234,19 @@ provider_list = ["claude", "codex", "all"]
 
 Width is the one setting here a running sidebar does not pick up. `width_percent`, `max_cols`, and `max_percent` are read when a sidebar starts, so a live room keeps its current width until the sidebar restarts. Inside the room, `a` and `d` resize it immediately and outrank the default percentage and column cap, but never `max_percent` ([sidebar](./sidebar.md#setting-the-width)).
 
-The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client, either directly or through tmux 3.6 or later with `allow-passthrough` on. Zellij and every other path draw the half-cell bar instead, as does `NO_COLOR`. Setting `pixel = "off"` opts out of both the pixel meter and pixel pets.
+The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client, either directly or through tmux 3.6 or later with `allow-passthrough` on. Its compaction end-stop shares the text wall's tone and position. Zellij and every other path draw the half-cell bar instead, as does `NO_COLOR`. Setting `pixel = "off"` opts out of both the pixel meter and pixel pets.
 
 ### Meter color stops
 
 Three nested tables move the stops the sidebar's meters slide through. Every key is optional; the values below are the shipped ones.
 
-`[theme.display.context_meter]` warms a card's context read out of green. Each of `green`, `yellow`, `amber`, and `red` names a fill percentage *and* an absolute token count, and the meter takes the worse of the two, so a large-window model that is calm by percentage still warms on sheer volume. Separately, the drawn fill is log-warped so the working range keeps its visual space instead of bunching at the left edge. How hard depends on the model's window: up to 256k the fill stays linear, and the curve reaches full strength at 1M. `log_scale = false` turns the warp off. Either way the percentage on screen and the color stops read raw usage.
+`[theme.display.context_meter]` warms a card's context read out of green. By default, `scale = "compaction"` measures progress toward the native auto-compaction point RimZ configured, capped by the provider, when that point is below the model window. A `┤` wall ends that track, and the identity line pairs the point with the window (`372k/1M`). Without a known point below the window, the meter stays window-scaled with no wall. `scale = "window"` always restores that window view.
+
+Each of `green`, `yellow`, `amber`, and `red` names a percentage on the selected scale *and* an absolute token count, and the meter takes the worse of the two, so a large-window model that is calm by percentage still warms on sheer volume. Token stops stay absolute. Separately, the drawn fill is log-warped so the working range keeps its visual space instead of bunching at the left edge. Its strength follows the selected denominator: up to 256k the fill stays linear, and the curve reaches full strength at 1M. `log_scale = false` turns the warp off. The percentage and color stops never take that geometric warp; the fill and displayed percentage stop at 100% even if usage passes the compaction point.
 
 ```toml
 [theme.display.context_meter]
+scale = "compaction"
 log_scale = true
 green = { percent = 50, tokens = 128000 }
 yellow = { percent = 70, tokens = 192000 }

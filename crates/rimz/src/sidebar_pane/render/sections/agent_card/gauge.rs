@@ -83,8 +83,9 @@ pub(super) fn bar_row(
 }
 
 /// The context meter — the resting card's one bar. A context glyph on the left,
-/// the **percent used** on the right, the bar between. The window size is on the
-/// identity line. The fill amount and its calm-blue →
+/// the **percent used** on the right, the bar between. A compaction-scaled track
+/// ends in a wall, paired with the identity line's point/window label; fallback
+/// cards keep an open track and the window alone. The fill amount and its calm-blue →
 /// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
 /// `[theme.display.context_meter]`) come from the selected scale's percentage
 /// and the absolute tokens. Fill geometry is log-scaled by default, with curve
@@ -94,7 +95,7 @@ pub(super) fn bar_row(
 /// breakdown, every severity splits the fill into cache-read / cache-write /
 /// fresh-input segments while the prompt cache is warm. An expired cache draws
 /// one flat run in the fixed expired-cache tone. Components below 0.5% of the
-/// filled window fold into the lead run; each remaining accent starts with a
+/// filled bar fold into the lead run; each remaining accent starts with a
 /// gap-fronted `╺` cap, and the segmented fill ends flush at a whole cell. The
 /// cache-read run carries severity when present; `▣` follows the fill's tone
 /// while the `▤` stats head always keeps severity. The value prefers a
@@ -132,6 +133,9 @@ pub(super) fn gauge_line(
         .as_agent()
         .is_some_and(|agent| agent.compacted_unmeasured);
     let meter = row.context_meter(bands.scale);
+    let wall = meter
+        .compact_at
+        .map(|_| theme.component(Component::CompactionPoint));
     let percent = meter.percent;
     let compacted_empty = compacted_unmeasured && percent.is_none();
     let percent = percent.unwrap_or(0);
@@ -183,37 +187,50 @@ pub(super) fn gauge_line(
     } else {
         0
     };
+    let segments = segments
+        .as_ref()
+        .map(|segments| &segments[..])
+        .unwrap_or(&[]);
     let mut line = bar_row(
         theme,
         glyph,
         theme.style(glyph_color, Modifier::empty()),
         &value,
         |bar_width| {
-            if compacted_empty {
-                return vec![Span::styled(
-                    theme.glyph(GlyphRole::MeterBarTrack).repeat(bar_width),
-                    theme.style(bar_color, Modifier::empty()),
-                )];
-            }
-            if let Some(pixels) = meter_pixels
+            if (!compacted_empty || wall.is_some())
+                && let Some(pixels) = meter_pixels
                 && let Some(spans) = pixel_gauge_spans(
                     theme,
-                    fill,
+                    (!compacted_empty).then_some(fill),
                     bar_color,
-                    segments
-                        .as_ref()
-                        .map(|segments| &segments[..])
-                        .unwrap_or(&[]),
+                    segments,
                     bar_width,
                     pixels,
+                    wall,
                 )
             {
                 return spans;
             }
-            match &segments {
-                Some(segments) => context_gauge_spans(theme, bar_color, segments, fill, bar_width),
-                None => context_gauge_spans(theme, bar_color, &[], fill, bar_width),
+            let track_width = bar_width.saturating_sub(if wall.is_some() {
+                text_width(theme.glyph(GlyphRole::MeterCompactionWall))
+            } else {
+                0
+            });
+            let mut spans = if compacted_empty {
+                vec![Span::styled(
+                    theme.glyph(GlyphRole::MeterBarTrack).repeat(track_width),
+                    theme.style(bar_color, Modifier::empty()),
+                )]
+            } else {
+                context_gauge_spans(theme, bar_color, segments, fill, track_width)
+            };
+            if let Some(wall) = wall {
+                spans.push(Span::styled(
+                    theme.glyph(GlyphRole::MeterCompactionWall).to_owned(),
+                    theme.style(wall, Modifier::DIM),
+                ));
             }
+            spans
         },
         width.saturating_sub(age_width),
     );
@@ -249,17 +266,26 @@ fn log_scaled_fill(pct: f64, window: Option<u64>) -> f64 {
 
 fn pixel_gauge_spans(
     theme: &Theme,
-    fill_pct: f64,
+    fill_pct: Option<f64>,
     health: Color,
     segments: &[(u64, Color)],
     width: usize,
     pixels: &mut MeterPixels,
+    wall: Option<Color>,
 ) -> Option<Vec<Span<'static>>> {
     if !placeholder_columns_supported(width) {
         return None;
     }
     let health = theme.pixel_rgb(health)?;
-    let track = theme.pixel_rgb(theme.faint().fg?)?;
+    let track = if fill_pct.is_none() {
+        health
+    } else {
+        theme.pixel_rgb(theme.faint().fg?)?
+    };
+    let wall = match wall {
+        Some(wall) => Some(theme.pixel_rgb(wall)?),
+        None => None,
+    };
     let segments = segments
         .iter()
         .filter(|(weight, _)| *weight > 0)
@@ -268,10 +294,11 @@ fn pixel_gauge_spans(
     let width_cells = u16::try_from(width).ok()?;
     let image_id = pixels.intern(MeterRaster::new(
         width_cells,
-        (fill_pct / 100.0).clamp(0.0, 1.0),
+        (fill_pct.unwrap_or(0.0) / 100.0).clamp(0.0, 1.0),
         health,
         segments,
         track,
+        wall,
     ))?;
     let style = Style::default().fg(image_id_color(image_id));
     Some(

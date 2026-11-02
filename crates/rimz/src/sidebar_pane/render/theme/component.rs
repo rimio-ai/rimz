@@ -124,6 +124,8 @@ pub(crate) enum Component {
     CacheExpired,
     /// The compacted-context empty track while its size is unknown.
     ContextCompacted,
+    /// The native-compaction wall and its matching identity-line point label.
+    CompactionPoint,
     /// Provider fast mode: a scheme-derived amber, independent of lifecycle state.
     FastMode,
     /// Starts needing a fix, above the footer.
@@ -178,6 +180,7 @@ impl Component {
         Component::WindowHuge,
         Component::CacheExpired,
         Component::ContextCompacted,
+        Component::CompactionPoint,
         Component::FastMode,
         Component::ThrottleNotice,
     ];
@@ -200,7 +203,9 @@ impl Component {
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }
-            TeamLabel | SubagentHeader | WaitHeader | ProcIo | CacheWrite => palette.meta,
+            TeamLabel | SubagentHeader | WaitHeader | ProcIo | CacheWrite | CompactionPoint => {
+                palette.meta
+            }
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
             CacheExpired => palette.cache_expired,

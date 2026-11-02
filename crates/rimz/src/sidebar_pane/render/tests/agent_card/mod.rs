@@ -1,6 +1,7 @@
 use super::*;
 
 mod card;
+mod compaction;
 mod context;
 mod density;
 mod description;
