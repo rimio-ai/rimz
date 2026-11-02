@@ -189,11 +189,33 @@ Use `lifecycle = "until"` to work across turns until the check says you are done
 
 An agent step does not start in a checkout another agent is using. It waits until the checkout is free. With `takeover = true` it stops an idle agent there to make room, but an agent in the middle of a turn still makes it wait. Agents in other RimZ worktrees do not count.
 
-When a loop starts the run automatically, its agent steps also wait for [capacity](./loops.md#pace-agent-starts), before stopping any occupant. A held step uses no visit and retries about once a minute. `list` separates its reason and held age; `show` prints `held 4m` and a bounded wait's give-up time. On an agent step, set `capacity-wait = "6h"` to give up after six hours, or leave the default `forever`. Giving up ends the run as failed unless `on.capacity` names `@done` or another node. It cannot park at `@user` or `@wait`. A window or occupancy wait restarts this clock, and the run deadline still applies. `throttle = "off"` skips capacity for that step. Runs you start with `rimz workflow run` or `rimz loop fire`, and runs detached by removing their loop task, are never limited; neither are command steps, checks, or an already-open staying session.
+When a loop starts the run automatically, its agent steps also wait for [capacity](./loops.md#pace-agent-starts), before stopping any occupant. A held step uses no visit and retries about once a minute. `list` separates its reason and held age; `show` prints `held 4m` and a bounded wait's give-up time. On an agent step, set `capacity-wait = "6h"` to give up after six hours, or leave the default `forever`. Giving up ends the run as failed unless `on.capacity` names `@done` or another node. It cannot park at `@user` or `@wait`. A window or occupancy wait restarts this clock, and the run deadline still applies. `throttle = "off"` skips the machine's capacity checks, not the workflow's own limits below. Runs you start with `rimz workflow run` or `rimz loop fire`, and runs detached by removing their loop task, skip capacity waits but still count and restart any applicable workflow pace. Command steps, checks, and an already-open staying session never ask for admission.
 
 A judge runs headless, with no pane, and [the judge section](#let-a-model-decide) covers what it may touch.
 
 While the room is open, it checks every active run about once a minute. With no room open for the project, only the [loop timer](./loops.md#who-keeps-time) does those checks, so keep the room open while a run works. Your `~/.rimz/workflows/` directory is never written.
+
+### Limit one workflow or step
+
+A per-task cap in `loop.toml` holds every step alike. When triage is expensive but sweep should remain free to start, put the rule on triage instead. Add a workflow limit when all its agent steps also need a shared ceiling:
+
+```toml
+[workflow.limit]
+max-active = 4
+pace = "2m"
+
+[steps.triage.limit]
+max-active = 3
+pace = "10m"
+```
+
+Both tables accept `max-active`, `pace`, or both. `max-active` is a positive integer; `pace` is a positive duration in `s`, `m`, `h`, or `d`. An empty table refuses, as does a limit on a command step. A workflow limit covers every agent attempt of that workflow name across rooms; a step limit covers only that step name. Each run obeys its sealed limits, so editing the definition changes new runs, not waiting ones.
+
+An attempt takes a slot only while its leader is mid-turn, not compacting, and still alive. An idle staying pane takes no slot; its next turn counts again. Companions, judges, and subagents take no additional slots. These are start limits, never a reason to stop a turn already running. Starts you request by hand skip the wait even at a full cap, but count afterwards and restart the pace gap. `throttle = "off"` does not bypass these limits. A workflow with its own workflow-level `max-active` skips the machine's `max-active-per-task`; the machine-wide cap and resource checks still apply unless the step turns the machine throttle off.
+
+After the window and checkout clear, an automated start must pass both limits. Earlier capacity waiters of the same workflow go first: a workflow-limit waiter holds all steps, a step-limit waiter only its own step. A freed slot can wait until that run's next minute retry. `workflow list` and `loop list` put these starts in HELD with reasons such as `limit triage 3/3 working`, `limit land 4/4 working (2 with you)`, `limit triage next start in 7m`, `limit land: 2 earlier starts waiting`, or `limit land: 1 start launching` while another start of the workflow is still coming up. `with you` counts working staying attempts. The same `capacity-wait` and `on.capacity` give-up apply, including on an `off` step.
+
+Workflow `pace` is a minimum gap between launches, not between grants or user turns. It survives process restarts and is shared across rooms. It cannot guarantee the usage window has caught up with the last start's spend: normal direct usage probes refresh no more than once every five minutes, while a live Claude statusline can update on the next heavy refresh while a sidebar is subscribed. The next start still uses the window reading available when it asks.
 
 ## Do mechanical work without an agent
 

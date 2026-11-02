@@ -1,11 +1,12 @@
-//! Loop start throttle: one capacity door per RimZ home for automated agent starts.
+//! Home-wide machine admission and workflow/step start limits.
 //!
 //! Blocking runs keep a ticket; condition fires try once and leave none when held.
-//! The turn passes on when the launch it admitted is reported and the provider
-//! then reports the new agent, or the ceiling passes, whichever is first; a later
-//! scanner releases it, so the launching process never lingers. Admission samples
-//! caps and resource limits only for the run at the head of the queue, in the
-//! pass that would admit it. Inspection reads them without taking a turn.
+//! Machine turns release on a provider report or ceiling. Workflow-scoped turns
+//! wait for a countable leader or their own ceiling, independently of machine
+//! scope. Manual limited starts claim without waiting and stamp pace at launch.
+//! A later scanner releases each scope, so the launching process never lingers.
+//! Admission samples limits under the queue lock; capacity scripts run off-lock.
+//! Inspection reads the same limits without taking a turn.
 
 use std::fmt;
 use std::io;
@@ -792,9 +793,9 @@ impl Turn {
         }))
     }
 
-    /// Stamp the committed launch on the ticket. The turn then passes on once
-    /// the provider reports the agent or the ceiling has passed. A second report,
-    /// which a verify retry produces, changes nothing.
+    /// Stamp the committed launch and any workflow/step pace under the queue lock.
+    /// Machine and workflow scopes release independently on their report or ceiling.
+    /// A second report, which a verify retry produces, changes nothing.
     pub fn report_launch(&self, workspace: &WorkspaceId, agent: &AgentSessionId) {
         if self.0.reported.swap(true, Ordering::SeqCst) {
             return;
