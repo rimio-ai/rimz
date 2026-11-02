@@ -225,7 +225,7 @@ fn attempt_superseded(
             },
             _,
         ) => true,
-        (JournalEvent::Cancel, AttemptOutcome::Canceled) => true,
+        (JournalEvent::Cancel { .. }, AttemptOutcome::Canceled) => true,
         _ => false,
     }
 }

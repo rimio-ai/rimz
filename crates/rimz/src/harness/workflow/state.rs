@@ -592,7 +592,12 @@ impl Transition<'_> {
             self.close_wait();
             self.record.state = RunState::Canceled;
             self.record.terminal_at = Some(self.now);
-            self.push(None, JournalEvent::Cancel);
+            self.push(
+                None,
+                JournalEvent::Cancel {
+                    reason: ending.reason,
+                },
+            );
             self.push(
                 None,
                 JournalEvent::Terminal {
@@ -718,6 +723,7 @@ impl Transition<'_> {
                     outcome: AttemptOutcome::Canceled,
                     cause: EndCause::Deadline,
                     route: None,
+                    reason: None,
                 },
                 None,
                 None,
@@ -743,6 +749,7 @@ impl Transition<'_> {
                 outcome: AttemptOutcome::Timeout,
                 cause: EndCause::Timeout,
                 route: None,
+                reason: None,
             },
             None,
             None,

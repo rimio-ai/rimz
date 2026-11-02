@@ -100,6 +100,7 @@ pub(super) fn prepare(
                 outcome,
                 cause,
                 route: None,
+                reason: None,
             },
             &observed,
         );
@@ -146,6 +147,7 @@ pub(super) fn prepare(
             outcome: AttemptOutcome::Ended,
             cause: EndCause::Lifecycle,
             route: Some(verdict),
+            reason: None,
         },
         &observed,
     );

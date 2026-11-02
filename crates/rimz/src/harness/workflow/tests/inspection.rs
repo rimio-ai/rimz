@@ -353,6 +353,7 @@ fn hops_use_a_held_turn_verdict_instead_of_then() {
                         outcome: AttemptOutcome::Ended,
                         cause: EndCause::Lifecycle,
                         route: Some(verdict),
+                        reason: None,
                     },
                     &host.observed.borrow(),
                 );

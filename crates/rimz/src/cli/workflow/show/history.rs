@@ -375,7 +375,13 @@ impl View<'_> {
                         deadline.map_or_else(|| "none".into(), |at| self.clock(at))
                     )?;
                 }
-                JournalEvent::Cancel => writeln!(out, "cancel canceled")?,
+                JournalEvent::Cancel { reason } => writeln!(
+                    out,
+                    "cancel canceled{}",
+                    reason
+                        .as_ref()
+                        .map_or_else(String::new, |reason| format!(" · {reason}"))
+                )?,
                 JournalEvent::Terminal { state } => writeln!(out, "terminal {}", state.as_str())?,
                 JournalEvent::Wake { signal } => writeln!(out, "wake {signal}{note}")?,
             }
@@ -582,6 +588,48 @@ mod tests {
 
     fn clock(minute: i64) -> String {
         render::workflow_clock(at(minute), at(20))
+    }
+
+    #[test]
+    fn cancellation_history_prints_the_recorded_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        let globals = crate::cli::GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let spec = b"[workflow]\nscope='worktree'\nstart='pr'\n\
+            [checks.pr]\nshell='true'\non={pass='@done',fail='@failed'}\n";
+        let mut actual = Vec::new();
+        for reason in [None, Some("worktree removed")] {
+            let mut record = waiting_record(0, 0, 1);
+            record.id = WorkflowRunId::new();
+            let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            records::initialize(&state, &record, spec, &guard).unwrap();
+            drop(guard);
+            workflow::cancel(
+                &state,
+                &record.id,
+                &Host::new(&state, &globals, None),
+                reason,
+            )
+            .unwrap();
+            let journal = records::journal(&state.workflow(&record.id)).unwrap();
+            let text = history(&journal);
+            actual.push(
+                text.lines()
+                    .find(|line| line.contains("cancel canceled"))
+                    .unwrap()
+                    .split_once("cancel canceled")
+                    .unwrap()
+                    .1
+                    .to_owned(),
+            );
+        }
+        assert_eq!(actual, ["", " · worktree removed"]);
     }
 
     #[test]

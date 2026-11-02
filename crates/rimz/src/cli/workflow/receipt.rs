@@ -14,12 +14,17 @@ fn select(
     }
 }
 
-pub(super) fn cancel(target: &str, globals: &super::super::GlobalFlags) -> Result<()> {
+pub(super) fn cancel(
+    target: &str,
+    reason: Option<&str>,
+    globals: &super::super::GlobalFlags,
+) -> Result<()> {
     let run = select(target, "cancel", globals, None, &[])?;
     let changed = workflow::cancel(
         &run.state,
         &run.record.id,
         &Host::new(&run.state, globals, None),
+        reason,
     )?;
     let address = run.record.address().to_string();
     let mut out = render::out();

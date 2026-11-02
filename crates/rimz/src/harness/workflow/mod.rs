@@ -83,6 +83,12 @@ pub fn advance_args(
     args
 }
 
+pub fn cancel_args(id: &WorkflowRunId, reason: &str) -> Vec<std::ffi::OsString> {
+    ["workflow", "cancel", id.as_str(), "--reason", reason]
+        .map(std::ffi::OsString::from)
+        .into()
+}
+
 pub trait AttemptHost {
     fn occupancy(&self, scope: &Path, project_root: &Path) -> Result<Occupancy, WorkflowErr>;
     fn evict(&self, scope: &Path, project_root: &Path) -> Result<Vec<String>, WorkflowErr>;
