@@ -85,6 +85,7 @@ fn row_snapshot_at(
     let mut snap = snapshot(ws);
     snap.panes_produced_at_ms = Some(1);
     snap.worktree_groups = vec![SidebarWorktreeGroup {
+        stalled_since: None,
         pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
@@ -215,6 +216,7 @@ fn snapshot_in_group(
         ),
     };
     let group = SidebarWorktreeGroup {
+        stalled_since: None,
         pr_stack: Default::default(),
         key: key.to_owned(),
         label: key.to_owned(),

@@ -552,6 +552,7 @@ impl SidebarSnapshot {
 
         let windows = aggregate::AttentionWindows::from_config(&self.attention);
         for group in Arc::make_mut(&mut self.worktree_groups) {
+            group.stalled_since = None;
             let Some(pipeline) = group
                 .pipeline
                 .as_ref()
@@ -596,6 +597,7 @@ impl SidebarSnapshot {
             };
             card.status = AgentStatus::Failed;
             card.turn_error_label = Some(label);
+            group.stalled_since = Some(latest);
             aggregate::stamp_attention(rows, self.now, windows);
             layout::refresh_overlay_group(group);
         }

@@ -196,6 +196,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
     snapshot.panes_produced_at_ms = Some(1);
     snapshot.pane_session_name = Some("rimz-test".to_owned());
     snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+        stalled_since: None,
         pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
@@ -274,6 +275,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         )),
     };
     snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+        stalled_since: None,
         pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
