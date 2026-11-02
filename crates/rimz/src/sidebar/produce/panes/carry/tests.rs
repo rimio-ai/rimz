@@ -489,6 +489,7 @@ fn omitted_tab_is_recreated_from_prior_metadata() {
         build: None,
         session_name: "s".to_owned(),
         tabs: vec![TabFrame {
+            position: None,
             view_id: ViewId::new_unchecked("tab_9"),
             kind: ViewKind::Tab,
             name: Some("work".to_owned()),

@@ -21,6 +21,7 @@ fn reopen_listing(panes: Vec<PaneRef>, authoritative: bool) -> PaneListing {
         authoritative,
         panes,
         views: Vec::new(),
+        positions: Vec::new(),
         observed_at_ms: 0,
         session_focus: None,
         client_view: None,

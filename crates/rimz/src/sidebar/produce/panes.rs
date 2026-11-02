@@ -716,6 +716,7 @@ pub fn repaired_pane_frame_for_binding(
             authoritative: true,
             panes: fixture,
             views: Vec::new(),
+            positions: Vec::new(),
             observed_at_ms: unix_now_ms(),
             session_focus: None,
             client_view: None,
@@ -735,6 +736,7 @@ pub fn repaired_pane_frame_for_binding(
     let (mut frame, diagnostics) = crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
         panes: listing.panes,
         views: listing.views,
+        positions: listing.positions,
         produced_at_ms: unix_now_ms(),
         observed_at_ms: listing.observed_at_ms,
         session_name: session.to_owned(),
@@ -1008,6 +1010,7 @@ impl FrameContext<'_> {
             authoritative: listing_authoritative,
             panes,
             views,
+            positions,
             observed_at_ms,
             session_focus,
             client_view: pushed_client_view,
@@ -1061,6 +1064,7 @@ impl FrameContext<'_> {
             crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
                 panes,
                 views,
+                positions,
                 produced_at_ms: unix_now_ms(),
                 observed_at_ms,
                 session_name: self.session.to_owned(),

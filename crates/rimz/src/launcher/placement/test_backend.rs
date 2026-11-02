@@ -42,6 +42,7 @@ impl m::MuxBackend for Backend {
                 authoritative: true,
                 panes: panes.clone(),
                 views: Vec::new(),
+                positions: Vec::new(),
                 observed_at_ms: 0,
                 session_focus: None,
                 client_view: None,

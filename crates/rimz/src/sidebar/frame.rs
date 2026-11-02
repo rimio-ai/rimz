@@ -79,6 +79,8 @@ pub struct CarriedPane {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TabFrame {
     pub view_id: ViewId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u32>,
     pub kind: ViewKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -338,6 +340,7 @@ fn is_false(value: &bool) -> bool {
 
 pub(super) struct FrameInputs<'a> {
     pub panes: Vec<PaneRef>,
+    pub positions: Vec<(String, u32)>,
     pub views: Vec<(String, crate::mux::tab_name::ViewNaming)>,
     pub produced_at_ms: u64,
     pub observed_at_ms: u64,
@@ -358,6 +361,7 @@ pub fn assemble_frame(
     assemble_frame_from_inputs(FrameInputs {
         panes,
         views: Vec::new(),
+        positions: Vec::new(),
         produced_at_ms,
         observed_at_ms: produced_at_ms,
         session_name: session_name.into(),
@@ -373,6 +377,7 @@ pub fn assemble_frame(
 
 pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<DiagEvent>) {
     let FrameInputs {
+        positions,
         panes,
         views,
         produced_at_ms,
@@ -388,6 +393,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
     let topology_stamp_ms = prior.and_then(|frame| frame.topology_stamp_ms);
     let mut tabs: BTreeMap<ViewId, TabFrame> = BTreeMap::new();
     let views = views.into_iter().collect::<HashMap<_, _>>();
+    let positions = positions.into_iter().collect::<HashMap<_, _>>();
     let mut seen_panes = HashSet::new();
     let mut diagnostics = Vec::new();
     for pane in panes {
@@ -406,6 +412,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
             .view_kind
             .unwrap_or_else(|| crate::mux::view_kind(pane.pane_id.mux()));
         let tab = tabs.entry(view_id.clone()).or_insert_with(|| TabFrame {
+            position: positions.get(view_id.as_str()).copied(),
             naming: views.get(view_id.as_str()).cloned().unwrap_or_default(),
             view_id,
             kind,

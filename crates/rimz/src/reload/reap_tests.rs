@@ -39,6 +39,7 @@ fn listing(panes: &[PaneId], observed_at_ms: u64) -> PaneListing {
             .collect(),
         observed_at_ms,
         views: Vec::new(),
+        positions: Vec::new(),
         session_focus: None,
         client_view: None,
         client_sample_withheld: false,
