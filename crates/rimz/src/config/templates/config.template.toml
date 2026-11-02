@@ -280,6 +280,7 @@ aggressive_resize = true
 ## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's brief for the seat (solo or team member), "" = bare command
 # idle_compact = "100k"           # compact an idle agent at or above this many tokens before its prompt cache expires (TTL minus prompt_cache_margin); a profile or role may set its own idle-compact; off disables it
 # cache_keepalive = true          # keep waiting agents' prompt caches warm
+# stall_nudge = false             # nudge a resting unfinished team once per stage visit at 55m
 # Stop subsequent pings this long after the agent's last request of its own.
 # The first sleeping ping is uncapped; the maximum also limits keep-warm holds.
 # cache_keepalive_max = "6h"      # off, or a duration longer than prompt_cache_margin

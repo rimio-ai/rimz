@@ -997,7 +997,8 @@ upward-dependencies = [
 # SmartCompactSeat, its explicit/resolve methods and ProfilesConfig::setting share seat lines (+4).
 # load_seat_tables shares effective-or-machine fallback with dispatch and harness policy (+1).
 # ProfilesConfig::keep_warm and Team::keep_warm_with_default share horizon fallback with validation (+2).
-surface-budget = 265
+# Team::leader_role shares the declared-or-first-role fallback with launch reminders and nudges (+1).
+surface-budget = 266
 
 [[verdict]]
 kind = "item"
@@ -2072,7 +2073,23 @@ path = "crates/rimz/src/harness"
 # Check::subscriptions shares derived and explicit wakes with the full node view (+1).
 # throttle::room_held shares the lock-free room ticket read with sidebar and CLI (+1).
 # throttle::DiagnosticHold and diagnostic_holds share fresh read-only doctor findings (+2).
-surface-budget = 1062
+# stall_nudge, Decision, and decision share opt-in policy with room and host callers (+3).
+surface-budget = 1065
+
+[[verdict]]
+kind = "item"
+key = "harness::stall_nudge"
+reason = "Room entry and the live evaluator share one opt-in stalled-team policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::stall_nudge::Decision"
+reason = "Room entry and the live evaluator share the off, on, and shadowed flag decision."
+
+[[verdict]]
+kind = "item"
+key = "harness::stall_nudge::decision"
+reason = "The entry warning and live evaluator agree when the stall window shadows the fixed 55-minute nudge."
 
 [[verdict]]
 kind = "item"

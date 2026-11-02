@@ -649,6 +649,13 @@ pub struct Team {
 pub const DONE_STAGE: &str = "Done";
 
 impl Team {
+    /// The declared leader, otherwise the first role, if the team has one.
+    pub fn leader_role(&self) -> Option<&str> {
+        self.leader
+            .as_deref()
+            .or_else(|| self.roles.first().map(|seat| seat.role.as_str()))
+    }
+
     /// Resolve each keep-warm field from role over team; explicit `off` cancels it.
     pub fn keep_warm(&self, role: Option<&str>) -> Option<super::KeepWarmFields> {
         self.keep_warm_with_default(role, super::KeepWarm::Off)
