@@ -18,24 +18,46 @@ use crate::sidebar_pane::render::ViewState;
 #[cfg(test)]
 use crate::store::snapshot::SidebarSnapshot;
 
-#[derive(Default)]
 pub(super) struct ViewsHandle {
     views: Mutex<Views>,
     record: Mutex<Arc<ViewsRecord>>,
     generation: AtomicU64,
+    pub(super) mirrors: Arc<super::mirror_queue::MirrorQueue>,
+    mirror_driver: Mutex<Option<super::mirror_queue::Driver>>,
+}
+
+impl Default for ViewsHandle {
+    fn default() -> Self {
+        Self::from(Views::default())
+    }
 }
 
 impl From<Views> for ViewsHandle {
     fn from(views: Views) -> Self {
+        let mirrors = Arc::new(super::mirror_queue::MirrorQueue::new(
+            views.subscribers.clone(),
+        ));
         Self {
             record: Mutex::new(Arc::new(ViewsRecord::new(&views, 0))),
             views: Mutex::new(views),
             generation: AtomicU64::new(0),
+            mirrors,
+            mirror_driver: Mutex::new(None),
         }
     }
 }
 
 impl ViewsHandle {
+    pub(super) fn start_mirrors(&self) {
+        let mut driver = self
+            .mirror_driver
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if driver.is_none() {
+            *driver = Some(self.mirrors.spawn());
+        }
+    }
+
     pub(super) fn read(&self) -> Arc<ViewsRecord> {
         self.record
             .lock()
@@ -108,8 +130,9 @@ pub(super) struct ViewsRecord {
     pub(super) revision: u64,
     pub(super) latest: Latest,
     pub(super) mirror_target: Option<(ViewId, u64)>,
+    pub(super) mirror_pane: Option<PaneId>,
     pub(super) mirror_interval: Duration,
-    fold: Option<Arc<WorkspaceFold>>,
+    pub(super) fold: Option<Arc<WorkspaceFold>>,
     mapped_panes: HashSet<PaneId>,
     resolved_panes: HashSet<PaneId>,
 }
@@ -126,6 +149,7 @@ impl ViewsRecord {
             revision: views.revision,
             latest: views.latest.clone(),
             mirror_target: mirror.map(|(id, state, _, _)| (id, state.layout_sequence)),
+            mirror_pane: None,
             mirror_interval: mirror.map_or(Duration::ZERO, |(_, _, context, _)| {
                 super::timing::animation_frame(&context.current)
             }),
