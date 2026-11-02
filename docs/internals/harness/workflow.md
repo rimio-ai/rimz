@@ -44,7 +44,7 @@ Paths are under `crates/rimz/src/`.
 
 ## Definitions
 
-Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Every table rejects unknown fields, and `rimz workflow schema` derives its JSON Schema from the same Rust types that deserialize the TOML. `rimz workflow validate [dir] [--json]` loads agent profiles through the machine definition catalog and reports dotted paths, resolved edges, warnings, and errors. It never creates a room, and a directory it checks must sit inside the definitions directory. The committed fixture `crates/rimz/tests/fixtures/workflows/babysit-pr/` shows script checks with declared wakes, supervised steps, a judge, and signs. Nothing installs it.
+Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Every table rejects unknown fields, and `rimz workflow schema` derives its JSON Schema from the same Rust types that deserialize the TOML. `rimz workflow validate [dir] [--json]` loads agent profiles through the machine definition catalog and reports dotted paths, resolved edges, warnings, and errors. It never creates a room, and it checks a directory anywhere, so a definition's source can be checked before it is copied into the definitions directory; `rimz workflow run` (`crates/rimz/src/cli/workflow.rs::start`) and a loop-started run (`crates/rimz/src/harness/schedule/runner.rs::TaskFire::prepare_workflow`) each refuse a directory outside it. The committed fixture `crates/rimz/tests/fixtures/workflows/babysit-pr/` shows script checks with declared wakes, supervised steps, a judge, and signs. Nothing installs it.
 
 ### The header
 
