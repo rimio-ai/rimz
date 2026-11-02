@@ -58,7 +58,10 @@ fn an_explicit_empty_cases_field_is_not_ignored_on_a_run_check() {
     fs::write(dir.join("workflow.toml"), "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
-        report.errors.iter().any(|error| error.path == "checks.pr"),
+        report
+            .errors
+            .iter()
+            .any(|error| error.path == "checks.pr.cases"),
         "run must refuse cases, even an empty array: {:?}",
         report.errors
     );
@@ -133,46 +136,72 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
 }
 
 #[test]
-fn condition_validation_refuses_malformed_cases_and_inapplicable_fields() {
+fn condition_validation_refuses_malformed_cases_and_missing_required_fields() {
     let (_home, dir) = fixture();
     for (label, text, path) in [
-        ("missing else", CONDITION.replace("else='pending'\n", ""), "checks.pr.else"),
-        ("empty cases", CONDITION.replace("[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n", "cases=[]\n"), "checks.pr"),
-        ("two kinds", CONDITION.replace("else='pending'", "run='true'\nelse='pending'"), "checks.pr"),
-        ("missing route", CONDITION.replace("ready='@done', ", ""), "checks.pr.on.ready"),
-        ("dead route", CONDITION.replace("ready='@done'", "dead='@done', ready='@done'"), "checks.pr.on.dead"),
-        ("reserved case", CONDITION.replace("outcome='ready'", "outcome='hold'"), "checks.pr.cases.0.outcome"),
-        ("reserved else", CONDITION.replace("else='pending'", "else='unknown'"), "checks.pr.else"),
-        ("reserved edge", CONDITION.replace("ready='@done'", "hold='@done', ready='@done'"), "checks.pr.on.hold"),
-        ("unknown value", CONDITION.replace("pr=merged", "!pr=unknown"), "checks.pr.cases.0.when"),
-        ("empty when", CONDITION.replace("when=['pr=merged']", "when=[]"), "checks.pr.cases.0.when"),
-        ("zero hold", format!("{CONDITION}for='0s'\n"), "checks.pr.cases.0.for"),
-        ("bad hold", format!("{CONDITION}for='3ms'\n"), "checks.pr.cases.0.for"),
         (
-            "held wait",
-            format!("{}for='2m'\n", CONDITION.replace("ready='@done'", "ready='@wait'")),
-            "checks.pr.cases.0.for",
+            "missing else",
+            CONDITION.replace("else='pending'\n", ""),
+            "checks.pr.else",
         ),
-        ("bad key", format!("{CONDITION}key=true\n"), "checks.pr"),
-        ("prompt", CONDITION.replace("else='pending'", "prompt-file='prompts/build.md'\nelse='pending'"), "checks.pr.prompt-file"),
-        ("window", CONDITION.replace("else='pending'", "window='5h.left>=40'\nelse='pending'"), "checks.pr.window"),
-        ("wake", CONDITION.replace("else='pending'", "wake=[]\nelse='pending'"), "checks.pr.wake"),
-        ("missing provider", CONDITION.replace("pr=merged", "window.5h.left>=40"), "checks.pr.provider"),
-        ("unneeded provider", CONDITION.replace("else='pending'", "provider='claude'\nelse='pending'"), "checks.pr.provider"),
-        ("unknown provider", CONDITION.replace("else='pending'", "provider='missing-kind'\nelse='pending'").replace("pr=merged", "window.5h.left>=40"), "checks.pr.provider"),
-        ("account", CONDITION.replace("else='pending'", "account='work'\nelse='pending'"), "checks.pr.account"),
-        ("run else", "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\nelse='pending'\non.ok='@done'\n".into(), "checks.pr.else"),
-        ("run prompt", "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\nprompt-file='prompts/build.md'\non.ok='@done'\n".into(), "checks.pr.prompt-file"),
-        ("run unknown", "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.unknown='@done'\n".into(), "checks.pr.on.unknown"),
+        (
+            "empty cases",
+            CONDITION.replace(
+                "[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n",
+                "cases=[]\n",
+            ),
+            "checks.pr",
+        ),
+        (
+            "two kinds",
+            CONDITION.replace("else='pending'", "run='true'\nelse='pending'"),
+            "checks.pr",
+        ),
+        (
+            "missing route",
+            CONDITION.replace("ready='@done', ", ""),
+            "checks.pr.on.ready",
+        ),
+        (
+            "reserved case",
+            CONDITION.replace("outcome='ready'", "outcome='hold'"),
+            "checks.pr.cases.0.outcome",
+        ),
+        (
+            "reserved else",
+            CONDITION.replace("else='pending'", "else='unknown'"),
+            "checks.pr.else",
+        ),
+        (
+            "unknown value",
+            CONDITION.replace("pr=merged", "!pr=unknown"),
+            "checks.pr.cases.0.when",
+        ),
+        (
+            "empty when",
+            CONDITION.replace("when=['pr=merged']", "when=[]"),
+            "checks.pr.cases.0.when",
+        ),
+        (
+            "missing provider",
+            CONDITION.replace("pr=merged", "window.5h.left>=40"),
+            "checks.pr.provider",
+        ),
+        (
+            "unknown provider",
+            CONDITION
+                .replace("else='pending'", "provider='missing-kind'\nelse='pending'")
+                .replace("pr=merged", "window.5h.left>=40"),
+            "checks.pr.provider",
+        ),
     ] {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
-        assert!(report.errors.iter().any(|e| e.path.contains(path)), "{label}: {text}: {:?}", report.errors);
-        if label == "held wait" {
-            assert!(report.errors.iter().any(|error| error
-                .message
-                .contains("a held case must route away from @wait")));
-        }
+        assert!(
+            report.errors.iter().any(|e| e.path.contains(path)),
+            "{label}: {text}: {:?}",
+            report.errors
+        );
     }
     fs::write(
         dir.join("workflow.toml"),
@@ -202,38 +231,6 @@ fn wake_validation_accepts_selectors_and_strict_match_tables() {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert!(report.errors.is_empty(), "{text}: {:?}", report.errors);
-    }
-}
-
-#[test]
-fn wake_validation_refuses_invalid_and_unreachable_subscriptions() {
-    let (_home, dir) = fixture();
-    for entry in [
-        "'bad selector'",
-        "{signal='review.ready', match={env=' '}}",
-        "'ci.finished'",
-        "{signal='ci.*', match={conclusion='success'}}",
-        "'agent.*'",
-        "'agent.idle'",
-        "'team.idle'",
-        "'team.*'",
-        "{signal='review.ready', extra=true}",
-        "{match={env='prod'}}",
-        "{signal='review.ready', match={env=42}}",
-    ] {
-        let text = format!(
-            "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\nwake=[{entry}]\n"
-        );
-        fs::write(dir.join("workflow.toml"), &text).unwrap();
-        let report = validate(&dir, &LoadedDefinitions::default(), None);
-        assert!(
-            report
-                .errors
-                .iter()
-                .any(|error| error.path == "checks.pr.wake"),
-            "{entry}: {:?}",
-            report.errors
-        );
     }
 }
 

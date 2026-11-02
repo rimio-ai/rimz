@@ -162,6 +162,32 @@ fn cancel_helper_names_the_machine_wide_id_and_reason() {
 }
 
 #[test]
+fn reread_prompt_file_type_error_records_a_launch_failure_without_panicking() {
+    let (_dir, state, record) = setup(STEP);
+    let paths = state.workflow(&record.id);
+    fs::write(
+        &paths.spec,
+        STEP.replace("prompt-file='prompt.md'", "prompt-file=5"),
+    )
+    .unwrap();
+    let host = FakeHost::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        advance(&state, &record.id, &host)
+    }));
+    assert!(
+        result.is_ok(),
+        "a dropped prompt-file must not panic: {result:?}"
+    );
+    result.unwrap().unwrap();
+    assert!(host.launched.borrow().is_empty());
+    assert!(records::journal(&paths).unwrap().iter().any(|row| {
+        matches!(&row.event, JournalEvent::Attempt {
+            outcome: AttemptOutcome::Died, reason: Some(reason), ..
+        } if reason.contains("steps.build.prompt-file"))
+    }));
+}
+
+#[test]
 fn launch_counts_keyed_visits_and_composes_live_signs() {
     let (dir, state, mut record) = setup(STEP);
     record.key = Some(Key::Integer(7));

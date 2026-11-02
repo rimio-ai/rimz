@@ -57,6 +57,25 @@ fn held(record: &RunRecord, verdict: bool) -> RunRecord {
 }
 
 #[test]
+fn reread_then_type_error_returns_an_error_without_panicking() {
+    let (_dir, state, record) = setup(UNTIL);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    let paths = state.workflow(&record.id);
+    fs::write(&paths.spec, UNTIL.replace("then='pr'", "then=5")).unwrap();
+    host.observed.borrow_mut().turn = Some(turn());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        advance(&state, &record.id, &host)
+    }));
+    assert!(result.is_ok(), "a dropped then must not panic: {result:?}");
+    let error = result.unwrap().unwrap_err();
+    assert!(error.to_string().contains("steps.build.then"), "{error}");
+    let record = records::load(&paths).unwrap();
+    assert_eq!(record.node, "build");
+    assert!(record.attempt.unwrap().judged.is_none());
+}
+
+#[test]
 fn same_step_keeps_consume_each_turn_once_without_relaunch_or_input_changes() {
     keeps("build");
 }

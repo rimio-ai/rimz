@@ -126,6 +126,7 @@ mod commands;
 mod conditions;
 mod graph;
 mod inspection;
+mod tolerance;
 mod turns;
 
 #[test]
@@ -234,7 +235,7 @@ fn validation_carries_workflow_summary() {
 }
 
 #[test]
-fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
+fn validation_ignores_empty_or_multiline_summaries_at_the_field() {
     let (_home, dir) = fixture();
     let mut actual = Vec::new();
     for (kind, node) in [
@@ -265,12 +266,11 @@ fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
                 Some(node) => format!("{kind}.{node}.summary"),
                 None => format!("{kind}.summary"),
             };
-            let refused = report.errors.len() == 1
-                && report.errors[0].path == path
-                && report.errors[0]
-                    .message
-                    .contains("a summary is one nonempty line");
-            actual.push((path, summary, refused, format!("{report:?}")));
+            let ignored = report.errors.is_empty()
+                && report.warnings.iter().any(|issue| {
+                    issue.path == path && issue.message.contains("a summary is one nonempty line")
+                });
+            actual.push((path, summary, ignored, format!("{report:?}")));
         }
     }
     assert_eq!(
@@ -284,7 +284,7 @@ fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
 }
 
 #[test]
-fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
+fn validation_accepts_step_layouts() {
     let cases = [
         (
             "mixed layout",
@@ -312,26 +312,6 @@ fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
             "team",
             VALID.replace("agent = \"claude\"", "agent = 'forge'"),
             Some("steps.build.agent"),
-        ),
-        (
-            "stay timeout",
-            format!("{VALID}lifecycle='stay'\ntimeout='1h'\n"),
-            Some("steps.build.timeout"),
-        ),
-        (
-            "stay asked",
-            format!("{VALID}lifecycle='stay'\non.asked='@user'\n"),
-            Some("steps.build.on.asked"),
-        ),
-        (
-            "until timeout",
-            format!("{VALID}lifecycle='until'\ntimeout='1h'\n"),
-            Some("steps.build.timeout"),
-        ),
-        (
-            "until asked",
-            format!("{VALID}lifecycle='until'\non.asked='@user'\n"),
-            Some("steps.build.on.asked"),
         ),
         (
             "judge layout",
@@ -363,8 +343,6 @@ fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
                             "team" => issue.message.contains("use an agent layout"),
                             "no agent" => issue.message.contains("add an agent"),
                             "ambiguous leader" => issue.message.contains("choose an unambiguous"),
-                            "stay timeout" => issue.message.contains("remove timeout"),
-                            "stay asked" => issue.message.contains("remove on.asked"),
                             _ => true,
                         }
                 }),
@@ -489,11 +467,6 @@ fn validation_rejects_each_invalid_spec() {
             "checks.pick.on.fail",
         ),
         (
-            "shell dead outcome",
-            shell.replace("fail='@user'", "fail='@user',other='@done'"),
-            "checks.pick.on.other",
-        ),
-        (
             "empty shell",
             shell.replace("shell='true'", "shell='  '"),
             "checks.pick.shell",
@@ -511,39 +484,6 @@ fn validation_rejects_each_invalid_spec() {
         (
             "shell and cases",
             format!("{shell}[[checks.pick.cases]]\nwhen=['ci=passed']\noutcome='pass'\n"),
-            "checks.pick",
-        ),
-        (
-            "shell prompt",
-            shell.replace(
-                "shell='true'",
-                "shell='true'\nprompt-file='prompts/build.md'",
-            ),
-            "checks.pick.prompt-file",
-        ),
-        (
-            "shell window",
-            shell.replace("shell='true'", "shell='true'\nwindow='5h.left>=42'"),
-            "checks.pick.window",
-        ),
-        (
-            "shell else",
-            shell.replace("shell='true'", "shell='true'\nelse='pass'"),
-            "checks.pick.else",
-        ),
-        (
-            "shell provider",
-            shell.replace("shell='true'", "shell='true'\nprovider='claude'"),
-            "checks.pick.provider",
-        ),
-        (
-            "shell account",
-            shell.replace("shell='true'", "shell='true'\naccount='default'"),
-            "checks.pick.account",
-        ),
-        (
-            "unknown field",
-            VALID.replace("timeout = \"1d\"", "surprise = true"),
             "checks.pick",
         ),
         (
@@ -595,29 +535,9 @@ fn validation_rejects_each_invalid_spec() {
             "steps.build.then",
         ),
         (
-            "step outcome",
-            format!("{VALID}\non.done = '@done'\n"),
-            "build",
-        ),
-        (
             "unknown profile",
             VALID.replace("agent = \"claude\"", "agent = 'missing-profile'"),
             "steps.build.agent",
-        ),
-        (
-            "script window",
-            VALID.replace("timeout = \"1d\"", "timeout = '1d'\nwindow = '5h.left>=42'"),
-            "checks.pick.window",
-        ),
-        (
-            "bad window",
-            format!("{VALID}\nwindow = '5h.left=>42'\n"),
-            "steps.build.window",
-        ),
-        (
-            "non-window",
-            format!("{VALID}\nwindow = 'ci=passed'\n"),
-            "steps.build.window",
         ),
         (
             "missing prompt",
@@ -695,24 +615,9 @@ fn validation_rejects_each_invalid_spec() {
             "steps.build.on.cap",
         ),
         (
-            "zero visits",
-            VALID.replace("max-visits = 3", "max-visits = 0"),
-            "steps.build.max-visits",
-        ),
-        (
             "bad duration",
             VALID.replace("timeout = \"1d\"", "timeout = 'tomorrow'"),
             "checks.pick.timeout",
-        ),
-        (
-            "bad deadline",
-            VALID.replace("start = \"pick\"", "start = 'pick'\ndeadline = 'never'"),
-            "workflow.deadline",
-        ),
-        (
-            "header outcome",
-            VALID.replace("start = \"pick\"", "start = 'pick'\non.other = '@done'"),
-            "workflow",
         ),
         (
             "bad node name",
@@ -725,32 +630,12 @@ fn validation_rejects_each_invalid_spec() {
             "checks.pick.run",
         ),
     ];
-    let keyed_cases = [
-        (
-            "zero per-key visits",
-            format!("{VALID}\nmax-visits-per-key = 0\n"),
-            "steps.build.max-visits-per-key",
-            "must be at least 1",
-        ),
-        (
-            "per-key cap equals total",
-            format!("{VALID}\nmax-visits-per-key = 3\n"),
-            "steps.build.max-visits-per-key",
-            "must be below max-visits",
-        ),
-        (
-            "per-key cap exceeds total",
-            format!("{VALID}\nmax-visits-per-key = 4\n"),
-            "steps.build.max-visits-per-key",
-            "must be below max-visits",
-        ),
-        (
-            "per-key cap does not bound a cycle",
-            VALID.replace("max-visits = 3", "max-visits-per-key = 2"),
-            "steps.build",
-            "a per-key bound does not bound the cycle: a check can name a new key every time; max-visits is needed",
-        ),
-    ];
+    let keyed_cases = [(
+        "per-key cap does not bound a cycle",
+        VALID.replace("max-visits = 3", "max-visits-per-key = 2"),
+        "steps.build",
+        "a per-key bound does not bound the cycle: a check can name a new key every time; max-visits is needed",
+    )];
     let command = VALID
         .replace("agent = \"claude\"", "shell = 'true'\ntimeout = '1m'")
         .replace("prompt-file = \"prompts/build.md\"", "");
@@ -802,36 +687,6 @@ fn validation_rejects_each_invalid_spec() {
             command.replace("shell = 'true'", "shell = '  '"),
             "steps.build.shell",
             "set a nonempty shell command",
-        ),
-        (
-            "command takeover",
-            format!("{command}takeover=false\n"),
-            "steps.build.takeover",
-            "nothing to take over",
-        ),
-        (
-            "command lifecycle",
-            format!("{command}lifecycle='turn'\n"),
-            "steps.build.lifecycle",
-            "lifecycle is for agent steps",
-        ),
-        (
-            "command window",
-            format!("{command}window='5h.left>=42'\n"),
-            "steps.build.window",
-            "windows gate provider usage",
-        ),
-        (
-            "command asked",
-            format!("{command}on.asked='@user'\n"),
-            "steps.build.on.asked",
-            "a command cannot ask",
-        ),
-        (
-            "command prompt",
-            format!("{command}prompt-file='prompts/build.md'\n"),
-            "steps.build.prompt-file",
-            "a command step takes no prompt",
         ),
     ];
     let mut missed = Vec::new();
@@ -1040,8 +895,8 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
             None,
         ),
         ("capacity-wait='forever'", None),
-        ("capacity-wait='0s'", Some("steps.build")),
-        ("throttle='sometimes'", Some("steps.build")),
+        ("capacity-wait='0s'", None),
+        ("throttle='sometimes'", None),
         ("on.capacity='@user'", Some("steps.build.on.capacity")),
         ("on.capacity='@wait'", Some("steps.build.on.capacity")),
     ] {
@@ -1076,14 +931,16 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
     ] {
         fs::write(dir.join("workflow.toml"), format!("{command}{extra}\n")).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
-        actual.push(report.errors.iter().any(|issue| issue.path == field));
+        actual.push(
+            report.errors.is_empty() && report.warnings.iter().any(|issue| issue.path == field),
+        );
     }
     assert_eq!(actual, vec![true; 9]);
     assert!(super::spec::RESERVED_OUTCOMES.contains(&"capacity"));
 }
 
 #[test]
-fn limits_validate_both_scopes_and_reject_invalid_values_at_the_limit() {
+fn limits_validate_both_scopes_and_ignore_invalid_values_with_a_warning() {
     let (_home, dir) = fixture();
     let mut actual = Vec::new();
     for scope in ["workflow", "steps.build"] {
@@ -1095,7 +952,8 @@ fn limits_validate_both_scopes_and_reject_invalid_values_at_the_limit() {
             ("max-active=0", Some(".max-active")),
             ("pace='0s'", Some(".pace")),
             ("pace='soon'", Some(".pace")),
-            ("unknown=1", Some("")),
+            ("max-active='three'", Some(".max-active")),
+            ("unknown=1", Some(".unknown")),
         ] {
             fs::write(
                 dir.join("workflow.toml"),
@@ -1103,14 +961,18 @@ fn limits_validate_both_scopes_and_reject_invalid_values_at_the_limit() {
             )
             .unwrap();
             let report = validate(&dir, &LoadedDefinitions::default(), None);
-            let valid = match suffix {
-                None => report.errors.is_empty(),
-                Some(suffix) => report
-                    .errors
-                    .iter()
-                    .any(|issue| issue.path == format!("{scope}.limit{suffix}")),
-            };
-            actual.push((scope, value, valid, report.errors));
+            let valid = report.errors.is_empty()
+                && match suffix {
+                    None => !report
+                        .warnings
+                        .iter()
+                        .any(|issue| issue.path.starts_with(&format!("{scope}.limit"))),
+                    Some(suffix) => report
+                        .warnings
+                        .iter()
+                        .any(|issue| issue.path == format!("{scope}.limit{suffix}")),
+                };
+            actual.push((scope, value, valid, report.errors, report.warnings));
         }
     }
     let command = VALID
@@ -1125,15 +987,20 @@ fn limits_validate_both_scopes_and_reject_invalid_values_at_the_limit() {
     actual.push((
         "command",
         "max-active=1",
-        report.errors.iter().any(|issue| {
-            issue.path == "steps.build.limit"
-                && issue
-                    .message
-                    .contains("a command step has no turn to count")
-        }),
+        report.errors.is_empty()
+            && report.warnings.iter().any(|issue| {
+                issue.path == "steps.build.limit"
+                    && issue
+                        .message
+                        .contains("a command step has no turn to count")
+            }),
         report.errors,
+        report.warnings,
     ));
-    assert!(actual.iter().all(|(_, _, valid, _)| *valid), "{actual:#?}");
+    assert!(
+        actual.iter().all(|(_, _, valid, _, _)| *valid),
+        "{actual:#?}"
+    );
 }
 
 #[test]

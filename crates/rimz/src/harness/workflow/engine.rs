@@ -78,10 +78,8 @@ pub fn create(
     refuse_existing(state, &name, &roots)?;
     let prompt = prompt().map_err(WorkflowErr::Refused)?;
     let bytes = std::fs::read(crate::disk::paths::workflow_spec_file(&spec_dir))?;
-    let spec: WorkflowSpec = toml::from_str(
-        std::str::from_utf8(&bytes).map_err(|e| WorkflowErr::Refused(e.to_string()))?,
-    )
-    .map_err(|e| WorkflowErr::Refused(format!("invalid workflow spec: {e}")))?;
+    let spec =
+        spec::parse(std::str::from_utf8(&bytes).map_err(|e| WorkflowErr::Refused(e.to_string()))?)?;
     let machine = crate::config::MachineConfig::load_lenient();
     let definitions = crate::config::definitions::load(
         &crate::disk::paths::agents_home(),
