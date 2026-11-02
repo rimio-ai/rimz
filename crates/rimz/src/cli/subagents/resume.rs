@@ -94,7 +94,11 @@ fn resume_resolved(
     if let Some(reason) = &posture.degraded {
         bail!("{reason}");
     }
-    rimz::harness::plan::check_child_permission_mode(caller.mode, posture.launch.mode)?;
+    rimz::harness::plan::check_child_permission_mode(
+        &child.kind,
+        caller.mode,
+        posture.launch.mode,
+    )?;
     let adapter = rimz::agents::find_definition(child.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", child.kind))?;
     let capped = rimz::harness::plan::cap_child_isolation(

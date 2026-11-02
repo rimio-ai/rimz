@@ -1091,10 +1091,12 @@ fn child_permission_ranking_orders_grants_not_declaration_order() {
 #[test]
 fn child_permission_cap_refuses_explicit_grants_above_the_parent() {
     use PermissionMode::{Ask, Auto, Plan, Yolo};
+    let kind = AgentKind::new_unchecked("claude");
     for mode in [Some(Auto), Some(Ask), Some(Plan), None, Some(Yolo)] {
         let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
         caller.mode = mode;
         let result = cap_child_permission(
+            &kind,
             Some(&caller),
             Some(Yolo),
             None,
@@ -1128,6 +1130,7 @@ fn child_permission_cap_refuses_explicit_grants_above_the_parent() {
 #[test]
 fn child_permission_defaults_lower_with_their_source_and_preserve_stricter_modes() {
     use PermissionMode::{Ask, Auto, Plan, Yolo};
+    let kind = AgentKind::new_unchecked("claude");
     for (parent, default, source, expected) in [
         (Some(Ask), None, PermissionClampSource::AutoDefault, Ask),
         (Some(Plan), None, PermissionClampSource::AutoDefault, Plan),
@@ -1147,7 +1150,7 @@ fn child_permission_defaults_lower_with_their_source_and_preserve_stricter_modes
         let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
         caller.mode = parent;
         assert_eq!(
-            cap_child_permission(Some(&caller), None, default, source).unwrap(),
+            cap_child_permission(&kind, Some(&caller), None, default, source).unwrap(),
             (
                 PermissionModeChoice::Explicit(expected),
                 Some(PermissionClamp {
@@ -1167,6 +1170,7 @@ fn child_permission_defaults_lower_with_their_source_and_preserve_stricter_modes
             }
             assert_eq!(
                 cap_child_permission(
+                    &kind,
                     Some(&caller),
                     None,
                     default,
@@ -1180,6 +1184,7 @@ fn child_permission_defaults_lower_with_their_source_and_preserve_stricter_modes
     for explicit in [None, Some(Yolo)] {
         assert_eq!(
             cap_child_permission(
+                &kind,
                 None,
                 explicit,
                 Some(Yolo),
@@ -1200,12 +1205,13 @@ fn child_permission_defaults_lower_with_their_source_and_preserve_stricter_modes
 #[test]
 fn child_permission_resume_refuses_replayed_modes_above_the_current_parent() {
     use PermissionMode::{Ask, Auto, Plan, Yolo};
+    let kind = AgentKind::new_unchecked("claude");
     for (parent, child) in [
         (Some(Ask), Some(Yolo)),
         (None, Some(Yolo)),
         (Some(Plan), None),
     ] {
-        let result = check_child_permission_mode(parent, child);
+        let result = check_child_permission_mode(&kind, parent, child);
         assert!(result.is_err(), "resume {child:?} under {parent:?}");
         let error = result.unwrap_err().to_string();
         assert!(
@@ -1217,9 +1223,36 @@ fn child_permission_resume_refuses_replayed_modes_above_the_current_parent() {
         assert!(error.contains(&parent), "{error}");
     }
     for mode in [Plan, Ask, Auto, Yolo] {
-        assert!(check_child_permission_mode(Some(mode), Some(mode)).is_ok());
-        assert!(check_child_permission_mode(Some(Yolo), Some(mode)).is_ok());
+        assert!(check_child_permission_mode(&kind, Some(mode), Some(mode)).is_ok());
+        assert!(check_child_permission_mode(&kind, Some(Yolo), Some(mode)).is_ok());
     }
+}
+
+#[test]
+fn child_permission_resume_maps_defaults_and_ceiling_by_kind() {
+    use PermissionMode::{Ask, Auto, Plan, Yolo};
+    for kind in ["pi", "opencode"] {
+        let kind = AgentKind::new_unchecked(kind);
+        for parent in [Some(Plan), Some(Ask), Some(Auto), None] {
+            for child in [None, Some(Plan), Some(Ask), Some(Auto)] {
+                assert!(
+                    check_child_permission_mode(&kind, parent, child).is_ok(),
+                    "{kind} child {child:?} under {parent:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        check_child_permission_mode(&AgentKind::new_unchecked("pi"), Some(Ask), Some(Yolo)).is_ok()
+    );
+    assert!(
+        check_child_permission_mode(
+            &AgentKind::new_unchecked("opencode"),
+            Some(Auto),
+            Some(Yolo)
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -4926,6 +4959,65 @@ fn supervised_permission_cap_renders_and_records_only_the_parent_grant() {
         );
         assert!(launch.permission_clamp.is_none());
     }
+}
+
+#[test]
+fn supervised_permission_cap_maps_modes_by_child_kind() {
+    use PermissionMode::{Ask, Auto, Plan, Yolo};
+    let dir = tempfile::tempdir().unwrap();
+    let machine = MachineConfig::default();
+    for (parent_kind, parent, child_kind, explicit, expected) in [
+        ("claude", Ask, "pi", None, Yolo),
+        ("claude", Ask, "pi", Some(Yolo), Yolo),
+        ("claude", Plan, "opencode", None, Auto),
+        ("claude", Ask, "opencode", Some(Ask), Auto),
+        ("opencode", Auto, "claude", None, Auto),
+    ] {
+        let mut caller =
+            crate::agents::AgentState::stub(parent_kind, "parent", AgentStatus::Running);
+        caller.mode = Some(parent);
+        let mut request = supervised_request(child_kind, "work");
+        request.subagent = true;
+        request.permission_mode = explicit;
+        let (planned, _) = SupervisedPlan {
+            request: &request,
+            caller: Some(&caller),
+            lane: None,
+            parent_isolation: None,
+            machine: &machine,
+        }
+        .run(dir.path());
+        let launch = planned.unwrap();
+        assert_eq!(planned_cell(&launch).launch.mode, Some(expected));
+        assert_eq!(
+            planned_cell(&launch).args,
+            crate::agents::find_definition(child_kind)
+                .unwrap()
+                .spec()
+                .launch
+                .permission_args(expected)
+        );
+        assert_eq!(launch.permission_clamp, None, "{child_kind} under {parent}");
+    }
+    let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+    caller.mode = Some(Auto);
+    let mut request = supervised_request("opencode", "work");
+    request.subagent = true;
+    request.permission_mode = Some(Yolo);
+    let (planned, _) = SupervisedPlan {
+        request: &request,
+        caller: Some(&caller),
+        lane: None,
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(dir.path());
+    assert!(
+        planned
+            .unwrap_err()
+            .to_string()
+            .contains("requested yolo mode exceeds parent mode auto")
+    );
 }
 
 #[test]

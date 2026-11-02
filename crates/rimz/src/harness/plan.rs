@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 
 use crate::agents::account::{ProviderStatus, read_accounts_cache};
+use crate::agents::definition::LaunchPermissionArgs;
 use crate::agents::{PermissionMode, TierSkipReason};
 use crate::config::RoleBinding;
 use crate::disk::paths::{RuntimePaths, StatePaths};
@@ -557,6 +558,7 @@ fn parent_permission_label(mode: Option<PermissionMode>) -> String {
 }
 
 fn cap_child_permission(
+    child_kind: &AgentKind,
     caller: Option<&crate::agents::AgentState>,
     explicit: Option<PermissionMode>,
     default: Option<PermissionMode>,
@@ -569,8 +571,13 @@ fn cap_child_permission(
     let Some(caller) = caller else {
         return Ok((choice, None));
     };
-    let requested = explicit.or(default).unwrap_or(PermissionMode::Auto);
-    let ceiling = caller.mode.unwrap_or(PermissionMode::Auto);
+    let permission = LaunchPermissionArgs::of_kind(child_kind.as_str());
+    let requested = permission
+        .resolve_mode(explicit.or(default))
+        .unwrap_or(PermissionMode::Auto);
+    let ceiling = permission
+        .resolve_mode(Some(caller.mode.unwrap_or(PermissionMode::Auto)))
+        .unwrap_or(PermissionMode::Auto);
     if requested.rank() <= ceiling.rank() {
         return Ok((choice, None));
     }
@@ -590,13 +597,21 @@ fn cap_child_permission(
     ))
 }
 
-/// Refuse a parent-message resume above the parent's current recorded grant. Unrecorded modes count as auto; a resumed grant is never lowered.
+/// Refuse a parent-message resume above the parent's recorded grant, mapping both through the child
+/// kind. Unrecorded parents count as auto before mapping; a resumed grant is never lowered.
 pub fn check_child_permission_mode(
+    child_kind: &AgentKind,
     parent: Option<PermissionMode>,
     child: Option<PermissionMode>,
 ) -> Result<(), ChildPermissionErr> {
-    let child = child.unwrap_or(PermissionMode::Auto);
-    if child.rank() <= parent.unwrap_or(PermissionMode::Auto).rank() {
+    let permission = LaunchPermissionArgs::of_kind(child_kind.as_str());
+    let child = permission
+        .resolve_mode(child)
+        .unwrap_or(PermissionMode::Auto);
+    let ceiling = permission
+        .resolve_mode(Some(parent.unwrap_or(PermissionMode::Auto)))
+        .unwrap_or(PermissionMode::Auto);
+    if child.rank() <= ceiling.rank() {
         return Ok(());
     }
     Err(ChildPermissionErr::Resume { child, parent })
@@ -1083,6 +1098,7 @@ pub fn plan_supervised_launch(
         PermissionClampSource::ProfileDefault
     };
     let (permission_mode, permission_clamp) = cap_child_permission(
+        &cell.kind,
         caller.filter(|_| request.subagent),
         request.permission_mode,
         cell.launch.mode,
