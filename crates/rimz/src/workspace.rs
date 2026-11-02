@@ -197,7 +197,14 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
 
 /// The same census without record repairs or workspace locks.
 pub fn known_workspaces_read_only() -> io::Result<Vec<KnownWorkspace>> {
-    known_workspaces_in(&crate::disk::paths::workspaces_dir(), false)
+    known_workspaces_read_only_under(&crate::disk::paths::workspaces_dir())
+}
+
+/// [`known_workspaces_read_only`] over an explicit state root.
+pub(crate) fn known_workspaces_read_only_under(
+    workspaces_root: &Path,
+) -> io::Result<Vec<KnownWorkspace>> {
+    known_workspaces_in(workspaces_root, false)
 }
 
 fn known_workspaces_in(workspaces_root: &Path, repair: bool) -> io::Result<Vec<KnownWorkspace>> {

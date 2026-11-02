@@ -36,6 +36,58 @@ fn config() -> GcConfig {
 }
 
 #[test]
+fn inventory_preview_preserves_records_and_eviction_repairs_them() {
+    use crate::workspace::RootClass;
+    use crate::workspace::record::{self, WorkspaceRecord};
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("state");
+    let project_root = temp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let canonical_root = project_root.canonicalize().unwrap();
+    let workspace_id = crate::WorkspaceId::from_project_root(&canonical_root);
+    let paths = StatePaths::under(workspace_id.clone(), &home).unwrap();
+    fs::create_dir_all(&paths.root).unwrap();
+    record::write(
+        &paths,
+        &WorkspaceRecord {
+            layout: 2,
+            workspace_id,
+            project_root: project_root.join("..").join("project"),
+            worktree_root: None,
+            session_name: "rimz-stale".to_owned(),
+            root_class: RootClass::Repo,
+            rimz_bin: None,
+            rimz_build: None,
+            pins: Default::default(),
+            remote_control_off: Default::default(),
+            agent_shell: None,
+            skipped: Vec::new(),
+            updated_at: jiff::Timestamp::UNIX_EPOCH,
+        },
+    )
+    .unwrap();
+    let before = fs::read(&paths.workspace_record).unwrap();
+
+    inventory(&home, InventoryPass::DoctorPreview).unwrap();
+    assert!(
+        fs::read(&paths.workspace_record).unwrap() == before,
+        "preview must leave workspace.json byte-identical"
+    );
+    assert!(
+        !paths.workspace_lock.exists(),
+        "preview must not create a workspace lock"
+    );
+
+    inventory(&home, InventoryPass::Eviction).unwrap();
+    assert_eq!(
+        record::read(&paths.workspace_record).unwrap().project_root,
+        canonical_root,
+        "eviction must retain workspace record repair"
+    );
+}
+
+#[test]
 fn pressure_orders_mixed_candidates_and_stops_at_the_floor() {
     let temp = tempfile::tempdir().unwrap();
     let candidates = vec![

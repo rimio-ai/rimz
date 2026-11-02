@@ -32,6 +32,11 @@ struct Candidate {
     unit: TmpUnit,
 }
 
+enum InventoryPass {
+    DoctorPreview,
+    Eviction,
+}
+
 #[derive(Debug, Serialize)]
 pub struct FloorReport {
     pub free_bytes: u64,
@@ -84,7 +89,10 @@ pub fn inspect(config: &GcConfig, measure_bytes: bool) -> Result<TempUnits, TmpF
         ..TempUnits::default()
     };
     let now = SystemTime::now();
-    for candidate in inventory(&root, false)? {
+    for candidate in inventory(
+        &crate::disk::paths::rimz_home(),
+        InventoryPass::DoctorPreview,
+    )? {
         let bytes = if measure_bytes {
             crate::disk::usage::dir_size(&candidate.unit.path)
         } else {
@@ -148,7 +156,7 @@ pub fn run(config: &GcConfig) -> Result<FloorOutcome, TmpFloorErr> {
         }));
     }
     enforce(
-        inventory(&root, true)?,
+        inventory(&crate::disk::paths::rimz_home(), InventoryPass::Eviction)?,
         config,
         || probe(&root),
         rejudge,
@@ -177,23 +185,23 @@ fn room_inventory(paths: &StatePaths) -> Result<Vec<TmpUnit>, TmpFloorErr> {
     )?)
 }
 
-fn inventory(root: &Path, lock: bool) -> Result<Vec<Candidate>, TmpFloorErr> {
+fn inventory(home: &Path, pass: InventoryPass) -> Result<Vec<Candidate>, TmpFloorErr> {
+    let root = crate::disk::paths::workspaces_dir_under(home);
+    let rooms = match pass {
+        InventoryPass::DoctorPreview => crate::workspace::known_workspaces_read_only_under(&root)?,
+        InventoryPass::Eviction => crate::workspace::known_workspaces_under(&root)?,
+    };
     let mut candidates = Vec::new();
-    for room in crate::workspace::known_workspaces_under(root)? {
-        let mut paths = StatePaths::under_named(
-            room.workspace_id,
-            room.dir_name,
-            &crate::disk::paths::rimz_home(),
-        );
+    for room in rooms {
+        let mut paths = StatePaths::under_named(room.workspace_id, room.dir_name, home);
         let runtime = RuntimePaths::for_state_under(&paths, &crate::disk::paths::runtime_home());
         paths.bind_runtime_checkpoint(&runtime);
         let units = (|| {
-            let _guard = if lock {
-                Some(crate::disk::lock::WorkspaceLock::acquire(
+            let _guard = match pass {
+                InventoryPass::DoctorPreview => None,
+                InventoryPass::Eviction => Some(crate::disk::lock::WorkspaceLock::acquire(
                     &paths.workspace_lock,
-                )?)
-            } else {
-                None
+                )?),
             };
             room_inventory(&paths)
         })();
