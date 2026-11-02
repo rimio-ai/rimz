@@ -1622,7 +1622,7 @@ fn presence_plugin_verdict(tally: &mut Tally, row: &PresencePluginRow) -> Cell {
             tally,
             Severity::Warning,
             format!(
-                "a newer plugin took over — {} of its topology writes were ignored",
+                "another writer took over — {} of its topology writes were ignored",
                 row.rejected_count.unwrap_or_default()
             ),
             "run `rimz reload`",

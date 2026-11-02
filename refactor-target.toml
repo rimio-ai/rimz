@@ -9967,7 +9967,7 @@ reason = "Ordered probes are gated by backend, workspace and room liveness; prov
 [[verdict]]
 kind = "item"
 key = "cli::doctor::runtime::presence_plugins_view"
-reason = "Generation-aware join of live ids, diagnostic spans, fresh topology writer and rejected writer, with desired-build comparison and stable row order. Five presence_plugins tests pin the join; a library DTO would duplicate the report model (pass 29c)."
+reason = "Join of live ids, diagnostic spans, fresh topology writer and non-superseded rejected writer, with desired-build comparison and stable row order. Five presence_plugins tests pin the join; a library DTO would duplicate the report model (pass 29c)."
 
 [[verdict]]
 kind = "item"

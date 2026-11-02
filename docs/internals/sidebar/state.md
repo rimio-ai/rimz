@@ -395,8 +395,8 @@ These files are the multiplexer's side of the channel, written outside the sideb
 
 | Lane | Writer | Carries |
 | --- | --- | --- |
-| `lanes/pane-topology.json` | Zellij presence plugin, through `rimz sidebar wake` | The pane roster (live panes, tab names, foreground commands, geometry) and full client views, from which the host derives attached-client count, terminal `viewed_panes`, and unique-live focus. |
-| `lanes/presence-desired.json` | Zellij room-owner flows (birth, reload repair and upgrade, web sharing) | The requested plugin build and configuration identity that ranks competing writers ([multiplexers.md → Writer fencing](../multiplexers.md#writer-fencing)). |
+| `lanes/pane-topology.json` | Zellij presence plugin, through `rimz sidebar wake` | The pane roster (live panes, tab names, foreground commands, geometry), writer identity including its own optional `client_id`, and full client views, from which the host derives writer attachment, attached-client count, terminal `viewed_panes`, and unique-live focus. |
+| `lanes/presence-desired.json` | Zellij room-owner flows (birth, reload repair and upgrade, web sharing) | The requested plugin build and configuration identity that ranks competing writers after attachment ([multiplexers.md → Writer fencing](../multiplexers.md#writer-fencing)). |
 | `live/presence.stamp` | Zellij plugin, tmux control-mode watch | A liveness mark carrying its own `written_at_ms`, so `rimz doctor` reads the same age the producer does. While it is fresh, the pane lane relaxes to the longer event-mode TTL. |
 
 ### Enrichment lanes

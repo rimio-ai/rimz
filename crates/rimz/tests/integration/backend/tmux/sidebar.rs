@@ -4,8 +4,38 @@ use std::collections::BTreeSet;
 
 use super::support::*;
 use crate::backend::shared_view::{
-    agent_layout, seed_agents, sidebar_view, wait_frame, wait_screen,
+    SidebarView, agent_layout, seed_agents, sidebar_view, wait_frame, wait_screen,
 };
+
+fn bottom_view(client: &mut AttachedTmuxClient, label: &str) -> SidebarView {
+    let before = client.screen();
+    let before_view = sidebar_view(&before);
+    client.send(b"G");
+    let last = wait_screen(
+        || client.screen(),
+        |s| {
+            let view = sidebar_view(s);
+            s != before
+                && view.selection_visible
+                && (view.unnamed_bottom_selected()
+                    || (view.selected_card().is_some()
+                        && view.selected_card() == view.last_card()
+                        && view.selected_card() != before_view.selected_card()))
+        },
+        label,
+    );
+    if sidebar_view(&last).selected_card().is_none() {
+        client.send(b"k");
+    }
+    sidebar_view(&wait_screen(
+        || client.screen(),
+        |s| {
+            let view = sidebar_view(s);
+            view.selected_card().is_some() && view.selected_card() == view.last_card()
+        },
+        "client selects a bottom card",
+    ))
+}
 
 #[test]
 fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
@@ -87,7 +117,7 @@ fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
     wait_frame(
         &env.runtime_paths(),
         |frame| frame.viewed_panes == [home.clone()],
-        "only the home sidebar is viewed before the card appears",
+        &format!("only the home sidebar is viewed before the card appears: {home}"),
     );
     thread::sleep(Duration::from_secs(3));
     let agents: Vec<_> = list_session_panes(&server, session)
@@ -96,7 +126,11 @@ fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
         .take(1)
         .collect();
     assert_eq!(agents.len(), 1);
-    seed_agents(&env.state_path_for(&env.project_root), &agents);
+    seed_agents(
+        &env.state_path_for(&env.project_root),
+        &agents,
+        &env.project_root,
+    );
     wait_screen(
         || client.screen(),
         |screen| screen.contains("view-card-00"),
@@ -115,7 +149,7 @@ fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
     wait_frame(
         &env.runtime_paths(),
         |frame| frame.viewed_panes == [home.clone()],
-        "the client stayed on the home window throughout the hidden capture",
+        &format!("the client stayed on the home window throughout the hidden capture: {home}"),
     );
 }
 
@@ -202,7 +236,11 @@ fn two_clients_share_the_sidebar_view_through_detach() {
         })
         .collect();
     assert_eq!(agents.len(), 12);
-    seed_agents(&env.state_path_for(&env.project_root), &agents);
+    seed_agents(
+        &env.state_path_for(&env.project_root),
+        &agents,
+        &env.project_root,
+    );
     let mut first = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
     let mut second = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
     server.tmux(&["select-pane", "-t", sidebar.raw()]);
@@ -216,28 +254,41 @@ fn two_clients_share_the_sidebar_view_through_detach() {
         |s| s.contains("⢿ 12"),
         "all twelve running cards reach the second client",
     );
-    first.send(b"g");
+    wait_frame(
+        &env.runtime_paths(),
+        |frame| {
+            frame.client_views.len() == 2
+                && frame
+                    .client_views
+                    .iter()
+                    .all(|client| client.pane_id == sidebar)
+        },
+        &format!("host resolves both clients on the sidebar before input: {sidebar}"),
+    );
+    // Home is fixture setup: wait for this terminal's key acknowledgment, not just publication.
     wait_screen(
-        || first.screen(),
-        |s| s.contains("view-card-00") && !s.contains("view-card-11"),
+        || {
+            first.send(b"g");
+            first.screen()
+        },
+        |s| {
+            let view = sidebar_view(s);
+            view.top_selected()
+        },
         "first client starts at the top",
     );
     wait_screen(
         || second.screen(),
-        |s| s.contains("view-card-00") && !s.contains("view-card-11"),
+        |s| {
+            let view = sidebar_view(s);
+            view.top_selected()
+        },
         "second client starts at the top",
     );
-    first.send(b"G");
-    let bottom = wait_screen(
-        || first.screen(),
-        |s| {
-            s.contains("view-card-11")
-                && !s.contains("view-card-00")
-                && sidebar_view(s).selection_visible
-        },
+    let bottom = bottom_view(
+        &mut first,
         "first client scrolls to bottom with the selection shown",
     );
-    let bottom = sidebar_view(&bottom);
     wait_screen(
         || second.screen(),
         |s| sidebar_view(s) == bottom,
@@ -246,20 +297,27 @@ fn two_clients_share_the_sidebar_view_through_detach() {
     second.send(b"g");
     wait_screen(
         || first.screen(),
-        |s| s.contains("view-card-00") && !s.contains("view-card-11"),
+        |s| {
+            let view = sidebar_view(s);
+            view.top_selected()
+        },
         "second client's input updates both views",
     );
-    first.send(b"G");
-    let bottom = wait_screen(
+    let bottom = bottom_view(
+        &mut first,
+        "client scrolls to the bottom again before detach",
+    );
+    wait_screen(
         || second.screen(),
-        |s| {
-            s.contains("view-card-11")
-                && !s.contains("view-card-00")
-                && sidebar_view(s).selection_visible
-        },
+        |s| sidebar_view(s) == bottom,
         "survivor has the scrolled view with the selection before detach",
     );
-    let bottom = sidebar_view(&bottom);
+    let selected = bottom
+        .cards
+        .iter()
+        .position(|(_, selected)| *selected)
+        .unwrap();
+    let previous = &bottom.cards[selected.checked_sub(1).expect("preceding visible card")].0;
     drop(first);
     let deadline = Instant::now() + Duration::from_secs(5);
     while server
@@ -323,10 +381,7 @@ fn two_clients_share_the_sidebar_view_through_detach() {
     returning.send(b"k");
     wait_screen(
         || returning.screen(),
-        |s| {
-            !s.contains("view-card-00")
-                && sidebar_view(s).cards.iter().any(|(_, selected)| *selected)
-        },
+        |s| sidebar_view(s).selected_card() == Some(previous.as_str()),
         "returning input continues the retained cursor, not cached terminal bytes",
     );
     drop(returning);
@@ -338,15 +393,28 @@ fn two_clients_share_the_sidebar_view_through_detach() {
         "host resolves the second full detach",
     );
     thread::sleep(Duration::from_secs(23));
-    let fresh = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
-    wait_screen(
+    let mut fresh = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
+    let expired = sidebar_view(&wait_screen(
         || fresh.screen(),
         |s| {
-            s.contains("view-card-00")
-                && !s.contains("view-card-11")
-                && !sidebar_view(s).selection_visible
+            let view = sidebar_view(s);
+            view.first_card().is_some() && !view.selection_visible
         },
-        "reattach after the hold starts at the top",
+        "reattach after the hold has no carried selection",
+    ));
+    fresh.send(b"g");
+    let homed = sidebar_view(&wait_screen(
+        || fresh.screen(),
+        |s| {
+            let view = sidebar_view(s);
+            view.top_selected()
+        },
+        "fresh client's home key selects the first listed card",
+    ));
+    assert_eq!(
+        homed.first_card(),
+        expired.first_card(),
+        "reattach after the hold drops the retained browse offset",
     );
 }
 

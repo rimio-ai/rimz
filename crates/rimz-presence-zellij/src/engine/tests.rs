@@ -51,6 +51,7 @@ fn config() -> EngineConfig {
         session_name: Some("session-1".to_owned()),
         rimz_bin: Some("/bin/rimz".to_owned()),
         plugin_id: Some(9),
+        client_id: Some(17),
         plugin_build: Some("wasm-build".to_owned()),
         plugin_config: Some("config-hash".to_owned()),
         focus_key: None,
@@ -83,15 +84,18 @@ fn zoom_pipe_runs_the_host_command_after_permission() {
     grant(&mut engine, 1, &host);
     assert_eq!(
         engine.on_zoom_pane_pipe(),
-        vec![Effect::RunCommand(strings(&[
-            "/bin/rimz",
-            "pane",
-            "zoom",
-            "--session-name",
-            "session-1",
-            "--mux",
-            "zellij",
-        ]))]
+        vec![Effect::RunCommand {
+            argv: strings(&[
+                "/bin/rimz",
+                "pane",
+                "zoom",
+                "--session-name",
+                "session-1",
+                "--mux",
+                "zellij",
+            ]),
+            topology_issued_at: None,
+        }]
     );
 }
 
@@ -234,7 +238,7 @@ fn run_commands(effects: &[Effect]) -> Vec<&Vec<String>> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::RunCommand(argv) => Some(argv),
+            Effect::RunCommand { argv, .. } => Some(argv),
             _ => None,
         })
         .collect()
@@ -809,6 +813,119 @@ fn dump_topology_bypasses_floor_and_pregrant_dump_holds_signal() {
     assert!(
         run_commands(&effects)[0].contains(&"--topology".to_owned()),
         "dump publishes immediate topology even inside the duplicate floor",
+    );
+    let _ = engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":200}"#));
+    let effects = engine.on_dump_topology_pipe(210, &host);
+    assert_eq!(
+        topology_json(run_commands(&effects)[0])["clients_withheld"],
+        true
+    );
+}
+
+#[test]
+fn topology_publications_carry_the_load_time_client_id() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
+    let effects = engine.on_dump_topology_pipe(3, &host);
+    assert_eq!(
+        topology_json(run_commands(&effects)[0])["writer"]["client_id"],
+        17
+    );
+}
+
+#[test]
+fn muted_copy_reduces_events_without_publishing_or_querying() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
+    let _ = engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#));
+    let manifest = tabs(vec![pane(1), pane(2)]);
+    let updates = [
+        engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 20, &host),
+        engine.on_session_update(Some(2), 30, &host),
+        engine.on_command_changed(
+            ProjectedPaneId::Terminal(2),
+            strings(&["vim"]),
+            true,
+            40,
+            &host,
+        ),
+        engine.on_cwd_changed(
+            ProjectedPaneId::Terminal(2),
+            Some("/new".to_owned()),
+            50,
+            &host,
+        ),
+        engine.on_timer(KEEPALIVE_MS, &host),
+    ];
+    for effects in updates {
+        assert!(run_commands(&effects).is_empty(), "{effects:?}");
+        assert!(!effects.contains(&Effect::ListClients), "{effects:?}");
+    }
+    let effects = engine.on_dump_topology_pipe(KEEPALIVE_MS + 1, &host);
+    let topology = topology_json(run_commands(&effects)[0]);
+    let added = topology["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pane| pane["id"] == 2);
+    assert!(added.is_some(), "{topology}");
+    assert_eq!(added.unwrap()["pane_command"], "vim");
+    assert_eq!(added.unwrap()["pane_cwd"], "/new");
+}
+
+#[test]
+fn revival_withholds_pre_dump_replies_until_a_post_dump_query_returns() {
+    for dump_at in [30, 50] {
+        let host = FakeHost::default();
+        let mut engine = Engine::new(0, config());
+        grant(&mut engine, 10, &host);
+        seed_manifest(&mut engine, tabs(vec![pane(1)]), 20, &host);
+        let _ = engine.on_list_clients(vec![client(17, ProjectedPaneId::Terminal(1))], 30, &host);
+        let _ = engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":40}"#));
+        let effects = engine.on_dump_topology_pipe(dump_at, &host);
+        assert_eq!(
+            topology_json(run_commands(&effects)[0])["clients_withheld"],
+            true
+        );
+        assert!(
+            !effects.contains(&Effect::ListClients),
+            "the pre-dump query is still in flight"
+        );
+
+        let effects =
+            engine.on_list_clients(vec![client(18, ProjectedPaneId::Terminal(1))], 60, &host);
+        assert!(effects.contains(&Effect::ListClients));
+        let effects = engine.on_timer(160, &host);
+        assert_eq!(
+            topology_json(run_commands(&effects)[0])["clients_withheld"],
+            true
+        );
+        let effects =
+            engine.on_list_clients(vec![client(17, ProjectedPaneId::Terminal(1))], 260, &host);
+        let topology = topology_json(run_commands(&effects)[0]);
+        assert!(topology.get("clients_withheld").is_none());
+        assert_eq!(topology["clients"]["views"][0]["client_id"], 17);
+    }
+}
+
+#[test]
+fn revival_without_an_in_flight_query_publishes_withheld_and_queries() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
+    let _ = engine.on_list_clients(Vec::new(), 3, &host);
+    let _ = engine.on_list_clients(Vec::new(), 4, &host);
+    let _ = engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#));
+    let effects = engine.on_dump_topology_pipe(20, &host);
+    assert!(effects.contains(&Effect::ListClients), "{effects:?}");
+    assert_eq!(
+        topology_json(run_commands(&effects)[0])["clients_withheld"],
+        true
     );
 }
 
@@ -1655,23 +1772,24 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
     grant(&mut same_id, 1, &host);
     seed_manifest(&mut same_id, tabs(vec![pane(1)]), 2, &host);
 
-    assert_eq!(
-        same_id.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#)),
-        vec![Effect::Unsubscribe]
+    assert!(
+        same_id
+            .on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#))
+            .is_empty()
     );
     assert!(same_id.on_focus_sidebar_pipe().is_empty());
     assert!(same_id.on_zoom_pane_pipe().is_empty());
-    assert!(same_id.on_timer(KEEPALIVE_MS, &host).is_empty());
-    assert!(
-        same_id
-            .on_pane_manifest(
-                raw_hash(&tabs(vec![pane(1), plugin_pane(9)])),
-                |_| tabs(vec![pane(1), plugin_pane(9)]),
-                20,
-                &host
-            )
-            .is_empty()
+    let effects = same_id.on_timer(KEEPALIVE_MS, &host);
+    assert!(run_commands(&effects).is_empty());
+    assert!(!effects.contains(&Effect::ListClients));
+    let effects = same_id.on_pane_manifest(
+        raw_hash(&tabs(vec![pane(1), plugin_pane(9)])),
+        |_| tabs(vec![pane(1), plugin_pane(9)]),
+        20,
+        &host,
     );
+    assert!(run_commands(&effects).is_empty());
+    assert!(!effects.contains(&Effect::ListClients));
     assert!(
         same_id
             .on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":20}"#))
@@ -1679,14 +1797,17 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
     );
 
     let effects = same_id.on_dump_topology_pipe(30, &host);
-    assert_eq!(effects.first(), Some(&Effect::Resubscribe));
     assert_eq!(reasons(&effects), vec!["alive"]);
     assert!(run_commands(&effects)[0].contains(&"--topology".to_owned()));
+    assert_eq!(
+        topology_json(run_commands(&effects)[0])["clients_withheld"],
+        true
+    );
     assert!(!same_id.on_focus_sidebar_pipe().is_empty());
     assert!(!same_id.on_zoom_pane_pipe().is_empty());
     assert_eq!(
         same_id.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":40}"#)),
-        vec![Effect::Unsubscribe],
+        Vec::new(),
         "a revived stale clone remains retireable",
     );
 
@@ -1695,6 +1816,26 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
         different_id.on_retire_pipe(Some(r#"{"plugin_id":10,"loaded_at_ms":10}"#)),
         vec![Effect::CloseSelf]
     );
+}
+
+#[test]
+fn muted_copy_still_closes_for_a_newer_generation() {
+    for generation in [
+        r#"{"plugin_id":10,"loaded_at_ms":10}"#,
+        r#"{"plugin_id":9,"loaded_at_ms":0,"build":"new-build","config":"new-config"}"#,
+    ] {
+        let mut engine = Engine::new(0, config());
+        assert!(
+            engine
+                .on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#))
+                .is_empty()
+        );
+        assert_eq!(
+            engine.on_retire_pipe(Some(generation)),
+            vec![Effect::CloseSelf],
+            "{generation}",
+        );
+    }
 }
 
 #[test]
@@ -1717,26 +1858,26 @@ fn repeated_command_failures_fall_back_to_path_once_and_success_resets_the_strea
 
     assert!(
         engine
-            .on_run_command_result(None, false, 10, &host)
+            .on_run_command_result(None, None, 10, &host)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(Some(0), false, 20, &host)
+            .on_run_command_result(Some(0), None, 20, &host)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(Some(1), false, 30, &host)
+            .on_run_command_result(Some(1), None, 30, &host)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(None, false, 40, &host)
+            .on_run_command_result(None, None, 40, &host)
             .is_empty()
     );
 
-    let effects = engine.on_run_command_result(Some(1), false, 50, &host);
+    let effects = engine.on_run_command_result(Some(1), None, 50, &host);
     assert_eq!(reasons(&effects), vec!["alive"]);
     assert_eq!(run_commands(&effects).len(), 1);
     assert_eq!(
@@ -1746,76 +1887,231 @@ fn repeated_command_failures_fall_back_to_path_once_and_success_resets_the_strea
 
     assert!(
         engine
-            .on_run_command_result(None, false, 60, &host)
+            .on_run_command_result(None, None, 60, &host)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(None, false, 70, &host)
+            .on_run_command_result(None, None, 70, &host)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(None, false, 80, &host)
+            .on_run_command_result(None, None, 80, &host)
             .is_empty(),
         "PATH mode does not keep firing fallback pokes",
     );
 }
 
 #[test]
-fn repeated_stale_writer_rejections_retire_the_losing_plugin() {
+fn repeated_stale_writer_rejections_mute_the_losing_plugin() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 1, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
 
     assert!(
         engine
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 10, &host)
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(10), 10, &host)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(Some(0), false, 15, &host)
+            .on_run_command_result(Some(0), None, 15, &host)
             .is_empty(),
         "an unrelated successful command does not reset publish rejections",
     );
     assert!(
         engine
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 20, &host)
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(20), 20, &host)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(Some(2), true, 25, &host)
+            .on_run_command_result(Some(2), Some(25), 25, &host)
             .is_empty(),
         "a failed topology fork preserves the stale-writer rejection streak",
     );
     assert_eq!(
-        engine.on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 30, &host),
-        vec![Effect::Unsubscribe]
+        engine.on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(30), 30, &host),
+        Vec::new()
     );
     assert!(engine.on_timer(40, &host).is_empty());
     let effects = engine.on_dump_topology_pipe(50, &host);
-    assert_eq!(effects.first(), Some(&Effect::Resubscribe));
     assert_eq!(reasons(&effects), vec!["alive"]);
+    assert_eq!(
+        topology_json(run_commands(&effects)[0])["clients_withheld"],
+        true
+    );
+    assert!(
+        engine
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(60), 60, &host)
+            .is_empty()
+    );
+    assert!(
+        !engine.on_focus_sidebar_pipe().is_empty(),
+        "revival resets the rejection streak"
+    );
 
     let mut reset = Engine::new(0, config());
     grant(&mut reset, 1, &host);
     assert!(
         reset
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 10, &host)
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(10), 10, &host)
             .is_empty()
     );
     assert!(
         reset
-            .on_run_command_result(Some(0), true, 20, &host)
+            .on_run_command_result(Some(0), Some(20), 20, &host)
             .is_empty()
     );
     assert!(
         reset
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), true, 30, &host)
+            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(30), 30, &host)
             .is_empty()
     );
+}
+
+#[test]
+fn accepted_topology_unmutes_and_runs_queued_work_immediately() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
+    let _ = engine.on_list_clients(Vec::new(), 3, &host);
+    let _ = engine.on_list_clients(Vec::new(), 4, &host);
+    let issued = engine.on_dump_topology_pipe(5, &host);
+    let accepted_at = topology_json(run_commands(&issued)[0])["produced_at_ms"]
+        .as_u64()
+        .unwrap();
+    for issued_at in 6..=8 {
+        let _ = engine.on_run_command_result(
+            Some(wire::STALE_WRITER_EXIT_CODE),
+            Some(issued_at),
+            10 + issued_at,
+            &host,
+        );
+    }
+    let manifest = tabs(vec![pane(1)]);
+    let queued = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 20, &host);
+    assert!(!queued.contains(&Effect::ListClients));
+
+    let accepted = engine.on_run_command_result(Some(0), Some(accepted_at), 30, &host);
+    assert!(
+        accepted.contains(&Effect::ListClients),
+        "acceptance must run the query queued while muted: {accepted:?}",
+    );
+    let manifest = tabs(vec![pane(1), pane(2)]);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 1_100, &host);
+    assert!(!run_commands(&effects).is_empty(), "{effects:?}");
+}
+
+/// Mutes a copy whose dump publication is still in flight, lets `absorb` reduce an
+/// observation and the settle poke lapse while muted, then accepts that publication.
+fn publication_on_unmute(
+    absorb: impl FnOnce(&mut Engine, &FakeHost) -> Vec<Effect>,
+) -> serde_json::Value {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
+    let _ = engine.on_list_clients(Vec::new(), 3, &host);
+    let _ = engine.on_list_clients(Vec::new(), 4, &host);
+    let issued = engine.on_dump_topology_pipe(5, &host);
+    let accepted_at = topology_json(run_commands(&issued)[0])["produced_at_ms"]
+        .as_u64()
+        .unwrap();
+    for issued_at in 6..=8 {
+        let _ = engine.on_run_command_result(
+            Some(wire::STALE_WRITER_EXIT_CODE),
+            Some(issued_at),
+            10 + issued_at,
+            &host,
+        );
+    }
+    assert!(run_commands(&absorb(&mut engine, &host)).is_empty());
+    assert!(run_commands(&engine.on_timer(1_300, &host)).is_empty());
+
+    let effects = engine.on_run_command_result(Some(0), Some(accepted_at), 1_500, &host);
+    let published = run_commands(&effects);
+    assert!(
+        !published.is_empty(),
+        "acceptance must publish what the copy reduced while muted: {effects:?}",
+    );
+    topology_json(published[0])
+}
+
+#[test]
+fn accepted_topology_publishes_a_change_reduced_while_muted() {
+    let topology = publication_on_unmute(|engine, host| {
+        engine.on_cwd_changed(
+            ProjectedPaneId::Terminal(1),
+            Some("/new".to_owned()),
+            1_000,
+            host,
+        )
+    });
+    assert_eq!(topology["panes"][0]["pane_cwd"], "/new", "{topology}");
+}
+
+#[test]
+fn accepted_topology_publishes_a_client_sample_taken_while_muted() {
+    let topology = publication_on_unmute(|engine, host| {
+        engine.on_list_clients(vec![client(17, ProjectedPaneId::Terminal(1))], 1_000, host)
+    });
+    assert_eq!(
+        topology["clients"]["views"][0]["client_id"], 17,
+        "{topology}"
+    );
+}
+
+#[test]
+fn accepted_topology_ignores_older_and_tied_rejections() {
+    for rejected_at in [[4, 5, 6], [10, 10, 10]] {
+        let host = FakeHost::default();
+        let mut engine = Engine::new(0, config());
+        grant(&mut engine, 1, &host);
+        seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
+        let _ = engine.on_list_clients(Vec::new(), 3, &host);
+        let _ = engine.on_list_clients(Vec::new(), 4, &host);
+        let _ = engine.on_run_command_result(Some(0), Some(10), 20, &host);
+        let _ = engine.on_run_command_result(Some(0), Some(3), 21, &host);
+        for issued_at in rejected_at {
+            let _ = engine.on_run_command_result(
+                Some(wire::STALE_WRITER_EXIT_CODE),
+                Some(issued_at),
+                30,
+                &host,
+            );
+        }
+        let manifest = tabs(vec![pane(1), pane(2)]);
+        let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 1_100, &host);
+        assert!(
+            !run_commands(&effects).is_empty() && effects.contains(&Effect::ListClients),
+            "late or tied rejections must not mute the accepted writer: {effects:?}",
+        );
+    }
+}
+
+#[test]
+fn rejections_after_accepted_topology_still_mute() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
+    let _ = engine.on_run_command_result(Some(0), Some(10), 20, &host);
+    for issued_at in 11..=13 {
+        let _ = engine.on_run_command_result(
+            Some(wire::STALE_WRITER_EXIT_CODE),
+            Some(issued_at),
+            30,
+            &host,
+        );
+    }
+    let manifest = tabs(vec![pane(1), pane(2)]);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 1_100, &host);
+    assert!(run_commands(&effects).is_empty(), "{effects:?}");
+    assert!(!effects.contains(&Effect::ListClients), "{effects:?}");
 }
 
 #[test]

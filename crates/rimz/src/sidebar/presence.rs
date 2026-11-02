@@ -15,8 +15,8 @@ use crate::diag::plugin_presence::{PluginCommandFailure, PluginPresenceSample, W
 use crate::diag::record::{DiagEvent, WorkPaneBoundaryMove};
 use crate::ids::{MuxName, PaneId, ViewId};
 use crate::mux::zellij::pane_topology::{
-    PaneTopologyCache, PaneTopologyPane, PresenceDesired, TopologyWriter, ZellijPaneId,
-    pane_topology_cache_is_fresh, read_pane_topology_cache, read_presence_desired,
+    PaneTopologyCache, PaneTopologyPane, PresenceDesired, TopologyClients, TopologyWriter,
+    ZellijPaneId, pane_topology_cache_is_fresh, read_pane_topology_cache, read_presence_desired,
     write_pane_topology_cache,
 };
 use crate::pane::{SIDEBAR_CHROME_TITLE, command_is_launch_chrome};
@@ -34,7 +34,7 @@ use projector::{
 
 const TOPOLOGY_CONFLICT_DIAG_MS: u64 = 60_000;
 /// Private `rimz sidebar wake` status consumed by the Zellij plugin. Three
-/// consecutive publishes rejected with this code retire the losing writer.
+/// consecutive publishes rejected with this code mute the losing writer.
 pub const STALE_WRITER_EXIT_CODE: i32 = 73;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,7 +196,7 @@ pub fn ingest_zellij_wake(
             );
         }
         if writer_changed {
-            clear_superseded_conflict(runtime, incoming.writer.as_ref(), desired.as_ref())?;
+            clear_superseded_conflict(runtime, incoming.writer.as_ref())?;
         }
     }
 
@@ -549,16 +549,30 @@ fn topology_decision(
     if !pane_topology_cache_is_fresh(existing, now_ms, None) {
         return TopologyDecision::Accept;
     }
-    let incoming_rank = writer_rank(incoming.writer.as_ref(), desired);
-    let existing_rank = writer_rank(existing.writer.as_ref(), desired);
-    if incoming_rank < existing_rank {
-        return TopologyDecision::Reject;
+    if incoming.writer != existing.writer {
+        let clients = [existing, incoming]
+            .into_iter()
+            .filter(|cache| !cache.clients_withheld)
+            .filter_map(|cache| {
+                cache
+                    .clients
+                    .as_ref()
+                    .filter(|clients| !clients.views.is_empty())
+                    .map(|clients| (cache.produced_at_ms, clients))
+            })
+            .max_by_key(|(stamp, _)| *stamp)
+            .map(|(_, clients)| clients);
+        let incoming_rank = writer_rank(incoming.writer.as_ref(), desired, clients);
+        let existing_rank = writer_rank(existing.writer.as_ref(), desired, clients);
+        if incoming_rank < existing_rank {
+            return TopologyDecision::Reject;
+        }
+        if incoming_rank > existing_rank {
+            return TopologyDecision::Accept;
+        }
     }
     // A future-stamped cache (the wall clock stepped back) fences nothing.
-    if incoming_rank == existing_rank
-        && incoming.produced_at_ms < existing.produced_at_ms
-        && existing.produced_at_ms <= now_ms
-    {
+    if incoming.produced_at_ms < existing.produced_at_ms && existing.produced_at_ms <= now_ms {
         return TopologyDecision::Stale;
     }
     TopologyDecision::Accept
@@ -567,7 +581,9 @@ fn topology_decision(
 fn writer_rank(
     writer: Option<&TopologyWriter>,
     desired: Option<&PresenceDesired>,
-) -> (bool, u64, u32) {
+    clients: Option<&TopologyClients>,
+) -> (bool, bool, u64, u32) {
+    let attached = writer.and_then(|writer| writer.attached_to(clients)) == Some(true);
     let matches_desired = desired.is_some_and(|desired| {
         writer.is_some_and(|writer| {
             writer.build.as_deref() == Some(desired.build.as_str())
@@ -575,7 +591,7 @@ fn writer_rank(
         })
     });
     let (loaded_at_ms, plugin_id) = writer_generation(writer);
-    (matches_desired, loaded_at_ms, plugin_id)
+    (attached, matches_desired, loaded_at_ms, plugin_id)
 }
 
 fn writer_generation(writer: Option<&TopologyWriter>) -> (u64, u32) {
@@ -648,12 +664,11 @@ fn record_topology_write_rejected(
 fn clear_superseded_conflict(
     runtime: &RuntimePaths,
     writer: Option<&TopologyWriter>,
-    desired: Option<&PresenceDesired>,
 ) -> Result<(), ZellijWakeError> {
     let Some(conflict) = read_topology_writer_conflict(runtime) else {
         return Ok(());
     };
-    if writer_rank(writer, desired) <= writer_rank(conflict.accepted_writer.as_ref(), desired) {
+    if writer == conflict.accepted_writer.as_ref() {
         return Ok(());
     }
     let path = topology_writer_conflict_path(runtime);
