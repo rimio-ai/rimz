@@ -110,6 +110,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--auto-review"],
             yolo: &["--force", "--sandbox", "disabled"],
             plan: &["--mode=plan"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
         interrupt_key: None,

@@ -388,6 +388,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     auto: leak_strings(&launch.permission_args.auto),
                     yolo: leak_strings(&launch.permission_args.yolo),
                     plan: leak_strings(&launch.permission_args.plan),
+                    ..LaunchPermissionArgs::EMPTY
                 },
                 max_turn_flag: None,
                 interrupt_key: None,

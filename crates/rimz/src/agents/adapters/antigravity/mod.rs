@@ -213,6 +213,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--mode", "accept-edits"],
             yolo: &["--dangerously-skip-permissions", "--mode", "accept-edits"],
             plan: &["--mode", "plan"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
         interrupt_key: None,

@@ -196,6 +196,9 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--permission-mode", "auto"],
             yolo: &["--dangerously-skip-permissions"],
             plan: &["--permission-mode", "plan"],
+            default: Some(crate::agents::PermissionMode::Auto),
+            flags: &["--permission-mode", "--dangerously-skip-permissions"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: Some("--max-turns"),
         interrupt_key: Some(crate::pane::keys::NamedKey::Escape),

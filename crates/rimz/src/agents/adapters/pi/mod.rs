@@ -142,7 +142,11 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
         }),
         restores_session_model: true,
         model_dependent_flags: &["--provider"],
-        permission: super::LaunchPermissionArgs::EMPTY,
+        permission: super::LaunchPermissionArgs {
+            default: Some(crate::agents::PermissionMode::Auto),
+            mapped_modes: [crate::agents::PermissionMode::Yolo; 4],
+            ..super::LaunchPermissionArgs::EMPTY
+        },
         max_turn_flag: None,
         interrupt_key: None,
         compact_command: Some(super::CompactCommand {

@@ -122,6 +122,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--approval-mode", "auto-edit"],
             yolo: &["--approval-mode", "yolo"],
             plan: &["--approval-mode", "plan"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: Some("--max-session-turns"),
         interrupt_key: None,

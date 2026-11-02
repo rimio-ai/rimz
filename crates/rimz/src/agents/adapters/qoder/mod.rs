@@ -210,6 +210,7 @@ static QODER_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--permission-mode", "auto"],
             plan: &["--permission-mode", "plan"],
             yolo: &["--dangerously-skip-permissions"],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         compact_command: Some(super::CompactCommand {
             command: "/compact",

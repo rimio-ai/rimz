@@ -105,6 +105,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             auto: &["--permission-mode", "auto"],
             yolo: &["--yolo"],
             plan: &[],
+            ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: Some("--max-turns"),
         interrupt_key: None,
