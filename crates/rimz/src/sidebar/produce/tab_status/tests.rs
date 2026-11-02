@@ -22,6 +22,7 @@ fn frame(name: &str, panes: &[&str]) -> PaneFrame {
         build: None,
         session_name: "room".to_owned(),
         tabs: vec![TabFrame {
+            position: None,
             view_id: ViewId::new_unchecked("@1"),
             kind: ViewKind::Window,
             name: Some(name.to_owned()),

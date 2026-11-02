@@ -382,6 +382,7 @@ fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: 
         Some(tab) => tab,
         None => {
             fresh.tabs.push(TabFrame {
+                position: None,
                 view_id: prior_tab.view_id.clone(),
                 kind: prior_tab.kind,
                 name: prior_tab.name.clone(),

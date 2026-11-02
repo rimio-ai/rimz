@@ -687,12 +687,16 @@ impl MuxBackend for TmuxBackend {
         let output = spec.run_with_timeout(timeout)?;
         let mut panes = Vec::new();
         let mut views = BTreeMap::new();
-        for (pane, naming) in String::from_utf8_lossy(&output.stdout)
+        let mut positions = BTreeMap::new();
+        for (pane, naming, position) in String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter_map(parse_pane_line)
         {
             if let Some(view_id) = &pane.view_id {
                 views.entry(view_id.clone()).or_insert(naming);
+                if let Some(position) = position {
+                    positions.insert(view_id.clone(), position);
+                }
             }
             panes.push(pane);
         }
@@ -700,6 +704,7 @@ impl MuxBackend for TmuxBackend {
             authoritative: true,
             panes,
             views: views.into_iter().collect(),
+            positions: positions.into_iter().collect(),
             observed_at_ms,
             session_focus: None,
             client_view: None,
@@ -1814,7 +1819,7 @@ impl TmuxBackend {
     }
 
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
-        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{s/,/_/g:window_name},#{s/,/_/g:#{?#{@rimz_title},#{@rimz_title},#{pane_title}}},#{pane_floating_flag},#{s/,/_/g:pane_start_command},#{automatic-rename},#{s/,/_/g:@rimz_tab_base},#{@rimz_tab_founders}";
+        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{s/,/_/g:window_name},#{s/,/_/g:#{?#{@rimz_title},#{@rimz_title},#{pane_title}}},#{pane_floating_flag},#{s/,/_/g:pane_start_command},#{automatic-rename},#{s/,/_/g:@rimz_tab_base},#{@rimz_tab_founders},#{window_index}";
         match session_name {
             Some(session) => self
                 .cmd()

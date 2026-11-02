@@ -356,6 +356,8 @@ pub struct PaneListing {
     pub panes: Vec<PaneRef>,
     /// Naming metadata keyed by the same view ids carried by `panes`.
     pub views: Vec<(String, tab_name::ViewNaming)>,
+    /// Native tab indices keyed by the same view ids carried by `panes`.
+    pub positions: Vec<(String, u32)>,
     /// Wall-clock millisecond when the pane source observed this topology.
     /// For a topology-cache hit this is the cache's `produced_at_ms`; other
     /// backends stamp it before the live mux read starts.

@@ -14,7 +14,7 @@ use super::options::spawn_command_is_sidebar_serve;
 /// Trailing columns are read with `.get(i)`, so a short row (an older tmux, or a
 /// mid-tick race that truncated the line) yields `None`/default for the missing
 /// field rather than erroring the whole read.
-pub(super) fn parse_pane_line(line: &str) -> Option<(PaneRef, ViewNaming)> {
+pub(super) fn parse_pane_line(line: &str) -> Option<(PaneRef, ViewNaming, Option<u32>)> {
     let cols: Vec<_> = line.split(',').collect();
     if cols.len() < 3 {
         return None;
@@ -76,6 +76,7 @@ pub(super) fn parse_pane_line(line: &str) -> Option<(PaneRef, ViewNaming)> {
                     .collect(),
             }),
         },
+        cols.get(13).and_then(|value| value.trim().parse().ok()),
     ))
 }
 
@@ -188,8 +189,19 @@ mod tests {
     use crate::ids::{MuxName, PaneId};
 
     #[test]
+    fn parse_pane_line_reads_trailing_window_position() {
+        let positions = [
+            "room,@8,%3,sh,/repo,42,name,title,0,sh,1,,,4",
+            "room,@8,%3",
+            "room,@8,%3,sh,/repo,42,name,title,0,sh,1,,,invalid",
+        ]
+        .map(|row| parse_pane_line(row).unwrap().2);
+        assert_eq!(positions, [Some(4), None, None]);
+    }
+
+    #[test]
     fn parse_pane_line_reads_window_ownership() {
-        let (pane, naming) =
+        let (pane, naming, _) =
             parse_pane_line("rimz-qe,@1,%3,sh,/repo,4242,opus,opus,0,sh,0,opus,%3 %4")
                 .expect("pane row");
         assert_eq!(pane.view_id.as_deref(), Some("@1"));
@@ -203,7 +215,7 @@ mod tests {
             })
         );
         assert!(!naming.automatic);
-        let (_, automatic) =
+        let (_, automatic, _) =
             parse_pane_line("rimz-qe,@1,%3,sleep,/repo,4242,sleep,sleep,0,sleep,1,,")
                 .expect("automatic row");
         assert!(automatic.automatic);
@@ -216,7 +228,7 @@ mod tests {
         // pinned launch name or pane_title, pane_floating_flag, pane_start_command.
         let row =
             "rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,rimz loop watch --hold,0,rimz loop watch --hold";
-        let (pane, naming) = parse_pane_line(row).expect("full row parses");
+        let (pane, naming, _) = parse_pane_line(row).expect("full row parses");
         assert_eq!(naming, ViewNaming::default());
         assert_eq!(pane.pane_id.raw(), "%3");
         assert_eq!(pane.session_name, "rimz-qe");
@@ -239,13 +251,13 @@ mod tests {
         let second = "rimz-qe,@1,%4,zsh,/home/u/qe,4243,qe";
         assert!(parse_pane_line(second).is_some());
 
-        let (floating, _) = parse_pane_line("rimz-qe,@1,%5,codex,/home/u/qe,4244,qe,,1")
+        let (floating, _, _) = parse_pane_line("rimz-qe,@1,%5,codex,/home/u/qe,4244,qe,,1")
             .expect("floating row parses");
         assert!(floating.is_floating);
 
         // A truncated row that still carries the three load-bearing columns
         // parses; the absent optional fields read as `None`/default.
-        let (short, naming) = parse_pane_line("rimz-qe,@1,%3").expect("leading columns parse");
+        let (short, naming, _) = parse_pane_line("rimz-qe,@1,%3").expect("leading columns parse");
         assert_eq!(naming, ViewNaming::default());
         assert_eq!(short.pane_id.raw(), "%3");
         assert_eq!(short.command, None);
@@ -272,7 +284,7 @@ mod tests {
         ];
         let parsed_commands = commands.map(|spawn| {
             let row = format!("rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,hostname,0,{spawn}");
-            let (pane, _) = parse_pane_line(&row).expect("pane row");
+            let (pane, _, _) = parse_pane_line(&row).expect("pane row");
             assert_eq!(pane.title.as_deref(), Some("hostname"));
             assert_eq!(pane.spawn_command.as_deref(), Some(spawn));
             pane.command.expect("command")
@@ -287,7 +299,7 @@ mod tests {
     fn parse_pane_line_preserves_launch_names_terminal_titles_and_chrome() {
         for title in ["opus-fast", "user@host: ~/repo", "rimz-sidebar"] {
             let row = format!("rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,{title},0");
-            let (pane, _) = parse_pane_line(&row).expect("pane row");
+            let (pane, _, _) = parse_pane_line(&row).expect("pane row");
             assert_eq!(pane.title.as_deref(), Some(title));
             assert_eq!(
                 pane.command.as_deref(),

@@ -70,6 +70,16 @@ impl PaneTopologyCache {
         PaneListing {
             authoritative,
             views: Vec::new(),
+            positions: panes
+                .iter()
+                .filter(|pane| pane.is_listed_pane())
+                .filter_map(|pane| {
+                    let position = u32::try_from(pane.view_position()).ok()?;
+                    Some((format!("tab_{}", pane.view_position()), position))
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
             panes: panes
                 .into_iter()
                 .filter_map(|mut pane| {
@@ -471,6 +481,21 @@ mod tests {
 
         assert!(pane_topology_cache_is_fresh(&cache, 101, Some(100)));
         assert!(!pane_topology_cache_is_fresh(&cache, 101, Some(101)));
+    }
+
+    #[test]
+    fn topology_listing_carries_native_tab_positions() {
+        let cache: PaneTopologyCache = serde_json::from_value(serde_json::json!({
+            "session_name": "rimz-test", "produced_at_ms": 42,
+            "panes": [{"id": 7, "tab_position": 4}, {"id": 8, "tab_position": 4}]
+        }))
+        .unwrap();
+        assert_eq!(
+            cache
+                .into_pane_listing("rimz-test".to_owned(), false)
+                .positions,
+            vec![("tab_4".to_owned(), 4)],
+        );
     }
 
     #[test]
