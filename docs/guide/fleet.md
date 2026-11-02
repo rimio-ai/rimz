@@ -88,31 +88,31 @@ $ rimz agents list --all
 needs you
   @planner  waiting  2m  which rotation strategy should we use?
 
-HANDLE        PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  SEEN
+HANDLE        PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
-@planner      planner   claude  waiting  Opus 5@high   42%     84k    2m
+@planner      planner   claude  waiting  Opus 5@high   42%     84k   2m
   which rotation strategy should we use?
 
-@coder        coder     codex   running  GPT 5.5@high  31%     84k    0s
+@coder        coder     codex   running  GPT 5.5@high  31%     84k   0s
   wire up the refresh-token path
 
-@reviewer     reviewer  claude  idle     Opus 5@high    3%      6k   15m
+@reviewer     reviewer  claude  idle     Opus 5@high    3%      6k  15m
   review the diff once coder lands
 
 main
-@claude#main  -         claude  success  Opus 5@high   78%    156k    8m
+@claude#main  -         claude  success  Opus 5@high   78%    156k   8m
   store refactor
 ```
 
-`@planner` sits first because it stopped to ask you something. The summary and `needs you` block name everyone waiting, paused, or failed before the full tables, including parents whose current children wait or whose provider-native children fail. The block orders them oldest first and shows the ask's age, or time since the card's last activity when there is no open ask. `CTX` is how full each agent's context window is, `TOKENS` how many tokens occupy it now, and `SEEN` how long since the agent was last seen active. The indented line follows the sidebar: a pause or failure reason first, a matching working or sleeping wait, then what the agent is working on. A parent waiting on its children names them there too. `rimz agents list --all` widens past the current channel to every channel in the room, and a scope like `rimz agents list '#auth-refresh'` reads one. Listing needs the `list` verb: bare `rimz agents` refuses and prints the `list` command to run, then a map of its verbs (the same map `rimz agents --help` shows), so a launch whose spec came out empty fails instead of printing cards.
+`@planner` sits first because it stopped to ask you something. The summary and `needs you` block name everyone waiting, paused, or failed before the full tables, including parents whose current children wait or whose provider-native children fail. The block orders them oldest first and shows the ask's age, or time since the card's last activity when there is no open ask. `CTX` is how full each agent's context window is, `TOKENS` how many tokens occupy it now, and `AGE` matches the sidebar's own cache clock, keepalive pings included and child activity excluded. Child entries keep their real-activity age. The indented line follows the sidebar: a pause or failure reason first, a matching working or sleeping wait, then what the agent is working on. A parent waiting on its children names them there too. `rimz agents list --all` widens past the current channel to every channel in the room, and a scope like `rimz agents list '#auth-refresh'` reads one. Listing needs the `list` verb: bare `rimz agents` refuses and prints the `list` command to run, then a map of its verbs (the same map `rimz agents --help` shows), so a launch whose spec came out empty fails instead of printing cards.
 
 **Ask why one agent is where it is.** When a card raises a question you cannot answer from one line, `rimz agents show` prints the full report for a single agent, so you see what you asked it, what it is spending, and where its pane lives without switching to it:
 
 ```console
 $ rimz agents show @coder
 @coder  codex · coder · GPT 5.5@high
-running (acting) · turn 3m · last seen 0s ago
+running (acting) · turn 3m · last request 0s ago
 wire up the refresh-token path
 
 Context
@@ -211,7 +211,7 @@ The report covers the agents that worked the checkout's current branch within th
 ```console
 $ rimz agents top --once --all
 5 agents · 143.0% CPU · 1.9 GB MEM · 3M spent
-AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  SEEN
+AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
 @coder            running  96.0%  892 MB  4 MB/s     12  31%     1M  0s
   └ @swift-otter  running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
 @planner          waiting   2.0%  410 MB       -      6  42%   200k  2m
