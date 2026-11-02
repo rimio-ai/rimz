@@ -438,7 +438,7 @@ impl Room {
         panes.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         room.panes = panes.try_into().expect("two supervisor panes");
         if let LiveRoom::Zellij { cleanup, .. } = &room.live {
-            write_zellij_topology(&cleanup.namespace, &room.runtime, SESSION, false);
+            write_zellij_topology(&cleanup.namespace, &room.runtime, SESSION, false, None);
         }
         Some(room)
     }

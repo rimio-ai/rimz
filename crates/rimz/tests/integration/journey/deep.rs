@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use rimz::diag::record::DiagEvent;
+use rimz::diag::record::{DiagEnvelope, DiagEvent};
 use rimz::mux::{MuxBackend, PaneListOptions, PaneReadConsistency, ZellijBackend};
 use tempfile::TempDir;
 
@@ -1154,12 +1154,6 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
         .expect("create background session");
     assert!(created.success(), "create-background failed for {name}");
 
-    // Reproduce the real startup ordering: the presence feed can publish the
-    // sidebar before the rest of the layout. That one-pane extent must remain
-    // unknown rather than becoming the room's viewport basis.
-    write_zellij_topology(&cleanup.namespace, &runtime_paths, name, true);
-    std::thread::sleep(Duration::from_millis(1_200));
-
     env.install_agent_hooks("codex");
     let hook_env = [
         (rimz::harness::launch::ENV_AGENT_ROLE, "codex"),
@@ -1188,17 +1182,41 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
     // enough that a sidebar-only viewport bug is invisible.
     let view_cols = 320;
     let mut client = AttachedZellijScreen::new(&cleanup.namespace, name, view_cols, 80);
+
+    // Reproduce the real startup ordering: the presence feed can publish the
+    // sidebar before the rest of the layout. That one-pane extent must remain
+    // unknown rather than becoming the room's viewport basis. The plugin's settle
+    // replaces that feed within a moment, and this fixture replaces it well inside
+    // the 5 s self-close confirm window: a sidebar that reads no siblings for that
+    // long self-closes and re-attaches, and the re-attached width controller
+    // proves a topology written before it started only through a pane-count
+    // change it sees afterwards, which a single write may never give it. So the
+    // client attaches and the tab is laid out at its width first, and nothing
+    // load can stretch sits between the two writes but the sleep that lets a
+    // baseline retry read the sidebar-only feed. The completed tab goes out
+    // without a target broadcast; the next keypress must resolve against this
+    // proven viewport.
+    write_zellij_topology(
+        &cleanup.namespace,
+        &runtime_paths,
+        name,
+        true,
+        Some(view_cols),
+    );
+    std::thread::sleep(Duration::from_millis(1_200));
+    write_zellij_topology(
+        &cleanup.namespace,
+        &runtime_paths,
+        name,
+        false,
+        Some(view_cols),
+    );
+
     let screen = client.wait_until(|screen| screen.contains("codex"), CAPTURE_BUDGET);
     assert!(
         screen.contains("codex"),
         "the live zellij sidebar pane should show the agent row:\n{screen}"
     );
-
-    // Keep the raced feed in place long enough for the old controller to
-    // converge against it, then publish the completed tab without a target
-    // broadcast. The next keypress must resolve against this proven viewport.
-    std::thread::sleep(Duration::from_secs(3));
-    write_zellij_topology(&cleanup.namespace, &runtime_paths, name, false);
 
     let backend = ZellijBackend::with_runtime_dir(runtime);
     let pane = wait_for_zellij_sidebar_pane(&backend, &runtime_paths, name);
@@ -1206,15 +1224,21 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
     // against the whole tab is the controller acting on the proven viewport.
     // The key must land after automatic convergence settles and the frame
     // repaints inside its target band, not at an intermediate nudge's width.
-    env.wait_for_diag(
+    let settled = env.wait_for_diag(
         name,
         |record| {
-            matches!(
-                record.event,
-                DiagEvent::SidebarWidthNudge { view_cols: nudged, .. } if nudged == view_cols
-            )
+            is_self_close_rejected(record)
+                || matches!(
+                    record.event,
+                    DiagEvent::SidebarWidthNudge { view_cols: nudged, .. } if nudged == view_cols
+                )
         },
         CAPTURE_BUDGET,
+    );
+    assert!(
+        !is_self_close_rejected(&settled),
+        "{SELF_CLOSE_CYCLE}\n{}",
+        env.diag_tail(name, DIAG_EVIDENCE_RECORDS),
     );
     let width = rimz::mux::SidebarWidth::default();
     let target = rimz::mux::SidebarTarget {
@@ -1263,6 +1287,21 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
         held_narrower, narrower,
         "the narrower sidebar frame reverted after the convergence settle window\n{diag}",
     );
+    assert!(
+        !env.diag_records(name).iter().any(is_self_close_rejected),
+        "{SELF_CLOSE_CYCLE}\n{}",
+        env.diag_tail(name, DIAG_EVIDENCE_RECORDS),
+    );
+}
+
+/// Why a Zellij sidebar that self-closed during a width-keys run fails it.
+const SELF_CLOSE_CYCLE: &str = "the sidebar-only Zellij topology outlived the 5 s self-close \
+     confirm window: the sidebar self-closed and re-attached, and a re-attached width \
+     controller proves a topology written before it started only through a pane-count change \
+     it sees afterwards, so the 320-column nudge may never come";
+
+fn is_self_close_rejected(record: &DiagEnvelope) -> bool {
+    matches!(record.event, DiagEvent::SelfCloseRejected { .. })
 }
 
 #[test]
@@ -4260,6 +4299,7 @@ fn write_zellij_topology(
     runtime: &rimz::RuntimePaths,
     session: &str,
     sidebar_only: bool,
+    view_cols: Option<u16>,
 ) {
     use rimz::mux::zellij::pane_topology::{TopologyClientView, TopologyClients, ZellijPaneId};
 
@@ -4308,12 +4348,14 @@ fn write_zellij_topology(
             .into_iter()
             .map(|value| serde_json::from_value(value).expect("decode Zellij pane topology"))
             .collect();
-        if panes.iter().filter(|pane| !pane.is_plugin).count() >= 2 {
+        let laid_out = view_cols.is_none_or(|cols| tiled_extent(&panes) == Some(u64::from(cols)));
+        if laid_out && panes.iter().filter(|pane| !pane.is_plugin).count() >= 2 {
             break panes;
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for Zellij layout panes",
+            "timed out waiting for Zellij layout panes at {view_cols:?} columns; last extent {:?}",
+            tiled_extent(&panes),
         );
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -4361,6 +4403,19 @@ fn write_zellij_topology(
     };
     rimz::mux::zellij::pane_topology::write_pane_topology_cache(runtime, &cache)
         .expect("publish Zellij pane topology fixture");
+}
+
+/// The columns the tiled terminal panes span, once at least two of them do:
+/// the extent the sidebar proves its viewport from.
+fn tiled_extent(panes: &[rimz::mux::zellij::pane_topology::PaneTopologyPane]) -> Option<u64> {
+    let extents: Vec<u64> = panes
+        .iter()
+        .filter(|pane| !pane.is_plugin && !pane.is_suppressed && !pane.is_floating)
+        .filter_map(|pane| pane.pane_x?.checked_add(pane.pane_columns?))
+        .collect();
+    (extents.len() >= 2)
+        .then(|| extents.iter().copied().max())
+        .flatten()
 }
 
 fn wait_for_zellij_sidebar_pane(
