@@ -48,9 +48,6 @@ skip = [
     # catches up. (The former wit-bindgen and windows-sys skips left with the
     # graph's target scoping — wasm and windows triples are no longer audited.)
     { crate = "getrandom@0.2.17", reason = "ring pins getrandom 0.2; the audited graph otherwise carries 0.4" },
-    # The dev-only headless_chrome tungstenite stack and tempfile still use
-    # getrandom 0.3; drop when they follow the runtime's 0.4 line.
-    { crate = "getrandom@0.3.4", reason = "headless_chrome's tungstenite/rand_core stack and tempfile pin getrandom 0.3; runtime otherwise on 0.4" },
     # `flate2` has moved to miniz_oxide 0.9 while `png` still uses 0.8.
     # Drop this skip when png follows.
     { crate = "miniz_oxide@0.9.1", reason = "flate2 pins miniz_oxide 0.9; png still carries 0.8" },
