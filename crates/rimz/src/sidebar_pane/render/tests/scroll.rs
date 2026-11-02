@@ -347,7 +347,6 @@ fn assert_cache_notice_anchor(
             ceiling_secs: 1800,
             last_request_at: Some(fixed_now() - Duration::from_secs(1801)),
             warm_until: Some(fixed_now() - Duration::from_secs(1)),
-            held_since: None,
             rewarm_cost_usd: None,
         });
     let mut ui = ViewState {

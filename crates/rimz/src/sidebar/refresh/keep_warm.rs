@@ -79,14 +79,13 @@ pub(in crate::sidebar) fn project_cache_clocks(
             let ttl = harness.prompt_cache_lifetime(agent)?;
             let published = cache.horizons.get(&horizon_key(agent));
             let horizon = published.map(|&secs| std::time::Duration::from_secs(secs));
-            let held = holds(agent, horizon, harness, now)
+            let warm_until = holds(agent, horizon, harness, now)
                 .zip(agent.turn_ended_at)
-                .and_then(|(horizon, ended)| Some((ended.checked_add(horizon).ok()?, ended)));
+                .and_then(|(horizon, ended)| ended.checked_add(horizon).ok());
             let clock = CacheClock {
                 ceiling_secs: u32::try_from(ttl.as_secs()).unwrap_or(u32::MAX),
                 last_request_at: agent.last_request_at(),
-                warm_until: held.map(|(until, _)| until),
-                held_since: held.map(|(_, ended)| ended),
+                warm_until,
                 rewarm_cost_usd: None,
             };
             Some((horizon_key(agent), clock))

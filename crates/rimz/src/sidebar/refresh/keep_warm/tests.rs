@@ -362,7 +362,6 @@ fn cache_clock_reads_the_provider_ttl_and_the_published_hold() {
             ceiling_secs: 3600,
             last_request_at: Some(ended),
             warm_until: Some(Timestamp::from_second(7210).unwrap()),
-            held_since: Some(ended),
             rewarm_cost_usd: None,
         })
     );
@@ -372,7 +371,6 @@ fn cache_clock_reads_the_provider_ttl_and_the_published_hold() {
             ceiling_secs: 3600,
             last_request_at: None,
             warm_until: None,
-            held_since: None,
             rewarm_cost_usd: None,
         }),
         "no real turn has ended, so there is nothing to hold yet"
@@ -383,7 +381,6 @@ fn cache_clock_reads_the_provider_ttl_and_the_published_hold() {
             ceiling_secs: 1800,
             last_request_at: Some(ended),
             warm_until: None,
-            held_since: None,
             rewarm_cost_usd: None,
         })
     );
@@ -393,7 +390,6 @@ fn cache_clock_reads_the_provider_ttl_and_the_published_hold() {
             ceiling_secs: 3600,
             last_request_at: Some(ended),
             warm_until: None,
-            held_since: None,
             rewarm_cost_usd: None,
         }),
         "a kind without a provider default uses the fallback"
@@ -434,8 +430,8 @@ fn the_cache_clock_counts_from_the_last_ping_and_drops_a_hold_once_cold() {
         Some(Timestamp::from_second(-3400).unwrap())
     );
     assert_eq!(
-        pinged.held_since,
-        Some(Timestamp::from_second(-7000).unwrap())
+        pinged.warm_until,
+        Some(Timestamp::from_second(200).unwrap())
     );
     let cold = clock("cold-1");
     assert_eq!(cold.warm_until, None, "the window was missed at 0");
@@ -554,7 +550,6 @@ fn a_published_horizon_holds_only_an_agent_the_pings_can_maintain() {
             ceiling_secs,
             last_request_at: Some(Timestamp::from_second(10).unwrap()),
             warm_until: None,
-            held_since: None,
             rewarm_cost_usd: None,
         })
     };

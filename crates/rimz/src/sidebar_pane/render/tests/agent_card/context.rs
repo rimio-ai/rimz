@@ -53,7 +53,6 @@ fn half_hour_cache() -> CacheClock {
         ceiling_secs: 1800,
         last_request_at: None,
         warm_until: None,
-        held_since: None,
         rewarm_cost_usd: None,
     }
 }
@@ -114,10 +113,10 @@ fn compaction_gap_mutes_age_without_resetting_elapsed_time_or_overriding_a_hold(
         }
     }
     let held = cache_meter_snapshot_with_gap(
-        80 * 60,
+        50 * 60,
         Some(CacheClock {
             warm_until: Some(fixed_now() + Duration::from_secs(600)),
-            held_since: Some(fixed_now() - Duration::from_secs(50 * 60)),
+            last_request_at: Some(fixed_now() - Duration::from_secs(600)),
             ..half_hour_cache()
         }),
         true,
@@ -126,8 +125,8 @@ fn compaction_gap_mutes_age_without_resetting_elapsed_time_or_overriding_a_hold(
     let pin = lines
         .iter()
         .flat_map(|line| &line.spans)
-        .find(|span| span.content.contains("50m"))
-        .expect("a held gap still counts from the last real turn");
+        .find(|span| span.content.contains("10m"))
+        .expect("a held gap counts from the latest cache ping");
     assert_eq!(pin.style.fg, theme.good(Modifier::empty()).fg);
 }
 
@@ -312,7 +311,6 @@ fn cache_line_follows_held_stats_and_stays_absent_outside_expiry() {
     let theme = Theme::fixed(false);
     let held = CacheClock {
         warm_until: Some(fixed_now() + Duration::from_secs(600)),
-        held_since: Some(fixed_now() - Duration::from_secs(600)),
         ..half_hour_cache()
     };
     for cache in [None, Some(held), Some(half_hour_cache())] {
@@ -546,7 +544,6 @@ fn warm_held_and_unknown_lifetime_context_meters_keep_composition() {
     let theme = Theme::fixed(false);
     let held = CacheClock {
         warm_until: Some(fixed_now() + Duration::from_secs(70 * 60)),
-        held_since: Some(fixed_now() - Duration::from_secs(50 * 60)),
         ..half_hour_cache()
     };
     let reference = cache_meter_line(&cache_meter_snapshot(20 * 60, None), &theme);
@@ -639,11 +636,10 @@ fn cache_clock_heat_starts_halfway_through_the_ttl() {
 }
 
 #[test]
-fn lapsed_or_incomplete_hold_uses_the_latest_cache_request() {
+fn lapsed_hold_uses_the_latest_cache_request_and_live_hold_needs_only_its_horizon() {
     let theme = Theme::fixed(false);
     let lapsed = CacheClock {
         warm_until: Some(fixed_now() - Duration::from_secs(1)),
-        held_since: Some(fixed_now() - Duration::from_secs(60 * 60)),
         last_request_at: Some(fixed_now() - Duration::from_secs(40 * 60)),
         ..half_hour_cache()
     };
@@ -664,13 +660,18 @@ fn lapsed_or_incomplete_hold_uses_the_latest_cache_request() {
     );
     let incomplete = CacheClock {
         warm_until: Some(fixed_now() + Duration::from_secs(70 * 60)),
-        held_since: None,
         ..half_hour_cache()
     };
-    assert_expired_meter(
-        &cache_meter_line(&cache_meter_snapshot(50 * 60, Some(incomplete)), &theme),
-        &theme,
-    );
+    let held = cache_meter_snapshot(50 * 60, Some(incomplete));
+    let text = line_texts(&group_lines(&held, &theme, 0)).join("\n");
+    assert!(!text.contains("expired"), "{text}");
+    let meter = cache_meter_line(&held, &theme);
+    let pin = meter
+        .spans
+        .iter()
+        .find(|span| span.content.contains("50m"))
+        .unwrap();
+    assert_eq!(pin.style, theme.good(Modifier::empty()));
 }
 
 #[test]
@@ -1855,19 +1856,19 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         "the pin heats until the cache ceiling"
     );
     assert_eq!(
-        age_style(AgentStatus::Idle, 10 * 60 * 60, '◉'),
+        age_style(AgentStatus::Idle, 10 * 60 * 60, '●'),
         expired,
         "past the ceiling no action can save the cache"
     );
     assert_eq!(
-        age_style(AgentStatus::Success, 10 * 60 * 60, '◉'),
+        age_style(AgentStatus::Success, 10 * 60 * 60, '●'),
         expired,
         "a finished-success context also wears the expired tone"
     );
 }
 
 /// The face reads quiet time on the hour scale; the cache lifetime and hold
-/// still decide its tone, and only an expired cache gets the ring.
+/// still decide its tone, but expiry never replaces the hour face with a ring.
 #[test]
 fn context_line_age_pin_reads_the_card_cache_clock() {
     let age_span = |theme: &Theme, cache: Option<CacheClock>, idle_secs: u64| {
@@ -1911,23 +1912,20 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
                 .any(|c| span.content.contains(*c))
             })
             .map(|span| (span.content.to_string(), span.style))
-            .expect("the context line carries an age pin")
     };
     let ttl = |ceiling_secs| {
         Some(CacheClock {
             ceiling_secs,
             last_request_at: None,
             warm_until: None,
-            held_since: None,
             rewarm_cost_usd: None,
         })
     };
     let held = |quiet_minutes: u64, remaining_minutes: u64| {
         Some(CacheClock {
             ceiling_secs: 1800,
-            last_request_at: None,
+            last_request_at: Some(fixed_now() - Duration::from_secs(quiet_minutes * 60)),
             warm_until: Some(fixed_now() + Duration::from_secs(remaining_minutes * 60)),
-            held_since: Some(fixed_now() - Duration::from_secs(quiet_minutes * 60)),
             rewarm_cost_usd: None,
         })
     };
@@ -1957,7 +1955,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
                 heat(2.0 / 3.0),
             ),
             (ttl(3600), 45 * 60, "◕ 45m", "\u{f0aa3} 45m", heat(0.5)),
-            (ttl(3600), 80 * 60, "◉  1h", "◉  1h", cold),
+            (ttl(3600), 80 * 60, "●  1h", "\u{f0aa5}  1h", cold),
             (
                 ttl(43_200),
                 5 * 3600,
@@ -1974,20 +1972,35 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
                 heat(1.0 / 3.0),
             ),
             (ttl(1800), 30 * 60, "◑ 30m", "\u{f0aa1} 30m", heat(1.0)),
-            (ttl(1800), 35 * 60, "◉ 35m", "◉ 35m", cold),
+            (ttl(1800), 35 * 60, "◑ 35m", "\u{f0aa1} 35m", cold),
+            (ttl(300), 301, "◔  5m", "\u{f0a9e}  5m", cold),
             (None, 2 * 3600, "●  2h", "\u{f0aa5}  2h", theme.muted()),
             (
-                held(116, 4),
-                20 * 60,
-                "●  1h",
-                "\u{f0aa5}  1h",
+                held(10, 4),
+                50 * 60,
+                "◔ 10m",
+                "\u{f0a9e} 10m",
+                theme.good(Modifier::empty()),
+            ),
+            (
+                held(5, 4),
+                50 * 60,
+                "◔  5m",
+                "\u{f0a9e}  5m",
                 theme.good(Modifier::empty()),
             ),
             (
                 held(40, 80),
-                20 * 60,
+                50 * 60,
                 "◑ 40m",
                 "\u{f0aa2} 40m",
+                theme.good(Modifier::empty()),
+            ),
+            (
+                held(50, 80),
+                50 * 60,
+                "◕ 50m",
+                "\u{f0aa3} 50m",
                 theme.good(Modifier::empty()),
             ),
             (expired, 20 * 60, "◔ 20m", "\u{f0a9f} 20m", heat(1.0 / 3.0)),
@@ -1995,8 +2008,15 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
             let face = if modern { nerd } else { unicode };
             assert_eq!(
                 age_span(&theme, cache, quiet),
-                (face.to_owned(), style),
+                Some((face.to_owned(), style)),
                 "modern={modern}, quiet={quiet}, cache={cache:?}"
+            );
+        }
+        for minutes in [0, 2, 4] {
+            assert_eq!(
+                age_span(&theme, held(minutes, 4), 50 * 60),
+                None,
+                "a held cache keeps the five-minute pin hide, modern={modern}"
             );
         }
         assert_eq!(

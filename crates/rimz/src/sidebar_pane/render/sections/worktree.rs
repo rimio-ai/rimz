@@ -547,11 +547,11 @@ fn finished_roster_line(
 }
 
 fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Option<Line<'static>> {
-    let max_last_activity = group
+    let idle_since = group
         .rows
         .iter()
         .filter(|row| row.is_agent())
-        .map(|row| row.last_activity)
+        .map(SidebarRow::idle_since)
         .max()?;
     let (tokens, active_secs) = group.cohort_effort.as_ref().map_or(
         (crate::agents::spending::EffortTokens::default(), None),
@@ -563,8 +563,8 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
     let cache_read = tokens.cache_read;
     let right = active_secs.map_or_else(
         || {
-            activity_short(max_last_activity, ctx.now).map_or_else(Vec::new, |label| {
-                let seconds = age_secs(max_last_activity, ctx.now);
+            activity_short(idle_since, ctx.now).map_or_else(Vec::new, |label| {
+                let seconds = age_secs(idle_since, ctx.now);
                 vec![Span::styled(
                     format!("{} {label}", hour_age_glyph(ctx.theme, seconds)),
                     ctx.theme.muted(),

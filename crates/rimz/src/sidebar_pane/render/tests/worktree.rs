@@ -1,6 +1,7 @@
 use super::*;
 use crate::sidebar_pane::render::layout::{spans_width, text_width};
 use crate::sidebar_pane::render::theme::Component;
+use crate::store::snapshot::CacheClock;
 
 #[test]
 fn filtered_team_cards_render_and_open_as_unfiltered() {
@@ -1728,6 +1729,47 @@ fn finished_worktree_age_stays_full_past_an_hour() {
         assert!(span.is_some(), "{}", line_texts(&lines).join("\n"));
         assert_eq!(span.unwrap().style, theme.muted());
     }
+}
+
+#[test]
+fn finished_worktree_age_uses_the_newest_member_cache_request() {
+    let members = [1200, 2400].map(|seconds| {
+        let mut member = agent(
+            &format!("worker-{seconds}"),
+            "claude",
+            AgentStatus::Success,
+            Some("/repo/main"),
+            Some("main"),
+            Some("finished work"),
+        );
+        member.last_activity = fixed_now() - Duration::from_secs(seconds);
+        member
+    });
+    let mut snapshot = snapshot_with(members.into());
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.finished = true;
+    group.cohort_effort = None;
+    for (row, minutes) in std::sync::Arc::make_mut(&mut group.rows)
+        .iter_mut()
+        .zip([8, 12])
+    {
+        row.as_agent_mut().unwrap().cache = Some(CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: Some(fixed_now() - Duration::from_secs(minutes * 60)),
+            warm_until: None,
+            rewarm_cost_usd: None,
+        });
+    }
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, usize::MAX);
+    assert!(
+        lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .any(|span| span.content == "◔ 8m"),
+        "{}",
+        line_texts(&lines).join("\n")
+    );
 }
 
 #[test]
