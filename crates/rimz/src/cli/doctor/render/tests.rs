@@ -2,9 +2,9 @@ use super::*;
 use crate::cli::doctor::model::{
     AccountRow, DaemonTab, HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow,
     LoopTimer, MachineConfigProblem, MachineConfigProblemKind, MessageProblemRow, MuxBinaries,
-    MuxLogIssue, OpenCounts, PresenceCommandFailure, PresencePluginRow, PresencePluginStatus,
-    PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageFolderView, StorageRoomView,
-    StorageRootView, TmuxCaps, ZellijCaps, ZellijKittyGraphics,
+    MuxLogIssue, OpenCounts, OutdatedIntegration, PresenceCommandFailure, PresencePluginRow,
+    PresencePluginStatus, PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageFolderView,
+    StorageRoomView, StorageRootView, TmuxCaps, ZellijCaps, ZellijKittyGraphics,
 };
 use rimz::daemon_view::{DaemonShape, DaemonShapeFault};
 use rimz::ids::MuxName;
@@ -1253,6 +1253,78 @@ fn hooks_section_renders_glyph_status_and_fix() {
 }
 
 #[test]
+fn hooks_section_renders_outdated_files_only_in_the_closing_fix() {
+    for paths in [
+        vec!["/srv/pi/rimz.ts"],
+        vec!["/srv/pi/rimz.ts", "/srv/pi/settings.json"],
+    ] {
+        let files: Vec<std::path::PathBuf> = paths.iter().map(Into::into).collect();
+        let fix = format!("run `rimz hooks install pi` to update {}", paths.join(", "));
+        let report = DoctorReport {
+            hooks: vec![
+                HookRow {
+                    kind: "claude".into(),
+                    detected: true,
+                    status: HookStatus::Installed,
+                },
+                HookRow {
+                    kind: "pi".into(),
+                    detected: true,
+                    status: HookStatus::Outdated {
+                        files: files.clone(),
+                        fix: fix.clone(),
+                    },
+                },
+            ],
+            ..report_fixture()
+        };
+        let mut tally = Tally::default();
+        let body = strip(|w| render_hooks(w, &report, &mut tally));
+        assert!(
+            body.lines()
+                .any(|line| line.split_whitespace().eq(["!", "pi", "out", "of", "date"])),
+            "{body}"
+        );
+        assert!(body.contains("2 reporting to RimZ: claude, pi"), "{body}");
+        assert!(
+            !body.contains("/srv/") && !body.contains("rimz hooks install"),
+            "{body}"
+        );
+        assert_eq!(tally.warns.len(), 1, "{body}");
+        assert!(tally.alarms.is_empty(), "{body}");
+        let closing = strip(|w| render_tally(w, &tally));
+        assert!(closing.contains("! HOOKS: pi out of date"), "{closing}");
+        assert!(closing.contains(&format!("fix: {fix}")), "{closing}");
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["hooks"][1]["status"],
+            serde_json::json!({
+                "state": "outdated", "files": files, "fix": fix,
+            })
+        );
+    }
+}
+
+#[test]
+fn hooks_section_counts_a_lone_outdated_agent_as_reporting() {
+    let report = DoctorReport {
+        hooks: vec![HookRow {
+            kind: "pi".into(),
+            detected: true,
+            status: HookStatus::Outdated {
+                files: vec!["/srv/pi/rimz.ts".into()],
+                fix: "run `rimz hooks install pi` to update /srv/pi/rimz.ts".into(),
+            },
+        }],
+        ..report_fixture()
+    };
+    let mut tally = Tally::default();
+    let body = strip(|w| render_hooks(w, &report, &mut tally));
+    assert!(body.contains("1 reporting to RimZ: pi"), "{body}");
+    assert!(!body.contains("no agent reports"), "{body}");
+    assert_eq!(body.matches("pi").count(), 2, "{body}");
+}
+
+#[test]
 fn hooks_section_renders_blocked_upgrade_fix() {
     let report = DoctorReport {
         hooks: vec![HookRow {
@@ -1284,6 +1356,7 @@ fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
         machine_default: false,
         default_for: rimz::room::Scopes::default(),
         problem: problem.map(|text| text.to_owned().into()),
+        outdated: None,
         usage: None,
     };
     let accounts = Probe::Ready(Accounts {
@@ -1319,6 +1392,89 @@ fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
 }
 
 #[test]
+fn accounts_section_warns_for_outdated_integrations_below_launch_problems() {
+    for room in [false, true] {
+        let fix = "run `rimz accounts add claude work` to update /srv/work/settings.json";
+        let mut accounts = Probe::Ready(Accounts {
+            rows: vec![AccountRow {
+                kind: "claude".into(),
+                name: "work".into(),
+                home: Some("/srv/work".into()),
+                room,
+                machine_default: false,
+                default_for: Default::default(),
+                usage: None,
+                problem: None,
+                outdated: Some(OutdatedIntegration {
+                    files: vec!["/srv/work/settings.json".into()],
+                    fix: fix.into(),
+                }),
+            }],
+        });
+        let mut tally = Tally::default();
+        let body = strip(|w| render_accounts(w, &accounts, &mut tally));
+        assert!(
+            body.lines().any(|line| line.split_whitespace().eq([
+                "!",
+                "claude",
+                "work",
+                "/srv/work",
+                "integration",
+                "out",
+                "of",
+                "date",
+                "-"
+            ])),
+            "{body}"
+        );
+        assert!(
+            !body.contains("settings.json") && !body.contains("rimz accounts add"),
+            "{body}"
+        );
+        assert_eq!(tally.warns.len(), 1, "{body}");
+        assert!(tally.alarms.is_empty(), "{body}");
+        let closing = strip(|w| render_tally(w, &tally));
+        assert!(
+            closing.contains("! ACCOUNTS: claude@work: integration out of date"),
+            "{closing}"
+        );
+        assert!(closing.contains(&format!("fix: {fix}")), "{closing}");
+
+        let Probe::Ready(rows) = &mut accounts else {
+            unreachable!()
+        };
+        rows.rows[0].usage = Some(super::super::model::AccountUsage {
+            read_at: Timestamp::now(),
+            standing: super::super::model::AccountStanding::Spent,
+            resets_at: None,
+            agents: vec!["@fox".into()],
+        });
+        let mut tally = Tally::default();
+        let body = strip(|w| render_accounts(w, &accounts, &mut tally));
+        assert!(
+            body.contains("integration out of date; 1 agent paused or failed on it: @fox"),
+            "{body}"
+        );
+
+        let Probe::Ready(rows) = &mut accounts else {
+            unreachable!()
+        };
+        rows.rows[0].problem = Some("hooks disabled".to_owned().into());
+        let mut tally = Tally::default();
+        let body = strip(|w| render_accounts(w, &accounts, &mut tally));
+        assert!(
+            body.contains("hooks disabled") && !body.contains("integration out of date"),
+            "{body}"
+        );
+        assert_eq!(tally.alarms.len(), usize::from(room));
+        assert_eq!(tally.warns.len(), usize::from(!room));
+        assert!(
+            serde_json::to_value(&accounts).unwrap()["ready"]["rows"][0]["outdated"].is_object()
+        );
+    }
+}
+
+#[test]
 fn accounts_section_speaks_the_accounts_list_vocabulary() {
     let mut accounts = Probe::Ready(Accounts {
         rows: vec![AccountRow {
@@ -1329,6 +1485,7 @@ fn accounts_section_speaks_the_accounts_list_vocabulary() {
             machine_default: true,
             default_for: rimz::room::Scopes::default(),
             problem: None,
+            outdated: None,
             usage: None,
         }],
     });
@@ -1426,6 +1583,7 @@ fn account_error_fixes_only_appear_in_the_closing_block() {
                 machine_default: false,
                 default_for: Default::default(),
                 usage: None,
+                outdated: None,
                 problem: Some(error.into()),
             }],
         });

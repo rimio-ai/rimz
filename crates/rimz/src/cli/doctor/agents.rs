@@ -3,8 +3,8 @@ use rimz::trust::{self};
 
 use super::super::open_existing_store;
 use super::model::{
-    AccountRow, Accounts, AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus, PluginProbeRow,
-    PluginRow, Probe, Trust,
+    AccountRow, Accounts, AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus,
+    OutdatedIntegration, PluginProbeRow, PluginRow, Probe, Trust,
 };
 
 impl From<rimz::agents::BirthLoginErr> for super::model::AccountProblem {
@@ -482,10 +482,6 @@ fn project_agent_rollup(
     AgentRollup::Observed { counts, rows }
 }
 
-/// Each adapter's RimZ-hook wiring state. A run in a RimZ room registers nothing
-/// until the agent's own hook system invokes `rimz hooks feed`, so this
-/// distinguishes installed, present-but-unwired, absent, and
-/// known-but-not-installable adapters.
 pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Accounts> {
     let config = rimz::config::MachineConfig::load_lenient();
     let (catalog, errors) = rimz::agents::LoginCatalog::room_view(&config.accounts);
@@ -520,6 +516,7 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
                     machine_default: false,
                     default_for: rimz::room::Scopes::default(),
                     problem: Some(error.into()),
+                    outdated: None,
                     usage: None,
                 });
             }
@@ -599,26 +596,55 @@ fn account_rows(
     ambient: &std::collections::BTreeMap<String, String>,
     machine: &rimz::ids::RoomLogins,
 ) -> Vec<AccountRow> {
+    let options = crate::cli::hook_install_options();
+    let mut seen: std::collections::BTreeSet<_> = catalog
+        .all()
+        .filter(|login| login.is_default())
+        .filter_map(|login| rimz::agents::find_definition(login.kind()))
+        .filter_map(|agent| agent.managed_integration())
+        .flat_map(|integration| integration.outdated_files(ambient, options))
+        .map(|path| integration_file_identity(&path))
+        .collect();
     let in_room = |kind: &rimz::ids::AgentKind, name: &rimz::ids::LoginName| {
         room.and_then(|room| room.name(kind).ok()).as_ref() == Some(name)
     };
     let mut rows: Vec<AccountRow> = catalog
         .all()
         .filter(|login| !login.is_default())
-        .map(|login| AccountRow {
-            kind: login.kind().to_string(),
-            name: login.name().to_string(),
-            home: login.home().map(|home| home.display().to_string()),
-            room: in_room(login.kind(), login.name()),
-            machine_default: machine.get(login.kind()) == Some(login.name()),
-            default_for: rimz::room::Scopes::default(),
-            usage: None,
-            // A pane born on this account exports its home by design.
-            problem: (!in_room(login.kind(), login.name()))
-                .then(|| login.check_exported_home(ambient).err())
-                .flatten()
-                .map(Into::into)
-                .or_else(|| login.preflight(ambient).err().map(Into::into)),
+        .map(|login| {
+            let outdated = rimz::agents::find_definition(login.kind())
+                .and_then(|agent| agent.managed_integration())
+                .and_then(|integration| {
+                    let files: Vec<_> = integration
+                        .outdated_files(&login.env(ambient), options)
+                        .into_iter()
+                        .filter_map(|path| std::path::absolute(path).ok())
+                        .filter(|path| seen.insert(integration_file_identity(path)))
+                        .collect();
+                    (!files.is_empty()).then(|| OutdatedIntegration {
+                        fix: integration_update_fix(
+                            &format!("rimz accounts add {} {}", login.kind(), login.name()),
+                            &files,
+                        ),
+                        files,
+                    })
+                });
+            AccountRow {
+                kind: login.kind().to_string(),
+                name: login.name().to_string(),
+                home: login.home().map(|home| home.display().to_string()),
+                room: in_room(login.kind(), login.name()),
+                machine_default: machine.get(login.kind()) == Some(login.name()),
+                default_for: rimz::room::Scopes::default(),
+                usage: None,
+                outdated,
+                // A pane born on this account exports its home by design.
+                problem: (!in_room(login.kind(), login.name()))
+                    .then(|| login.check_exported_home(ambient).err())
+                    .flatten()
+                    .map(Into::into)
+                    .or_else(|| login.preflight(ambient).err().map(Into::into)),
+            }
         })
         .collect();
     for (room, kind) in room
@@ -659,6 +685,7 @@ fn account_rows(
             machine_default: !name.is_default() && machine.get(kind) == Some(&name),
             default_for: rimz::room::Scopes::default(),
             usage: None,
+            outdated: None,
             problem,
         });
     }
@@ -680,6 +707,7 @@ fn account_rows(
                 machine_default: true,
                 default_for: rimz::room::Scopes::default(),
                 usage: None,
+                outdated: None,
                 problem,
             });
         }
@@ -688,8 +716,44 @@ fn account_rows(
     rows
 }
 
+fn integration_file_identity(path: &std::path::Path) -> std::path::PathBuf {
+    let mut target = path.to_path_buf();
+    'links: for _ in 0..40 {
+        for ancestor in target.ancestors() {
+            // Every ancestor is a component-wise prefix of this target.
+            let suffix = target.strip_prefix(ancestor).expect("ancestor is a prefix");
+            if let Ok(resolved) = ancestor.canonicalize() {
+                return resolved.join(suffix);
+            }
+            if let Ok(link) = std::fs::read_link(ancestor) {
+                let Some(parent) = ancestor.parent() else {
+                    break;
+                };
+                target = parent.join(link).join(suffix);
+                continue 'links;
+            }
+        }
+        break;
+    }
+    path.to_path_buf()
+}
+
+fn integration_update_fix(command: &str, files: &[std::path::PathBuf]) -> String {
+    let files = files
+        .iter()
+        .map(|path| crate::cli::render::home_relative_path(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("run `{command}` to update {files}")
+}
+
+/// Each adapter's RimZ-hook wiring state. A run in a RimZ room registers nothing
+/// until the agent's own hook system invokes `rimz hooks feed`, so this
+/// distinguishes installed, present-but-unwired, absent, and
+/// known-but-not-installable adapters.
 pub(super) fn collect_hooks() -> Vec<HookRow> {
     let login_env = rimz::agents::ambient_env();
+    let options = crate::cli::hook_install_options();
     let cwd = std::env::current_dir().ok();
     let definitions: Vec<_> = rimz::agents::all_definitions().collect();
     rimz::utils::parallel::bounded_map(
@@ -721,12 +785,29 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
                     HookStatus::InstalledDisabled {
                         fix: conflict.to_string(),
                     }
-                } else if untrusted.is_empty() {
-                    HookStatus::Installed
-                } else {
+                } else if !untrusted.is_empty() {
                     HookStatus::InstalledUntrusted {
                         events: untrusted,
                         fix: rimz::agents::hook_trust_fix(name),
+                    }
+                } else {
+                    let files: Vec<_> = agent
+                        .managed_integration()
+                        .map(|integration| integration.outdated_files(&login_env, options))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|path| std::path::absolute(path).ok())
+                        .collect();
+                    if files.is_empty() {
+                        HookStatus::Installed
+                    } else {
+                        HookStatus::Outdated {
+                            fix: integration_update_fix(
+                                &format!("rimz hooks install {name}"),
+                                &files,
+                            ),
+                            files,
+                        }
                     }
                 }
             } else if detected {
@@ -839,6 +920,29 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integration_file_identity_resolves_dangling_directory_links() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let default = dir.path().join("default");
+        let named = dir.path().join("named");
+        std::fs::create_dir(&default).unwrap();
+        std::fs::create_dir(&named).unwrap();
+        symlink(default.join("rules"), named.join("absolute")).unwrap();
+        symlink("../default/rules", named.join("relative")).unwrap();
+        symlink("relative", named.join("chained")).unwrap();
+
+        let expected = integration_file_identity(&default.join("rules/nested/rimz.rules"));
+        let identities = ["absolute", "relative", "chained"]
+            .map(|link| integration_file_identity(&named.join(link).join("nested/rimz.rules")));
+        assert_eq!(identities, [expected.clone(), expected.clone(), expected]);
+
+        symlink("cycle", named.join("cycle")).unwrap();
+        let cyclic = named.join("cycle/rimz.rules");
+        assert_eq!(integration_file_identity(&cyclic), cyclic);
+    }
 
     #[test]
     fn soft_compact_skips_list_only_detected_kinds_with_their_reasons() {
@@ -1061,6 +1165,7 @@ mod tests {
             machine_default: false,
             default_for: Default::default(),
             problem: None,
+            outdated: None,
             usage: None,
         }];
         collect_account_usage(&mut rows, &runtime, &rimz::config::MachineConfig::default());

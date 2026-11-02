@@ -4,6 +4,8 @@
 //! `fits`, a `TrustState::Stale`, a `HookStatus::NotInstalled`) carry the verdict;
 //! the glyph-and-color mapping lives entirely in the renderer.
 
+use std::path::PathBuf;
+
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -659,7 +661,15 @@ pub(super) struct AccountRow {
     /// Why a room cannot launch into this account, with the fix.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) problem: Option<AccountProblem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) outdated: Option<OutdatedIntegration>,
     pub(super) usage: Option<AccountUsage>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct OutdatedIntegration {
+    pub(super) files: Vec<PathBuf>,
+    pub(super) fix: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -725,6 +735,7 @@ pub(super) enum HookStatus {
     Installed,
     InstalledUntrusted { events: Vec<String>, fix: String },
     InstalledDisabled { fix: String },
+    Outdated { files: Vec<PathBuf>, fix: String },
     NotInstalled { fix: String },
     Blocked { fix: String },
     NotDetected,
@@ -738,6 +749,7 @@ impl HookStatus {
             Self::Installed => "installed",
             Self::InstalledUntrusted { .. } => "installed, untrusted",
             Self::InstalledDisabled { .. } => "installed, disabled",
+            Self::Outdated { .. } => "out of date",
             Self::NotInstalled { .. } => "not installed",
             Self::Blocked { .. } => "blocked",
             Self::NotDetected => "not detected",

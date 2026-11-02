@@ -1711,6 +1711,359 @@ fn doctor_counts_an_invalid_loop_action() {
 }
 
 #[test]
+fn doctor_reports_outdated_pi_extension_in_json_and_text_without_writing() {
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["pi"]);
+    env.install_agent_hooks("pi");
+    let path = env.home_root.join(".pi/agent/extensions/rimz.ts");
+    let stale = "// _rimz_managed\n// old extension\n";
+    std::fs::write(&path, stale).unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    let row = hook(report["hooks"].as_array().unwrap(), "pi");
+    assert_eq!(
+        row["status"],
+        json!({
+            "state": "outdated", "files": [path],
+            "fix": "run `rimz hooks install pi` to update ~/.pi/agent/extensions/rimz.ts",
+        })
+    );
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("PATH", &stub_dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.lines()
+            .any(|line| line.split_whitespace().eq(["!", "pi", "out", "of", "date"])),
+        "{text}"
+    );
+    assert!(text.contains("! HOOKS: pi out of date"), "{text}");
+    assert_eq!(
+        text.matches("fix: run `rimz hooks install pi` to update ~/.pi/agent/extensions/rimz.ts")
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains("reporting to RimZ:") && line.contains("pi")),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), stale);
+}
+
+#[test]
+fn doctor_reports_outdated_relative_override_with_absolute_file_path() {
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["pi"]);
+    let path = env.project_root.join("old-pi.ts");
+    std::fs::write(&path, "// _rimz_managed\n// old extension\n").unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .env("RIMZ_PI_EXTENSION", "./old-pi.ts")
+            .output()
+            .unwrap(),
+    );
+    let row = hook(report["hooks"].as_array().unwrap(), "pi");
+    assert_eq!(row["status"]["state"], "outdated", "{row}");
+    assert_eq!(row["status"]["files"], json!([path]), "{row}");
+    assert_eq!(
+        fix(row),
+        "run `rimz hooks install pi` to update ~/project/old-pi.ts"
+    );
+}
+
+#[test]
+fn doctor_reports_outdated_claude_owned_handler_but_missing_events_are_not_installed() {
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["claude"]);
+    env.install_agent_hooks("claude");
+    let path = env.home_root.join(".claude/settings.json");
+    let mut settings: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    settings["hooks"]["Stop"][0]["hooks"][0]["timeout"] = json!(999);
+    std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    let row = hook(report["hooks"].as_array().unwrap(), "claude");
+    assert_eq!(row["status"]["state"], "outdated", "{row}");
+    assert_eq!(row["status"]["files"], json!([path]));
+    assert_eq!(
+        fix(row),
+        "run `rimz hooks install claude` to update ~/.claude/settings.json"
+    );
+
+    settings["hooks"].as_object_mut().unwrap().remove("Stop");
+    std::fs::write(path, serde_json::to_vec(&settings).unwrap()).unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        hook(report["hooks"].as_array().unwrap(), "claude")["status"]["state"],
+        "not_installed"
+    );
+}
+
+#[test]
+fn doctor_reports_outdated_named_claude_only_in_accounts_and_deduplicates_shared_files() {
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["claude"]);
+    env.install_agent_hooks("claude");
+    for name in ["work", "work-alias"] {
+        env.rimz()
+            .args(["accounts", "add", "claude", name])
+            .env("PATH", &stub_dir)
+            .assert()
+            .success();
+    }
+    let path = env.rimz_home().join("accounts/claude/work/settings.json");
+    let settings = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, settings).unwrap();
+    let alias = env
+        .rimz_home()
+        .join("accounts/claude/work-alias/settings.json");
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&path, &alias).unwrap();
+    let mut settings: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    settings["hooks"]["Stop"][0]["hooks"][0]["timeout"] = json!(999);
+    std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    let rows = report["accounts"]["ready"]["rows"].as_array().unwrap();
+    let work = rows
+        .iter()
+        .find(|row| row["kind"] == "claude" && row["name"] == "work")
+        .unwrap();
+    let expected_fix = concat!(
+        "run `rimz accounts add claude work` to update ",
+        "~/rimz-home/accounts/claude/work/settings.json"
+    );
+    assert_eq!(
+        work["outdated"],
+        json!({
+            "files": [path],
+            "fix": expected_fix,
+        }),
+        "{work}"
+    );
+    assert!(work.get("problem").is_none(), "{work}");
+    let alias = rows
+        .iter()
+        .find(|row| row["kind"] == "claude" && row["name"] == "work-alias")
+        .unwrap();
+    assert!(alias.get("outdated").is_none(), "{alias}");
+    assert_eq!(
+        hook(report["hooks"].as_array().unwrap(), "claude")["status"]["state"],
+        "installed"
+    );
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("PATH", &stub_dir)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("! ACCOUNTS: claude@work: integration out of date"),
+        "{text}"
+    );
+    assert!(text.contains(&format!("fix: {expected_fix}")), "{text}");
+    env.rimz()
+        .args(["accounts", "add", "claude", "work"])
+        .env("PATH", &stub_dir)
+        .assert()
+        .success();
+}
+
+#[test]
+fn doctor_reports_outdated_shared_pi_extension_once_under_default_hooks() {
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["pi"]);
+    env.rimz()
+        .args(["accounts", "add", "pi", "work"])
+        .env("PATH", &stub_dir)
+        .assert()
+        .success();
+    let path = env.home_root.join(".pi/agent/extensions/rimz.ts");
+    let shared = env.rimz_home().join("accounts/pi/work/extensions");
+    assert!(shared.is_symlink());
+    assert_eq!(
+        shared.join("rimz.ts").canonicalize().unwrap(),
+        path.canonicalize().unwrap()
+    );
+    std::fs::write(&path, "// _rimz_managed\n// old extension\n").unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    let row = hook(report["hooks"].as_array().unwrap(), "pi");
+    assert_eq!(row["status"]["state"], "outdated", "{row}");
+    assert_eq!(row["status"]["files"], json!([path]));
+    let work = report["accounts"]["ready"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "pi" && row["name"] == "work")
+        .unwrap();
+    assert!(work.get("outdated").is_none(), "{work}");
+    assert!(work.get("problem").is_none(), "{work}");
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("PATH", &stub_dir)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        text.matches("to update ~/.pi/agent/extensions/rimz.ts")
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(!text.contains("pi@work: integration out of date"), "{text}");
+}
+
+#[test]
+fn doctor_uses_configured_rule_install_options_and_prioritizes_untrusted_hooks() {
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["codex"]);
+    env.install_agent_hooks("codex");
+    env.rimz()
+        .args(["accounts", "add", "codex", "work"])
+        .env("PATH", &stub_dir)
+        .assert()
+        .success();
+    let path = env.home_root.join(".codex/rules/rimz.rules");
+    std::fs::remove_file(&path).unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        hook(report["hooks"].as_array().unwrap(), "codex")["status"]["state"],
+        "installed_untrusted"
+    );
+    trust_codex_hooks(&env);
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    let row = hook(report["hooks"].as_array().unwrap(), "codex");
+    assert_eq!(row["status"]["state"], "outdated", "{row}");
+    assert_eq!(row["status"]["files"], json!([path]));
+    let work = report["accounts"]["ready"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "codex" && row["name"] == "work")
+        .unwrap();
+    assert!(
+        work.get("outdated").is_none(),
+        "missing shared rules still deduplicate: {work}"
+    );
+
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nallow-routine-rimz = false\n",
+    )
+    .unwrap();
+    env.install_agent_hooks("codex");
+    std::fs::write(&path, "# _rimz_managed\n# old rules\n").unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    let row = hook(report["hooks"].as_array().unwrap(), "codex");
+    assert_eq!(row["status"]["state"], "outdated", "{row}");
+    assert_eq!(row["status"]["files"], json!([path]));
+    env.install_agent_hooks("codex");
+    assert!(!path.exists());
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        hook(report["hooks"].as_array().unwrap(), "codex")["status"]["state"],
+        "installed"
+    );
+}
+
+#[test]
+fn doctor_prioritizes_disabled_hooks_over_outdated_files() {
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["copilot"]);
+    env.install_agent_hooks("copilot");
+    let path = env.home_root.join(".copilot/hooks/rimz.json");
+    let mut hooks = std::fs::read_to_string(&path).unwrap();
+    hooks.push('\n');
+    std::fs::write(path, hooks).unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    let row = hook(report["hooks"].as_array().unwrap(), "copilot");
+    assert_eq!(row["status"]["state"], "outdated", "{row}");
+    let settings = env.copilot_settings_path();
+    let mut document: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    document["disableAllHooks"] = json!(true);
+    std::fs::write(settings, serde_json::to_vec(&document).unwrap()).unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        hook(report["hooks"].as_array().unwrap(), "copilot")["status"]["state"],
+        "installed_disabled"
+    );
+}
+
+#[test]
 fn doctor_json_reports_agent_hook_install_and_trust_states() {
     let env = Env::new();
     let stub_dir = stub_agent_binaries(&env, &["codex", "claude", "kiro-cli"]);
