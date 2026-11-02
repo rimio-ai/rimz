@@ -115,6 +115,13 @@ version = "0.2.191"
 when = "2026-10-16"
 trusted-publisher = "github:rust-lang/libc"
 
+[[publisher.libsqlite3-sys]]
+version = "0.39.1"
+when = "2026-10-25"
+user-id = 5062
+user-login = "gwenn"
+user-name = "gwenn"
+
 [[publisher.litemap]]
 version = "0.8.2"
 when = "2026-04-01"
@@ -143,11 +150,25 @@ user-id = 1234
 user-login = "dhardy"
 user-name = "Diggory Hardy"
 
+[[publisher.rusqlite]]
+version = "0.41.1"
+when = "2026-10-28"
+user-id = 5062
+user-login = "gwenn"
+user-name = "gwenn"
+
 [[publisher.rustc-demangle]]
 version = "0.1.27"
 when = "2026-01-15"
 user-id = 55123
 user-login = "rust-lang-owner"
+
+[[publisher.sysinfo]]
+version = "0.40.0"
+when = "2026-10-28"
+user-id = 111
+user-login = "GuillaumeGomez"
+user-name = "Guillaume Gomez"
 
 [[publisher.tinystr]]
 version = "0.8.3"
