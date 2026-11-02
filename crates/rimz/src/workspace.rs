@@ -306,7 +306,6 @@ fn normalize_known_workspace_record(
                 Ok(Some(_guard)) => {
                     record = record::read(record_path).ok()?;
                     record.project_root = project_root.clone();
-                    record.updated_at = jiff::Timestamp::now();
                     if let Err(err) = record::write(paths, &record) {
                         tracing::warn!(path = %record_path.display(), error = %err, "repairing workspace record failed; using repaired value in memory");
                     }

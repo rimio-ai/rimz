@@ -220,11 +220,79 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     assert_eq!(known[0].dir_name, paths.dir_name);
     assert_eq!(known[0].project_root, canonical_root);
     assert_eq!(known[0].session_name, "rimz-stale");
+    assert_eq!(known[0].updated_at, jiff::Timestamp::UNIX_EPOCH);
 
     let repaired = record::read(&paths.workspace_record).expect("read repaired");
     assert_eq!(repaired.workspace_id, workspace_id);
     assert_eq!(repaired.project_root, project_root.canonicalize().unwrap());
     assert_eq!(repaired.session_name, "rimz-stale");
+    assert_eq!(repaired.updated_at, jiff::Timestamp::UNIX_EPOCH);
+}
+
+#[test]
+fn known_workspaces_repairs_roots_without_changing_duplicate_session_winner() {
+    use crate::disk::paths::{StatePaths, workspaces_dir_under};
+    use crate::workspace::record::{self, WorkspaceRecord};
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let state_root = dir.path().join("state");
+    let older_root = dir.path().join("older");
+    let newer_root = dir.path().join("newer");
+    std::fs::create_dir_all(&older_root).expect("mkdir older project");
+    std::fs::create_dir_all(&newer_root).expect("mkdir newer project");
+    let older_root = older_root.canonicalize().expect("canonical older project");
+    let newer_root = newer_root.canonicalize().expect("canonical newer project");
+    let older_id = WorkspaceId::from_project_root(&older_root);
+    let newer_id = WorkspaceId::from_project_root(&newer_root);
+    let older_paths = StatePaths::under(older_id.clone(), &state_root).expect("older paths");
+    let newer_paths = StatePaths::under(newer_id.clone(), &state_root).expect("newer paths");
+    let newer_at = jiff::Timestamp::from_second(1).unwrap();
+
+    for (paths, workspace_id, project_root, updated_at) in [
+        (
+            &older_paths,
+            older_id,
+            older_root.join("..").join("older"),
+            jiff::Timestamp::UNIX_EPOCH,
+        ),
+        (&newer_paths, newer_id.clone(), newer_root, newer_at),
+    ] {
+        std::fs::create_dir_all(&paths.root).expect("mkdir workspace");
+        record::write(
+            paths,
+            &WorkspaceRecord {
+                layout: 2,
+                workspace_id,
+                project_root,
+                worktree_root: None,
+                session_name: "recorded-session".to_owned(),
+                root_class: RootClass::Repo,
+                rimz_bin: None,
+                rimz_build: None,
+                pins: Default::default(),
+                remote_control_off: Default::default(),
+                agent_shell: None,
+                skipped: Vec::new(),
+                updated_at,
+            },
+        )
+        .expect("write record");
+    }
+
+    let root = workspaces_dir_under(&state_root);
+    let read_only = known_workspaces_read_only_under(&root).expect("enumerate read-only");
+    assert_eq!(read_only.len(), 1);
+    assert_eq!(read_only[0].workspace_id, newer_id);
+    assert_eq!(read_only[0].updated_at, newer_at);
+
+    let repairing = known_workspaces_under(&root).expect("enumerate repairing");
+    assert_eq!(
+        repairing, read_only,
+        "root repair must not change the duplicate-session winner"
+    );
+    let repaired = record::read(&older_paths.workspace_record).expect("read repaired");
+    assert_eq!(repaired.project_root, older_root);
+    assert_eq!(repaired.updated_at, jiff::Timestamp::UNIX_EPOCH);
 }
 
 #[test]
