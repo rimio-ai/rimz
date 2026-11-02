@@ -332,6 +332,7 @@ fn routine_rimz_settings_union_and_idempotence() {
             "lsp callees",
             "lsp symbols",
             "lsp find",
+            "lsp show",
             "lsp check",
             "lsp list",
             "lsp status",
