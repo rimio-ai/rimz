@@ -34,7 +34,7 @@ fn install_disposition(
         InstallDisposition::Installed
     } else if agent
         .managed_integration()
-        .is_some_and(|integration| integration.upgrade_available(login_env, options))
+        .is_some_and(|integration| !integration.outdated_files(login_env, options).is_empty())
     {
         InstallDisposition::Refreshed
     } else {
@@ -89,9 +89,9 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(mode: HookInstallMode) -> Resu
     for agent in detected_installable_adapters(&login_env) {
         let definition = agent.spec();
         if !agent.hooks_installed(&login_env)
-            || agent
-                .managed_integration()
-                .is_some_and(|integration| integration.upgrade_available(&login_env, options))
+            || agent.managed_integration().is_some_and(|integration| {
+                !integration.outdated_files(&login_env, options).is_empty()
+            })
         {
             actionable.push(agent.preview_hook_install(&login_env, options)?);
             continue;

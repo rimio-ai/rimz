@@ -35,6 +35,13 @@ pub(super) fn is_managed(root: &Map<String, Value>, spec: &ManagedStatusLineSpec
     matches!(value_at(root, spec.key_path), Some(Value::Object(object)) if object_is_managed(object))
 }
 
+pub(super) fn managed_value<'a>(
+    root: &'a Map<String, Value>,
+    spec: &ManagedStatusLineSpec,
+) -> Option<&'a Value> {
+    value_at(root, spec.key_path).filter(|value| value.as_object().is_some_and(object_is_managed))
+}
+
 pub(super) fn install_satisfied(root: &Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
     if !spec.required_for_install {
         return true;

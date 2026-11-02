@@ -1875,6 +1875,52 @@ fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
 }
 
 #[test]
+fn outdated_files_compare_owned_hooks_and_statuslines() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("hooks.json");
+    let config = dir.path().join("cli-config.json");
+    let configs = [config.clone()];
+    let state = dir.path().join("state.json");
+    assert!(install::outdated_files_at(&hooks, &configs).is_empty());
+    install::install_into(&hooks, &config, &state).unwrap();
+    assert!(install::outdated_files_at(&hooks, &configs).is_empty());
+    let canonical: Value = serde_json::from_slice(&std::fs::read(&hooks).unwrap()).unwrap();
+    let mut user = canonical.clone();
+    user["hooks"]["sessionStart"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"command":"echo user"}));
+    user["theme"] = json!("dark");
+    std::fs::write(&hooks, user.to_string()).unwrap();
+    assert!(install::outdated_files_at(&hooks, &configs).is_empty());
+    for retired in [false, true] {
+        let mut drift = canonical.clone();
+        if retired {
+            drift["hooks"]["RetiredEvent"] = json!([{"command":RIMZ_HOOK_COMMAND}]);
+        } else {
+            drift["hooks"]["sessionStart"][0]["command"] =
+                json!(format!("{RIMZ_HOOK_COMMAND} --old"));
+        }
+        std::fs::write(&hooks, drift.to_string()).unwrap();
+        assert_eq!(
+            install::outdated_files_at(&hooks, &configs),
+            std::slice::from_ref(&hooks)
+        );
+    }
+    std::fs::write(&hooks, canonical.to_string()).unwrap();
+    let mut status: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    status["statusLine"]["command"] = json!(format!("{RIMZ_STATUS_LINE_COMMAND} --old"));
+    std::fs::write(&config, status.to_string()).unwrap();
+    assert_eq!(
+        install::outdated_files_at(&hooks, &configs),
+        std::slice::from_ref(&config)
+    );
+    std::fs::write(&hooks, "not json").unwrap();
+    std::fs::write(&config, r#"{"statusLine":{"command":"echo user"}}"#).unwrap();
+    assert!(install::outdated_files_at(&hooks, &configs).is_empty());
+}
+
+#[test]
 fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.json");

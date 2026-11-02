@@ -52,15 +52,18 @@ fn managed_extension_install_preview_and_uninstall() {
     assert_eq!(report.installed_events, managed_event_names());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
     assert!(PI_MANAGED_SOURCE.installed_at(&path));
-    assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&path));
+    assert!(PI_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
 
     let stale = "// still _rimz_managed\n// older RimZ source\n";
     std::fs::write(&path, stale).unwrap();
     assert!(PI_MANAGED_SOURCE.installed_at(&path));
-    assert!(PI_MANAGED_SOURCE.upgrade_available_at(&path));
+    assert_eq!(
+        PI_MANAGED_SOURCE.outdated_files_at(&path),
+        std::slice::from_ref(&path)
+    );
     assert!(PI_MANAGED_SOURCE.install_into(&path).unwrap().files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
-    assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&path));
+    assert!(PI_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
 
     let preview = PI_MANAGED_SOURCE.preview_at(&path).unwrap();
     assert_eq!(preview.agent, "pi");
@@ -72,7 +75,7 @@ fn managed_extension_install_preview_and_uninstall() {
     assert_eq!(removed.removed_events, managed_event_names());
     assert!(!path.exists());
     assert!(!PI_MANAGED_SOURCE.installed_at(&path));
-    assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&path));
+    assert!(PI_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
     assert!(!PI_MANAGED_SOURCE.uninstall_from(&path).unwrap().files[0].existed);
 
     let user_path = dir.path().join("user.ts");
@@ -93,7 +96,7 @@ fn managed_extension_install_preview_and_uninstall() {
         "// the user's own extension\n"
     );
     assert!(!PI_MANAGED_SOURCE.installed_at(&user_path));
-    assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&user_path));
+    assert!(PI_MANAGED_SOURCE.outdated_files_at(&user_path).is_empty());
 }
 
 /// The extension is TypeScript RimZ owns but never executes under `cargo`, so

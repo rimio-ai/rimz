@@ -5,6 +5,16 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[test]
+fn outdated_files_compare_only_owned_json() {
+    crate::agents::testkit::outdated_json_source(
+        &MANAGED_SOURCE,
+        DROID_HOOKS,
+        crate::agents::managed_json_hooks::SyncEncoding::None,
+        None,
+    );
+}
+
 use crate::agents::lifecycle::{LifecycleState, PriorTurnIds, TurnPhase, step};
 use crate::agents::testkit::{hook_lifecycle, hook_output, hook_signal};
 use crate::agents::transcript::TranscriptCursor;
@@ -80,7 +90,10 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
     std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
     assert!(!MANAGED_SOURCE.installed_at(&path));
     assert!(MANAGED_SOURCE.managed_artifacts_at(&path));
-    assert!(!MANAGED_SOURCE.upgrade_available_at(&path));
+    assert_eq!(
+        MANAGED_SOURCE.outdated_files_at(&path),
+        std::slice::from_ref(&path)
+    );
     MANAGED_SOURCE.install_into(&path).unwrap();
     assert!(MANAGED_SOURCE.installed_at(&path));
 

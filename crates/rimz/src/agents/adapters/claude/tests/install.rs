@@ -267,13 +267,17 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
         "a partial managed hook set must re-offer install"
     );
     assert!(MANAGED_SOURCE.managed_artifacts_at(&path));
-    assert!(!MANAGED_SOURCE.upgrade_available_at(&path));
+    assert_eq!(
+        MANAGED_SOURCE.outdated_files_at(&path),
+        std::slice::from_ref(&path)
+    );
 
     let path = dir.path().join("async.json");
     MANAGED_SOURCE.install_into(&path).unwrap();
     let mut parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     parsed["hooks"]["PermissionRequest"][0]["_rimz_sync"] = Value::Bool(false);
     std::fs::write(&path, serde_json::to_string(&parsed).unwrap()).unwrap();
+    assert!(MANAGED_SOURCE.outdated_files_at(&path).is_empty());
 
     assert!(
         !MANAGED_SOURCE.installed_at(&path),
@@ -363,4 +367,13 @@ fn install_rejects_top_level_non_object() {
             ..
         }
     ));
+}
+#[test]
+fn outdated_files_compare_only_owned_json() {
+    crate::agents::testkit::outdated_json_source(
+        &MANAGED_SOURCE,
+        CLAUDE_HOOKS,
+        crate::agents::managed_json_hooks::SyncEncoding::EntryMarker,
+        Some("/statusLine/command"),
+    );
 }

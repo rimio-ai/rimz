@@ -186,7 +186,11 @@ impl SetupReport {
                     }),
                     hooks_installed: agent.hooks_installed(&login_env),
                     hook_upgrade_available: agent.managed_integration().is_some_and(
-                        |integration| integration.upgrade_available(&login_env, hook_options),
+                        |integration| {
+                            !integration
+                                .outdated_files(&login_env, hook_options)
+                                .is_empty()
+                        },
                     ),
                 }
             })

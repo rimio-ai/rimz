@@ -99,7 +99,7 @@ The hook file is whole-file managed through its first-line `_rimz_managed` marke
 
 Preview builds both candidates and shows both diffs before either file is written. Install then writes the settings file and the hook file in that order, and a failed hook write restores both originals (`settings_json::commit_pair`). Uninstall strips only the managed statusline first, restoring a wrapped value, then removes only the marked hook file. A failed hook removal restores the original settings bytes.
 
-Readiness (`installed`) requires the marked hook file and the canonical statusline command together. Either artifact alone counts as a partial install (`managed_artifacts_present`), which repair and uninstall still see. The hook file is upgradeable (`COPILOT_MANAGED_SOURCE` passes `true`): a marked file whose bytes differ from the embedded source is offered for refresh by `rimz start` and `rimz setup`. Declining keeps the old commands, including any that deny on error.
+Readiness (`installed`) requires the marked hook file and the canonical statusline command together. Either artifact alone counts as a partial install (`managed_artifacts_present`), which repair and uninstall still see. `outdated_files` lists a marked hook file whose bytes differ from the embedded source and settings whose managed statusline differs from the install candidate. User formatting and unrelated settings do not count. `rimz start` and `rimz setup` offer a refresh. Declining keeps the old commands, including any that deny on error.
 
 Read-only probes, readiness and the wrapped-command read included, parse `settings.json` as JSONC. Install and uninstall parse it strictly and refuse a file with comments or trailing commas, so they never discard them.
 

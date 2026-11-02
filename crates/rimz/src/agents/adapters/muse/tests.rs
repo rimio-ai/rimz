@@ -182,6 +182,11 @@ fn managed_install_is_two_files_without_markers_and_restores_user_settings() {
     let settings: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(settings["schema_version"], 1);
     assert!(integration.installed(&env));
+    assert!(
+        integration
+            .outdated_files(&env, Default::default())
+            .is_empty()
+    );
     let canonical_settings = std::fs::read(&path).unwrap();
     for (key, value) in [
         ("schema_version", json!(2)),
@@ -204,6 +209,10 @@ fn managed_install_is_two_files_without_markers_and_restores_user_settings() {
     let hooks_json: Value = serde_json::from_slice(&hooks).unwrap();
     std::fs::write(home.join("rimz-hooks.json"), "{}").unwrap();
     assert!(!integration.installed(&env));
+    assert_eq!(
+        integration.outdated_files(&env, Default::default()),
+        [home.join("rimz-hooks.json")]
+    );
     std::fs::write(home.join("rimz-hooks.json"), &hooks).unwrap();
     let names = settings["managed_hooks_env_vars"].as_array().unwrap();
     assert!(

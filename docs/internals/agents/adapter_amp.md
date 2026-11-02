@@ -66,7 +66,7 @@ Install, preview, and uninstall own one whole file. `amp_plugin_path` resolves i
 
 The file opens with a `_rimz_managed` marker line. Install and preview refuse a file at that path without the marker, and uninstall leaves such a file untouched. The plugin runs `$RIMZ_BIN` when set, else `rimz`, and discards the helper's stdout, so the neutral hook answer is empty and permission prompts stay in Amp's own UI.
 
-`AMP_MANAGED_SOURCE` is built with `upgradeable` false, the only whole-file adapter so built. A RimZ-owned plugin that differs from this build's `PLUGIN_SOURCE` is therefore never reported as `(upgrade available)` by `rimz setup` or refreshed by detected-hook install. An explicit `rimz hooks install amp` rewrites it, but reports `hooks up to date`.
+`ManagedSource::outdated_files` lists a marked plugin that differs byte for byte from this build's `PLUGIN_SOURCE`. `rimz setup` reports `(upgrade available)`, `rimz start` offers a consented refresh, and `rimz hooks install amp` reports `refreshed` when replacing that source.
 
 ### Runtime owner
 

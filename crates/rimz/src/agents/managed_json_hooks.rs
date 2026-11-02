@@ -150,6 +150,40 @@ impl ManagedJsonHookSpec {
                 .any(|spec| managed_statusline::is_managed(&root, spec))
     }
 
+    pub(super) fn outdated_at(&self, path: &Path) -> bool {
+        let Ok(root) = self.read_json(path) else {
+            return false;
+        };
+        let Ok((candidate, _)) = self.candidate(path) else {
+            return false;
+        };
+        let owned = self.owned_hooks(&root);
+        let has_owned = !owned.is_empty()
+            || self
+                .status_lines
+                .iter()
+                .any(|spec| managed_statusline::is_managed(&root, spec));
+        has_owned
+            && (owned != self.owned_hooks(&candidate)
+                || self.status_lines.iter().any(|spec| {
+                    managed_statusline::managed_value(&root, spec)
+                        != managed_statusline::managed_value(&candidate, spec)
+                }))
+    }
+
+    fn owned_hooks(&self, root: &Map<String, Value>) -> Map<String, Value> {
+        root.get(HOOKS_KEY)
+            .and_then(Value::as_object)
+            .map_or_else(Map::new, |hooks| {
+                owned_hook_entries(hooks, |entry| {
+                    entry
+                        .as_object()
+                        .filter(|entry| self.entry_is_owned(entry))
+                        .map(|_| entry.clone())
+                })
+            })
+    }
+
     pub(super) fn read_json(&self, path: &Path) -> Result<Map<String, Value>> {
         settings_json::read_json_object(self.agent, path)
     }
@@ -371,6 +405,19 @@ impl ManagedJsonHookSpec {
         }
         removed
     }
+}
+
+pub(super) fn owned_hook_entries(
+    hooks: &Map<String, Value>,
+    project: impl Fn(&Value) -> Option<Value>,
+) -> Map<String, Value> {
+    hooks
+        .iter()
+        .filter_map(|(event, entries)| {
+            let owned: Vec<_> = entries.as_array()?.iter().filter_map(&project).collect();
+            (!owned.is_empty()).then(|| (event.clone(), Value::Array(owned)))
+        })
+        .collect()
 }
 
 fn matcher_matches(expected: Option<&str>, actual: Option<&str>) -> bool {

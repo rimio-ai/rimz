@@ -206,12 +206,12 @@ impl ManagedIntegration for OmpAdapter {
     fn managed_artifacts_present(&self, env: &BTreeMap<String, String>) -> bool {
         OMP_SOURCE.managed_artifacts_present(env)
     }
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
-    ) -> bool {
-        OMP_SOURCE.upgrade_available(env)
+    ) -> Vec<PathBuf> {
+        OMP_SOURCE.outdated_files(env)
     }
     fn wiring_input_paths(
         &self,
@@ -558,7 +558,6 @@ const OMP_SOURCE: ManagedSource = ManagedSource::new(
     OMP_HOOKS,
     "extension",
     extension_path,
-    true,
 );
 
 fn extension_path(env: &BTreeMap<String, String>) -> Result<PathBuf> {

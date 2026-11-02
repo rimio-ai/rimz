@@ -839,20 +839,12 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
         OpencodeBundle::resolve().is_ok_and(|bundle| bundle.installed())
     }
 
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         _env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
-    ) -> bool {
-        OpencodeBundle::resolve().is_ok_and(|bundle| {
-            bundle.managed_artifacts_present()
-                && !bundle.inspect().is_ok_and(|files| {
-                    files.len() == 2
-                        && files
-                            .iter()
-                            .all(|file| file.original.as_deref() == Some(file.candidate.as_str()))
-                })
-        })
+    ) -> Vec<PathBuf> {
+        OpencodeBundle::resolve().map_or_else(|_| Vec::new(), |bundle| bundle.outdated_files())
     }
 
     fn managed_artifacts_present(&self, _env: &BTreeMap<String, String>) -> bool {
@@ -880,6 +872,18 @@ struct OpencodeBundle {
 }
 
 impl OpencodeBundle {
+    fn outdated_files(&self) -> Vec<PathBuf> {
+        if !self.managed_artifacts_present() {
+            return Vec::new();
+        }
+        self.preflight()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|file| file.original.as_deref() != Some(file.candidate.as_str()))
+            .map(|file| file.path)
+            .collect()
+    }
+
     fn resolve() -> Result<Self> {
         if let Some(raw) =
             std::env::var_os("RIMZ_OPENCODE_PLUGIN").filter(|value| !value.is_empty())

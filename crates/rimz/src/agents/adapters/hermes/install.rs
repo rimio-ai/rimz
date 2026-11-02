@@ -17,7 +17,38 @@ pub(super) static MANAGED_INTEGRATION: HermesManagedIntegration = HermesManagedI
 
 pub(super) struct HermesManagedIntegration;
 
+fn managed_entry() -> Value {
+    json!({"command":COMMAND,"timeout":10})
+}
+
+fn outdated_files_at(path: &Path) -> Vec<PathBuf> {
+    let Ok((_, config)) = read_config(path) else {
+        return Vec::new();
+    };
+    let mut owned = super::super::managed_json_hooks::owned_hook_entries(&config.hooks, |entry| {
+        owned(entry).then(|| entry.clone())
+    });
+    owned.retain(|event, _| is_shell_hook_event(event));
+    let expected: Map<String, Value> = HERMES_HOOKS
+        .iter()
+        .map(|hook| (hook.event.to_owned(), json!([managed_entry()])))
+        .collect();
+    if !owned.is_empty() && owned != expected {
+        vec![path.to_path_buf()]
+    } else {
+        Vec::new()
+    }
+}
+
 impl ManagedIntegration for HermesManagedIntegration {
+    fn outdated_files(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Vec<PathBuf> {
+        config_path(env).map_or_else(|_| Vec::new(), |path| outdated_files_at(&path))
+    }
+
     fn install(
         &self,
         env: &BTreeMap<String, String>,
@@ -111,7 +142,7 @@ fn preview_at(path: &Path, version: Option<CliVersion>) -> Result<HookInstallPre
         entries
             .as_array_mut()
             .ok_or_else(|| config_refusal(path))?
-            .push(json!({"command":COMMAND,"timeout":10}));
+            .push(managed_entry());
     }
     Ok(HookInstallPreview {
         agent: "hermes",
@@ -134,7 +165,7 @@ fn preview_at(path: &Path, version: Option<CliVersion>) -> Result<HookInstallPre
     })
 }
 
-fn install_at(path: &Path, version: Option<CliVersion>) -> Result<HookInstallReport> {
+pub(super) fn install_at(path: &Path, version: Option<CliVersion>) -> Result<HookInstallReport> {
     let preview = preview_at(path, version)?;
     let file = &preview.files[0];
     if file.original.as_deref() != Some(&file.candidate) {
@@ -178,7 +209,7 @@ fn installed_at(path: &Path) -> bool {
                 .hooks
                 .get(hook.event)
                 .and_then(Value::as_array)
-                .is_some_and(|entries| entries.contains(&json!({"command":COMMAND,"timeout":10})))
+                .is_some_and(|entries| entries.contains(&managed_entry()))
         })
     })
 }
@@ -225,6 +256,10 @@ fn owned(entry: &Value) -> bool {
         .is_some_and(|command| command.contains(OWNER))
 }
 
+fn is_shell_hook_event(event: &str) -> bool {
+    !matches!(event, "output_spill" | "outbound")
+}
+
 fn config_refusal(path: &Path) -> AgentErr {
     AgentErr::Install {
         agent: "hermes",
@@ -257,7 +292,7 @@ impl Config {
             _ => return Err(refusal()),
         };
         for (event, entries) in &hooks {
-            if matches!(event.as_str(), "output_spill" | "outbound") {
+            if !is_shell_hook_event(event) {
                 continue;
             }
             if !entries.is_null() && !entries.is_array() {
@@ -381,7 +416,7 @@ impl Config {
     fn remove_owned(&mut self) -> Vec<String> {
         let mut removed = Vec::new();
         self.hooks.retain(|event, entries| {
-            if matches!(event.as_str(), "output_spill" | "outbound") {
+            if !is_shell_hook_event(event) {
                 return true;
             }
             let Some(entries) = entries.as_array_mut() else {

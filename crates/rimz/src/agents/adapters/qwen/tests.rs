@@ -5,6 +5,16 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[test]
+fn outdated_files_compare_only_owned_json() {
+    crate::agents::testkit::outdated_json_source(
+        &install::MANAGED_SOURCE,
+        QWEN_HOOKS,
+        crate::agents::managed_json_hooks::SyncEncoding::HandlerAsync,
+        Some("/ui/statusLine/command"),
+    );
+}
+
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 use crate::agents::transcript::TranscriptCursor;
 use crate::agents::{AgentHookClass, AskKind, CostCoverage};
@@ -114,7 +124,7 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
     assert_eq!(report.installed_events.len(), 14);
     assert!(install::MANAGED_SOURCE.installed_at(&path));
     assert!(install::MANAGED_SOURCE.managed_artifacts_at(&path));
-    assert!(!install::MANAGED_SOURCE.upgrade_available_at(&path));
+    assert!(install::MANAGED_SOURCE.outdated_files_at(&path).is_empty());
     let installed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     for entries in installed["hooks"].as_object().unwrap().values() {
         assert_eq!(entries[0]["hooks"][0]["timeout"], 2);

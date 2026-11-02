@@ -446,6 +446,44 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
 }
 
 #[test]
+fn outdated_files_compare_only_owned_toml_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    assert!(install::outdated_files_at(&path).is_empty());
+    install::install(&path, None).unwrap();
+    assert!(install::outdated_files_at(&path).is_empty());
+    let mut canonical: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+    let user: toml::Value =
+        toml::from_str("event = 'SessionStart'\ncommand = 'echo user'\n").unwrap();
+    canonical["hooks"].as_array_mut().unwrap().push(user);
+    std::fs::write(&path, toml::to_string(&canonical).unwrap()).unwrap();
+    assert!(install::outdated_files_at(&path).is_empty());
+    for retired in [false, true] {
+        let mut drift = canonical.clone();
+        if retired {
+            let mut leftover = canonical["hooks"][0].clone();
+            leftover["event"] = "SessionHeartbeat".into();
+            drift["hooks"].as_array_mut().unwrap().push(leftover);
+        } else {
+            drift["hooks"][0]["timeout"] = 60.into();
+        }
+        std::fs::write(&path, toml::to_string(&drift).unwrap()).unwrap();
+        assert_eq!(
+            install::outdated_files_at(&path),
+            std::slice::from_ref(&path)
+        );
+    }
+    std::fs::write(
+        &path,
+        "[[hooks]]\nevent = 'SessionStart'\ncommand = 'echo user'\n",
+    )
+    .unwrap();
+    assert!(install::outdated_files_at(&path).is_empty());
+    std::fs::write(&path, "invalid = [").unwrap();
+    assert!(install::outdated_files_at(&path).is_empty());
+}
+
+#[test]
 fn install_merge_includes_native_permission_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

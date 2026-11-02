@@ -784,10 +784,13 @@ fn install_preview_reclaim_and_uninstall_own_only_marked_files() {
     assert!(!report.files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
     assert!(COPILOT_MANAGED_SOURCE.installed_at(&path));
-    assert!(!COPILOT_MANAGED_SOURCE.upgrade_available_at(&path));
+    assert!(COPILOT_MANAGED_SOURCE.outdated_files_at(&path).is_empty());
 
     std::fs::write(&path, "{\"_rimz_managed\":\"drifted\"}\n").unwrap();
-    assert!(COPILOT_MANAGED_SOURCE.upgrade_available_at(&path));
+    assert_eq!(
+        COPILOT_MANAGED_SOURCE.outdated_files_at(&path),
+        std::slice::from_ref(&path)
+    );
     assert!(COPILOT_MANAGED_SOURCE.install_into(&path).unwrap().files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
     assert_eq!(
@@ -814,6 +817,29 @@ fn install_preview_reclaim_and_uninstall_own_only_marked_files() {
             .is_empty()
     );
     assert!(user_path.exists());
+}
+
+#[test]
+fn outdated_files_include_owned_statusline_drift_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("rimz.json");
+    let settings = dir.path().join("settings.json");
+    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
+    install::install(&hooks, &settings).unwrap();
+    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
+    let mut root: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    root["theme"] = json!("user preference");
+    root["statusLine"]["padding"] = json!(5);
+    std::fs::write(&settings, root.to_string()).unwrap();
+    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
+    root["statusLine"]["command"] = json!("older statusline");
+    std::fs::write(&settings, root.to_string()).unwrap();
+    assert_eq!(
+        install::outdated_files_at(&hooks, &settings),
+        std::slice::from_ref(&settings)
+    );
+    std::fs::write(&settings, "not json").unwrap();
+    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
 }
 
 #[test]

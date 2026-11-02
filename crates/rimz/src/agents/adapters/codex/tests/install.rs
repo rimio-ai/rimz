@@ -235,7 +235,7 @@ fn untrusted_hook_hashes_match_the_on_disk_definition() {
 }
 
 #[test]
-fn hook_definition_drift_is_an_upgrade() {
+fn hook_definition_drift_lists_the_outdated_config() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
@@ -244,7 +244,7 @@ fn hook_definition_drift_is_an_upgrade() {
         allow_routine_rimz: false,
     };
     install_into(&path).unwrap();
-    assert!(!integration.upgrade_available(&env, options));
+    assert!(integration.outdated_files(&env, options).is_empty());
     for (field, value) in [
         ("timeout", 10.into()),
         ("statusMessage", "Routing Stop through RimZ".into()),
@@ -258,11 +258,11 @@ fn hook_definition_drift_is_an_upgrade() {
             .insert(field.into(), value);
         std::fs::write(&path, toml::to_string(&root).unwrap()).unwrap();
         assert!(
-            integration.upgrade_available(&env, options),
+            !integration.outdated_files(&env, options).is_empty(),
             "{field} drift must be offered as an upgrade"
         );
         install_into(&path).unwrap();
-        assert!(!integration.upgrade_available(&env, options));
+        assert!(integration.outdated_files(&env, options).is_empty());
     }
     let mut root: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
     let user: toml::Value =
@@ -270,7 +270,7 @@ fn hook_definition_drift_is_an_upgrade() {
             .unwrap();
     root["hooks"]["Stop"].as_array_mut().unwrap().push(user);
     std::fs::write(&path, toml::to_string(&root).unwrap()).unwrap();
-    assert!(!integration.upgrade_available(&env, options));
+    assert!(integration.outdated_files(&env, options).is_empty());
 }
 
 #[test]
@@ -360,7 +360,7 @@ fn rules_preview_tracks_new_updated_and_removed_files() {
 }
 
 #[test]
-fn rules_upgrade_detects_missing_stale_and_opted_out_artifacts() {
+fn outdated_rules_include_missing_stale_and_opted_out_artifacts() {
     let dir = tempfile::tempdir().unwrap();
     let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
     let integration = CodexAdapter.managed_integration().unwrap();
@@ -371,17 +371,17 @@ fn rules_upgrade_detects_missing_stale_and_opted_out_artifacts() {
         allow_routine_rimz: false,
     };
     let rules = dir.path().join("rules/rimz.rules");
-    assert!(integration.upgrade_available(&env, on));
-    assert!(!integration.upgrade_available(&env, off));
+    assert!(!integration.outdated_files(&env, on).is_empty());
+    assert!(integration.outdated_files(&env, off).is_empty());
     integration.install(&env, on).unwrap();
-    assert!(!integration.upgrade_available(&env, on));
-    assert!(integration.upgrade_available(&env, off));
+    assert!(integration.outdated_files(&env, on).is_empty());
+    assert!(!integration.outdated_files(&env, off).is_empty());
     std::fs::write(&rules, "# _rimz_managed\n# stale\n").unwrap();
-    assert!(integration.upgrade_available(&env, on));
-    assert!(integration.upgrade_available(&env, off));
+    assert!(!integration.outdated_files(&env, on).is_empty());
+    assert!(!integration.outdated_files(&env, off).is_empty());
     std::fs::write(&rules, "# user rules\n").unwrap();
-    assert!(!integration.upgrade_available(&env, on));
-    assert!(!integration.upgrade_available(&env, off));
+    assert!(integration.outdated_files(&env, on).is_empty());
+    assert!(integration.outdated_files(&env, off).is_empty());
     assert_eq!(integration.install(&env, on).unwrap().files.len(), 1);
     assert_eq!(integration.preview(&env, on).unwrap().files.len(), 1);
 }

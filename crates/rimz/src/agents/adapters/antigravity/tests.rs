@@ -269,6 +269,49 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
     }
 }
 #[test]
+fn outdated_files_compare_owned_hooks_and_statuslines() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("hooks.json");
+    let settings = dir.path().join("settings.json");
+    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
+    install::install(&hooks, &settings).unwrap();
+    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
+    let canonical: Value = serde_json::from_slice(&std::fs::read(&hooks).unwrap()).unwrap();
+    let mut user = canonical.clone();
+    user["mine"] = json!({"Stop":[{"command":"echo user"}]});
+    std::fs::write(&hooks, user.to_string()).unwrap();
+    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
+    for retired in [false, true] {
+        let mut drift = canonical.clone();
+        if retired {
+            drift["rimz"]["RetiredEvent"] = canonical["rimz"]["Stop"].clone();
+        } else {
+            drift["rimz"]["Stop"][0]["timeout"] = json!(999);
+        }
+        std::fs::write(&hooks, drift.to_string()).unwrap();
+        assert_eq!(
+            install::outdated_files_at(&hooks, &settings),
+            std::slice::from_ref(&hooks)
+        );
+    }
+    std::fs::write(&hooks, canonical.to_string()).unwrap();
+    let mut status: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    status["statusLine"]["command"] = json!("older statusline");
+    std::fs::write(&settings, status.to_string()).unwrap();
+    assert_eq!(
+        install::outdated_files_at(&hooks, &settings),
+        std::slice::from_ref(&settings)
+    );
+    std::fs::write(&hooks, "not json").unwrap();
+    std::fs::write(
+        &settings,
+        r#"{"statusLine":{"type":"command","command":"echo user"}}"#,
+    )
+    .unwrap();
+    assert!(install::outdated_files_at(&hooks, &settings).is_empty());
+}
+
+#[test]
 fn hook_install_round_trips_existing_and_absent_statuslines() {
     for (name, original, change) in [
         (

@@ -227,6 +227,31 @@ fn failed_hook_feed_records_one_machine_diagnostic_without_changing_exit() {
 }
 
 #[test]
+fn claude_owned_hook_drift_is_reported_as_refreshed() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let path = env.home_root.join(".claude/settings.json");
+    let mut settings: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    settings["hooks"]["Stop"][0]["hooks"][0]["timeout"] = json!(999);
+    std::fs::write(&path, settings.to_string()).unwrap();
+    let output = env
+        .rimz()
+        .args(["hooks", "install", "claude"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("refreshed"), "{stdout}");
+    let output = env
+        .rimz()
+        .args(["hooks", "install", "claude"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("hooks up to date"));
+}
+
+#[test]
 fn copilot_stale_managed_hooks_are_reported_as_refreshed() {
     let env = Env::new();
     env.install_agent_hooks("copilot");

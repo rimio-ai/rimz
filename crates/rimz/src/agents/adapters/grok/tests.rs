@@ -2,6 +2,16 @@ use serde_json::json;
 
 use super::*;
 
+#[test]
+fn outdated_files_compare_only_owned_json() {
+    crate::agents::testkit::outdated_json_source(
+        &install::MANAGED_SOURCE,
+        GROK_HOOKS,
+        crate::agents::managed_json_hooks::SyncEncoding::None,
+        None,
+    );
+}
+
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 use crate::agents::{AgentHookClass, ClassificationSample, ClassifiedHook};
 

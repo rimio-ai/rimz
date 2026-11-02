@@ -344,7 +344,7 @@ fn partial_package_install_can_resume() {
 }
 
 #[test]
-fn package_install_is_idempotent_upgradeable_and_directory_scoped() {
+fn package_install_is_idempotent_reports_outdated_files_and_is_directory_scoped() {
     let root = tempfile::tempdir().unwrap();
     let env = BTreeMap::from([("MINIMAX_DATA_DIR".into(), root.path().display().to_string())]);
     let managed = adapter().managed_integration().unwrap();
@@ -362,7 +362,11 @@ fn package_install_is_idempotent_upgradeable_and_directory_scoped() {
         .unwrap();
     assert_eq!(installed.installed_events, preview.planned_events);
     assert!(managed.installed(&env));
-    assert!(!managed.upgrade_available(&env, crate::agents::HookInstallOptions::default()));
+    assert!(
+        managed
+            .outdated_files(&env, crate::agents::HookInstallOptions::default())
+            .is_empty()
+    );
     let hooks = package.join("hooks/rimz.json");
     let metadata = std::fs::metadata(&hooks).unwrap();
     managed
@@ -375,7 +379,10 @@ fn package_install_is_idempotent_upgradeable_and_directory_scoped() {
     );
     let original = std::fs::read(&hooks).unwrap();
     std::fs::write(&hooks, b"{}\n").unwrap();
-    assert!(managed.upgrade_available(&env, crate::agents::HookInstallOptions::default()));
+    assert_eq!(
+        managed.outdated_files(&env, crate::agents::HookInstallOptions::default()),
+        std::slice::from_ref(&hooks)
+    );
     managed
         .install(&env, crate::agents::HookInstallOptions::default())
         .unwrap();

@@ -2,6 +2,69 @@ use super::*;
 use crate::agents::lifecycle::{LifecycleState, PriorTurnIds, TurnPhase, step};
 use serde_json::{Value, json};
 
+#[test]
+fn outdated_files_compare_only_owned_yaml_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yaml");
+    let env = BTreeMap::from([("HERMES_HOME".into(), dir.path().display().to_string())]);
+    let integration = HermesAdapter.managed_integration().unwrap();
+    assert!(
+        integration
+            .outdated_files(&env, Default::default())
+            .is_empty()
+    );
+    install::install_at(&path, None).unwrap();
+    assert!(
+        integration
+            .outdated_files(&env, Default::default())
+            .is_empty()
+    );
+    let mut canonical: Value =
+        serde_saphyr::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    canonical["hooks"]["pre_llm_call"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"command":"echo user"}));
+    std::fs::write(&path, format!("hooks: {}\n", canonical["hooks"])).unwrap();
+    assert!(
+        integration
+            .outdated_files(&env, Default::default())
+            .is_empty()
+    );
+    let reserved = ["output_spill", "outbound"].map(|key| {
+        let mut config = canonical.clone();
+        config["hooks"][key] = json!([canonical["hooks"]["pre_llm_call"][0]]);
+        std::fs::write(&path, format!("hooks: {}\n", config["hooks"])).unwrap();
+        integration.outdated_files(&env, Default::default())
+    });
+    assert_eq!(reserved, [Vec::<std::path::PathBuf>::new(), Vec::new()]);
+    for retired in [false, true] {
+        let mut drift = canonical.clone();
+        if retired {
+            drift["hooks"]["RetiredEvent"] = json!([canonical["hooks"]["pre_llm_call"][0]]);
+        } else {
+            drift["hooks"]["pre_llm_call"][0]["timeout"] = json!(999);
+        }
+        std::fs::write(&path, format!("hooks: {}\n", drift["hooks"])).unwrap();
+        assert_eq!(
+            integration.outdated_files(&env, Default::default()),
+            std::slice::from_ref(&path)
+        );
+    }
+    std::fs::write(&path, "hooks: {pre_llm_call: [{command: echo user}]}\n").unwrap();
+    assert!(
+        integration
+            .outdated_files(&env, Default::default())
+            .is_empty()
+    );
+    std::fs::write(&path, "hooks: [").unwrap();
+    assert!(
+        integration
+            .outdated_files(&env, Default::default())
+            .is_empty()
+    );
+}
+
 fn decode(event: &str, extra: Value) -> HookOutput {
     HermesAdapter
         .decode_hook(

@@ -1,7 +1,7 @@
 //! Copilot whole-file hook and reversible statusline installer.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
@@ -21,13 +21,38 @@ pub(super) static MANAGED_INTEGRATION: CopilotManagedIntegration = CopilotManage
 
 pub(super) struct CopilotManagedIntegration;
 
+pub(super) fn outdated_files_at(hooks: &Path, settings: &Path) -> Vec<PathBuf> {
+    let Ok(original) = read_optional_file(AGENT, hooks) else {
+        return Vec::new();
+    };
+    if original.is_some() && !COPILOT_MANAGED_SOURCE.installed_at(hooks) {
+        return Vec::new();
+    }
+    let (Ok(root), Ok((candidate, _))) = (
+        settings_json::read_json_object(AGENT, settings),
+        statusline_candidate(settings),
+    ) else {
+        return Vec::new();
+    };
+    let mut files = COPILOT_MANAGED_SOURCE.outdated_files_at(hooks);
+    if super::super::managed_statusline::is_managed(&root, &STATUS_LINE)
+        && super::super::managed_statusline::managed_value(&root, &STATUS_LINE)
+            != super::super::managed_statusline::managed_value(&candidate, &STATUS_LINE)
+    {
+        files.push(settings.to_path_buf());
+    }
+    files
+}
+
 impl ManagedIntegration for CopilotManagedIntegration {
-    fn upgrade_available(
+    fn outdated_files(
         &self,
         login_env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
-    ) -> bool {
-        COPILOT_MANAGED_SOURCE.upgrade_available(login_env)
+    ) -> Vec<PathBuf> {
+        super::paths::hooks_path(login_env)
+            .and_then(|hooks| Ok(outdated_files_at(&hooks, &super::paths::settings_path()?)))
+            .unwrap_or_default()
     }
 
     fn install(
