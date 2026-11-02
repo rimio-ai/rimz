@@ -27,6 +27,9 @@ use crate::store::run::RunRecord;
 use crate::utils::size::decimal_bytes;
 use crate::utils::time::format_duration_compact;
 
+mod limits;
+pub(in crate::harness) use limits::WorkflowStart;
+
 const RECHECK: Duration = Duration::from_secs(1);
 const SAMPLE_EVERY_MS: u64 = 5_000;
 const CHECK_REUSE_MS: u64 = 60_000;
@@ -60,6 +63,8 @@ pub enum ThrottleError {
     },
     #[error("writing a loop throttle ticket: {0}")]
     WriteTicket(#[source] AtomicErr),
+    #[error("writing workflow pace: {0}")]
+    WritePace(#[source] AtomicErr),
     #[error("loop throttle ticket {0} vanished from the queue")]
     Vanished(PathBuf),
     #[error("listening for Ctrl-C while held: {0}")]
@@ -153,6 +158,7 @@ pub(super) trait Host: Send + Sync {
     fn queue_dir(&self) -> PathBuf;
     fn queue_lock(&self) -> PathBuf;
     fn check_cache(&self) -> PathBuf;
+    fn workflow_pace(&self) -> PathBuf;
     fn check(
         &self,
         config: &ThrottleConfig,
@@ -171,12 +177,10 @@ pub(super) trait Host: Send + Sync {
     fn workspaces(&self) -> Result<Vec<WorkspaceId>, String>;
     /// Every agent row of one workspace; `Err` names why it cannot be read.
     fn agents(&self, workspace: &WorkspaceId) -> Result<Vec<AgentState>, String>;
-    /// The open supervised runs one loop task owns in a workspace.
-    fn task_runs(&self, workspace: &WorkspaceId, task: &str) -> Result<Vec<RunRecord>, String>;
-    fn task_workflows(
+    fn runs(&self, workspace: &WorkspaceId) -> Result<Vec<RunRecord>, String>;
+    fn workflows(
         &self,
         workspace: &WorkspaceId,
-        task: &str,
     ) -> Result<Vec<crate::store::workflow::RunRecord>, String>;
 }
 
@@ -192,6 +196,10 @@ impl Host for SystemHost {
 
     fn check_cache(&self) -> PathBuf {
         paths::loop_throttle_check_cache()
+    }
+
+    fn workflow_pace(&self) -> PathBuf {
+        paths::loop_throttle_workflow_pace()
     }
 
     fn check(
@@ -315,20 +323,19 @@ impl Host for SystemHost {
         ))
     }
 
-    fn task_runs(&self, workspace: &WorkspaceId, task: &str) -> Result<Vec<RunRecord>, String> {
+    fn runs(&self, workspace: &WorkspaceId) -> Result<Vec<RunRecord>, String> {
         let unreadable =
             |err: &dyn fmt::Display| format!("workspace {workspace} unreadable: {err}");
         let state = StatePaths::for_workspace(workspace.clone()).map_err(|err| unreadable(&err))?;
         let mut runs =
             crate::harness::run::list(&state).map_err(|err| unreadable(&format!("{err:#}")))?;
-        runs.retain(|run| !run.status.is_terminal() && run.loop_task.as_deref() == Some(task));
+        runs.retain(|run| !run.status.is_terminal());
         Ok(runs)
     }
 
-    fn task_workflows(
+    fn workflows(
         &self,
         workspace: &WorkspaceId,
-        task: &str,
     ) -> Result<Vec<crate::store::workflow::RunRecord>, String> {
         let unreadable =
             |err: &dyn fmt::Display| format!("workspace {workspace} unreadable: {err}");
@@ -344,7 +351,7 @@ impl Host for SystemHost {
                 }
                 Err(err) => return Err(unreadable(&err)),
             };
-            if !record.state.is_terminal() && record.task.as_deref() == Some(task) {
+            if !record.state.is_terminal() {
                 runs.push(record);
             }
         }
@@ -393,6 +400,8 @@ pub(in crate::harness) struct Run {
     pub(in crate::harness) groups: Vec<StartGroup>,
     /// Absolute UNIX milliseconds, or no bound for blocking admission.
     pub(in crate::harness) gives_up_ms: Option<u64>,
+    pub(in crate::harness) machine_gated: bool,
+    pub(in crate::harness) limits: Option<WorkflowStart>,
 }
 
 impl Run {
@@ -429,10 +438,16 @@ pub(super) fn try_admit_in(
     config: &ThrottleConfig,
     run: &Run,
 ) -> Result<Attempt> {
-    if !gates(config) {
+    if (!run.machine_gated || !gates(config)) && run.limits.is_none() {
         return Ok(Attempt::Open);
     }
-    if let Some(problem) = unreadable(host.as_ref(), config) {
+    let run = &Run {
+        machine_gated: run.machine_gated && gates(config),
+        ..run.clone()
+    };
+    if run.machine_gated
+        && let Some(problem) = unreadable(host.as_ref(), config)
+    {
         return Err(ThrottleError::Unreadable(problem));
     }
     let turn = {
@@ -450,7 +465,9 @@ pub(super) fn try_admit_in(
     match check_groups(host.as_ref(), config, run, false)? {
         Some(hold) => Ok(Attempt::Held(hold)),
         // A check cut at the give-up instant answered nothing, so it grants no turn.
-        None if run.gives_up_ms.is_some_and(|until| host.now_ms() >= until) => {
+        None if run.limits.as_ref().is_none_or(|start| start.may_wait)
+            && run.gives_up_ms.is_some_and(|until| host.now_ms() >= until) =>
+        {
             Ok(Attempt::Held(Hold {
                 kind: HoldKind::Capacity,
                 text: "wait deadline reached".to_owned(),
@@ -463,10 +480,16 @@ pub(super) fn try_admit_in(
 
 /// Inspect the same tail without a ticket or reservation, even during its check.
 pub(super) fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
-    if !gates(config) {
+    if (!run.machine_gated || !gates(config)) && run.limits.is_none() {
         return Ok(None);
     }
-    if let Some(problem) = unreadable(host, config) {
+    let run = &Run {
+        machine_gated: run.machine_gated && gates(config),
+        ..run.clone()
+    };
+    if run.machine_gated
+        && let Some(problem) = unreadable(host, config)
+    {
         return Err(ThrottleError::Unreadable(problem));
     }
     {
@@ -525,7 +548,7 @@ fn check_groups(
     run: &Run,
     refresh: bool,
 ) -> Result<Option<Hold>> {
-    if config.check.is_none() {
+    if !run.machine_gated || config.check.is_none() {
         return Ok(None);
     }
     let mut held = Hold {
@@ -710,8 +733,11 @@ impl Ticket {
             root: run.root.clone(),
             checkout: run.checkout.clone(),
             enqueued_ms,
-            machine_gated: true,
-            limit: None,
+            machine_gated: run.machine_gated,
+            limit: run.limits.as_ref().map(|start| LimitScope {
+                workflow: start.workflow.clone(),
+                step: start.step.clone(),
+            }),
             kinds: run.kinds(),
             gives_up_ms: run.gives_up_ms,
             state: TicketState::Waiting { reason: None },
@@ -720,6 +746,21 @@ impl Ticket {
 
     fn same_task(&self, other: &Self) -> bool {
         self.task == other.task && self.root == other.root
+    }
+
+    fn shares_scope(&self, other: &Self) -> bool {
+        (self.machine_gated && other.machine_gated) || self.shares_limit(other)
+    }
+
+    fn shares_limit(&self, other: &Self) -> bool {
+        self.limit
+            .as_ref()
+            .zip(other.limit.as_ref())
+            .is_some_and(|(mine, theirs)| mine.workflow == theirs.workflow)
+    }
+
+    fn is_waiting(&self) -> bool {
+        matches!(self.state, TicketState::Waiting { .. })
     }
 }
 
@@ -764,8 +805,12 @@ impl Turn {
             let Some(mut ticket) = read_ticket(&self.0.ticket)? else {
                 return Ok(());
             };
+            let at_ms = host.now_ms();
+            if let Some(scope) = &ticket.limit {
+                limits::stamp(host.as_ref(), scope, at_ms)?;
+            }
             ticket.state = TicketState::Launched {
-                at_ms: host.now_ms(),
+                at_ms,
                 workspace: workspace.clone(),
                 agent: agent.clone(),
             };
@@ -976,6 +1021,9 @@ fn pass(
     now: u64,
     blocked: &mut Option<(u64, Hold)>,
 ) -> Result<Option<Hold>> {
+    if run.limits.as_ref().is_some_and(|start| !start.may_wait) {
+        return Ok(None);
+    }
     let ceiling = if config.check.is_some() {
         config.pace().max(CHECK_CEILING)
     } else {
@@ -993,8 +1041,19 @@ fn pass(
         Some(_) => queue[position].1.clone(),
         None => Ticket::new(host, run, now),
     };
-    let mut hold = queue_hold(&queue, position, &ticket);
-    if hold.is_none() {
+    // A limit hold is reported before the machine's, an in-flight turn of the
+    // limited workflow included, so the waiter keeps its FIFO standing.
+    let mut hold = run
+        .limits
+        .as_ref()
+        .and_then(|start| match launching(&queue, &ticket) {
+            0 => limits::evaluate(host, start).unwrap_or_else(|error| Some(store_hold(error))),
+            count => Some(limits::launching(start, count)),
+        });
+    if hold.is_none() && run.machine_gated {
+        hold = queue_hold(&queue, position, &ticket);
+    }
+    if hold.is_none() && run.machine_gated {
         hold = match blocked {
             Some((at, hold)) if now.saturating_sub(*at) < SAMPLE_EVERY_MS => Some(hold.clone()),
             _ => {
@@ -1029,15 +1088,23 @@ fn pass(
     Ok(hold)
 }
 
+fn launching(queue: &[(PathBuf, Ticket)], mine: &Ticket) -> usize {
+    queue
+        .iter()
+        .filter(|(_, ticket)| ticket.shares_limit(mine) && !ticket.is_waiting())
+        .count()
+}
+
+fn turn_held(queue: &[(PathBuf, Ticket)], mine: &Ticket) -> bool {
+    queue
+        .iter()
+        .any(|(_, ticket)| ticket.shares_scope(mine) && !ticket.is_waiting())
+}
+
 /// What in the queue keeps the ticket at `position` from being the candidate:
 /// a held turn, or a ticket ahead that nothing lets it step over.
 fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Option<Hold> {
-    let turn_held = queue.iter().any(|(_, ticket)| {
-        matches!(
-            ticket.state,
-            TicketState::Admitted | TicketState::Launched { .. }
-        )
-    });
+    let turn_held = turn_held(queue, mine);
     let task_cap = |ticket: &Ticket| {
         matches!(
             &ticket.state,
@@ -1049,8 +1116,14 @@ fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Op
     // each keeps its place among its own.
     let blocks_me = |index: usize| {
         let ticket = &queue[index].1;
-        if !matches!(ticket.state, TicketState::Waiting { .. }) {
+        if !ticket.shares_scope(mine) {
+            return false;
+        }
+        if !ticket.is_waiting() {
             return true;
+        }
+        if !mine.machine_gated || !ticket.machine_gated {
+            return false;
         }
         if let TicketState::Waiting { reason: Some(hold) } = &ticket.state
             && matches!(hold.kind, HoldKind::Capacity | HoldKind::CheckFailed)
@@ -1126,7 +1199,7 @@ fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Op
 fn sweep(host: &dyn Host, pace: Option<Duration>, now: u64) -> Result<Vec<(PathBuf, Ticket)>> {
     let mut queue = Vec::new();
     for path in ticket_paths(&host.queue_dir())? {
-        let ticket = match read_ticket(&path) {
+        let mut ticket = match read_ticket(&path) {
             Ok(Some(ticket)) => ticket,
             Ok(None) => continue,
             Err(err @ ThrottleError::CorruptTicket { .. }) => {
@@ -1136,6 +1209,7 @@ fn sweep(host: &dyn Host, pace: Option<Duration>, now: u64) -> Result<Vec<(PathB
             }
             Err(err) => return Err(err),
         };
+        let scopes = (ticket.machine_gated, ticket.limit.clone());
         let over = match &ticket.state {
             TicketState::Waiting { .. } | TicketState::Admitted => {
                 !host.owner_is_live(&ticket.owner)
@@ -1144,16 +1218,33 @@ fn sweep(host: &dyn Host, pace: Option<Duration>, now: u64) -> Result<Vec<(PathB
                 at_ms,
                 workspace,
                 agent,
-            } => pace.is_some_and(|pace| {
-                now.saturating_sub(*at_ms) >= duration_ms(pace)
-                    || host
-                        .agents(workspace)
-                        .is_ok_and(|agents| provider_reported(&agents, agent))
-            }),
+            } => {
+                if let Some(pace) = pace {
+                    let elapsed = now.saturating_sub(*at_ms);
+                    let mut machine_done = !ticket.machine_gated || elapsed >= duration_ms(pace);
+                    let mut limit_done =
+                        ticket.limit.is_none() || elapsed >= duration_ms(pace.max(CHECK_CEILING));
+                    if (!machine_done || !limit_done)
+                        && let Ok(agents) = host.agents(workspace)
+                    {
+                        machine_done = machine_done || provider_reported(&agents, agent);
+                        limit_done =
+                            limit_done || limits::reported(&agents, agent, host_time(host));
+                    }
+                    ticket.machine_gated &= !machine_done;
+                    if limit_done {
+                        ticket.limit = None;
+                    }
+                }
+                !ticket.machine_gated && ticket.limit.is_none()
+            }
         };
         if over {
             remove_ticket(&path);
         } else {
+            if scopes != (ticket.machine_gated, ticket.limit.clone()) {
+                write_ticket(&path, &ticket)?;
+            }
             queue.push((path, ticket));
         }
     }
@@ -1252,8 +1343,12 @@ fn task_count(
     now: Timestamp,
 ) -> Result<(usize, Vec<String>), String> {
     let agents = host.agents(workspace)?;
-    let runs = host.task_runs(workspace, task)?;
-    let workflows = host.task_workflows(workspace, task)?;
+    let runs: Vec<_> = host
+        .runs(workspace)?
+        .into_iter()
+        .filter(|run| run.loop_task.as_deref() == Some(task))
+        .collect();
+    let workflows = host.workflows(workspace)?;
     let counted = task_working(&agents, &runs, &workflows, task, now);
     let mut names = Vec::new();
     name_counted(&mut names, &agents, &counted);
@@ -1314,7 +1409,11 @@ fn cap_hold(kind: HoldKind, cap: u32, count: usize, mut names: Vec<String>) -> O
 /// a hold, never a short count.
 fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
     let now = host_time(host);
-    if let Some(cap) = config.max_active_per_task {
+    if let Some(cap) = config.max_active_per_task.filter(|_| {
+        !run.limits
+            .as_ref()
+            .is_some_and(WorkflowStart::task_cap_exempt)
+    }) {
         let (count, names) = match task_count(host, &run.workspace, &run.task, now) {
             Ok(read) => read,
             Err(text) => return Ok(Some(store_hold(text))),
@@ -1459,6 +1558,8 @@ pub fn readings(
     };
     let checkout = entry.run_dir();
     let run = Run {
+        machine_gated: true,
+        limits: None,
         task: name.to_owned(),
         root,
         disk: disk_at(entry, &config.agents.worktree, checkout.clone()),
