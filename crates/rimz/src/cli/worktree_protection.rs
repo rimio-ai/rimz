@@ -1,11 +1,11 @@
-//! Runtime pane, agent, loop-task, and team-board facts for worktree removal safety.
+//! Runtime pane, agent, loop-task, team-board, and workflow-run removal protection facts.
 //!
 //! Domain removal policy stays in `rimz::worktree::ProtectionSet`; this module
 //! preserves each CLI caller's fact-gathering and failure semantics.
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use super::{GlobalFlags, open_existing_store};
 use rimz::agents::AgentState;
@@ -23,6 +23,8 @@ pub(super) enum ProtectionErr {
     Roster(#[source] anyhow::Error),
     #[error("loop tasks unavailable: {0:#}")]
     LoopTasks(#[source] anyhow::Error),
+    #[error("workflow runs unavailable: {0:#}")]
+    WorkflowRuns(#[source] anyhow::Error),
     #[error("listing owned worktrees: {0}")]
     WorktreeListing(#[source] rimz::worktree::WorktreeErr),
 }
@@ -32,6 +34,20 @@ fn add_loop_tasks(protection: &mut RuntimeProtection) -> Result<()> {
         protection
             .protections
             .insert_loop_task(&pin.name, &pin.path);
+    }
+    Ok(())
+}
+
+fn add_workflow_runs(
+    protection: &mut RuntimeProtection,
+    mode: rimz::store::workflow::RunRead,
+) -> Result<()> {
+    for run in rimz::store::workflow::unfinished_under(&rimz::disk::paths::rimz_home(), mode)? {
+        protection.protections.insert_workflow_run(
+            &run.id,
+            &run.address().to_string(),
+            &run.scope.path,
+        );
     }
     Ok(())
 }
@@ -52,7 +68,7 @@ fn add_team_boards(
     Ok(())
 }
 
-/// Best-effort occupancy, loop-task, and team-board facts, with gc's own-pane policy.
+/// Best-effort occupancy, task, team-board, and workflow-run facts, with gc's own-pane policy.
 pub(super) fn for_listing(
     workspace: &ResolvedWorkspace,
     globals: &GlobalFlags,
@@ -66,6 +82,7 @@ pub(super) fn for_listing(
     let mut protection = assemble(&panes, agents, None, rimz::worktree::Occupancy::Unproven);
     let _ = add_loop_tasks(&mut protection);
     let _ = add_team_boards(&mut protection, &workspace.project_root);
+    let _ = add_workflow_runs(&mut protection, rimz::store::workflow::RunRead::BestEffort);
     protection
 }
 
@@ -73,6 +90,7 @@ pub(super) fn for_listing(
 ///
 /// Stale records do not block an explicit decision, and the command's own pane
 /// is excluded so invoking removal from inside a checkout can proceed.
+/// Unfinished workflow runs are read best-effort across every room.
 pub(super) fn for_explicit_removal(
     repo_roots: &[&Path],
     globals: &GlobalFlags,
@@ -86,7 +104,18 @@ pub(super) fn for_explicit_removal(
     }
 }
 
-/// Best-effort occupancy, required loop-task facts, and the cleanup path's team board.
+/// Best-effort occupancy for landing, which does not remove a workflow's checkout.
+pub(super) fn for_merge(repo_roots: &[&Path], globals: &GlobalFlags) -> RuntimeProtection {
+    RuntimeProtection {
+        protections: rimz::launcher::worktree_entry::occupancy_protections(
+            repo_roots,
+            globals.root.as_deref(),
+            globals.mux,
+        ),
+    }
+}
+
+/// Best-effort occupancy, required task and workflow facts, and the cleanup path's team board.
 ///
 /// Unlike explicit removal, unknown agent liveness remains protective.
 pub(super) fn for_wrapper_cleanup(
@@ -99,16 +128,18 @@ pub(super) fn for_wrapper_cleanup(
         globals,
         rimz::worktree::Occupancy::Unproven,
     );
-    add_loop_tasks(&mut protection)?;
+    add_loop_tasks(&mut protection).context("loop tasks unavailable")?;
+    add_workflow_runs(&mut protection, rimz::store::workflow::RunRead::Strict)
+        .context("workflow runs unavailable")?;
     add_team_board(&mut protection, path);
     Ok(protection)
 }
 
-/// Required roster, loop-task, and owned-tree facts, including team-board holds.
+/// Required roster, task, workflow-run, and owned-tree facts, including team-board holds.
 ///
-/// The caller already resolved and opened its workspace. A roster, task-source,
+/// The caller already resolved and opened its workspace. A roster, task-source, run-source,
 /// or owned-tree listing failure is returned so gc can skip the sweep instead
-/// of reclaiming without durable agent, task, or board truth; the invoking pane
+/// of reclaiming without durable agent, task, run, or board truth; the invoking pane
 /// remains part of automatic occupancy.
 pub(super) fn for_automatic_gc(
     workspace: &ResolvedWorkspace,
@@ -119,6 +150,8 @@ pub(super) fn for_automatic_gc(
     let (_, panes) = list_panes(Some(workspace), globals);
     let mut protection = assemble(&panes, agents, None, rimz::worktree::Occupancy::Unproven);
     add_loop_tasks(&mut protection).map_err(ProtectionErr::LoopTasks)?;
+    add_workflow_runs(&mut protection, rimz::store::workflow::RunRead::Strict)
+        .map_err(ProtectionErr::WorkflowRuns)?;
     add_team_boards(&mut protection, &workspace.project_root)
         .map_err(ProtectionErr::WorktreeListing)?;
     Ok(protection)

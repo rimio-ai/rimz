@@ -5,6 +5,87 @@ use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::writer::AgentLaunchScope;
 
 #[test]
+fn worktree_recreation_refuses_an_unfinished_workflow_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=RimZ Test",
+            "-c",
+            "user.email=rimz@example.test",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let config = crate::config::MachineConfig::default();
+    let created = crate::worktree::create(
+        &repo,
+        &config.agents.worktree,
+        Some("held"),
+        None,
+        None,
+        false,
+        crate::worktree::LaunchBase::Configured,
+    )
+    .unwrap();
+    let workspace = crate::workspace::WorkspaceResolver::resolve(&repo, None).unwrap();
+    let state = crate::StatePaths::for_project_root(&repo).unwrap();
+    let store = crate::Store::open(
+        state.clone(),
+        crate::RuntimePaths::for_state(&state).unwrap(),
+    )
+    .unwrap();
+    crate::workspace::record::write(
+        &state,
+        &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+    )
+    .unwrap();
+    let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+        "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"land",
+        "spec_dir":dir.path(), "spec_digest":"test", "project_root":repo,
+        "scope":{"kind":"worktree","path":created.marker.worktree_path},
+        "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"check",
+        "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
+        "next_seq":1, "visits":{}, "visit_grant":0
+    }))
+    .unwrap();
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    crate::store::workflow::initialize(&state, &run, b"[workflow]", &guard).unwrap();
+    drop(guard);
+    let result = worktree_entry::remove(
+        &workspace,
+        &config,
+        None,
+        None,
+        &store,
+        "held",
+        &created.marker.worktree_path,
+        "team",
+        &mut Unattended,
+    );
+    let error = result
+        .expect_err("a run must prevent recreation")
+        .to_string();
+    assert!(
+        error.contains("is in use by workflow run land#held; nothing removed; nothing launched"),
+        "{error}"
+    );
+    assert!(created.marker.worktree_path.exists());
+}
+
+#[test]
 fn explicit_account_keeps_the_tier_provider_and_stamps_every_agent_cell() {
     use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
 

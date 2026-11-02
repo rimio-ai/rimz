@@ -1346,7 +1346,8 @@ allowed-dependencies = [
 # atomic::sync_tree makes staged Git trees durable before entry publication (+1).
 # paths::is_under_root shares empty-root containment across preflights and sandbox planning (+1).
 # atomic::publish_staged_no_replace shares non-replacing staged-entry publication (+1).
-surface-budget = 317
+# paths::workflow_runs_under_strict preserves required protection facts across rooms (+1).
+surface-budget = 318
 
 [[verdict]]
 kind = "item"
@@ -2383,7 +2384,8 @@ path = "crates/rimz/src/launcher"
 # The store-creation doorway is launcher-private (-1).
 # prepare_run_layout joins run-bearing layouts to shared preparation (+1).
 # run_exit_policy moves to the shared pane compiler (-1).
-surface-budget = 100
+# worktree_entry::occupancy_protections keeps landing separate from removal's workflow pins (+1).
+surface-budget = 101
 
 [[verdict]]
 kind = "item"
@@ -3659,7 +3661,8 @@ path = "crates/rimz/src/store"
 # idle_compaction_edge keeps idle stamps and lapse checks on the same turn boundaries (+1).
 # ProviderPlan and SidebarProviderPanel::plan_label replace the shared formatter (+1).
 # agent_idle_since shares the row-or-child idle origin across CLI scenes (+1).
-surface-budget = 529
+# workflow::{RunRead, unfinished_under} share strict and best-effort cross-room run protection (+2).
+surface-budget = 531
 
 [[verdict]]
 kind = "item"
@@ -3920,7 +3923,8 @@ path = "crates/rimz/src/worktree"
 # discover_checkout and CheckoutDiscoveryErr carry validated checkout discovery into launch compilation (+2).
 # ProtectionSet::insert_team accepts CLI-gathered team-board pins (+1).
 # CheckoutKind and classify_checkout expose metadata-only room-relative labels (+2).
-surface-budget = 84
+# WorkflowRunHolder and ProtectionSet::insert_workflow_run carry caller-gathered run pins (+2).
+surface-budget = 86
 
 [[verdict]]
 kind = "item"
@@ -8554,7 +8558,37 @@ reason = "The public bounded_map signature carries lane attribution through util
 [[verdict]]
 kind = "item"
 key = "worktree::Holders"
-reason = "Shared inspection and sweep records carry agent handles, bare-pane counts, loop-task names, and team names to the CLI."
+reason = "Shared inspection and sweep records carry agent handles, bare-pane counts, loop-task names, team names, and workflow run ids and addresses to the CLI."
+
+[[verdict]]
+kind = "item"
+key = "worktree::WorkflowRunHolder"
+reason = "Listing and removal receipts share a run's stable id and readable address without loading records in the worktree domain."
+
+[[verdict]]
+kind = "item"
+key = "worktree::ProtectionSet::insert_workflow_run"
+reason = "Callers supply workflow pins just like task and board pins; containment and deduplication stay in the worktree domain."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunRead"
+reason = "Automatic reclamation requires every workflow fact while explicit decisions retain readable facts best-effort."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::unfinished_under"
+reason = "Removal callers read unfinished runs across every room through the strict record codec, without a second parser."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::workflow_runs_under_strict"
+reason = "Required worktree protection propagates unreadable workflow directories while existing discovery stays lenient."
+
+[[verdict]]
+kind = "item"
+key = "launcher::worktree_entry::occupancy_protections"
+reason = "Landing leaves the tree in place and must not refuse a workflow's own merge step; removal adds run pins separately."
 
 [[verdict]]
 kind = "item"

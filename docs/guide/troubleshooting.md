@@ -511,7 +511,7 @@ rimz gc --all --dry-run    # preview every room and shared machine state
 rimz gc --all              # sweep that machine-wide scope
 ```
 
-A kept worktree carries every reason (`in use`, `uncommitted changes`, `unlanded work`, `unknown`) and its holders: agents, panes, loop tasks, and team boards short of `Done`. Nothing with unlanded work is ever swept.
+A kept worktree carries every reason (`in use`, `uncommitted changes`, `unlanded work`, `unknown`) and its holders: agents, panes, loop tasks, team boards short of `Done`, and unfinished workflow runs. Cancel a holding run with `rimz workflow cancel <run-id>` before removing its tree. Nothing with unlanded work is ever swept.
 
 ### Where state lives, and full removal
 

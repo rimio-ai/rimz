@@ -127,7 +127,7 @@ feat-a    feat-a  landed            -
 | `WORKTREE` | The name, which is also the channel. |
 | `BRANCH` | The branch checked out now, or `-` on a detached `HEAD`. |
 | `STATE` | `landed`, `unlanded`, or `unknown`, with ` · dirty` when `git status` shows any change, untracked files included. |
-| `HOLDERS` | Holders using the sweep's occupancy rules: at most three handles then `+N`, `pane` for a pane-only holder, `loop task NAME` for each holding task, then `team NAME` for each holding board, or `-`. Ended agents are omitted. |
+| `HOLDERS` | Holders using the sweep's occupancy rules: at most three handles then `+N`, `pane` for a pane-only holder, `loop task NAME` for each holding task, `team NAME` for each holding board, then `workflow run ADDRESS` for each unfinished run, or `-`. Ended agents are omitted. |
 
 `--json` prints an array of objects, `[]` when there are none.
 
@@ -141,7 +141,7 @@ feat-a    feat-a  landed            -
 | `dirty` | `true` or `false`. |
 | `landed` | `true`, `false`, or `null` when unknown. |
 | `reasons` | All keep reason ids in precedence order: `in_use`, `uncommitted_changes`, `unlanded`, `unknown`. Empty means removable. |
-| `holders` | `agents` (full handles), `panes` (the count of protected panes with no agent), `loop_tasks` (deduplicated task names), then `teams` (deduplicated team names). Both name arrays are `[]` when none. |
+| `holders` | `agents` (full handles), `panes` (the count of protected panes with no agent), `loop_tasks` (deduplicated task names), `teams` (deduplicated team names), then `workflow_runs` (`{id, address}` objects, deduplicated by id). Arrays are `[]` when none. |
 
 ## Open a shell in a worktree
 
@@ -172,6 +172,8 @@ landed auth on main
 `merge` starts from the recorded base while it remains a live destination, otherwise the trunk. This supports `master` and stacked feature branches. A remote-tracking base such as `origin/main` maps to the local branch whose upstream is that ref, otherwise the trunk's local branch; with neither, landing refuses. The prompt and receipt name the local destination. `list` still measures against the remote-tracking base, so the tree remains `unlanded` until that local branch is pushed.
 
 The target must be a branch checked out somewhere in this repository; a snapshot commit is not a landing target. RimZ rebases the tree's branch onto the target, then advances that branch in its own checkout with `git merge --ff-only`. It never creates a merge commit and has no `--force`. The tree stays in place afterwards; `sweep` or `remove` reclaims it.
+
+Unfinished workflow runs do not block `merge`: it leaves their checkout in place, and a workflow step may land its own work.
 
 Without `--yes`, terminal stdin prompts `land NAME on TARGET? [y/N]`. Declining prints `nothing changed.` on stderr and succeeds. Without a terminal it refuses with ``rimz worktree merge needs a terminal to confirm; pass --yes to land `NAME` on `TARGET` without asking``. `--yes` skips confirmation, not the preconditions.
 
@@ -204,14 +206,14 @@ removed feat-a
 
 | Refusal | When |
 | --- | --- |
-| ``worktree `NAME` is in use by HANDLES; use --force to remove it`` | A live agent or an open pane is in the tree. `HANDLES` reads `an open pane` when no agent is recorded there. A stale record from a crashed agent does not count. |
+| ``worktree `NAME` is in use by HOLDERS; ...`` | A live agent, an open pane, or an unfinished workflow run holds the tree. Pane-only occupancy reads `an open pane`; runs read `workflow run ADDRESS`. A run refusal adds `rimz workflow cancel <run-id>` for each run and the `--force` alternative. A stale record from a crashed agent does not count. |
 | ``worktree `NAME` has uncommitted changes (N files); commit or stash them, or pass --force to discard them`` | The tree is dirty. |
 | ``worktree `NAME` has N commits not landed on TARGET; run `rimz worktree merge NAME`, or pass --force to delete them`` | The work is unlanded on its comparison ref. |
 | ``worktree `NAME` has work RimZ cannot prove landed; land it yourself, or pass --force to delete its branch`` | RimZ cannot prove whether the work landed. |
 
 Without `--force`, the branch is deleted when Git considers it merged or RimZ proves its work landed. Otherwise the branch stays and the report adds `  branch kept: its work is not proven landed on TARGET`.
 
-`--force` skips these checks and removes the tree with `git worktree remove --force`, then deletes the branch with `git branch -D`. When its tip could be read, the receipt prints ``branch deleted: BRANCH was at OID; restore with `git branch BRANCH OID` `` with the full commit id. When the tree was in use, `--force` first prints ``warning: worktree `NAME` is in use by HANDLES; removing it anyway`` on stderr. Holders include agent handles and any unassociated open panes.
+`--force` skips these checks and removes the tree with `git worktree remove --force`, then deletes the branch with `git branch -D`. When its tip could be read, the receipt prints ``branch deleted: BRANCH was at OID; restore with `git branch BRANCH OID` `` with the full commit id. When the tree was in use, `--force` first prints ``warning: worktree `NAME` is in use by HOLDERS; removing it anyway`` on stderr. Holders include agent handles, unassociated open panes, and unfinished workflow runs.
 
 `remove` exits 1 if ending the sessions or archiving the messages fails, even though the checkout is already gone. A failure to append the message history only warns and leaves the exit code 0 ([write classes](../../internals/store.md#write-classes)).
 
@@ -233,7 +235,7 @@ would remove (1) from ~/code/query-engine-worktrees
 nothing was removed; run `rimz worktree sweep` to remove the 1
 ```
 
-`sweep` removes every RimZ-owned worktree that is clean, proven landed, and has no pane, agent, armed loop-task holder, or team board short of `Done`, deleting each branch the way `remove` does without `--force`, and then runs `git worktree prune`. It never forces. `--dry-run` prints the same report and removes nothing; in a repository with no RimZ store it prints `sweep — skipped · no RimZ store here` and creates none. A sweep with nothing to remove prints `sweep — nothing to remove · N kept`.
+`sweep` removes every RimZ-owned worktree that is clean, proven landed, and has no pane, agent, armed loop-task holder, team board short of `Done`, or unfinished workflow run, deleting each branch the way `remove` does without `--force`, and then runs `git worktree prune`. It never forces. `--dry-run` prints the same report and removes nothing; in a repository with no RimZ store it prints `sweep — skipped · no RimZ store here` and creates none. A sweep with nothing to remove prints `sweep — nothing to remove · N kept`.
 
 An enabled machine or instance task holds its root and its run directory until removed, disabled, or past its deadline; a paused task still holds them. `--each-worktree` holds only its root. A task that launches with `--worktree` holds only its root unless it has a check, judge, `when`, or watch that needs its run directory too. Project tasks do not hold trees. Holders print as `loop task NAME`; they also keep trees during unattended agent-exit cleanup. Explicit `remove` and `merge` ignore loop holders.
 
@@ -243,7 +245,7 @@ Each removal runs the optional [`removed` hook](../../guide/worktrees.md#prepare
 
 | `kept` reason | Meaning |
 | --- | --- |
-| `in use` | An open pane or an agent is in the tree, an armed loop task needs it, or its team board is short of `Done` (including an unreadable board or one with no stage). Unlike `remove`, an agent RimZ cannot prove dead still counts. |
+| `in use` | An open pane or an agent is in the tree, an armed loop task needs it, its team board is short of `Done` (including an unreadable board or one with no stage), or an active or parked workflow run has its scope inside it. Unlike `remove`, an agent RimZ cannot prove dead still counts. |
 | `uncommitted changes` | The tree is dirty. |
 | `unlanded work` | The work has not landed. |
 | `unknown` | RimZ cannot prove whether the work landed. |
@@ -252,6 +254,6 @@ The report groups each kept tree under its first reason, then names additional r
 
 Quitting the agent that worked in a tree reclaims nothing: its pane says the worktree was kept and names `rimz worktree sweep`, then drops back to a shell, and the tree, its branch, and its files stay. A tree goes away through `sweep`, through `remove`, or through the daily `gc` below, which runs this same sweep.
 
-A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` under its row. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster, machine loop file, workspace listing, any workspace's instance-task file, or the owned-worktree listing cannot be read, `sweep` removes nothing and exits 1, naming the failed source. Listing is best-effort: unreadable task sources contribute no loop holders to `list`, and a failed board enumeration contributes no team holders (the listing itself still requires Git's worktree list).
+A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` under its row. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster, machine loop file, workspace listing, any workspace's instance-task file, any workflow record or workflows directory, or the owned-worktree listing cannot be read, `sweep` removes nothing and exits 1, naming the failed source. Listing is best-effort: unreadable task sources contribute no loop holders to `list`, a failed board enumeration contributes no team holders, and unreadable workflow records or directories are skipped while readable runs still hold (the listing itself still requires Git's worktree list).
 
 [`rimz gc`](./maintenance.md#sweep-stale-state) runs the same sweep as one area of its report.

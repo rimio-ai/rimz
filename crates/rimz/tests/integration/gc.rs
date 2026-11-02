@@ -5,6 +5,7 @@ use std::process::Command;
 use std::time::{Duration, SystemTime};
 
 use assert_cmd::assert::OutputAssertExt;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::AgentSessionId;
@@ -1412,6 +1413,55 @@ fn gc_fanout_does_not_pin_its_arming_directory() {
         .success()
         .stdout(contains("removed: followup"));
     assert!(!worktree.exists());
+}
+
+#[test]
+fn gc_skips_worktrees_when_another_rooms_workflow_record_is_broken() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let tree = env.home_root.join("project-worktrees/followup");
+    let other = env.home_root.join("other");
+    env.record(&other);
+    let paths = env
+        .state_path_for(&other)
+        .workflow(&rimz::ids::WorkflowRunId::new());
+    std::fs::create_dir_all(&paths.home).unwrap();
+    std::fs::write(&paths.record, "broken JSON").unwrap();
+    let output = env.rimz().args(["gc", "--json"]).assert().success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["worktrees"]["skipped"], "workflow_runs_unavailable");
+    assert!(tree.exists());
+    env.rimz().arg("gc").assert().success().stdout(
+        contains("workflow runs unavailable").and(contains(paths.record.display().to_string())),
+    );
+    env.rimz()
+        .args(["worktree", "sweep", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(
+            contains("reading protection facts before sweeping worktrees")
+                .and(contains(paths.record.display().to_string())),
+        );
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&tree)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(tree.exists());
+    env.rimz()
+        .args(["worktree", "remove", "followup"])
+        .assert()
+        .success();
+    assert!(!tree.exists());
 }
 
 #[test]
