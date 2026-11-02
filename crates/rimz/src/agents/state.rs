@@ -664,6 +664,7 @@ impl WaitingResolution {
         context: Option<&AgentContext>,
         last_activity: Timestamp,
         source_agent: Option<&AgentState>,
+        _now: Timestamp,
     ) -> Self {
         if status != AgentStatus::Waiting {
             return Self::NotWaiting;
@@ -1651,8 +1652,8 @@ impl AgentState {
     /// `success`, which opens message delivery gates. Budget-aware callers may
     /// still upgrade a paused projection to `failed`. Resting rows with an
     /// armed one-shot delivery read as `sleeping`.
-    pub fn effective_status(&self) -> AgentStatus {
-        let status = self.rested_status();
+    pub fn effective_status(&self, now: Timestamp) -> AgentStatus {
+        let status = self.rested_status(now);
         if matches!(status, AgentStatus::Idle | AgentStatus::Success)
             && !self.pending_waits.is_empty()
         {
@@ -1662,12 +1663,13 @@ impl AgentState {
         }
     }
 
-    fn resolved_status_phase(&self) -> (AgentStatus, TurnPhase) {
+    fn resolved_status_phase(&self, now: Timestamp) -> (AgentStatus, TurnPhase) {
         match WaitingResolution::resolve(
             self.status,
             self.context.as_ref(),
             self.last_activity,
             Some(self),
+            now,
         ) {
             WaitingResolution::Answered => (AgentStatus::Running, TurnPhase::Reasoning),
             _ => (self.status, self.phase),
@@ -1696,8 +1698,8 @@ impl AgentState {
         status
     }
 
-    pub(crate) fn rested_status(&self) -> AgentStatus {
-        let (status, phase) = self.resolved_status_phase();
+    pub(crate) fn rested_status(&self, now: Timestamp) -> AgentStatus {
+        let (status, phase) = self.resolved_status_phase(now);
         let settled = settled_outcome(status, self.context.as_ref(), self.last_activity);
         if matches!(
             settled,
@@ -1711,7 +1713,7 @@ impl AgentState {
         if status == AgentStatus::Waiting && settled == Some(TurnSettleOutcome::Interrupted) {
             return AgentStatus::Idle;
         }
-        if let Some((class, _)) = self.displayed_turn_error() {
+        if let Some((class, _)) = self.displayed_turn_error(now) {
             return if class.pauses_turn() {
                 AgentStatus::Paused
             } else {
@@ -1887,8 +1889,11 @@ impl AgentState {
     /// Provider API error currently explaining this row's displayed state. The
     /// returned class includes legacy label remapping; the marker retains the
     /// upstream label and timestamp for display and resume decisions.
-    pub fn displayed_turn_error(&self) -> Option<(TurnErrorClass, &AgentTurnError)> {
-        let (status, _) = self.resolved_status_phase();
+    pub fn displayed_turn_error(
+        &self,
+        now: Timestamp,
+    ) -> Option<(TurnErrorClass, &AgentTurnError)> {
+        let (status, _) = self.resolved_status_phase(now);
         let error = display_turn_error(
             status,
             self.context.as_ref(),
@@ -1903,8 +1908,12 @@ impl AgentState {
     /// unknown marker reads `failed`, on a raw-`failed` row too, and so does a
     /// displayed pausing marker the card's [`super::ParkDemotion`] counts as
     /// spent; otherwise this is the rested status lifted by in-flight waits or shells.
-    pub fn rowless_status(&self, demotion: &super::ParkDemotion) -> (AgentStatus, TurnPhase) {
-        let class = self.displayed_turn_error().map(|(class, _)| class);
+    pub fn rowless_status(
+        &self,
+        demotion: &super::ParkDemotion,
+        now: Timestamp,
+    ) -> (AgentStatus, TurnPhase) {
+        let class = self.displayed_turn_error(now).map(|(class, _)| class);
         match class {
             Some(
                 TurnErrorClass::Unknown | TurnErrorClass::Failed | TurnErrorClass::NotEntitled,
@@ -1920,9 +1929,9 @@ impl AgentState {
                 | TurnErrorClass::PausedOverloaded,
             )
             | None => {
-                let rested = self.rested_status();
+                let rested = self.rested_status(now);
                 let status = self.display_rest_status(rested);
-                let (_, resolved_phase) = self.resolved_status_phase();
+                let (_, resolved_phase) = self.resolved_status_phase(now);
                 let phase = if status == AgentStatus::Running
                     && (rested == AgentStatus::Running || resolved_phase == TurnPhase::Parked)
                 {
@@ -1943,12 +1952,12 @@ impl AgentState {
     ) -> Option<(u64, ChildStall)> {
         if self.parent_agent_id.is_none()
             || self.ended_at.is_some()
-            || self.displayed_turn_error().is_some()
+            || self.displayed_turn_error(now).is_some()
         {
             return None;
         }
-        let (status, _) = self.resolved_status_phase();
-        let cause = match self.effective_status() {
+        let (status, _) = self.resolved_status_phase(now);
+        let cause = match self.effective_status(now) {
             AgentStatus::Running => ChildStall::MidTurn,
             AgentStatus::Idle
                 if status == AgentStatus::Idle
@@ -1965,8 +1974,8 @@ impl AgentState {
     }
 
     /// Displayed provider error label, falling back to the effective class words.
-    pub fn displayed_turn_error_label(&self) -> Option<String> {
-        self.displayed_turn_error().map(|(class, error)| {
+    pub fn displayed_turn_error_label(&self, now: Timestamp) -> Option<String> {
+        self.displayed_turn_error(now).map(|(class, error)| {
             error
                 .label
                 .clone()

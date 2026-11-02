@@ -842,7 +842,7 @@ fn keep_warm_holds_only_an_agent_it_can_still_ping() {
     // Sleeping is a rested row with armed waits, never a stored status.
     let mut asleep = sleeping();
     asleep.profile = Some("warm".into());
-    assert_eq!(asleep.effective_status(), AgentStatus::Sleeping);
+    assert_eq!(asleep.effective_status(ts(3_000)), AgentStatus::Sleeping);
     assert_eq!(holding(&asleep, &on), Some(TWO_HOURS));
 
     let off: HarnessConfig = toml::from_str("cache_keepalive = false").unwrap();
@@ -856,7 +856,7 @@ fn keep_warm_holds_only_an_agent_it_can_still_ping() {
     // would fold as work: it is not held.
     let mut background = running.clone();
     background.phase = crate::agents::TurnPhase::Parked;
-    assert_eq!(background.effective_status(), AgentStatus::Success);
+    assert_eq!(background.effective_status(ts(3_000)), AgentStatus::Success);
     assert_eq!(holding(&background, &on), Some(TWO_HOURS));
     let mut settled = running.clone();
     settled.last_activity = ts(10);
@@ -867,7 +867,7 @@ fn keep_warm_holds_only_an_agent_it_can_still_ping() {
         )),
         ..crate::agents::AgentContext::default()
     });
-    assert_eq!(settled.effective_status(), AgentStatus::Success);
+    assert_eq!(settled.effective_status(ts(3_000)), AgentStatus::Success);
     assert_eq!(holding(&settled, &on), None);
     let mut compacting = solo.clone();
     compacting.compacting_since = Some(ts(3000));

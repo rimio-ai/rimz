@@ -568,7 +568,7 @@ impl TurnWaitView {
     /// Effective status, held at `sleeping` while a wake for the agent is
     /// still between its consumed catalog row and its delivered turn.
     fn status(&self, agent: &AgentState) -> AgentStatus {
-        let status = agent.effective_status();
+        let status = agent.effective_status(self.snapshot.now);
         let waking = self.wake_in_flight(agent, false);
         if waking && matches!(status, AgentStatus::Idle | AgentStatus::Success) {
             AgentStatus::Sleeping

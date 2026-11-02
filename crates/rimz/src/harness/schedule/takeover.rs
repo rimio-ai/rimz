@@ -171,7 +171,7 @@ fn open_turn(agent: &AgentState, now: Timestamp) -> Option<OpenTurn> {
     if agent.is_awaiting_input() {
         return Some(OpenTurn::WaitingOnUser);
     }
-    match agent.effective_status() {
+    match agent.effective_status(now) {
         AgentStatus::Running => Some(OpenTurn::Working),
         AgentStatus::Waiting => Some(OpenTurn::WaitingOnUser),
         AgentStatus::Paused => Some(OpenTurn::Paused),
@@ -451,10 +451,10 @@ mod tests {
             },
             armed_at: Some(now()),
         });
-        assert_eq!(sleeping.effective_status(), AgentStatus::Sleeping);
+        assert_eq!(sleeping.effective_status(now()), AgentStatus::Sleeping);
         let mut background = agent("a", AgentStatus::Running, "/repo/wt");
         background.phase = TurnPhase::Parked;
-        assert_eq!(background.effective_status(), AgentStatus::Success);
+        assert_eq!(background.effective_status(now()), AgentStatus::Success);
         for settled in [
             agent("a", AgentStatus::Idle, "/repo/wt"),
             agent("a", AgentStatus::Success, "/repo/wt"),
@@ -462,7 +462,7 @@ mod tests {
             sleeping,
             background,
         ] {
-            let status = settled.effective_status();
+            let status = settled.effective_status(now());
             assert_eq!(decide(&[settled]), Ok(vec!["a".to_owned()]), "{status:?}");
         }
 
@@ -480,7 +480,7 @@ mod tests {
             resets_at: None,
             reset_window: None,
         });
-        assert_eq!(paused.effective_status(), AgentStatus::Paused);
+        assert_eq!(paused.effective_status(now()), AgentStatus::Paused);
         let mut compacting = agent("a", AgentStatus::Idle, "/repo/wt");
         compacting.compacting_since = Some(now());
         for (open, turn) in [

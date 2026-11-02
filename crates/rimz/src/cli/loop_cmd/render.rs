@@ -375,6 +375,7 @@ enum ShowThrottle {
 fn leader_statuses(
     launches: &BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
     agents: &[rimz::agents::AgentState],
+    now: jiff::Timestamp,
 ) -> BTreeMap<String, rimz::agents::AgentStatus> {
     launches
         .values()
@@ -382,7 +383,7 @@ fn leader_statuses(
             let agent = agents
                 .iter()
                 .find(|agent| agent.name.as_deref() == Some(launch.leader.as_str()))?;
-            Some((launch.leader.clone(), agent.effective_status()))
+            Some((launch.leader.clone(), agent.effective_status(now)))
         })
         .collect()
 }
@@ -1665,7 +1666,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         });
     let leader_statuses = snapshot
         .as_ref()
-        .map(|snapshot| leader_statuses(&launches, &snapshot.agents))
+        .map(|snapshot| leader_statuses(&launches, &snapshot.agents, snapshot.now))
         .unwrap_or_default();
     let you = store
         .as_ref()

@@ -748,7 +748,7 @@ fn idle_notification_settles_only_activity_older_than_its_timestamp() {
         let context = decoded.take_observed_context().expect("idle marker");
         assert_eq!(context.agent_id.as_str(), "s1");
         state.context = Some(context.context);
-        assert_eq!(state.effective_status(), status);
+        assert_eq!(state.effective_status(activity), status);
         assert_eq!(state.holds_open_turn(), open);
     }
     for payload in [

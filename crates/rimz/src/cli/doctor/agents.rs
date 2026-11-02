@@ -436,7 +436,8 @@ fn project_agent_rollup(
                     .iter()
                     .find(|child| child.id == agent.agent_id.as_str())
             });
-            let (status, phase) = rimz::store::snapshot::card_status(agent, row, child, demotion);
+            let (status, phase) =
+                rimz::store::snapshot::card_status(agent, row, child, demotion, snapshot.now);
             counts.add(status);
             if !audit && !matches!(status, AgentStatus::Failed | AgentStatus::Paused) {
                 return None;
@@ -454,7 +455,7 @@ fn project_agent_rollup(
             let attributed_to_account = !historical
                 && matches!(status, AgentStatus::Failed | AgentStatus::Paused)
                 && agent
-                    .displayed_turn_error()
+                    .displayed_turn_error(snapshot.now)
                     .is_some_and(|(class, _)| class.is_limit())
                 && usage
                     .as_ref()
@@ -471,7 +472,7 @@ fn project_agent_rollup(
                 last_seen: agent.last_seen,
                 handle,
                 account,
-                turn_error: agent.displayed_turn_error_label(),
+                turn_error: agent.displayed_turn_error_label(snapshot.now),
                 attributed_to_account,
                 restartable: agent.pane.is_some() && agent.ended_at.is_none(),
                 historical,

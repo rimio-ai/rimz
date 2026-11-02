@@ -74,7 +74,7 @@ pub enum Verdict {
 }
 
 /// The terms the rollup alone answers: the producer's whole view of an agent.
-pub(super) fn resting(agent: &AgentState) -> Result<(), Hold> {
+pub(super) fn resting(agent: &AgentState, now: Timestamp) -> Result<(), Hold> {
     if agent.ended_at.is_some() {
         return Err(Hold::Ended);
     }
@@ -91,7 +91,7 @@ pub(super) fn resting(agent: &AgentState) -> Result<(), Hold> {
         return Err(Hold::Compacting);
     }
     if !matches!(
-        agent.effective_status(),
+        agent.effective_status(now),
         AgentStatus::Idle | AgentStatus::Success
     ) || agent.phase == TurnPhase::Parked
         || !agent.background_shells.is_empty()
@@ -159,8 +159,8 @@ pub(super) fn debt(
 
 /// When the stop falls due while the agent keeps resting, or `None` while a
 /// term the rollup shows is holding the clock.
-pub fn due_at(agent: &AgentState, stop: &IdleStop) -> Option<Timestamp> {
-    resting(agent).ok()?;
+pub fn due_at(agent: &AgentState, stop: &IdleStop, now: Timestamp) -> Option<Timestamp> {
+    resting(agent, now).ok()?;
     let after = i64::try_from(stop.after_secs).unwrap_or(i64::MAX);
     rested_since(agent, stop.requested_at)
         .checked_add(jiff::SignedDuration::from_secs(after))
@@ -178,10 +178,10 @@ pub fn decide(
     stop: &IdleStop,
     now: Timestamp,
 ) -> Result<Verdict, StoreErr> {
-    if let Err(hold) = resting(agent) {
+    if let Err(hold) = resting(agent, now) {
         return Ok(Verdict::Hold(hold));
     }
-    if due_at(agent, stop).is_none_or(|due| now < due) {
+    if due_at(agent, stop, now).is_none_or(|due| now < due) {
         return Ok(Verdict::Hold(Hold::Clock));
     }
     let messages = store.list_messages()?;
@@ -190,7 +190,7 @@ pub fn decide(
         return Ok(Verdict::Hold(hold));
     }
     for child in closing_with(agents, agent) {
-        if resting(child).is_err() || debt(store, &messages, &runs, child)?.is_some() {
+        if resting(child, now).is_err() || debt(store, &messages, &runs, child)?.is_some() {
             return Ok(Verdict::Hold(Hold::Tree));
         }
     }
@@ -247,7 +247,7 @@ pub(crate) fn project_requests(snapshot: &mut SidebarSnapshot, paths: &StatePath
             })
             .map(|request| PendingIdleStop {
                 stop: request.stop.clone(),
-                due_at: due_at(agent, &request.stop),
+                due_at: due_at(agent, &request.stop, snapshot.now),
             });
     }
 }
@@ -273,7 +273,7 @@ fn stop_idle_agents_with(
         let Some(agent) = find_agent(&snapshot.agents, &request.kind, &request.agent_id) else {
             continue;
         };
-        if due_at(agent, &request.stop).is_none_or(|due| snapshot.now < due) {
+        if due_at(agent, &request.stop, snapshot.now).is_none_or(|due| snapshot.now < due) {
             continue;
         }
         let record_path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
