@@ -140,6 +140,7 @@ impl IdleCycleFixture {
         let (finished, results) = std::sync::mpsc::channel();
         let (backstop, backstops) = std::sync::mpsc::channel();
         let views = self.sink.host_data.lock().unwrap().views.clone();
+        let _mirrors = views.mirrors.spawn();
         let subscribers = self.sink.cycle.clone();
         let viewed = self
             .sink

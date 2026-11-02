@@ -145,6 +145,8 @@ Raw IDs stay inside the backend adapter, where native commands expect them (Zell
 
 `ViewId` names the view holding a pane (a Zellij tab, a tmux window) by the identity RimZ observes on every fast path: Zellij tab position (`tab_1`), tmux window id (`@3`). `PaneRef.view_id` is the flat read-side field, and the producer lifts it into `TabFrame.view_id` so per-view sidebar bookkeeping runs over typed topology.
 
+`TabFrame.position` separately carries the backend's tab index for neighbour ordering: tmux `window_index`, Zellij `view_position()`. The mux listing supplies it through `PaneListing.positions`, without changing pane identity or naming. It is optional: carried tabs and older frames read as `None`, and an absent position is omitted from the serialized frame.
+
 **A view id is never the view's on-screen label.** Zellij's default tab names are number-shaped (`Tab #16`), so matching a positional `tab_15` against a tab named "Tab #15" joins two unrelated id spaces and picks the wrong tab in any session that has closed one. The label is minted at tab creation and does not follow position; `PaneRef.view_name` carries it for display only. Resolve "which view holds this pane?" through the pane id.
 
 ### Tab names

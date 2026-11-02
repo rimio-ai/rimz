@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::fetch::{FetchUpdate, Subscribers, WorkspaceFold};
-use super::input::Wakeup;
 use super::view_state::ViewContext;
 use crate::ids::{MuxClientId, PaneId};
 #[cfg(test)]
@@ -37,8 +36,10 @@ impl From<Views> for ViewsHandle {
         let mirrors = Arc::new(super::mirror_queue::MirrorQueue::new(
             views.subscribers.clone(),
         ));
+        let record = Arc::new(ViewsRecord::new(&views, 0));
+        mirrors.observe(record.clone());
         Self {
-            record: Mutex::new(Arc::new(ViewsRecord::new(&views, 0))),
+            record: Mutex::new(record),
             views: Mutex::new(views),
             generation: AtomicU64::new(0),
             mirrors,
@@ -74,17 +75,7 @@ impl ViewsHandle {
         let record = Arc::new(ViewsRecord::new(views, generation));
         *self.record.lock().unwrap_or_else(PoisonError::into_inner) = record.clone();
         self.generation.store(generation, Ordering::Release);
-        if record.mirror_target.is_some() && record.mirror_target != previous.mirror_target {
-            for subscriber in views
-                .subscribers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .values()
-                .filter(|subscriber| !record.mapped(&subscriber.own_pane))
-            {
-                let _ = subscriber.wake.try_send(Wakeup::Tick);
-            }
-        }
+        self.mirrors.observe(record);
     }
 
     pub(super) fn generation(&self) -> u64 {
@@ -131,7 +122,6 @@ pub(super) struct ViewsRecord {
     pub(super) latest: Latest,
     pub(super) mirror_target: Option<(ViewId, u64)>,
     pub(super) mirror_pane: Option<PaneId>,
-    pub(super) mirror_interval: Duration,
     pub(super) fold: Option<Arc<WorkspaceFold>>,
     mapped_panes: HashSet<PaneId>,
     resolved_panes: HashSet<PaneId>,
@@ -149,10 +139,7 @@ impl ViewsRecord {
             revision: views.revision,
             latest: views.latest.clone(),
             mirror_target: mirror.map(|(id, state, _, _)| (id, state.layout_sequence)),
-            mirror_pane: None,
-            mirror_interval: mirror.map_or(Duration::ZERO, |(_, _, context, _)| {
-                super::timing::animation_frame(&context.current)
-            }),
+            mirror_pane: mirror.and_then(|(id, ..)| views.mirror_pane(id)),
             fold: views.fold.clone(),
             mapped_panes: views.panes.keys().cloned().collect(),
             resolved_panes: views.resolved_panes().cloned().collect(),
@@ -160,11 +147,10 @@ impl ViewsRecord {
     }
 
     fn matches(&self, views: &Views) -> bool {
+        let mirror = views.mirror_view();
         self.revision == views.revision
-            && self.mirror_target
-                == views
-                    .mirror_view()
-                    .map(|(id, state, _, _)| (id, state.layout_sequence))
+            && self.mirror_target == mirror.map(|(id, state, _, _)| (id, state.layout_sequence))
+            && self.mirror_pane == mirror.and_then(|(id, ..)| views.mirror_pane(id))
             && self.fold.as_ref().map(Arc::as_ptr) == views.fold.as_ref().map(Arc::as_ptr)
             && self.mapped_panes.len() == views.panes.len()
             && views.panes.keys().all(|pane| self.mapped(pane))
@@ -406,6 +392,22 @@ impl Views {
             entry.context.as_ref()?,
             entry.cursor.revision,
         ))
+    }
+
+    fn mirror_pane(&self, id: ViewId) -> Option<PaneId> {
+        self.entries[&id]
+            .last_pane
+            .as_ref()
+            .filter(|pane| self.panes.get(*pane) == Some(&id))
+            .cloned()
+            .or_else(|| {
+                self.panes
+                    .iter()
+                    .filter(|(_, view)| **view == id)
+                    .map(|(pane, _)| pane)
+                    .min_by(|left, right| left.as_str().cmp(right.as_str()))
+                    .cloned()
+            })
     }
 
     pub(super) fn fresh_fold(

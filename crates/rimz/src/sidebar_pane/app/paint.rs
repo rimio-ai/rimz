@@ -242,7 +242,9 @@ impl FramePainter {
         let width = terminal.get_frame().area().width;
         (
             body_result,
-            terminal.backend_mut().take_frame(bracket, width),
+            terminal
+                .backend_mut()
+                .take_frame(bracket, width, matches!(kind, PaintKind::Mirror)),
         )
     }
 

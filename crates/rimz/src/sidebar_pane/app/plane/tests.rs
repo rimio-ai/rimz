@@ -4,6 +4,44 @@ use crate::sidebar_pane::app::fetch::FetchMode;
 use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 
 #[test]
+fn real_mirror_dispatcher_wakes_two_hidden_subscribers() {
+    let (plane, _, _) = DataPlane::idle();
+    let mut config = serve_config(&workspace());
+    let source = config.own_pane.clone();
+    let mut subscriptions = Vec::new();
+    let mut receivers = Vec::new();
+    for index in 0..2 {
+        config.instance_id = SidebarInstanceId::new();
+        config.own_pane = crate::PaneId::from_parts(MuxName::Zellij, format!("hidden_{index}"));
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        subscriptions.push(plane.subscribe(&config, send));
+        receivers.push(receive);
+    }
+    {
+        let mut views = plane.views.lock();
+        let (_, entry) = views.presentation(&source, std::time::Instant::now(), false);
+        entry.context = Some(super::super::view_state::ViewContext::new(
+            snapshot(&workspace()),
+            std::time::Instant::now(),
+        ));
+        entry.state.layout_sequence = 1;
+    }
+    assert!(
+        receivers
+            .iter()
+            .all(|receiver| receiver.try_recv().is_err()),
+        "release sends no wake"
+    );
+    plane.views.start_mirrors();
+    for receiver in receivers {
+        assert!(matches!(
+            receiver.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(Wakeup::Tick)
+        ));
+    }
+}
+
+#[test]
 fn fold_request_maps_each_event_kind() {
     use crate::agents::LifecycleSignal;
 

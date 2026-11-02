@@ -540,6 +540,7 @@ impl IdleCycleFixture {
             subscriptions.insert(
                 instance_id.as_str().to_owned(),
                 Subscriber {
+                    mirror_offer: Arc::default(),
                     instance_id,
                     own_pane: PaneId::from_parts(
                         crate::MuxName::Zellij,
@@ -1385,6 +1386,7 @@ pub(super) struct Subscriber {
     pub(super) tick_seconds: u64,
     pub(super) completion: Arc<AtomicBool>,
     pub(super) wake: SyncSender<Wakeup>,
+    pub(super) mirror_offer: Arc<AtomicBool>,
 }
 
 pub(super) fn data_tick(eldest: &Subscriber) -> Duration {
@@ -1408,12 +1410,13 @@ struct ResultSink {
 
 impl ResultSink {
     fn shared(subscribers: Subscribers, host_data: Arc<Mutex<HostData>>) -> Self {
-        host_data
+        let views = host_data
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .views
-            .lock()
-            .subscribers = subscribers.clone();
+            .clone();
+        views.mirrors.bind(subscribers.clone());
+        views.lock().subscribers = subscribers.clone();
         let mut sink = Self {
             subscribers,
             host_data,

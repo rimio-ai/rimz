@@ -186,9 +186,10 @@ fn paint_scrolled(source: &mut Rig, offset: usize) {
 
 pub(super) struct SharedPanes {
     pub(super) plane: super::super::super::plane::DataPlane,
-    pub(super) panes: [Rig; 2],
+    pub(super) panes: Vec<Rig>,
     pub(super) snapshot: SidebarSnapshot,
     pub(super) clock: LoopClock,
+    subscriptions: Vec<super::super::super::plane::Subscription>,
 }
 
 impl SharedPanes {
@@ -211,15 +212,43 @@ impl SharedPanes {
         let plane = super::super::super::plane::DataPlane::detached();
         let mut pair = Self {
             plane,
-            panes: [a, b],
+            panes: vec![a, b],
             snapshot,
             clock,
+            subscriptions: Vec::new(),
         };
         for rig in &mut pair.panes {
+            let (wake, _) = std::sync::mpsc::sync_channel(1);
+            pair.subscriptions
+                .push(pair.plane.subscribe(&rig.state.pane.config, wake));
             rig.state.pane.clock = pair.clock.clone();
             rig.share_views(pair.plane.views.clone());
         }
         pair
+    }
+
+    pub(super) fn add_hidden(&mut self, count: usize) {
+        let mux = self.panes[0].state.pane.config.room.mux;
+        for index in self.panes.len()..self.panes.len() + count {
+            let own = PaneId::from_parts(
+                mux,
+                match mux {
+                    MuxName::Tmux => format!("%{}", 100 + index),
+                    MuxName::Zellij => format!("terminal_{}", 100 + index),
+                },
+            );
+            let mut rig = Rig::with_own_pane(own);
+            rig.state.pane.config.room.mux = mux;
+            rig.state.pane.clock = self.clock.clone();
+            let (wake, _) = std::sync::mpsc::sync_channel(1);
+            self.subscriptions
+                .push(self.plane.subscribe(&rig.state.pane.config, wake));
+            rig.share_views(self.plane.views.clone());
+            settle_width(&mut rig);
+            rig.state.pane.optimistic_watch_until = None;
+            self.panes.push(rig);
+        }
+        self.sample(&[(1, 0)]);
     }
 
     pub(super) fn sample(&mut self, clients: &[(u32, usize)]) {
@@ -239,6 +268,16 @@ impl SharedPanes {
             sidebar.pane_id = own.clone();
             sidebar.command = Some("rimz-sidebar".into());
             panes.push(sidebar);
+            if index >= 2 {
+                let mut working = pane(
+                    &format!("mirror_work_{index}"),
+                    &format!("tab_{index}"),
+                    false,
+                );
+                working.pane_id = PaneId::from_parts(mux, working.pane_id.raw());
+                working.command = Some("sh".into());
+                panes.push(working);
+            }
         }
         for (index, mut working) in self
             .snapshot
@@ -251,6 +290,9 @@ impl SharedPanes {
         }
         let mut frame =
             crate::sidebar::frame::assemble_frame(panes, self.clock.now_ms(), "rimz-test");
+        for (index, tab) in frame.tabs.iter_mut().enumerate() {
+            tab.position = Some(index as u32);
+        }
         frame.client_views = clients
             .iter()
             .map(|(client, destination)| crate::pane::ClientPaneView {
@@ -301,7 +343,7 @@ impl SharedPanes {
         rig.state.on_snapshot();
     }
 
-    fn input(&mut self, index: usize) {
+    pub(super) fn input(&mut self, index: usize) {
         let rig = &mut self.panes[index];
         rig.state
             .on_input(Wakeup::Scroll { down: true }, &mut rig.terminal)
@@ -912,11 +954,17 @@ fn tmux_clients_share_a_view_through_focus_overlay_and_detach() {
 }
 
 #[test]
-fn a_scrolled_layout_wakes_an_unmapped_peer() {
+fn a_scrolled_layout_wakes_an_unmapped_peer_only_at_rest() {
     let mut pair = SharedPanes::new(MuxName::Zellij);
     let (tx, rx) = std::sync::mpsc::sync_channel(64);
     let _subscription = pair.plane.subscribe(&pair.panes[1].state.pane.config, tx);
     pair.input(0);
+    assert!(rx.try_recv().is_err());
+    pair.plane.views.mirrors.dispatch(pair.clock.now());
+    assert!(rx.try_recv().is_err());
+    pair.clock
+        .advance(super::super::super::timing::MIRROR_QUIET);
+    pair.plane.views.mirrors.dispatch(pair.clock.now());
     assert!(matches!(rx.try_recv(), Ok(Wakeup::Tick)));
     assert!(rx.try_recv().is_err());
 }

@@ -4,6 +4,27 @@ use crate::sidebar_pane::app::clock::LoopClock;
 
 const HOLD: Duration = Duration::from_secs(10);
 
+#[test]
+fn record_release_does_not_wait_for_the_subscriber_registry() {
+    let handle = Arc::new(ViewsHandle::default());
+    let subscribers = handle.lock().subscribers.clone();
+    let locked = subscribers.lock().unwrap();
+    let publishing = handle.clone();
+    let (finished, receive) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        publishing.lock().revision += 1;
+        finished.send(()).unwrap();
+    });
+    let completed = receive.recv_timeout(Duration::from_secs(2));
+    drop(locked);
+    worker.join().unwrap();
+    assert!(
+        completed.is_ok(),
+        "a views release must not wait for the driver's subscriber registry"
+    );
+    assert_eq!(handle.read().revision, 1);
+}
+
 fn assert_record(handle: &ViewsHandle) {
     let record = handle.read();
     let views = handle.lock();

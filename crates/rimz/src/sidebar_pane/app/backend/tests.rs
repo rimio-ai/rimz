@@ -189,7 +189,7 @@ fn a_composed_frame_defers_output_until_explicit_publish() {
     let mut backend = PaneBackend::for_fd(pty.slave()).unwrap();
     backend.begin_frame();
     backend.write_all(b"composed").unwrap();
-    let frame = backend.take_frame(true, 40);
+    let frame = backend.take_frame(true, 40, false);
     assert_eq!(pty.drain(), b"");
     backend.begin_frame();
     backend.write_all(b"next").unwrap();
@@ -197,6 +197,45 @@ fn a_composed_frame_defers_output_until_explicit_publish() {
     assert_eq!(pty.drain(), b"\x1b[?2026hcomposed\x1b[?2026l");
     backend.end_frame(false, 40).unwrap();
     assert_eq!(pty.drain(), b"next");
+}
+
+#[test]
+fn unchanged_frames_skip_output_but_keep_cells_clears_and_graphics() {
+    for change in ["none", "cell", "clear", "graphics"] {
+        let mut pty = Pty::open(40, 12);
+        let mut terminal = Terminal::new(PaneBackend::for_fd(pty.slave()).unwrap()).unwrap();
+        draw_held_cells(&mut terminal, 1, 1, false);
+        pty.drain();
+
+        terminal.backend_mut().begin_frame();
+        terminal
+            .draw(|frame| {
+                frame.buffer_mut()[(0, 0)].set_symbol(if change == "cell" { "y" } else { "x" });
+            })
+            .unwrap();
+        if change == "clear" {
+            terminal.backend_mut().clear().unwrap();
+        }
+        if change == "graphics" {
+            terminal
+                .backend_mut()
+                .write_all(b"\x1b_Ga=d,d=A\x1b\\")
+                .unwrap();
+        }
+        let frame = terminal
+            .backend_mut()
+            .take_frame(change == "graphics", 40, true);
+        frame.write(terminal.backend_mut()).unwrap();
+        let bytes = pty.drain();
+        assert_eq!(bytes.is_empty(), change == "none", "{change}: {bytes:?}");
+        if change == "clear" {
+            assert!(bytes.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+        }
+        if change == "graphics" {
+            assert!(bytes.windows(3).any(|bytes| bytes == b"\x1b_G"));
+            assert_eq!(sync_pairs(&bytes), (1, 1));
+        }
+    }
 }
 
 #[test]

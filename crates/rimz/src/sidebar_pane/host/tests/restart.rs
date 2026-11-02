@@ -83,6 +83,7 @@ fn an_arriving_attachment_never_replaces_the_views_existing_baseline() {
 #[test]
 fn a_hidden_attachments_carry_cannot_seed_the_view_seen_elsewhere() {
     let room = Room::new();
+    room.host.plane.start_mirrors_for_test();
     room.view_client(0);
     let mut hidden = Pty::open(54, 30);
     let hidden_pane = room.attach_carried(&hidden, 1, Some(working(1)));
