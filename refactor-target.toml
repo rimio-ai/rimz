@@ -10450,12 +10450,12 @@ reason = "Workflow codecs share lock-free reads and caller-locked durable writes
 [[verdict]]
 kind = "item"
 key = "harness::workflow"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::WorkflowSpec"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
@@ -10500,22 +10500,22 @@ reason = "Trail and full history share which evaluations actually contributed a 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Header"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::HeaderEdges"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::StepEdges"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Check"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
@@ -10585,22 +10585,22 @@ reason = "Workflow admission and answer normalization share one reserved-outcome
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Step"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::SpecErr"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::load"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::schema"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
@@ -10665,22 +10665,22 @@ reason = "Stored condition unread prose is parsed beside its writer, never in a 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::NodeRow"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Issue"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Validation"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::validate"
-reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
