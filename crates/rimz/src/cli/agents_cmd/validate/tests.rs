@@ -182,7 +182,7 @@ fn keep_warm_warns_at_the_definition_for_an_unknown_or_short_cache_lifetime() {
     let harness = |toml: &str| toml::from_str::<rimz::config::HarnessConfig>(toml).unwrap();
 
     let defaults = keep_warm_warnings(&loaded, &harness("[prompt_cache_ttl]\nfallback = 'off'"));
-    assert_eq!(defaults.len(), 1, "a 60m Claude cache clears the 15m floor");
+    assert_eq!(defaults.len(), 1, "a 60m Claude cache clears the 30m floor");
     assert!(defaults[0].path.ends_with("unknown.md"));
     assert!(
         defaults[0]
@@ -213,14 +213,14 @@ fn keep_warm_warns_at_the_definition_for_an_unknown_or_short_cache_lifetime() {
         "no maximum, no cap"
     );
 
-    let short = "[prompt_cache_ttl]\nclaude = \"5m\"\namp = \"20m\"";
+    let short = "[prompt_cache_ttl]\nclaude = \"5m\"\namp = \"30m\"";
     let floored = keep_warm_warnings(&loaded, &harness(short));
     assert_eq!(floored.len(), 1, "an override makes amp known");
     assert!(floored[0].path.ends_with("warm.md"));
     assert!(
         floored[0]
             .message
-            .contains("lifetime 5m is below `harness.keep_warm_min_ttl` (15m)"),
+            .contains("lifetime 5m is below `harness.keep_warm_min_ttl` (30m)"),
         "{}",
         floored[0].message
     );

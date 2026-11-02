@@ -114,7 +114,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `harness.prompt_cache_margin` | a non-zero duration (default `1m`), shorter than every static prompt-cache lifetime (settings, defaults, fallback) and `harness.cache_keepalive_max`; observed writes may be shorter; see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.prompt_cache_ttl.<kind>[.<subscription\|api-key>]` | `off` or a duration longer than the margin; plain or split provider settings |
 | `harness.prompt_cache_ttl.fallback` | `off` or a duration longer than the margin (default `1h`) |
-| `harness.keep_warm_min_ttl` | `off` or a duration such as `15m` (default); see [keep-warm](../../guide/configuration.md#keep-warm) |
+| `harness.keep_warm_min_ttl` | `off` or a duration such as `30m` (default); see [keep-warm](../../guide/configuration.md#keep-warm) |
 | `harness.budget` | an amount ending in `/day` |
 | `accounts.budget.<kind>` | an amount ending in `/day` or `/month`; monthly caps count API-key billing, not subscriptions |
 | `accounts.<kind>.<name>.budget` | an amount ending in `/day` or `/month`, overriding the kind cap; requires `history = "standalone"` |

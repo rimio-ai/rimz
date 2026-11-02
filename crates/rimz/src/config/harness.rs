@@ -804,7 +804,7 @@ mod prompt_cache_ttl_serde {
     }
 }
 
-const DEFAULT_KEEP_WARM_MIN_TTL: Duration = Duration::from_secs(15 * 60);
+const DEFAULT_KEEP_WARM_MIN_TTL: Duration = Duration::from_secs(30 * 60);
 
 mod keep_warm_min_ttl_serde {
     use super::*;

@@ -336,10 +336,10 @@ fn keep_warm_takes_off_or_a_positive_duration() {
 }
 
 #[test]
-fn keep_warm_floor_defaults_to_fifteen_minutes_and_takes_off() {
+fn keep_warm_floor_defaults_to_thirty_minutes_and_takes_off() {
     assert_eq!(
         HarnessConfig::default().keep_warm_min_ttl,
-        Some(Duration::from_secs(900))
+        Some(Duration::from_secs(1800))
     );
     for (raw, expected) in [("off", None), ("5m", Some(Duration::from_secs(300)))] {
         let config: HarnessConfig =
