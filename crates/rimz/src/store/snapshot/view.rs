@@ -44,7 +44,7 @@ pub use model::{
     SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
     SidebarStatusCount, SidebarUnitKey, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
     ThrottleNotice, UnitStatus, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
-    card_status, lead_unread_row, needs_you,
+    agent_idle_since, card_status, lead_unread_row, needs_you,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;

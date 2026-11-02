@@ -11,6 +11,11 @@ use crate::config::PaletteRole;
 use crate::ids::LinkTier;
 use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent};
 
+/// The card's displayed idle origin, or real activity for a rowless child.
+pub fn agent_idle_since(agent: &AgentState, row: Option<&SidebarRow>) -> jiff::Timestamp {
+    row.map_or(agent.last_activity, SidebarRow::idle_since)
+}
+
 /// The displayed status and phase: card first, then child, then rowless demotion.
 pub fn card_status(
     agent: &AgentState,
