@@ -71,7 +71,7 @@ tar = { version = "0.4", default-features = false }
 # OpenCode stores usage and Cursor stores live chat roots in WAL SQLite
 # databases; adapters open both read-only. `bundled` keeps RimZ independent of
 # a system libsqlite3 at install time.
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 # Cursor's version-pinned chat root is protobuf. The decoder reads only the one
 # repeated pending-call field instead of owning a wire parser.
 prost = "0.14"
