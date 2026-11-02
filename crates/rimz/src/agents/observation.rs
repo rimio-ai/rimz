@@ -222,8 +222,8 @@ pub struct LaunchParams {
     /// The provider account the process runs under. Store ignores this field on a launch request and stamps the allocated identity from its explicit login selection. `None` is the provider's own `default` home, including legacy rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<crate::ids::LoginName>,
-    /// The permission posture selected by the launcher. Stored durably so an
-    /// explicit restart can reproduce it.
+    /// The requested permission mode after the kind's mapping, not the provider's granted mode.
+    /// `None` means unknown: a legacy launch, a kind without a default, or raw permission flags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<PermissionMode>,
     /// A per-launch `--isolation` override of machine `agents.isolation`.

@@ -237,6 +237,8 @@ pub struct AgentAttachPayload {
     pub record: Option<crate::agents::LaunchRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<crate::agents::TierStamp>,
+    /// The requested permission mode after the kind's mapping, not the provider's granted mode.
+    /// `None` means unknown: a legacy launch, a kind without a default, or raw permission flags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<crate::agents::PermissionMode>,
     pub agent_id: AgentSessionId,

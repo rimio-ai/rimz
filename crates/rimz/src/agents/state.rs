@@ -801,8 +801,8 @@ pub struct AgentState {
     pub tier: Option<Box<super::TierStamp>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<Box<super::LaunchRecord>>,
-    /// The permission posture selected for this launch, carried forward so an
-    /// explicit restart can reproduce it.
+    /// The requested permission mode after the kind's mapping, not the provider's granted mode.
+    /// `None` means unknown: a legacy launch, a kind without a default, or raw permission flags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<crate::agents::PermissionMode>,
     /// The launch's `--isolation` override, carried forward like `mode`;

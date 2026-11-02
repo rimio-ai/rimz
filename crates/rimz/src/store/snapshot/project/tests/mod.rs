@@ -1319,6 +1319,65 @@ fn launch_record_is_verbatim_and_optional() {
 }
 
 #[test]
+fn launch_events_replace_unknown_modes_while_sparse_hooks_preserve_them() {
+    let launch = |mode| {
+        let mut payload = launch_payload("a1", "worker");
+        payload.launch.mode = mode;
+        launch_event("codex", payload)
+    };
+    let hook = raw_lifecycle_at(
+        "codex",
+        2,
+        json!({
+            "agent_id": "a1", "signal": {"signal": "registered"}
+        }),
+    );
+    let mut events = vec![launch(Some(PermissionMode::Auto)), hook.clone()];
+    assert_eq!(
+        reduce_agent_states(&events)[0].mode,
+        Some(PermissionMode::Auto)
+    );
+    events.push(launch(None));
+    events.push(hook);
+    assert_eq!(reduce_agent_states(&events)[0].mode, None);
+}
+
+#[test]
+fn resume_attach_replaces_unknown_modes_and_recordless_defaults_but_fresh_attach_does_not() {
+    for (before, mode, record) in [
+        (
+            Some(PermissionMode::Auto),
+            None,
+            Some(crate::agents::LaunchRecord::default()),
+        ),
+        (None, Some(PermissionMode::Auto), None),
+    ] {
+        let mut payload = launch_payload("a1", "worker");
+        payload.launch.mode = before;
+        let launch = launch_event("codex", payload);
+        let fresh = attach_event("codex", "a1", Some("a1"), "tmux:%1", Some(42), 42);
+        assert_eq!(
+            reduce_agent_states(&[launch.clone(), fresh.clone()])[0].mode,
+            before
+        );
+        let EventKind::AgentAttach(payload) = fresh.kind() else {
+            panic!("attach event")
+        };
+        let resumed = EventEnvelope::agent_attached(
+            workspace(),
+            "session",
+            &AgentKind::new_unchecked("codex"),
+            AgentAttachPayload {
+                record,
+                mode,
+                ..payload
+            },
+        );
+        assert_eq!(reduce_agent_states(&[launch, resumed])[0].mode, mode);
+    }
+}
+
+#[test]
 fn resume_attach_replaces_launch_record_and_can_clear_tier() {
     let mut payload = serde_json::to_value(launch_payload("launch_a", "lucid-atlas")).unwrap();
     payload["record"] = json!({"model": "opus", "effort": null, "agent": null});
@@ -1364,7 +1423,7 @@ fn resume_attach_replaces_launch_record_and_can_clear_tier() {
             let wire = serde_json::to_value(&agents[0]).unwrap();
             assert_eq!(wire["record"], record);
             assert_eq!(wire["tier"], tier);
-            assert_eq!(wire["mode"], "yolo");
+            assert_eq!(wire["mode"], if events.len() == 3 { "ask" } else { "yolo" });
         }
     }
 }
