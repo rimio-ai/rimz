@@ -56,6 +56,8 @@ A change to what `local_conversation_present` answers in any case also runs `car
 
 A change to an adapter's permission arguments updates the `Permission modes` table in [agent-support.md](../../../../docs/reference/agent-support.md#permission-modes), which `conformance.rs` pins cell by cell against `LaunchSpec::permission_args`.
 
+A change to `ROUTINE_RIMZ_PREFIXES` moves its three pins with it: the bullet list in [agent-support.md](../../../../docs/reference/agent-support.md#permission-modes) (`agents::conformance::routine_rimz_prefixes_match_documented_list`), Claude's settings (`adapters/claude/tests/mod.rs::routine_rimz_settings_union_and_idempotence`), and the Codex rules golden (`adapters/codex/tests/install.rs::install_includes_shared_routine_rules_golden`).
+
 A new `Ignored` edge in `lifecycle::step` is decided in its early-return chain and tested from a `compacting: true` prior. An ignore decided inside `map_status` still runs `step`'s tail, which closes the compaction bracket.
 
 A test for a new typed mapping must fail with that mapping removed: give the payload a fallback input that would classify differently. A shared test that needs an adapter lacking some capability uses an unregistered kind (`"unregistered"`), never a real built-in that may gain it.
