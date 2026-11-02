@@ -175,6 +175,7 @@ pub enum TaskFirePlan {
         worktree: Option<String>,
         spec: String,
         prompt: String,
+        permission_override: Option<PermissionMode>,
         /// The `### Loop` reminder body for the prompt leader.
         loop_reminder: String,
     },
@@ -1310,6 +1311,8 @@ impl<'a> TaskFire<'a> {
             bail!("--stay requires an agent layout");
         };
         let prompt = self.resolve_effect_prompt()?;
+        let permission_override =
+            task_permission_mode(&self.entry)?.filter(|mode| *mode != PermissionMode::Auto);
         before_launch(&root)?;
         if self.run_lock.is_none() {
             if let Some(done) = self.prepare_run_lock(false)? {
@@ -1339,6 +1342,7 @@ impl<'a> TaskFire<'a> {
             worktree: self.entry.worktree.clone(),
             spec,
             prompt,
+            permission_override,
             loop_reminder: self.loop_reminder(None),
         })
     }
@@ -2059,13 +2063,7 @@ impl<'a> TaskFire<'a> {
             .as_deref()
             .map(resolve_config_path)
             .transpose()?;
-        let permission_mode = self
-            .entry
-            .mode
-            .as_deref()
-            .filter(|mode| !mode.trim().is_empty())
-            .map(parse_mode_value)
-            .transpose()?;
+        let permission_mode = task_permission_mode(&self.entry)?;
         let budget = self
             .entry
             .budget
@@ -2800,6 +2798,15 @@ pub fn after_reset(
 
 pub fn parse_mode(raw: &str) -> Result<String> {
     Ok(mode_name(parse_mode_value(raw)?).to_owned())
+}
+
+fn task_permission_mode(entry: &TaskEntry) -> Result<Option<PermissionMode>> {
+    entry
+        .mode
+        .as_deref()
+        .filter(|mode| !mode.trim().is_empty())
+        .map(parse_mode_value)
+        .transpose()
 }
 
 fn parse_mode_value(raw: &str) -> Result<PermissionMode> {

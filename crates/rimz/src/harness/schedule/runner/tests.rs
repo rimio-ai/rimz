@@ -2993,6 +2993,145 @@ fn resident_entry(root: &Path) -> TaskEntry {
 }
 
 #[test]
+fn resident_saved_modes_refuse_invalid_values_before_room_birth_and_record_strikes() {
+    use crate::harness::schedule::strikes::{Signal, classify};
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for mode in [LoopRunMode::Manual, LoopRunMode::Scheduled] {
+        for raw in ["plan", "yollo", "ASK", " plan "] {
+            let root = tempfile::tempdir().unwrap();
+            record_room(root.path()).unwrap();
+            let paths = StatePaths::for_project_root(root.path()).unwrap();
+            let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+            let host = throttle::tests::FakeHost::new();
+            let entry = TaskEntry {
+                mode: Some(raw.to_owned()),
+                ..resident_entry(root.path())
+            };
+            let mut fire = throttled_fire("bad-mode", entry, &catalog, "pace='0s'", &host);
+            fire.mode = mode;
+            let error = fire
+                .prepare(&mut |_| panic!("invalid saved mode must not birth a room"))
+                .unwrap_err();
+            let message = format!("unknown loop mode `{}`; use auto, ask, or yolo", raw.trim());
+            actual.push(format!("{error:#}"));
+            expected.push(message.clone());
+            assert!(fire.pending.is_none(), "{mode:?}, {raw:?}");
+            let finished = fire.finish_error(&error);
+            assert_eq!(finished.record.result, LoopRunResult::Errored);
+            assert_eq!(finished.record.error.as_deref(), Some(message.as_str()));
+            assert_eq!(classify(&finished.record), Signal::Strike);
+            let records = run_log::task_records(&logs_dir(), "bad-mode", Some(root.path()));
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].result, LoopRunResult::Errored);
+            assert_eq!(records[0].error.as_deref(), Some(message.as_str()));
+            assert!(
+                super::super::launch_ledger::load(&paths)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn resident_saved_modes_prepare_typed_permission_overrides() {
+    let cases = [
+        (None, None),
+        (Some(""), None),
+        (Some(" \t "), None),
+        (Some("auto"), None),
+        (Some(" auto "), None),
+        (Some("ask"), Some(PermissionMode::Ask)),
+        (Some("yolo"), Some(PermissionMode::Yolo)),
+        (Some(" ask "), Some(PermissionMode::Ask)),
+        (Some(" yolo "), Some(PermissionMode::Yolo)),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for mode in [LoopRunMode::Manual, LoopRunMode::Scheduled] {
+        for (raw, permission) in cases {
+            let root = tempfile::tempdir().unwrap();
+            record_room(root.path()).unwrap();
+            let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+            let host = throttle::tests::FakeHost::new();
+            let entry = TaskEntry {
+                mode: raw.map(str::to_owned),
+                ..resident_entry(root.path())
+            };
+            let mut fire = throttled_fire("mode", entry, &catalog, "pace='0s'", &host);
+            fire.mode = mode;
+            let plan = fire.prepare(&mut record_room).unwrap();
+            let TaskFirePlan::Resident {
+                permission_override,
+                ..
+            } = plan
+            else {
+                panic!("expected resident plan: {plan:?}");
+            };
+            actual.push(permission_override);
+            expected.push(permission);
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn resident_saved_modes_leave_supervised_request_semantics_unchanged() {
+    let cases = [
+        (None, Ok(None)),
+        (Some(""), Ok(None)),
+        (Some(" \t "), Ok(None)),
+        (Some("auto"), Ok(Some(PermissionMode::Auto))),
+        (Some(" auto "), Ok(Some(PermissionMode::Auto))),
+        (Some("ask"), Ok(Some(PermissionMode::Ask))),
+        (Some("yolo"), Ok(Some(PermissionMode::Yolo))),
+        (Some(" ask "), Ok(Some(PermissionMode::Ask))),
+        (Some(" yolo "), Ok(Some(PermissionMode::Yolo))),
+        (
+            Some("plan"),
+            Err("unknown loop mode `plan`; use auto, ask, or yolo"),
+        ),
+        (
+            Some("yollo"),
+            Err("unknown loop mode `yollo`; use auto, ask, or yolo"),
+        ),
+        (
+            Some("ASK"),
+            Err("unknown loop mode `ASK`; use auto, ask, or yolo"),
+        ),
+        (
+            Some(" plan "),
+            Err("unknown loop mode `plan`; use auto, ask, or yolo"),
+        ),
+    ];
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(raw, _)| {
+            let entry = TaskEntry {
+                mode: raw.map(str::to_owned),
+                stay: false,
+                ..resident_entry(root.path())
+            };
+            throttled_fire("mode", entry, &catalog, "pace='0s'", &host)
+                .compile_spawn_request(
+                    "claude".to_owned(),
+                    "repair".to_owned(),
+                    ManagedLaunchState::Unsupported,
+                )
+                .map(|request| request.permission_mode)
+                .map_err(|error| error.to_string())
+        })
+        .collect();
+    assert_eq!(actual, cases.map(|(_, mode)| mode.map_err(str::to_owned)));
+}
+
+#[test]
 fn capacity_manual_fires_bypass_even_a_closed_door() {
     let root = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
