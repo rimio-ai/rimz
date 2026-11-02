@@ -3820,7 +3820,8 @@ path = "crates/rimz/src/workspace.rs"
 # SkippedSetting carries the room's configuration warnings into CLI and sidebar readers (+1).
 # AgentShell carries the room-life bare-name shell lookup into launch and CLI readers (+1).
 # known_workspaces_read_only shares the census without repair writes or locks (+1).
-surface-budget = 29
+# known_workspaces_read_only_under keeps explicit-home inventories read-only (+1).
+surface-budget = 30
 
 [[module]]
 path = "crates/rimz/src/wakeup"
@@ -6987,6 +6988,11 @@ reason = "Named by the integration crate's zellij reconcile suite (pass 22b)."
 kind = "item"
 key = "workspace::known_workspaces_read_only"
 reason = "Throttle counts and doctor use the workspace census without its optional repair writes or locks."
+
+[[verdict]]
+kind = "item"
+key = "workspace::known_workspaces_read_only_under"
+reason = "Doctor's temp-unit inventory shares the repair-free census under the same explicit home used for room paths."
 
 [[verdict]]
 kind = "item"
