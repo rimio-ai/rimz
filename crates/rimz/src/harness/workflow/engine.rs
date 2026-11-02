@@ -857,6 +857,8 @@ fn prepare_capacity(
             t.record.next_seq,
             t.record.node.clone(),
             throttle::Run {
+                machine_gated: true,
+                limits: None,
                 task: task.clone(),
                 root: t.record.project_root.clone(),
                 checkout: t.record.scope.path.clone(),

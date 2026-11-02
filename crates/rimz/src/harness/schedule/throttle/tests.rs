@@ -7,6 +7,9 @@ use jiff::Timestamp;
 use super::*;
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
+#[path = "tests/limits.rs"]
+mod limits;
+
 type SleepHook = Box<dyn FnMut(&FakeHost) + Send>;
 
 /// A machine the test scripts: a queue in a tempdir, a clock that only
@@ -23,6 +26,7 @@ pub(in crate::harness::schedule) struct FakeHost {
     disk_reads: Mutex<Vec<PathBuf>>,
     rooms: Mutex<BTreeMap<String, Result<Vec<AgentState>, String>>>,
     workflows: Mutex<Vec<crate::store::workflow::RunRecord>>,
+    runs: Mutex<Vec<RunRecord>>,
     agent_reads: AtomicUsize,
     on_sleep: Mutex<Option<SleepHook>>,
     on_lock: Mutex<Option<SleepHook>>,
@@ -56,6 +60,7 @@ impl FakeHost {
             disk_reads: Mutex::new(Vec::new()),
             rooms: Mutex::new(BTreeMap::new()),
             workflows: Mutex::new(Vec::new()),
+            runs: Mutex::new(Vec::new()),
             agent_reads: AtomicUsize::new(0),
             on_sleep: Mutex::new(None),
             on_lock: Mutex::new(None),
@@ -136,6 +141,10 @@ impl Host for FakeHost {
 
     fn check_cache(&self) -> PathBuf {
         self.dir.path().join("checks.json")
+    }
+
+    fn workflow_pace(&self) -> PathBuf {
+        self.dir.path().join("workflow-pace.json")
     }
 
     fn check(
@@ -241,16 +250,29 @@ impl Host for FakeHost {
             .unwrap_or_else(|| Ok(Vec::new()))
     }
 
-    fn task_runs(&self, _workspace: &WorkspaceId, _task: &str) -> Result<Vec<RunRecord>, String> {
-        Ok(Vec::new())
+    fn runs(&self, workspace: &WorkspaceId) -> Result<Vec<RunRecord>, String> {
+        Ok(self
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|run| &run.workspace_id == workspace)
+            .cloned()
+            .collect())
     }
 
-    fn task_workflows(
+    fn workflows(
         &self,
-        _workspace: &WorkspaceId,
-        _task: &str,
+        workspace: &WorkspaceId,
     ) -> Result<Vec<crate::store::workflow::RunRecord>, String> {
-        Ok(self.workflows.lock().unwrap().clone())
+        Ok(self
+            .workflows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|run| &WorkspaceId::from_project_root(&run.project_root) == workspace)
+            .cloned()
+            .collect())
     }
 }
 
@@ -293,6 +315,8 @@ fn workspace() -> WorkspaceId {
 
 fn run(task: &str) -> Run {
     Run {
+        machine_gated: true,
+        limits: None,
         task: task.to_owned(),
         root: PathBuf::from("/repo"),
         checkout: PathBuf::from("/repo"),
@@ -387,8 +411,8 @@ fn capacity_task_cap_counts_working_agents_of_live_task_workflows() {
     let id = crate::ids::WorkflowRunId::new();
     let workflow: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
         "version":1, "id":id, "workflow":"review", "task":"nightly", "spec_dir":"/defs",
-        "spec_digest":"test", "scope":{"kind":"project", "path":"/project"},
-        "project_root":"/project", "created_at":Timestamp::UNIX_EPOCH,
+        "spec_digest":"test", "scope":{"kind":"project", "path":"/repo"},
+        "project_root":"/repo", "created_at":Timestamp::UNIX_EPOCH,
         "entered_at":Timestamp::UNIX_EPOCH, "node":"build", "state":"active",
         "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1
     }))

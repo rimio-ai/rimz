@@ -3641,6 +3641,8 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
         &host.host(),
         &throttle_config,
         &throttle::Run {
+            machine_gated: true,
+            limits: None,
             groups: Vec::new(),
             gives_up_ms: None,
             task: "other".to_owned(),
@@ -3837,6 +3839,8 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
         &host.host(),
         &config.r#loop.throttle,
         &throttle::Run {
+            machine_gated: true,
+            limits: None,
             groups: Vec::new(),
             gives_up_ms: None,
             task: "other".to_owned(),

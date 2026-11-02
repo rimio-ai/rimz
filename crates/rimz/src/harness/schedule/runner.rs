@@ -910,6 +910,8 @@ impl<'a> TaskFire<'a> {
             None => self.resident_groups.clone(),
         };
         Ok(throttle::Run {
+            machine_gated: true,
+            limits: None,
             groups,
             gives_up_ms: self
                 .capacity_gives_up_at(self.capacity_now()?)?
