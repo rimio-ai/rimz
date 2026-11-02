@@ -505,6 +505,12 @@ trusted-publisher = "github:rust-lang/libc"
 start = "2026-10-02"
 end = "2027-10-13"
 
+[[trusted.libsqlite3-sys]]
+criteria = "safe-to-deploy"
+user-id = 5062 # gwenn (gwenn)
+start = "2019-03-10"
+end = "2027-11-02"
+
 [[trusted.litemap]]
 criteria = "safe-to-deploy"
 user-id = 1139 # Manish Goregaokar (Manishearth)
@@ -529,11 +535,23 @@ user-id = 1234 # Diggory Hardy (dhardy)
 start = "2019-06-06"
 end = "2027-06-13"
 
+[[trusted.rusqlite]]
+criteria = "safe-to-deploy"
+user-id = 5062 # gwenn (gwenn)
+start = "2019-03-10"
+end = "2027-11-02"
+
 [[trusted.rustc-demangle]]
 criteria = "safe-to-deploy"
 user-id = 55123 # rust-lang-owner
 start = "2023-03-23"
 end = "2027-06-13"
+
+[[trusted.sysinfo]]
+criteria = "safe-to-deploy"
+user-id = 111 # Guillaume Gomez (GuillaumeGomez)
+start = "2019-03-01"
+end = "2027-11-02"
 
 [[trusted.tinystr]]
 criteria = "safe-to-deploy"
