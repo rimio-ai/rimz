@@ -1099,7 +1099,10 @@ fn fleet_park_projection_keeps_live_spend_parks_until_enforcement() {
         snapshot.fleet_day_spend_epoch_secs = epoch;
 
         project_parks(|_| false, &mut snapshot, &runtime, None, &config);
-        assert_eq!(snapshot.agents[0].effective_status(), AgentStatus::Paused);
+        assert_eq!(
+            snapshot.agents[0].effective_status(snapshot.now),
+            AgentStatus::Paused
+        );
         assert_eq!(
             snapshot.agents[0]
                 .budget_park

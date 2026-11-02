@@ -94,7 +94,7 @@ pub(super) fn attach_sub_agents_indexed(
             {
                 continue;
             }
-            let park = launched_child_park(child, demotion);
+            let park = launched_child_park(child, demotion, now);
             let entry = project_sub_agent(
                 child,
                 live_pane(child),
@@ -128,15 +128,16 @@ pub(super) fn attach_sub_agents_indexed(
 fn launched_child_park(
     child: &AgentState,
     demotion: &ParkDemotion,
+    now: Timestamp,
 ) -> Option<(AgentStatus, String)> {
     if !child.is_launched_child() || child.ended_at.is_some() {
         return None;
     }
-    let (class, error) = child.displayed_turn_error()?;
+    let (class, error) = child.displayed_turn_error(now)?;
     if !class.pauses_turn() {
         return None;
     }
-    let status = child.rowless_status(demotion).0;
+    let status = child.rowless_status(demotion, now).0;
     let label = error
         .label
         .clone()
@@ -316,8 +317,8 @@ fn project_sub_agent(
             Some(format!("silent {}", format_duration_coarse(secs as i64))),
         )
     } else if child.is_launched_child() && child.ended_at.is_none() {
-        let (status, phase) = child.rowless_status(demotion);
-        (status, phase, child.displayed_turn_error_label())
+        let (status, phase) = child.rowless_status(demotion, now);
+        (status, phase, child.displayed_turn_error_label(now))
     } else {
         (child.display_rest_status(child.status), child.phase, None)
     };

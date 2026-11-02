@@ -123,6 +123,7 @@ fn focus_member<'a>(
     cohort: &TeamCohort<'a>,
     leader: Option<&str>,
     attention_scores: &HashMap<&str, u32>,
+    now: jiff::Timestamp,
 ) -> &'a AgentState {
     let score = |agent: &AgentState| {
         attention_scores
@@ -134,7 +135,7 @@ fn focus_member<'a>(
         .members
         .iter()
         .copied()
-        .filter(|agent| agent.effective_status().is_actionable())
+        .filter(|agent| agent.effective_status(now).is_actionable())
         .fold(None, |best, candidate| match best {
             Some(best) if score(best) >= score(candidate) => Some(best),
             _ => Some(candidate),
@@ -172,7 +173,10 @@ pub(super) fn focus(
         .rows()
         .map(|row| (row.id.as_str(), row.attention_score))
         .collect::<HashMap<_, _>>();
-    agents_cmd::focus_resolved(&ctx, focus_member(&cohort, leader, &attention_scores))
+    agents_cmd::focus_resolved(
+        &ctx,
+        focus_member(&cohort, leader, &attention_scores, snapshot.now),
+    )
 }
 
 pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags) -> Result<()> {
@@ -289,7 +293,9 @@ mod tests {
         let scores = HashMap::from([("first", 10), ("urgent", 50)]);
 
         assert_eq!(
-            focus_member(&cohort, None, &scores).agent_id.as_str(),
+            focus_member(&cohort, None, &scores, jiff::Timestamp::UNIX_EPOCH)
+                .agent_id
+                .as_str(),
             "urgent"
         );
     }

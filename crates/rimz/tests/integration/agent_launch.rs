@@ -2902,7 +2902,7 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
         .with_agent_activity(&rimz::agent_activity::read_all(&runtime))
         .agents;
         let run = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
-        rimz::harness::park_notice::unnoticed_park(&run, &agents).is_some()
+        rimz::harness::park_notice::unnoticed_park(&run, &agents, jiff::Timestamp::now()).is_some()
     };
     let seed_marker = |at: jiff::Timestamp| {
         let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);

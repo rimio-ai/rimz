@@ -469,7 +469,7 @@ fn turn_error_wakes_and_preserves_typed_limit_reset() {
                 .find(|row| row.agent_id.as_str() == "limited-child")
                 .unwrap();
             assert!(
-                source.displayed_turn_error().is_some(),
+                source.displayed_turn_error(snapshot.now).is_some(),
                 "child limit must be actionable: {source:#?}"
             );
             success(
@@ -486,7 +486,7 @@ fn turn_error_wakes_and_preserves_typed_limit_reset() {
                 .find(|row| row.name == run.agent_name)
             {
                 assert!(
-                    source.displayed_turn_error().is_some(),
+                    source.displayed_turn_error(snapshot.now).is_some(),
                     "root limit must be actionable: {source:#?}"
                 );
             }

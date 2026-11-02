@@ -36,7 +36,7 @@ pub(super) fn run(request: ParkNoticeRequest) -> Result<()> {
     .agents;
     let paths = ctx.store.paths();
     let run = rimz::harness::run::load(paths, &request.run_id).context("loading parked run")?;
-    let Some(park) = unnoticed_park(&run, &agents) else {
+    let Some(park) = unnoticed_park(&run, &agents, Timestamp::now()) else {
         return Ok(());
     };
     let activity = park.child.last_activity;

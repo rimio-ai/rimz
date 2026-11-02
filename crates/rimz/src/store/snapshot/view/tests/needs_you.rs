@@ -19,11 +19,11 @@ fn card_projection_status_honors_card_and_rowless_demotion() {
     card.status = AgentStatus::Sleeping;
     card.phase = TurnPhase::Reasoning;
     assert_eq!(
-        card_status(&state, Some(&row), None, &demotion),
+        card_status(&state, Some(&row), None, &demotion, now),
         (AgentStatus::Sleeping, TurnPhase::Reasoning)
     );
     assert_eq!(
-        card_status(&state, None, None, &demotion),
+        card_status(&state, None, None, &demotion, now),
         (AgentStatus::Paused, TurnPhase::Idle)
     );
     let spent = ParkDemotion::new(
@@ -32,18 +32,18 @@ fn card_projection_status_honors_card_and_rowless_demotion() {
         now,
     );
     assert_eq!(
-        card_status(&state, None, None, &spent),
+        card_status(&state, None, None, &spent, now),
         (AgentStatus::Failed, TurnPhase::Idle)
     );
     let mut child = sub_agent_from_state(&state, now, false, default_stall_secs() as u32);
     child.status = AgentStatus::Running;
     child.phase = TurnPhase::Acting;
     assert_eq!(
-        card_status(&state, None, Some(&child), &spent),
+        card_status(&state, None, Some(&child), &spent, now),
         (AgentStatus::Running, TurnPhase::Acting)
     );
     assert_eq!(
-        card_status(&state, Some(&row), Some(&child), &spent),
+        card_status(&state, Some(&row), Some(&child), &spent, now),
         (AgentStatus::Sleeping, TurnPhase::Reasoning)
     );
 }
@@ -118,6 +118,6 @@ fn attention_membership_and_rowless_fallback() {
         needs_you(&state, None, &Default::default(), epoch())
             .unwrap()
             .status,
-        state.rowless_status(&Default::default()).0,
+        state.rowless_status(&Default::default(), epoch()).0,
     );
 }

@@ -747,13 +747,13 @@ fn read_published_snapshot_carries_a_launched_child_parked_on_a_limit() {
     )
     .expect("published base");
 
-    let park = crate::harness::park_notice::unnoticed_park(&run, &snapshot.agents)
+    let park = crate::harness::park_notice::unnoticed_park(&run, &snapshot.agents, snapshot.now)
         .expect("the producer's snapshot shows the park");
     assert_eq!(park.child.agent_id, "child-1");
     assert_eq!(park.parent.agent_id, "parent-1");
     assert_eq!(
         park.child
-            .displayed_turn_error()
+            .displayed_turn_error(snapshot.now)
             .and_then(|(_, error)| error.label.as_deref()),
         Some("Usage limit reached"),
     );

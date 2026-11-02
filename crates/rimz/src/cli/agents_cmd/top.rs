@@ -171,6 +171,7 @@ fn sample_snapshot(
                     row_for_agent(snapshot, agent),
                     child_for_agent(snapshot, agent),
                     demotion,
+                    snapshot.now,
                 )
                 .0,
                 context_pct: agent.context_fill_pct(),

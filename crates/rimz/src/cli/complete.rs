@@ -48,10 +48,10 @@ pub(crate) fn handles() -> Vec<CompletionCandidate> {
     let Some(context) = room_context() else {
         return Vec::new();
     };
-    handles_from_agents(&context.snapshot.agents)
+    handles_from_agents(&context.snapshot.agents, context.snapshot.now)
 }
 
-fn handles_from_agents(agents: &[AgentState]) -> Vec<CompletionCandidate> {
+fn handles_from_agents(agents: &[AgentState], now: jiff::Timestamp) -> Vec<CompletionCandidate> {
     let peers: Vec<_> = agents
         .iter()
         .filter(|agent| !agent.is_provider_subagent())
@@ -71,7 +71,7 @@ fn handles_from_agents(agents: &[AgentState]) -> Vec<CompletionCandidate> {
                 } else {
                     base.clone()
                 },
-                format!("{} · {}", agent.kind, agent.effective_status().as_str()),
+                format!("{} · {}", agent.kind, agent.effective_status(now).as_str()),
             )
         })
         .collect();
@@ -231,7 +231,7 @@ pub(crate) fn agent_refs() -> Vec<CompletionCandidate> {
     let Some(context) = room_context() else {
         return Vec::new();
     };
-    let mut candidates = handles_from_agents(&context.snapshot.agents);
+    let mut candidates = handles_from_agents(&context.snapshot.agents, context.snapshot.now);
     candidates.extend(
         rimz::harness::run::list(context.store.paths())
             .unwrap_or_default()
@@ -252,7 +252,10 @@ pub(crate) fn pane_targets() -> Vec<CompletionCandidate> {
     let Some(context) = room_context() else {
         return candidates;
     };
-    candidates.extend(handles_from_agents(&context.snapshot.agents));
+    candidates.extend(handles_from_agents(
+        &context.snapshot.agents,
+        context.snapshot.now,
+    ));
     if let Some(frame) = rimz::sidebar::cache::read_snapshot_cache(
         &context.store.runtime_paths().pane_frame_path(),
         &context.workspace.session_name,
@@ -362,7 +365,7 @@ pub(crate) fn transcript_targets() -> Vec<CompletionCandidate> {
     let Some(context) = room_context() else {
         return Vec::new();
     };
-    let mut candidates = handles_from_agents(&context.snapshot.agents);
+    let mut candidates = handles_from_agents(&context.snapshot.agents, context.snapshot.now);
     candidates.extend(
         context
             .snapshot
@@ -444,7 +447,7 @@ mod tests {
         let mut coder =
             rimz::testkit::agent_state("codex", "sess-coder", jiff::Timestamp::UNIX_EPOCH);
         coder.role = Some("coder".to_owned());
-        let candidates = handles_from_agents(&[coder]);
+        let candidates = handles_from_agents(&[coder], jiff::Timestamp::UNIX_EPOCH);
         let values: Vec<_> = candidates
             .iter()
             .map(|candidate| candidate.get_value().to_string_lossy().into_owned())

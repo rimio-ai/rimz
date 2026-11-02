@@ -2764,12 +2764,12 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         .find(|agent| agent.agent_id.as_str() == "conv-cursor-recovery")
         .unwrap();
     assert_eq!(
-        active.effective_status(),
+        active.effective_status(snapshot.now),
         rimz::agents::AgentStatus::Running
     );
     assert!(!rimz::store::message::gate_open(
         rimz::store::message::DeliveryGate::Done,
-        active.effective_status(),
+        active.effective_status(snapshot.now),
     ));
 
     std::fs::write(&transcript_path, format!("{active_rewrite}{terminal}")).unwrap();
@@ -2802,12 +2802,12 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         .find(|agent| agent.agent_id.as_str() == "conv-cursor-recovery")
         .unwrap();
     assert_eq!(
-        settled.effective_status(),
+        settled.effective_status(snapshot.now),
         rimz::agents::AgentStatus::Success
     );
     assert!(rimz::store::message::gate_open(
         rimz::store::message::DeliveryGate::Done,
-        settled.effective_status(),
+        settled.effective_status(snapshot.now),
     ));
     assert!(
         serde_json::to_string(&env.agent_contexts())
@@ -3096,7 +3096,7 @@ fn grok_idle_notification_cannot_settle_a_newer_prompt() {
             .iter()
             .find(|agent| agent.agent_id.as_str() == "idle-grok")
             .unwrap();
-        assert_eq!(agent.effective_status(), expected);
+        assert_eq!(agent.effective_status(snapshot.now), expected);
         assert_eq!(agent.holds_open_turn(), open);
     };
     send(json!({"hookEventName":"session_start", "source":"new"}));

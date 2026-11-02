@@ -348,7 +348,7 @@ fn pane_json_annotates_the_bound_agent_with_its_handle() {
     let pane = pane("terminal_1", "tab_0", "#main", "claude", "/repo/main");
     let agent = agent_on("terminal_1", "claude", "main");
     let peers: Vec<&AgentState> = vec![&agent];
-    let json = pane_json(&pane, Some(&agent), &peers, false);
+    let json = pane_json(&pane, Some(&agent), &peers, false, agent.last_activity);
     assert_eq!(json.kind, "agent");
     let bound = json.agent.as_ref().expect("agent bound");
     assert_eq!(bound.handle, "@claude#main");
@@ -384,7 +384,7 @@ fn pane_list_role_handle_counts_only_same_lane_historical_roots() {
         let live = snapshot
             .agent_bound_to_pane(&pane)
             .expect("live agent bound");
-        let handle = pane_json(&pane, Some(live), &peers, false)
+        let handle = pane_json(&pane, Some(live), &peers, false, snapshot.now)
             .agent
             .expect("bound agent")
             .handle;
@@ -459,7 +459,7 @@ fn pane_list_root_and_launched_child_profile_handles_round_trip() {
     ]) {
         let agent = snapshot.agent_bound_to_pane(pane).expect("pane bound");
         assert_eq!(agent.agent_id.as_str(), agent_id);
-        let json_handle = pane_json(pane, Some(agent), &peers, false)
+        let json_handle = pane_json(pane, Some(agent), &peers, false, snapshot.now)
             .agent
             .expect("agent JSON")
             .handle;
@@ -505,14 +505,14 @@ fn pane_list_live_overlay_keeps_ordinal_disambiguation() {
         .agent_bound_to_pane(&second_pane)
         .expect("second pane bound");
     assert_eq!(
-        pane_json(&first_pane, Some(first), &peers, false)
+        pane_json(&first_pane, Some(first), &peers, false, snapshot.now)
             .agent
             .expect("first agent")
             .handle,
         "@codex-1#main"
     );
     assert_eq!(
-        pane_json(&second_pane, Some(second), &peers, false)
+        pane_json(&second_pane, Some(second), &peers, false, snapshot.now)
             .agent
             .expect("second agent")
             .handle,
@@ -523,7 +523,7 @@ fn pane_list_live_overlay_keeps_ordinal_disambiguation() {
 #[test]
 fn pane_json_leaves_a_plain_pane_unannotated() {
     let pane = pane("terminal_2", "tab_1", "shell", "zsh", "/home/x");
-    let json = pane_json(&pane, None, &[], false);
+    let json = pane_json(&pane, None, &[], false, jiff::Timestamp::UNIX_EPOCH);
     assert!(json.agent.is_none(), "a bare shell carries no agent");
     assert_eq!(json.kind, "process");
     assert_eq!(json.command, Some("zsh"), "command is retained in json");
@@ -539,7 +539,7 @@ fn pane_json_labels_the_sidebar_pane() {
         rimz::pane::SIDEBAR_CHROME_TITLE,
         "/home/x",
     );
-    let json = pane_json(&pane, None, &[], false);
+    let json = pane_json(&pane, None, &[], false, jiff::Timestamp::UNIX_EPOCH);
 
     assert_eq!(json.kind, "sidebar");
     assert!(json.agent.is_none());
@@ -550,7 +550,7 @@ fn pane_json_labels_the_sidebar_pane() {
 #[test]
 fn pane_json_marks_the_calling_pane() {
     let pane = pane("terminal_2", "tab_1", "shell", "zsh", "/home/x");
-    let json = pane_json(&pane, None, &[], true);
+    let json = pane_json(&pane, None, &[], true, jiff::Timestamp::UNIX_EPOCH);
 
     let serialized = serde_json::to_value(&json).expect("pane JSON");
     assert_eq!(serialized.get("self"), Some(&serde_json::json!(true)));
@@ -568,7 +568,13 @@ fn pane_row_labels_a_calling_sidebar_before_any_agent_overlay() {
     let agent = agent_on("terminal_3", "codex", "main");
     let peers = vec![&agent];
     let mut table = render::Table::new(["AGENT", "STATUS", "COMMAND", "CWD", "PANE"]);
-    table.row(pane_row(&pane, Some(&agent), &peers, true));
+    table.row(pane_row(
+        &pane,
+        Some(&agent),
+        &peers,
+        true,
+        agent.last_activity,
+    ));
     let mut raw = Vec::new();
 
     table.render(&mut raw).expect("pane row");

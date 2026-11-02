@@ -119,7 +119,7 @@ pub(super) fn send_batch_to_live_pane(
             .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none())
             .filter(|agent| {
                 matches!(
-                    agent.effective_status(),
+                    agent.effective_status(current.now),
                     AgentStatus::Running | AgentStatus::Waiting
                 )
             })

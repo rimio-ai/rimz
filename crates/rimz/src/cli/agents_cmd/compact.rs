@@ -77,7 +77,7 @@ pub(super) fn compact_agent(
         CompactOutcome::Queued => writeln!(
             render::out(),
             "queued compaction for {handle} ({message_id}) — {handle} is {}; delivers at its next turn boundary",
-            agent.effective_status().as_str(),
+            agent.effective_status(jiff::Timestamp::now()).as_str(),
         )?,
     }
     Ok(())

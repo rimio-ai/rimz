@@ -223,7 +223,7 @@ fn hibernating_agent_is_due_for_idle_stop() {
         verdict(&store, &agent, &stop, DUE),
         Verdict::Stop { idle_secs: 180 }
     );
-    assert_eq!(due_at(&agent, &stop), Some(ts(DUE)));
+    assert_eq!(due_at(&agent, &stop, ts(10_000)), Some(ts(DUE)));
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn each_rollup_term_holds_the_stop_alone_and_a_clear_agent_stops() {
         verdict(&store, &clear, &stop, DUE),
         Verdict::Stop { idle_secs: 180 }
     );
-    assert_eq!(due_at(&clear, &stop), Some(ts(DUE)));
+    assert_eq!(due_at(&clear, &stop, ts(10_000)), Some(ts(DUE)));
 
     let hold = |name: &str, expected: Hold, change: &dyn Fn(&mut AgentState)| {
         let mut agent = clear.clone();
@@ -244,7 +244,7 @@ fn each_rollup_term_holds_the_stop_alone_and_a_clear_agent_stops() {
             Verdict::Hold(expected),
             "{name}"
         );
-        assert_eq!(due_at(&agent, &stop), None, "{name}");
+        assert_eq!(due_at(&agent, &stop, ts(10_000)), None, "{name}");
     };
     hold("ended", Hold::Ended, &|agent| {
         agent.ended_at = Some(ts(1_100))
@@ -319,7 +319,7 @@ fn the_clock_runs_from_the_later_of_turn_end_and_request() {
         verdict(&store, &agent, &stop, DUE),
         Verdict::Hold(Hold::Clock)
     );
-    assert_eq!(due_at(&agent, &stop), Some(ts(1_280)));
+    assert_eq!(due_at(&agent, &stop, ts(10_000)), Some(ts(1_280)));
     assert_eq!(
         verdict(&store, &agent, &stop, 1_280),
         Verdict::Stop { idle_secs: 180 }
@@ -340,7 +340,10 @@ fn the_clock_runs_from_the_later_of_turn_end_and_request() {
     let (mut fractional, three_minutes) = rested();
     let ms = |ms: i64| Timestamp::from_millisecond(ms).expect("timestamp");
     fractional.turn_ended_at = Some(ms(1_000_900));
-    assert_eq!(due_at(&fractional, &three_minutes), Some(ms(1_180_900)));
+    assert_eq!(
+        due_at(&fractional, &three_minutes, ts(10_000)),
+        Some(ms(1_180_900))
+    );
     assert_eq!(
         decide_alone(&store, &fractional, &three_minutes, ms(1_180_899)),
         Verdict::Hold(Hold::Clock)
@@ -352,7 +355,7 @@ fn the_clock_runs_from_the_later_of_turn_end_and_request() {
 
     // An agent that never closed a turn rests from the request.
     agent.turn_ended_at = None;
-    assert_eq!(due_at(&agent, &stop), Some(ts(5_180)));
+    assert_eq!(due_at(&agent, &stop, ts(10_000)), Some(ts(5_180)));
 
     // Zero fires at the first evaluation.
     stop.after_secs = 0;
@@ -387,7 +390,7 @@ fn a_turn_settled_only_by_a_provider_marker_rests_from_the_marker() {
         // only the marker restarts the clock.
         let agent = settled_by_marker(status, outcome);
         let case = format!("{status:?} {outcome:?}");
-        assert_eq!(due_at(&agent, &stop), Some(ts(2_180)), "{case}");
+        assert_eq!(due_at(&agent, &stop, ts(10_000)), Some(ts(2_180)), "{case}");
         assert_eq!(
             verdict(&store, &agent, &stop, 2_179),
             Verdict::Hold(Hold::Clock),
@@ -440,7 +443,7 @@ fn a_turn_settled_only_by_a_provider_marker_rests_from_the_marker() {
     let mut resting = settled_by_marker(AgentStatus::Idle, TurnSettleOutcome::Complete);
     resting.last_activity = ts(1_000);
     assert_eq!(
-        due_at(&resting, &stop),
+        due_at(&resting, &stop, ts(10_000)),
         Some(ts(DUE)),
         "a hook-ended turn ignores the marker"
     );
@@ -473,7 +476,7 @@ fn a_failed_compaction_restarts_the_clock() {
     let agent = store.snapshot_cached().expect("snapshot").agents[0].clone();
     let ended = agent.turn_ended_at.expect("turn end");
     assert!(
-        resting(&agent).is_ok(),
+        resting(&agent, ts(10_000)).is_ok(),
         "the failed compaction leaves it resting"
     );
     assert!(

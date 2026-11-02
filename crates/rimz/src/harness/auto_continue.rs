@@ -203,7 +203,7 @@ fn resume_park(
     if agent.is_provider_subagent() || agent.agent_id.is_empty() {
         return None;
     }
-    let (class, error) = agent.displayed_turn_error()?;
+    let (class, error) = agent.displayed_turn_error(now)?;
     match class {
         TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit => {
             let deadline =
@@ -223,7 +223,7 @@ pub(crate) fn resume_gate_recovered(
     agent: &AgentState,
     now: Timestamp,
 ) -> bool {
-    if agent.effective_status() != crate::agents::AgentStatus::Paused {
+    if agent.effective_status(now) != crate::agents::AgentStatus::Paused {
         return false;
     }
     if let Some(park) = agent.budget_park.as_ref() {
@@ -233,7 +233,9 @@ pub(crate) fn resume_gate_recovered(
     match resume_park(agent, capacity.as_ref(), now) {
         Some(ResumeArm::Overloaded { .. }) => true,
         Some(ResumeArm::RateLimit { .. }) => false,
-        None => limit_marker_active(agent) && capacity_recovered(capacity.as_ref(), agent, now),
+        None => {
+            limit_marker_active(agent, now) && capacity_recovered(capacity.as_ref(), agent, now)
+        }
     }
 }
 
@@ -302,15 +304,15 @@ pub(crate) fn resume_parked(
             )
             && !still_parked(&record, agent.last_activity)
         {
-            let turn_error = agent.displayed_turn_error();
+            let turn_error = agent.displayed_turn_error(now);
             if matches!(agent.status, AgentStatus::Running | AgentStatus::Failed)
                 && turn_error.is_none()
             {
                 continue;
             }
-            if rebased_record(record, agent, resume_messages).is_some()
+            if rebased_record(record, agent, resume_messages, now).is_some()
                 && let Some(record) = read_park(&path)
-                    .and_then(|record| rebased_record(record, agent, resume_messages))
+                    .and_then(|record| rebased_record(record, agent, resume_messages, now))
             {
                 write_park(&path, &record);
             }
@@ -334,7 +336,7 @@ pub(crate) fn resume_parked(
                 // the durable deadline". A still-active limit marker gets one
                 // chance to fire the persisted due record on the recovery
                 // frame; clear only stale records whose marker already moved on.
-                if limit_marker_active(agent) {
+                if limit_marker_active(agent, now) {
                     if cached_park(&path).is_none()
                         && capacity_recovered(capacity, agent, now)
                         && !recent_resume_attempt(resume_messages, agent, now)
@@ -362,13 +364,14 @@ fn rebased_record(
     mut record: ParkRecord,
     agent: &AgentState,
     resume_messages: &[ResumeMessage],
+    now: Timestamp,
 ) -> Option<ParkRecord> {
     if !matches!(
         record.kind,
         ParkKind::RateLimit { .. } | ParkKind::Overloaded { .. }
     ) || still_parked(&record, agent.last_activity)
         || !agent
-            .displayed_turn_error()
+            .displayed_turn_error(now)
             .is_some_and(|(class, _)| class.is_limit() || class == TurnErrorClass::PausedOverloaded)
     {
         return None;
@@ -461,9 +464,9 @@ fn capacity_recovered(
 
 /// Whether the row's displayed turn error is a provider limit: the one
 /// definition of "stopped on a limit" auto-continue and park-notice share.
-pub(crate) fn limit_marker_active(agent: &AgentState) -> bool {
+pub(crate) fn limit_marker_active(agent: &AgentState, now: Timestamp) -> bool {
     agent
-        .displayed_turn_error()
+        .displayed_turn_error(now)
         .is_some_and(|(class, _)| class.is_limit())
 }
 

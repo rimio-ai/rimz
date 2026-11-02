@@ -697,7 +697,7 @@ fn live_instances(
                     .find(|row| row.is_agent() && row.id == agent.agent_id.as_str());
                 let card = row.and_then(|row| row.as_agent());
                 let (status, phase) = card.map_or_else(
-                    || agent.rowless_status(catalog.demotion),
+                    || agent.rowless_status(catalog.demotion, snapshot.now),
                     |card| (card.status, card.phase),
                 );
                 LiveMember {

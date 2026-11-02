@@ -84,7 +84,7 @@ pub(super) fn receiver_readiness(
     now: Timestamp,
 ) -> ReceiverReadiness {
     ReceiverReadiness {
-        status: agent.effective_status(),
+        status: agent.effective_status(now),
         compacting: agent.is_compacting(now),
         gate_open: gate_open_for_agent(gate, agent, force, now),
         waiting: !force && agent.is_awaiting_input(),
@@ -1291,7 +1291,7 @@ pub(super) fn evaluate_after_condition(
             met,
             met_at: condition.met_at,
             agent_present: agent.is_some(),
-            status: agent.map(crate::agents::AgentState::effective_status),
+            status: agent.map(|agent| agent.effective_status(now)),
         },
         stamp_needed: condition.met_at.is_none() && met,
     }
@@ -1336,7 +1336,7 @@ fn delivery_candidate<'a>(
     let (Some(agent), Some(binding)) = (evaluation.agent, evaluation.binding) else {
         return Candidacy::Refused(check.verdict());
     };
-    let status = agent.effective_status();
+    let status = agent.effective_status(now);
     let target = binding.pane;
     let bound = binding.exact_agent;
     Candidacy::Ready(Box::new(DeliveryCandidate {

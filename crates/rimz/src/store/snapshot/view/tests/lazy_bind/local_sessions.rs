@@ -720,7 +720,7 @@ fn cursor_open_ask_holds_despite_a_newer_local_session_write() {
         .with_live_panes(vec![pane], None);
     assert_eq!(
         (
-            rollup_agent(&snapshot, "cursor-session").effective_status(),
+            rollup_agent(&snapshot, "cursor-session").effective_status(snapshot.now),
             row(&snapshot, "cursor-session").status(),
         ),
         (AgentStatus::Waiting, Some(AgentStatus::Waiting)),
