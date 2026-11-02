@@ -163,6 +163,7 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
         effort: Some("high".into()),
         fast: false,
         agent: None,
+        auto_compact: None,
     };
     let stamp = tier_stamp("opus");
     for profile in [Some("planner"), None] {
@@ -281,6 +282,93 @@ fn pi_recorded_fast_replays_without_argv_or_warnings() {
 }
 
 #[test]
+fn resume_posture_reresolves_the_native_auto_compact_count() {
+    let record: crate::agents::LaunchRecord = serde_json::from_value(serde_json::json!({
+        "model": null, "effort": null, "agent": null, "auto_compact": 372_000
+    }))
+    .unwrap();
+    let actual = [Some("200k"), None].map(|configured| {
+        let profiles = profiles(
+            "worker",
+            Profile {
+                auto_compact: configured.map(str::to_owned),
+                ..profile("claude")
+            },
+        );
+        let posture = resolve_posture(
+            PostureRequest {
+                record: Some(&record),
+                profile: Some("worker"),
+                kind: &AgentKind::new_unchecked("claude"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+        );
+        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+        let cell = posture
+            .launch
+            .into_cell(AgentKind::new_unchecked("claude"), Some("worker".into()));
+        (
+            cell.auto_compact,
+            serde_json::to_value(cell.launch.record.unwrap()).unwrap()["auto_compact"].as_u64(),
+        )
+    });
+    assert_eq!(
+        actual,
+        [(Some("200000".into()), Some(200_000)), (None, None)]
+    );
+}
+
+#[test]
+fn resume_posture_records_auto_compact_without_refinalizing_argv() {
+    let record = crate::agents::LaunchRecord {
+        auto_compact: Some(200_000),
+        ..Default::default()
+    };
+    for configured in [Some("372k"), None] {
+        let profiles = profiles(
+            "worker",
+            Profile {
+                auto_compact: configured.map(str::to_owned),
+                args: Some("--model sonnet --model opus".into()),
+                ..profile("claude")
+            },
+        );
+        for record in [None, Some(&record)] {
+            let posture = resolve_posture(
+                PostureRequest {
+                    record,
+                    profile: Some("worker"),
+                    kind: &AgentKind::new_unchecked("claude"),
+                    stamped_mode: None,
+                    stamped_tier: None,
+                },
+                &profiles,
+            );
+            assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+            let mut expected_args = Vec::new();
+            if configured.is_some() {
+                expected_args.extend(["--autocompact", "372000"]);
+            }
+            expected_args.extend(["--model", "sonnet", "--model", "opus"]);
+            expected_args.extend(["--permission-mode", "auto"]);
+            assert_eq!(posture.launch.args, expected_args);
+            assert_eq!(posture.launch.model, None);
+            assert_eq!(
+                posture.launch.record.as_deref(),
+                (record.is_some() || configured.is_some())
+                    .then_some(crate::agents::LaunchRecord {
+                        auto_compact: configured.map(|_| 372_000),
+                        ..Default::default()
+                    })
+                    .as_ref(),
+            );
+        }
+    }
+}
+
+#[test]
 fn resume_posture_normalizes_unmapped_flags_before_recording() {
     // Resume requires a registered adapter; Copilot lacks both preset switches.
     let profiles = profiles(
@@ -289,6 +377,7 @@ fn resume_posture_normalizes_unmapped_flags_before_recording() {
     );
     let record = crate::agents::LaunchRecord {
         fast: true,
+        auto_compact: Some(372_000),
         ..Default::default()
     };
     for record in [None, Some(&record)] {
@@ -312,6 +401,7 @@ fn resume_posture_normalizes_unmapped_flags_before_recording() {
             posture.launch.fast,
         );
         assert!(!replayed.fast, "{replayed:?}");
+        assert_eq!(replayed.auto_compact, None);
     }
 }
 
@@ -362,6 +452,7 @@ fn recorded_model_override_keeps_the_stamped_family_render() {
         effort: Some("high".into()),
         fast: false,
         agent: None,
+        auto_compact: None,
     };
     let stamp = tier_stamp("astra");
     let posture = resolve_posture(
@@ -562,6 +653,7 @@ fn recorded_base_replays_and_missing_base_degrades() {
         effort: Some("medium".into()),
         fast: false,
         agent: Some("reviewer".into()),
+        auto_compact: None,
     };
     let resolve = |profiles: &ProfilesConfig| {
         resolve_posture(

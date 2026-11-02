@@ -23,6 +23,33 @@ fn card_fast_projects_live_precedence_and_omits_standard() {
 }
 
 #[test]
+fn card_auto_compact_projects_the_record_and_accepts_legacy_json() {
+    let legacy = serde_json::json!({"model": null, "effort": null, "agent": null});
+    let record: crate::agents::LaunchRecord = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(record).unwrap(), legacy);
+    let card: AgentCard =
+        serde_json::from_value(serde_json::to_value(AgentCard::default()).unwrap()).unwrap();
+    assert!(
+        serde_json::to_value(card)
+            .unwrap()
+            .get("auto_compact")
+            .is_none()
+    );
+
+    let mut configured = legacy;
+    configured["auto_compact"] = serde_json::json!(372_000);
+    let mut agent = AgentState::stub("claude", "session", AgentStatus::Idle);
+    agent.record = Some(Box::new(
+        serde_json::from_value(configured.clone()).unwrap(),
+    ));
+    let card = AgentCard::from_agent(&agent, row_time());
+    assert_eq!(serde_json::to_value(&agent.record).unwrap(), configured);
+    let encoded = serde_json::to_value(&card).unwrap();
+    assert_eq!(encoded["auto_compact"], 372_000);
+    assert_eq!(serde_json::from_value::<AgentCard>(encoded).unwrap(), card);
+}
+
+#[test]
 fn card_open_ask_round_trips_and_follows_display_status() {
     let mut value = serde_json::to_value(AgentCard::default()).unwrap();
     assert!(value.get("ask_detail").is_none());

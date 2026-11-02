@@ -75,6 +75,7 @@ fn finalized_launch_stamps_verbatim_record() {
             effort: Some("high".into()),
             fast: false,
             agent: None,
+            auto_compact: None,
         })
     );
 }
@@ -650,6 +651,7 @@ fn off_launch_record_keeps_its_wire_bytes() {
         effort: None,
         agent: None,
         fast: false,
+        auto_compact: None,
     };
     assert_eq!(
         serde_json::to_string(&record).unwrap(),
@@ -1285,7 +1287,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         resume_model_override,
         isolation_default,
         kind: _,
-        auto_compact: _,
+        auto_compact,
         args,
         system_prompt_file,
         append_system_prompt_files,
@@ -1306,6 +1308,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             isolation_default,
             isolation: launch.isolation,
             args,
+            auto_compact,
             system_prompt_file,
             append_system_prompt_files,
             team_prompt,
@@ -3523,6 +3526,59 @@ fn auto_compact_reconciles_declared_fields_without_touching_other_args() {
                 if args == &finalized)
         );
     }
+}
+
+#[test]
+fn finalized_launch_records_only_the_configured_native_auto_compact_count() {
+    let cases = [
+        ("claude", Some("372k"), "", "", Some(372_000)),
+        ("codex", Some("1M"), "", "", Some(1_000_000)),
+        ("copilot", Some("200k"), "", "", None),
+        ("claude", Some("off"), "", "", None),
+        ("claude", None, "--autocompact 100000", "", None),
+        (
+            "claude",
+            Some("200k"),
+            "--autocompact 100000",
+            "--autocompact 300000",
+            Some(200_000),
+        ),
+        (
+            "codex",
+            Some("200k"),
+            "-c model_auto_compact_token_limit=100000",
+            "-c model_auto_compact_token_limit=300000",
+            Some(200_000),
+        ),
+    ];
+    let actual = cases.map(|(kind, configured, raw, passthrough, _)| {
+        let configured = if configured == Some("off") {
+            let harness: crate::config::HarnessConfig =
+                toml::from_str("auto_compact = 'off'").unwrap();
+            harness.auto_compact.map(|tokens| tokens.to_string())
+        } else {
+            configured.map(str::to_owned)
+        };
+        let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
+            "compact".into(),
+            Profile {
+                auto_compact: configured,
+                args: Some(raw.into()),
+                ..configured_profile(kind, None, None, None, None, None)
+            },
+        )]));
+        let cell = crate::harness::spec::profile_cell("compact", &profiles).unwrap();
+        let mut layout = LayoutSpec::single(Cell::Agent(cell));
+        finalize(
+            &mut layout,
+            &Default::default(),
+            &shlex::split(passthrough).unwrap(),
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        serde_json::to_value(cell.launch.record.as_ref().unwrap()).unwrap()["auto_compact"].as_u64()
+    });
+    assert_eq!(actual, cases.map(|(_, _, _, _, expected)| expected));
 }
 
 #[test]

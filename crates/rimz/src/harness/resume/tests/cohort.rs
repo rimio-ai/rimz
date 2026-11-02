@@ -400,6 +400,7 @@ fn recorded_team_restore_keeps_role_layers() {
                 effort: Some("high".into()),
                 fast: false,
                 agent: None,
+                auto_compact: None,
             })
         });
         let tabs = plan_team_restore_tabs(
@@ -1001,6 +1002,7 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
         effort: Some("high".into()),
         fast: false,
         agent: None,
+        auto_compact: None,
     }));
     let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
         crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
@@ -1130,6 +1132,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                     effort: Some("xhigh".into()),
                     fast: false,
                     agent: Some("reviewer".into()),
+                    auto_compact: None,
                 }));
                 let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
                     crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
@@ -3133,6 +3136,7 @@ fn explicit_resume_mode_beats_recorded_and_profile_modes() {
         effort: Some("high".into()),
         fast: false,
         agent: None,
+        auto_compact: None,
     }));
     let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
         crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
@@ -3498,7 +3502,7 @@ fn invalid_record_effort_refuses_its_cohort_restore() {
 }
 
 #[test]
-fn resumed_seats_clear_auto_compact_and_fresh_seats_keep_it() {
+fn resumed_and_fresh_seats_record_their_postures_auto_compact_count() {
     let profiles = profiles(
         "planner",
         Profile {
@@ -3515,6 +3519,12 @@ fn resumed_seats_clear_auto_compact_and_fresh_seats_keep_it() {
         .push(crate::harness::spec::Cell::Agent(cell));
     let mut agent = agent("claude", "a1", "/repo", 1);
     agent.profile = Some("planner".into());
+    agent.record = Some(Box::new(
+        serde_json::from_value(serde_json::json!({
+            "model": null, "effort": null, "agent": null, "auto_compact": 372_000
+        }))
+        .unwrap(),
+    ));
     restore_routed_cells(
         &mut layout,
         &[CohortSeed::Resume(Box::new(agent)), CohortSeed::Fresh],
@@ -3522,7 +3532,15 @@ fn resumed_seats_clear_auto_compact_and_fresh_seats_keep_it() {
         &Default::default(),
     )
     .unwrap();
-    let mut cells = layout.agent_cells();
-    assert_eq!(cells.next().unwrap().auto_compact, None);
-    assert_eq!(cells.next().unwrap().auto_compact, declared);
+    let actual = layout
+        .agent_cells()
+        .map(|cell| {
+            (
+                cell.auto_compact.clone(),
+                serde_json::to_value(cell.launch.record.as_ref().unwrap()).unwrap()["auto_compact"]
+                    .as_u64(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, vec![(declared, Some(200_000)); 2]);
 }

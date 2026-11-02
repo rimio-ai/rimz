@@ -52,6 +52,9 @@ pub struct LaunchRecord {
     /// record written for an agent without fast keeps its bytes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fast: bool,
+    /// Configured native compaction count in tokens, before the provider's runtime cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact: Option<u64>,
 }
 
 impl LaunchRecord {
@@ -66,6 +69,7 @@ impl LaunchRecord {
             effort: effort.map(str::to_owned),
             agent: None,
             fast,
+            auto_compact: None,
         }))
     }
 }

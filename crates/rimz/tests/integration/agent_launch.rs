@@ -4967,6 +4967,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             effort: Some("high".into()),
             fast: false,
             agent: Some("reviewer".into()),
+            auto_compact: None,
         }));
         resume.identity.params.tier = Some(Box::new(rimz::agents::TierStamp {
             tier: rimz::config::tiers::ModelTier::Junior,

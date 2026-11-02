@@ -579,6 +579,7 @@ mod tests {
                 model: Some("opus".to_owned()),
                 effort: Some("high".to_owned()),
                 system_prompt_file: Some(prompt.path().to_path_buf().into()),
+                auto_compact: Some("372k".into()),
                 args: Some("--plugin-dir '/tmp/plugin dir'".to_owned()),
                 ..profile("claude")
             },
@@ -594,6 +595,8 @@ mod tests {
                 "opus",
                 "--effort",
                 "high",
+                "--autocompact",
+                "372000",
                 "--dangerously-skip-permissions",
                 "--plugin-dir",
                 "/tmp/plugin dir",
@@ -610,6 +613,10 @@ mod tests {
         assert_eq!(posture.launch.mode, Some(PermissionMode::Yolo));
         assert_eq!(posture.launch.model.as_deref(), Some("opus"));
         assert_eq!(posture.launch.effort.as_deref(), Some("high"));
+        assert_eq!(
+            serde_json::to_value(posture.launch.record).unwrap()["auto_compact"],
+            372_000
+        );
     }
 
     #[test]

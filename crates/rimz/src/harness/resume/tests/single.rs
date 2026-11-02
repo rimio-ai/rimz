@@ -13,6 +13,7 @@ fn saved() -> AgentState {
             effort: Some("high".into()),
             fast: false,
             agent: None,
+            auto_compact: None,
         })),
         ..agent("claude", "saved", "/repo", 0)
     }

@@ -698,7 +698,7 @@ mod agent_ref {
     }
 
     #[test]
-    fn single_session_omission_keeps_the_saved_record() {
+    fn single_session_omission_replays_saved_settings_and_refreshes_auto_compact() {
         let fixture = Fixture::new(LaunchParams::default(), false, None);
         let params = LaunchParams {
             record: Some(rimz::agents::LaunchRecord::replay_or_new(
@@ -716,7 +716,12 @@ mod agent_ref {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(fixture.request().identity.params.record, params.record);
+        let mut expected_record = params.record.unwrap();
+        expected_record.auto_compact = Some(272_000);
+        assert_eq!(
+            fixture.request().identity.params.record,
+            Some(expected_record)
+        );
     }
 
     #[test]

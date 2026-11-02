@@ -341,6 +341,7 @@ pub struct ResumeLaunchPosture {
     pub isolation_default: Option<crate::config::Isolation>,
     pub isolation: Option<crate::config::Isolation>,
     pub args: Vec<String>,
+    pub auto_compact: Option<String>,
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
@@ -360,7 +361,7 @@ impl ResumeLaunchPosture {
             notices: self.notices,
             kind,
             empty_dir: None,
-            auto_compact: None,
+            auto_compact: self.auto_compact,
             resume_model_override: self.resume_model_override,
             isolation_default: self.isolation_default,
             args: self.args,
@@ -415,6 +416,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             record: cell.launch.record.clone(),
             isolation: cell.launch.isolation,
             args: cell.args.clone(),
+            auto_compact: cell.auto_compact.clone(),
             system_prompt_file: cell.system_prompt_file.clone(),
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
@@ -1612,6 +1614,10 @@ pub(super) fn finalize_agent_cell(
                 .and_then(|record| record.agent.clone())
         }),
         fast: cell.launch.fast,
+        auto_compact: cell
+            .auto_compact
+            .as_deref()
+            .and_then(|value| AutoCompact::parse_native_window(value).ok()),
     }));
     if let Some(policy) = options.smart_compact {
         policy.append_warnings(cell, warnings);

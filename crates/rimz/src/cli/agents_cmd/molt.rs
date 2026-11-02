@@ -394,7 +394,10 @@ mod tests {
         let mut machine = rimz::config::MachineConfig::default();
         machine.agents.profiles = serde_json::from_value(serde_json::json!({
             "worker": {"agent": "claude", "model": "opus"},
-            "replacement": {"agent": "codex", "model": "gpt-6.1-sol", "effort": "medium"}
+            "replacement": {
+                "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium",
+                "auto-compact": "200k"
+            }
         }))
         .unwrap();
         machine.agents.teams = serde_json::from_value(serde_json::json!({
@@ -412,6 +415,7 @@ mod tests {
             effort: Some("xhigh".into()),
             fast: true,
             agent: None,
+            auto_compact: None,
         }));
         let (kind, posture) =
             replacement_posture(&agent, &machine, &effective, "replacement", None).unwrap();
@@ -419,6 +423,10 @@ mod tests {
         assert_eq!(posture.launch.model.as_deref(), Some("gpt-6.1-sol"));
         assert_eq!(posture.launch.effort.as_deref(), Some("medium"));
         assert!(!posture.launch.fast);
+        assert_eq!(
+            serde_json::to_value(posture.launch.record.as_ref().unwrap()).unwrap()["auto_compact"],
+            200_000
+        );
         assert_eq!(posture.launch.mode, agent.mode);
         assert_eq!(posture.launch.isolation, agent.isolation);
         assert_eq!(posture.launch.system_prompt_file, Some(role_prompt.into()));
