@@ -240,10 +240,9 @@ impl LaunchSpec {
         let raw = args.iter().enumerate().any(|(index, arg)| {
             !owned.as_ref().is_some_and(|range| range.contains(&index))
                 && (self.permission.flags.iter().any(|flag| {
-                    arg == *flag
-                        || arg
-                            .strip_prefix(*flag)
-                            .is_some_and(|rest| rest.starts_with('='))
+                    let short = flag.len() == 2 && !flag.starts_with("--");
+                    arg.strip_prefix(*flag)
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('=') || short)
                 }) || self
                     .permission
                     .config_keys

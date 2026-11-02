@@ -59,6 +59,7 @@ fn permission_settlement_yields_defaults_to_raw_markers_and_records_unknown() {
         ("codex", vec!["--ask-for-approval", "never"]),
         ("codex", vec!["--ask-for-approval=never"]),
         ("codex", vec!["-a", "never"]),
+        ("codex", vec!["-anever"]),
         ("codex", vec!["-c", "approvals_reviewer=user"]),
         ("codex", vec!["--config=approvals_reviewer=user"]),
         ("codex", vec!["-c", "approval_policy=never"]),
@@ -109,7 +110,8 @@ fn permission_settlement_ignores_only_one_owned_vector_and_exact_flag_names() {
     for (kind, raw) in [
         ("claude", "--permission-mode-extra"),
         ("codex", "--ask-for-approval-extra"),
-        ("codex", "-another"),
+        ("codex", "-b"),
+        ("codex", "--a"),
         ("opencode", "--automatic"),
     ] {
         let launch = crate::agents::spec_by_kind(kind).unwrap().launch;
