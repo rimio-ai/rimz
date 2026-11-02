@@ -31,6 +31,8 @@ mod keymap;
 mod layout_freeze;
 mod lifecycle;
 mod loop_state;
+#[allow(dead_code)]
+mod mirror_queue;
 mod notify;
 mod paint;
 mod plane;

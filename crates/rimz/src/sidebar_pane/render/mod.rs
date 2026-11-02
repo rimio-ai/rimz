@@ -24,7 +24,7 @@ mod interaction;
 mod labels;
 mod layout;
 mod odometer;
-mod scroll_ease;
+pub(super) mod scroll_ease;
 mod scrollbar;
 mod sections;
 mod theme;

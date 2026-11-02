@@ -17,6 +17,14 @@ pub(super) const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
 /// after a quick switch away.
 pub(super) const FOCUS_RESUME_WATCH_WINDOW: Duration = Duration::from_secs(3);
 
+pub(super) const MIRROR_POOL: usize = 4;
+pub(super) const MIRROR_QUIET: Duration = Duration::from_millis(150);
+
+const _: () = assert!(
+    MIRROR_QUIET.as_millis()
+        > crate::sidebar_pane::render::scroll_ease::SCROLL_EASE_DURATION.as_millis()
+);
+
 pub(super) struct FrameClock {
     pub(super) phase: u64,
     elapsed_ms: u64,
