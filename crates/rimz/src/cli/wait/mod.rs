@@ -152,7 +152,9 @@ fn home_write_hint(error: anyhow::Error, action: &str) -> anyhow::Error {
         "nothing was {action}: this command cannot write the RimZ home, for example inside a \
          provider's command sandbox. Run `rimz wait …` as its own command, without a chain, pipe, \
          redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
-         `allow-routine-rimz` is off, approve the sandbox's escalation"
+         `allow-routine-rimz` is off, approve the sandbox's escalation. If Codex's routine rules \
+         predate this RimZ, refresh them with `rimz hooks install codex` from a user shell and \
+         restart the agent"
     ))
 }
 
@@ -191,6 +193,7 @@ mod tests {
                     "chain, pipe, redirect, or `VAR=` prefix",
                     "allow-routine-rimz",
                     "escalation",
+                    "`rimz hooks install codex`",
                 ] {
                     assert!(report.contains(text), "{report}");
                 }
