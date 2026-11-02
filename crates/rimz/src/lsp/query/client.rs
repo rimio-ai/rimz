@@ -90,6 +90,24 @@ pub fn select(
     server: Option<&str>,
     path: Option<&Path>,
 ) -> std::result::Result<Entry, QueryErr> {
+    select_with_probe(
+        root,
+        entries,
+        servers,
+        server,
+        path,
+        registry::socket_denied,
+    )
+}
+
+fn select_with_probe(
+    root: &Path,
+    entries: Vec<Entry>,
+    servers: &BTreeMap<String, crate::config::LspServerConfig>,
+    server: Option<&str>,
+    path: Option<&Path>,
+    probe: impl FnOnce() -> bool,
+) -> std::result::Result<Entry, QueryErr> {
     let extension = path.and_then(Path::extension).and_then(|ext| ext.to_str());
     if server.is_none()
         && !servers.is_empty()
@@ -138,6 +156,9 @@ pub fn select(
         return Err(QueryErr::stopped(&entry, reason));
     }
     if !registry::is_live(&entry) {
+        if probe() {
+            return Err(LspErr::CommandSandbox.into());
+        }
         return Err(QueryErr::Unavailable {
             root: root.into(),
             reason: UnavailableReason::Crashed,
