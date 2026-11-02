@@ -4,7 +4,7 @@ const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\n
 
 #[test]
 fn inline_cases_match_table_blocks_in_order() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     let header = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@user',pending='@wait'}\n";
     let actual: Vec<_> = [
         r#"cases = [
@@ -26,7 +26,7 @@ for = "2m"
     .into_iter()
     .map(|cases| {
         fs::write(dir.join("workflow.toml"), format!("{header}{cases}")).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert!(
             report.errors.is_empty() && report.warnings.is_empty(),
             "{report:?}"
@@ -54,9 +54,9 @@ for = "2m"
 
 #[test]
 fn an_explicit_empty_cases_field_is_not_ignored_on_a_run_check() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     fs::write(dir.join("workflow.toml"), "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report.errors.iter().any(|error| error.path == "checks.pr"),
         "run must refuse cases, even an empty array: {:?}",
@@ -66,7 +66,7 @@ fn an_explicit_empty_cases_field_is_not_ignored_on_a_run_check() {
 
 #[test]
 fn condition_validation_resolves_defaults_waits_and_cycles() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     for (text, valid, message) in [
         (CONDITION.to_owned(), true, ""),
         (CONDITION.replace("timeout='1h'\n", ""), false, "timeout"),
@@ -92,7 +92,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
         ),
     ] {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert_eq!(
             report.errors.is_empty(),
             valid,
@@ -119,7 +119,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
             .replace("pending='@wait'", "pending='@done'"),
     )
     .unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     let error = report
         .errors
         .iter()
@@ -134,7 +134,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
 
 #[test]
 fn condition_validation_refuses_malformed_cases_and_inapplicable_fields() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     for (label, text, path) in [
         ("missing else", CONDITION.replace("else='pending'\n", ""), "checks.pr.else"),
         ("empty cases", CONDITION.replace("[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n", "cases=[]\n"), "checks.pr"),
@@ -166,7 +166,7 @@ fn condition_validation_refuses_malformed_cases_and_inapplicable_fields() {
         ("run unknown", "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.unknown='@done'\n".into(), "checks.pr.on.unknown"),
     ] {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert!(report.errors.iter().any(|e| e.path.contains(path)), "{label}: {text}: {:?}", report.errors);
         if label == "held wait" {
             assert!(report.errors.iter().any(|error| error
@@ -184,13 +184,13 @@ fn condition_validation_refuses_malformed_cases_and_inapplicable_fields() {
             .replace("pr=merged", "window.5h.left>=40"),
     )
     .unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
 }
 
 #[test]
 fn wake_validation_accepts_selectors_and_strict_match_tables() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     for runner in [
         "run='true'\non.ok='@done'",
         "shell='true'\non={pass='@done',fail='@user'}",
@@ -200,14 +200,14 @@ fn wake_validation_accepts_selectors_and_strict_match_tables() {
             "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n"
         );
         fs::write(dir.join("workflow.toml"), &text).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert!(report.errors.is_empty(), "{text}: {:?}", report.errors);
     }
 }
 
 #[test]
 fn wake_validation_refuses_invalid_and_unreachable_subscriptions() {
-    let (home, dir) = fixture();
+    let (_home, dir) = fixture();
     for entry in [
         "'bad selector'",
         "{signal='review.ready', match={env=' '}}",
@@ -225,7 +225,7 @@ fn wake_validation_refuses_invalid_and_unreachable_subscriptions() {
             "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\nwake=[{entry}]\n"
         );
         fs::write(dir.join("workflow.toml"), &text).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert!(
             report
                 .errors

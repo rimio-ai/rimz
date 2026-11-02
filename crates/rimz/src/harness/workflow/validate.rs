@@ -37,7 +37,6 @@ pub struct Validation {
 
 pub fn validate(
     dir: &Path,
-    workflows_home: &Path,
     definitions: &LoadedDefinitions,
     project_root: Option<&Path>,
 ) -> Validation {
@@ -55,21 +54,6 @@ pub fn validate(
         );
         return report;
     };
-    let confined = canonical.as_ref().is_ok_and(|dir| {
-        workflows_home
-            .canonicalize()
-            .is_ok_and(|home| *dir != home && dir.starts_with(home))
-    });
-    if !confined {
-        report.error(
-            "workflow",
-            format!(
-                "{name}: directory must exist inside {}",
-                workflows_home.display()
-            ),
-        );
-        return report;
-    }
     let spec = match super::load(dir) {
         Ok(spec) => spec,
         Err(err) => {
