@@ -748,6 +748,7 @@ fn hidden_reveal(
     reveal_by_resize: bool,
 ) {
     let room = Room::with_mux_timing(mux, Timing::default());
+    room.host.plane.start_mirrors_for_test();
     let visible_id = crate::ids::PaneId::from_parts(
         mux,
         if mux == MuxName::Tmux {
@@ -889,7 +890,7 @@ fn hidden_reveal(
             .contents()
             .contains("hidden-new-card")
     });
-    // Wall-clock liveness bound; the virtual-clock unit test pins one frame interval.
+    // Wall-clock liveness bound.
     assert!(
         changed.elapsed() < Duration::from_millis(500),
         "structural mirror remains live"

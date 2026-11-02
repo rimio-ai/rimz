@@ -17,12 +17,13 @@ const OFFER_LEASE: Duration = Duration::from_secs(4);
 pub(super) struct MirrorQueue {
     state: Mutex<Queue>,
     changed: Condvar,
-    subscribers: super::fetch::Subscribers,
+    subscribers: Mutex<super::fetch::Subscribers>,
 }
 
 #[derive(Default)]
 struct Queue {
     record: Arc<ViewsRecord>,
+    // Subscriber-backed state is pruned each step; offers plus grants are capped by MIRROR_POOL.
     subscribers: Vec<PaneId>,
     members: HashSet<PaneId>,
     target_changed: bool,
@@ -50,19 +51,55 @@ pub(super) struct Grant {
 impl MirrorQueue {
     pub(super) fn new(subscribers: super::fetch::Subscribers) -> Self {
         Self {
-            subscribers,
+            subscribers: Mutex::new(subscribers),
             ..Self::default()
         }
+    }
+
+    pub(super) fn bind(&self, subscribers: super::fetch::Subscribers) {
+        *self
+            .subscribers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = subscribers;
+        self.notify();
+    }
+
+    pub(super) fn notify(&self) {
+        let mut state = self.lock();
+        state.epoch += 1;
+        self.changed.notify_one();
     }
     fn lock(&self) -> MutexGuard<'_, Queue> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(super) fn flag(&self, pane: &PaneId) -> Arc<AtomicBool> {
-        self.lock().flags.entry(pane.clone()).or_default().clone()
+        let subscribers = self
+            .subscribers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let flag = subscribers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .find(|subscriber| subscriber.own_pane == *pane)
+            .map(|subscriber| subscriber.mirror_offer.clone());
+        let mut state = self.lock();
+        let Some(flag) = flag else {
+            return state.flags.entry(pane.clone()).or_default().clone();
+        };
+        flag.store(state.offers.contains_key(pane), Ordering::Release);
+        state.flags.insert(pane.clone(), flag.clone());
+        if state.members.insert(pane.clone()) {
+            state.subscribers.push(pane.clone());
+        }
+        state.epoch += 1;
+        self.changed.notify_one();
+        flag
     }
 
-    pub(super) fn observe(&self, record: Arc<ViewsRecord>, _subscribers: Vec<PaneId>) {
+    pub(super) fn observe(&self, record: Arc<ViewsRecord>) {
         let mut state = self.lock();
         state.target_changed |= record.mirror_target != state.record.mirror_target;
         let current = record.mirror_pane.as_ref().and_then(|pane| {
@@ -104,6 +141,8 @@ impl MirrorQueue {
         let mut state = self.lock();
         if !state.eligible(pane) {
             state.clear_offer(pane);
+            state.epoch += 1;
+            self.changed.notify_one();
             return None;
         }
         if state.members.contains(pane)
@@ -127,6 +166,17 @@ impl MirrorQueue {
         None
     }
 
+    pub(super) fn discard_offer(&self, pane: &PaneId) {
+        let mut state = self.lock();
+        if !state.offers.contains_key(pane) {
+            return;
+        }
+        state.clear_offer(pane);
+        state.pending.remove(pane);
+        state.epoch += 1;
+        self.changed.notify_one();
+    }
+
     #[cfg(test)]
     pub(super) fn step(
         &self,
@@ -141,17 +191,25 @@ impl MirrorQueue {
             .subscribers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let flags = subscribers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .map(|subscriber| subscriber.own_pane.clone())
-            .collect();
+            .map(|subscriber| (subscriber.own_pane.clone(), subscriber.mirror_offer.clone()))
+            .collect::<Vec<_>>();
         let (wakes, deadline, epoch) = {
             let mut state = self.lock();
-            let (wakes, deadline) = state.step(now, subscribers);
+            for (pane, flag) in &flags {
+                flag.store(state.offers.contains_key(pane), Ordering::Release);
+                state.flags.insert(pane.clone(), flag.clone());
+            }
+            let panes = flags.into_iter().map(|(pane, _)| pane).collect();
+            let (wakes, deadline) = state.step(now, panes);
             (wakes, deadline, state.epoch)
         };
         if !wakes.is_empty() {
-            for subscriber in self
-                .subscribers
+            for subscriber in subscribers
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .values()
@@ -214,11 +272,7 @@ impl Drop for Grant {
 impl Drop for Driver {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        {
-            let mut state = self.queue.lock();
-            state.epoch += 1;
-            self.queue.changed.notify_one();
-        }
+        self.queue.notify();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -289,8 +343,8 @@ impl Queue {
         }
         let quiet = self.quiet_until.filter(|until| now < *until);
         let mut wakes = Vec::new();
-        if quiet.is_none() {
-            let slots = MIRROR_POOL.saturating_sub(self.offers.len() + self.grants.len());
+        let slots = MIRROR_POOL.saturating_sub(self.offers.len() + self.grants.len());
+        if quiet.is_none() && slots != 0 {
             for pane in self.ranked().into_iter().take(slots) {
                 self.pending.remove(&pane);
                 self.offers.insert(pane.clone(), now + OFFER_LEASE);

@@ -50,6 +50,7 @@ terminal emulator
   mux session (Zellij or tmux)
     sidebar panes (one supervisor each, holding the pane's terminal)
   sidebar host (one per session, detached; paints every pane, read-only on the store)
+      shared room lanes, including the ranked four-slot hidden-mirror dispatcher
       elected user-scoped spending service and walker threads (disposable warm cache)
     shells, scripts, agents, CI helpers
                 │

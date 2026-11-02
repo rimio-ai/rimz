@@ -1,6 +1,36 @@
 use super::*;
 use crate::sidebar_pane::app::fixtures;
 
+#[test]
+fn offer_flags_survive_an_older_subscriber_snapshot() {
+    let own = pane(1);
+    let (wake, _) = std::sync::mpsc::sync_channel(1);
+    let instance_id = crate::SidebarInstanceId::new();
+    let subscribers = Arc::new(Mutex::new(std::collections::BTreeMap::from([(
+        instance_id.as_str().to_owned(),
+        super::super::fetch::Subscriber {
+            instance_id,
+            own_pane: own.clone(),
+            tick_seconds: 1,
+            completion: Arc::default(),
+            wake,
+            mirror_offer: Arc::default(),
+        },
+    )])));
+    let queue = Arc::new(MirrorQueue::new(subscribers));
+    let now = Instant::now();
+    queue.observe(record(3));
+    let flag = queue.flag(&own);
+    queue.step(now, Vec::new());
+    queue.observe(record(3));
+    assert!(queue.take(&own, now).is_none());
+    queue.dispatch(now);
+    assert!(
+        flag.load(Ordering::Acquire),
+        "an offered attachment must retain its flag across a stale membership snapshot"
+    );
+}
+
 fn pane(index: usize) -> PaneId {
     PaneId::from_parts(crate::MuxName::Zellij, format!("terminal_{index}"))
 }
@@ -44,13 +74,13 @@ fn ranks_neighbours_then_previous_then_outward_then_unknown() {
         .filter(|index| *index != 3)
         .map(pane)
         .collect::<Vec<_>>();
-    queue.observe(record(6), subscribers.clone());
-    queue.observe(Arc::new(ViewsRecord::default()), subscribers.clone());
-    queue.observe(record(6), subscribers.clone());
+    queue.observe(record(6));
+    queue.observe(Arc::new(ViewsRecord::default()));
+    queue.observe(record(6));
     let mut missing = record(6);
     Arc::get_mut(&mut missing).unwrap().mirror_pane = Some(pane(99));
-    queue.observe(missing, subscribers.clone());
-    queue.observe(record(3), subscribers.clone());
+    queue.observe(missing);
+    queue.observe(record(3));
     for pane in &subscribers {
         assert!(queue.take(pane, now).is_none());
     }
@@ -104,8 +134,8 @@ fn ranks_neighbours_and_outward_distance_across_native_position_gaps() {
             .filter(|(index, position)| *index != 3 && position.is_some())
             .map(|(index, _)| pane(index))
             .collect::<Vec<_>>();
-        queue.observe(record(6), subscribers.clone());
-        queue.observe(current, subscribers.clone());
+        queue.observe(record(6));
+        queue.observe(current);
         let mut order = Vec::new();
         loop {
             let (offered, _) = queue.step(now, subscribers.clone());
@@ -126,7 +156,7 @@ fn ten_peers_share_four_slots_and_drop_releases_the_fifth() {
     let queue = Arc::new(MirrorQueue::default());
     let now = Instant::now();
     let subscribers = (10..20).map(pane).collect::<Vec<_>>();
-    queue.observe(record(3), subscribers.clone());
+    queue.observe(record(3));
     for pane in &subscribers {
         queue.take(pane, now);
     }
@@ -147,7 +177,7 @@ fn input_revokes_offers_but_not_grants_and_reranks_after_rest() {
     let queue = Arc::new(MirrorQueue::default());
     let now = Instant::now();
     let subscribers = (0..8).map(pane).collect::<Vec<_>>();
-    queue.observe(record(3), subscribers.clone());
+    queue.observe(record(3));
     for pane in &subscribers {
         queue.take(pane, now);
     }
@@ -167,7 +197,7 @@ fn input_revokes_offers_but_not_grants_and_reranks_after_rest() {
     );
     assert_eq!(queue.lock().grants.len(), 1);
     drop(grant);
-    queue.observe(record(5), subscribers.clone());
+    queue.observe(record(5));
     let offered = queue.step(now + MIRROR_QUIET, subscribers).0;
     assert_eq!(&offered[..2], &[pane(4), pane(6)]);
 }
@@ -177,7 +207,7 @@ fn unpainted_drop_waits_for_a_new_due_pass_and_stale_offers_expire() {
     let queue = Arc::new(MirrorQueue::default());
     let now = Instant::now();
     let subscribers = vec![pane(1)];
-    queue.observe(record(3), subscribers.clone());
+    queue.observe(record(3));
     queue.take(&pane(1), now);
     assert_eq!(queue.step(now, subscribers.clone()).0, subscribers);
     drop(queue.take(&pane(1), now).unwrap());

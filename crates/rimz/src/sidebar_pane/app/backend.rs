@@ -86,8 +86,17 @@ impl PaneBackend {
     }
 
     /// Detach the composed frame without writing, so its owner can release view state before output.
-    pub(super) fn take_frame(&mut self, bracket: bool, width: u16) -> BufferedFrame {
-        let frame = self.frame.take().unwrap_or_default();
+    pub(super) fn take_frame(
+        &mut self,
+        bracket: bool,
+        width: u16,
+        skip_unchanged: bool,
+    ) -> BufferedFrame {
+        let mut frame = self.frame.take().unwrap_or_default();
+        // Even an empty ratatui diff emits style resets and cursor hiding.
+        if skip_unchanged && frame.changed_cells == 0 && !frame.cleared && !bracket {
+            frame.bytes.clear();
+        }
         let dense = frame.touched_rows != 0
             && 2 * frame.changed_cells >= frame.touched_rows * u64::from(width);
         let bytes = frame.bytes;
@@ -99,7 +108,7 @@ impl PaneBackend {
 
     #[cfg(test)]
     pub(super) fn end_frame(&mut self, bracket: bool, width: u16) -> io::Result<()> {
-        self.take_frame(bracket, width).write(self)
+        self.take_frame(bracket, width, false).write(self)
     }
 
     /// Paint the pane behind `fd`, the pane's own terminal output.

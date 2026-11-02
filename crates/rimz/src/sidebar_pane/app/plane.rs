@@ -141,6 +141,7 @@ impl DataPlane {
             .then(|| observe::RoomObserver::new(plane.observe_tx.clone(), plane.events.clone()));
         let (config, runtime, diag) = (config.clone(), runtime.clone(), diag.clone());
         let subscribers = plane.subscribers.clone();
+        let views = plane.views.clone();
         let host_data = plane.host_data.clone();
         let requests = plane.request_tx.clone();
         let room_events = plane.room_events(&runtime);
@@ -154,6 +155,7 @@ impl DataPlane {
             }));
         }
         let lanes: Lanes = Box::new(move || {
+            views.start_mirrors();
             let producer = PaneProducer::seeded(&runtime, &config.session_name);
             let last_projection =
                 crate::sidebar::agent_projection::read_publication(&runtime, &config.session_name);
@@ -232,6 +234,11 @@ impl DataPlane {
     }
 
     #[cfg(test)]
+    pub(in crate::sidebar_pane) fn start_mirrors_for_test(&self) {
+        self.views.start_mirrors();
+    }
+
+    #[cfg(test)]
     pub(in crate::sidebar_pane) fn event_store(&self) -> crate::sidebar::event_store::EventStore {
         lock(&self.events).clone()
     }
@@ -252,6 +259,7 @@ impl DataPlane {
             (views.fold.clone(), views.revision)
         };
         let subscriber = Subscriber {
+            mirror_offer: Arc::default(),
             instance_id: config.instance_id.clone(),
             own_pane: config.own_pane.clone(),
             tick_seconds: config.tick_seconds,
@@ -262,10 +270,12 @@ impl DataPlane {
             instance_id: config.instance_id.clone(),
             subscribers: self.subscribers.clone(),
             jumps: self.jumps.clone(),
+            mirrors: self.views.mirrors.clone(),
         };
         let mut subscribers = lock(&self.subscribers);
         subscribers.insert(config.instance_id.as_str().to_owned(), subscriber);
         drop(subscribers);
+        self.views.mirrors.notify();
         if let Some(start) = lock(&self.lanes).take() {
             // Room workers inherit their creator's Linux comm. Keep their CPU out of the
             // attachment samples by starting them from a separately named thread.
@@ -398,12 +408,15 @@ struct Membership {
     instance_id: SidebarInstanceId,
     subscribers: Subscribers,
     jumps: Arc<super::focus_push::JumpHost>,
+    mirrors: Arc<super::mirror_queue::MirrorQueue>,
 }
 
 impl Drop for Membership {
     fn drop(&mut self) {
         let mut subscribers = lock(&self.subscribers);
         subscribers.remove(self.instance_id.as_str());
+        drop(subscribers);
+        self.mirrors.notify();
         self.jumps.forget(&self.instance_id);
     }
 }

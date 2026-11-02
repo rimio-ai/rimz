@@ -13,6 +13,7 @@ pub(in crate::sidebar_pane::app) struct ViewAccess {
     was_resolved: bool,
     view_advanced: bool,
     cached: RefCell<Arc<ViewsRecord>>,
+    pub(super) mirror_offer: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +83,7 @@ impl ViewAccess {
             scratch_context,
             was_resolved: false,
             view_advanced: false,
+            mirror_offer: Arc::default(),
         }
     }
 
@@ -146,7 +148,8 @@ impl ViewAccess {
         })
     }
 
-    pub(super) fn share(&mut self, views: Arc<ViewsHandle>) -> Option<PaneId> {
+    pub(super) fn share(&mut self, views: Arc<ViewsHandle>, own: &PaneId) -> Option<PaneId> {
+        self.mirror_offer = views.mirrors.flag(own);
         self.cached = RefCell::new(views.read());
         self.registry = views;
         self.view_advanced = false;

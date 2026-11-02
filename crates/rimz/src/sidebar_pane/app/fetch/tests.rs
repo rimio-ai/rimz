@@ -1491,6 +1491,7 @@ const SINGLE_SINK_PANE: &str = "sidebar_0";
 
 fn single_sink(host_data: Arc<Mutex<HostData>>, wake: SyncSender<Wakeup>) -> (ResultSink, Replay) {
     let subscriber = Subscriber {
+        mirror_offer: Arc::default(),
         instance_id: SidebarInstanceId::new(),
         own_pane: PaneId::from_parts(MuxName::Zellij, SINGLE_SINK_PANE),
         tick_seconds: 1,
@@ -3218,6 +3219,7 @@ fn subscriber(
     wake: SyncSender<Wakeup>,
 ) -> (Subscriber, Replay) {
     let subscriber = Subscriber {
+        mirror_offer: Arc::default(),
         instance_id: SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap(),
         own_pane: PaneId::from_parts(MuxName::Zellij, own),
         tick_seconds,

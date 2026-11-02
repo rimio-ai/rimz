@@ -32,9 +32,139 @@ fn mirror_pair(mux: MuxName) -> super::scroll::SharedPanes {
 }
 
 fn repaint_source(pair: &mut super::scroll::SharedPanes) {
-    pair.panes[0].state.pane.dirty = true;
-    pair.panes[0].state.pane.next_frame = pair.clock.now();
-    advance_wakeup(&mut pair.panes[0], Wakeup::Snapshot);
+    let rig = &mut pair.panes[0];
+    rig.state.pane.dirty = true;
+    rig.state.pane.next_frame = pair.clock.now();
+    rig.state
+        .advance(
+            &mut super::scroll::queued([Wakeup::Snapshot]),
+            &mut rig.terminal,
+        )
+        .unwrap();
+}
+
+#[test]
+fn wheel_gestures_paint_no_hidden_mirrors_until_one_sweep_at_rest() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        pair.add_hidden(5);
+        repaint_source(&mut pair);
+        pair.clock.advance(Duration::from_secs(1));
+        for rig in pair.panes.iter_mut().skip(1) {
+            advance_wakeup(rig, Wakeup::Tick);
+        }
+        let before = pair
+            .panes
+            .iter()
+            .map(|rig| rig.state.pane.paints)
+            .collect::<Vec<_>>();
+        for _ in 0..5 {
+            pair.clock.advance(Duration::from_millis(40));
+            pair.input(0);
+            for rig in pair.panes.iter_mut().skip(1) {
+                advance_wakeup(rig, Wakeup::Tick);
+            }
+        }
+        let during = pair
+            .panes
+            .iter()
+            .skip(1)
+            .enumerate()
+            .map(|(index, rig)| rig.state.pane.paints - before[index + 1])
+            .collect::<Vec<_>>();
+        assert_eq!(during, vec![0; 6], "{mux:?}: no hidden paint during input");
+        pair.clock
+            .advance(super::super::super::timing::MIRROR_QUIET);
+        for rig in pair.panes.iter_mut().skip(1) {
+            advance_wakeup(rig, Wakeup::Tick);
+        }
+        let after = pair
+            .panes
+            .iter()
+            .skip(1)
+            .enumerate()
+            .map(|(index, rig)| rig.state.pane.paints - before[index + 1])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after,
+            vec![1; 6],
+            "{mux:?}: one paint per hidden peer at rest"
+        );
+    }
+}
+
+#[test]
+fn a_mid_gesture_native_switch_keeps_the_latest_mirror_target() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        pair.add_hidden(5);
+        pair.input(0);
+        pair.sample(&[(1, 1)]);
+        pair.paint(1);
+        let target = pair.plane.views.read().mirror_target;
+        let before = pair
+            .panes
+            .iter()
+            .map(|rig| rig.state.pane.paints)
+            .collect::<Vec<_>>();
+        for (index, rig) in pair
+            .panes
+            .iter_mut()
+            .enumerate()
+            .filter(|(index, _)| *index != 1)
+        {
+            assert!(!advance_wakeup(rig, Wakeup::Tick), "{mux:?}, pane {index}");
+        }
+        pair.clock
+            .advance(super::super::super::timing::MIRROR_QUIET);
+        for (index, rig) in pair
+            .panes
+            .iter_mut()
+            .enumerate()
+            .filter(|(index, _)| *index != 1)
+        {
+            assert!(advance_wakeup(rig, Wakeup::Tick), "{mux:?}, pane {index}");
+            assert_eq!(rig.state.pane.paints, before[index] + 1);
+            assert_eq!(
+                rig.state.pane.mirrored.as_ref().map(|last| last.target),
+                target
+            );
+        }
+    }
+}
+
+#[test]
+fn structural_publications_are_prompt_at_rest_but_wait_during_input() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        for input in [false, true] {
+            let mut pair = mirror_pair(mux);
+            if input {
+                pair.input(0);
+            }
+            let before = pair.plane.views.read().mirror_target;
+            pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+                v.state.landed_open = !v.state.landed_open;
+            });
+            repaint_source(&mut pair);
+            assert_ne!(pair.plane.views.read().mirror_target, before);
+            let offered = pair
+                .plane
+                .views
+                .mirrors
+                .step(
+                    pair.clock.now(),
+                    vec![pair.panes[1].state.pane.config.own_pane.clone()],
+                )
+                .0;
+            assert_eq!(offered.is_empty(), input, "{mux:?}, input={input}");
+            assert_eq!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick), !input);
+            if input {
+                pair.clock
+                    .advance(super::super::super::timing::MIRROR_QUIET);
+                assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+            }
+        }
+    }
 }
 
 #[test]
@@ -100,7 +230,9 @@ fn hidden_mirrors_structural_layouts_on_both_backends() {
                     )
                 })
                 .collect::<Vec<_>>();
-            pair.clock.advance(animation_frame(&pair.snapshot));
+            pair.clock.advance(
+                animation_frame(&pair.snapshot).max(super::super::super::timing::MIRROR_QUIET),
+            );
             let counts = host_pass::thread_counters();
             counts.reset();
             let painted = advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
@@ -206,10 +338,63 @@ fn hidden_mirrors_last_card_height_changes_in_a_fitting_roster() {
 }
 
 #[test]
-fn hidden_mirrors_coalesce_and_cap_the_driver_deadline() {
+fn a_mirror_ahead_of_its_source_paint_writes_the_layout_only_once() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = mirror_pair(mux);
-        let interval = animation_frame(&pair.snapshot);
+        let before = pair.plane.views.read().mirror_target;
+        pair.snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
+        pair.sample(&[(1, 0)]);
+        pair.panes[0].state.on_snapshot();
+        assert_eq!(pair.plane.views.read().mirror_target, before);
+
+        let output = FrameOutput::default();
+        pair.panes[1]
+            .terminal
+            .backend_mut()
+            .play_output(output.clone());
+        pair.panes[1].state.pane.mirrored = None;
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+        assert!(!std::mem::take(&mut *output.0.lock().unwrap()).is_empty());
+        assert_ne!(
+            pair.panes[1].state.pane.ui.painted_rows,
+            pair.panes[0].state.pane.ui.painted_rows
+        );
+
+        repaint_source(&mut pair);
+        let target = pair.plane.views.read().mirror_target;
+        assert_ne!(target, before);
+        assert_eq!(
+            pair.panes[1].state.pane.ui.painted_rows,
+            pair.panes[0].state.pane.ui.painted_rows
+        );
+        advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
+        let repeated = std::mem::take(&mut *output.0.lock().unwrap());
+        assert_eq!(
+            repeated, b"",
+            "{mux:?}: publishing the already-mirrored layout emits no bytes"
+        );
+        assert_eq!(
+            pair.panes[1]
+                .state
+                .pane
+                .mirrored
+                .as_ref()
+                .map(|last| last.target),
+            target
+        );
+
+        pair.snapshot.theme.display.card_density = crate::config::CardDensityMode::Auto;
+        pair.sample(&[(1, 0)]);
+        repaint_source(&mut pair);
+        assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+        assert!(!output.0.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn hidden_mirrors_coalesce_at_grant_to_the_latest_layout() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
         let paints = pair.panes[1].state.pane.paints;
         for offset in [3, 6] {
             pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
@@ -218,18 +403,14 @@ fn hidden_mirrors_coalesce_and_cap_the_driver_deadline() {
                 v.state.scroll_ease.cancel();
             });
             repaint_source(&mut pair);
+            pair.clock.advance(Duration::from_millis(150));
             let rig = &mut pair.panes[1];
-            let (painted, deadline) = rig
+            let (painted, _) = rig
                 .state
                 .advance(&mut super::scroll::queued([]), &mut rig.terminal)
                 .unwrap();
-            assert!(!painted, "{mux:?}: rate limited inside the interval");
-            assert!(
-                deadline <= pair.clock.now() + interval,
-                "{mux:?}: pending mirror deadline"
-            );
+            assert!(!painted, "{mux:?}: a due mirror needs an offer");
         }
-        pair.clock.advance(interval);
         assert!(
             advance_wakeup(&mut pair.panes[1], Wakeup::Tick),
             "{mux:?}: latest layout mirrors"
@@ -302,7 +483,7 @@ fn layout_publications_ignore_numbers_clocks_and_scroll_easing() {
 }
 
 #[test]
-fn layout_publications_wake_only_unmapped_subscribers() {
+fn the_mirror_driver_offers_only_unmapped_subscribers() {
     let mut results = Vec::new();
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = mirror_pair(mux);
@@ -317,6 +498,12 @@ fn layout_publications_wake_only_unmapped_subscribers() {
             v.state.landed_open = !v.state.landed_open;
         });
         repaint_source(&mut pair);
+        assert!(
+            receivers
+                .iter()
+                .all(|receiver| receiver.try_recv().is_err())
+        );
+        pair.plane.views.mirrors.dispatch(pair.clock.now());
         results.push((
             mux,
             receivers[0].try_recv().is_err(),
@@ -589,6 +776,90 @@ fn no_painted_view_publishes_no_hidden_mirror() {
 }
 
 #[test]
+fn blocked_hidden_pass_requests_nothing_but_releases_an_offer() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        let rig = &mut pair.panes[1];
+        let size = rig.terminal.get_frame().area().as_size();
+        rig.terminal = Terminal::new(PaneBackend::captured(size.width, size.height + 1)).unwrap();
+        let queue = rig.state.views.registry.mirrors.clone();
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, false)
+            .unwrap();
+        queue.dispatch(pair.clock.now());
+        assert!(
+            !rig.state.views.mirror_offer.load(Ordering::Acquire),
+            "{mux:?}: a blocked due pass must not request an offer"
+        );
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, true)
+            .unwrap();
+        queue.dispatch(pair.clock.now());
+        assert!(rig.state.views.mirror_offer.load(Ordering::Acquire));
+        let paints = rig.state.pane.paints;
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, false)
+            .unwrap();
+        queue.dispatch(pair.clock.now());
+        assert!(!rig.state.views.mirror_offer.load(Ordering::Acquire));
+        assert_eq!(rig.state.pane.paints, paints);
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, true)
+            .unwrap();
+        queue.dispatch(pair.clock.now());
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, true)
+            .unwrap();
+        assert_eq!(rig.state.pane.paints, paints + 1);
+    }
+}
+
+#[test]
+fn unsized_hidden_pass_requests_nothing_but_releases_an_offer() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        let rig = &mut pair.panes[1];
+        let size = rig.terminal.get_frame().area().as_size();
+        rig.terminal = Terminal::new(PaneBackend::captured(0, 0)).unwrap();
+        assert!(rig.terminal.backend().is_unsized());
+        rig.state.pane.mirrored = None;
+        let queue = rig.state.views.registry.mirrors.clone();
+        let paints = rig.state.pane.paints;
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, true)
+            .unwrap();
+        queue.dispatch(pair.clock.now());
+        assert!(
+            !rig.state.views.mirror_offer.load(Ordering::Acquire),
+            "{mux:?}: an unsized hidden pass must not request an offer"
+        );
+        assert!(
+            queue
+                .take(&rig.state.pane.config.own_pane, pair.clock.now())
+                .is_none()
+        );
+        queue.dispatch(pair.clock.now());
+        assert!(rig.state.views.mirror_offer.load(Ordering::Acquire));
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, true)
+            .unwrap();
+        queue.dispatch(pair.clock.now());
+        assert!(!rig.state.views.mirror_offer.load(Ordering::Acquire));
+        assert_eq!(rig.state.pane.paints, paints);
+        rig.terminal = Terminal::new(PaneBackend::captured(size.width, size.height)).unwrap();
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, true)
+            .unwrap();
+        queue.dispatch(pair.clock.now());
+        assert!(rig.state.views.mirror_offer.load(Ordering::Acquire));
+        rig.state
+            .paint_hidden_mirror_if_due(&mut rig.terminal, true)
+            .unwrap();
+        assert_eq!(rig.state.pane.paints, paints + 1);
+    }
+}
+
+#[test]
 fn hidden_mirror_retries_after_the_jump_fence_releases() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = mirror_pair(mux);
@@ -786,12 +1057,31 @@ fn zellij_source_baseline_retained_preserves_destination() {
 }
 
 fn advance_wakeup(rig: &mut Rig, wakeup: Wakeup) -> bool {
+    let registry = &rig.state.views.registry;
+    registry.mirrors.dispatch(rig.state.pane.clock.now());
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     send.send(wakeup).unwrap();
-    rig.state
+    let painted = rig
+        .state
         .advance(&mut WakeupInbox::new(receive), &mut rig.terminal)
         .unwrap()
+        .0;
+    rig.state
+        .views
+        .registry
+        .mirrors
+        .dispatch(rig.state.pane.clock.now());
+    if !rig.state.views.mirror_offer.load(Ordering::Acquire) {
+        return painted;
+    }
+    rig.state
+        .advance(
+            &mut super::scroll::queued([Wakeup::Tick]),
+            &mut rig.terminal,
+        )
+        .unwrap()
         .0
+        || painted
 }
 
 #[test]
