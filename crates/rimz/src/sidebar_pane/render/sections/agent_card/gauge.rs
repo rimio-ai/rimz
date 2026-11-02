@@ -98,11 +98,13 @@ pub(super) fn bar_row(
 /// gap-fronted `╺` cap, and the segmented fill ends flush at a whole cell. The
 /// cache-read run carries severity when present; `▣` follows the fill's tone
 /// while the `▤` stats head always keeps severity. The value prefers a
-/// one-decimal precise fraction (`78.2%`) over the integer gauge. An empty (0%)
-/// window reads the hollow `▢`; any usage fills it to `▣`. A completed compaction
-/// keeps its own glyph until the first real reading. A provider estimate fills
-/// the track flat in its ordinary tone with a percentage; without one, the
-/// glyph is healthy green and the empty track stays muted, without a percentage.
+/// one-decimal precise fraction (`78.2%`) over the integer gauge. Only an
+/// exactly empty drawn fraction reads the hollow `▢`; any usage fills it to
+/// `▣`. A completed compaction keeps its own glyph until the first real
+/// reading. A provider estimate fills the track flat in its ordinary tone from
+/// its own fraction ([`compacted_estimate_pct`]) with a percentage, `<1%` for a
+/// positive estimate under one percent; without one, the glyph is healthy green
+/// and the empty track stays muted, without a percentage.
 ///
 /// At L2 every meter reserves a five-cell age cluster after a space; below L2
 /// the bar keeps that room and the stats line pins the age instead, except in
@@ -137,21 +139,23 @@ pub(super) fn gauge_line(
     };
     let compacted_empty = compacted_unmeasured && percent.is_none();
     let percent = percent.unwrap_or(0);
-    let precise = if compacted_unmeasured {
-        None
+    let (precise, estimate) = if compacted_unmeasured {
+        (None, compacted_estimate_pct(row))
     } else {
-        precise_context_pct(row)
+        (precise_context_pct(row), None)
     };
     let value = if compacted_empty {
         String::new()
+    } else if estimate.is_some_and(|pct| pct > 0.0 && pct < 1.0) {
+        "<1%".to_owned()
     } else {
         pct_label(precise, percent)
     };
-    let fill = precise.unwrap_or_else(|| f64::from(percent));
+    let drawn = precise.or(estimate).unwrap_or_else(|| f64::from(percent));
     let fill = if bands.log_scale {
-        log_scaled_fill(fill, display_context_window(row))
+        log_scaled_fill(drawn, display_context_window(row))
     } else {
-        fill
+        drawn
     };
     let severity = row_severity(row, bands);
     // While warm, one health amount drives the row's `▣` glyph and `▤` line. When present,
@@ -170,10 +174,10 @@ pub(super) fn gauge_line(
     };
     let glyph = if compacted_unmeasured {
         theme.glyph(GlyphRole::MeterCompacted)
-    } else if percent == 0 {
-        theme.glyph(GlyphRole::MeterContextEmpty)
-    } else {
+    } else if drawn > 0.0 {
         theme.glyph(GlyphRole::MeterContextFull)
+    } else {
+        theme.glyph(GlyphRole::MeterContextEmpty)
     };
     let glyph_color = if compacted_empty {
         theme.heat_tone(0.0)
@@ -226,6 +230,17 @@ pub(super) fn gauge_line(
             .push(cache_age_pin(theme, row, ctx.now).unwrap_or_else(|| Span::raw("     ")));
     }
     line
+}
+
+/// The compaction-gap estimate as a fraction (0..=100) over the window its
+/// integer `context_pct` was taken against, kept only when it floors to that
+/// integer: a provider's explicit percentage over another window, or one with
+/// no token count behind it, keeps the integer fill and label.
+fn compacted_estimate_pct(row: &SidebarRow) -> Option<f64> {
+    let usage = &row.as_agent()?.usage;
+    let window = usage.context_window.filter(|window| *window > 0)? as f64;
+    let pct = (usage.total_tokens? as f64 * 100.0 / window).clamp(0.0, 100.0);
+    (pct.floor() == f64::from(usage.context_pct?)).then_some(pct)
 }
 
 /// Window below which the drawn fill stays linear.

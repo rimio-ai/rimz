@@ -2140,9 +2140,9 @@ fn post_compaction_sidecar_estimate_renders_the_same_frame_as_a_fold_estimate() 
         Some("compact the context"),
     );
     claude.compacted_unmeasured = true;
-    for window in [200_000, 1_000_000] {
+    for (tokens, window) in [(45_786, 200_000), (45_786, 1_000_000), (6_092, 1_000_000)] {
         let mut context = claude_context(fixed_now());
-        context.post_compaction_tokens = Some(45_786);
+        context.post_compaction_tokens = Some(tokens);
         context.tokens = Some(AgentTokenUsage {
             context_window_size: Some(window),
             ..Default::default()
@@ -2152,7 +2152,7 @@ fn post_compaction_sidecar_estimate_renders_the_same_frame_as_a_fold_estimate() 
         let mut fold = claude.clone();
         fold.context.as_mut().unwrap().post_compaction_tokens = None;
         fold.usage = crate::agents::AgentUsageSummary {
-            total_tokens: Some(45_786),
+            total_tokens: Some(tokens),
             context_window: Some(window),
             ..Default::default()
         }
@@ -2170,9 +2170,24 @@ fn post_compaction_sidecar_estimate_renders_the_same_frame_as_a_fold_estimate() 
                 let actual = group_lines_at_width(&sidecar, &theme, 0, width);
                 let expected = group_lines_at_width(&fold, &theme, 0, width);
                 let rendered = line_texts(&actual).join("\n");
-                let percent = 45_786 * 100 / window;
-                assert!(rendered.contains(&format!("{percent}%")), "{rendered}");
-                assert!(rendered.contains('━'), "a flat estimate: {rendered}");
+                let percent = tokens * 100 / window;
+                let value = if percent == 0 {
+                    "<1%".to_owned()
+                } else {
+                    format!("{percent}%")
+                };
+                assert!(
+                    actual
+                        .iter()
+                        .flat_map(|line| &line.spans)
+                        .any(|span| span.content == format!("{value:>5}")),
+                    "{rendered}"
+                );
+                assert!(
+                    rendered.contains(theme.glyph(GlyphRole::MeterBarFilled))
+                        || rendered.contains(theme.glyph(GlyphRole::MeterBarHalf)),
+                    "a flat estimate: {rendered}"
+                );
                 assert!(!rendered.contains('╺'), "no call split: {rendered}");
                 assert!(
                     rendered.contains(theme.glyph(GlyphRole::MeterCompacted)),
@@ -2182,13 +2197,231 @@ fn post_compaction_sidecar_estimate_renders_the_same_frame_as_a_fold_estimate() 
                     !rendered.contains(theme.glyph(GlyphRole::TokensFilled)),
                     "{rendered}"
                 );
-                assert_eq!(actual, expected, "{set}, {width}, {window}");
+                assert_eq!(actual, expected, "{set}, {width}, {tokens}/{window}");
             }
         }
         assert_eq!(
             snapshot_to_screen(&sidecar, 58, 17),
             snapshot_to_screen(&fold, 58, 17)
         );
+    }
+}
+
+fn compacted_estimate_snapshot(tokens: Option<u64>, window: u64, percent: u8) -> SidebarSnapshot {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("compact the context"),
+    );
+    claude.compacted_unmeasured = true;
+    claude.usage = crate::agents::AgentUsageSummary {
+        total_tokens: tokens,
+        context_window: Some(window),
+        context_pct: Some(percent),
+        ..Default::default()
+    };
+    snapshot_with(vec![claude])
+}
+
+#[test]
+fn small_post_compaction_estimates_draw_one_half_cell() {
+    for set in ["unicode", "nerd_font"] {
+        let theme = Theme::fixed_for_theme(
+            false,
+            &crate::config::ThemeConfig {
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            },
+        );
+        for window in [200_000, 1_000_000] {
+            let snapshot = compacted_estimate_snapshot(Some(300), window, 0);
+            for width in [32, 46, 58] {
+                let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+                let rendered = line_texts(&lines).join("\n");
+                assert_eq!(
+                    rendered
+                        .matches(theme.glyph(GlyphRole::MeterBarHalf))
+                        .count(),
+                    1,
+                    "{set}, {width}, {window}: {rendered}"
+                );
+                assert!(
+                    !rendered.contains(theme.glyph(GlyphRole::MeterBarFilled)),
+                    "{rendered}"
+                );
+                assert!(rendered.contains("<1%"), "{rendered}");
+            }
+        }
+    }
+}
+
+#[test]
+fn post_compaction_estimates_use_fractional_pixel_fill() {
+    for set in ["unicode", "nerd_font"] {
+        let theme = Theme::fixed_for_theme(
+            false,
+            &crate::config::ThemeConfig {
+                mode: crate::config::ThemeMode::Truecolor,
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            },
+        );
+        for (tokens, window, fill) in [
+            (300, 200_000, f64::MIN_POSITIVE),
+            (300, 1_000_000, f64::MIN_POSITIVE),
+            (
+                6_092,
+                1_000_000,
+                (1.0 + 4.0 * 0.006092_f64).ln() / 5.0_f64.ln(),
+            ),
+            (45_786, 200_000, 0.22893),
+            (
+                45_786,
+                1_000_000,
+                (1.0 + 4.0 * 0.045786_f64).ln() / 5.0_f64.ln(),
+            ),
+        ] {
+            let snapshot =
+                compacted_estimate_snapshot(Some(tokens), window, (tokens * 100 / window) as u8);
+            for width in [32, 46, 58] {
+                let cost_rolls = CostRolls::default();
+                let ctx = test_row_ctx(&snapshot, &theme, width, 0, 0, &cost_rolls);
+                let mut pixels = MeterPixels::new(0x120000);
+                pixels.begin_frame();
+                let lines = worktree_group_block(
+                    &ctx,
+                    &snapshot.worktree_groups[0],
+                    false,
+                    Some(&mut pixels),
+                )
+                .lines;
+                pixels.observe_visible(&lines);
+                let rasters = pixels.visible_rasters().collect::<Vec<_>>();
+                assert_eq!(rasters.len(), 1);
+                let raster = rasters[0].1;
+                let glyph = lines
+                    .iter()
+                    .flat_map(|line| &line.spans)
+                    .find(|span| span.content == theme.glyph(GlyphRole::MeterCompacted))
+                    .unwrap();
+                let health = theme.pixel_rgb(glyph.style.fg.unwrap()).unwrap();
+                assert_eq!(
+                    *raster,
+                    MeterRaster::new(raster.width_cells, fill, health, Vec::new(), raster.track),
+                    "{set}, {width}, {tokens}/{window}"
+                );
+                assert_ne!(
+                    *raster,
+                    MeterRaster::new(raster.width_cells, 0.0, health, Vec::new(), raster.track)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn post_compaction_estimate_fallbacks_keep_the_integer_meter() {
+    for set in ["unicode", "nerd_font"] {
+        let theme = Theme::fixed_for_theme(
+            false,
+            &crate::config::ThemeConfig {
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            },
+        );
+        for (tokens, window, percent) in [
+            (Some(0), 1_000_000, 0),
+            (Some(6_092), 1_000_000, 3),
+            (None, 1_000_000, 0),
+            (Some(6_092), 0, 0),
+        ] {
+            let snapshot = compacted_estimate_snapshot(tokens, window, percent);
+            let reference = compacted_estimate_snapshot(None, window, percent);
+            for width in [32, 46, 58] {
+                let meter = |snapshot: &SidebarSnapshot| {
+                    group_lines_at_width(snapshot, &theme, 0, width)
+                        .into_iter()
+                        .find(|line| {
+                            line.to_string()
+                                .contains(theme.glyph(GlyphRole::MeterCompacted))
+                        })
+                        .unwrap()
+                };
+                let actual = meter(&snapshot);
+                assert_eq!(
+                    actual,
+                    meter(&reference),
+                    "{set}, {width}, {tokens:?}/{window}"
+                );
+                assert!(
+                    actual.to_string().contains(&format!("{percent}%")),
+                    "{actual}"
+                );
+                if percent == 0 {
+                    assert!(
+                        !actual
+                            .to_string()
+                            .contains(theme.glyph(GlyphRole::MeterBarFilled)),
+                        "{actual}"
+                    );
+                    assert!(
+                        !actual
+                            .to_string()
+                            .contains(theme.glyph(GlyphRole::MeterBarHalf)),
+                        "{actual}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn measured_sub_percent_context_uses_a_filled_glyph() {
+    let mut snapshot = cache_meter_snapshot(60, None);
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
+    card.context.as_mut().unwrap().tokens = Some(AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        used_percentage: Some(0),
+        current_usage: Some(AgentCurrentUsage {
+            input_tokens: Some(8_000),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    for set in ["unicode", "nerd_font"] {
+        let theme = Theme::fixed_for_theme(
+            false,
+            &crate::config::ThemeConfig {
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            },
+        );
+        for width in [32, 46, 58] {
+            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+            let rendered = line_texts(&lines).join("\n");
+            assert!(
+                rendered.contains(theme.glyph(GlyphRole::MeterContextFull)),
+                "{set}, {width}: {rendered}"
+            );
+            assert!(
+                !rendered.contains(theme.glyph(GlyphRole::MeterContextEmpty)),
+                "{rendered}"
+            );
+            assert!(rendered.contains("0.8%"), "{rendered}");
+            assert!(
+                rendered.contains(theme.glyph(GlyphRole::MeterBarHalf))
+                    || rendered.contains(theme.glyph(GlyphRole::MeterBarFilled)),
+                "{rendered}"
+            );
+        }
     }
 }
 
