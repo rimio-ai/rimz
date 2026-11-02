@@ -466,9 +466,9 @@ The latest capture of each bench. Run one group with a name filter, such as `car
 | `fleet::publish::scale_with_orphans` 0 / 3,000 orphans | not quoted | 37,996 requests, 3,724,484 bytes requested, both arms | 2026-10-14 |
 | `fleet::idle_cycle` 0 / 3,000 orphans | 12.25 / 10.77 ms | 51,200 requests, 6,483,552 bytes requested, both arms | 2026-10-14; medians 2026-10-12 |
 | `fleet::idle_cycle_worker` 0 / 3,000 orphans | not quoted | 51,103 requests, 6,476,496 bytes requested, both arms | 2026-10-14 |
-| `fleet::idle_cycle_hidden_fanout` | 5.166 ms | 29,636 requests, 3,462,424 bytes requested | 2026-10-31 |
+| `fleet::idle_cycle_hidden_fanout` | 2.569 ms | 30,265 requests, 3,499,438 bytes requested | 2026-11-02 |
 | `fleet::concurrent_hidden_fanout` 200 agents / 100 panes | 1.750 ms publication-to-paint | not quoted | 2026-10-29 |
-| `fleet::concurrent_structural_fanout` 50 agents / 81 attachments | 1.594 ms watched paint; 7.548 ms last mirror | not quoted | 2026-10-31 |
+| `fleet::concurrent_structural_fanout` 50 agents / 81 attachments | 0.735 ms watched paint; 10.382 ms last mirror | not quoted | 2026-11-02 |
 | `hotpath::fuse_owned_no_overlay` 40 agents | 74.7 µs | 819 B alloc/op | not recorded |
 | `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows | 56.9 / 79.8 µs | 655.6 / 655.6 KB alloc/op | 2026-09-14 |
 | `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows | 2.24 / 2.99 µs | 0 / 0 B alloc/op | 2026-09-14 |
@@ -514,24 +514,24 @@ The recorded paint medians, p99s and reveal times were lower in both head runs, 
 
 ##### Structural hidden mirrors
 
-On 2026-10-31, merge base `294153f75` and head (`perf(sidebar): split watched and mirror fanout latency`, including `fix(sidebar): mirror the painted layout into hidden sidebars`) were measured in base/head/head/base order. Both binaries were built with Rust 1.97.1. The Linux x86-64 EPYC 7502P host had 58 available logical CPUs, uncontrolled ambient load and no induced load. One-minute load at the start and end of each run ranged from 11.47 to 19.78.
+On 2026-11-02, merge base `d25afd61e84` and head (`perf(sidebar): repaint hidden mirrors only after input rests`, with its ranked four-slot queue) were measured in base/head/head/base order. Both binaries were built with Rust 1.97.1. The Linux x86-64 Ryzen 9 9950X host had 24 available logical CPUs, uncontrolled ambient load and no induced load. One-minute load at command boundaries, including builds, ranged from 5.40 to 40.22. The reference rows above quote H2.
 
-Both fleet binaries were built with `cargo xtask perf --bench fleet --message-format=json -- --no-run`, serially sharing a target directory, then copied out and run from one directory with the same `CARGO_MANIFEST_DIR`. Each run invoked the copied binary with `idle_cycle_hidden_fanout --bench` followed by `concurrent_structural_fanout --bench`, the two arms of `cargo xtask perf --bench fleet -- <arm>`. The base carried only head's bench-and-concurrent-fixture patch, with no product mirror code.
+Each run invoked `cargo xtask perf --bench fleet -- concurrent_structural_fanout` followed by `cargo xtask perf --bench fleet -- idle_cycle_hidden_fanout`, one Cargo command at a time. Base ran unmodified in a detached scratch worktree, sharing head's target directory through `CARGO_TARGET_DIR`; no binaries were copied or fixtures patched. This four-run capture used direct commands rather than the common-directory, six-runs-per-build comparison described above. The checkout paths differed by 21 bytes, so requested-byte differences are not isolated code effects.
 
-The structural arm measures 100 card removals/restorations at one watched and 80 hidden attachments, with a 100 ms frame interval. Base runs paint only the watched pane; head runs acknowledge all 80 mirrors per publication. Watched-paint and last-mirror triples are separate nearest-rank p50 / p99 / max values in milliseconds, each measured from publication. Base has no mirror latency, reported as `absent` rather than zero or the watched latency. CPU includes backstops and the final nudge, not the publisher or reveal, as in the content arm.
+The structural arm measures 100 card removals/restorations at one watched and 80 hidden attachments, with a 100 ms frame interval and no user input. Both builds acknowledge all 80 mirrors per publication; head drives grants through the queue's real-time dispatcher. Watched-paint and last-mirror triples are separate nearest-rank p50 / p99 / max values in milliseconds, each measured from publication. CPU includes attachment backstops and the final nudge, not the publisher, reveal or head's dispatcher thread. It is not room-total CPU.
 
 | Run | Watched paint ms | Last mirror ms | Attachment CPU µs/publication, hidden / watched / total | Hidden paints |
 | --- | --- | --- | --- | ---: |
-| B1 | 1.298 / 1.760 / 1.819 | absent | 2,985.6 / 1,346.5 / 4,332.1 | 0 |
-| H1 | 1.593 / 2.082 / 2.092 | 7.661 / 9.565 / 9.993 | 94,719.9 / 1,695.5 / 96,415.4 | 8,000 |
-| H2 | 1.594 / 2.060 / 2.141 | 7.548 / 11.123 / 11.634 | 94,435.3 / 1,681.1 / 96,116.4 | 8,000 |
-| B2 | 1.477 / 1.860 / 2.066 | absent | 2,875.3 / 1,505.2 / 4,380.6 | 0 |
+| B1 | 1.082 / 10.548 / 37.270 | 8.224 / 174.314 / 316.911 | 53,866.2 / 1,265.2 / 55,131.4 | 8,000 |
+| H1 | 1.020 / 4.990 / 6.186 | 31.461 / 82.197 / 86.969 | 52,275.1 / 1,026.8 / 53,302.0 | 8,000 |
+| H2 | 0.735 / 0.912 / 1.010 | 10.382 / 12.443 / 12.707 | 37,321.7 / 770.8 / 38,092.5 | 8,000 |
+| B2 | 0.850 / 1.146 / 1.182 | 4.273 / 5.946 / 7.045 | 45,000.9 / 887.1 / 45,888.0 | 8,000 |
 
-Watched-paint p50 was 1.593 / 1.594 ms on head versus 1.298 / 1.477 ms on base, about 0.12 to 0.30 ms slower in these runs. Its p99 was 2.082 / 2.060 ms versus 1.760 / 1.860 ms. The last mirror's 7.661 / 7.548 ms p50 is a different measurement, not the watched paint's slowdown. Shared-host load was uncontrolled, so these differences are observations, not a fixed overhead.
+The accepted cost of the four-slot pool is `last_mirror_latency` growth: head's last-mirror p50 was 31.461 / 10.382 ms versus base's 8.224 / 4.273 ms. The tails did not grow consistently: B1's 316.911 ms maximum exceeded both head maxima, while B2's 7.045 ms was below both. Watched-paint and attachment-CPU ranges overlap between builds. These shared-host observations do not establish an attributed speedup, fixed overhead, portable timing ceiling or live-provider latency guarantee.
 
-Aggregate hidden attachment CPU was 94.44 to 94.72 ms per structural publication on head, versus 2.88 to 2.99 ms on base. Each head run took exactly 8,000 hidden views locks, one per mirror, versus zero on base. All observed mirrors completed within 11.634 ms, inside the fixture's 100 ms frame interval; these measurements are not a portable timing ceiling or a live-provider guarantee.
+Every run took 8,000 hidden views locks, one per mirror, and 9,414 total views locks. Hidden EventStore takes in B1/H1/H2/B2 order were 48,174 / 48,453 / 48,480 / 48,480. Reveal times, outside the counting window, were 10.487 / 1.060 / 0.970 / 1.252 ms. The no-input fixture does not measure gesture latency or prove the absence of mid-gesture writes.
 
-The number-only arm's median ms in the same order were 4.926 / 5.048 / 5.166 / 4.920, with overlapping sample ranges. Every run requested 29,636 allocations, below the 38,000 ceiling. Requested bytes were 3,462,384 / 3,462,424 / 3,462,424 / 3,462,384: head requested 40 more bytes, less than 0.002%. Head's medians were about 2.5% to 5% higher; these shared-host timings do not isolate a small number-only timing cost. Number-only cycles still trigger no mirrors.
+The number-only arm's median ms in the same order were 3.554 / 2.487 / 2.569 / 2.425, with sample ranges 3.057 to 5.001 / 2.413 to 3.146 / 2.404 to 2.883 / 2.394 to 2.838 ms. Head's medians fall between the two base medians, not a consistent timing improvement. Allocation requests were 30,259 / 30,265 / 30,265 / 30,259, below the 38,000 ceiling. Requested bytes were 3,498,565 / 3,499,438 / 3,499,438 / 3,498,181; bytes varied even between the unchanged base runs. Number-only cycles still trigger no mirrors.
 
 #### Per-frame drainer latency under build load
 
