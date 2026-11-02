@@ -2174,7 +2174,7 @@ mod render {
                 .split_whitespace()
                 .collect::<Vec<_>>(),
             [
-                "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "SEEN"
+                "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"
             ],
             "{text}"
         );

@@ -636,13 +636,13 @@ $ rimz agents list
 needs you
   @planner  waiting  2m  which rotation strategy should we use?
 
-HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  SEEN
+HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
-@planner  planner  claude  waiting  Opus 5@high   42%     84k    2m
+@planner  planner  claude  waiting  Opus 5@high   42%     84k   2m
   which rotation strategy should we use?
 
-@coder    coder    codex   running  GPT 5.5@high  31%     84k    0s
+@coder    coder    codex   running  GPT 5.5@high  31%     84k   0s
   wire up the refresh-token path
 ```
 
@@ -659,7 +659,7 @@ Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain 
 | `MODEL` | The shared model display name and effort, as `model@effort`; a recorded context-window qualifier appears as `[1M]`. Fast mode adds a bold amber bolt after the label (`ϟ`, or the configured `card.fast` glyph). The `show` header uses the same suffix. |
 | `CTX` | Context-window fill. |
 | `TOKENS` | Tokens currently occupying the context window, not cumulative spend. Integer counts use `k`, `M`, and `B`. |
-| `SEEN` | Time since the agent was last seen active. |
+| `AGE` | Time since the agent's own activity or a later cache request, keepalive pings included and child activity excluded, matching the sidebar. A rowless child shows time since its real activity. |
 
 Under each row, the sidebar's description rule chooses the error reason, first working wait while working through a wait or first sleeping wait while sleeping, or activity, with `-` when none is known. It wraps to at most three indented lines, ending in an ellipsis when cut. A running parent whose own turn is idle adds `· on N subagents (@x, @y)` for its current running children.
 
@@ -691,7 +691,7 @@ The status is derived for display. Codex launched in `auto` mode shows `running`
 | `model` | `id`, `effort`, `fast` (always a boolean), and the glyph-free rendered `label`. Tier-routed agents also carry `tier`: the launch stamp with `tier`, chosen `model`, optional `used_tier`, and nonempty `skipped` (usage reasons) and `unbuildable` (`model`, full `error`) lists. The stamp is omitted for an unstamped agent. |
 | `context` | `fill_pct`, `used_tokens`, `window`, `severity`, `compactions` (completed), and `compacting` (in progress). |
 | `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time across the seat's sessions and the pane-backed children it launched, matching `agents show`; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
-| `timeline` | Registration, turn-start, activity, and observation timestamps. |
+| `timeline` | UTC timestamps: `registered_at`, `turn_started_at`, `last_activity` (real activity), `last_seen` (liveness), and `idle_since` (the displayed `AGE` origin, always present). |
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
 | `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. |
 | `sub_agents` | Nested children. Each child's `status` is its displayed status, including `paused` for a live launched child parked on a provider limit or overload, or `failed` once that park can no longer resume (see [parent-card precedence](../../guide/sidebar.md#the-agent-card)). Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
@@ -702,12 +702,12 @@ The status is derived for display. Codex launched in `auto` mode shows `running`
 
 The identity line's model names its launch tier when stamped. If routing moved it, the model also lists every passed entry and its reason, including full build errors. The same stamp appears under `model.tier` in both `show --json` and `list --json`.
 
-The state line shows the phase and time last seen, plus the turn duration while running. Waiting cards include the ask summary and the next supported answer command, or `rimz agents focus` for a pane-only prompt, even when no ask was recorded. A live Run shows its elapsed duration without an exit code; a terminal one shows its result, exit code, and completed duration.
+The state line shows the phase and `last request` age, using the same origin as `list`'s `AGE`, plus the turn duration while running. Waiting cards include the ask summary and the next supported answer command, or `rimz agents focus` for a pane-only prompt, even when no ask was recorded. A live Run shows its elapsed duration without an exit code; a terminal one shows its result, exit code, and completed duration.
 
 ```console
 $ rimz agents show @coder
 @coder  codex · coder · GPT 5.5@high
-running (acting) · turn 2m · last seen 0s ago
+running (acting) · turn 2m · last request 0s ago
 wire up the refresh-token path
 
 Run
@@ -849,7 +849,7 @@ Member and total `cost_usd`, `tokens`, and `active_secs` are all-in; asks, tool 
 ```console
 $ rimz agents top --once
 4 agents · 143.0% CPU · 1.9 GB MEM · 3M spent
-AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  SEEN
+AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
 @coder            running  96.0%  892 MB  4 MB/s     12  31%     1M  0s
   └ @swift-otter  running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
 @planner          waiting   2.0%  410 MB       -      6  42%   200k  2m
@@ -863,7 +863,7 @@ AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  SEEN
 | `--all` | Every channel in the room instead of the current channel. |
 | `-w, --worktree <NAME>` | One worktree or channel, with an optional leading `#`. Conflicts with `--all`. An unknown lane fails with the same refusal as `list`. |
 
-The `AGENT` column uses the same paste-ready addresses as `list`, even when the table is filtered. Children indent under their parent, whose rank uses their combined CPU; a child without a parent in scope stays at top level. Resource columns read `-` where process metrics are unavailable for the platform or pane; the summary's CPU is `-` until any row has two samples, and `IO/S` is omitted when no row has an I/O rate. `SPENT` is provider-reported cumulative session usage, while `list`'s `TOKENS` shows window occupancy. The summary sums `SPENT` across the displayed sessions. In this example the parent's 1M and child's 2M together account for the 3M whole-seat spend in `show @coder`.
+The `AGENT` column uses the same paste-ready addresses as `list`, even when the table is filtered. Children indent under their parent, whose rank uses their combined CPU; a child without a parent in scope stays at top level. `AGE` uses the same cache-clock origin as `list`. Resource columns read `-` where process metrics are unavailable for the platform or pane; the summary's CPU is `-` until any row has two samples, and `IO/S` is omitted when no row has an I/O rate. `SPENT` is provider-reported cumulative session usage, while `list`'s `TOKENS` shows window occupancy. The summary sums `SPENT` across the displayed sessions. In this example the parent's 1M and child's 2M together account for the 3M whole-seat spend in `show @coder`.
 
 ```console
 $ rimz agents top -w '#nonsense' --once

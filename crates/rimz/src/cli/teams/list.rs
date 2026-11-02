@@ -18,7 +18,7 @@ use rimz::harness::schedule::run_log::{self, LoopRunResult, LoopRunStats};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
 use rimz::harness::team_stage::StageSignal;
 use rimz::store::snapshot::{
-    SidebarSnapshot, SidebarUnitKey, UnitStatus, WorktreeCi, WorktreePrState,
+    SidebarSnapshot, SidebarUnitKey, UnitStatus, WorktreeCi, WorktreePrState, agent_idle_since,
 };
 use rimz::utils::path::normalize_path_lexical;
 use rimz::workspace::WorkspaceResolver;
@@ -81,6 +81,7 @@ pub(super) struct LiveInstance {
     pub state: CohortState,
     pub status_counts: BTreeMap<String, usize>,
     pub last_activity_at: Option<jiff::Timestamp>,
+    pub idle_since: Option<jiff::Timestamp>,
     pub members: Vec<LiveMember>,
     pub worktree: Option<PathBuf>,
     pub branch: Option<String>,
@@ -190,6 +191,7 @@ pub(super) struct LiveMember {
     pub phase: TurnPhase,
     pub activity: Option<String>,
     pub last_activity_at: jiff::Timestamp,
+    pub idle_since: jiff::Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_fill_pct: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -742,6 +744,7 @@ fn live_instances(
                     context_fill_pct: agent.context_fill_pct(),
                     activity: render::agent_activity_line(agent, card),
                     last_activity_at: row.map_or(agent.last_activity, |row| row.last_activity),
+                    idle_since: agent_idle_since(agent, row),
                     cost_usd: effort_by_session
                         .get(&agent.agent_id)
                         .and_then(|effort| effort.cost_usd),
@@ -760,6 +763,7 @@ fn live_instances(
             members.iter().map(|member| member.status),
         );
         let last_activity_at = members.iter().map(|member| member.last_activity_at).max();
+        let idle_since = members.iter().map(|member| member.idle_since).max();
         let role_rank = |member: &LiveMember| {
             team.and_then(|team| {
                 team.roles
@@ -781,6 +785,7 @@ fn live_instances(
                 state,
                 status_counts,
                 last_activity_at,
+                idle_since,
                 members,
                 worktree,
                 branch,
@@ -943,7 +948,7 @@ fn write_catalog(
     for (report, instance) in rows {
         let state = instance.map_or_else(
             || "ready".to_owned(),
-            |instance| super::show::state_with_age(instance.state, instance.last_activity_at, now),
+            |instance| super::show::state_with_age(instance.state, instance.idle_since, now),
         );
         let status = if let Some(error) = &report.error {
             format!("broken: {error}")

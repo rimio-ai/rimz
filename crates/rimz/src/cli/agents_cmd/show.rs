@@ -413,8 +413,8 @@ pub(super) fn render_activity_section(
         state.push_str(&format!(" · turn {}", duration_label(started, now)));
     }
     state.push_str(&format!(
-        " · last seen {}",
-        render::rel_age(agent.timeline.last_seen, now)
+        " · last request {}",
+        render::rel_age(agent.timeline.idle_since, now)
     ));
     if stale {
         state.push_str(" · stale");

@@ -299,7 +299,7 @@ fn poll(
             needs_you: Vec::new(),
         };
         let mut statuses = Vec::new();
-        let mut activity = None;
+        let mut idle_since = None;
         let cohort = snapshot.as_ref().and_then(|snapshot| {
             rimz::address::team_cohorts(snapshot.agents.iter())
                 .into_iter()
@@ -337,9 +337,8 @@ fn poll(
                     .and_then(|row| row.status())
                     .unwrap_or_else(|| agent.rowless_status(demotion, snapshot.now).0);
                 statuses.push(status);
-                activity = activity.max(Some(
-                    row.map_or(agent.last_activity, |row| row.last_activity),
-                ));
+                idle_since =
+                    idle_since.max(Some(rimz::store::snapshot::agent_idle_since(agent, row)));
                 if let Some(attention) = attention {
                     progress.needs_you.push((
                         rimz::address::agent_handle(agent, &peers, false),
@@ -357,7 +356,7 @@ fn poll(
             .map_or(super::list::CohortState::Idle, |(snapshot, cohort)| {
                 super::list::CohortState::for_cohort(snapshot, cohort, statuses)
             });
-        let state = super::show::state_with_age(state, activity, now);
+        let state = super::show::state_with_age(state, idle_since, now);
         // A settling target's outcome follows at once, so it gets no progress line.
         if outcome.is_none()
             && let Some(line) = diagnostic_line(

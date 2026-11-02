@@ -363,6 +363,12 @@ fn catalog_projects_cohort_observability_by_worktree() {
             last_activity: agent.last_activity,
             card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 description: Some(format!("reading {lane}.rs")),
+                cache: Some(rimz::store::snapshot::CacheClock {
+                    ceiling_secs: 1800,
+                    last_request_at: Some(jiff::Timestamp::from_second(120).unwrap()),
+                    warm_until: None,
+                    rewarm_cost_usd: None,
+                }),
                 ..AgentCard::default()
             })),
         });
@@ -470,6 +476,14 @@ fn catalog_projects_cohort_observability_by_worktree() {
         jiff::Timestamp::UNIX_EPOCH
     );
     assert_eq!(
+        first_report.members[0].idle_since,
+        jiff::Timestamp::from_second(120).unwrap()
+    );
+    assert_eq!(
+        first_report.idle_since,
+        Some(jiff::Timestamp::from_second(120).unwrap())
+    );
+    assert_eq!(
         reports[0].instances[1].pr.as_ref().unwrap().number,
         Some(42)
     );
@@ -479,6 +493,14 @@ fn catalog_projects_cohort_observability_by_worktree() {
     assert_eq!(
         json[0]["instances"][0]["members"][0]["last_activity_at"],
         "1970-01-01T00:00:00Z"
+    );
+    assert_eq!(
+        json[0]["instances"][0]["members"][0]["idle_since"],
+        "1970-01-01T00:02:00Z"
+    );
+    assert_eq!(
+        json[0]["instances"][0]["idle_since"],
+        "1970-01-01T00:02:00Z"
     );
     assert!(json[0]["instances"][0]["members"][0]["phase"].is_string());
     assert!(json[0]["instances"][1]["stage"].is_null());
