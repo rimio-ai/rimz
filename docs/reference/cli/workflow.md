@@ -39,11 +39,22 @@ When `-w` selects a project-scoped workflow, stderr prints `note: <workflow> has
 
 `[workflow] start` must name a check or a step, not a special target such as `@done` or `@user`. A step at the start runs through the same admission as any later visit. Its first `context.json` has `input`, `key`, and `prev_attempt` set to null, with `visit` and `visits` both 1; that visit counts against `max-visits-per-key` under the null key.
 
-A step selects exactly one of `agent`, `run`, or `shell`, and requires `then` naming a check. A run or shell step requires `timeout` and accepts the common visit bounds and `on.cap`. `run` is a literally passed argv, with slash-containing words confined to the definition directory; `shell` runs through `sh -c` without path confinement. Command steps refuse `prompt-file`, `lifecycle`, `window`, `takeover`, `throttle`, `capacity-wait`, `on.capacity`, and `on.asked`, and never wait for checkout occupancy or capacity. Their stdin is closed, both streams go to `work/<seq>.step.log`, and they inherit the workspace pin and workflow environment.
+A step selects exactly one of `agent`, `run`, or `shell`, and requires `then` naming a check. A run or shell step requires `timeout` and accepts the common visit bounds and `on.cap`. `run` is a literally passed argv, with slash-containing words confined to the definition directory; `shell` runs through `sh -c` without path confinement. Command steps refuse `prompt-file`, `lifecycle`, `window`, `takeover`, `throttle`, `limit`, `capacity-wait`, `on.capacity`, and `on.asked`, and never wait for checkout occupancy or capacity. Their stdin is closed, both streams go to `work/<seq>.step.log`, and they inherit the workspace pin and workflow environment.
 
 An agent step requires `prompt-file`. Its `agent` accepts the fresh-launch layout grammar, including agent and command cells. `lifecycle` is `turn` by default, `stay` to keep the attempt live until the leader's session exits, or `until` to check `then` at each eligible leader turn end and close when its route is neither this step nor `@wait`. A staying step (`stay` or `until`) has neither `timeout` nor `on.asked`. A kept `@wait` on `until` has no timed recheck: the next leader turn end checks again. Teams, command-only layouts, and ambiguous prompt leaders refuse with a field-specific fix. Judge checks still take one profile. An agent step's `window` gates every agent cell's provider.
 
-Agent steps of automatically loop-started runs also ask the [start throttle](./loop.md#the-start-throttle) before taking over a checkout. `throttle = "off"` bypasses it. `capacity-wait` accepts a positive `s`, `m`, `h`, or `d` duration, or `forever` (the default). A held step spends no visit and retries about once a minute. Giving up follows `on.capacity`, default `@failed`; it may instead name `@done` or a node, but not `@user` or `@wait`, since capacity give-up never parks a run. A window or occupancy wait restarts the capacity clock. The run deadline still applies. Runs created by `workflow run` or `loop fire`, and runs detached by `loop remove`, bypass capacity, as do checks, command steps, and already-open staying sessions.
+`[workflow.limit]` limits all agent attempts of the workflow name across rooms; `[steps.<name>.limit]` limits that step's attempts across those runs. Both reject unknown keys and require at least one of:
+
+| Field | Rule |
+| --- | --- |
+| `max-active` | Integer at least 1. Counts working leaders, not idle staying sessions, companions, judges, or subagents. |
+| `pace` | Positive duration in `s`, `m`, `h`, or `d`. Minimum gap between launches at this scope, stamped at launch and shared across rooms and restarts. |
+
+Limits use each run's sealed definition, but count every nonterminal run of that workflow name. They apply after window and occupancy, before machine checks, even with no `[throttle]` table. A workflow-level `max-active` exempts the start from `max-active-per-task`, not machine `max-active` or resource limits. Earlier Active capacity waiters held by a workflow limit go first across all steps; a step-limit waiter holds only its step. Ties use run id. A freed slot waits for the earlier run's next retry. Limits never stop an already-running turn.
+
+Agent steps of automatically loop-started runs also ask the [start throttle](./loop.md#the-start-throttle) before taking over a checkout. `throttle = "off"` bypasses machine checks and machine-only turns, not applicable workflow or step limits. `capacity-wait` accepts a positive `s`, `m`, `h`, or `d` duration, or `forever` (the default). A held step spends no visit and retries about once a minute. Giving up follows `on.capacity`, default `@failed`, for machine and workflow limits alike; it may instead name `@done` or a node, but not `@user` or `@wait`, since capacity give-up never parks a run. A window or occupancy wait restarts the capacity clock. The run deadline still applies. Runs created by `workflow run` or `loop fire`, and runs detached by `loop remove`, skip waits but claim any applicable workflow limit, count afterwards, and restart its pace. Without limits these starts take no ticket. Checks, command steps, and already-open staying sessions never ask for admission.
+
+Limit holds are self-clearing (`workflow_limit` or `step_limit`), shown in HELD. Reasons are `limit <name> N/M working`, with ` (K with you)` when working staying attempts contribute, `limit <name> next start in <duration>`, `limit <name>: N earlier starts waiting` (singular `1 earlier start waiting`), or `limit <name>: N starts launching` (singular `1 start launching`) while a launch of the same workflow is not yet counted. `<name>` is the workflow or step for that scope.
 
 ## Inspect definitions
 
@@ -53,7 +64,7 @@ Each node shows its runner, summary when set, routes, and routing limits. Condit
 
 A missing or unloadable definition prints `definition unavailable` with a `workflow validate` command, then still lists its runs and exits 0. An unknown workflow with neither a definition directory nor runs refuses. `show <WORKFLOW> --json` keeps its live-runs array and does not include the rail.
 
-`rimz workflow show <WORKFLOW> <NODE>` prints one definition node in full: runner kind and summary, predecessors with the outcomes that reach it, check subscriptions (derived for conditions, explicit otherwise) and the minute tick, ordered condition cases with holds and keys, every resolved edge with its source and fireability mark, then the configured command text, agent layout, prompt path, lifecycle, takeover, window, throttle, capacity wait, visit bounds, timeout, provider and account. Commands keep their full text, including multiple lines. Never-firing edges appear here even though the rail omits them. Predecessors omit never-firing routes; conditional ones carry the shared mark.
+`rimz workflow show <WORKFLOW> <NODE>` prints one definition node in full: runner kind and summary, predecessors with the outcomes that reach it, check subscriptions (derived for conditions, explicit otherwise) and the minute tick, ordered condition cases with holds and keys, every resolved edge with its source and fireability mark, then the configured command text, agent layout, prompt path, lifecycle, takeover, window, throttle, limit, capacity wait, visit bounds, timeout, provider and account. A limit reads `max-active=N · pace=<duration>`, omitting unset fields; the definition header prints its workflow limit in the same form. Commands keep their full text, including multiple lines. Never-firing edges appear here even though the rail omits them. Predecessors omit never-firing routes; conditional ones carry the shared mark.
 
 The two-positional form takes a workflow name only, not an address or run id (usage error, exit 2), and conflicts with `--json` and `--history` in clap. An unknown node refuses with the definition's node names (exit 1). A missing or unloadable definition refuses with its validation command (exit 1); there is no runs-table fallback for a node view.
 
@@ -95,7 +106,7 @@ ACTIVE
 | `window <term>` | An agent step or judge whose provider `window` is closed, with the failing term and its reading. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot evict it yet. |
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
-| `held <age>[, gives up <clock>]` | A loop-started agent step is held by the start throttle. Its give-up time is absent for `forever`; reason and count follow ` · `. |
+| `held <age>[, gives up <clock>]` | An automatic loop-started agent step is held by machine capacity or a workflow/step limit. Its give-up time is absent for `forever`; reason and count follow ` · `. |
 | `×N` | How many advances found it still waiting. `show --history` omits this count from the waiting phrase only when exactly one history row states the wait with the same count. Human `workflow list` omits it for capacity holds with count one; its JSON and the loop commands retain it. |
 | `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal matching that check's subscription clears it. For a `for` hold it is when the hold completes, and subscribed signals and the minute tick re-sample the case before then. |
 
@@ -135,7 +146,7 @@ Rows follow the graph from `start`, with a returning step immediately below the 
 | `never: no timeout` | The check has no timeout clock. |
 | `never: no max-visits` | The step has neither visit bound. |
 | `never: capacity-wait is forever` | Capacity admission never gives up. |
-| `never: throttle is off` | The step bypasses capacity admission. |
+| `never: throttle is off` | The step bypasses machine capacity admission and has no applicable workflow or step limit. |
 | `never: a judge retries once, then parks at @user` | A judge never follows its `invalid` edge, even an explicit one. |
 | `only with a deadline` | No deadline is sealed; a run needs a deadline grant. |
 | `only when a loop task starts the run` | Capacity can give up in an automatic loop-started run, not a by-hand run or `loop fire`. |

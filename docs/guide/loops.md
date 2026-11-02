@@ -314,7 +314,7 @@ Add records the reset instant on the task, and the receipt shows the window's cu
 
 ## Pace agent starts
 
-A burst of due tasks would otherwise start every agent in the same second, and each new agent loads a model session, a language server, and a build cache at once. RimZ starts automated agent launches one at a time through one capacity door for the whole machine. The turn passes on when the new agent reports in or after ten seconds, whichever comes first. A configured capacity check raises that ceiling to at least two minutes, giving the provider time to report usage. Manual `rimz loop fire`, wakes of running agents, check-only tasks, and fires their check skipped never queue.
+A burst of due tasks would otherwise start every agent in the same second, and each new agent loads a model session, a language server, and a build cache at once. RimZ starts automated agent launches one at a time through one capacity door for the whole machine. The turn passes on when the new agent reports in or after ten seconds, whichever comes first. A configured capacity check raises that ceiling to at least two minutes, giving the provider time to report usage. Manual `rimz loop fire`, wakes of running agents, check-only tasks, and fires their check skipped never wait in the machine queue. A manual workflow start still counts toward its own [workflow and step limits](./workflows.md#limit-one-workflow-or-step), without waiting.
 
 The `[throttle]` table in `loop.toml` tunes it, and can also hold starts back while the machine is busy:
 
@@ -329,6 +329,8 @@ min-disk = "20GB"
 # check = "my-capacity-check" # optional: 0 admits, 75 holds, anything else errors
 check-timeout = "30s"
 ```
+
+A workflow with its own `[workflow.limit] max-active` skips `max-active-per-task`; its agents still count for other starts of that task. The machine-wide `max-active` and resource checks still apply to machine-gated steps. Use [workflow and step limits](./workflows.md#limit-one-workflow-or-step) when only one workflow or step needs a cap or a minimum gap between launches.
 
 Pressure numbers differ from one machine to the next, and inside a container they may be the host's. Read what `rimz loop show <task>` reports under a normal load before you pick a limit.
 
