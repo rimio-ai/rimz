@@ -194,6 +194,8 @@ The descriptor declares these launch forms, pinned by `crates/rimz/src/agents/ad
 | manual compaction | `/compact`, with no instruction argument |
 | permission mode, turn cap, interrupt key | none |
 
+Pi has no permission system: every requested mode, including the Auto default, maps to Yolo without flags. RimZ records that mapped request and cannot restrict a Pi child through permission-mode ceilings ([permission modes](../../reference/agent-support.md#permission-modes)).
+
 Profile presets render through `PresetMatchers`, pinned in `crates/rimz/src/agents/conformance.rs`:
 
 | Preset | Rendered as |
