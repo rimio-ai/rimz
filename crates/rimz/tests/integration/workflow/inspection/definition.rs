@@ -200,12 +200,15 @@ fn definition_names_loop_triggers_and_sealed_or_granted_deadlines() {
     assert!(!text.contains("unreachable"), "{text}");
     fs::write(
         dir.join("workflow.toml"),
-        GRAPH.replace("start = 'begin'", "start = 'begin'\ndeadline = '2h'"),
+        GRAPH.replace(
+            "start = 'begin'",
+            "start = 'begin'\ndeadline = '2099-01-01T00:00:00Z'",
+        ),
     )
     .unwrap();
     let text = success(command(&env, &["workflow", "show", "review"]));
     assert!(
-        text.contains("deadline 2h → @user (a live attempt is canceled)"),
+        text.contains("deadline 2099-01-01T00:00:00Z → @user (a live attempt is canceled)"),
         "{text}"
     );
     assert!(!text.contains("No deadline is set"), "{text}");
@@ -246,13 +249,13 @@ agent = 'claude'
 prompt-file = 'prompt.md'
 window = '5h.left>=25'
 wake = [{ signal = 'ci.*', match = { path = '/checkout' } }]
-provider = 'claude'
-account = 'default'
 timeout = '8h'
 on.ok = 'fix'
 on.invalid = '@failed'
 [checks.watch]
-cases = [{ when = ['ci=passed', 'pr=open'], outcome = 'green', for = '3m', key = 'lint' }]
+cases = [{ when = ['ci=passed', 'pr=open', 'window.5h.left>=25'], outcome = 'green', for = '3m', key = 'lint' }]
+provider = 'claude'
+account = 'default'
 else = 'waiting'
 on.green = '@done'
 on.waiting = '@wait'
@@ -304,9 +307,6 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "prompt.md",
                 "window:",
                 "5h.left>=25",
-                "provider:",
-                "account:",
-                "default",
                 "timeout:",
                 "8h",
                 "ok → fix (explicit)",
@@ -357,6 +357,11 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "minute tick",
                 "cases:",
                 "ci=passed && pr=open",
+                "window.5h.left>=25",
+                "provider:",
+                "claude",
+                "account:",
+                "default",
                 "for 3m",
                 "key",
                 "\"lint\"",

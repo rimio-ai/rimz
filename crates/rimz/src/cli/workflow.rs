@@ -209,6 +209,9 @@ fn start(
                 .join("\n")
         );
     }
+    for warning in &report.warnings {
+        writeln!(render::err(), "warning: {}", warning.message)?;
+    }
     let ctx = super::ctx::Ctx::open(globals)?;
     let scope = if let Some(name) = &worktree {
         rimz::worktree::resolve_owned(

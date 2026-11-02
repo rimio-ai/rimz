@@ -25,13 +25,18 @@ pub(super) fn render(
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let journal = records::journal(&run.paths)?;
+    let spec = workflow::load(&run.paths.home);
     if json {
-        return render::json_pretty(&serde_json::json!({
+        let mut value = serde_json::json!({
             "address":run.record.address().to_string(),
             "dir":run.paths.work,"record":run.record,"journal":journal,
-        }));
+        });
+        if let Ok(spec) = &spec {
+            value["warnings"] = serde_json::json!(spec.ignored);
+        }
+        return render::json_pretty(&value);
     }
-    let spec = workflow::load(&run.paths.home)?;
+    let spec = spec?;
     let view = View {
         record: &run.record,
         paths: &run.paths,
@@ -42,6 +47,9 @@ pub(super) fn render(
     };
     let mut out = render::out();
     view.headline(&mut out, history)?;
+    for warning in &spec.ignored {
+        writeln!(out, "warning: {}", warning.message)?;
+    }
     if history {
         return view.history(&mut out);
     }
