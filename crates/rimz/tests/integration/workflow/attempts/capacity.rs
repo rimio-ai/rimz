@@ -2,6 +2,8 @@ use super::*;
 use rimz::disk::lock::WorkspaceLock;
 use rimz::ids::WorkflowRunId;
 
+mod limits;
+
 fn pending(room: &Room, task: Option<&str>) -> records::RunRecord {
     let state = room.env.state_path_for(&room.env.project_root);
     let dir = room.env.rimz_home().join("workflows/review");
@@ -372,9 +374,16 @@ fn capacity_manual_and_exempt_steps_bypass_the_door() {
         let room = Room::new(extra);
         fs::write(
             room.env.rimz_home().join("loop.toml"),
-            "[throttle]\npace='0s'\nmax-active=0\n",
+            "[throttle]\npace='0s'\ncheck='exit 75'\n",
         )
         .unwrap();
+        let throttle: Value = serde_json::from_str(&success(
+            room.command(&["config", "get", "loop.throttle", "--json"])
+                .output()
+                .unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(throttle["check"], "exit 75", "{throttle:#}");
         let record = pending(&room, task);
         let value = advance(&room, &record);
         actual.push(value["record"]["visits"]["build"]["total"] == 1);

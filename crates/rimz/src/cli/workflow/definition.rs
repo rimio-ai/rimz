@@ -94,6 +94,9 @@ fn header(
     } else {
         writeln!(out, "one run per {scope} · {}", tasks.join(" · "))?;
     }
+    if let Some(limit) = &spec.workflow.limit {
+        writeln!(out, "limit {}", limit_text(limit))?;
+    }
     let edge = spec
         .edges(&spec.workflow.start)
         .into_iter()

@@ -23,6 +23,16 @@ mod resolve;
 mod show;
 use host::Host;
 
+fn limit_text(limit: &workflow::Limit) -> String {
+    limit
+        .max_active
+        .map(|cap| format!("max-active={cap}"))
+        .into_iter()
+        .chain(limit.pace.as_ref().map(|pace| format!("pace={pace}")))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 #[derive(Debug, Args)]
 pub(super) struct WorkflowArgs {
     #[command(subcommand)]

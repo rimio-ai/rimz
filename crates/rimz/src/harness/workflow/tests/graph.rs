@@ -61,6 +61,35 @@ fn cap_edges_need_either_visit_bound() {
 }
 
 #[test]
+fn limited_off_capacity_edges_keep_the_give_up_routes() {
+    let mut actual = Vec::new();
+    for workflow_limit in [false, true] {
+        for wait in ["forever", "5m"] {
+            let step =
+                format!("agent='claude'\nthen='gate'\nthrottle='off'\ncapacity-wait='{wait}'");
+            let mut spec = spec("run='true'\non.ready='work'", &step);
+            let limit = Some(toml::from_str("max-active=1").unwrap());
+            if workflow_limit {
+                spec.workflow.limit = limit;
+            } else {
+                spec.steps.get_mut("work").unwrap().limit = limit;
+            }
+            let (edge, _) = edge(&spec, "work", "capacity");
+            actual.push((edge["fires"].clone(), edge["because"].clone()));
+        }
+    }
+    assert_eq!(
+        actual,
+        [
+            (json!("never"), json!("capacity-wait-forever")),
+            (json!("in-loop-runs"), serde_json::Value::Null),
+            (json!("never"), json!("capacity-wait-forever")),
+            (json!("in-loop-runs"), serde_json::Value::Null),
+        ]
+    );
+}
+
+#[test]
 fn capacity_edges_name_the_loop_and_definition_preconditions() {
     for (settings, fires, because, mark) in [
         (
