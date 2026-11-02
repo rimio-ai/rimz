@@ -579,15 +579,16 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
 fn parked_workflow(
     env: &Env,
     tree: &str,
+    workflow: &str,
 ) -> (rimz::ids::WorkflowRunId, rimz::disk::paths::WorkflowPaths) {
-    let dir = env.rimz_home().join("workflows/hold");
+    let dir = env.rimz_home().join("workflows").join(workflow);
     std::fs::create_dir_all(&dir).unwrap();
     let spec = "[workflow]\nscope='worktree'\nstart='check'\n\
         [checks.check]\nshell='true'\non={pass='@user',fail='@failed'}\n";
     std::fs::write(dir.join("workflow.toml"), spec).unwrap();
     let output = env
         .rimz()
-        .args(["workflow", "run", "hold", "-w", tree])
+        .args(["workflow", "run", workflow, "-w", tree])
         .assert()
         .success();
     let text = std::str::from_utf8(&output.get_output().stdout).unwrap();
@@ -620,7 +621,7 @@ fn workflow_runs_hold_listing_sweeps_cleanup_and_removal_but_not_merge() {
         .assert()
         .success();
     let path = env.home_root.join("project-worktrees/followup");
-    let (id, _) = parked_workflow(&env, "followup");
+    let (id, _) = parked_workflow(&env, "followup", "hold");
     for args in [
         vec!["worktree", "sweep", "--dry-run", "--json"],
         vec!["worktree", "sweep", "--json"],
@@ -682,6 +683,203 @@ fn workflow_runs_hold_listing_sweeps_cleanup_and_removal_but_not_merge() {
         .assert()
         .success();
     assert!(!path.exists());
+}
+
+fn assert_worktree_canceled_run(paths: &rimz::disk::paths::WorkflowPaths) {
+    use rimz::store::workflow::{JournalEvent, RunState};
+
+    assert_eq!(
+        rimz::store::workflow::load(paths).unwrap().state,
+        RunState::Canceled
+    );
+    let journal = rimz::store::workflow::journal(paths).unwrap();
+    assert!(journal.iter().any(|entry| matches!(
+        &entry.event,
+        JournalEvent::Cancel { reason: Some(reason) } if reason == "worktree removed"
+    )));
+}
+
+#[cfg(unix)]
+#[test]
+fn forced_removal_cancels_runs_through_a_symlink_but_not_when_removal_fails() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    let physical = env.home_root.join("physical-trees");
+    std::fs::create_dir(&physical).unwrap();
+    std::os::unix::fs::symlink(&physical, env.home_root.join("project-worktrees")).unwrap();
+    for name in ["demo", "other"] {
+        env.rimz()
+            .args(["worktree", "new", name])
+            .assert()
+            .success();
+    }
+    let path = env.home_root.join("project-worktrees/demo");
+    let (id, paths) = parked_workflow(&env, "demo", "hold");
+    let (_, other) = parked_workflow(&env, "other", "hold");
+    assert_eq!(
+        rimz::store::workflow::load(&paths).unwrap().scope.path,
+        physical.join("demo")
+    );
+    git(
+        &env.project_root,
+        &["worktree", "lock", path.to_str().unwrap()],
+    );
+    env.rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .assert()
+        .failure();
+    assert!(path.exists());
+    assert_eq!(
+        rimz::store::workflow::load(&paths).unwrap().state,
+        rimz::store::workflow::RunState::Parked
+    );
+    git(
+        &env.project_root,
+        &["worktree", "unlock", path.to_str().unwrap()],
+    );
+    let output = env
+        .rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .assert()
+        .success()
+        .stderr(contains("is in use by workflow run hold#demo"));
+    assert!(!path.exists());
+    assert_worktree_canceled_run(&paths);
+    assert_eq!(
+        rimz::store::workflow::load(&other).unwrap().state,
+        rimz::store::workflow::RunState::Parked
+    );
+    let text = std::str::from_utf8(&output.get_output().stdout).unwrap();
+    assert!(
+        text.find("removed demo").unwrap()
+            < text
+                .find("canceled workflow run hold#demo · worktree removed")
+                .unwrap()
+    );
+    env.rimz()
+        .args(["workflow", "show", id.as_str(), "--history"])
+        .assert()
+        .success()
+        .stdout(contains("cancel canceled · worktree removed"));
+}
+
+#[test]
+fn forced_removal_rereads_runs_after_the_removed_hook() {
+    use rimz::store::workflow::{JournalEvent, RunState};
+
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let (finished_id, finished) = parked_workflow(&env, "demo", "finished");
+    let (_, late) = parked_workflow(&env, "demo", "late");
+    let staged = env.home_root.join("late-record.json");
+    std::fs::rename(&late.record, &staged).unwrap();
+    let hook = r#"[agents.worktree.hooks]
+removed = '''"$RIMZ_BIN" workflow cancel "$RIMZ_TEST_FINISHED_RUN" &&
+mv "$RIMZ_TEST_LATE_RECORD" "$RIMZ_TEST_LATE_DEST"'''
+"#;
+    std::fs::write(env.rimz_home().join("config.toml"), hook).unwrap();
+    env.rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .env("RIMZ_BIN", env.rimz_bin())
+        .env("RIMZ_TEST_FINISHED_RUN", finished_id.as_str())
+        .env("RIMZ_TEST_LATE_RECORD", staged)
+        .env("RIMZ_TEST_LATE_DEST", &late.record)
+        .assert()
+        .success()
+        .stdout(contains(
+            "canceled workflow run late#demo · worktree removed",
+        ))
+        .stdout(contains("canceled workflow run finished#demo").not());
+    assert_worktree_canceled_run(&late);
+    assert_eq!(
+        rimz::store::workflow::load(&finished).unwrap().state,
+        RunState::Canceled
+    );
+    let cancels: Vec<_> = rimz::store::workflow::journal(&finished)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| matches!(entry.event, JournalEvent::Cancel { .. }))
+        .collect();
+    assert_eq!(cancels.len(), 1);
+    assert!(matches!(
+        cancels[0].event,
+        JournalEvent::Cancel { reason: None }
+    ));
+}
+
+#[test]
+fn forced_removal_reports_a_cancel_error_and_still_cancels_other_runs() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let (broken_id, broken) = parked_workflow(&env, "demo", "broken");
+    let (_, healthy) = parked_workflow(&env, "demo", "healthy");
+    std::fs::write(&broken.spec, "not valid TOML").unwrap();
+    env.rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .assert()
+        .code(1)
+        .stdout(contains("removed demo"))
+        .stdout(contains(
+            "canceled workflow run healthy#demo · worktree removed",
+        ))
+        .stderr(contains("failed to cancel workflow run broken#demo"))
+        .stderr(contains(format!("rimz workflow cancel {broken_id}")))
+        .stderr(contains("TOML"));
+    assert!(!env.home_root.join("project-worktrees/demo").exists());
+    assert_worktree_canceled_run(&healthy);
+    assert_eq!(
+        rimz::store::workflow::load(&broken).unwrap().state,
+        rimz::store::workflow::RunState::Parked
+    );
+}
+
+#[test]
+fn forced_removal_reports_an_unspawnable_cancel_with_a_manual_fix() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let (id, paths) = parked_workflow(&env, "demo", "hold");
+    env.rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
+        .assert()
+        .code(1)
+        .stdout(contains("removed demo"))
+        .stderr(contains("failed to cancel workflow run hold#demo"))
+        .stderr(contains(format!("rimz workflow cancel {id}")))
+        .stderr(contains("No such file or directory"));
+    assert!(!env.home_root.join("project-worktrees/demo").exists());
+    assert_eq!(
+        rimz::store::workflow::load(&paths).unwrap().state,
+        rimz::store::workflow::RunState::Parked
+    );
 }
 
 #[test]
@@ -2078,6 +2276,7 @@ fn worktree_remove_reports_live_queue_write_failure_after_removal() {
     let path = env.home_root.join("project-worktrees").join("demo");
     commit_file(&path, "feature.txt", "feature\n", "feature");
     let tip = git_stdout(&path, &["rev-parse", "HEAD"]);
+    let (_, workflow) = parked_workflow(&env, "demo", "hold");
     let message_id = queue_channel_message(&env, "demo", "old work");
     let messages_dir = env.store().paths().messages_dir.clone();
     let permissions = std::fs::metadata(&messages_dir)
@@ -2112,6 +2311,7 @@ fn worktree_remove_reports_live_queue_write_failure_after_removal() {
         "removal completes before the queue write fails"
     );
     assert!(!branch_exists(&env.project_root, "demo"));
+    assert_worktree_canceled_run(&workflow);
     assert!(
         env.store()
             .list_messages()

@@ -215,7 +215,9 @@ Without `--force`, the branch is deleted when Git considers it merged or RimZ pr
 
 `--force` skips these checks and removes the tree with `git worktree remove --force`, then deletes the branch with `git branch -D`. When its tip could be read, the receipt prints ``branch deleted: BRANCH was at OID; restore with `git branch BRANCH OID` `` with the full commit id. When the tree was in use, `--force` first prints ``warning: worktree `NAME` is in use by HOLDERS; removing it anyway`` on stderr. Holders include agent handles, unassociated open panes, and unfinished workflow runs.
 
-`remove` exits 1 if ending the sessions or archiving the messages fails, even though the checkout is already gone. A failure to append the message history only warns and leaves the exit code 0 ([write classes](../../internals/store.md#write-classes)).
+After a successful forced removal, RimZ re-reads unfinished workflow runs across every room and cancels those scoped inside the removed tree. Runs that finished during removal are skipped; newly arrived runs are included. The receipt adds `canceled workflow run ADDRESS · worktree removed` for each cancellation, and the workflow history records that reason. No run is canceled if removal fails. If cancellation fails, stderr names the run, error, and `rimz workflow cancel <run-id>` to finish it; other runs are still attempted, the tree stays removed, and the command exits 1.
+
+`remove` also exits 1 if ending the sessions or archiving the messages fails, even though the checkout is already gone. Forced-removal cancellations are attempted even when that retirement fails. A failure to append the message history only warns and leaves the exit code 0 ([write classes](../../internals/store.md#write-classes)).
 
 ## Sweep landed worktrees
 

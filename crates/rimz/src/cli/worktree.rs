@@ -2,7 +2,7 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -492,6 +492,11 @@ fn remove_worktree(
     let guard =
         super::worktree_protection::for_explicit_removal(&[&workspace.project_root], globals);
     let path = rimz::worktree::worktree_path(&workspace.project_root, config, &name)?;
+    let canonical = if force {
+        path.canonicalize().ok()
+    } else {
+        None
+    };
     if force && guard.protections.protects(&path) {
         writeln!(
             std::io::stderr().lock(),
@@ -515,7 +520,7 @@ fn remove_worktree(
         Err(rimz::worktree::WorktreeErr::InUse { .. }) => {
             let holders = guard.protections.holders(&path);
             let fix = if holders.workflow_runs.is_empty() {
-                String::new()
+                "use --force to remove it".to_owned()
             } else {
                 let commands = holders
                     .workflow_runs
@@ -523,9 +528,12 @@ fn remove_worktree(
                     .map(|run| format!("`rimz workflow cancel {}`", run.id))
                     .collect::<Vec<_>>()
                     .join(" and ");
-                format!("cancel with {commands}, or ")
+                format!(
+                    "cancel with {commands}, or use --force to remove it \
+                     and cancel its unfinished workflow runs"
+                )
             };
-            bail!("worktree `{name}` is in use by {holders}; {fix}use --force to remove it");
+            bail!("worktree `{name}` is in use by {holders}; {fix}");
         }
         result => named_worktree_result(result, workspace, config, &name)?,
     };
@@ -556,8 +564,68 @@ fn remove_worktree(
             "  branch deleted: {branch} was at {tip}; restore with `git branch {branch} {tip}`"
         )?;
     }
+    let cancellation = if force {
+        cancel_removed_workflow_runs(&workspace.project_root, &path, canonical.as_deref())
+    } else {
+        Ok(())
+    };
     session_retirement?;
     message_archival?;
+    cancellation
+}
+
+fn cancel_removed_workflow_runs(
+    repo_root: &Path,
+    path: &Path,
+    canonical: Option<&Path>,
+) -> Result<()> {
+    use rimz::store::workflow::{RunRead, unfinished_under};
+    use rimz::utils::path::normalize_path_lexical;
+
+    let path = normalize_path_lexical(path);
+    let runs =
+        unfinished_under(&rimz::disk::paths::rimz_home(), RunRead::BestEffort).unwrap_or_default();
+    let reason = "worktree removed";
+    let mut failed = false;
+    for run in runs {
+        let scope = normalize_path_lexical(&run.scope.path);
+        if !scope.starts_with(&path) && !canonical.is_some_and(|path| scope.starts_with(path)) {
+            continue;
+        }
+        let error = match Command::new(rimz::proc::rimz_exe())
+            .args(rimz::harness::workflow::cancel_args(&run.id, reason))
+            .current_dir(repo_root)
+            .stdin(Stdio::null())
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                writeln!(
+                    render::out(),
+                    "  canceled workflow run {} · {reason}",
+                    run.address()
+                )?;
+                continue;
+            }
+            Ok(output) => format!(
+                "{}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            Err(error) => error.to_string(),
+        };
+        failed = true;
+        writeln!(
+            std::io::stderr().lock(),
+            "failed to cancel workflow run {} ({}): {error}; \
+             run `rimz workflow cancel {}` to finish it",
+            run.address(),
+            run.id,
+            run.id
+        )?;
+    }
+    if failed {
+        bail!("could not cancel every workflow run after removing the worktree");
+    }
     Ok(())
 }
 
