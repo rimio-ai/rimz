@@ -1767,6 +1767,10 @@ pub(crate) fn loop_throttle_check_cache() -> PathBuf {
     loops_dir().join("throttle-checks.json")
 }
 
+pub(crate) fn loop_throttle_workflow_pace() -> PathBuf {
+    loops_dir().join("workflow-pace.json")
+}
+
 /// A new ticket in `queue`; the name sorts by its enqueue time.
 pub(crate) fn loop_throttle_ticket_in(queue: &Path, enqueued_ms: u64) -> PathBuf {
     queue.join(format!("{enqueued_ms:020}-{}", uuid::Uuid::now_v7()))

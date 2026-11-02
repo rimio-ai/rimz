@@ -1347,7 +1347,13 @@ allowed-dependencies = [
 # paths::is_under_root shares empty-root containment across preflights and sandbox planning (+1).
 # atomic::publish_staged_no_replace shares non-replacing staged-entry publication (+1).
 # paths::workflow_runs_under_strict preserves required protection facts across rooms (+1).
-surface-budget = 318
+# paths::loop_throttle_workflow_pace names the home-wide workflow launch stamps (+1).
+surface-budget = 319
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::loop_throttle_workflow_pace"
+reason = "The throttle reads and stamps workflow pacing through one home-wide disk path."
 
 [[verdict]]
 kind = "item"

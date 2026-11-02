@@ -680,12 +680,26 @@ struct Ticket {
     root: PathBuf,
     checkout: PathBuf,
     enqueued_ms: u64,
+    #[serde(default = "machine_gated_default")]
+    machine_gated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<LimitScope>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     kinds: Vec<AgentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gives_up_ms: Option<u64>,
     #[serde(flatten)]
     state: TicketState,
+}
+
+fn machine_gated_default() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct LimitScope {
+    workflow: String,
+    step: String,
 }
 
 impl Ticket {
@@ -696,6 +710,8 @@ impl Ticket {
             root: run.root.clone(),
             checkout: run.checkout.clone(),
             enqueued_ms,
+            machine_gated: true,
+            limit: None,
             kinds: run.kinds(),
             gives_up_ms: run.gives_up_ms,
             state: TicketState::Waiting { reason: None },
