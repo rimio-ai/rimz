@@ -4,6 +4,8 @@ Use this before hand-off for a renderer, pipeline line, shared data plane, or cl
 
 ## Hold a room and join it
 
+From an agent's tool-sandboxed shell, run the testkit build, `cargo xtask sandbox room`, and every `sandbox in` command unsandboxed (escalated): inside the tool sandbox the build cannot reach the shared target directory, and tmux socket connects fail with `Operation not permitted`.
+
 Build the testkit binary first; without it `sandbox room` refuses with `development rimz missing`:
 
 ```sh
