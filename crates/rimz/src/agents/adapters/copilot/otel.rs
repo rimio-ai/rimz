@@ -282,6 +282,8 @@ mod tests {
         std::fs::write(&path, FIXTURE).unwrap();
         let pricing = dir.path().join("pricing.json");
         let first = refresh(&LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-fixture",
             model_hint: None,
@@ -301,6 +303,8 @@ mod tests {
         let stat = first.transcript_stat.unwrap();
         assert!(
             refresh(&LocalContextRefreshCtx {
+                open_permission_since: None,
+                prior_permission_settle: None,
                 login_env: &std::collections::BTreeMap::new(),
                 agent_id: "session-fixture",
                 model_hint: None,
@@ -322,6 +326,8 @@ mod tests {
             .write_all(b"{\"type\":\"span\",\"name\":\"chat next\",\"timeUnixNano\":\"1783955606000000000\",\"attributes\":{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"session-fixture\",\"gen_ai.response.model\":\"next-model\",\"gen_ai.usage.output_tokens\":1}}\n")
             .unwrap();
         let next = refresh(&LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-fixture",
             model_hint: None,
@@ -348,6 +354,8 @@ mod tests {
         std::fs::write(&path, "").unwrap();
         let pricing = dir.path().join("pricing.json");
         let anchored = refresh(&LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-a",
             model_hint: None,
@@ -373,6 +381,8 @@ mod tests {
         file.write_all(INTERLEAVED_FIXTURE.as_bytes()).unwrap();
 
         let refreshed = refresh(&LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-a",
             model_hint: None,

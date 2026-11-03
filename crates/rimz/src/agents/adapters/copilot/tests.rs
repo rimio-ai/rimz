@@ -1062,6 +1062,8 @@ fn statusline_health_suppresses_otel_and_replacement_restores_it() {
     std::fs::write(&otel, include_str!("tests/fixtures/otel.jsonl")).unwrap();
     let pricing = dir.path().join("pricing.json");
     let ctx = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &std::collections::BTreeMap::new(),
         agent_id: "session-fixture",
         model_hint: None,

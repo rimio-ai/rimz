@@ -342,7 +342,8 @@ upward-dependencies = ["address"]
 # ModelContextLimitsKey carries the independent catalog/config/model stat gate (+1).
 # LaunchCapability::model_config_path resolves native model-settings remedies for doctor (+1).
 # Automation, its facade export and workflow_scope share durable start origin (+3).
-surface-budget = 1234
+# PermissionSettle shares asking-cell completion proof between adapters and state (+1).
+surface-budget = 1235
 
 [[verdict]]
 kind = "item"
@@ -438,6 +439,11 @@ reason = "Doctor resolves the account's model-settings remedy through the provid
 kind = "item"
 key = "agents::context::ModelContextLimits"
 reason = "Model-keyed catalog facts travel on the context sidecar without replacing its reported session window."
+
+[[verdict]]
+kind = "item"
+key = "agents::context::PermissionSettle"
+reason = "The rollout producer and shared ask projection exchange ask-keyed terminal-cell proof."
 
 [[verdict]]
 kind = "item"

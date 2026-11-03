@@ -39,6 +39,7 @@ pub(super) fn refresh_live_sessions(
             &refresh.kind,
             &refresh.session_id,
             refresh.model_hint.as_deref(),
+            refresh.open_permission_since,
             crate::store::agent_context::read_cached_one(
                 runtime,
                 &refresh.kind,
@@ -93,6 +94,7 @@ pub fn refresh_session_transcript_context_from_watch(
     session_id: &str,
     model_hint: Option<&str>,
     login: Option<&LoginName>,
+    open_permission_since: Option<Timestamp>,
 ) {
     refresh_session_transcript_context_with_snapshot(
         None,
@@ -102,6 +104,7 @@ pub fn refresh_session_transcript_context_from_watch(
         model_hint,
         login,
         RefreshTrigger::Watch,
+        open_permission_since,
     );
 }
 
@@ -130,6 +133,7 @@ pub fn force_refresh_session_context(
         kind,
         session_id,
         model_hint,
+        agent.open_permission_since(),
         crate::store::agent_context::read_one(runtime, kind, session_id).map(Arc::new),
         true,
         RefreshTrigger::Tick,
@@ -158,6 +162,10 @@ fn spawn_forced_session_context_refresh(
     spawn_session_context_refresh(runtime, kind, session_id, spawn);
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the watcher supplies the ask arrival without loading a snapshot"
+)]
 fn refresh_session_transcript_context_with_snapshot(
     snapshot: Option<&SidebarSnapshot>,
     runtime: &RuntimePaths,
@@ -166,6 +174,7 @@ fn refresh_session_transcript_context_with_snapshot(
     model_hint: Option<&str>,
     login: Option<&LoginName>,
     trigger: RefreshTrigger<'_>,
+    open_permission_since: Option<Timestamp>,
 ) {
     if let Err(err) = refresh_session_transcript_context_core(
         snapshot,
@@ -174,6 +183,7 @@ fn refresh_session_transcript_context_with_snapshot(
         kind,
         session_id,
         model_hint,
+        open_permission_since,
         crate::store::agent_context::read_one(runtime, kind, session_id).map(Arc::new),
         false,
         trigger,
@@ -193,6 +203,7 @@ fn refresh_session_transcript_context_core(
     kind: &str,
     session_id: &str,
     model_hint: Option<&str>,
+    open_permission_since: Option<Timestamp>,
     prior: Option<Arc<crate::agents::context::record::AgentContextRecord>>,
     force: bool,
     trigger: RefreshTrigger<'_>,
@@ -208,6 +219,10 @@ fn refresh_session_transcript_context_core(
     };
     let login_key = LoginKey::new(kind_id, login.cloned().unwrap_or_default());
     let ctx = LocalContextRefreshCtx {
+        open_permission_since,
+        prior_permission_settle: prior
+            .as_ref()
+            .and_then(|record| record.context.permission_settle),
         login_env: &login_env,
         agent_id: session_id,
         model_hint,
@@ -390,6 +405,7 @@ struct LiveSessionRefresh {
     pub kind: String,
     pub session_id: String,
     pub model_hint: Option<String>,
+    pub open_permission_since: Option<Timestamp>,
 }
 
 fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSessionRefresh> {
@@ -404,6 +420,7 @@ fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSessionRefresh>
             kind: agent.kind.as_str().to_owned(),
             session_id: agent.agent_id.to_string(),
             model_hint: session_model_hint(agent).map(str::to_owned),
+            open_permission_since: agent.open_permission_since(),
         })
         .collect()
 }

@@ -1962,6 +1962,14 @@ impl AgentState {
             .is_some_and(|until| now < until)
     }
 
+    /// Arrival of the row's open permission ask, whatever its mode.
+    pub fn open_permission_since(&self) -> Option<Timestamp> {
+        self.open_ask
+            .as_ref()
+            .filter(|ask| ask.kind == AskKind::Permission)
+            .map(|ask| ask.since)
+    }
+
     /// The blocking ask visible to attention readers, excluding automatic review
     /// and closed turns. Pane-input reservation may outlive an ended turn.
     pub fn attention_ask(&self, now: Timestamp) -> Option<&OpenAsk> {

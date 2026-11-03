@@ -142,6 +142,7 @@ impl AgentContextRecord {
         context.turn_opened_by = self.context.turn_opened_by.clone();
         context.last_cache_write = self.context.last_cache_write;
         context.post_compaction_tokens = self.context.post_compaction_tokens;
+        context.permission_settle = self.context.permission_settle;
         let model_context_limits_key = if context.model_context_limits.is_none() {
             context
                 .model_context_limits

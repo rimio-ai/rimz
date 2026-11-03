@@ -352,6 +352,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
             label: Some(label.to_owned()),
         }),
         settle: None,
+        permission_settle: None,
         observed_at: ts(error_at),
     });
     agent

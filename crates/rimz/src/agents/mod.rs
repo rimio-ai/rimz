@@ -997,6 +997,9 @@ pub struct LocalContextRefreshCtx<'a> {
     /// Catalog/config inputs already reflected in the sidecar's model limits.
     pub prior_model_context_limits_key: Option<&'a context::record::ModelContextLimitsKey>,
     pub prior_spend_fold: Option<&'a LocalSpendFold>,
+    /// Arrival of the row's open permission ask, when the caller knows the row.
+    pub open_permission_since: Option<Timestamp>,
+    pub prior_permission_settle: Option<context::PermissionSettle>,
     /// Persistent shared `pricing-cache.json`, for adapters that price token
     /// counts into card dollars. The spending producer owns writes.
     pub shared_pricing_cache_path: &'a Path,
@@ -1411,6 +1414,8 @@ mod tests {
     ) -> LocalContextRefreshCtx<'_> {
         static LOGIN_ENV: BTreeMap<String, String> = BTreeMap::new();
         LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &LOGIN_ENV,
             agent_id: "session",
             model_hint: None,

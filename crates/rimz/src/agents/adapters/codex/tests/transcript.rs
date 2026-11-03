@@ -87,6 +87,8 @@ fn local_context_reads_model_catalog_limits_with_tolerant_fallbacks() {
             ]);
             let pricing = home.path().join("pricing.json");
             let ctx = crate::agents::LocalContextRefreshCtx {
+                open_permission_since: None,
+                prior_permission_settle: None,
                 login_env: &login_env,
                 agent_id: "catalog-session",
                 model_hint: Some(model),
@@ -190,6 +192,8 @@ impl ModelLimitsFixture {
 
     fn ctx<'a>(&'a self, model: &'a str) -> crate::agents::LocalContextRefreshCtx<'a> {
         crate::agents::LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &self.env,
             agent_id: "limits-session",
             model_hint: Some(model),

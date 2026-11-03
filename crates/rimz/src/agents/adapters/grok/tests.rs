@@ -47,6 +47,8 @@ fn named_login_scopes_spending_and_session_transcripts() {
     let pricing = temp.path().join("pricing.json");
     for (current, prior) in [(Some(&named_file), None), (None, Some(&named_file))] {
         let ctx = LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &login_env,
             agent_id: "shared-session",
             model_hint: None,
@@ -697,6 +699,8 @@ fn completed_usage_preserves_occupancy_and_estimates_missing_cost() {
     .unwrap();
     crate::agents::PriceBook::write_fixture_cache(&pricing);
     let ctx = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &std::collections::BTreeMap::new(),
         agent_id: "session-1",
         model_hint: Some("grok-4.5"),

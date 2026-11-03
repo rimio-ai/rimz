@@ -1045,6 +1045,7 @@ fn observed_context() -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         settle: None,
+        permission_settle: None,
         observed_at: observed_at(),
     }
 }

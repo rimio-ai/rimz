@@ -473,6 +473,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         settle: None,
+        permission_settle: None,
         observed_at: now,
     }
 }
@@ -522,6 +523,7 @@ fn codex_context(now: Timestamp) -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         settle: None,
+        permission_settle: None,
         observed_at: now,
     }
 }
