@@ -256,9 +256,9 @@ impl Row {
                                 target(name, &edge.target, order)
                             ));
                         }
-                        if let Some(max) = step.max_visits_per_key {
+                        if let Some(max) = &step.max_visits_per_outcome {
                             row.details.push(format!(
-                                "{max} visits per key, then {}",
+                                "max-visits-per-outcome {max}, then {}",
                                 target(name, &edge.target, order)
                             ));
                         }

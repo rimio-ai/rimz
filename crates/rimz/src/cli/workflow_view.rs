@@ -178,7 +178,7 @@ pub(super) fn detail(record: &RunRecord, spec: Option<&WorkflowSpec>, now: Times
         return step
             .visit_bounds(
                 record.visits.get(&record.node),
-                record.key.as_ref(),
+                record.visit_bucket(),
                 record.visit_grant,
             )
             .next()

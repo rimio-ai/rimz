@@ -27,7 +27,7 @@ then = 'watch'
 timeout = '2h'
 takeover = true
 max-visits = 4
-max-visits-per-key = 2
+max-visits-per-outcome = { limit = 2, reset-on = 'green' }
 capacity-wait = '6h'
 on.asked = 'watch'
 [checks.unused]
@@ -59,7 +59,7 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "red → fix",
         "waits ≤3d, then @user",
         "4 visits, then @user",
-        "2 visits per key, then @user",
+        "max-visits-per-outcome 2, reset-on green, then @user",
         "takes over",
         "capacity-wait 6h",
         "only when a loop task starts the run",
@@ -253,7 +253,7 @@ timeout = '8h'
 on.ok = 'fix'
 on.invalid = '@failed'
 [checks.watch]
-cases = [{ when = ['ci=passed', 'pr=open', 'window.5h.left>=25'], outcome = 'green', for = '3m', key = 'lint' }]
+cases = [{ when = ['ci=passed', 'pr=open', 'window.5h.left>=25'], outcome = 'green', for = '3m' }]
 provider = 'claude'
 account = 'default'
 else = 'waiting'
@@ -278,7 +278,7 @@ throttle = 'off'
 capacity-wait = '6h'
 then = 'judge'
 max-visits = 4
-max-visits-per-key = 2
+max-visits-per-outcome = { limit = 2, reset-on = ['green', 'ok'] }
 timeout = '2h'
 on.asked = 'watch'
 on.cap = '@user'
@@ -336,8 +336,9 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "6h",
                 "max-visits:",
                 "4",
-                "max-visits-per-key:",
+                "max-visits-per-outcome:",
                 "2",
+                "reset-on green, ok",
                 "timeout:",
                 "2h",
                 "then → judge (explicit)",
@@ -363,8 +364,6 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "account:",
                 "default",
                 "for 3m",
-                "key",
-                "\"lint\"",
                 "green → @done",
                 "none true",
                 "waiting → @wait",

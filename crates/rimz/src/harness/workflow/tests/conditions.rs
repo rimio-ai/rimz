@@ -8,18 +8,16 @@ fn inline_cases_match_table_blocks_in_order() {
     let header = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@user',pending='@wait'}\n";
     let actual: Vec<_> = [
         r#"cases = [
-    { when = ["pr=merged"], outcome = "merged", key = 7 },
-    { when = ["ci=failed || pr.queue=dequeued"], outcome = "red", key = "ci", for = "2m" },
+    { when = ["pr=merged"], outcome = "merged" },
+    { when = ["ci=failed || pr.queue=dequeued"], outcome = "red", for = "2m" },
 ]
 "#,
         r#"[[checks.pr.cases]]
 when = ["pr=merged"]
 outcome = "merged"
-key = 7
 [[checks.pr.cases]]
 when = ["ci=failed || pr.queue=dequeued"]
 outcome = "red"
-key = "ci"
 for = "2m"
 "#,
     ]
@@ -37,16 +35,16 @@ for = "2m"
             .map(|case| {
                 serde_json::json!({
                     "when": case.when, "outcome": case.outcome,
-                    "for": case.hold, "key": case.key
+                    "for": case.hold
                 })
             })
             .collect::<Vec<_>>()
     })
     .collect();
     let expected = vec![
-        serde_json::json!({"when":["pr=merged"], "outcome":"merged", "for":null, "key":7}),
+        serde_json::json!({"when":["pr=merged"], "outcome":"merged", "for":null}),
         serde_json::json!({
-            "when":["ci=failed || pr.queue=dequeued"], "outcome":"red", "for":"2m", "key":"ci"
+            "when":["ci=failed || pr.queue=dequeued"], "outcome":"red", "for":"2m"
         }),
     ];
     assert_eq!(actual, vec![expected.clone(), expected]);

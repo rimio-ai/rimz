@@ -51,13 +51,17 @@ fn inspection_hold_uses_the_matching_cases_first_settlement() {
 }
 
 #[test]
-fn a_keyed_hold_preserves_routed_context_until_the_case_fires() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='next', pending='next'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\nkey='case'\n[checks.next]\nrun='true'\non.ok='@done'\n").unwrap();
+fn a_hold_preserves_routed_context_and_counts_until_the_reset_case_fires() {
+    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='next', pending='next'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[checks.next]\nrun='true'\non.ok='@done'\n[steps.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=6\nmax-visits-per-outcome={limit=2,reset-on='ready'}\n").unwrap();
     let paths = paths();
     for completes in [false, true] {
         let mut record = record();
         record.key = Some(Key::String("prior".into()));
         record.input = Some(json!({"outcome":"seed", "key":"prior"}));
+        record.visits = serde_json::from_value(json!({
+            "build":{"total":2,"keys":[{"key":"prior","visits":2}]}
+        }))
+        .unwrap();
         let original = record.clone();
         let mut t = Transition {
             now: record.entered_at,
@@ -66,9 +70,9 @@ fn a_keyed_hold_preserves_routed_context_until_the_case_fires() {
             paths: &paths,
             entries: vec![],
         };
-        let answer = json!({"outcome":"ready", "case":0, "key":"case"});
+        let answer = json!({"outcome":"ready", "case":0});
         t.finish_check(1, Ok(answer.clone()), None).unwrap();
-        assert_eq!(t.record.key, original.key, "a hold has not fired its key");
+        assert_eq!(t.record.key, original.key);
         assert_eq!(
             t.record.input, original.input,
             "a hold has not routed an answer"
@@ -91,15 +95,17 @@ fn a_keyed_hold_preserves_routed_context_until_the_case_fires() {
         )
         .unwrap();
         assert_eq!(t.record.node, "next");
-        assert_eq!(
-            t.record.key,
-            Some(Key::String(if completes { "case" } else { "prior" }.into()))
-        );
-        assert_eq!(
-            t.record.input.as_ref().unwrap()["key"],
-            if completes { "case" } else { "prior" }
-        );
-        assert_eq!(t.record.visits, original.visits);
+        assert_eq!(t.record.key, Some(Key::String("prior".into())));
+        assert_eq!(t.record.input.as_ref().unwrap()["key"], "prior");
+        assert_eq!(t.record.visits["build"].total, 2);
+        if completes {
+            assert_eq!(
+                serde_json::to_value(&t.record).unwrap()["visits"]["build"]["outcomes"],
+                json!([])
+            );
+        } else {
+            assert_eq!(t.record.visits, original.visits);
+        }
         assert!(t.record.wait.is_none());
     }
 }

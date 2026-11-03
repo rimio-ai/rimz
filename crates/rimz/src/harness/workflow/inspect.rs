@@ -8,7 +8,7 @@ use crate::store::workflow::{
 use crate::utils::time::TimeInputErr;
 
 /// A routing decision or lifecycle marker projected from the durable journal.
-/// Markers have no outcome or target and count once.
+/// Markers have no target and count once; visit resets retain the answered outcome.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hop {
     pub at: Timestamp,
@@ -19,11 +19,12 @@ pub struct Hop {
     pub kind: HopKind,
 }
 
-/// Distinguish routing decisions from resume, park, and terminal markers.
+/// Distinguish routing decisions from resume, visit-reset, park, and terminal markers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HopKind {
     Route,
     Resume,
+    VisitsReset,
     Park { reason: ParkReason },
     Terminal { state: RunState },
 }
@@ -59,6 +60,7 @@ pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry]) -> Vec<Hop> {
             at: entry.at,
             node: match &entry.event {
                 JournalEvent::TurnEnd { check, .. } => check.clone(),
+                JournalEvent::VisitsReset { step, .. } => step.clone(),
                 _ => entry.node.clone(),
             },
             outcome,
@@ -132,6 +134,9 @@ fn hop_kind(
             return Some((HopKind::Route, Some(outcome.clone()), Some(target.clone())));
         }
         JournalEvent::Resume { .. } => return Some((HopKind::Resume, None, None)),
+        JournalEvent::VisitsReset { outcome, .. } => {
+            return Some((HopKind::VisitsReset, Some(outcome.clone()), None));
+        }
         JournalEvent::Park { reason, .. } => {
             return Some((HopKind::Park { reason: *reason }, None, None));
         }
@@ -191,6 +196,7 @@ fn held_verdict(entry: &JournalEntry, following: &[JournalEntry]) -> bool {
             }
             JournalEvent::Wait { .. }
             | JournalEvent::Wake { .. }
+            | JournalEvent::VisitsReset { .. }
             | JournalEvent::Attempt { .. } => {}
             JournalEvent::Route { .. } if repeats_evaluation(next, Some(entry)) => {}
             _ => return false,

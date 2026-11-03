@@ -119,9 +119,6 @@ fn answer(
                 let case = &check.cases[index];
                 object["outcome"] = json!(case.outcome);
                 object["case"] = json!(index);
-                if let Some(key) = &case.key {
-                    object["key"] = json!(key);
-                }
             }
             None => {
                 object["outcome"] = json!("unknown");
@@ -447,7 +444,7 @@ mod tests {
                 None,
             ),
         ] {
-            let check: Check = toml::from_str(&format!("else='pending'\n[[cases]]\nwhen=['{}']\noutcome='first'\nkey='fixed'\n[[cases]]\nwhen=['{}']\noutcome='second'\n", conditions[0], conditions[1])).unwrap();
+            let check: Check = toml::from_str(&format!("else='pending'\n[[cases]]\nwhen=['{}']\noutcome='first'\n[[cases]]\nwhen=['{}']\noutcome='second'\n", conditions[0], conditions[1])).unwrap();
             let expressions: Vec<_> = conditions
                 .into_iter()
                 .map(|s| WhenExpr::parse(&[s.into()]).unwrap())
@@ -467,11 +464,7 @@ mod tests {
             );
             assert_eq!(object["outcome"], outcome);
             assert_eq!(object.get("case"), case.map(|n| json!(n)).as_ref());
-            if case == Some(0) {
-                assert_eq!(object["key"], "fixed");
-            } else {
-                assert!(object.get("key").is_none());
-            }
+            assert!(object.get("key").is_none());
             assert_eq!(object.get("reason").is_some(), outcome == "unknown");
         }
     }

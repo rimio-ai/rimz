@@ -183,6 +183,27 @@ impl Transition<'_> {
                 },
             },
         );
+        if origin == EvaluationOrigin::Check && outcome != "hold" {
+            let spec = self.spec;
+            for (step, definition) in &spec.steps {
+                if definition
+                    .max_visits_per_outcome
+                    .as_ref()
+                    .is_some_and(|cap| cap.reset_on().contains(&outcome))
+                    && let Some(visits) = self.record.visits.get_mut(step)
+                    && !visits.outcomes.is_empty()
+                {
+                    visits.outcomes.clear();
+                    self.push(
+                        Some(seq),
+                        JournalEvent::VisitsReset {
+                            step: step.clone(),
+                            outcome: outcome.clone(),
+                        },
+                    );
+                }
+            }
+        }
         if reason == ParkReason::Invalid {
             self.push(
                 Some(seq),
@@ -477,13 +498,15 @@ impl Transition<'_> {
         // A step's live attempt and visit are published together by prepare.
         let attempt = self.record.attempt.as_ref().expect("live step attempt");
         let visits = &self.record.visits[&attempt.node];
-        let visit = visits.for_key(self.record.key.as_ref());
+        let bucket = self.record.visit_bucket();
+        let visit = visits.for_bucket(bucket);
         PreviousAttempt {
             step: attempt.node.clone(),
             outcome,
             seq: attempt.seq,
             visit,
-            key: self.record.key.clone(),
+            key: bucket.1.cloned(),
+            routed_by: bucket.0.map(str::to_owned),
             started_at: attempt.started_at,
             ended_at: self.now,
             handle: attempt.run.as_ref().map(|run| run.handle.clone()),
@@ -566,6 +589,7 @@ impl Transition<'_> {
                 outcome: previous.outcome,
                 visit: previous.visit,
                 key: previous.key.clone(),
+                routed_by: previous.routed_by.clone(),
                 digests: attempt.digests.clone(),
                 started_at: previous.started_at,
                 ended_at: self.now,

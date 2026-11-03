@@ -23,15 +23,14 @@ fn dummy_agent_process() -> std::process::Child {
 }
 
 #[test]
-fn agent_step_start_launches_with_null_context_and_counts_the_null_key() {
-    let room = Room::new("max-visits-per-key=1\n");
+fn agent_step_start_launches_with_null_context_and_counts_the_null_outcome() {
+    let room = Room::new("max-visits-per-outcome=1\n");
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
         &path,
         fs::read_to_string(&path)
             .unwrap()
-            .replace("start = 'pr'", "start = 'build'")
-            .replace("on.done = '@done'", "on.done = 'build'"),
+            .replace("start = 'pr'", "start = 'build'"),
     )
     .unwrap();
     let definition = success(command(&room.env, &["workflow", "show", "review"]));
@@ -62,16 +61,14 @@ fn agent_step_start_launches_with_null_context_and_counts_the_null_key() {
         assert_eq!(ctx.get(field), Some(&Value::Null), "{ctx:#}");
     }
     assert_eq!(
-        value["record"]["visits"]["build"]["keys"],
-        json!([{"key":null,"visits":1}])
+        value["record"]["visits"]["build"]["outcomes"],
+        json!([{"outcome":null,"key":null,"visits":1}])
     );
     assert_eq!(run.workflow.as_ref().unwrap().seq, 1);
     assert!(events(&value, "evaluation").is_empty(), "{value:#}");
     room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
-    let value = settled(&room.env, &id, "parked");
-    assert_eq!(value["record"]["park"]["reason"], "cap");
-    assert_eq!(value["record"]["input"]["bound"], "max-visits-per-key");
+    let value = settled(&room.env, &id, "done");
     assert_eq!(events(&value, "attempt").len(), 1, "{value:#}");
     let history = success(command(&room.env, &["workflow", "show", &id, "--history"]));
     assert!(
@@ -616,8 +613,8 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
     }
     let value = settled(&room.env, &id, "done");
     assert_eq!(
-        value["record"]["visits"]["build"]["keys"],
-        json!([{"key":"one", "visits":1}, {"key":"two", "visits":1}])
+        value["record"]["visits"]["build"]["outcomes"],
+        json!([{"outcome":"ready", "key":"one", "visits":1}, {"outcome":"ready", "key":"two", "visits":1}])
     );
     let picked: Vec<_> = events(&value, "evaluation")
         .into_iter()

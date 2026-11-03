@@ -44,6 +44,7 @@ expression: value
     "limited": null,
     "log": "/work/1.step.log",
     "outcome": "died",
+    "routed_by": "red",
     "run_id": null,
     "seq": 1,
     "started_at": "2026-01-01T00:00:00Z",
@@ -66,13 +67,15 @@ expression: value
   "visit_grant": 0,
   "visits": {
     "build": {
-      "keys": [
+      "outcomes": [
         {
           "key": 42,
+          "outcome": null,
           "visits": 1
         },
         {
           "key": "42",
+          "outcome": null,
           "visits": 1
         }
       ],

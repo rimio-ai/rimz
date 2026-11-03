@@ -179,21 +179,43 @@ pub enum Key {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StepVisits {
     pub total: u64,
-    pub keys: Vec<KeyVisits>,
+    #[serde(alias = "keys")]
+    pub outcomes: Vec<OutcomeVisits>,
 }
 
 impl StepVisits {
-    /// Visits under `key`, where `None` is the unkeyed row; 0 before the key's first visit.
-    pub fn for_key(&self, key: Option<&Key>) -> u64 {
-        self.keys
+    /// Visits in this outcome/key bucket since the last reset; 0 before its first visit.
+    pub fn for_bucket(&self, bucket: (Option<&str>, Option<&Key>)) -> u64 {
+        self.bucket_index(bucket)
+            .map_or(0, |index| self.outcomes[index].visits)
+    }
+
+    /// Count one visit in this bucket and in the never-reset total.
+    pub fn bump(&mut self, bucket: (Option<String>, Option<Key>)) {
+        self.total += 1;
+        let (outcome, key) = bucket;
+        if let Some(index) = self.bucket_index((outcome.as_deref(), key.as_ref())) {
+            self.outcomes[index].visits += 1;
+        } else {
+            self.outcomes.push(OutcomeVisits {
+                outcome,
+                key,
+                visits: 1,
+            });
+        }
+    }
+
+    fn bucket_index(&self, bucket: (Option<&str>, Option<&Key>)) -> Option<usize> {
+        self.outcomes
             .iter()
-            .find(|visits| visits.key.as_ref() == key)
-            .map_or(0, |visits| visits.visits)
+            .position(|row| (row.outcome.as_deref(), row.key.as_ref()) == bucket)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct KeyVisits {
+pub struct OutcomeVisits {
+    #[serde(default)]
+    pub outcome: Option<String>,
     pub key: Option<Key>,
     pub visits: u64,
 }
@@ -403,6 +425,8 @@ pub struct PreviousAttempt {
     pub seq: u64,
     pub visit: u64,
     pub key: Option<Key>,
+    #[serde(default)]
+    pub routed_by: Option<String>,
     pub started_at: Timestamp,
     pub ended_at: Timestamp,
     pub handle: Option<String>,
@@ -489,6 +513,21 @@ pub struct RunRecord {
 }
 
 impl RunRecord {
+    /// The routed outcome and key, preserving a capped node's bucket across resume.
+    pub fn visit_bucket(&self) -> (Option<&str>, Option<&Key>) {
+        (
+            self.input.as_ref().and_then(|input| {
+                let field = if input["outcome"] == "cap" && input["step"] == self.node {
+                    "routed_by"
+                } else {
+                    "outcome"
+                };
+                input[field].as_str()
+            }),
+            self.key.as_ref(),
+        )
+    }
+
     /// Derive the lane without resolving or reading the checkout, which may be gone.
     pub fn address(&self) -> RunAddress {
         RunAddress {
@@ -563,6 +602,8 @@ pub enum JournalEvent {
         outcome: AttemptOutcome,
         visit: u64,
         key: Option<Key>,
+        #[serde(default)]
+        routed_by: Option<String>,
         digests: BTreeMap<String, String>,
         started_at: Timestamp,
         ended_at: Timestamp,
@@ -588,6 +629,10 @@ pub enum JournalEvent {
         asked: Option<Asked>,
         #[serde(default)]
         reason: Option<String>,
+    },
+    VisitsReset {
+        step: String,
+        outcome: String,
     },
     Wait {
         outcome: String,

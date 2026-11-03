@@ -161,16 +161,9 @@ fn cases(out: &mut impl Write, check: &Check, edges: &[Edge], note: Option<&str>
             .as_ref()
             .map(|hold| format!(" for {hold}"))
             .unwrap_or_default();
-        let key = case
-            .key
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?
-            .map(|key| format!(" · key {key}"))
-            .unwrap_or_default();
         writeln!(
             out,
-            "  {}  {}{hold}  {} → {target}{key}",
+            "  {}  {}{hold}  {} → {target}",
             index + 1,
             WhenExpr::parse(&case.when)?,
             case.outcome
@@ -238,5 +231,9 @@ fn step_facts(facts: &mut render::KeyVals, step: &Step) {
     field(facts, "limit", step.limit.as_ref().map(limit_text));
     field(facts, "capacity-wait", step.capacity_wait.map(String::from));
     field(facts, "max-visits", step.max_visits);
-    field(facts, "max-visits-per-key", step.max_visits_per_key);
+    field(
+        facts,
+        "max-visits-per-outcome",
+        step.max_visits_per_outcome.as_ref(),
+    );
 }

@@ -339,8 +339,16 @@ fn durable_record_round_trip_and_json_shape() {
     let state =
         StatePaths::for_project_root_under(std::path::Path::new("/project"), home.path()).unwrap();
     let mut value = serde_json::to_value(record()).unwrap();
+    assert_eq!(
+        value["visits"]["build"],
+        json!({"total":2,"outcomes":[
+            {"outcome":null,"key":42,"visits":1},
+            {"outcome":null,"key":"42","visits":1}
+        ]}),
+        "trunk-shaped keys rows load and serialize as null-outcome buckets"
+    );
     value["prev_attempt"] = json!({
-        "step":"merge", "outcome":"died", "seq":1, "visit":1, "key":null,
+        "step":"merge", "outcome":"died", "seq":1, "visit":1, "key":null, "routed_by":"red",
         "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:01Z",
         "handle":null, "run_id":null, "claim_path":"/work/1.claim.json",
         "head_start":"abc", "head_end":"def", "children":null,
@@ -357,15 +365,17 @@ fn durable_record_round_trip_and_json_shape() {
     let mut legacy = value["prev_attempt"].clone();
     legacy.as_object_mut().unwrap().remove("code");
     legacy.as_object_mut().unwrap().remove("log");
+    legacy.as_object_mut().unwrap().remove("routed_by");
     let legacy: PreviousAttempt = serde_json::from_value(legacy).unwrap();
     let legacy = serde_json::to_value(legacy).unwrap();
     assert_eq!(
         (legacy.get("code"), legacy.get("log")),
         (Some(&Value::Null), Some(&Value::Null))
     );
+    assert_eq!(legacy.get("routed_by"), Some(&Value::Null));
     let event = json!({
         "event":"attempt", "seq":1, "at":"2026-01-01T00:00:01Z", "node":"merge",
-        "outcome":"died", "visit":1, "key":null, "digests":{},
+        "outcome":"died", "visit":1, "key":null, "routed_by":"red", "digests":{},
         "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:01Z",
         "code":7, "log":"/work/1.step.log"
     });
@@ -375,15 +385,18 @@ fn durable_record_round_trip_and_json_shape() {
         (&encoded["code"], &encoded["log"]),
         (&event["code"], &event["log"])
     );
+    assert_eq!(encoded["routed_by"], "red");
     let mut legacy = event;
     legacy.as_object_mut().unwrap().remove("code");
     legacy.as_object_mut().unwrap().remove("log");
+    legacy.as_object_mut().unwrap().remove("routed_by");
     let decoded: JournalEntry = serde_json::from_value(legacy).unwrap();
     let encoded = serde_json::to_value(decoded).unwrap();
     assert_eq!(
         (encoded.get("code"), encoded.get("log")),
         (Some(&Value::Null), Some(&Value::Null))
     );
+    assert_eq!(encoded.get("routed_by"), Some(&Value::Null));
     let paths = state.workflow(&record.id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     initialize(&state, &record, b"[workflow]", &guard).unwrap();

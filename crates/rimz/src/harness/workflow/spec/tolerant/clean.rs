@@ -198,17 +198,17 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             positive,
         );
         sanitize(
-            &mut step.max_visits_per_key,
-            &format!("{path}.max-visits-per-key"),
+            &mut step.max_visits_per_outcome,
+            &format!("{path}.max-visits-per-outcome"),
             ignored,
-            positive,
+            |cap| positive(&cap.limit()),
         );
-        if let (Some(per_key), Some(total)) = (step.max_visits_per_key, step.max_visits)
-            && per_key >= total
+        if let (Some(cap), Some(total)) = (&step.max_visits_per_outcome, step.max_visits)
+            && cap.limit() >= total
         {
             ignore(
-                &mut step.max_visits_per_key,
-                &format!("{path}.max-visits-per-key"),
+                &mut step.max_visits_per_outcome,
+                &format!("{path}.max-visits-per-outcome"),
                 ignored,
                 "must be below max-visits, since the total cap trips first",
             );
