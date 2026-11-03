@@ -56,7 +56,7 @@ You rarely open these by hand: `rimz config set` writes to them for you, and `ri
 
 | File | What it holds |
 | --- | --- |
-| `config.toml` | room behavior, accounts, notifications, agent launch preferences and commands, worktree defaults, attention timing, resume, compaction |
+| `config.toml` | room behavior, accounts, notifications, agent launch preferences and commands, machine start limits, worktree defaults, attention timing, resume, compaction |
 | `theme.toml` | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
 | `loop.toml` | recurring loop task definitions and scheduled command checks |
 
@@ -124,7 +124,7 @@ Markdown definitions are never touched. The one file setup overwrites outright i
 
 Three paths replace a file wholesale with fresh templates: answering no to `Keep your current config?`, `rimz config init --force`, and `rimz config init` on a machine with none of the three files. Plain `rimz config init` where one exists refuses and tells you to pass `--force`.
 
-**The template is close to a field reference.** Every persisted `config.toml` and `theme.toml` section ships as commented TOML with an inline note, so `rimz config init --print` is the fastest current list of keys and defaults. The loop template is the exception: it shows the common task fields and leaves out `verify`, `max-attempts`, and `max-strikes`, which [loop tasks](#loop-tasks) covers below. A line left commented keeps following the default future RimZ versions ship; uncommenting it makes that value this machine's override.
+**The template is close to a field reference.** Every persisted `config.toml` and `theme.toml` section ships as commented TOML, so `rimz config init --print` is the fastest current list of keys and defaults. The `[throttle]` block shows example limits, all unset by default. The loop template shows the common task fields and leaves out `verify`, `max-attempts`, and `max-strikes`, which [loop tasks](#loop-tasks) covers below. A line left commented keeps following the default future RimZ versions ship; uncommenting it makes that value this machine's override.
 
 ## config.toml: room behavior
 
@@ -560,6 +560,35 @@ The reserved token `"stats"` expands to that built-in command. Its range and rel
 
 Edits reach a running room unevenly. A changed `command` or `cwd` reloads when you save `config.toml`. Each configured command also restarts when `rimz reload` moves the room onto a different build. A newly added entry gets its pane within about thirty seconds, or at the next `rimz start`. A removed entry's pane stays open, showing live stats, until the room restarts. A pane whose command is empty or unparseable is skipped, and if every configured pane is skipped, RimZ falls back to the built-in stats pane.
 
+### Agent start limits
+
+Scheduled work should not fill every session slot or start a burst of agents while the machine is busy. The machine-only `[throttle]` table in `~/.rimz/config.toml` controls those starts across rooms. These are example limits, not defaults:
+
+```toml
+[throttle]
+max-parallel-agents = 128
+max-parallel-automation = 32
+stagger = "30s"
+min-memory = "1GB"
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `max-parallel-agents` | unset | Positive integer. Caps all open agents on this machine, including yours. |
+| `max-parallel-automation` | unset | Positive integer. Caps open agents started by loop tasks or workflows, including their RimZ-launched children and peers. |
+| `stagger` | unset | Positive `s`/`m`/`h` duration. Minimum gap between machine-gated launches, measured from launch, not admission. |
+| `cpu-pressure`, `io-pressure`, `memory-pressure` | unset | Percent from `1` to `100`. Holds when either the 10-second or 60-second Linux pressure-stall average reaches it. |
+| `min-memory` | unset | Positive size such as `8GB`. Holds while available memory is below it. |
+| `min-disk` | unset | Positive size such as `20GB`. Holds while free disk at the run's write path is below it. |
+| `check` | unset | Nonempty shell command for provider capacity: exit `0` allows a start, `75` holds, and other exits, signals, start failures, or timeouts hold as errors visible in `rimz doctor`. |
+| `check-timeout` | `30s` | Positive `s`/`m`/`h` duration bounding one capacity check. |
+
+Idle, waiting, paused, hibernated, compacting, and live agents whose last turn errored count as open; ended or dead agents, failed launches, and provider-built-in subagents do not. Headless workflow judges and loop agent checks do not count: they run without a pane and publish no agent row. A start must fit its whole agent layout under every applicable cap, including starts already admitted but not yet launched. An automated start larger than a cap fails with the key and the fix instead of waiting forever. [Workflow and step limits](./workflows.md#limit-one-workflow-or-step) can only tighten these caps. Manual starts never wait for capacity, but count afterwards; manual loop and workflow starts count as automated too.
+
+Automated starts with `throttle` on take one machine turn at a time, released on the provider's report or after `10s` (`2m` with `check`). This turn is independent of `stagger`. A task or step's `throttle = "off"` skips that turn, machine stagger, resource limits, and capacity check, never the caps or workflow and step limits. Manual and `off` starts neither wait for nor restart machine stagger. Set a key with `rimz config set throttle.stagger 30s`; remove it to disable that limit. A project `[throttle]` warns and is ignored, with the skipped setting retained for the sidebar and `rimz doctor`.
+
+The [loop guide](./loops.md#limit-agent-starts) explains held starts; the [loop reference](../reference/cli/loop.md#the-start-throttle) defines the check environment, hold cache, and queue rules.
+
 ### Off-box error reporting
 
 ```toml
@@ -960,9 +989,7 @@ The rest tune what one fire is allowed to do:
 - `budget` caps each run in dollars. `budget-per-day` requires `budget` and skips a fire when today's recorded spend for the task, plus the next run's cap, would pass the daily amount.
 - `surplus` holds a task back unless the provider's usage window has room to spare: `"1.5x"` fires only while the budget left in the window outpaces the time left in it by half again. `surplus-after` adds an elapsed floor, and alone it still demands the break-even `1.0x`. Both fail closed when RimZ has no usable window reading, so a plain API key never fires a gated task. The model, worked through with numbers, is [budgets → the surplus gate](./budget.md#the-surplus-gate).
 
-An automated task that starts an agent asks the start throttle, tuned by the file's top-level `[throttle]` table: `pace` (default `"10s"`, `"0s"` off without a capacity check), the caps `max-active` and `max-active-per-task`, the pressure limits `cpu-pressure`, `io-pressure`, and `memory-pressure` in percent, and the floors `min-memory` and `min-disk`. An optional shell `check`, with `check-timeout` (default `"30s"`), asks your script for provider capacity: exit `0` admits, `75` holds, and other exits, signals, start failures, or timeouts hold as errors visible in `rimz doctor`. With `check`, the turn's ceiling is `max(pace, 2m)`, or the provider's report if sooner. `rimz config set loop.throttle.check my-capacity-check` writes the command. Manual `loop fire` and a task's own `throttle = "off"` bypass it. The task key `capacity-wait` accepts a positive `s`/`m`/`h`/`d` duration or `forever`: conditions, signals, watches, and absolute one-shots default to forever; repeating clocks give up just before the next occurrence. The task's deadline still applies. Held conditions leave no ticket and retry every minute; other triggers wait in the queue. The [loop reference](../reference/cli/loop.md#the-start-throttle) defines the check environment and 60-second hold cache; the guide explains [pace agent starts](./loops.md#pace-agent-starts).
-
-A workflow with its own `[workflow.limit] max-active` skips the machine's `max-active-per-task`; its working agents still count for non-exempt starts of the task. Machine `max-active` and resource checks still apply to machine-gated steps. [Workflow and step limits](./workflows.md#limit-one-workflow-or-step) also work without `[throttle]`, and a step's `throttle = "off"` does not bypass them. Manual workflow starts skip waits but still count and restart applicable workflow pacing.
+An automated task that starts an agent asks the [machine start throttle](#agent-start-limits), configured in `config.toml`, not this file. The task key `throttle = "off"` skips machine stagger, resource limits, and the capacity check, not the caps. The task key `capacity-wait` accepts a positive `s`/`m`/`h`/`d` duration or `forever`: conditions, signals, watches, and absolute one-shots default to forever; repeating clocks give up just before the next occurrence. The task's deadline still applies. Held conditions leave no ticket and retry every minute; other triggers wait in the queue. Manual `loop fire` never waits for capacity.
 
 A task can start a [workflow](./workflows.md) run instead of an agent. `workflow` names a definition under `~/.rimz/workflows/`, `prompt` or `prompt-file` becomes the run's prompt, and `each-worktree = true` starts a run per worktree. With a `when` trigger, that launch happens once per checkout, even after its run finishes. `rimz loop add` has no flag for it, so this is the one action you only write by hand:
 
