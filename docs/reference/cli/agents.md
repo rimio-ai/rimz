@@ -715,7 +715,7 @@ Run
   prompt: wire up the refresh-token path
 
 Context
-  31% of 272k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active
+  33% of 258k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active
   compactions: 0
   tools:       12 · Bash 9, Read 3
   budget:      -
@@ -728,6 +728,7 @@ Identity
   worktree: /home/you/code/query-engine-auth-refresh
   pr:       #91 open · ci passing
   pane:     tmux:%14
+
 ```
 
 The Identity section includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch. When requested and running effort are both known and differ, an `effort` row reads, for example, `running max, requested xhigh`. This text-only notice leaves the launch request and JSON unchanged.
