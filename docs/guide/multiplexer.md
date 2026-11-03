@@ -12,7 +12,7 @@ If an older RimZ wrote the room, `rimz start` tears it down and opens a fresh ro
 
 On Zellij the room starts in locked mode, so your keystrokes reach the agent until you press `Ctrl+g` for a Zellij mode. A single click on a sidebar card jumps to that agent whatever your own mouse settings say. A new pane opened with no direction splits the focused pane along its longer visual edge, and closing it returns the space to that sibling.
 
-Three more Zellij differences have nothing to do with typing. Session serialization is off, because RimZ rebuilds a room after a crash or reboot itself rather than letting Zellij resurrect a wall of suspended command panes that come back dead. Zellij's per-second session-metadata loop is off too, because at around 100 panes it costs a visible share of the Zellij server's CPU. And because RimZ supplies the room's tab layout, a RimZ tab carries Zellij's one-row compact bar instead of the status chrome your own `default_layout` would draw.
+Three more Zellij differences have nothing to do with typing. Session serialization is off, because RimZ rebuilds a room after a crash or reboot itself rather than letting Zellij resurrect a wall of suspended command panes that come back dead. Zellij's per-second session-metadata loop is off too, because at around 100 panes it costs a visible share of the Zellij server's CPU. And because RimZ supplies the room's tab layout, a RimZ tab carries Zellij's one-row compact bar instead of the status chrome your own `default_layout` would draw, unless `[mux] status_bar = "off"` omits it.
 
 On tmux the room turns on the mouse, focus events, a 100,000-line scrollback, notification passthrough, the OSC 52 clipboard, clickable OSC 8 links, atomic redraws, and the extended-keys handling that makes Shift+Enter and Alt+Enter soft newlines while plain Enter still submits. It sets `escape-time` to 10 ms, keeps window numbering compact, resizes panes per attached client, and titles the outer terminal. In its `rimzd` window it turns `remain-on-exit` off, so a daemon pane that exits closes and RimZ restarts it while the window survives. Your other windows keep their retention setting.
 
@@ -34,7 +34,7 @@ It holds one session per project and exits when the last one closes. `rimz paths
 
 Zellij has no such split: a RimZ room is an ordinary session in `zellij ls`, and `zellij action` addresses it with no extra flag. On either backend, a new room's session name is its state directory name under `~/.rimz/ws/`, such as `myrepo-a1b2`, also shown by `rimz list` and `rimz gc`. A running room keeps its older name across an upgrade; `rimz start` and `rimz attach` join it unchanged. The next birth, after the session ends or you run `rimz reset`, takes the state directory name.
 
-### Large tmux rooms
+### Large rooms
 
 With hundreds of windows, tmux's full tab list can make switching slow: it formats every tab on each status redraw, including redraws triggered by agents changing their terminal titles. `[mux] status_bar` in `~/.rimz/config.toml` offers three modes, at any room size:
 
@@ -47,11 +47,13 @@ rimz config set mux.status_bar compact
 rimz reload
 ```
 
-Changes apply when you start or attach to the room, or run `rimz reload` for live tmux rooms. Zellij rooms ignore `status_bar` for now. In `compact` or `off`, RimZ owns the room's `status` and `status-format`, so a toggle typed inside the room lasts until that next apply; switching back to `full` returns them to your config.
+On tmux, changes apply when you start or attach to the room, or run `rimz reload` for a live room; Zellij's timing is below. In `compact` or `off`, RimZ owns the tmux room's `status` and `status-format`, so a toggle typed inside the room lasts until that next apply; switching back to `full` returns them to your config.
 
 Compact keeps your left and right status text, lengths and styles, tab formats and styles, separators, and justification. It replaces a custom `status-format[0]` with tmux's standard layout; additional global status lines are preserved. If your global bar is off, choosing compact turns it on for the room; an existing multi-line bar keeps its line count.
 
 Tab contents refresh when windows are selected, added, removed, renamed or moved, and on activity, bell and silence alerts. Time- or title-driven tab content (`%H`, `#T`), including the current tab's, waits for the next such event or re-apply. A manual `swap-window` on tmux older than 3.8, and activity or bell flags with `activity-action none` or `bell-action none`, also wait for that next event. Sparse indices with `renumber-windows` off can show fewer than 21 tabs.
+
+On Zellij, `full` and `compact` look the same: both keep Zellij's one-row compact bar. Zellij runs one bar instance per tab: in a 268-tab measurement it added about 14 ms to each tab switch and about 700 MiB to the Zellij server. `off` removes that bar, including its tab names and input-mode indicator, so there is no visible cue for locked mode versus a `Ctrl+g` mode. The sidebar still lists and jumps to agents. Tabs RimZ opens follow a change immediately; existing tabs stay as they are, while tabs you open yourself (`Ctrl+t` or `zellij action new-tab`) use the room's birth choice. A room can therefore be mixed until its next birth (`rimz reset`, or the next `rimz start` after the session ends), which makes it uniform again. `rimz reload` does not change a Zellij room's bar.
 
 ### Two keys that work from any pane
 
@@ -77,6 +79,8 @@ The backends differ in what an unset key means. `[tmux]` carries a RimZ value fo
 A changed `[tmux]` value reaches every open window on open, reattach, or `rimz reload`. Open or reattach also refreshes the defaults for windows opened later. Removing a pane-border key restores inheritance from `~/.tmux.conf` on that next apply, except that a window holding a stack gets top borders naming its members and blanking all other panes. Closing its last member restores inheritance. An explicit `pane_border_status`, including `"off"`, wins over this stack default.
 
 A `[zellij]` session value overrides `config.kdl` absolutely. Most changes reach an open room on the next `rimz start` or reattach. `session_serialization`, `disable_session_metadata`, `scroll_buffer_size`, `on_force_close`, `osc8_hyperlinks`, `show_startup_tips`, and `show_release_notes` take effect at the next room birth. `mouse_mode` and `support_kitty_keyboard_protocol` apply per attaching client.
+
+`[mux] status_bar` applies on its own schedule; see [large rooms](#large-rooms).
 
 Removing an optional `[zellij]` key returns control to `config.kdl` at the next room birth, not in the open room. One client setting has a limit: `mouse_mode = true` cannot override `mouse_mode false` in `config.kdl`. Remove that line or change it to `true` in `config.kdl` before attaching; `mouse_mode = false` in RimZ always disables mouse reporting for that client.
 

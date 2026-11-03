@@ -249,6 +249,67 @@ fn session_layout_renders_terminal_template_bar_and_runtime_args() {
     assert!(layout.contains("stacked_pane_list false"), "{layout}");
 }
 
+fn status_bar_layouts(mode: crate::config::MuxStatusBar) -> [String; 4] {
+    let mut background = background_view_opts(vec![stats_host()]);
+    background.sidebar.config.status_bar = mode;
+    let session = render_session_layout(
+        &background.sidebar,
+        Some(&background.view),
+        &[resume_tab("#test", &[&["sleep", "600"]], "/proj/root")],
+        None,
+    )
+    .unwrap();
+    let mut tab = TabOptions {
+        env: Default::default(),
+        title: "test".to_owned(),
+        panes: crate::mux::LayoutPanes {
+            columns: vec![layout_column(&[&["sleep", "600"]], false)],
+            focused_pane: 0,
+        },
+        focus: true,
+        dock_sidebar: true,
+        after: None,
+        sidebar: background.sidebar.clone(),
+    };
+    let docked = render_tab_layout(&tab, 30).unwrap();
+    tab.dock_sidebar = false;
+    [
+        session,
+        render_background_view_layout(&background).unwrap(),
+        docked,
+        render_tab_layout(&tab, 30).unwrap(),
+    ]
+}
+
+#[test]
+fn status_bar_off_omits_every_bar_and_keeps_all_layouts_valid() {
+    let layouts = status_bar_layouts(crate::config::MuxStatusBar::Off);
+    let observations = layouts.each_ref().map(|layout| {
+        (
+            layout
+                .matches(r#"plugin location="zellij:compact-bar""#)
+                .count(),
+            layout.parse::<kdl::KdlDocument>().is_ok(),
+        )
+    });
+    assert_eq!(observations, [(0, true); 4], "{layouts:#?}");
+}
+
+#[test]
+fn status_bar_compact_is_identical_to_full_in_every_layout() {
+    let full = status_bar_layouts(crate::config::MuxStatusBar::Full);
+    assert_eq!(
+        full.each_ref()
+            .map(|layout| layout.matches("zellij:compact-bar").count()),
+        [4, 1, 1, 1],
+        "{full:#?}",
+    );
+    assert_eq!(
+        full,
+        status_bar_layouts(crate::config::MuxStatusBar::Compact)
+    );
+}
+
 #[test]
 fn session_layout_uses_configured_birth_fixed_options() {
     let mut opts = sidebar_opts("rimz-options", None, None);

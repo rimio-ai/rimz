@@ -141,13 +141,14 @@
 
 [mux]
 ## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux
-# status_bar = "full"                 # full, compact, or off; tmux rooms only for now (Zellij ignores it)
+# status_bar = "full"                 # full, compact, or off; Zellij full and compact look the same
 
 [zellij]
 # The room invariants you can see and set. RimZ also fixes room behaviours that
 # have no key here (locked default mode, swap layouts off, stacked resize, its
-# own layout with the compact bar); docs/guide/configuration.md, "Multiplexer
-# room options", lists them for both backends.
+# own layout with the compact bar unless mux.status_bar is off);
+# docs/guide/configuration.md, "Multiplexer room options", lists them for both
+# backends.
 mouse_click_through = true            # single click on a card jumps to the agent (Zellij >= 0.44.2)
 focus_follows_mouse = false           # off so a single click passes through to the renderer
 session_serialization = false         # RimZ owns rebirth instead of Zellij resurrection

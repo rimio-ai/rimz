@@ -130,7 +130,7 @@ impl ZellijBackend {
         // come back as command panes the birth layout spells out: Zellij can't
         // reorder tabs or add command panes after birth. The same birth layout
         // handles a plain room as `None, &[]`, so every session carries the same
-        // new-tab template and fixed sidebar/compact-bar tree shape.
+        // new-tab template and sidebar/work split, with a bar unless disabled.
         let presence = self.birth_presence_options(opts)?;
         self.seed_presence_permissions(&presence);
         // Allocate the path first so resolution observes the exact birth spec.

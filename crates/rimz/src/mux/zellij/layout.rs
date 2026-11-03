@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::config::MuxStatusBar;
 use crate::ids::MuxName;
 use crate::mux::{
     BackgroundViewOptions, DaemonView, HostPane, LayoutColumn, Result, ResumeTab,
@@ -40,12 +41,19 @@ impl Drop for TempLayoutFile {
 }
 
 /// The one-row compact-bar plugin pane. Supplying our own layout replaces
-/// Zellij's built-in tab/status bar, so every view re-adds the compact-bar or is
-/// born bar-less. Must stay multi-line: Zellij's KDL parser rejects the
+/// Zellij's built-in tab/status bar. Full and compact modes re-add this pane;
+/// off omits it. Must stay multi-line: Zellij's KDL parser rejects the
 /// single-line `pane {{ plugin … }}` form.
 const COMPACT_BAR_KDL: &str = r#"pane size=1 borderless=true {
         plugin location="zellij:compact-bar"
     }"#;
+
+fn status_bar_kdl(mode: MuxStatusBar) -> &'static str {
+    match mode {
+        MuxStatusBar::Full | MuxStatusBar::Compact => COMPACT_BAR_KDL,
+        MuxStatusBar::Off => "",
+    }
+}
 
 /// The left `rimz sidebar serve` pane every Zellij view carries, as a KDL `pane`
 /// block. `cwd` is spelled only when the pane can't inherit the session's
@@ -95,12 +103,12 @@ fn sidebar_pane_kdl(
 /// creating the implicit first tab. The terminal in the template is an explicit
 /// `pane focus=true`, not Zellij's `children` placeholder; nested `children`
 /// creates the right terminal on 0.44.3 but leaves focus stranded on the
-/// sidebar in newly-created tabs. The visible layout pins the sidebar and
-/// compact-bar as fixed tree siblings. Zellij's `auto_layout=false` plus
-/// `stacked_resize=true` leaves no-direction pane opens and closes on the
-/// focused-pane native split path instead of a root swap layout. All panes
-/// inherit the session's `--default-cwd` except the daemon hosts and resumed
-/// agents, which carry their own worktree cwd.
+/// sidebar in newly-created tabs. The visible layout pins the sidebar/work
+/// split above the compact-bar unless `status_bar` is off. Zellij's
+/// `auto_layout=false` plus `stacked_resize=true` leaves no-direction pane
+/// opens and closes on the focused-pane native split path instead of a root
+/// swap layout. All panes inherit the session's `--default-cwd` except the
+/// daemon hosts and resumed agents, which carry their own worktree cwd.
 ///
 /// Zellij 0.45 defaults `stacked_pane_list` on, which marks collapsed stack
 /// members suppressed and gives every member the stack's full geometry. RimZ
@@ -127,6 +135,7 @@ pub(super) fn render_session_layout(
         )
         .0;
     let sidebar = sidebar_pane_kdl(opts, None, percent)?;
+    let status_bar = status_bar_kdl(opts.config.status_bar);
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
@@ -143,7 +152,7 @@ pub(super) fn render_session_layout(
             format!(
                 r#"    tab name={daemon_name} {{
 {body}
-        {COMPACT_BAR_KDL}
+        {status_bar}
     }}
 "#,
             )
@@ -173,7 +182,7 @@ pub(super) fn render_session_layout(
         agent_tabs.push_str(&format!(
             r#"    tab name={tab_name}{focus_attr} {{
 {body}
-        {COMPACT_BAR_KDL}
+        {status_bar}
     }}
 "#,
         ));
@@ -198,11 +207,11 @@ pub(super) fn render_session_layout(
         r#"layout {{
     new_tab_template {{
 {new_tab_body}
-        {COMPACT_BAR_KDL}
+        {status_bar}
     }}
 {daemon_tab}{agent_tabs}    tab{work_focus} {{
 {work_body}
-        {COMPACT_BAR_KDL}
+        {status_bar}
     }}
 }}
 {session_options}{background_plugins}"#,
@@ -216,8 +225,8 @@ fn kdl_string(value: &str) -> Result<String> {
 
 /// A tab layout born `sidebar | content | hosts…`: the global sidebar docked on
 /// the left, content panes in the middle, daemon hosts stacked on the right when
-/// present, and the compact-bar below. The render and daemon columns share the
-/// sidebar width verdict; content absorbs the center remainder.
+/// present, and the optional compact-bar below. The render and daemon columns
+/// share the sidebar width verdict; content absorbs the center remainder.
 /// Supplying this as `new-tab --layout` overrides the session template, so the
 /// sidebar is spelled out here rather than inherited. The sidebar runs from its
 /// own worktree cwd and each command pane from its own `cwd`. Every command pane
@@ -236,6 +245,7 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
         )
         .0;
     let sidebar = sidebar_pane_kdl(&opts.sidebar, Some(&opts.sidebar.cwd), percent)?;
+    let status_bar = status_bar_kdl(opts.sidebar.config.status_bar);
     let body = render_daemon_columns(
         &sidebar,
         &opts.view.content,
@@ -245,11 +255,11 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
         4,
     )?;
     // The body (sidebar + work area) is a nested vertical split above the
-    // one-row compact-bar.
+    // optional one-row compact-bar.
     Ok(format!(
         r#"layout {{
 {body}
-    {COMPACT_BAR_KDL}
+    {status_bar}
 }}
 "#,
     ))
@@ -266,6 +276,7 @@ pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Resu
         return render_undocked_tab_layout(opts);
     }
     let sidebar = sidebar_pane_kdl(&opts.sidebar, Some(&opts.sidebar.cwd), sidebar_percent)?;
+    let status_bar = status_bar_kdl(opts.sidebar.config.status_bar);
     let mut position = 0;
     let focus_position = opts.panes.focus_position();
     let mut columns = String::new();
@@ -283,13 +294,14 @@ pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Resu
     Ok(format!(
         r#"layout {{
 {body}
-    {COMPACT_BAR_KDL}
+    {status_bar}
 }}
 "#,
     ))
 }
 
 fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
+    let status_bar = status_bar_kdl(opts.sidebar.config.status_bar);
     let mut position = 0;
     let focus_position = opts.panes.focus_position();
     let mut columns = String::new();
@@ -307,7 +319,7 @@ fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
         r#"layout {{
     pane split_direction="vertical" {{
 {columns}    }}
-    {COMPACT_BAR_KDL}
+    {status_bar}
 }}
 "#,
     ))

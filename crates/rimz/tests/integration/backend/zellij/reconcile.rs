@@ -264,6 +264,77 @@ fn repair_cli_docks_a_sidebar_beside_a_lone_work_pane() {
 }
 
 #[test]
+fn repair_cli_redocks_a_closed_sidebar_in_a_barless_room() {
+    require_zellij!();
+    let mut fixture = RepairRoom::new("repairbarless");
+    fixture.opts.config.status_bar = rimz::config::MuxStatusBar::Off;
+    fixture.opts.extra_env.insert(
+        "RIMZ_HOME".to_owned(),
+        fixture.env.rimz_home().to_string_lossy().into_owned(),
+    );
+    std::fs::write(
+        fixture.env.rimz_home().join("config.toml"),
+        "[mux]\nstatus_bar = \"off\"\n",
+    )
+    .unwrap();
+    let room = &fixture.room;
+    publish_room_bin(room.path(), &fixture.opts);
+    room.backend()
+        .open_sidebar(&fixture.opts, None)
+        .expect("barless birth");
+    let _client = AttachedClient::attach(room, 180, 50);
+    assert_session_has_no_bottom_bar(room.path(), room.name());
+    let before = expect_list_panes(room.path(), room.name());
+    let sidebar = before.sidebar().expect("birth sidebar");
+    let work = before
+        .panes
+        .iter()
+        .find(|pane| pane.tab_id == sidebar.tab_id && pane.is_live_terminal() && !pane.is_sidebar())
+        .expect("birth work pane");
+    room.backend()
+        .close_pane(room.name(), &sidebar.pane_ref(room.name()).pane_id)
+        .expect("close sidebar");
+    poll_until(
+        Duration::from_secs(10),
+        || list_panes(room.path(), room.name()),
+        |snapshot| !snapshot.panes.iter().any(|pane| pane.is_sidebar()),
+        "closed sidebar disappears",
+    );
+    let (output, _) = with_repair_claims(&fixture, || fixture.repair());
+    let after = expect_list_panes(room.path(), room.name());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}\n{after:#?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("Recovered 1 sidebar in place."),
+        "{stdout}\n{after:#?}"
+    );
+    let sidebars: Vec<_> = after
+        .panes
+        .iter()
+        .filter(|pane| pane.is_sidebar() && pane.tab_id == work.tab_id)
+        .collect();
+    assert_eq!(sidebars.len(), 1, "{after:#?}");
+    let sidebar = sidebars[0];
+    assert_eq!(sidebar.pane_x, 0, "{after:#?}");
+    assert_eq!(sidebar.pane_y, 0, "{after:#?}");
+    assert_eq!(sidebar.pane_rows, 50, "{after:#?}");
+    assert!((sidebar.pane_columns as i64 - 45).abs() <= 5, "{after:#?}");
+    let kept = after
+        .panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.id == work.id)
+        .expect("work pane survives repair");
+    assert_eq!(kept.pane_x, sidebar.pane_columns, "{after:#?}");
+    assert_eq!(kept.pane_y, 0, "{after:#?}");
+    assert_eq!(kept.pane_rows, 50, "{after:#?}");
+    assert_eq!(kept.pane_x + kept.pane_columns, 180, "{after:#?}");
+}
+
+#[test]
 fn repair_cli_docks_a_sidebar_when_a_lone_work_pane_has_floats_shown() {
     require_zellij!();
     let fixture = RepairRoom::new("repairfloats");
