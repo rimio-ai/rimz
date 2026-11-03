@@ -2,6 +2,7 @@
 //!
 //! This module locates session JSONL files, reads bounded tails, folds token usage, and enriches context/cost fields without touching the live app-server. Costs use the shared cached price book, so refreshed prices heal post-release models.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{LazyLock, Mutex};
@@ -17,7 +18,7 @@ use super::spend::{live_fast_mode, live_fold_needs_token_counter_backfill, resum
 use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, ModelContextLimits,
-    TurnErrorClass, TurnSettle, TurnSettleOutcome, cap_turn_error_label,
+    PermissionSettle, TurnErrorClass, TurnSettle, TurnSettleOutcome, cap_turn_error_label,
 };
 use crate::agents::pricing;
 use crate::agents::{
@@ -28,7 +29,11 @@ use crate::agents::{
 use crate::ids::AgentSessionId;
 
 /// Refresh Codex's local transcript-derived context for one session, skipping the
-/// tail read when the persisted transcript stat still matches and its fold is current.
+/// tail read when the stat and fold are current and no permission needs proof.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transcript gate also needs the open ask and its prior completion proof"
+)]
 pub fn refresh_transcript_context(
     session_id: &str,
     model_hint: Option<&str>,
@@ -37,6 +42,8 @@ pub fn refresh_transcript_context(
     prior_spend_fold: Option<&LocalSpendFold>,
     pricing_cache_path: &Path,
     login_env: &std::collections::BTreeMap<String, String>,
+    open_permission_since: Option<Timestamp>,
+    prior_permission_settle: Option<PermissionSettle>,
 ) -> Option<LocalContextRefresh> {
     let mut path = prior_transcript_path.map(PathBuf::from);
     let mut stat = path.as_deref().and_then(TranscriptStat::from_path);
@@ -51,13 +58,22 @@ pub fn refresh_transcript_context(
         .flatten();
     let needs_token_counter_backfill =
         prior_spend_fold.is_some_and(live_fold_needs_token_counter_backfill);
-    if prior_transcript_stat.is_some_and(|prior| *prior == stat) && !needs_token_counter_backfill {
+    let needs_permission_proof = open_permission_since
+        .is_some_and(|since| !prior_permission_settle.is_some_and(|proof| proof.answers(since)));
+    let stat_current =
+        prior_transcript_stat.is_some_and(|prior| *prior == stat) && !needs_token_counter_backfill;
+    if stat_current && !needs_permission_proof {
         return None;
     }
 
+    let tail = read_transcript_tail_with_status(&path);
+    let permission_settle = open_permission_since
+        .and_then(|since| permission_settle_from_tail(&tail.as_ref()?.text, since));
+    if stat_current && permission_settle.is_none() {
+        return None;
+    }
     let prices = pricing::cached_book(pricing_cache_path);
     let spend_fold = resume_live_fold(&path, prior_spend_fold, stat.len, &prices);
-    let tail = read_transcript_tail_with_status(&path);
     let (usage, outcome, _) = tail
         .as_ref()
         .map(|tail| {
@@ -99,6 +115,7 @@ pub fn refresh_transcript_context(
             cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
             turn_error: turn_error.map_or(FieldPatch::Clear, FieldPatch::Set),
             settle: settle.map_or(FieldPatch::Clear, FieldPatch::Set),
+            permission_settle: permission_settle.map_or(FieldPatch::Keep, FieldPatch::Set),
             ..LocalContextPatch::authoritative_current()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),
@@ -106,6 +123,104 @@ pub fn refresh_transcript_context(
         spend_fold: FieldPatch::Set(spend_fold),
         model_context_limits_key: None,
     })
+}
+
+fn permission_settle_from_tail(text: &str, since: Timestamp) -> Option<PermissionSettle> {
+    let records: Vec<_> = text
+        .lines()
+        .filter_map(|line| decode_line(line.as_bytes()).map(|record| (line, record)))
+        .collect();
+    let (index, (line, _)) = records.iter().enumerate().rfind(|(_, (_, record))| {
+        matches!(record.kind, RolloutKind::ToolCall(_))
+            && record.event_timestamp().is_some_and(|at| at <= since)
+    })?;
+    let asking = response_payload(line)?;
+    let original_id = asking.get("call_id")?.as_str()?;
+    let mut cell = match (asking.get("type")?.as_str()?, asking.get("name")?.as_str()?) {
+        ("custom_tool_call", "exec") => None,
+        ("function_call", "wait") => Some(wait_cell_id(&asking)?),
+        _ => return None,
+    };
+    let mut calls = HashSet::from([original_id.to_owned()]);
+    for (line, record) in &records[index + 1..] {
+        let Some(item) = response_payload(line) else {
+            continue;
+        };
+        let Some(call_id) = item.get("call_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if item.get("type").and_then(Value::as_str) == Some("function_call")
+            && item.get("name").and_then(Value::as_str) == Some("wait")
+            && cell.is_some()
+            && wait_cell_id(&item) == cell
+        {
+            calls.insert(call_id.to_owned());
+            continue;
+        }
+        if !matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("custom_tool_call_output" | "function_call_output")
+        ) || !calls.contains(call_id)
+        {
+            continue;
+        }
+        let Some(status) = item.get("output").and_then(code_mode_status) else {
+            continue;
+        };
+        if let Some(id) = status.strip_prefix("Script running with cell ID ") {
+            if call_id == original_id && !id.is_empty() {
+                cell = Some(id.to_owned());
+            }
+            continue;
+        }
+        if matches!(
+            status,
+            "Script completed" | "Script failed" | "Script terminated"
+        ) && let Some(at) = record.event_timestamp().filter(|at| *at > since)
+        {
+            return Some(PermissionSettle {
+                ask_since: since,
+                at,
+            });
+        }
+    }
+    None
+}
+
+fn response_payload(line: &str) -> Option<Value> {
+    let record: Value = serde_json::from_str(line).ok()?;
+    (record.get("type")?.as_str()? == "response_item")
+        .then(|| record.get("payload").cloned())
+        .flatten()
+}
+
+fn wait_cell_id(item: &Value) -> Option<String> {
+    let arguments: Value = serde_json::from_str(item.get("arguments")?.as_str()?).ok()?;
+    arguments
+        .get("cell_id")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+fn code_mode_status(output: &Value) -> Option<&str> {
+    let text = match output {
+        Value::String(text) => text.as_str(),
+        Value::Array(items) => {
+            let first = items.first()?;
+            if first.get("type")?.as_str()? != "input_text" {
+                return None;
+            }
+            first.get("text")?.as_str()?
+        }
+        _ => return None,
+    };
+    let mut lines = text.lines();
+    let status = lines.next()?;
+    if !lines.next()?.starts_with("Wall time ") || lines.next()? != "Output:" {
+        return None;
+    }
+    Some(status)
 }
 
 /// Read a session's origin from the first rollout line. `None` means unknown:

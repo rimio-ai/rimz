@@ -1540,6 +1540,8 @@ fn refresh_local_context_under(
         ctx.prior_spend_fold,
         ctx.shared_pricing_cache_path,
         ctx.login_env,
+        ctx.open_permission_since,
+        ctx.prior_permission_settle,
     );
     let session_name = codex_home
         .and_then(|home| session_index::session_name_under(home, ctx.agent_id))
