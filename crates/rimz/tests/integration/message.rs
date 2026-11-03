@@ -3084,7 +3084,12 @@ fn resume_gate_waits_for_recovery_then_delivers() {
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-resume-ready", "feature-resume", pane_env);
-    seed_turn_error(&env, "sess-resume-ready", TurnErrorClass::PausedRateLimit);
+    seed_turn_error(
+        &env,
+        "sess-resume-ready",
+        TurnErrorClass::PausedRateLimit,
+        false,
+    );
     seed_rate_limit_budget(&env, 100);
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let snapshot = env.store().snapshot_cached().expect("snapshot");
@@ -3150,7 +3155,12 @@ fn resume_gate_failed_park_waits_for_recovery_then_delivers() {
         },
         |_| {},
     );
-    seed_turn_error(&env, "sess-failed-resume", TurnErrorClass::PausedRateLimit);
+    seed_turn_error(
+        &env,
+        "sess-failed-resume",
+        TurnErrorClass::PausedRateLimit,
+        false,
+    );
     seed_rate_limit_budget(&env, 100);
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let snapshot = env.store().snapshot_cached().expect("snapshot");
@@ -3209,7 +3219,12 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
         "feature-resume",
         &[("ZELLIJ_PANE_ID", "3")],
     );
-    seed_turn_error(&env, "sess-resume-ready", TurnErrorClass::PausedRateLimit);
+    seed_turn_error(
+        &env,
+        "sess-resume-ready",
+        TurnErrorClass::PausedRateLimit,
+        false,
+    );
     seed_rate_limit_budget(&env, 100);
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let request = rimz::harness::AutoContinueRequest {
@@ -5824,6 +5839,94 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
         MessageStatus::Sent
+    );
+}
+
+#[test]
+fn turn_ended_reserved_pane_names_the_provider_error() {
+    const REASON: &str = concat!(
+        "ended its turn on a provider error, but a background approval may still be open in ",
+        "its pane; check the pane or pass --force"
+    );
+    const LABEL: &str = "@claude#steer-ended";
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-steer-ended", "steer-ended", pane_env);
+    let message_id = queue_add(&env, "@claude", "push now");
+    push_pending_agent_ask(&env, "sess-steer-ended");
+    seed_turn_error(
+        &env,
+        "sess-steer-ended",
+        TurnErrorClass::PausedOverloaded,
+        true,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-steer-ended-trace.log");
+
+    let queued = traced_rimz(&env, "zellij-steer-ended-trace.log")
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "steer", &message_id])
+        .output()
+        .expect("message steer");
+    assert!(!queued.status.success());
+    let stderr = String::from_utf8_lossy(&queued.stderr);
+    assert!(
+        stderr.contains(&format!("@claude ({message_id}) {REASON}")),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("waiting on your input"), "{stderr}");
+
+    let fresh = traced_rimz(&env, "zellij-steer-ended-trace.log")
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "--steer", "@claude", "--", "nudge"])
+        .output()
+        .expect("fresh steer");
+    assert!(!fresh.status.success());
+    let stderr = String::from_utf8_lossy(&fresh.stderr);
+    assert!(stderr.contains(REASON), "{stderr}");
+    assert!(!stderr.contains("waiting on your input"), "{stderr}");
+
+    let parked = run_success(
+        traced_rimz(&env, "zellij-steer-ended-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@claude", "--", "later"]),
+        "boundary send",
+    );
+    let receipt = String::from_utf8_lossy(&parked.stdout);
+    let parked_id = receipt
+        .split(['(', ')'])
+        .nth(1)
+        .expect("receipt names the message id");
+    assert!(
+        receipt.contains(&format!(
+            "queued for {LABEL} ({parked_id}) — {LABEL} ended its turn on a provider error; its \
+             pane is held until its next activity in case a background approval is still open\n  \
+             check it: rimz pane capture {LABEL}      send now: rimz message steer {parked_id} \
+             --force"
+        )),
+        "{receipt}"
+    );
+    assert!(!receipt.contains("asks show"), "{receipt}");
+
+    let shown = run_success(
+        env.rimz().args(["message", "show", &message_id]),
+        "message show",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown
+            .lines()
+            .any(|line| line.trim() == "ask:      held after a provider error"),
+        "{shown}"
+    );
+    assert!(!shown.contains("waiting in pane"), "{shown}");
+    assert!(!shown.contains("asks show"), "{shown}");
+    assert!(trace_lines(&trace_log).is_empty());
+    assert_eq!(
+        message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
+        MessageStatus::Queued
     );
 }
 
@@ -13580,7 +13683,7 @@ fn seed_context_tokens(env: &Env, agent_id: &str, used: u64, window: u64) {
         .expect("seed context sidecar");
 }
 
-fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass) {
+fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass, ended_turn: bool) {
     let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
@@ -13590,6 +13693,7 @@ fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass) {
     let at = agent.last_activity + jiff::SignedDuration::from_secs(1);
     let mut context = rimz::agents::AgentContext::new("claude", at);
     context.turn_error = Some(AgentTurnError {
+        ended_turn,
         class,
         at,
         label: Some("provider parked".to_owned()),

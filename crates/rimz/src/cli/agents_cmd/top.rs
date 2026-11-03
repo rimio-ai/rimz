@@ -604,6 +604,7 @@ mod tests {
                     agent.status = AgentStatus::Running;
                     let mut context = rimz::agents::AgentContext::new("claude", now);
                     context.turn_error = Some(rimz::agents::AgentTurnError {
+                        ended_turn: false,
                         class: rimz::agents::TurnErrorClass::PausedOverloaded,
                         at: now + jiff::SignedDuration::from_secs(1),
                         label: Some("overloaded".into()),

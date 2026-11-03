@@ -762,6 +762,7 @@ fn render_api_error_dead_turn_card() {
     claude.last_activity = fixed_now() - Duration::from_secs(60);
     let mut context = claude_context(fixed_now());
     context.turn_error = Some(AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::Failed,
         at: fixed_now() - Duration::from_secs(10),
         label: Some("API Error: Bad Request".to_owned()),

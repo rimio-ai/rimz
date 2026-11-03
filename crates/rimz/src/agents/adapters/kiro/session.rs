@@ -732,6 +732,7 @@ pub(super) fn refresh_context(path: &Path) -> LocalContextPatch {
     };
     let turn_error = match folded.turn {
         TurnState::Failed(Some(at)) => Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::Failed,
             at,
             label: None,

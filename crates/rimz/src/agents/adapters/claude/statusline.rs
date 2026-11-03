@@ -290,6 +290,7 @@ fn detect_resting_turn_outcome(
         {
             let label = turn_error_label(&value);
             return Some(RestingTurnOutcome::Died(AgentTurnError {
+                ended_turn: false,
                 class: classify_api_error(
                     value.get("error").and_then(Value::as_str),
                     value.get("apiErrorStatus").and_then(Value::as_u64),

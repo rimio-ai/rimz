@@ -384,6 +384,8 @@ pub(super) fn steer_failure(
     if check.ask.waiting {
         let reason = if check.ask.permission_review {
             rimz::message::InputWait::PermissionReview
+        } else if check.ask.turn_ended {
+            rimz::message::InputWait::TurnEnded
         } else {
             rimz::message::InputWait::Human
         };
@@ -621,7 +623,9 @@ fn gate_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
 }
 
 fn ask_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
-    let detail = if check.ask.waiting {
+    let detail = if check.ask.turn_ended {
+        "held after a provider error".to_owned()
+    } else if check.ask.waiting {
         "waiting in pane".to_owned()
     } else if check.ask.force {
         "ok (forced)".to_owned()
@@ -767,6 +771,9 @@ pub(super) fn render_verdict(
         deliver::DeliveryVerdict::AskWaiting => {
             format!("waiting: {target} is waiting on input in its pane")
         }
+        deliver::DeliveryVerdict::PaneHeld => format!(
+            "waiting: {target} ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open"
+        ),
         deliver::DeliveryVerdict::NoPane { pinned_pane_id } => {
             format!("{} for {target}", deliver::no_pane_blocker(pinned_pane_id.as_ref()))
         }
@@ -795,6 +802,9 @@ pub(super) fn delivery_action_hint(
         }
         deliver::DeliveryVerdict::AskWaiting => Some(format!(
             "see it: rimz asks show {target}      answer it: rimz answer {target} <choice>"
+        )),
+        deliver::DeliveryVerdict::PaneHeld => Some(format!(
+            "check it: rimz pane capture {target}      send now: rimz message steer {message_id} --force"
         )),
         deliver::DeliveryVerdict::NoPane { .. } | deliver::DeliveryVerdict::Ready => None,
         deliver::DeliveryVerdict::ReceiverEnded => None,
@@ -958,6 +968,12 @@ mod tests {
             delivery_action_hint(&deliver::DeliveryVerdict::AskWaiting, &id, "@coder").as_deref(),
             Some("see it: rimz asks show @coder      answer it: rimz answer @coder <choice>")
         );
+        assert_eq!(
+            delivery_action_hint(&deliver::DeliveryVerdict::PaneHeld, &id, "@coder").as_deref(),
+            Some(
+                "check it: rimz pane capture @coder      send now: rimz message steer msg_0000000000000001 --force"
+            )
+        );
     }
 
     use rimz::agents::AgentStatus;
@@ -1032,6 +1048,7 @@ mod tests {
                 waiting: false,
                 force: false,
                 permission_review: false,
+                turn_ended: false,
             },
             pane: deliver::PaneCheck {
                 present: true,

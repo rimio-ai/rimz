@@ -158,6 +158,7 @@ mod tests {
         let at = child.last_activity + Duration::from_secs(1);
         let mut context = AgentContext::new(child.kind.as_str(), at);
         context.turn_error = Some(AgentTurnError {
+            ended_turn: false,
             class,
             at,
             label: label.map(str::to_owned),

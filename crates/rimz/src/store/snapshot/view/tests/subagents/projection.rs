@@ -1,6 +1,84 @@
 use super::*;
-use crate::agents::{PendingWait, PendingWaitTrigger};
+use crate::agents::{PendingWait, PendingWaitTrigger, TurnErrorClass};
 use crate::store::snapshot::SubAgentTokens;
+
+const CAPACITY_LABEL: &str = "Selected model is at capacity. Please try a different model.";
+
+fn turn_ended_waiting_pair(wait_age_secs: i64, class: TurnErrorClass) -> (AgentState, AgentState) {
+    let parent = agent("codex", "root", AgentStatus::Success, 0)
+        .worktree("/repo/main")
+        .active_ago(120);
+    let mut child = child_state("root", "child", AgentStatus::Waiting, wait_age_secs);
+    child.kind = AgentKind::new_unchecked("codex");
+    child.launch_depth = Some(1);
+    child.name = Some("child".to_owned());
+    child.registered_at = Some(ago(180));
+    child.turn_started_at = Some(ago(150));
+    child.mode = Some(crate::agents::PermissionMode::Auto);
+    child.waiting_since = Some(child.last_activity);
+    child.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::new(),
+        kind: crate::agents::AskKind::Permission,
+        detail: Some("shell: cargo test".to_owned()),
+        native_key: None,
+        since: child.last_activity,
+    });
+    let error_at = ago(wait_age_secs - 7);
+    child.context = Some(crate::agents::AgentContext {
+        turn_error: Some(crate::agents::AgentTurnError {
+            class,
+            at: error_at,
+            label: Some(CAPACITY_LABEL.to_owned()),
+            ended_turn: true,
+        }),
+        ..crate::agents::AgentContext::new("codex", error_at)
+    });
+    (parent, child)
+}
+
+#[test]
+fn turn_ending_capacity_error_pauses_waiting_child_and_parent() {
+    let modes = [
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::agents::PermissionMode::Ask),
+        None,
+    ];
+    for (age, mode) in [59, 61, 90]
+        .into_iter()
+        .flat_map(|age| modes.map(|mode| (age, mode)))
+    {
+        let (parent, mut child) = turn_ended_waiting_pair(age, TurnErrorClass::PausedOverloaded);
+        child.mode = mode;
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        let parent = row(&snapshot, "root");
+        let child = &parent.sub_agents()[0];
+        assert_eq!(child.status, AgentStatus::Paused, "at {age}s, {mode:?}");
+        assert_eq!(child.turn_error_label.as_deref(), Some(CAPACITY_LABEL));
+        assert_eq!(
+            parent.status(),
+            Some(AgentStatus::Paused),
+            "at {age}s, {mode:?}"
+        );
+        assert_eq!(
+            parent.turn_error_label(),
+            Some(format!("@child: {CAPACITY_LABEL}").as_str())
+        );
+        assert_ne!(parent.attention_status(), Some(AgentStatus::Waiting));
+    }
+}
+
+#[test]
+fn turn_ending_plain_error_fails_waiting_child_without_parking_parent() {
+    let (parent, child) = turn_ended_waiting_pair(90, TurnErrorClass::Failed);
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent = row(&snapshot, "root");
+    let child = &parent.sub_agents()[0];
+    assert_eq!(child.status, AgentStatus::Failed);
+    assert_eq!(child.turn_error_label.as_deref(), Some(CAPACITY_LABEL));
+    assert_eq!(parent.status(), Some(AgentStatus::Success));
+    assert_eq!(parent.turn_error_label(), None);
+    assert_ne!(parent.attention_status(), Some(AgentStatus::Waiting));
+}
 
 #[test]
 fn launched_child_fast_uses_its_own_live_reading_and_never_marks_native_children() {

@@ -230,6 +230,7 @@ fn delivery_gates_distinguish_failed_provider_parks_from_fatal_errors() {
         failed.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
         failed.context = Some(AgentContext {
             turn_error: Some(AgentTurnError {
+                ended_turn: false,
                 class,
                 at: failed.turn_started_at.unwrap(),
                 label: None,

@@ -165,6 +165,7 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
     successor.origin = Some(crate::agents::SessionOrigin::Fresh);
     let context = AgentContext {
         turn_error: Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),
@@ -710,6 +711,7 @@ fn read_published_snapshot_carries_a_launched_child_parked_on_a_limit() {
     let error_at = child.last_activity + std::time::Duration::from_secs(1);
     let context = AgentContext {
         turn_error: Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::PausedRateLimit,
             at: error_at,
             label: Some("Usage limit reached".to_owned()),

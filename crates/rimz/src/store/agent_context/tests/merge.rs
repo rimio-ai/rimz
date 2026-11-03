@@ -367,11 +367,12 @@ fn codex_local_refresh_overwrites_turn_error_marker() {
     let (_dir, runtime) = runtime();
     let observed_at = Timestamp::from_second(1_700_000_000).unwrap();
     let prior_marker = turn_error(TurnErrorClass::PausedRateLimit, "old limit", 1_700_000_000);
-    let next_marker = turn_error(
+    let mut next_marker = turn_error(
         TurnErrorClass::Unknown,
         "turn ended with no final message",
         1_700_000_030,
     );
+    next_marker.ended_turn = true;
     let mut prior = codex_record(observed_at);
     prior.context.turn_error = Some(prior_marker);
     write_record(&runtime, &prior).unwrap();
@@ -452,6 +453,7 @@ fn non_codex_local_refresh_preserves_turn_error_marker() {
 fn merge_turn_error_skips_identical_marker() {
     let (_dir, runtime) = runtime();
     let marker = AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::PausedRateLimit,
         at: Timestamp::from_second(1_700_000_000).unwrap(),
         label: Some("You've hit your usage limit".to_owned()),
@@ -473,6 +475,7 @@ fn merge_turn_error_skips_identical_marker() {
 
 fn turn_error(class: TurnErrorClass, label: &str, at: i64) -> AgentTurnError {
     AgentTurnError {
+        ended_turn: false,
         class,
         at: Timestamp::from_second(at).unwrap(),
         label: Some(label.to_owned()),

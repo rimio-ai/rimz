@@ -524,6 +524,7 @@ fn certificate_dead_occupied_pane_binds_without_focus() {
     let error_at = jiff::Timestamp::from_second(1).unwrap();
     owner.context = Some(AgentContext {
         turn_error: Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),
@@ -557,6 +558,7 @@ fn certificate_dead_primary_does_not_hide_a_live_occupied_owner() {
     let error_at = jiff::Timestamp::from_second(1).unwrap();
     dead_primary.context = Some(AgentContext {
         turn_error: Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),

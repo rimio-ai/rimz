@@ -188,10 +188,10 @@ Providers whose hooks identify a child only at its brackets fold `subagent_start
 
 ### Waiting and asks
 
-A blocking hook classifies as [awaiting-user](./adapter.md#two-channels) and records `awaiting_input`, and `step` moves the row to `waiting`. From there, the shared guard [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) decides whether the ask still holds, and message delivery reserves pane input while it does. It holds in three cases:
+A blocking hook classifies as [awaiting-user](./adapter.md#two-channels) and records `awaiting_input`, and `step` moves the row to `waiting`. From there, the shared guard [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) decides whether message delivery must reserve pane input. It normally follows the open ask in three cases, with the non-Auto turn-end exception below:
 
-- The row is `waiting` and no activity is newer than `waiting_since`. An activity heartbeat newer than the ask releases it at once, so an agent answered in its own UI returns to work without waiting for a durable clear.
-- The row is `waiting` on a keyed ask (one carrying a native key). A keyed ask holds through newer activity until a tool with the same native key completes, because a parallel sibling tool also advances the heartbeat.
+- The row is `waiting`, still holds its turn, and no activity is newer than `waiting_since`. An activity heartbeat newer than the ask releases it at once, so an agent answered in its own UI returns to work without waiting for a durable clear.
+- The row is `waiting`, still holds its turn, and has a keyed ask (one carrying a native key). A keyed ask holds through newer activity until a tool with the same native key completes, because a parallel sibling tool also advances the heartbeat.
 - A `running` row's context sidecar carries a provider native-wait or plan-proposal marker newer than `last_activity`. This covers native dialogs without inventing a durable ask.
 
 The heartbeat those rules read comes from hook events only ([activity clocks](#activity-clocks)). Statusline pushes never advance it. A snapshot read through `snapshot_cached` attaches the context sidecars, so every consumer of the guard sees the provider's markers.
@@ -203,6 +203,8 @@ A transition off `waiting` sets `waiting_cleared`, and Store appends that event 
 A keyed ask also clears when its own call resolved with no hook to report it. When a keyed tool event reaches a row waiting on a different key, the hook path asks the adapter whether the provider's transcript already holds the open call's result. On a yes it records a derived answer edge for the open key ahead of the incoming event. This is the ingress-side twin of the `SubagentAskAnswered` derivation in [subagents](#subagents), and an adapter that cannot read its transcript abstains ([adapter_claude.md](./adapter_claude.md#asks-and-answers)).
 
 A provider interruption marker newer than `last_activity` displays a waiting row as `idle` and releases its ask, keyed or not. This is how RimZ learns that Esc cancelled a native prompt when no hook reports it. The row leaves `rimz asks` and stops reserving pane input, while the durable question record still closes on the next prompt.
+
+A turn-error marker with `ended_turn = true` also releases a waiting row's blocking ask, keyed or not, when its timestamp is strictly newer than `last_activity`. The row no longer holds its turn, and attention and ask listings drop the ask; its error displays paused with the native label for a pause class, or failed otherwise. Only a recorded Auto row also releases pane input. Other modes, including an unknown mode, keep pane input reserved for an ask still unanswered at the error until newer activity retires the marker, because a background Code Mode approval may still be live; auto-continue does not nudge those panes. The same pause on a live launched child parks its parent with `@<child>: <label>` regardless of mode. Codex alone supplies this proof ([turn-death marker](./adapter_codex.md#turn-death-marker)). A mid-turn error, a marker at or before `last_activity`, or a newer prompt cannot close the ask. A clean completion marker does not release a waiting ask.
 
 Non-blocking questions live beside the blocking `open_ask`, in the ordered `queued_asks` list ([`QueuedAsk`](../../../crates/rimz/src/agents/state.rs)). An observation's optional `ask_queue` edit ([`AskQueueEdit`](../../../crates/rimz/src/agents/observation.rs)) maintains it, and the fold applies the edit in [`fold_lifecycle`](../../../crates/rimz/src/store/snapshot/project.rs) in four steps:
 
@@ -305,7 +307,7 @@ The rollup holds the agent-reported lifecycle status. `rimz sidebar snapshot` re
 
 [`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap operational projection that message delivery, reply waits, keepalive, and idle stop use. The sidebar applies a separate display-rest projection for in-flight work. Effective status reads the rollup, the budget park, pending waits, and the context sidecar's markers, in this order:
 
-1. A `waiting` agent whose keyless ask was answered reads as `running` in the `reasoning` phase: `waiting_since` is present, `last_activity` is newer, and no interruption marker applies. A permission still under automatic review has the same projection for its first 60 seconds ([waiting and asks](#waiting-and-asks)). Every later step sees either as `running`. A keyed ask, or a wait without answer evidence, otherwise stays `waiting`. A local-session observation that still reports `waiting` stamps the ask no earlier than its last observed write, so that write cannot pass for an answer. A later activity heartbeat can still release it.
+1. A `waiting` agent whose turn ended on an error newer than `last_activity` first reads as `running` in the `reasoning` phase, so the error rungs can display its outcome. An answered keyless ask has the same normalization: `waiting_since` is present, `last_activity` is newer, and no interruption marker applies. A permission still under automatic review also has that projection for its first 60 seconds ([waiting and asks](#waiting-and-asks)). Every later step sees these as `running`. A keyed ask, or a wait without answer or turn-end evidence, otherwise stays `waiting`. A local-session observation that still reports `waiting` stamps the ask no earlier than its last observed write, so that write cannot pass for an answer. A later activity heartbeat can still release it.
 2. A `running` row with a native-wait or plan-proposal marker reads `waiting`.
 3. A row with a budget park, unless it is `waiting`, reads `paused`.
 4. A `waiting` row with an interruption marker reads `idle`.
@@ -325,7 +327,7 @@ The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/
 
 | Rung | Condition | Displays |
 | --- | --- | --- |
-| 1 | a `waiting` row with no interruption marker, answer proof, or permission still under automatic review | `waiting` |
+| 1 | a `waiting` row with no interruption marker, turn-ending error, answer proof, or permission still under automatic review | `waiting` |
 | 2 | a `running` row with a native-wait or plan-proposal marker | `waiting` |
 | 3 | a budget park | `paused`, with spend against cap |
 | 4 | a turn-error marker of a pausing class | `paused`, with the upstream label; `failed` with the same label once retries are exhausted or the limit window reset with no spent window |
@@ -339,7 +341,7 @@ The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/
 | 12 | a `running` row silent past the stall window | `paused` when the kind has a spent window, otherwise `failed` |
 | 13 | none of the above | the rested lifecycle or context status |
 
-A `waiting` row that fails rung 1 first resolves by the shared waiting rule. With an interruption marker it becomes `idle` and continues down the ladder, skipping rung 3. An answered keyless ask continues as `running` in the `reasoning` phase until a durable clear lands; an auto-reviewed permission does so until its visibility deadline. The interruption check uses the row's child-folded activity clock, while answer proof and review use the source agent's own activity. A wait without `waiting_since`, or without a source agent, holds at rung 1 unless interrupted or under automatic review. Answered and in-review rows are eligible for either child rung after normalization, including a delegated park, and a raw `failed` parent is not. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test passes.
+A `waiting` row that fails rung 1 first resolves by the shared waiting rule. With an interruption marker it becomes `idle` and continues down the ladder, skipping rung 3. A qualifying turn-ending error continues as `running` in the `reasoning` phase so its outcome reaches the error rungs. An answered keyless ask uses that same normalization until a durable clear lands; an auto-reviewed permission does so until its visibility deadline. Interruption and turn-ending-error checks use the row's child-folded activity clock, while answer proof and review use the source agent's own activity. A wait without `waiting_since`, or without a source agent, holds at rung 1 unless interrupted, ended on an error, or under automatic review. These normalized running rows are eligible for either child rung, including a delegated park, and a raw `failed` parent is not. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test passes.
 
 The rungs that need more than their row:
 

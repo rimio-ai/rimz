@@ -528,6 +528,7 @@ fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
     child.last_activity = ingress_at - Duration::from_secs(1);
     let mut context = AgentContext::new("codex", marker_at);
     context.turn_error = Some(AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::PausedRateLimit,
         at: marker_at,
         label: Some(label.to_owned()),

@@ -346,6 +346,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
         account: None,
         turn_opened_by: Vec::new(),
         turn_error: Some(AgentTurnError {
+            ended_turn: false,
             class,
             at: ts(error_at),
             label: Some(label.to_owned()),
@@ -1473,6 +1474,63 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
         read_park(&path),
         Some(overloaded_record(1_000, 100, Some(1_180), 1))
     );
+}
+
+#[test]
+fn turn_ended_waiting_permission_only_nudges_auto_mode() {
+    for mode in [
+        None,
+        Some(crate::agents::PermissionMode::Ask),
+        Some(crate::agents::PermissionMode::Auto),
+    ] {
+        let (_dir, runtime) = temp_runtime();
+        let mut agent = parked_agent(100, 1_000, TurnErrorClass::PausedOverloaded, "at capacity");
+        agent.kind = AgentKind::new_unchecked("codex");
+        agent.mode = mode;
+        agent.status = AgentStatus::Waiting;
+        agent.waiting_since = Some(agent.last_activity);
+        agent.open_ask = Some(crate::agents::OpenAsk {
+            id: crate::ids::AskId::new(),
+            kind: crate::agents::AskKind::Permission,
+            detail: Some("shell: cargo test".to_owned()),
+            native_key: None,
+            since: agent.last_activity,
+        });
+        agent
+            .context
+            .as_mut()
+            .unwrap()
+            .turn_error
+            .as_mut()
+            .unwrap()
+            .ended_turn = true;
+        let path = park_record_path(&runtime, &agent.kind, &agent.agent_id);
+        let mut pane = live_pane();
+        pane.kind = agent.kind.clone();
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![agent],
+            ts(1_180),
+        );
+        snapshot.agent_panes = vec![pane].into();
+        let config = ResumeConfig {
+            auto_continue: true,
+            ..Default::default()
+        };
+
+        resume_parked(
+            |_| false,
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &[],
+        );
+        let record = read_park(&path).expect("the provider pause arms a park");
+        let auto = mode == Some(crate::agents::PermissionMode::Auto);
+        assert_eq!(record.last_nudge_at, auto.then_some(ts(1_180)), "{mode:?}");
+        assert_eq!(record.retries, u32::from(auto), "{mode:?}");
+    }
 }
 
 #[test]

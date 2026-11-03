@@ -281,6 +281,9 @@ pub(crate) fn render_dispatch_outcome(
             Some(ParkReason::WaitingOnPrompt) => format!(
                 "queued for {label} ({message_id}) — {label} has a prompt open and will not read this until it is answered\n  see it: rimz asks show {label}      answer it: rimz answer {label} <choice>"
             ),
+            Some(ParkReason::PaneHeld) => format!(
+                "queued for {label} ({message_id}) — {label} ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open\n  check it: rimz pane capture {label}      send now: rimz message steer {message_id} --force"
+            ),
             Some(ParkReason::Scheduled(time)) => format!(
                 "queued for {label} ({message_id}) — opens {} ({})",
                 super::render::rel_until(*time, jiff::Timestamp::now()),
@@ -732,6 +735,13 @@ mod tests {
             .as_deref(),
             Some(
                 "queued for @coder (msg_0123456789abcdef) — @coder has a prompt open and will not read this until it is answered\n  see it: rimz asks show @coder      answer it: rimz answer @coder <choice>"
+            )
+        );
+        assert_eq!(
+            render_dispatch_outcome(DeliveryKind::Boundary, &outcome(Some(ParkReason::PaneHeld)))
+                .as_deref(),
+            Some(
+                "queued for @coder (msg_0123456789abcdef) — @coder ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open\n  check it: rimz pane capture @coder      send now: rimz message steer msg_0123456789abcdef --force"
             )
         );
         assert_eq!(

@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn turn_ending_capacity_error_releases_root_permission() {
+    let mut session = agent("codex", "review", AgentStatus::Waiting, 0)
+        .worktree("/repo/main")
+        .active_ago(90);
+    session.mode = Some(crate::agents::PermissionMode::Auto);
+    session.waiting_since = Some(session.last_activity);
+    session.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::new(),
+        kind: crate::agents::AskKind::Permission,
+        detail: Some("shell: cargo test".to_owned()),
+        native_key: None,
+        since: session.last_activity,
+    });
+    let label = "Selected model is at capacity. Please try a different model.";
+    session.context = Some(crate::agents::AgentContext {
+        turn_error: Some(crate::agents::AgentTurnError {
+            class: crate::agents::TurnErrorClass::PausedOverloaded,
+            at: ago(83),
+            label: Some(label.to_owned()),
+            ended_turn: true,
+        }),
+        ..Default::default()
+    });
+    let snapshot = room_with_agent_panes(vec![session]);
+    let row = row(&snapshot, "review");
+    assert_eq!(row.status(), Some(AgentStatus::Paused));
+    assert_eq!(row.turn_error_label(), Some(label));
+    assert_ne!(row.attention_status(), Some(AgentStatus::Waiting));
+}
+
+#[test]
 fn codex_auto_permission_card_and_ladder_wait_for_review() {
     for (age, expected, phase) in [
         (59, AgentStatus::Running, TurnPhase::Reasoning),

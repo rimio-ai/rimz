@@ -314,6 +314,7 @@ fn kimi_turn_error(event_name: &str, parsed: &payloads::KimiHookPayload) -> Opti
             .flatten()
             .find_map(|text| crate::agents::context::cap_turn_error_label(text));
         AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::classify_label(label.as_deref()),
             at: Timestamp::now(),
             label,

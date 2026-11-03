@@ -159,6 +159,7 @@ fn failed_card_description_keeps_error_over_stale_ask() {
     let mut asker = waiting_asker();
     asker.status = AgentStatus::Failed;
     asker.context.as_mut().unwrap().turn_error = Some(AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::Failed,
         at: fixed_now() - Duration::from_secs(10),
         label: Some("API Error: Bad request".to_owned()),
@@ -189,6 +190,7 @@ fn render_paused_turn_card_quotes_provider_reason_in_italics() {
     claude.last_activity = fixed_now() - Duration::from_secs(60);
     let mut context = claude_context(fixed_now());
     context.turn_error = Some(AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::PausedOverloaded,
         at: fixed_now() - Duration::from_secs(10),
         label: Some("API Error: Overloaded".to_owned()),

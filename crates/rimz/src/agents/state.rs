@@ -586,6 +586,11 @@ fn active_turn_error(
         .filter(|error| error.at > last_activity)
 }
 
+fn waiting_turn_ended(context: Option<&AgentContext>, last_activity: Timestamp) -> bool {
+    active_turn_error(AgentStatus::Running, context, last_activity)
+        .is_some_and(|error| error.ended_turn)
+}
+
 /// A `failed` row's terminal turn-error marker: it must fall inside the row's
 /// current turn (`turn_started_at` or later), so a stale marker from a prior
 /// turn never explains a fresh failure.
@@ -623,9 +628,10 @@ pub(crate) fn effective_turn_error_class(error: &AgentTurnError) -> TurnErrorCla
 /// or `None` when no marker applies. The provider marker
 /// (`AgentContext::settle`, folded in via the context sidecar) must postdate the
 /// agent's `last_activity`, and the row's status must admit the outcome: only a
-/// `running` row can complete, propose a plan, or open a native wait, because a
-/// hook-reported turn end already resolved every other status, while an
+/// `running` row can complete, propose a plan, or open a native wait, while an
 /// interruption also settles a `waiting` row whose native ask Esc cancelled.
+/// A turn-ending error releases waiting asks separately through
+/// [`AgentTurnError::ended_turn`], not a settle outcome.
 ///
 /// Self-clearing: any newer hook event advances `last_activity` past the marker
 /// and drops the row back to its lifecycle status. A RimZ-derived projection
@@ -654,6 +660,7 @@ pub fn settled_outcome(
 pub(crate) enum WaitingResolution {
     NotWaiting,
     Interrupted,
+    TurnEnded,
     Held,
     Answered,
     InReview,
@@ -672,6 +679,9 @@ impl WaitingResolution {
         }
         if settled_outcome(status, context, last_activity) == Some(TurnSettleOutcome::Interrupted) {
             return Self::Interrupted;
+        }
+        if waiting_turn_ended(context, last_activity) {
+            return Self::TurnEnded;
         }
         if source_agent.is_some_and(|agent| {
             agent
@@ -1650,8 +1660,9 @@ impl AgentState {
 
     /// Status after cheap, context-only projections that every read path can
     /// share. A live turn with an active provider park certificate reads as
-    /// `paused` even when the lifecycle rollup is still `running`, and so does a
-    /// `failed` row whose own turn carries one; native-input
+    /// `paused` even when the lifecycle rollup is still `running` or `waiting`
+    /// on an ask from that ended turn, and so does a `failed` row whose own
+    /// turn carries one; native-input
     /// markers raise `waiting`, provider completion markers settle falsely-running
     /// rows to `success`, interruption markers settle falsely-running or waiting
     /// rows to `idle`, and a clean turn parked on background work reads as
@@ -1679,10 +1690,12 @@ impl AgentState {
             Some(self),
             now,
         ) {
-            WaitingResolution::Answered | WaitingResolution::InReview => {
-                (AgentStatus::Running, TurnPhase::Reasoning)
-            }
-            _ => (self.status, self.phase),
+            WaitingResolution::TurnEnded
+            | WaitingResolution::Answered
+            | WaitingResolution::InReview => (AgentStatus::Running, TurnPhase::Reasoning),
+            WaitingResolution::NotWaiting
+            | WaitingResolution::Interrupted
+            | WaitingResolution::Held => (self.status, self.phase),
         }
     }
 
@@ -1775,7 +1788,10 @@ impl AgentState {
                         Some(TurnSettleOutcome::Complete | TurnSettleOutcome::Interrupted)
                     )
             }
-            AgentStatus::Waiting => settled != Some(TurnSettleOutcome::Interrupted),
+            AgentStatus::Waiting => {
+                settled != Some(TurnSettleOutcome::Interrupted)
+                    && !waiting_turn_ended(self.context.as_ref(), self.last_activity)
+            }
             AgentStatus::Idle
             | AgentStatus::Success
             | AgentStatus::Failed
@@ -1855,7 +1871,7 @@ impl AgentState {
     pub fn actionable_asks(&self) -> impl Iterator<Item = (OpenAsk, AskDelivery)> + '_ {
         self.open_ask
             .as_ref()
-            .filter(|_| self.is_awaiting_input())
+            .filter(|_| self.holds_open_turn() && self.is_awaiting_input())
             .map(|ask| (ask.clone(), AskDelivery::Blocking))
             .into_iter()
             .chain(self.queued_asks.iter().map(|ask| {
@@ -1877,23 +1893,32 @@ impl AgentState {
     /// markers cover native dialogs without inventing a durable ask record.
     /// A keyed open ask waits for its durable completion edge because parallel
     /// sibling tools also touch activity. Newer activity self-clears keyless
-    /// and derived asks. A durable ask holds only while the row still owns its
-    /// turn, so a provider interruption marker releases it keyed or not: Esc
-    /// cancels a native prompt without firing any hook, and the row the
-    /// sidebar already shows as `idle` must not reserve pane input.
+    /// and derived asks. A newer provider interruption releases an ask keyed
+    /// or not. A turn-ending error closes asks too, but releases pane input
+    /// only for a recorded Auto row. Other modes, including unknown mode,
+    /// keep an ask that still reserved input reserved until newer activity
+    /// retires the marker, because a background Code Mode approval may still
+    /// be live.
     pub fn is_awaiting_input(&self) -> bool {
+        let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
+        let ask_reserves = self
+            .open_ask
+            .as_ref()
+            .is_some_and(|ask| ask.native_key.is_some())
+            || self
+                .waiting_since
+                .is_some_and(|waiting_since| self.last_activity <= waiting_since);
+        if self.status == AgentStatus::Waiting
+            && waiting_turn_ended(self.context.as_ref(), self.last_activity)
+        {
+            return ask_reserves
+                && self.mode != Some(super::PermissionMode::Auto)
+                && settled != Some(TurnSettleOutcome::Interrupted);
+        }
         matches!(
-            settled_outcome(self.status, self.context.as_ref(), self.last_activity),
+            settled,
             Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
-        ) || (self.status == AgentStatus::Waiting
-            && self.holds_open_turn()
-            && (self
-                .open_ask
-                .as_ref()
-                .is_some_and(|ask| ask.native_key.is_some())
-                || self
-                    .waiting_since
-                    .is_some_and(|waiting_since| self.last_activity <= waiting_since)))
+        ) || (self.status == AgentStatus::Waiting && self.holds_open_turn() && ask_reserves)
     }
 
     /// When an auto-reviewed permission first needs attention. The raw ask
@@ -1922,12 +1947,12 @@ impl AgentState {
             .is_some_and(|until| now < until)
     }
 
-    /// The blocking ask visible to attention readers, excluding automatic review.
-    /// Pane-input guards and explicit ask access keep using the raw ask.
+    /// The blocking ask visible to attention readers, excluding automatic review
+    /// and closed turns. Pane-input reservation may outlive an ended turn.
     pub fn attention_ask(&self, now: Timestamp) -> Option<&OpenAsk> {
-        self.open_ask
-            .as_ref()
-            .filter(|_| self.is_awaiting_input() && !self.is_reviewing_permission(now))
+        self.open_ask.as_ref().filter(|_| {
+            self.holds_open_turn() && self.is_awaiting_input() && !self.is_reviewing_permission(now)
+        })
     }
 
     /// Provider API error currently explaining this row's displayed state. The

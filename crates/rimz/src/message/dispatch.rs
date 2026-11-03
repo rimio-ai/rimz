@@ -131,6 +131,7 @@ pub enum DispatchOutcome {
 pub enum ParkReason {
     Status(AgentStatus),
     WaitingOnPrompt,
+    PaneHeld,
     ProviderStarting,
     Resuming {
         register_by: Timestamp,
@@ -1073,10 +1074,12 @@ fn dispatch_decision(
     if let Some(agent) = readiness_agent {
         let readiness = deliver::receiver_readiness(agent, mode.draft.gate, mode.draft.force, now);
         if !readiness.accepts_prompt() {
-            let reason = if readiness.waiting {
-                ParkReason::WaitingOnPrompt
-            } else {
+            let reason = if !readiness.waiting {
                 ParkReason::Status(readiness.status)
+            } else if super::InputWait::for_agent(agent, now) == super::InputWait::TurnEnded {
+                ParkReason::PaneHeld
+            } else {
+                ParkReason::WaitingOnPrompt
             };
             return DispatchDecision::Parked {
                 reason: Some(reason),

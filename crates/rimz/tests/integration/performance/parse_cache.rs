@@ -265,6 +265,7 @@ fn warm_auto_continue_over_200_agents_reads_no_unchanged_park_bytes() {
             agent.last_activity = jiff::Timestamp::from_second(9_999).unwrap();
             let mut context = AgentContext::new("claude", now);
             context.turn_error = Some(AgentTurnError {
+                ended_turn: false,
                 class: TurnErrorClass::PausedOverloaded,
                 at: now,
                 label: None,

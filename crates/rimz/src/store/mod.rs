@@ -595,6 +595,7 @@ mod tests {
         event_log::append(&paths.events_log, &started).unwrap();
         let context = AgentContext {
             turn_error: Some(AgentTurnError {
+                ended_turn: false,
                 class: TurnErrorClass::PausedOverloaded,
                 at: error_at,
                 label: Some("server_overloaded".to_owned()),

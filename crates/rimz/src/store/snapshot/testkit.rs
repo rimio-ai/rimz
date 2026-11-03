@@ -235,6 +235,7 @@ impl AgentStateFx for AgentState {
 
     fn turn_error(mut self, secs_ago: i64, label: &str) -> Self {
         self.context.get_or_insert_with(bare_context).turn_error = Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::Failed,
             at: epoch() - std::time::Duration::from_secs(secs_ago as u64),
             label: Some(label.to_owned()),
@@ -244,6 +245,7 @@ impl AgentStateFx for AgentState {
 
     fn turn_error_class(mut self, secs_ago: i64, label: &str, class: TurnErrorClass) -> Self {
         self.context.get_or_insert_with(bare_context).turn_error = Some(AgentTurnError {
+            ended_turn: false,
             class,
             at: epoch() - std::time::Duration::from_secs(secs_ago as u64),
             label: Some(label.to_owned()),

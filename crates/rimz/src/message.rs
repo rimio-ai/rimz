@@ -26,12 +26,15 @@ pub enum DeliveryKind {
 pub enum InputWait {
     Human,
     PermissionReview,
+    TurnEnded,
 }
 
 impl InputWait {
     fn for_agent(agent: &AgentState, now: Timestamp) -> Self {
         if agent.is_reviewing_permission(now) {
             Self::PermissionReview
+        } else if agent.status == AgentStatus::Waiting && !agent.holds_open_turn() {
+            Self::TurnEnded
         } else {
             Self::Human
         }
@@ -45,6 +48,10 @@ impl std::fmt::Display for InputWait {
             Self::PermissionReview => concat!(
                 "has a permission request under the provider's automatic review; ",
                 "its pane may be busy; retry shortly or pass --force"
+            ),
+            Self::TurnEnded => concat!(
+                "ended its turn on a provider error, but a background approval may still be ",
+                "open in its pane; check the pane or pass --force"
             ),
         })
     }

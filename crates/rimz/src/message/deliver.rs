@@ -153,6 +153,7 @@ pub enum DeliveryVerdict {
     ResumeUnrecovered,
     ProviderStarting,
     AskWaiting,
+    PaneHeld,
     NoPane {
         pinned_pane_id: Option<PaneId>,
     },
@@ -186,6 +187,7 @@ impl DeliveryVerdict {
             | Self::ProviderStarting
             | Self::ResumeUnrecovered
             | Self::AskWaiting
+            | Self::PaneHeld
             | Self::ReceiverGone
             | Self::ReceiverEnded
             | Self::GateClosed { .. } => Some(StallClass::NotWorking),
@@ -205,6 +207,7 @@ impl DeliveryVerdict {
             Self::ProviderStarting => "provider is starting".to_owned(),
             Self::ResumeUnrecovered => "resuming".to_owned(),
             Self::AskWaiting => "waiting on input in its pane".to_owned(),
+            Self::PaneHeld => "pane held after a provider error ended its turn".to_owned(),
             Self::ReceiverGone => "receiver has no current card".to_owned(),
             Self::ReceiverEnded => "receiver ended".to_owned(),
             Self::WaitingForRegistration { register_by } => {
@@ -963,7 +966,11 @@ impl DeliveryCheck {
             return DeliveryVerdict::ResumeUnrecovered;
         }
         if self.ask.waiting {
-            return DeliveryVerdict::AskWaiting;
+            return if self.ask.turn_ended {
+                DeliveryVerdict::PaneHeld
+            } else {
+                DeliveryVerdict::AskWaiting
+            };
         }
         if !self.pane.present {
             return DeliveryVerdict::NoPane {
@@ -1042,6 +1049,8 @@ pub struct AskCheck {
     pub force: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub permission_review: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub turn_ended: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -1200,6 +1209,10 @@ fn evaluate_delivery<'a>(
             waiting,
             force: message.force,
             permission_review: agent.is_some_and(|agent| agent.is_reviewing_permission(now)),
+            turn_ended: waiting
+                && agent.is_some_and(|agent| {
+                    super::InputWait::for_agent(agent, now) == super::InputWait::TurnEnded
+                }),
         },
         pane: PaneCheck {
             present: binding.is_some(),

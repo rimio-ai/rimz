@@ -1882,6 +1882,35 @@ fn latest_ask_view_ignores_older_answer() {
 }
 
 #[test]
+fn latest_ask_view_keeps_turn_ended_reserved_pane_out_of_display() {
+    let (_dir, paths) = transcript_paths();
+    let mut ask = transcript_entry(TranscriptKind::Ask, "details", "2026-06-01T00:00:00Z");
+    ask.kind = AgentKind::new_unchecked("codex");
+    rimz::transcript::append(&paths, &ask).expect("append ask");
+    let mut agent = waiting_agent();
+    agent.kind = ask.kind;
+    agent.context = Some(rimz::agents::AgentContext {
+        turn_error: Some(rimz::agents::AgentTurnError {
+            ended_turn: true,
+            class: rimz::agents::TurnErrorClass::PausedOverloaded,
+            at: agent.last_activity + jiff::SignedDuration::from_secs(1),
+            label: Some("at capacity".to_owned()),
+        }),
+        ..Default::default()
+    });
+
+    assert!(
+        agent.is_awaiting_input(),
+        "unknown mode keeps pane input reserved"
+    );
+    assert!(
+        latest_ask_view_from_paths(&paths, &agent)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn latest_ask_view_skips_log_when_agent_not_waiting() {
     let (_dir, paths) = transcript_paths();
     let mut agent = waiting_agent();

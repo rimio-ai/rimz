@@ -93,6 +93,7 @@ pub(super) fn turn_markers_at(path: &Path, stat: TranscriptStat) -> Option<TurnM
         },
         Some(TerminalOutcome::Error(label)) => TurnMarkers {
             turn_error: Some(AgentTurnError {
+                ended_turn: false,
                 class: TurnErrorClass::classify_label(label.as_deref()),
                 at,
                 label,
