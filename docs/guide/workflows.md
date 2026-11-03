@@ -48,11 +48,15 @@ The workflow runs it again after your turn.
 
 Read the graph from `start`. The run begins at the `tests` check. An answer of `pass` goes to `@done`, which ends the run. An answer of `fail` goes to the `fix` step, which starts Claude Code in the checkout with the prompt file. When that agent's turn ends, RimZ stops the agent and follows `then` back to `tests`. The check decides whether the work is done, never the agent. The check's whole answer, `outcome` and `reason` included, becomes the next node's `input`. That is how `log` reaches the agent.
 
-`start` may name a check or a step. To do work before the first check, name the agent or command step directly; no placeholder check is needed. A first step's `context.json` has `input`, `key`, and `prev_attempt` set to null, and `visit` and `visits` both set to 1. That launch counts toward `max-visits-per-key` under the null key. An agent step still waits for its window, checkout occupancy, and any applicable capacity admission.
+`start` may name a check or a step. To do work before the first check, name the agent or command step directly; no placeholder check is needed. A first step's `context.json` has `input`, `key`, and `prev_attempt` set to null, and `visit` and `visits` both set to 1. That launch counts toward `max-visits-per-outcome` under the null outcome and null key. An agent step still waits for its window, checkout occupancy, and any applicable capacity admission.
 
 Two fields bound the loop. `max-visits = 3` refuses a fourth launch of `fix`, and the run parks to wait for you. `timeout = "1h"` ends an attempt that runs longer than an hour and follows `then` as if the turn had ended. Time the step's agent, or a subagent it launched, spends waiting on a blocking question or permission prompt does not count toward that hour. Durations take `s`, `m`, `h`, and `d`.
 
-For distinct failures to get their own tries while the same failure stops retrying, add `max-visits-per-key = 2` to the step. A `run` script's answer can name the failure in `key`, and a condition case can fix its `key`; a shell check passes the run's key through unchanged. A key's count never resets during the run, even after the run works on other keys; without a key, all visits share one count. Keep `max-visits` to cap the total: a check naming a new key each time must not retry forever, and a per-key bound alone does not bound a cycle. Both fields must be positive, and when both are set the per-key bound must be below the total. The total cap is checked first and wins if both trip. Either cap follows `on.cap` (default `@user`), and its `input.bound` names the field that tripped, `"max-visits"` or `"max-visits-per-key"`, so a `run` or agent check can route the two apart. The reference gives the [whole cap input](../reference/cli/workflow.md#json-shapes).
+For distinct failures to get their own tries while the same failure stops retrying, add `max-visits-per-outcome = 2` to the step. Visits count separately for each routed outcome and key. Two checks answering the same outcome share a count; a script or agent check can split it further by answering different string or integer keys. Shell and condition checks inherit the run's key. The bucket uses the step's routed outcome and `key`: forwarded input and `resume --at` retain that outcome. A cap park preserves the refused bucket, so resuming that step continues its count. An engine route into a different step counts there under its own outcome, such as `cap`.
+
+To give a later failure new tries after a success, use `max-visits-per-outcome = { limit = 2, reset-on = "queued" }` when a check answers `queued`. `reset-on` also accepts a nonempty list of outcomes. That answer clears this step's outcome counts even when it routes to `@wait` or `@done`; the total never resets. A `for`-held answer resets only when its hold completes. Switching between failure outcomes does not reset anything. Without `reset-on`, the counts last for the whole run.
+
+Keep `max-visits` to cap the total: a check naming a new outcome or key each time must not retry forever, and a per-outcome bound alone does not bound a cycle. Both limits must be positive, and the per-outcome limit must be below the total when both are set. `reset-on` requires a total bound and outcomes that a check can answer. A cap without `reset-on` warns when only one outcome reaches a non-start step with no incoming `then`: it repeats `max-visits` unless a check answers keys. The total cap is checked first and wins if both trip. Either cap follows `on.cap` (default `@user`), and its `input.bound` names the field that tripped, `"max-visits"` or `"max-visits-per-outcome"`, so a `run` or agent check can route the two apart. The reference gives the [whole cap input](../reference/cli/workflow.md#json-shapes).
 
 Select exactly one of `run`, `shell`, `agent`, or nonempty `cases` on a check. Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `shell` accepts shell syntax and arbitrary paths; it is not confined to the workflow directory. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined.
 
@@ -122,7 +126,7 @@ one node in full: rimz workflow show fix-tests tests · source ~/.rimz/workflows
 no active or parked runs of fix-tests
 ```
 
-When a route needs a closer look, open its node rather than guessing which defaults apply: `rimz workflow show fix-tests fix`. This view includes the prompt path, layout, limits and every resolved edge, even one that cannot fire. A condition node also shows its wake subscriptions and each case's hold and key. This reads the definition for future runs; a run address still inspects that run's sealed graph and history.
+When a route needs a closer look, open its node rather than guessing which defaults apply: `rimz workflow show fix-tests fix`. This view includes the prompt path, layout, limits (including `reset-on`) and every resolved edge, even one that cannot fire. A condition node also shows its wake subscriptions and each case's hold. This reads the definition for future runs; a run address still inspects that run's sealed graph and history.
 
 ```console
 $ rimz workflow show fix-tests fix
@@ -254,11 +258,12 @@ start = "pr"
 [checks.pr]
 summary = "Wait for merge or sustained CI trouble"
 else = "pending"
-on = { merged = "@done", red = "sweep", pending = "@wait" }
+on = { merged = "@done", queued = "@wait", red = "sweep", pending = "@wait" }
 timeout = "2d"
 cases = [
   { when = ["pr=merged"], outcome = "merged" },
-  { when = ["ci=failed || pr.queue=dequeued"], outcome = "red", key = "ci", for = "2m" },
+  { when = ["pr.queue=queued"], outcome = "queued" },
+  { when = ["ci=failed || pr.queue=dequeued"], outcome = "red", for = "2m" },
 ]
 
 [steps.sweep]
@@ -268,10 +273,11 @@ prompt-file = "prompts/sweep.md"
 takeover = true
 then = "pr"
 max-visits = 5
+max-visits-per-outcome = { limit = 2, reset-on = "queued" }
 timeout = "6h"
 ```
 
-`cases` is an ordered list, one case per line. Each `when` array is ANDed, and its strings take the loop grammar (`!`, `&&`, `||`, parentheses, and branch selectors). The first true case wins; all false answers `else`. Every case outcome and `else` needs an `on` edge. Here a merged PR ends the run; a failing CI or dequeued PR held for two minutes launches `sweep`. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`.
+`cases` is an ordered list, one case per line. Each `when` array is ANDed, and its strings take the loop grammar (`!`, `&&`, `||`, parentheses, and branch selectors). The first true case wins; all false answers `else`. Every case outcome and `else` needs an `on` edge. Here a merged PR ends the run; a queued PR waits and resets `sweep`'s outcome counts; a failing CI or dequeued PR held for two minutes launches `sweep`. Two sweeps for `red` without a queued answer use up that outcome's tries, while five sweeps in total use up the step's total bound. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`.
 
 A sweep that repairs a queue removal must also re-arm the PR (enable auto-merge or add it to the queue); a push alone does not clear `pr.queue=dequeued`.
 
@@ -281,7 +287,7 @@ Unread is not false: an unread case before the first true case answers `unknown`
 
 On an open GitHub PR, when the commits are known, bare `ci` also requires CI for the PR's head and the checkout's current HEAD to be on that PR. A local commit not yet on the PR, or a verdict for another PR head, makes `ci` unread. The check waits by default, and `show` says which commits differ. Someone else's push can count even when the checkout has not fetched it. Missing commit data skips only the comparison it prevents. Without a known PR head, the time floor alone applies, as it does for `pr`, `pr.queue`, `pr.mergeable`, `pr.review`, branch selectors such as `ci[main]`, merged or closed PRs, Gitea, and PR-less checkouts. Forge propagation lag can still affect those readings. Loop conditions have no commit fence.
 
-A case's optional `for` is a nonzero duration in `s`, `m`, `h`, or `d`. A held case must route its outcome away from `@wait`; otherwise `for` warns and is ignored. While that case keeps winning, the run shows `holding red 1m/2m`; the next evaluation at or after two minutes follows `on.red`. A different answer closes the hold, and a later true starts a new one. Subscribed signals and the minute tick re-sample an ordinary waiting check; a kept `until` wait samples only at the next eligible leader turn end. Changes entirely between samples go unseen. `key` fixes the case's string or integer key; without it the answer inherits the run's key.
+A case's optional `for` is a nonzero duration in `s`, `m`, `h`, or `d`. A held case must route its outcome away from `@wait`; otherwise `for` warns and is ignored. While that case keeps winning, the run shows `holding red 1m/2m`; the next evaluation at or after two minutes follows `on.red`. A different answer closes the hold, and a later true starts a new one. Subscribed signals and the minute tick re-sample an ordinary waiting check; a kept `until` wait samples only at the next eligible leader turn end. Changes entirely between samples go unseen. Condition answers inherit the run's key.
 
 A condition reading `window.*` requires `provider = "claude"` (an agent kind, not a profile) and accepts an optional `account = "work"`. An unknown provider or a provider without a window term warns and is ignored; an account without a remaining provider does too. Window terms still require a provider after ignoring. `team.stage` values are checked against the project's effective teams plus `Done`; validation outside a workspace warns that stage names were not checked.
 
@@ -345,7 +351,7 @@ Put the cheap case in a script and the unclear case in a judge. A script that an
 
 A run parks when it would otherwise have to guess:
 
-- a step reached `max-visits` or `max-visits-per-key`, and `on.cap` defaults or routes to `@user`,
+- a step reached `max-visits` or `max-visits-per-outcome`, and `on.cap` defaults or routes to `@user`,
 - a check's `timeout` passed,
 - a run check exited nonzero or printed a bad answer, or a shell check could not start or its log could not open,
 - a judge failed twice,
@@ -366,13 +372,13 @@ Fix what the reason names, then send the run back to work:
 ```sh
 rimz workflow resume "$RUN"                          # the same node, with a fresh timeout
 rimz workflow resume "$RUN" --at tests               # another node
-rimz workflow resume "$RUN" --extend visits=+2       # raise both visit caps for every step and key
+rimz workflow resume "$RUN" --extend visits=+2       # raise both visit caps for every step and bucket
 rimz workflow resume "$RUN" --extend deadline=2026-11-08
 ```
 
 The receipt names the resumed node, its visit limit when capped, and any new grant or armed deadline, then gives a `show` command. When a parked run re-enters a step with no visits left, it warns rather than promising progress that cannot happen. Extending an active run says `extended` and does not warn about visits its current attempt has already used. Either receipt warns if the armed deadline is already past. A deadline fires only once; plain resume after a deadline park continues without one until you grant a new deadline.
 
-A run that is still active takes `--extend` too, without `--at`. An extension is a grant on this run only, and the definition does not change. A visit grant raises both `max-visits` and `max-visits-per-key` for every step and key. `show` includes the grant in the limit, such as `visits  fix 3 of 5`. If the step declares `max-visits-per-key`, it adds rows such as `  fix 2 of 4 for key "lint"`, with keys rendered as JSON (`null` for unkeyed visits); otherwise it prints no key rows.
+A run that is still active takes `--extend` too, without `--at`. An extension is a grant on this run only, and the definition does not change. A visit grant raises both `max-visits` and `max-visits-per-outcome` for every step and bucket. The grant survives resets; the per-outcome bound compares it against counts since the last reset. `show` includes the grant in the limit, such as `visits  fix 3 of 5`. If the step declares `max-visits-per-outcome`, it adds rows such as `  fix 2 of 4 for red` or `  fix 2 of 4 for red key "lint"`, in recorded order. A missing outcome prints `null`, and keys, when set, render as JSON. Otherwise it prints no outcome rows. A per-outcome cap's park view lists only that bucket's attempts since its last reset; a total cap lists every attempt of the step. The trail and full history show `<step> visits reset on <outcome>` when an answer clears counts.
 
 ## Stop a run and clean up
 
@@ -435,7 +441,7 @@ A shell check constructs its answer for you: `outcome` is `pass` or `fail`, `cod
 
 Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, `@failed`, or `@user`. A step's `then` must name a check. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
-A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its fixed or inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` may override the default, but `on.hold` is never an edge.
+A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` may override the default, but `on.hold` is never an edge.
 
 ### The context file
 
@@ -445,14 +451,14 @@ A condition answer carries `outcome`, the zero-based winning `case` (absent for 
 | `prompt` | The run's `--prompt`, or null. |
 | `input` | The answer that routed here, the engine's object after a cap, timeout, or deadline, or null at the start. |
 | `key` | The current item key, or null. |
-| `visit`, `visits` | Steps only: this step's visits for the current key, and its visits in total, both including this launch. `max-visits-per-key` caps `visit`; `max-visits` caps `visits`. |
+| `visit`, `visits` | Steps only: this step's visits for the current outcome/key bucket since the last reset, and its never-reset total, both including this launch. `max-visits-per-outcome` caps `visit`; `max-visits` caps `visits`. |
 | `output_path` | Judges only: the file to write the answer to. Null for other checks and steps. |
 | `retry` | Judges only: set when the judge runs again after a failed first try, with that try's outcome and reason. |
 | `signs_path` | For a step, its sign file, `signs/<step>.md`. For a check, the `signs/` directory. |
 | `prev_attempt` | How the last step attempt ended, or null. |
 | `live_attempt` | The open `until` session, during checks too: its step, sequence, visits, launch key and time, handle, run id, claim path, starting commit, and last checked turn end. Not published for other lifecycles or staged endings. |
 
-`prev_attempt` remains the last attempt that ended; checking an open `until` session does not replace it. During a check, the top-level fields describe that check, while `live_attempt` describes the session you are working with. A keep or discard restores the step view; a close leaves the file until the next publication.
+`prev_attempt` remains the last attempt that ended; checking an open `until` session does not replace it. Its `routed_by` names the outcome that admitted the attempt (null for a start step), beside its `key`; its `visit` uses that bucket's count since the last reset. During a check, the top-level fields describe that check, while `live_attempt` describes the session you are working with, using the same visit-count rule. A keep or discard restores the step view; a close leaves the file until the next publication.
 
 `prev_attempt.outcome` is `ended`, `died`, `timeout`, `asked`, `limited`, or `canceled`. `asked` occurs only on a turn agent step with `on.asked` set. A staying agent step records no ask or step timeout; a terminal budget failure still reads `limited`. A command step ends as `ended`, `died`, `timeout`, or `canceled`. The object also carries the attempt's start and end times (`started_at`, `ended_at`), the leader's handle, the commit before and after (`head_start`, `head_end`), its cost, and, when they apply, the question it asked (`asked`) and the provider's reset time (`limited.reset_at`). For a command step, `code` is its exit code (null after a signal or an unobserved exit) and `log` is its output file when one exists; agent attempts have both fields null. Agent-only evidence is null for a command step. A command's `head_end` is null when another process, rather than the host that reaped the child, settles the attempt.
 
