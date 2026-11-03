@@ -177,14 +177,14 @@ fn merge_local_context_preserves_prior_fields_by_case() {
             assert: assert_prior_effort,
         },
         MergeCase {
-            name: "fresh Codex zero usage keeps established usage",
-            prior: prior_established_codex_usage,
-            refresh: fresh_zero_codex_refresh,
-            assert: assert_established_codex_usage,
+            name: "fresh Kimi zero usage keeps established usage",
+            prior: prior_established_kimi_usage,
+            refresh: fresh_zero_kimi_refresh,
+            assert: assert_established_kimi_usage,
         },
         MergeCase {
-            name: "cached exact Codex window beats default fallback",
-            prior: prior_exact_codex_window,
+            name: "cached exact Kimi window beats default fallback",
+            prior: prior_exact_kimi_window,
             refresh: fallback_window_refresh,
             assert: assert_exact_window,
         },
@@ -192,18 +192,13 @@ fn merge_local_context_preserves_prior_fields_by_case() {
         let (_dir, runtime) = runtime();
         let prior_at = Timestamp::from_second(1_700_000_000).unwrap();
         let local_at = Timestamp::from_second(1_700_000_030).unwrap();
-        write_record(&runtime, &(case.prior)(prior_at)).unwrap();
+        let prior = (case.prior)(prior_at);
+        let kind = prior.kind.as_str();
+        write_record(&runtime, &prior).unwrap();
 
-        merge_local_context(
-            &runtime,
-            spec("codex"),
-            "sess-1",
-            (case.refresh)(),
-            local_at,
-        )
-        .unwrap();
+        merge_local_context(&runtime, spec(kind), "sess-1", (case.refresh)(), local_at).unwrap();
 
-        let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+        let merged = read_one(&runtime, kind, "sess-1").unwrap();
         assert_eq!(merged.agent_id.as_str(), "sess-1", "{}", case.name);
         (case.assert)(&merged, prior_at, local_at);
     }
@@ -715,18 +710,22 @@ fn prior_effort(observed_at: Timestamp) -> AgentContextRecord {
     record
 }
 
-fn prior_established_codex_usage(observed_at: Timestamp) -> AgentContextRecord {
-    let mut record = codex_record(observed_at);
-    record.context.tokens = Some(codex_tokens(
+fn prior_established_kimi_usage(observed_at: Timestamp) -> AgentContextRecord {
+    let mut record =
+        AgentContextRecord::new("kimi", "sess-1", AgentContext::new("kimi", observed_at));
+    record.context.tokens = Some(tokens(
         258_400,
+        50,
+        50,
         Some(current_usage(9_200, 800, 0, 120_000)),
     ));
     record
 }
 
-fn prior_exact_codex_window(observed_at: Timestamp) -> AgentContextRecord {
-    let mut record = codex_record(observed_at);
-    record.context.model_id = Some("gpt-5.5".to_owned());
+fn prior_exact_kimi_window(observed_at: Timestamp) -> AgentContextRecord {
+    let mut record =
+        AgentContextRecord::new("kimi", "sess-1", AgentContext::new("kimi", observed_at));
+    record.context.model_id = Some("kimi-k2.5".to_owned());
     record.context.tokens = Some(tokens(258_400, 50, 50, None));
     record
 }
@@ -784,14 +783,15 @@ fn unknown_effort_refresh() -> LocalContextRefresh {
     refresh
 }
 
-fn fresh_zero_codex_refresh() -> LocalContextRefresh {
+fn fresh_zero_kimi_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         context: LocalContextPatch {
             effort: FieldPatch::Set("high".to_owned()),
-            tokens: LocalTokenPatch::PreserveEstablished(Some(codex_tokens(
-                codex_default_window(),
-                Some(current_usage(0, 0, 0, 0)),
-            ))),
+            tokens: LocalTokenPatch::PreserveEstablished(Some(AgentTokenUsage {
+                context_window_size: Some(kimi_default_window()),
+                current_usage: Some(current_usage(0, 0, 0, 0)),
+                ..Default::default()
+            })),
             turn_error: FieldPatch::Clear,
             ..LocalContextPatch::authoritative_current()
         },
@@ -806,7 +806,7 @@ fn fallback_window_refresh() -> LocalContextRefresh {
         context: LocalContextPatch {
             effort: FieldPatch::Set("high".to_owned()),
             tokens: LocalTokenPatch::PreserveEstablished(Some(tokens(
-                codex_default_window(),
+                kimi_default_window(),
                 10,
                 90,
                 None,
@@ -824,14 +824,11 @@ fn spec(kind: &str) -> &'static crate::agents::AgentSpec {
     crate::agents::spec_by_kind(kind).expect("fixture adapter is registered")
 }
 
-/// Codex's definition-default fallback window — what a refresh carries before a
-/// rollout's exact `model_context_window` appears. Sourced from the definition
-/// so these fixtures track the adapter instead of rotting as a literal when the
-/// fallback moves (it went `258_000` → `272_000` and left this test stale).
-fn codex_default_window() -> u64 {
-    crate::agents::spec_by_kind("codex")
+/// Kimi's fallback when no configured model window is available to its refresh.
+fn kimi_default_window() -> u64 {
+    crate::agents::spec_by_kind("kimi")
         .and_then(|definition| definition.default_context_window)
-        .expect("codex definition declares a default context window")
+        .expect("kimi definition declares a default context window")
 }
 
 fn assert_app_server_fields(merged: &AgentContextRecord, prior_at: Timestamp, local_at: Timestamp) {
@@ -887,7 +884,7 @@ fn assert_prior_effort(merged: &AgentContextRecord, _: Timestamp, _: Timestamp) 
     );
 }
 
-fn assert_established_codex_usage(merged: &AgentContextRecord, _: Timestamp, _: Timestamp) {
+fn assert_established_kimi_usage(merged: &AgentContextRecord, _: Timestamp, _: Timestamp) {
     let tokens = merged.context.tokens.as_ref().unwrap();
     assert_eq!(
         tokens
@@ -895,7 +892,7 @@ fn assert_established_codex_usage(merged: &AgentContextRecord, _: Timestamp, _: 
             .as_ref()
             .and_then(|usage| usage.cache_read_input_tokens),
         Some(120_000),
-        "a fresh zero placeholder must not blink an established Codex meter to empty",
+        "a fresh zero placeholder must not blink an established Kimi meter to empty",
     );
     assert_eq!(
         tokens.context_window_size,
@@ -914,7 +911,7 @@ fn assert_exact_window(merged: &AgentContextRecord, _: Timestamp, _: Timestamp) 
     assert_eq!(
         tokens.context_window_size,
         Some(258_400),
-        "an exact rollout window cached in the sidecar beats a later fallback",
+        "an exact configured window cached in the sidecar beats a later fallback",
     );
     assert_eq!(
         tokens.used_percentage,
@@ -933,22 +930,6 @@ fn tokens(
         context_window_size: Some(context_window_size),
         used_percentage: Some(used_percentage),
         remaining_percentage: Some(remaining_percentage),
-        current_context_tokens: None,
-        current_usage,
-        session_usage: None,
-    }
-}
-
-/// A Codex token record in its real shape: no baked percentage (the gauge
-/// derives it downstream from `current_usage` over the window).
-fn codex_tokens(
-    context_window_size: u64,
-    current_usage: Option<AgentCurrentUsage>,
-) -> AgentTokenUsage {
-    AgentTokenUsage {
-        context_window_size: Some(context_window_size),
-        used_percentage: None,
-        remaining_percentage: None,
         current_context_tokens: None,
         current_usage,
         session_usage: None,

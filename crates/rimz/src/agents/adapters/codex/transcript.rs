@@ -9,7 +9,6 @@ use std::sync::{LazyLock, Mutex};
 use jiff::Timestamp;
 use serde_json::Value;
 
-use super::DEFAULT_CONTEXT_WINDOW;
 use super::install::{codex_config_path, read_existing_table};
 use super::rollout::{
     CodexTaskComplete, RolloutError, RolloutKind, RolloutRecord, decode_line, read_rollout_header,
@@ -132,10 +131,9 @@ pub(super) fn session_forked_from(session_id: &str) -> Option<AgentSessionId> {
 /// Context-window usage derived from a Codex rollout tail.
 #[derive(Default)]
 pub(super) struct TranscriptUsage {
-    /// The model's context window from the rollout's `model_context_window`
-    /// (e.g. 258k for GPT-5.5) — the card's window label.
+    /// The newest nonzero `model_context_window` reported by `task_started`
+    /// or `token_count` in the rollout tail, used for the card's window label.
     pub(super) context_window: Option<u64>,
-    pub(super) context_window_reported: bool,
     pub(super) total_tokens: Option<u64>,
     pub(super) model: Option<String>,
     /// Session's live reasoning effort from the latest `turn_context`; updates
@@ -179,7 +177,7 @@ pub(super) fn transcript_enrichment(
     } else {
         None
     };
-    let tokens = if usage.context_window.is_some() || current_usage.is_some() {
+    let tokens = if current_usage.is_some() {
         // No baked percentage: the gauge derives it downstream from
         // `current_usage` over `context_window_size`, so the bar can never
         // disagree with the window it is drawn against.
@@ -314,14 +312,12 @@ pub(super) fn configured_reasoning_effort_at(path: &Path) -> Option<String> {
 }
 
 impl TranscriptUsage {
-    /// A whole-file read with no `token_count` event: report explicit zeroes
-    /// and the default window for a fresh session. An unreadable rollout or a
-    /// bounded tail without usage supplies no token or window reading,
-    /// preserving prior values.
+    /// A whole-file read with no `token_count` event reports explicit zeroes.
+    /// An unreadable rollout or bounded tail without usage supplies no token
+    /// reading, preserving prior usage.
     fn fresh() -> Self {
         Self {
-            context_window: Some(DEFAULT_CONTEXT_WINDOW),
-            context_window_reported: false,
+            context_window: None,
             total_tokens: Some(0),
             model: None,
             effort: None,
@@ -329,14 +325,6 @@ impl TranscriptUsage {
             last_cached_input_tokens: Some(0),
             last_cache_write_tokens: Some(0),
             last_output_tokens: Some(0),
-        }
-    }
-
-    pub(super) fn reported_context_window(&self) -> Option<u64> {
-        if self.context_window_reported {
-            self.context_window
-        } else {
-            None
         }
     }
 }
@@ -463,11 +451,12 @@ fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
 }
 
 /// Derive context-window usage from the tail of a Codex rollout JSONL. Codex
-/// emits an `event_msg`/`token_count` payload after every assistant turn with
-/// the current `model_context_window` and `last_token_usage` (gauge). This reads
-/// a bounded tail and takes the most recent record. Best-effort: any IO or parse
-/// failure yields empty fields (enrichment, never correctness). Test-only: the
-/// refresh path reads the tail once for usage and turn-completion together.
+/// emits `task_started` with the window at turn start and `token_count` with
+/// `last_token_usage` (gauge) and the window after each model call. This reads
+/// a bounded tail and takes the newest usage and reported window independently.
+/// Best-effort: any IO or parse failure yields empty fields (enrichment, never
+/// correctness). Test-only: the refresh path reads the tail once for usage and
+/// turn-completion together.
 #[cfg(test)]
 pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     let Some(tail) = read_transcript_tail_with_status(path) else {
@@ -817,13 +806,14 @@ pub(super) struct TranscriptScan {
     latest_model: Option<String>,
     latest_effort: Option<String>,
     latest_usage: Option<LastUsage>,
+    latest_window: Option<u64>,
     outcome: OutcomeScan,
     raw_error: RawErrorScan,
 }
 
 impl TranscriptScan {
     fn usage_complete(&self) -> bool {
-        self.latest_model.is_some() && self.latest_usage.is_some()
+        self.latest_model.is_some() && self.latest_usage.is_some() && self.latest_window.is_some()
     }
 
     fn complete(&self, need: TranscriptScanNeed) -> bool {
@@ -834,7 +824,7 @@ impl TranscriptScan {
     }
 
     pub(super) fn into_usage(self, whole_file: bool) -> TranscriptUsage {
-        match self.latest_usage {
+        let mut usage = match self.latest_usage {
             Some(last) => usage_from_last_record(last, self.latest_model, self.latest_effort),
             None => TranscriptUsage {
                 model: self.latest_model,
@@ -845,7 +835,9 @@ impl TranscriptScan {
                     TranscriptUsage::default()
                 }
             },
-        }
+        };
+        usage.context_window = self.latest_window.or(usage.context_window);
+        usage
     }
 
     #[cfg(test)]
@@ -929,6 +921,18 @@ fn scan_transcript_record(
         && let RolloutKind::TokenCount(token_count) = &record.kind
     {
         scan.latest_usage = last_usage_from_info(token_count.info());
+    }
+    if scan.latest_window.is_none() {
+        let window = match &record.kind {
+            RolloutKind::TaskStarted {
+                model_context_window,
+            } => *model_context_window,
+            RolloutKind::TokenCount(token_count) => token_count
+                .info()
+                .and_then(|info| info.model_context_window),
+            _ => None,
+        };
+        scan.latest_window = window.filter(|window| *window > 0);
     }
     if need == TranscriptScanNeed::UsageAndOutcome {
         scan_outcome_record(record, &mut scan.outcome);
@@ -1025,15 +1029,8 @@ fn usage_from_last_record(
     model: Option<String>,
     effort: Option<String>,
 ) -> TranscriptUsage {
-    let context_window_reported = last.window > 0;
-    let context_window = if context_window_reported {
-        last.window
-    } else {
-        DEFAULT_CONTEXT_WINDOW
-    };
     TranscriptUsage {
-        context_window: Some(context_window),
-        context_window_reported,
+        context_window: (last.window > 0).then_some(last.window),
         total_tokens: last.total,
         model,
         effort,

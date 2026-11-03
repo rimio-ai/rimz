@@ -107,16 +107,10 @@ pub(crate) fn native_compaction_point(kind: &str, configured: u64, window: u64) 
     let point = match kind {
         "claude" => configured,
         "codex" => {
-            // The adapter starts with its raw 272k fallback, then carries the
-            // rollout's usable window unchanged. Assume it is 95% of the raw
-            // window and never equals that fallback; a remote model catalog
-            // can violate either premise. Compaction caps at
-            // 90% of the raw window, not 90% of the usable window.
-            let raw = if Some(window) == spec_by_kind(kind)?.default_context_window {
-                u128::from(window)
-            } else {
-                u128::from(window) * 100 / 95
-            };
+            // The rollout reports the usable window, assumed to be 95% of raw;
+            // a remote model catalog can violate that premise. Compaction caps
+            // at 90% of the raw window, not 90% of the usable window.
+            let raw = u128::from(window) * 100 / 95;
             u128::from(configured).min(raw * 9 / 10) as u64
         }
         _ => return None,

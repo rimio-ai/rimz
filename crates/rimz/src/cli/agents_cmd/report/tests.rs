@@ -559,6 +559,7 @@ fn full_entry_has_a_stable_projection() {
     state.usage.cache_write_input_tokens = Some(1_920);
     state.usage.output_tokens = Some(510);
     state.usage.context_pct = Some(31);
+    state.usage.context_window = Some(272_000);
     state.compaction_count = 2;
     state.tool_calls.insert("Bash".to_owned(), 12);
     state.registered_at = Some(Timestamp::from_second(1_000).unwrap());
@@ -685,6 +686,10 @@ fn sparse_entry_keeps_unknown_and_zero_keys() {
         serde_json::json!([])
     );
     assert!(serde_json::to_value(&entry).unwrap().get("login").is_none());
+    assert_eq!(
+        serde_json::to_value(&entry).unwrap()["context"]["window"],
+        serde_json::Value::Null
+    );
     insta::with_settings!({snapshot_path => "../snapshots"}, {
         insta::assert_json_snapshot!("sparse_agent_report", entry);
     });

@@ -37,6 +37,44 @@ fn compaction_snapshot() -> SidebarSnapshot {
 }
 
 #[test]
+fn codex_identity_shows_compaction_only_after_a_reported_window() {
+    for window in [None, Some(828_400)] {
+        let mut state = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("index docs"),
+        );
+        state.model = Some("gpt-6.1-sol".into());
+        state.record = Some(Box::new(crate::agents::LaunchRecord {
+            auto_compact: Some(372_000),
+            ..Default::default()
+        }));
+        state.context = Some(AgentContext {
+            tokens: window.map(|window| AgentTokenUsage {
+                context_window_size: Some(window),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let snapshot = snapshot_with(vec![state]);
+        let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+        let lines = group_lines_at_width(&snapshot, &theme, 0, 58);
+        let identity = lines
+            .iter()
+            .find(|line| line.to_string().contains("codex"))
+            .unwrap();
+        let text = identity.to_string();
+        assert!(!text.contains("272k"), "{text}");
+        assert_eq!(text.contains('/'), window.is_some(), "{text}");
+        assert_eq!(text.contains("372k/828k"), window.is_some(), "{text}");
+        assert_eq!(text.contains("372k"), window.is_some(), "{text}");
+    }
+}
+
+#[test]
 fn compaction_wall_and_label_render_across_meter_states_and_glyph_sets() {
     for (set, no_color) in [("unicode", false), ("nerd_font", false), ("unicode", true)] {
         for state in [

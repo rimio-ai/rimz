@@ -101,15 +101,6 @@ use crate::transcript::{AskOption, AskQuestion};
 /// This timeout and the installed handler fields are frozen by the hook-hash golden.
 const CODEX_HOOK_TIMEOUT_SECS: i64 = 2;
 
-/// Codex's GPT-5.5 backend input ceiling — the observed 272k-token limit above
-/// which the Codex backend rejects a prompt, listed by litellm and models.dev
-/// as the Codex-family `max_input_tokens` / `limit.input`. The rollout's
-/// `model_context_window` — Codex's effective window after its internal headroom
-/// (`258_400 = 272k × 95%`) — replaces this as soon as it appears; until then the
-/// agent card uses this stable provider fallback instead of briefly omitting the
-/// window token.
-const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
-
 /// Marker RimZ sets on every `codex app-server` it spawns for read-only
 /// enrichment (the cold-spawn in [`app_server`] and the warm [`broker`]). Such a
 /// server is not a user session, yet Codex still fires its configured lifecycle
@@ -233,7 +224,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     coverage: CODEX_COVERAGE,
     user_coverage: CODEX_USER_COVERAGE,
     lifecycle_hooks: CODEX_LIFECYCLE_HOOKS,
-    default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
+    default_context_window: None,
     // Codex owns its native default; do not pin launches or guess idle identity.
     default_model: None,
     // Codex commonly runs as a `node` bundle, so PID attribution accepts the
@@ -2117,7 +2108,6 @@ fn build_codex_observation(
     observation.transcript_path = transcript
         .path
         .map(|path| path.to_string_lossy().into_owned());
-    let reported_context_window = usage.reported_context_window();
     observation.launch.role = is_subagent
         .then(|| {
             header
@@ -2138,7 +2128,7 @@ fn build_codex_observation(
                 .then(|| configured_reasoning_effort(&login_env))
                 .flatten()
         });
-    observation.usage.context_window = reported_context_window;
+    observation.usage.context_window = usage.context_window;
     observation.usage.total_tokens = if is_subagent {
         usage.total_tokens
     } else {

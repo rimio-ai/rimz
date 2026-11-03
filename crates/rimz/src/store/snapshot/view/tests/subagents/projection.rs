@@ -691,7 +691,7 @@ fn child_tokens_prefer_window_then_session_then_run_total_never_bare_total() {
 
 #[test]
 fn child_context_window_uses_only_reported_window_occupancy() {
-    let mut child = agent("codex", "child", AgentStatus::Running, 0);
+    let mut child = agent("claude", "child", AgentStatus::Running, 0);
     child.usage.fresh_input_tokens = Some(190_000);
     assert!(
         child.resolved_context_window().is_some(),
@@ -704,7 +704,7 @@ fn child_context_window_uses_only_reported_window_occupancy() {
         (Some(0), Some(200_000), true, Some(0)),
         (Some(200_000), Some(200_000), false, None),
     ] {
-        let mut context = crate::agents::AgentContext::new("codex", epoch());
+        let mut context = crate::agents::AgentContext::new("claude", epoch());
         context.tokens = Some(crate::agents::AgentTokenUsage {
             context_window_size: sidecar,
             ..Default::default()

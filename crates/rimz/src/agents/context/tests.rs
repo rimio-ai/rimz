@@ -103,10 +103,10 @@ fn field_patch_keeps_sets_and_clears_optional_values() {
 
 #[test]
 fn local_token_patches_preserve_established_and_replace_current_usage() {
-    let definition = crate::agents::spec_by_kind("codex").expect("Codex definition is registered");
+    let definition = crate::agents::spec_by_kind("kimi").expect("Kimi definition is registered");
     let exact_window = definition.default_context_window.unwrap() - 1_000;
-    let mut context = AgentContext::new("codex", Timestamp::now());
-    context.model_id = Some("gpt-5.5".to_owned());
+    let mut context = AgentContext::new("kimi", Timestamp::now());
+    context.model_id = Some("kimi-k2.5".to_owned());
     context.tokens = Some(AgentTokenUsage {
         context_window_size: Some(exact_window),
         used_percentage: Some(42),

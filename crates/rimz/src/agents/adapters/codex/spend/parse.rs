@@ -429,7 +429,7 @@ fn visit_response_timing(record: &RolloutRecord<'_>, state: &mut CodexSpendState
         .event_timestamp()
         .and_then(|ts| u64::try_from(ts.as_millisecond()).ok());
     match &record.kind {
-        RolloutKind::InputItem | RolloutKind::TaskStarted => {
+        RolloutKind::InputItem | RolloutKind::TaskStarted { .. } => {
             let Some(ms) = ms else { return };
             state.response_boundary = match state.response_boundary {
                 ResponseBoundary::AwaitingInput => ResponseBoundary::Inputs(ms),

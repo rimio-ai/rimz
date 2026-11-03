@@ -52,6 +52,28 @@ fn decoder_returns_other_for_unknown_valid_shapes() {
 }
 
 #[test]
+fn decoder_reads_task_started_window_when_present() {
+    for (payload, expected) in [
+        (
+            r#"{"type":"task_started","model_context_window":828400}"#,
+            Some(828_400),
+        ),
+        (r#"{"type":"task_started"}"#, None),
+    ] {
+        let line = format!(r#"{{"type":"event_msg","payload":{payload}}}"#);
+        let record = decode_line(line.as_bytes()).unwrap();
+        assert!(record.proves_recovery());
+        let RolloutKind::TaskStarted {
+            model_context_window,
+        } = record.kind
+        else {
+            panic!("task started");
+        };
+        assert_eq!(model_context_window, expected);
+    }
+}
+
+#[test]
 fn decoder_normalizes_visible_context_usage_and_terminal_facts() {
     let visible = decode_line(
         br#"{"timestamp":"2026-01-01T00:00:00Z","type":"event_msg","payload":{"type":"agent_message","message":"done"}}"#,

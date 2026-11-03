@@ -36,7 +36,6 @@ fn rollout_tail_without_its_last_usage_keeps_model_but_reports_unknown_tokens() 
     assert_eq!(usage.last_cache_write_tokens, None);
     assert_eq!(usage.last_output_tokens, None);
     assert_eq!(usage.context_window, None);
-    assert_eq!(usage.reported_context_window(), None);
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
     assert_eq!(usage.effort.as_deref(), Some("high"));
 }
@@ -62,7 +61,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     )
     .unwrap();
     let usage = usage_from_transcript(&full);
-    assert_eq!(usage.reported_context_window(), Some(258_400));
+    assert_eq!(usage.context_window, Some(258_400));
     assert_eq!(usage.total_tokens, Some(130_000));
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
     assert_eq!(usage.effort.as_deref(), Some("xhigh"));
@@ -71,9 +70,8 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.last_cache_write_tokens, Some(8_000));
     assert_eq!(usage.last_output_tokens, Some(800));
 
-    // A brand-new session (rollout opened, no `token_count` yet) reads as an
-    // explicit zero with the provider-default window, so the gauge draws an
-    // empty bar rather than vanishing.
+    // A brand-new session reads as explicit zero usage, without a window
+    // until Codex reports one.
     let fresh = dir.path().join("fresh.jsonl");
     std::fs::write(
         &fresh,
@@ -81,8 +79,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     )
     .unwrap();
     let usage = usage_from_transcript(&fresh);
-    assert_eq!(usage.context_window, Some(272_000));
-    assert_eq!(usage.reported_context_window(), None);
+    assert_eq!(usage.context_window, None);
     assert_eq!(usage.total_tokens, Some(0));
     assert_eq!(usage.effort, None);
     assert_eq!(usage.last_input_tokens, Some(0));
@@ -110,6 +107,102 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.last_cached_input_tokens, None);
     assert_eq!(usage.last_cache_write_tokens, None);
     assert_eq!(usage.last_output_tokens, None);
+}
+
+#[test]
+fn task_started_reports_the_whole_file_window_before_any_usage() {
+    let tail = concat!(
+        r#"{"type":"session_meta","payload":{"id":"sess-1"}}"#,
+        "\n",
+        r#"{"type":"event_msg","payload":{"type":"task_started","model_context_window":828400}}"#,
+    );
+    let usage = scan_transcript_tail(tail, TranscriptScanNeed::UsageOnly).into_usage(true);
+    assert_eq!(usage.context_window, Some(828_400));
+    assert_eq!(usage.total_tokens, Some(0));
+    assert_eq!(usage.last_input_tokens, Some(0));
+    assert_eq!(usage.last_cached_input_tokens, Some(0));
+    assert_eq!(usage.last_cache_write_tokens, Some(0));
+    assert_eq!(usage.last_output_tokens, Some(0));
+}
+
+#[test]
+fn newest_reported_window_and_newest_usage_are_selected_independently() {
+    let tail = concat!(
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"total_tokens":128},"model_context_window":258400}}}"#,
+        "\n",
+        r#"{"type":"event_msg","payload":{"type":"task_started","model_context_window":828400}}"#,
+        "\n",
+        r#"{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}"#,
+    );
+    let usage = scan_transcript_tail(tail, TranscriptScanNeed::UsageOnly).into_usage(false);
+    assert_eq!(usage.context_window, Some(828_400));
+    assert_eq!(usage.last_input_tokens, Some(120));
+    assert_eq!(usage.total_tokens, Some(128));
+
+    let tail = format!(
+        "{tail}\n{}",
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":250,"total_tokens":260},"model_context_window":372400}}}"#,
+    );
+    let usage = scan_transcript_tail(&tail, TranscriptScanNeed::UsageOnly).into_usage(false);
+    assert_eq!(usage.context_window, Some(372_400));
+    assert_eq!(usage.last_input_tokens, Some(250));
+}
+
+#[test]
+fn token_count_without_a_window_never_substitutes_a_guess() {
+    for window in [None, Some(0)] {
+        let mut token_count = json!({
+            "type": "event_msg",
+            "payload": { "type": "token_count", "info": {
+                "last_token_usage": { "input_tokens": 120, "total_tokens": 128 },
+            } },
+        });
+        if let Some(window) = window {
+            token_count["payload"]["info"]["model_context_window"] = json!(window);
+        }
+        let usage = scan_transcript_tail(&token_count.to_string(), TranscriptScanNeed::UsageOnly)
+            .into_usage(true);
+        assert_eq!(usage.context_window, None);
+        assert_eq!(usage.total_tokens, Some(128));
+    }
+}
+
+#[test]
+fn usage_scan_reads_past_model_and_usage_until_it_finds_a_reported_window() {
+    for window in [None, Some(0)] {
+        let mut records = [
+            json!({ "type": "event_msg", "payload": {
+                "type": "task_started", "model_context_window": 828_400,
+            } }),
+            json!({ "type": "turn_context", "payload": { "model": "gpt-6.1-sol" } }),
+            json!({ "type": "event_msg", "payload": { "type": "token_count", "info": {
+                "last_token_usage": { "input_tokens": 120, "total_tokens": 128 },
+            } } }),
+            json!({ "type": "event_msg", "payload": {
+                "type": "task_started",
+            } }),
+        ];
+        if let Some(window) = window {
+            records[2]["payload"]["info"]["model_context_window"] = json!(window);
+            records[3]["payload"]["model_context_window"] = json!(window);
+        }
+        let tail = records.map(|record| record.to_string()).join("\n");
+        let usage = scan_transcript_tail(&tail, TranscriptScanNeed::UsageOnly).into_usage(false);
+        assert_eq!(usage.context_window, Some(828_400));
+        assert_eq!(usage.last_input_tokens, Some(120));
+    }
+}
+
+#[test]
+fn bounded_window_only_tail_supplies_no_sidecar_token_reading() {
+    let tail =
+        r#"{"type":"event_msg","payload":{"type":"task_started","model_context_window":828400}}"#;
+    let usage = scan_transcript_tail(tail, TranscriptScanNeed::UsageOnly).into_usage(false);
+    assert_eq!(usage.context_window, Some(828_400));
+    assert_eq!(usage.last_input_tokens, None);
+    assert_eq!(usage.total_tokens, None);
+    let (tokens, _) = transcript_enrichment(&usage, None, &Default::default());
+    assert!(tokens.is_none());
 }
 
 #[test]
@@ -1186,7 +1279,6 @@ fn transcript_enrichment_maps_split_to_rich_usage() {
     // derives it from `current_usage` over the window downstream.
     let split = TranscriptUsage {
         context_window: Some(10_000),
-        context_window_reported: true,
         total_tokens: Some(4_200),
         model: Some("gpt-5".to_owned()),
         effort: None,
@@ -1223,7 +1315,6 @@ fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
     std::fs::write(&path, "model = \"gpt-5\"\n").unwrap();
     let usage = TranscriptUsage {
         context_window: None,
-        context_window_reported: false,
         total_tokens: None,
         model: None,
         effort: None,
