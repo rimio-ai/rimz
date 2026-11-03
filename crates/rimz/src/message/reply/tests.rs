@@ -8,6 +8,15 @@ use crate::ids::WorkspaceId;
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::message::DeliveryGate;
 
+fn wait_store() -> (tempfile::TempDir, Store) {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    (dir, store)
+}
+
 fn card(status: AgentStatus, started: i64) -> Option<CardView> {
     Some(CardView {
         status,
@@ -114,6 +123,7 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
 
 #[test]
 fn wake_in_flight_keeps_a_rested_agent_sleeping() {
+    let (_dir, store) = wait_store();
     let mut agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
     agent.status = AgentStatus::Success;
     agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
@@ -135,6 +145,8 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
             ),
             messages: vec![message],
             now: Timestamp::now(),
+            store: store.clone(),
+            demotion: ParkDemotion::default().into(),
         }
     };
     let wake = |notice| MessageSender::Harness { notice };
@@ -176,11 +188,14 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
 
 #[test]
 fn turn_wait_reason_projects_each_open_status() {
+    let (_dir, store) = wait_store();
     let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
     let view = TurnWaitView {
         snapshot: SidebarSnapshot::build_with_agents(workspace, vec![], Timestamp::now()),
         messages: vec![],
         now: Timestamp::now(),
+        store,
+        demotion: ParkDemotion::default().into(),
     };
     for (status, expected) in [
         (AgentStatus::Running, TurnWaitReason::Running),
@@ -206,12 +221,15 @@ fn provider_error_settles_the_reply_decision_until_new_activity() {
     use crate::agents::{AgentContext, AgentTurnError, TurnErrorClass};
 
     let at = Timestamp::from_second(1_000).unwrap();
+    let (_dir, store) = wait_store();
     let now = Timestamp::from_second(2_000).unwrap();
     let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
     let view = TurnWaitView {
         snapshot: SidebarSnapshot::build_with_agents(workspace, vec![], now),
         messages: vec![],
         now,
+        store,
+        demotion: ParkDemotion::default().into(),
     };
     let reply = WaitPhase::Reply {
         turn_started_at: Some(at),
@@ -267,7 +285,160 @@ fn provider_error_settles_the_reply_decision_until_new_activity() {
 }
 
 #[test]
+fn spent_provider_pauses_end_replies_but_recoverable_and_budget_parks_stay_open() {
+    use crate::agents::TurnErrorClass::{PausedOverloaded, PausedRateLimit, PausedSpendLimit};
+    use crate::agents::{
+        AgentContext, AgentTurnError, BudgetPark, BudgetScope, BudgetWindow, ProviderCapacity,
+        RateLimitWindow,
+    };
+    use TurnCompletion::{Failed, Open};
+
+    let (_dir, store) = wait_store();
+    let at = Timestamp::from_second(1_000).unwrap();
+    let now = Timestamp::from_second(2_000).unwrap();
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    for (class, exhausted, reset_offset, budget, expected) in [
+        (PausedRateLimit, true, None, false, Failed),
+        (PausedSpendLimit, true, None, false, Failed),
+        (PausedOverloaded, true, None, false, Failed),
+        (PausedRateLimit, false, Some(-1), false, Failed),
+        (PausedSpendLimit, false, Some(-1), false, Failed),
+        (PausedRateLimit, false, Some(1), false, Open),
+        (PausedRateLimit, false, None, false, Open),
+        (PausedOverloaded, false, Some(-1), false, Open),
+        (PausedRateLimit, true, None, true, Open),
+        (PausedRateLimit, false, Some(-1), true, Open),
+    ] {
+        let mut agent = crate::testkit::agent_state("claude", "sess-error", at);
+        agent.status = AgentStatus::Running;
+        agent.turn_started_at = Some(at);
+        agent.context = Some(AgentContext {
+            turn_error: Some(AgentTurnError {
+                ended_turn: false,
+                class,
+                at: at + jiff::SignedDuration::from_secs(1),
+                label: None,
+            }),
+            ..AgentContext::new("claude", now)
+        });
+        agent.budget_park = budget.then_some(BudgetPark {
+            cap_usd: 1.0,
+            spend_usd: 2.0,
+            window: BudgetWindow::Day,
+            at,
+            scope: BudgetScope::Turn,
+            account_kind: None,
+            resets_at: None,
+            reset_window: None,
+        });
+        let capacities = reset_offset
+            .map(|offset| {
+                [(
+                    agent.login_key(),
+                    ProviderCapacity::from_windows(vec![RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some(now + jiff::SignedDuration::from_secs(offset)),
+                        ..Default::default()
+                    }]),
+                )]
+                .into()
+            })
+            .unwrap_or_default();
+        let exhausted = if exhausted {
+            [(agent.kind.clone(), agent.agent_id.clone())].into()
+        } else {
+            Default::default()
+        };
+        let view = TurnWaitView {
+            snapshot: SidebarSnapshot::build_with_agents(workspace.clone(), vec![], now),
+            messages: vec![],
+            now,
+            store: store.clone(),
+            demotion: ParkDemotion::new(&capacities, exhausted, now).into(),
+        };
+        assert_eq!(
+            view.completion(&agent),
+            expected,
+            "{class:?}, budget: {budget}"
+        );
+        assert_eq!(
+            view.reason(&agent),
+            (expected == TurnCompletion::Open).then_some(TurnWaitReason::Paused),
+            "{class:?}, budget: {budget}"
+        );
+    }
+}
+
+#[test]
+fn spent_pause_evidence_is_lazy_and_cached_per_view() {
+    use crate::agents::{
+        AgentContext, AgentRateLimits, AgentTurnError, RateLimitCacheEntry, RateLimitWindow,
+        RateLimitsCache, TurnErrorClass,
+    };
+
+    let (_dir, store) = wait_store();
+    let at = Timestamp::from_second(1_000).unwrap();
+    let now = Timestamp::from_second(2_000).unwrap();
+    let mut agent = crate::testkit::agent_state("claude", "sess-error", at);
+    agent.status = AgentStatus::Running;
+    agent.turn_started_at = Some(at);
+    let mut view = TurnWaitView::load(&store).unwrap();
+    assert!(!view.wake_in_flight(&agent, true));
+    assert!(!view.soft_compact_in_flight(&agent));
+    assert_eq!(view.completion(&agent), TurnCompletion::Open);
+    assert!(view.demotion.get().is_none());
+
+    agent.context = Some(AgentContext {
+        turn_error: Some(AgentTurnError {
+            ended_turn: false,
+            class: TurnErrorClass::PausedRateLimit,
+            at: at + jiff::SignedDuration::from_secs(1),
+            label: None,
+        }),
+        ..AgentContext::new("claude", now)
+    });
+    view.snapshot = SidebarSnapshot::build_with_agents(
+        store.paths().workspace_id.clone(),
+        vec![agent.clone()],
+        now,
+    );
+    assert!(!view.wake_in_flight(&agent, true));
+    assert!(!view.soft_compact_in_flight(&agent));
+    assert!(view.demotion.get().is_none());
+    assert_eq!(view.reason(&agent), Some(TurnWaitReason::Paused));
+
+    let cache = RateLimitsCache {
+        entries: [(
+            agent.login_key().into(),
+            RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some(now - std::time::Duration::from_secs(1)),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &RateLimitsCache::shared_path(store.runtime_paths()),
+        &cache,
+    )
+    .unwrap();
+    assert_eq!(view.reason(&agent), Some(TurnWaitReason::Paused));
+    let mut reloaded = TurnWaitView::load(&store).unwrap();
+    reloaded.snapshot = view.snapshot;
+    assert_eq!(reloaded.completion(&agent), TurnCompletion::Failed);
+    assert_eq!(reloaded.reason(&agent), None);
+}
+
+#[test]
 fn turn_wait_reason_defers_person_until_permission_review_expires() {
+    let (_dir, store) = wait_store();
     let at = Timestamp::from_second(1_000).unwrap();
     let mut agent = crate::testkit::agent_state("codex", "child", at);
     agent.status = AgentStatus::Waiting;
@@ -297,6 +468,8 @@ fn turn_wait_reason_defers_person_until_permission_review_expires() {
             ),
             messages: vec![],
             now,
+            store: store.clone(),
+            demotion: ParkDemotion::default().into(),
         };
         assert_eq!(view.reason(&agent), Some(reason));
     }
@@ -304,6 +477,7 @@ fn turn_wait_reason_defers_person_until_permission_review_expires() {
 
 #[test]
 fn overdue_sent_wake_releases_sleeping_without_reconciliation() {
+    let (_dir, store) = wait_store();
     let now = Timestamp::from_second(1_700_000_100).unwrap();
     let mut agent = crate::testkit::agent_state("claude", "sess-wake", now);
     agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
@@ -349,6 +523,8 @@ fn overdue_sent_wake_releases_sleeping_without_reconciliation() {
                     ),
                     messages: vec![message.clone()],
                     now,
+                    store: store.clone(),
+                    demotion: ParkDemotion::default().into(),
                 };
                 assert_eq!(
                     view.status(&agent),
@@ -402,6 +578,7 @@ fn wake_turn_continues_an_anchored_reply_without_a_sleeping_poll() {
 
 #[test]
 fn card_uses_recorded_wake_classification() {
+    let (_dir, store) = wait_store();
     let agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
     let mut wire = serde_json::to_value(agent).unwrap();
     for (prompt, expected) in [
@@ -425,6 +602,8 @@ fn card_uses_recorded_wake_classification() {
             ),
             messages: Vec::new(),
             now: Timestamp::UNIX_EPOCH,
+            store: store.clone(),
+            demotion: ParkDemotion::default().into(),
         };
         assert_eq!(view.card(&view.snapshot.agents[0]).wake_turn, expected);
     }
@@ -432,6 +611,7 @@ fn card_uses_recorded_wake_classification() {
 
 #[test]
 fn card_identifies_wake_turns_from_the_rollup_classification() {
+    let (_dir, store) = wait_store();
     let mut agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
     agent.status = AgentStatus::Running;
     agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
@@ -457,6 +637,8 @@ fn card_identifies_wake_turns_from_the_rollup_classification() {
             ),
             messages: Vec::new(),
             now: Timestamp::UNIX_EPOCH,
+            store: store.clone(),
+            demotion: ParkDemotion::default().into(),
         };
         assert_eq!(
             view.card(&view.snapshot.agents[0]).wake_turn,
@@ -657,6 +839,8 @@ fn parked_reply_reanchors_when_delivery_starts() {
         snapshot: running,
         messages: vec![message.clone()],
         now: Timestamp::now(),
+        store: store.clone(),
+        demotion: ParkDemotion::default().into(),
     };
     assert!(!advance_leg(&mut leg, &store, &running, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.last_message, None);
@@ -667,6 +851,8 @@ fn parked_reply_reanchors_when_delivery_starts() {
         snapshot: idle,
         messages: vec![message],
         now: Timestamp::now(),
+        store: store.clone(),
+        demotion: ParkDemotion::default().into(),
     };
     assert!(advance_leg(&mut leg, &store, &idle, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.result().final_message, None);

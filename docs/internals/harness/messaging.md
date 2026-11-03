@@ -752,13 +752,13 @@ Each leg is a two-phase machine.
 
 **Delivery** waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into a running turn opens the reply phase from `Sent + Running` instead, because the live turn emits no second `TurnStarted`: the rest of that turn is the reply. Interrupt never takes that shortcut, so `--interrupt --wait` follows only the fresh turn that `Delivered` acknowledges.
 
-**Reply** reads status through `TurnWaitView`, which loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness wake still in flight, reads as `Sleeping`. A `Sent` wake stays in flight while its deadline has not passed or its receiver's compaction bracket is open, regardless of the 90 s display/delivery window. After the bracket closes, the deadline applies again. Legs settle through `TurnCompletion`:
+**Reply** reads status through `TurnWaitView`, which loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness wake still in flight, reads as `Sleeping`. A `Sent` wake stays in flight while its deadline has not passed or its receiver's compaction bracket is open, regardless of the 90 s display/delivery window. After the bracket closes, the deadline applies again. A displayed provider pause reads as `Failed` once the card's `ParkDemotion` counts it as spent; budget parks stay `Paused`. The view builds that evidence lazily, at most once, only for a status read of a provider pause without a budget park, using the snapshot's read instant. Legs settle through `TurnCompletion`:
 
 | Observed | Leg |
 | --- | --- |
 | `Idle` or `Success` after a turn opened (`turn_started_at` set) | Completes |
-| `Failed` (including a turn ended on a non-pausing provider error), a delivery failure, a vanished card, or a skipped waiting input | Fails, while the other legs keep gathering |
-| `Waiting`, `Paused`, or `Sleeping` | Stays in the reply and keeps its turn anchor |
+| `Failed` (including a non-pausing provider error or a provider pause the card counts as spent), a delivery failure, a vanished card, or a skipped waiting input | Fails, while the other legs keep gathering |
+| `Waiting`, a recoverable provider pause or budget park (`Paused`), or `Sleeping` | Stays in the reply and keeps its turn anchor |
 | `Running` with a `turn_started_at` other than the anchor, whose `AgentState::prompt` is wake notices alone | Re-anchors on the new stamp and keeps waiting |
 | `Running` with a new `turn_started_at` and any other prompt | Ends: a human or peer prompt, or a batch mixing a wake with another section, opened an unrelated turn |
 
