@@ -1336,14 +1336,95 @@ fn effective_status_keeps_raw_status_without_active_park() {
             );
         }
     }
+}
 
-    let mut running = test_agent(AgentStatus::Running, 1_000);
-    running.context = Some(context_error(TurnErrorClass::Failed, 1_010));
-    assert_eq!(running.effective_status(now), AgentStatus::Running);
+#[test]
+fn effective_status_fails_non_pausing_errors_until_new_activity() {
+    let now = Timestamp::from_second(2_000).unwrap();
+    for class in [
+        TurnErrorClass::Failed,
+        TurnErrorClass::Unknown,
+        TurnErrorClass::NotEntitled,
+    ] {
+        for status in [AgentStatus::Running, AgentStatus::Waiting] {
+            let mut agent = test_agent(status, 1_000);
+            agent.turn_started_at = Some(agent.last_activity);
+            agent.waiting_since = (status == AgentStatus::Waiting).then_some(agent.last_activity);
+            let mut context = context_error(class, 1_010);
+            context.turn_error.as_mut().unwrap().ended_turn = status == AgentStatus::Waiting;
+            agent.context = Some(context);
+            assert_eq!(
+                agent.effective_status(now),
+                AgentStatus::Failed,
+                "{status:?} {class:?}"
+            );
+            assert_eq!(
+                TurnCompletion::of(agent.effective_status(now), agent.turn_started_at),
+                TurnCompletion::Failed
+            );
+            assert_eq!(
+                agent.rowless_status(&ParkDemotion::default(), now),
+                (AgentStatus::Failed, TurnPhase::Idle)
+            );
+            for activity in [1_010, 1_011] {
+                agent.last_activity = Timestamp::from_second(activity).unwrap();
+                assert_eq!(
+                    agent.effective_status(now),
+                    AgentStatus::Running,
+                    "{status:?} {class:?}"
+                );
+                assert_eq!(
+                    TurnCompletion::of(agent.effective_status(now), agent.turn_started_at),
+                    TurnCompletion::Open
+                );
+            }
+        }
+    }
+}
 
-    let mut unknown = test_agent(AgentStatus::Running, 1_000);
-    unknown.context = Some(context_error(TurnErrorClass::Unknown, 1_010));
-    assert_eq!(unknown.effective_status(now), AgentStatus::Running);
+#[test]
+fn rowless_status_keeps_non_pausing_errors_above_operational_parks() {
+    let now = Timestamp::from_second(2_000).unwrap();
+    for class in [
+        TurnErrorClass::Failed,
+        TurnErrorClass::Unknown,
+        TurnErrorClass::NotEntitled,
+    ] {
+        for outcome in [
+            TurnSettleOutcome::NativeWait,
+            TurnSettleOutcome::PlanProposed,
+        ] {
+            let mut agent = test_agent(AgentStatus::Running, 1_000);
+            let mut context = context_error(class, 1_010);
+            context.settle = Some(TurnSettle::new(
+                Timestamp::from_second(1_010).unwrap(),
+                outcome,
+            ));
+            agent.context = Some(context);
+            assert_eq!(agent.effective_status(now), AgentStatus::Waiting);
+            assert_eq!(
+                agent.rowless_status(&ParkDemotion::default(), now),
+                (AgentStatus::Failed, TurnPhase::Idle)
+            );
+        }
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.context = Some(context_error(class, 1_010));
+        agent.budget_park = Some(BudgetPark {
+            cap_usd: 5.0,
+            spend_usd: 6.0,
+            window: BudgetWindow::Day,
+            at: agent.last_activity,
+            scope: BudgetScope::Fleet,
+            account_kind: None,
+            resets_at: None,
+            reset_window: None,
+        });
+        assert_eq!(agent.effective_status(now), AgentStatus::Paused);
+        assert_eq!(
+            agent.rowless_status(&ParkDemotion::default(), now),
+            (AgentStatus::Failed, TurnPhase::Idle)
+        );
+    }
 }
 
 #[test]
@@ -2053,7 +2134,7 @@ fn answered_waiting_admits_running_turn_errors() {
         ),
         (
             TurnErrorClass::Failed,
-            AgentStatus::Running,
+            AgentStatus::Failed,
             AgentStatus::Failed,
         ),
     ] {

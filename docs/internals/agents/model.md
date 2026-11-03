@@ -313,7 +313,7 @@ The rollup holds the agent-reported lifecycle status. `rimz sidebar snapshot` re
 2. A `running` row with a native-wait or plan-proposal marker reads `waiting`.
 3. A row with a budget park, unless it is `waiting`, reads `paused`.
 4. A `waiting` row with an interruption marker reads `idle`.
-5. A `running` or `failed` row with a qualifying turn-error marker of a pausing class reads `paused`.
+5. A `running` or `failed` row with a qualifying turn-error marker reads `paused` for a pausing class and `failed` for any other class.
 6. A `running` row with a completion marker reads `success`, with an interruption marker `idle`, and in the `parked` phase `success`.
 7. A pending wait makes an `idle` or `success` result read `sleeping`.
 

@@ -184,7 +184,9 @@ fn open_turn(agent: &AgentState, now: Timestamp) -> Option<OpenTurn> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{PendingWait, PendingWaitTrigger, TurnPhase};
+    use crate::agents::{
+        AgentContext, AgentTurnError, PendingWait, PendingWaitTrigger, TurnErrorClass, TurnPhase,
+    };
     use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
     use crate::pane::PaneRef;
 
@@ -497,6 +499,27 @@ mod tests {
             (compacting, OpenTurn::Compacting),
         ] {
             assert_eq!(decide(&[open]), Err(vec![("a".to_owned(), turn)]));
+        }
+    }
+
+    #[test]
+    fn provider_turn_errors_settle_failures_but_keep_pauses_open() {
+        for (class, expected) in [
+            (TurnErrorClass::Failed, None),
+            (TurnErrorClass::PausedOverloaded, Some(OpenTurn::Paused)),
+        ] {
+            let mut running = agent("a", AgentStatus::Running, "/repo/wt");
+            running.last_activity -= jiff::SignedDuration::from_secs(1);
+            running.context = Some(AgentContext {
+                turn_error: Some(AgentTurnError {
+                    ended_turn: false,
+                    class,
+                    at: now(),
+                    label: None,
+                }),
+                ..AgentContext::new("claude", now())
+            });
+            assert_eq!(open_turn(&running, now()), expected, "{class:?}");
         }
     }
 

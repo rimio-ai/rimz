@@ -6399,6 +6399,54 @@ fn message_wait_json_emits_one_fanout_map() {
 }
 
 #[test]
+fn message_wait_ends_on_non_pausing_provider_error() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let agent = ReplyAgentFixture::single(&env, "provider-error");
+
+    let started = Instant::now();
+    let child = traced_rimz(&env, "zellij-wait-provider-error-trace.log")
+        .args([
+            "message",
+            "@claude#feature-wait-provider-error",
+            "--wait=60s",
+            "try it",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn provider-error reply wait");
+    wait_for_message_event_count(&env, "message.sent", 1, Duration::from_secs(60));
+    run_hook_for_owner(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": agent.session_id,
+            "prompt": user_message("try it"),
+            "worktree_branch": agent.branch,
+            "transcript_path": agent.transcript_path,
+        }),
+        &[("ZELLIJ_PANE_ID", agent.pane_id)],
+        env.agent_owner_pid(),
+    );
+    seed_turn_error(&env, &agent.session_id, TurnErrorClass::Failed, false);
+
+    let out = child.wait_with_output().expect("wait for provider error");
+    let elapsed = started.elapsed();
+    assert_eq!(out.status.code(), Some(1), "elapsed: {elapsed:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .any(|line| line == "rimz: turn failed (exit 1)"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(elapsed < Duration::from_secs(20), "elapsed: {elapsed:?}");
+}
+
+#[test]
 fn message_wait_gathers_other_replies_after_one_leg_fails() {
     let env = Env::new();
     env.record(&env.project_root);

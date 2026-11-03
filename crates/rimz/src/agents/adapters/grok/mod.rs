@@ -386,10 +386,6 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
         decoded.set_turn_error(
             match canonical.as_str() {
                 "StopFailure" => parsed.error_details.as_deref().or(parsed.error.as_deref()),
-                "PostToolUseFailure" => parsed.error.as_deref(),
-                "Notification" if parsed.notification_type.as_deref() == Some("agent_error") => {
-                    parsed.error.as_deref().or(parsed.message.as_deref())
-                }
                 _ => None,
             }
             .map(|raw_label| {

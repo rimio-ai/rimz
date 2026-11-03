@@ -213,7 +213,7 @@ fn question_refresh_keeps_the_turn_waiter_open() {
 }
 
 #[test]
-fn failed_refresh_records_error_without_releasing_the_turn_waiter() {
+fn failed_refresh_records_error_and_releases_the_turn_waiter() {
     use crate::agents::{AgentStatus, TurnCompletion, TurnErrorClass};
     let now = "2025-01-01T00:00:10Z".parse().unwrap();
     let root = tempfile::tempdir().unwrap();
@@ -229,10 +229,10 @@ fn failed_refresh_records_error_without_releasing_the_turn_waiter() {
         );
         let agent = refreshed_running_agent(&path);
         assert!(agent.context.as_ref().unwrap().turn_error.is_some());
-        assert_eq!(agent.effective_status(now), AgentStatus::Running);
+        assert_eq!(agent.effective_status(now), AgentStatus::Failed);
         assert_eq!(
             TurnCompletion::of(agent.effective_status(now), agent.turn_started_at),
-            TurnCompletion::Open
+            TurnCompletion::Failed
         );
         let context = agent.context.unwrap();
         assert!(context.settle.is_none());

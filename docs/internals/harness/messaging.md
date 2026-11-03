@@ -757,7 +757,7 @@ Each leg is a two-phase machine.
 | Observed | Leg |
 | --- | --- |
 | `Idle` or `Success` after a turn opened (`turn_started_at` set) | Completes |
-| `Failed`, a delivery failure, a vanished card, or a skipped waiting input | Fails, while the other legs keep gathering |
+| `Failed` (including a turn ended on a non-pausing provider error), a delivery failure, a vanished card, or a skipped waiting input | Fails, while the other legs keep gathering |
 | `Waiting`, `Paused`, or `Sleeping` | Stays in the reply and keeps its turn anchor |
 | `Running` with a `turn_started_at` other than the anchor, whose `AgentState::prompt` is wake notices alone | Re-anchors on the new stamp and keeps waiting |
 | `Running` with a new `turn_started_at` and any other prompt | Ends: a human or peer prompt, or a batch mixing a wake with another section, opened an unrelated turn |

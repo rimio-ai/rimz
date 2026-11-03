@@ -1666,11 +1666,11 @@ impl AgentState {
     }
 
     /// Status after cheap, context-only projections that every read path can
-    /// share. A live turn with an active provider park certificate reads as
-    /// `paused` even when the lifecycle rollup is still `running` or `waiting`
-    /// on an ask from that ended turn, and so does a `failed` row whose own
-    /// turn carries one; native-input
-    /// markers raise `waiting`, provider completion markers settle falsely-running
+    /// share. A qualifying provider turn-error marker reads as `paused` for a
+    /// pausing class and `failed` otherwise, even when the lifecycle rollup is
+    /// still `running` or `waiting` on an ask from that ended turn, and on a
+    /// `failed` row whose own turn carries one. Native-input markers raise
+    /// `waiting`, provider completion markers settle falsely-running
     /// rows to `success`, interruption markers settle falsely-running or waiting
     /// rows to `idle`, and a clean turn parked on background work reads as
     /// `success`, which opens message delivery gates. Budget-aware callers may
@@ -1747,7 +1747,7 @@ impl AgentState {
             return if class.pauses_turn() {
                 AgentStatus::Paused
             } else {
-                status
+                AgentStatus::Failed
             };
         }
         if status != AgentStatus::Running {
