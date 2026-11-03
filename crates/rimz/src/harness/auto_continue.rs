@@ -539,7 +539,8 @@ struct FireContext<'a> {
 
 /// Fire a parked agent's resume when its recorded condition is due and it is
 /// still idle. A woken agent (activity advanced) clears the record; a pane that
-/// has not appeared yet, a condition still ahead, or a recent nudge each waits.
+/// has not appeared yet, reserved input, a condition still ahead, or a recent
+/// nudge each waits.
 fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     if cached_park(path).is_none_or(|record| park_action(&record, agent, ctx).is_none()) {
         return;
@@ -612,7 +613,7 @@ fn park_action(
         } else {
             None
         };
-    if ctx.text.is_empty() {
+    if ctx.text.is_empty() || agent.is_awaiting_input() {
         return None;
     }
     if matches!(record.kind, ParkKind::RateLimit { .. })

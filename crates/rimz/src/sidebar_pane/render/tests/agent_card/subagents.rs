@@ -787,6 +787,7 @@ fn paused_child_parks_parent_head_and_pet() {
     child.last_activity = fixed_now() - Duration::from_secs(1);
     let mut context = crate::agents::AgentContext::new("claude", fixed_now());
     context.turn_error = Some(crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::PausedRateLimit,
         at: fixed_now(),
         label: Some("usage limit reached".to_owned()),
@@ -847,6 +848,7 @@ fn paused_child_headline_stays_in_live_band() {
     paused.description = Some("hidden task".to_owned());
     let mut context = crate::agents::AgentContext::new("claude", fixed_now());
     context.turn_error = Some(crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::PausedRateLimit,
         at: fixed_now(),
         label: Some("usage limit\nreached".to_owned()),

@@ -811,6 +811,7 @@ mod tests {
         successor.worktree_path = Some("/repo/main".to_owned());
         let context = AgentContext {
             turn_error: Some(AgentTurnError {
+                ended_turn: false,
                 class: TurnErrorClass::PausedOverloaded,
                 at: error_at,
                 label: Some("server_overloaded".to_owned()),

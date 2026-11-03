@@ -268,6 +268,7 @@ mod tests {
             let mut errored = agents.clone();
             let mut context = AgentContext::new("codex", now());
             context.turn_error = Some(AgentTurnError {
+                ended_turn: false,
                 class,
                 at: now(),
                 label: None,

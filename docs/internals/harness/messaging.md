@@ -212,7 +212,7 @@ Two flags add cross-agent conditions to boundary and schedule sends, and they co
 - `--after <ADDR>` holds until that agent finishes its queued work. Each address must resolve to exactly one durable card, and repeats form an all-of set. The recipient itself and fan-out addresses are rejected.
 - `--when '@handle <status> <duration>'` holds until one agent stays continuously in a raw lifecycle status for the dwell. Self-reference is allowed, which is what makes keep-warm messages (`@codex --when '@codex idle 58m'`) work.
 
-Delivery gates and `when` conditions read status differently, on purpose. Gates read `effective_status(now)`, which projects budget parks to `Paused`, settles hookless turns, and reads a clean turn parked on background work as `Success`. `when` conditions otherwise read the stored `status` field, so display-only parks and sleeping work never trip a dwell. The exception is an auto-reviewed permission: it matches Running during review, and Waiting from `open_ask.since + 60s`, with the waiting dwell anchored there rather than at hook arrival. Its raw ask still reserves pane input ([waiting and asks](../agents/model.md#waiting-and-asks)).
+Delivery gates and `when` conditions read status differently, on purpose. Gates read `effective_status(now)`, which projects budget parks to `Paused`, settles hookless turns, and reads a clean turn parked on background work as `Success`. `when` conditions otherwise read the stored `status` field, so display-only parks and sleeping work never trip a dwell. The exception is an auto-reviewed permission: it matches Running during review, and Waiting from `open_ask.since + 60s`, with the waiting dwell anchored there rather than at hook arrival. Its raw ask still reserves pane input until a closing event, a newer interruption marker, or, on an Auto row only, a turn-ending error strictly newer than `last_activity` releases it ([waiting and asks](../agents/model.md#waiting-and-asks)). On other modes, including unknown mode, a turn-ending error closes attention and ask listings but keeps pane input reserved for an ask still unanswered at the error until newer activity retires the marker, because a background Code Mode approval may still be live. Auto-continue does not nudge those panes. Once a turn-ending error releases the ask, the review projection stops, and the stored `Waiting` matches from `waiting_since`, as an interrupted waiting row does.
 
 A condition is met for delivery only once its `met_at` stamp is written (`MessageRecord::conditions_met`). Dispatch stamps a condition already satisfied at send time, and the sweep stamps the rest ([Scheduling and wakeups](#scheduling-and-wakeups)). Upstream work must therefore be queued before the message that waits on it.
 
@@ -291,7 +291,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 10 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
 | 11 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation (normally `Registered`), or one delivery window. Lazy-registering providers skip this check |
 | 12 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting, or the overload marker clearing |
-| 13 | No open blocking prompt reserves the input, including a permission still under automatic review | `AskWaiting` | The ask clearing, or `--force` |
+| 13 | No open blocking prompt reserves the input, including a permission still under automatic review and a pane held after a provider error ended the turn | `AskWaiting`, or `PaneHeld` for the held pane | The ask clearing, the held agent's next activity, or `--force` |
 | 14 | A live pane can receive a paste | `NoPane` | A bindable pane appearing. A pinned record waits for its pinned pane |
 
 All fourteen pass and the verdict is `Ready`.
@@ -823,7 +823,7 @@ An agent that sent a message gets one notice when the message ends undelivered a
 
 | Class | Delay | Verdicts |
 | --- | --- | --- |
-| NotWorking | 5 min | `NoPane`, `ProviderStarting`, `ResumeUnrecovered`, `AskWaiting`, `ReceiverGone`, `ReceiverEnded` when not archived, and `GateClosed` with a status other than `Running` (absent status included) |
+| NotWorking | 5 min | `NoPane`, `ProviderStarting`, `ResumeUnrecovered`, `AskWaiting`, `PaneHeld`, `ReceiverGone`, `ReceiverEnded` when not archived, and `GateClosed` with a status other than `Running` (absent status included) |
 | Busy | 20 min | `GateClosed` with `Running`, and `Compacting` |
 | No notice | none | `WaitingForRegistration`, `Scheduled`, `WaitingOnAfter`, `WaitingOnWhen`, `BehindFifo`, `Expired`, `Ready`, or a stop without a verdict |
 

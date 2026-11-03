@@ -709,6 +709,7 @@ fn turn_error_class_round_trips_and_defaults_to_failed() {
         (TurnErrorClass::Failed, "failed", "API Error: Bad Request"),
     ] {
         let error = AgentTurnError {
+            ended_turn: false,
             class,
             at: Timestamp::from_second(1_700_000_000).unwrap(),
             label: Some(label.to_owned()),
@@ -725,6 +726,32 @@ fn turn_error_class_round_trips_and_defaults_to_failed() {
     }))
     .unwrap();
     assert_eq!(legacy.class, TurnErrorClass::Failed);
+}
+
+#[test]
+fn turn_error_end_fact_is_optional_and_round_trips() {
+    let legacy = serde_json::from_value::<AgentTurnError>(serde_json::json!({
+        "at": "2023-11-14T22:13:20Z",
+        "label": "API Error: Server Error"
+    }));
+    assert!(
+        legacy.is_ok(),
+        "older markers need no ended_turn key: {legacy:?}"
+    );
+    let mut error = legacy.unwrap();
+    assert!(!error.ended_turn);
+    for ended_turn in [false, true] {
+        error.ended_turn = ended_turn;
+        let value = serde_json::to_value(&error).unwrap();
+        assert_eq!(
+            value.get("ended_turn"),
+            ended_turn.then_some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentTurnError>(value).unwrap(),
+            error
+        );
+    }
 }
 
 #[test]

@@ -666,6 +666,7 @@ fn provider_error_certificate_reaps_the_replaced_owner() {
 
     let context = AgentContext {
         turn_error: Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),
@@ -760,6 +761,7 @@ fn stale_provider_certificate_does_not_reap_the_owner() {
 
     let context = AgentContext {
         turn_error: Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at: now - Duration::from_secs(3),
             label: Some("server_overloaded".to_owned()),

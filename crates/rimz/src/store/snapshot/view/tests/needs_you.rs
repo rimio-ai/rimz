@@ -8,6 +8,7 @@ fn card_projection_status_honors_card_and_rowless_demotion() {
     let mut state = agent("codex", "status", AgentStatus::Running, 0);
     let mut context = crate::agents::AgentContext::new("codex", now);
     context.turn_error = Some(crate::agents::AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::PausedRateLimit,
         at: now + jiff::SignedDuration::from_secs(1),
         label: Some("limit reached".into()),

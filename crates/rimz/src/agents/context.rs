@@ -178,11 +178,12 @@ pub struct AgentContext {
     pub turn_opened_by: Vec<MessageId>,
     /// A turn that died on a provider API error, detected from a provider hook
     /// or transcript/rollout tail. Status-projection marker: the projection
-    /// reads it to refine a falsely-`running` row, or a same-turn `failed` row,
-    /// into `paused`/`failed` with the provider's reason. The marker itself
-    /// never reaches the event log. It self-clears once a newer hook event
-    /// advances `last_activity` past [`AgentTurnError::at`], or once the
-    /// rollup's `turn_started_at` proves the marker belongs to a prior turn.
+    /// reads it to refine a falsely-`running` row, a `waiting` row whose turn
+    /// ended, or a same-turn `failed` row into `paused`/`failed` with the
+    /// provider's reason. The marker itself never reaches the event log. It
+    /// self-clears once a newer hook event advances `last_activity` past
+    /// [`AgentTurnError::at`], or once the rollup's `turn_started_at` proves
+    /// the marker belongs to a prior turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error: Option<AgentTurnError>,
     /// How the current turn came to rest when it fired no `Stop` hook to
@@ -1555,14 +1556,18 @@ fn is_transient_server_error(lower: &str) -> bool {
         || lower.contains("network error")
 }
 
-/// A turn that ended on a provider API error. Provider detectors read their
-/// hook payload or local transcript/rollout tail and normalize the death
-/// certificate into this marker. The projection compares [`at`](Self::at)
-/// against the row's `last_activity` for live `running` rows and against
-/// `turn_started_at` for terminal `failed` rows, so stale markers from prior
-/// turns do not reclassify fresh work.
+/// A provider API error from a hook payload or local transcript/rollout tail.
+/// The projection compares [`at`](Self::at) against the row's `last_activity`
+/// for live `running` rows and against `turn_started_at` for terminal `failed`
+/// rows, so stale markers from prior turns do not reclassify fresh work. An
+/// [`ended_turn`](Self::ended_turn) marker newer than `last_activity` also
+/// releases a `waiting` row's blocking asks and displays the turn's outcome.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentTurnError {
+    /// Whether this record proves the turn ended, rather than a mid-turn error.
+    /// Older sidecars and unproven provider records leave it false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ended_turn: bool,
     /// The display class for the dead turn. Older sidecars omitted this field;
     /// deserialize them as [`TurnErrorClass::Failed`] so stale markers remain
     /// conservative.

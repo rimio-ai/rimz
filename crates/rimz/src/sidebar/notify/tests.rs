@@ -177,6 +177,7 @@ fn delegated_park_opens_one_unread_episode_and_parent_notification() {
     child.last_activity = now - jiff::SignedDuration::from_secs(1);
     let mut context = crate::agents::AgentContext::new("claude", now);
     context.turn_error = Some(crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::PausedRateLimit,
         at: now,
         label: Some("usage limit reached".to_owned()),

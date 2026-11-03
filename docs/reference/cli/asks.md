@@ -12,7 +12,9 @@ rimz asks --json          # the same rows as JSON
 
 `rimz asks` and `rimz asks list` are the same command and take the same flags.
 
-For Codex launched in `auto` mode, permission requests under automatic review are omitted from both the table and `--json` for 60 seconds after arrival. If no later event clears the ask, it appears on the next read at or after 60 seconds. Questions and plan approvals are not delayed. Explicit `rimz asks show` and `rimz answer` still resolve the raw ask during review; pane-input guards still apply. See [Codex's mode and native-child limits](../../internals/agents/adapter_codex.md#asks-and-answers).
+For Codex launched in `auto` mode, permission requests under automatic review are omitted from both the table and `--json` for 60 seconds after arrival. If no later event clears the ask, it appears on the next read at or after 60 seconds. If the turn ends on a provider error instead, the ask closes and leaves the list, before or after that point; the agent shows paused or failed with the provider's message. Questions and plan approvals are not delayed. Explicit `rimz asks show` and `rimz answer` still resolve the raw ask during review; pane-input guards still apply. See [Codex's mode and native-child limits](../../internals/agents/adapter_codex.md#asks-and-answers).
+
+A turn-ending error removes an older ask from the list in any mode, but only a recorded Auto row also releases pane input. Other modes, including unknown mode, keep it reserved until the agent's next activity when the ask was still unanswered at the error, because a background Code Mode approval may still be live. Auto-continue does not nudge those panes.
 
 | Flag | Effect |
 | --- | --- |

@@ -362,6 +362,7 @@ impl HookCapability for QoderAdapter {
                 _ => TurnErrorClass::classify_label(label.as_deref()),
             };
             decoded.set_turn_error(Some(AgentTurnError {
+                ended_turn: false,
                 class,
                 at: Timestamp::now(),
                 label,

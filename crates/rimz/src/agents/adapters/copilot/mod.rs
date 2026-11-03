@@ -458,6 +458,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                         .and_then(|millis| Timestamp::from_millisecond(millis).ok())
                         .unwrap_or_else(Timestamp::now);
                     Some(AgentTurnError {
+                        ended_turn: false,
                         class: TurnErrorClass::classify_label(Some(&label)),
                         at,
                         label: Some(label),

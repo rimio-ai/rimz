@@ -1183,6 +1183,7 @@ fn context_severity_takes_the_worse_of_percent_and_tokens() {
 #[test]
 fn effective_turn_error_class_parks_legacy_limit_labels() {
     let turn_error = |label: &str| AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::Failed,
         at: Timestamp::from_second(1_700_000_000).unwrap(),
         label: Some(label.to_owned()),
@@ -1208,6 +1209,7 @@ fn effective_turn_error_class_parks_legacy_limit_labels() {
 fn effective_turn_error_class_keeps_usage_cap_failed() {
     let now = Timestamp::from_second(2_000).unwrap();
     let error = AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::Failed,
         at: Timestamp::from_second(1_010).unwrap(),
         label: crate::agents::context::cap_turn_error_label(concat!(
@@ -1245,6 +1247,7 @@ fn test_agent(status: AgentStatus, activity: i64) -> AgentState {
 fn context_error(class: TurnErrorClass, at: i64) -> AgentContext {
     AgentContext {
         turn_error: Some(AgentTurnError {
+            ended_turn: false,
             class,
             at: Timestamp::from_second(at).unwrap(),
             label: Some("provider parked".to_owned()),
@@ -1725,6 +1728,169 @@ fn auto_review_permission() -> AgentState {
         since: agent.last_activity,
     });
     agent
+}
+
+fn ended_permission_turn(class: TurnErrorClass, at: i64) -> AgentState {
+    let mut agent = auto_review_permission();
+    let mut context = context_error(class, at);
+    let error = context.turn_error.as_mut().unwrap();
+    error.ended_turn = true;
+    error.label = Some("Selected model is at capacity. Please try a different model.".to_owned());
+    agent.context = Some(context);
+    agent
+}
+
+#[test]
+fn turn_ending_pause_releases_permission_before_and_after_review() {
+    let mut agent = ended_permission_turn(TurnErrorClass::PausedOverloaded, 1_010);
+    for second in [1_059, 1_061, 1_090] {
+        let now = Timestamp::from_second(second).unwrap();
+        assert!(!agent.holds_open_turn(), "at {second}");
+        assert!(!agent.is_awaiting_input());
+        assert!(!agent.is_asking());
+        assert!(agent.attention_ask(now).is_none());
+        assert_eq!(agent.permission_review_until(), None);
+        assert_eq!(agent.actionable_asks().count(), 0);
+        assert_eq!(agent.effective_status(now), AgentStatus::Paused);
+        assert_eq!(
+            agent.displayed_turn_error(now).unwrap().1.label.as_deref(),
+            Some("Selected model is at capacity. Please try a different model.")
+        );
+        assert_eq!(
+            agent.rowless_status(&ParkDemotion::default(), now),
+            (AgentStatus::Paused, TurnPhase::Idle)
+        );
+    }
+
+    agent.status = AgentStatus::Running;
+    agent.phase = TurnPhase::Reasoning;
+    agent.last_activity = Timestamp::from_second(1_011).unwrap();
+    agent.waiting_since = None;
+    agent.open_ask = None;
+    assert_eq!(
+        agent.effective_status(agent.last_activity),
+        AgentStatus::Running
+    );
+    assert!(agent.displayed_turn_error(agent.last_activity).is_none());
+    assert!(agent.holds_open_turn());
+}
+
+#[test]
+fn turn_ended_non_auto_permission_reserves_input_but_not_attention() {
+    for mode in [None, Some(crate::agents::PermissionMode::Ask)] {
+        let mut agent = ended_permission_turn(TurnErrorClass::PausedOverloaded, 1_010);
+        agent.mode = mode;
+        for second in [1_059, 1_061] {
+            let now = Timestamp::from_second(second).unwrap();
+            assert!(agent.is_awaiting_input(), "{mode:?} at {second}");
+            assert!(!agent.holds_open_turn());
+            assert!(!agent.is_asking());
+            assert!(agent.attention_ask(now).is_none());
+            assert_eq!(agent.permission_review_until(), None);
+            assert_eq!(agent.actionable_asks().count(), 0);
+            assert_eq!(agent.effective_status(now), AgentStatus::Paused);
+            assert_eq!(
+                agent.displayed_turn_error(now).unwrap().1.label.as_deref(),
+                Some("Selected model is at capacity. Please try a different model.")
+            );
+            assert_eq!(
+                agent.rowless_status(&ParkDemotion::default(), now),
+                (AgentStatus::Paused, TurnPhase::Idle)
+            );
+        }
+
+        let mut answered = agent.clone();
+        answered.last_activity = Timestamp::from_second(1_005).unwrap();
+        assert!(
+            !answered.is_awaiting_input(),
+            "{mode:?} answered before the error"
+        );
+        assert_eq!(
+            answered.effective_status(Timestamp::from_second(1_061).unwrap()),
+            AgentStatus::Paused
+        );
+
+        agent.last_activity = Timestamp::from_second(1_011).unwrap();
+        assert!(!agent.is_awaiting_input());
+        assert!(agent.displayed_turn_error(agent.last_activity).is_none());
+        assert_eq!(
+            agent.effective_status(agent.last_activity),
+            AgentStatus::Running
+        );
+    }
+}
+
+#[test]
+fn turn_ending_failure_releases_permission_and_displays_failed() {
+    let agent = ended_permission_turn(TurnErrorClass::Failed, 1_010);
+    let now = Timestamp::from_second(1_061).unwrap();
+    assert_eq!(
+        agent.rowless_status(&ParkDemotion::default(), now),
+        (AgentStatus::Failed, TurnPhase::Idle)
+    );
+    assert!(!agent.holds_open_turn());
+    assert!(!agent.is_awaiting_input());
+    assert!(!agent.is_asking());
+    assert_eq!(agent.actionable_asks().count(), 0);
+    assert!(agent.attention_ask(now).is_none());
+}
+
+#[test]
+fn stale_tied_and_mid_turn_errors_keep_permission_waiting() {
+    let now = Timestamp::from_second(1_061).unwrap();
+    for (at, ended_turn) in [(990, true), (1_000, true), (1_010, false)] {
+        let mut agent = ended_permission_turn(TurnErrorClass::PausedOverloaded, at);
+        agent
+            .context
+            .as_mut()
+            .unwrap()
+            .turn_error
+            .as_mut()
+            .unwrap()
+            .ended_turn = ended_turn;
+        assert_eq!(
+            agent.effective_status(now),
+            AgentStatus::Waiting,
+            "{at}, {ended_turn}"
+        );
+        assert_eq!(
+            WaitingResolution::resolve(
+                agent.status,
+                agent.context.as_ref(),
+                agent.last_activity,
+                Some(&agent),
+                now
+            ),
+            WaitingResolution::Held
+        );
+        assert!(agent.holds_open_turn());
+        assert!(agent.is_awaiting_input());
+        assert!(agent.is_asking());
+        assert!(agent.displayed_turn_error(now).is_none());
+        assert_eq!(agent.actionable_asks().count(), 1);
+        assert_eq!(agent.attention_ask(now), agent.open_ask.as_ref());
+    }
+}
+
+#[test]
+fn newer_question_and_plan_asks_keep_pane_input_reserved() {
+    let now = Timestamp::from_second(1_061).unwrap();
+    for kind in [AskKind::Question, AskKind::PlanApproval] {
+        let mut agent = ended_permission_turn(TurnErrorClass::PausedOverloaded, 990);
+        let ask = agent.open_ask.as_mut().unwrap();
+        ask.kind = kind;
+        ask.native_key = Some("native-ask".to_owned());
+        assert_eq!(
+            agent.effective_status(now),
+            AgentStatus::Waiting,
+            "{kind:?}"
+        );
+        assert!(agent.is_awaiting_input());
+        assert!(agent.holds_open_turn());
+        assert!(agent.is_asking());
+        assert_eq!(agent.attention_ask(now), agent.open_ask.as_ref());
+        assert_eq!(agent.actionable_asks().count(), 1);
+    }
 }
 
 #[test]

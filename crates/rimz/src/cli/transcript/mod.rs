@@ -957,7 +957,7 @@ pub(crate) fn latest_ask_view(
     workspace: &rimz::ResolvedWorkspace,
     agent: &rimz::agents::AgentState,
 ) -> Result<Option<AskView>> {
-    if !agent.is_awaiting_input() {
+    if !agent.holds_open_turn() || !agent.is_awaiting_input() {
         return Ok(None);
     }
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
@@ -969,7 +969,7 @@ fn latest_ask_view_from_paths(
     paths: &rimz::StatePaths,
     agent: &rimz::agents::AgentState,
 ) -> Result<Option<AskView>> {
-    if !agent.is_awaiting_input() {
+    if !agent.holds_open_turn() || !agent.is_awaiting_input() {
         return Ok(None);
     }
     rimz::transcript::latest_open_ask(paths, &agent.kind, &agent.agent_id)

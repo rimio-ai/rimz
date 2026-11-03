@@ -715,6 +715,7 @@ fn task_complete_has_final_message(task: &CodexTaskComplete<'_>) -> bool {
 
 fn messageless_task_complete(at: Timestamp) -> AgentTurnError {
     AgentTurnError {
+        ended_turn: true,
         class: TurnErrorClass::Unknown,
         at,
         label: Some(MESSAGELESS_TASK_COMPLETE_LABEL.to_owned()),
@@ -726,7 +727,15 @@ fn turn_error_from_record(record: &RolloutRecord<'_>) -> Option<AgentTurnError> 
     let at = record.event_timestamp()?;
     let label = turn_error_label(error);
     let class = classify_turn_error(&error.kinds, label.as_deref());
-    Some(AgentTurnError { class, at, label })
+    Some(AgentTurnError {
+        ended_turn: matches!(
+            record.kind,
+            RolloutKind::TaskComplete(_) | RolloutKind::TurnAborted
+        ),
+        class,
+        at,
+        label,
+    })
 }
 
 fn trim_frame_line(line: &str) -> &str {

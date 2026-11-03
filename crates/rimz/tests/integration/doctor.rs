@@ -645,6 +645,7 @@ fn doctor_account_standing_is_cache_only_and_empty_paid_credits_are_not_exhausti
     );
     let mut context = rimz::agents::AgentContext::new("codex", now);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        ended_turn: false,
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at: Timestamp::now(),
         label: Some("limit reached".into()),
@@ -1509,6 +1510,7 @@ fn doctor_json_folds_one_row_per_agent() {
     let now = Timestamp::now();
     let mut context = rimz::agents::AgentContext::new("claude", now);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        ended_turn: false,
         class: rimz::agents::TurnErrorClass::Failed,
         at: now,
         label: Some("request rejected".into()),

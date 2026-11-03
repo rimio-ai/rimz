@@ -5354,6 +5354,7 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
         let at = Timestamp::now();
         let mut context = AgentContext::new("codex", at);
         context.turn_error = Some(AgentTurnError {
+            ended_turn: false,
             class: TurnErrorClass::PausedOverloaded,
             at,
             label: Some("server_overloaded".to_owned()),

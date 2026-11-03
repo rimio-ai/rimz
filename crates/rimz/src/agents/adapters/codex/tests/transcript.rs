@@ -684,6 +684,75 @@ fn task_complete_workspace_credits_depleted_is_a_rate_limit() {
 }
 
 #[test]
+fn turn_error_detector_marks_only_turn_ending_records() {
+    for (kind, ended_turn) in [
+        ("task_complete", true),
+        ("turn_aborted", true),
+        ("error", false),
+        ("stream_error", false),
+        ("turn_error", false),
+    ] {
+        let record = json!({
+            "timestamp": "2026-11-03T07:36:01.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": kind,
+                "message": "Selected model is at capacity. Please try a different model.",
+                "codex_error_info": "server_overloaded",
+                "error": {
+                    "message": "Selected model is at capacity. Please try a different model.",
+                    "codex_error_info": "server_overloaded"
+                }
+            }
+        });
+        let error = detect_turn_error(&record.to_string()).unwrap();
+        assert_eq!(error.ended_turn, ended_turn, "{kind}");
+        assert_eq!(error.class, crate::agents::TurnErrorClass::PausedOverloaded);
+    }
+}
+
+#[test]
+fn capacity_task_complete_refresh_keeps_the_turn_end_fact() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let output = json!({
+        "timestamp": "2026-11-03T07:36:00.000Z",
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call_output", "output": "Script completed"}
+    });
+    let complete = json!({
+        "timestamp": "2026-11-03T07:36:01.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "error": {
+                "message": "Selected model is at capacity. Please try a different model.",
+                "codex_error_info": "server_overloaded"
+            }
+        }
+    });
+    std::fs::write(&path, format!("{output}\n{complete}\n")).unwrap();
+    let refresh = refresh_transcript_context(
+        "sess-1",
+        None,
+        Some(path.to_string_lossy().as_ref()),
+        None,
+        None,
+        &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+    let error = refresh.context.turn_error.into_set().unwrap();
+    assert!(error.ended_turn);
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedOverloaded);
+    assert_eq!(
+        error.label.as_deref(),
+        Some("Selected model is at capacity. Please try a different model.")
+    );
+}
+
+#[test]
 fn turn_error_detector_maps_known_error_shapes() {
     let rate_limit = json!({
         "timestamp": "2026-06-11T07:18:00.000Z",
@@ -1304,10 +1373,11 @@ fn errored_abort_is_a_failed_turn_death_not_an_interruption() {
     };
     assert_eq!(error.class, crate::agents::TurnErrorClass::Failed);
     assert_eq!(error.label.as_deref(), Some(label));
+    assert!(error.ended_turn);
 }
 
 #[test]
-fn messageless_task_complete_refreshes_as_overload_death() {
+fn messageless_task_complete_refreshes_as_unknown_death() {
     for last_agent_message in [serde_json::Value::Null, json!("")] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rollout-session.jsonl");
@@ -1344,6 +1414,7 @@ fn messageless_task_complete_refreshes_as_overload_death() {
             .into_set()
             .expect("shape death is stamped");
         assert_eq!(error.class, crate::agents::TurnErrorClass::Unknown);
+        assert!(error.ended_turn);
         assert_eq!(
             error.at,
             "2026-07-03T12:55:00.000Z"
@@ -1493,6 +1564,7 @@ again at 6:35 AM.
 #[test]
 fn refine_turn_death_from_frame_parks_keyword_proven_and_adopts_banner() {
     let mut capacity = crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
         label: Some("turn ended with no final message".to_owned()),
@@ -1511,6 +1583,7 @@ fn refine_turn_death_from_frame_parks_keyword_proven_and_adopts_banner() {
     );
 
     let mut usage_limit = crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
         label: Some("turn ended with no final message".to_owned()),
@@ -1540,6 +1613,7 @@ again at 6:35 AM.
     );
 
     let mut unknown = crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
         label: Some("turn ended with no final message".to_owned()),
@@ -1549,6 +1623,7 @@ again at 6:35 AM.
     assert_eq!(unknown.label.as_deref(), Some("Provider ended turn early"));
 
     let mut numeric_pane_line = crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
         label: Some("turn ended with no final message".to_owned()),
@@ -1587,6 +1662,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
         }])
     };
     let generic = || crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: now,
         label: Some("turn ended with no final message".to_owned()),
@@ -1612,6 +1688,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
     }
 
     let mut proven = crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::PausedOverloaded,
         at: now,
         label: Some("Selected model is at capacity.".to_owned()),
@@ -1620,6 +1697,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
     assert_eq!(
         proven,
         crate::agents::AgentTurnError {
+            ended_turn: false,
             class: crate::agents::TurnErrorClass::PausedOverloaded,
             at: now,
             label: Some("Selected model is at capacity.".to_owned()),

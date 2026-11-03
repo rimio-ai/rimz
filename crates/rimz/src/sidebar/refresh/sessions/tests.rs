@@ -147,6 +147,7 @@ fn codex_turn_death_without_pane_infers_spent_window() {
     runtime.ensure_dirs().unwrap();
     let now = write_spent_codex_window(&runtime);
     let mut error = crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: now,
         label: Some("turn ended with no final message".to_owned()),
@@ -179,6 +180,7 @@ fn codex_turn_death_without_pane_infers_spent_window() {
 fn codex_turn_death_retry_is_bounded_to_generic_recent_codex_markers() {
     let now = Timestamp::now();
     let marker = crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at: now,
         label: Some("turn ended with no final message".to_owned()),
@@ -218,6 +220,7 @@ fn codex_turn_death_retry_merges_refined_marker() {
     runtime.ensure_dirs().unwrap();
     let at = write_spent_codex_window(&runtime);
     let marker = crate::agents::AgentTurnError {
+        ended_turn: false,
         class: crate::agents::TurnErrorClass::Unknown,
         at,
         label: Some("turn ended with no final message".to_owned()),

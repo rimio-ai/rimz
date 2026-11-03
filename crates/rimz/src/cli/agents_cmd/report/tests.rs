@@ -360,6 +360,7 @@ fn delegated_park_reports_paused_without_parent_turn_error() {
     child.launch_depth = Some(1);
     let mut context = rimz::agents::AgentContext::new("codex", now);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::PausedRateLimit,
         at: now,
         label: Some("usage limit reached".to_owned()),
@@ -397,6 +398,7 @@ fn projected_row_status_wins_and_rowless_error_falls_back_to_failed() {
     state.phase = TurnPhase::Acting;
     let mut context = rimz::agents::AgentContext::new("codex", now);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::Failed,
         at: now,
         label: Some("boom".to_owned()),
@@ -463,6 +465,7 @@ fn rowless_spent_child_reports_failed_with_provider_error() {
     child.launch_depth = Some(1);
     let mut context = rimz::agents::AgentContext::new("codex", now);
     context.turn_error = Some(rimz::agents::AgentTurnError {
+        ended_turn: false,
         class: TurnErrorClass::PausedRateLimit,
         at: now,
         label: Some("usage limit reached".to_owned()),

@@ -30,6 +30,7 @@ fn stall_classes_cover_every_delivery_verdict() {
             Some(StallClass::NotWorking),
         ),
         (DeliveryVerdict::AskWaiting, Some(StallClass::NotWorking)),
+        (DeliveryVerdict::PaneHeld, Some(StallClass::NotWorking)),
         (DeliveryVerdict::ReceiverGone, Some(StallClass::NotWorking)),
         (DeliveryVerdict::ReceiverEnded, Some(StallClass::NotWorking)),
         (DeliveryVerdict::Compacting, Some(StallClass::Busy)),
@@ -462,6 +463,9 @@ fn delivery_check_reports_first_blocker_and_passes_only_when_ready() {
     check.gate.resume_recovered = None;
     check.ask.waiting = true;
     assert_eq!(check.verdict(), DeliveryVerdict::AskWaiting);
+    check.ask.turn_ended = true;
+    assert_eq!(check.verdict(), DeliveryVerdict::PaneHeld);
+    check.ask.turn_ended = false;
     check.ask.waiting = false;
     check.pane.present = false;
     check.pane.pinned_pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
@@ -631,6 +635,7 @@ fn ready_check() -> DeliveryCheck {
             waiting: false,
             force: false,
             permission_review: false,
+            turn_ended: false,
         },
         pane: PaneCheck {
             present: true,

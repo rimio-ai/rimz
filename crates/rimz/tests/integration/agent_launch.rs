@@ -2932,6 +2932,7 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
     let seed_marker = |at: jiff::Timestamp| {
         let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);
         context.turn_error = Some(rimz::agents::AgentTurnError {
+            ended_turn: false,
             class: rimz::agents::TurnErrorClass::Failed,
             at,
             label: Some("Usage limit reached".to_owned()),

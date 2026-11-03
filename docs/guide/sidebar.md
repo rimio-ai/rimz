@@ -169,7 +169,9 @@ Every card wears one state, and seven cover the life of a session:
 
 The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on handed-off work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
-Codex launched in `auto` mode keeps Running while a permission request is under automatic review. If no later event clears it, `?` appears 60 seconds after arrival, on the next refresh; questions and plan approvals show `?` immediately. A pane glance during review does not silence that later ask. [Codex's limits](../internals/agents/adapter_codex.md#asks-and-answers) cover native children and mid-session permission-mode changes.
+Codex launched in `auto` mode keeps Running while a permission request is under automatic review. If no later event clears it, `?` appears 60 seconds after arrival, on the next refresh. If the turn ends on a provider error instead, such as the model being at capacity, the request closes before or after that point: the agent shows paused with the provider's message, or failed for an error that does not pause. Questions and plan approvals show `?` immediately. A pane glance during review does not silence that later ask. [Codex's limits](../internals/agents/adapter_codex.md#asks-and-answers) cover native children and mid-session permission-mode changes.
+
+A Codex permission request closes the same way in every permission mode when the turn ends on a provider error: the card shows paused or failed, and a parent that launched it shows the pause. Unless the agent was launched in `auto` mode, or you had already answered the request, RimZ still holds messages and auto-continue out of its pane until the agent's next activity, because an approval prompt from background work may still be open there. A steer refused for that reason says so and points you at the pane.
 
 A session's life traces one loop through those states:
 
