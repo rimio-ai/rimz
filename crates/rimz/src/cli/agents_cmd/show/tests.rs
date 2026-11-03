@@ -425,6 +425,7 @@ fn show_message_status_serializes_as_its_existing_string() {
 #[test]
 fn show_json_wraps_the_projected_agent() {
     let mut state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
+    state.usage.context_window = Some(272_000);
     state.login = Some("work".parse().unwrap());
     state.launch_warnings = vec!["tool rules unsupported".into()];
     let peers = [&state];

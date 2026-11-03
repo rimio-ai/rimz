@@ -212,25 +212,25 @@ fn cursor_idle_session_name_yields_to_first_prompt_affordance() {
 
 #[test]
 fn render_agent_capability_uses_descriptor_default_window() {
-    let mut codex = agent(
-        "codex-1",
-        "codex",
+    let mut kimi = agent(
+        "kimi-1",
+        "kimi",
         AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
         Some("resting"),
     );
-    codex.model = Some("gpt-5.5-codex".to_owned());
-    codex.effort = Some("xhigh".to_owned());
-    assert!(codex.usage.context_window.is_none());
-    assert!(codex.context.is_none());
-    let snapshot = snapshot_with(vec![codex]);
+    kimi.model = Some("kimi-k2.5".to_owned());
+    kimi.effort = Some("high".to_owned());
+    assert!(kimi.usage.context_window.is_none());
+    assert!(kimi.context.is_none());
+    let snapshot = snapshot_with(vec![kimi]);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 15);
 
     assert!(
-        rendered.contains("GPT 5.5 Codex · 272k"),
-        "the identity line falls back to the Codex definition window:\n{rendered}"
+        rendered.contains("Kimi K2.5 · 262k"),
+        "the identity line falls back to the Kimi definition window:\n{rendered}"
     );
 }
 

@@ -283,7 +283,7 @@ The unknown-model chase rides the same producer walk and has no timer of its own
 | `--check` | fetches without writing, and fails when the LiteLLM catalogue is implausibly small, an authoritative models.dev provider disappears, a built-in default model loses its price, or a long-context canary loses its tier |
 | `RIMZ_PRICING_JSON_PATH`, `RIMZ_PRICING_MODELS_DEV_JSON_PATH` | substitute a local document for the LiteLLM or the models.dev fetch. Under `--check`, a LiteLLM override without a models.dev override fails. A models.dev override alone still fetches LiteLLM. |
 
-`cargo xtask dist` runs the refresh before release builds, and the crate's Cargo `include` list carries the snapshot, so `cargo install rimz` embeds it too. GPT-6 Astra is the long-context canary: its fixtures cover both upstream shapes, standard and cache rates, and the whole-request price switch above 272,000 input tokens. Pricing capacity metadata does not change Codex's fresh-session context fallback.
+`cargo xtask dist` runs the refresh before release builds, and the crate's Cargo `include` list carries the snapshot, so `cargo install rimz` embeds it too. GPT-6 Astra is the long-context canary: its fixtures cover both upstream shapes, standard and cache rates, and the whole-request price switch above 272,000 input tokens. Pricing capacity metadata never supplies Codex's context window; only its rollout reports do.
 
 ### Resolving a model
 

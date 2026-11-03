@@ -129,7 +129,7 @@ impl RolloutRecord<'_> {
             self.kind,
             RolloutKind::TurnContext(_)
                 | RolloutKind::AgentMessage
-                | RolloutKind::TaskStarted
+                | RolloutKind::TaskStarted { .. }
                 | RolloutKind::UserMessage
         )
     }
@@ -156,7 +156,9 @@ pub(crate) enum RolloutKind<'a> {
     },
     UserMessage,
     AgentMessage,
-    TaskStarted,
+    TaskStarted {
+        model_context_window: Option<u64>,
+    },
     TurnAborted,
     TaskComplete(CodexTaskComplete<'a>),
     ItemCompleted(CodexItemCompleted<'a>),
@@ -399,7 +401,9 @@ fn decode_event<'a>(
         },
         Some("user_message") => RolloutKind::UserMessage,
         Some("agent_message") => RolloutKind::AgentMessage,
-        Some("task_started") => RolloutKind::TaskStarted,
+        Some("task_started") => RolloutKind::TaskStarted {
+            model_context_window: payload.model_context_window,
+        },
         Some("turn_aborted") => RolloutKind::TurnAborted,
         Some("task_complete") => RolloutKind::TaskComplete(CodexTaskComplete {
             turn_id: payload.turn_id,
@@ -510,6 +514,8 @@ struct EventPayload<'a> {
     turn_id: Option<Cow<'a, str>>,
     #[serde(flatten, borrow)]
     model: ModelFields<'a>,
+    #[serde(default)]
+    model_context_window: Option<u64>,
     #[serde(borrow, default)]
     info: RawField<'a>,
     #[serde(borrow, default)]

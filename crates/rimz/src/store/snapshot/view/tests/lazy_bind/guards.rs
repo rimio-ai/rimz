@@ -128,8 +128,8 @@ fn stale_codex_ghosts_predating_pane_start_render_idle_live_pane() {
             rows[0]
                 .as_agent()
                 .and_then(|agent| agent.usage.context_window),
-            Some(272_000),
-            "fresh Codex rows use the provider fallback window, not stale session stats: {label}",
+            None,
+            "fresh Codex rows must not guess a window or inherit stale session stats: {label}",
         );
     }
 }

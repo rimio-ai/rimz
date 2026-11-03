@@ -305,7 +305,8 @@ Codex writes each persistent thread's rollout at `sessions/YYYY/MM/DD/rollout-<t
 | Rollout record | Field | Internal |
 | --- | --- | --- |
 | `token_count` | `info.last_token_usage.input_tokens` | current context tokens |
-| `token_count` | `info.model_context_window` | context window; 272,000 (`DEFAULT_CONTEXT_WINDOW`) for a whole-file read with no usage yet |
+| `task_started` | `model_context_window` | context window at turn start |
+| `token_count` | `info.model_context_window` | context window |
 | `token_count` | `info.last_token_usage.total_tokens` | `total_tokens` for a child |
 | `token_count` | `info.last_token_usage.cached_input_tokens` | `cache_read_input_tokens` (the card's `◌`) |
 | `token_count` | `info.last_token_usage.cache_write_input_tokens` | `cache_write_input_tokens` (the card's `◍`) |
@@ -316,7 +317,7 @@ Codex writes each persistent thread's rollout at `sessions/YYYY/MM/DD/rollout-<t
 | `turn_context` | `model`, `effort` | model and live reasoning effort |
 | `event_msg` `thread_settings_applied` | `thread_settings.service_tier` | fast pricing for following token events ([cost](#cost)) |
 
-The adapter emits raw tokens and the window, and the snapshot fold derives the gauge percentage. A whole-file read with no `token_count` yet reports zeros against the fallback window. A bounded tail without a `token_count` supplies no token or window reading, which keeps the prior values under the shared [reading rules](./adapter.md#reading-rules). For a child, `total_token_usage` includes the copied parent history, so it never becomes child lifetime usage or spend. The model falls back from the rollout to `model` in `config.toml`.
+The adapter emits raw tokens and the window, and the snapshot fold derives the gauge percentage. Usage comes from the newest `token_count`; the window comes independently from the newest `task_started` or `token_count` reporting a nonzero window in the scanned tail. A whole-file read with no `token_count` yet reports zeros with that reported window, or no window if none was reported. A bounded tail without a `token_count` supplies no sidecar token reading, even if it contains a window, which keeps the prior values under the shared [reading rules](./adapter.md#reading-rules). Lifecycle observations can carry that window alone. For a child, `total_token_usage` includes the copied parent history, so it never becomes child lifetime usage or spend. The model falls back from the rollout to `model` in `config.toml`.
 
 `parse_transcript_messages` is the one conversation parser. It keeps `user_message` and `agent_message` events and completed user and agent message items, with their timestamps.
 

@@ -1149,7 +1149,7 @@ fn codex_descriptor_declares_lazy_registration() {
             .registers_lazily
     );
     assert_eq!(CodexAdapter.spec().default_model, None);
-    assert_eq!(CodexAdapter.spec().default_context_window, Some(272_000));
+    assert_eq!(CodexAdapter.spec().default_context_window, None);
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

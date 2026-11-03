@@ -4,6 +4,29 @@ use crate::agents::SessionOrigin;
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
 
 #[test]
+fn hook_observation_reads_the_window_from_the_latest_task_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"total_tokens":128},"model_context_window":258400}}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"task_started","model_context_window":828400}}"#,
+        ),
+    )
+    .unwrap();
+    let observation = hook_observation(
+        &CodexAdapter,
+        "UserPromptSubmit",
+        &json!({"session_id": "sess-1", "prompt": "next", "transcript_path": path}),
+    )
+    .unwrap();
+    assert_eq!(observation.usage.context_window, Some(828_400));
+    assert_eq!(observation.usage.total_tokens, Some(128));
+}
+
+#[test]
 fn observe_lifecycle_maps_each_event_to_its_signal() {
     // Each root event payload maps to its lifecycle signal.
     // Identity and subagent boundaries are covered separately below.

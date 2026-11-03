@@ -32,7 +32,7 @@ expression: entry
   "context": {
     "fill_pct": null,
     "used_tokens": null,
-    "window": 272000,
+    "window": null,
     "severity": null,
     "compactions": 0,
     "compacting": false
