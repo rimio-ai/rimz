@@ -539,3 +539,409 @@ fn land_rail_agrees_with_validate_and_arrows_follow_the_walk() {
         );
     }
 }
+
+mod horizontal_sweep {
+    use std::collections::{BTreeSet, VecDeque};
+
+    use super::*;
+
+    fn shapes() -> [(&'static str, String); 7] {
+        [
+            ("land", LAND.into()),
+            (
+                "branch",
+                "[workflow]\nscope='worktree'\nstart='choose'\n\
+                 [checks.choose]\nshell='true'\non.a='unit_tests'\n\
+                 on.b='integration_tests'\non.c='used'\n\
+                 [steps.unit_tests]\nshell='true'\nthen='used'\n\
+                 [steps.integration_tests]\nshell='true'\nthen='used'\n\
+                 [checks.used]\nshell='true'\non.pass='final'\n\
+                 [checks.final]\nshell='true'\non.pass='@done'\non.retry='choose'\n"
+                    .into(),
+            ),
+            (
+                "detours",
+                "[workflow]\nscope='worktree'\nstart='build'\n\
+                 [steps.build]\nshell='true'\nthen='review'\n\
+                 [checks.review]\nshell='true'\non.pass='merge'\n\
+                 on.fail='address_review_comments'\non.flaky='rerun_flaky_suite'\n\
+                 [steps.address_review_comments]\nshell='true'\nthen='review'\nmax-visits=9\n\
+                 [steps.rerun_flaky_suite]\nshell='true'\nthen='review'\nmax-visits=9\n\
+                 [checks.merge]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+                    .into(),
+            ),
+            (
+                "unreachable",
+                format!(
+                    "{LAND}\n[steps.resumed]\nshell='true'\nthen='watch'\n\
+                     [steps.never_used]\nshell='true'\nthen='watch'\n"
+                ),
+            ),
+            (
+                "deadline",
+                LAND.replace(
+                    "start = 'begin'",
+                    "start = 'begin'\ndeadline = '1d'\non.deadline = 'cleanup'",
+                ) + "\n[steps.cleanup]\nshell='true'\nthen='@done'\n",
+            ),
+            (
+                "until",
+                "[workflow]\nscope='worktree'\nstart='plan'\n\
+                 [steps.plan]\nagent='claude'\nthen='planned'\n\
+                 [checks.planned]\nshell='true'\non.pass='work'\n\
+                 [steps.work]\nagent='claude'\nlifecycle='until'\nthen='gate'\n\
+                 max-visits=3\non.cap='escalate_to_release_manager'\n\
+                 [steps.escalate_to_release_manager]\nshell='true'\nthen='gate'\n\
+                 [checks.gate]\nshell='true'\non.pass='@done'\non.fail='work'\n"
+                    .into(),
+            ),
+            (
+                "long",
+                "[workflow]\nscope='worktree'\nstart='collect_release_candidates'\n\
+                 [checks.collect_release_candidates]\nshell='true'\n\
+                 on.pass='build_signed_release_artifacts'\non.fail='repair_release_candidate_set'\n\
+                 [steps.repair_release_candidate_set]\nshell='true'\n\
+                 then='collect_release_candidates'\nmax-visits=3\n\
+                 [steps.build_signed_release_artifacts]\nshell='true'\n\
+                 then='verify_signed_artifacts_match'\n\
+                 [checks.verify_signed_artifacts_match]\nshell='true'\n\
+                 on.pass='publish_release_to_registry'\non.fail='@failed'\n\
+                 [steps.publish_release_to_registry]\nshell='true'\nthen='@done'\n"
+                    .into(),
+            ),
+        ]
+    }
+
+    fn shape(name: &str) -> WorkflowSpec {
+        let (_, definition) = shapes()
+            .into_iter()
+            .find(|(shape, _)| *shape == name)
+            .unwrap();
+        toml::from_str(&definition).unwrap()
+    }
+
+    fn path_to(spec: &WorkflowSpec, goal: &str) -> Vec<Hop> {
+        let mut previous = BTreeMap::new();
+        let mut queue = VecDeque::from([spec.workflow.start.clone()]);
+        let mut seen = BTreeSet::from([spec.workflow.start.clone()]);
+        while let Some(node) = queue.pop_front() {
+            if node == goal {
+                break;
+            }
+            for edge in spec.edges(&node) {
+                if edge.fires == Fireability::Never || edge.target.starts_with('@') {
+                    continue;
+                }
+                if seen.insert(edge.target.clone()) {
+                    previous.insert(edge.target.clone(), (node.clone(), edge.outcome));
+                    queue.push_back(edge.target);
+                }
+            }
+        }
+        if !seen.contains(goal) {
+            return vec![Hop {
+                kind: HopKind::Resume,
+                ..route(goal, "resume", goal)
+            }];
+        }
+        let mut hops = Vec::new();
+        let mut node = goal;
+        while let Some((from, outcome)) = previous.get(node) {
+            hops.push(route(from, outcome, node));
+            node = from;
+        }
+        hops.reverse();
+        hops
+    }
+
+    fn runs(
+        spec: &WorkflowSpec,
+        node: &str,
+        repeated_detours: bool,
+    ) -> Vec<(&'static str, RunRecord, Vec<Hop>)> {
+        let hops = path_to(spec, node);
+        let mut base = record(node);
+        for name in std::iter::once(node).chain(
+            hops.iter()
+                .flat_map(|hop| std::iter::once(hop.node.as_str()).chain(hop.target.as_deref())),
+        ) {
+            if spec.steps.contains_key(name) {
+                base.visits.entry(name.into()).or_default().total = 1;
+            }
+        }
+        if repeated_detours {
+            for row in spec.walk().nodes {
+                if row.hangs_under.is_some() {
+                    base.visits.entry(row.node).or_default().total = 12;
+                }
+            }
+        }
+        let mut runs = Vec::new();
+        for state in [
+            RunState::Active,
+            RunState::Parked,
+            RunState::Done,
+            RunState::Failed,
+        ] {
+            let mut record = base.clone();
+            record.state = state;
+            let mut hops = hops.clone();
+            if state.is_terminal() {
+                let target = if state == RunState::Done {
+                    "@done"
+                } else {
+                    "@failed"
+                };
+                hops.push(route(node, state.as_str(), target));
+                hops.push(Hop {
+                    kind: HopKind::Terminal { state },
+                    target: None,
+                    ..route(node, state.as_str(), target)
+                });
+            }
+            runs.push((state.as_str(), record, hops));
+        }
+        if let Some(step) = spec.steps.get(node)
+            && step.lifecycle == Some(StepLifecycle::Until)
+        {
+            base.node = step.then.clone().unwrap();
+            base.held = Some(
+                serde_json::from_value(serde_json::json!({
+                    "attempt": {
+                        "kind":"agent", "lifecycle":"until", "seq":1, "node":node,
+                        "started_at":jiff::Timestamp::UNIX_EPOCH, "host":{"pid":1, "start":null},
+                    },
+                    "entered_at":jiff::Timestamp::UNIX_EPOCH,
+                }))
+                .unwrap(),
+            );
+            runs.push(("held", base, hops));
+        }
+        runs
+    }
+
+    fn position_marks(spec: &WorkflowSpec, record: &RunRecord) -> Vec<(String, String)> {
+        let machine = super::super::super::super::machine_config();
+        let glyph = rimz::theme::theme_glyphs(&machine.theme);
+        std::iter::once(record.node.as_str())
+            .chain(record.held.as_ref().map(|held| held.attempt.node.as_str()))
+            .map(|name| {
+                let role = if record.state.is_terminal() {
+                    if spec.checks.contains_key(name) {
+                        GlyphRole::PipelineCheckPassed
+                    } else {
+                        GlyphRole::PipelinePassed
+                    }
+                } else {
+                    super::super::super::workflow_view::glyph_role(record)
+                };
+                (name.into(), format!("{} {name}", glyph(role)))
+            })
+            .collect()
+    }
+
+    fn position_floor(
+        spec: &WorkflowSpec,
+        record: &RunRecord,
+        hops: &[Hop],
+        marks: &[(String, String)],
+    ) -> Vec<String> {
+        let walk = spec.walk();
+        let anchors = walk
+            .nodes
+            .iter()
+            .filter(|row| marks.iter().any(|(name, _)| *name == row.node))
+            .map(|row| row.hangs_under.as_ref().unwrap_or(&row.node))
+            .collect::<BTreeSet<_>>();
+        let main = walk
+            .nodes
+            .iter()
+            .filter(|row| row.hangs_under.is_none())
+            .collect::<Vec<_>>();
+        let counts = reached(hops, &[]);
+        let machine = super::super::super::super::machine_config();
+        let glyph = rimz::theme::theme_glyphs(&machine.theme);
+        let mut floor = Vec::new();
+        let mut line = "      ".to_owned();
+        let mut previous = None;
+        for (index, row) in main
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| anchors.contains(&row.node))
+        {
+            if previous.is_none() && index > 0 {
+                line.push_str("… ");
+            }
+            if let Some(previous) = previous {
+                line.push_str(if index > previous + 1 {
+                    " ─ … ─ "
+                } else {
+                    " ─ "
+                });
+            }
+            let padding = line.width();
+            if let Some((_, mark)) = marks.iter().find(|(name, _)| *name == row.node) {
+                line.push_str(mark);
+            } else {
+                let role = if counts.contains_key(row.node.as_str()) {
+                    GlyphRole::PipelineCheckPassed
+                } else {
+                    GlyphRole::PipelineCheckFuture
+                };
+                line.push_str(&format!("{} {}", glyph(role), row.node));
+            }
+            for (name, mark) in marks {
+                if !walk
+                    .nodes
+                    .iter()
+                    .any(|hang| hang.node == *name && hang.hangs_under.as_ref() == Some(&row.node))
+                {
+                    continue;
+                }
+                let visits = record.visits.get(name).map_or(0, |visits| visits.total);
+                let repeat = if visits > 1 {
+                    format!(" ×{visits}")
+                } else {
+                    String::new()
+                };
+                floor.push(format!("{:padding$}╰─ {mark}{repeat} ↑", ""));
+            }
+            previous = Some(index);
+        }
+        if !anchors.is_empty() {
+            floor.push(line);
+        }
+        for (name, mark) in marks {
+            if walk.unreachable.contains(name) {
+                floor.push(format!("      {mark}"));
+            }
+        }
+        floor
+    }
+
+    fn rendered(spec: &WorkflowSpec, record: &RunRecord, hops: &[Hop], width: usize) -> String {
+        let mut out = Vec::new();
+        horizontal(&mut out, spec, record, hops, &[], Some(width), 6).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    fn check_case(
+        spec: &WorkflowSpec,
+        record: &RunRecord,
+        hops: &[Hop],
+        width: usize,
+    ) -> (bool, Vec<String>) {
+        let colored = rendered(spec, record, hops, width);
+        let text = anstream::adapter::strip_str(&colored).to_string();
+        let marks = position_marks(spec, record);
+        let floor = position_floor(spec, record, hops, &marks);
+        let mut failures = Vec::new();
+        let mut at_floor = false;
+        for line in text.lines().filter(|line| line.width() > width) {
+            if floor.iter().any(|minimum| minimum == line) {
+                at_floor = true;
+            } else {
+                failures.push(format!("width {} > {width}: {line:?}", line.width()));
+            }
+        }
+        for (name, mark) in marks {
+            let count = text.matches(&mark).count();
+            if count != 1 {
+                failures.push(format!(
+                    "position mark {mark:?}: {count} occurrences\n{text}"
+                ));
+            }
+            if record.state.is_terminal() {
+                let style = if record.state == RunState::Done {
+                    render::palette::good()
+                } else {
+                    render::palette::alarm()
+                };
+                let (glyph, _) = mark.split_once(' ').unwrap();
+                let painted = format!(
+                    "{} {}",
+                    render::paint(style, glyph),
+                    render::paint(style, &name)
+                );
+                let count = colored.matches(&painted).count();
+                if count != 1 {
+                    failures.push(format!(
+                        "ending mark {painted:?}: {count} occurrences\n{text}"
+                    ));
+                }
+            }
+        }
+        (at_floor, failures)
+    }
+
+    #[test]
+    fn held_run_elides_interior_nodes_between_current_anchors() {
+        let spec = shape("until");
+        let (_, record, hops) = runs(&spec, "work", false)
+            .into_iter()
+            .find(|(state, _, _)| *state == "held")
+            .unwrap();
+        let walk = spec
+            .walk()
+            .nodes
+            .into_iter()
+            .map(|row| row.node)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            anstream::adapter::strip_str(&rendered(&spec, &record, &hops, 40)).to_string(),
+            "      … ◆ planned ─ ⢿ work ─ … ─ ⢿ gate\n",
+            "until walk: {walk:?}"
+        );
+    }
+
+    #[test]
+    fn detour_elision_restores_fitting_main_track_context() {
+        let spec = shape("detours");
+        let (_, record, hops) = runs(&spec, "review", true)
+            .into_iter()
+            .find(|(state, _, _)| *state == "active")
+            .unwrap();
+        assert_eq!(
+            anstream::adapter::strip_str(&rendered(&spec, &record, &hops, 40)).to_string(),
+            "      ● build ─ ⢿ review ─ ◇ merge\n"
+        );
+    }
+
+    #[test]
+    fn fits_width_and_keeps_position_across_shapes() {
+        let mut failures = Vec::new();
+        let mut cases = 0;
+        let mut long_floor_cases = 0;
+        for (shape, definition) in shapes() {
+            let spec: WorkflowSpec = toml::from_str(&definition).unwrap();
+            for node in spec.checks.keys().chain(spec.steps.keys()) {
+                for repeated_detours in [false, true] {
+                    for (state, record, hops) in runs(&spec, node, repeated_detours) {
+                        for width in [40, 60, 80] {
+                            cases += 1;
+                            let (at_floor, errors) = check_case(&spec, &record, &hops, width);
+                            if shape == "long" && width == 40 && at_floor {
+                                long_floor_cases += 1;
+                            }
+                            for error in errors {
+                                failures.push(format!(
+                                    "{shape}/{node}/{state}/repeated={repeated_detours}/w{width}: \
+                                     {error}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if long_floor_cases == 0 {
+            failures.push("long names at width 40 never exercised the position floor".into());
+        }
+        assert!(
+            failures.is_empty(),
+            "{cases} cases, {} failures, {long_floor_cases} long-name floor cases:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+}
