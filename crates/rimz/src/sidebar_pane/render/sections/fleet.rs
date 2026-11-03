@@ -40,7 +40,7 @@ use super::{pin_right, trim_spans_to_width};
 /// soft stat gray, and every zero count sits at the same soft gray beside its
 /// glyph.
 /// Counts span the full snapshot roster by team unit, except success,
-/// which excludes finished groups. Active units suppress their resting buckets. The
+/// which excludes inactive groups. Active units suppress their resting buckets. The
 /// fleet's live time / token / commit totals are gone — the summary line's
 /// today-accumulated breakdown carries the fleet's resource read.
 ///
@@ -62,7 +62,10 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
 ) -> (Vec<Line<'static>>, Vec<HitRegion>) {
     let status_filter = match lens.filter {
         Some(BodyFilter::Status(status)) => Some(status),
-        Some(BodyFilter::Unread | BodyFilter::OpenPr) | None => None,
+        Some(
+            BodyFilter::Unread | BodyFilter::OpenPr | BodyFilter::Inactive | BodyFilter::Unlanded,
+        )
+        | None => None,
     };
     let buckets = [
         (AgentStatus::Waiting, BucketCluster::Left),
@@ -242,7 +245,7 @@ impl<'a> Cluster<'a> {
 
 /// The fleet head-count read by the dashboard's L2: `(main, subs)` — the main
 /// agents you launched (the sum of the per-worktree `status_counts`, including
-/// finished groups) and the subagents they spawned this turn.
+/// inactive groups) and the subagents they spawned this turn.
 pub(in crate::sidebar_pane::render) fn fleet_size(
     groups: &[SidebarWorktreeGroup],
 ) -> (usize, usize) {

@@ -143,7 +143,7 @@ fn structural_publications_are_prompt_at_rest_but_wait_during_input() {
             }
             let before = pair.plane.views.read().mirror_target;
             pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-                v.state.landed_open = !v.state.landed_open;
+                v.state.inactive_open = !v.state.inactive_open;
             });
             repaint_source(&mut pair);
             assert_ne!(pair.plane.views.read().mirror_target, before);
@@ -495,7 +495,7 @@ fn the_mirror_driver_offers_only_unmapped_subscribers() {
             receivers.push(receive);
         }
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.landed_open = !v.state.landed_open;
+            v.state.inactive_open = !v.state.inactive_open;
         });
         repaint_source(&mut pair);
         assert!(
@@ -722,7 +722,7 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
         rig.terminal.backend_mut().play_output(output.clone());
         pair.sample(&[(1, 0)]);
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.landed_open = !v.state.landed_open;
+            v.state.inactive_open = !v.state.inactive_open;
         });
         repaint_source(&mut pair);
         pair.clock.advance(animation_frame(&pair.snapshot));
@@ -875,7 +875,7 @@ fn hidden_mirror_retries_after_the_jump_fence_releases() {
                 pair.clock.now(),
             );
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.landed_open = !v.state.landed_open;
+            v.state.inactive_open = !v.state.inactive_open;
         });
         repaint_source(&mut pair);
         pair.clock.advance(animation_frame(&pair.snapshot));

@@ -151,12 +151,12 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Forked views retain these sources and the drawn selection.
     pub(in crate::sidebar_pane) held_expansions: BTreeSet<String>,
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
-    /// paint; explicit row and landed-chip reveals can still nudge their target into view.
+    /// paint; explicit row and inactive-chip reveals can still nudge their target into view.
     pub(in crate::sidebar_pane) offset_authoritative: bool,
-    /// Armed only by opening the landed chip. The next draw reveals its first
+    /// Armed only by opening the inactive chip. The next draw reveals its first
     /// newly shown receipt while keeping the chip visible, then consumes it.
-    pub(in crate::sidebar_pane) landed_reveal: bool,
-    /// The row a banner, focus marker, or finished-group click reveals minimally
+    pub(in crate::sidebar_pane) inactive_reveal: bool,
+    /// The row a banner, focus marker, or inactive-group click reveals minimally
     /// on the next draw, then consumed.
     pub(in crate::sidebar_pane) reveal_row: Option<String>,
     /// A fresh shared click placement and its source opening set for the next
@@ -208,8 +208,8 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
-    /// Visibility of finished groups' receipts in this client view.
-    pub(in crate::sidebar_pane) landed_open: bool,
+    /// Visibility of inactive groups' receipts in this client view.
+    pub(in crate::sidebar_pane) inactive_open: bool,
     /// View-owned open/closed choice for an agent card's delegation
     /// section (row id → open), set by a header click. It outranks the default
     /// (open under selection or `expanded` density) in both directions, stays
@@ -230,7 +230,7 @@ pub(in crate::sidebar_pane) struct LayoutKey {
     content_height: usize,
     scroll_max: usize,
     expanded_groups: BTreeSet<String>,
-    landed_open: bool,
+    inactive_open: bool,
     delegation_overrides: BTreeMap<String, bool>,
     delegation_history: BTreeMap<String, Option<Timestamp>>,
     dashboard_tab: Option<DashboardTab>,
@@ -248,7 +248,7 @@ impl LayoutKey {
             && self.content_height == frame.content_height
             && self.scroll_max == frame.scroll_max
             && self.expanded_groups == view.expanded_groups
-            && self.landed_open == view.landed_open
+            && self.inactive_open == view.inactive_open
             && self.delegation_overrides == view.delegation_overrides
             && self.delegation_history == view.delegation_history
             && self.dashboard_tab == view.dashboard_tab
@@ -309,7 +309,7 @@ impl ViewState {
             content_height: frame.content_height,
             scroll_max: frame.scroll_max,
             expanded_groups: self.expanded_groups.clone(),
-            landed_open: self.landed_open,
+            inactive_open: self.inactive_open,
             delegation_overrides: self.delegation_overrides.clone(),
             delegation_history: self.delegation_history.clone(),
             dashboard_tab: self.dashboard_tab.clone(),

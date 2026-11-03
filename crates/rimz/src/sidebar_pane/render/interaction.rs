@@ -18,7 +18,7 @@ pub(in crate::sidebar_pane) enum HitTarget {
         key: String,
         row: String,
     },
-    ToggleLanded,
+    ToggleInactive,
     /// A delegation header click; `open` is the state the click sets.
     ToggleDelegation {
         row: String,
@@ -211,7 +211,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
         HitTarget::SubAgentPane(_)
         | HitTarget::ToggleGroup(_)
         | HitTarget::ExpandGroup { .. }
-        | HitTarget::ToggleLanded
+        | HitTarget::ToggleInactive
         | HitTarget::ToggleDelegation { .. }
         | HitTarget::ToggleDelegationHistory(_) => 3,
         HitTarget::Row(_) => 4,

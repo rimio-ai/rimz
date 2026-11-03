@@ -156,7 +156,7 @@ fn draw_into(
     ui.banner_shown = composed.banner_shown;
     ui.anchor_clamped = composed.anchor_clamped;
     view.offset_authoritative = false;
-    view.landed_reveal = false;
+    view.inactive_reveal = false;
     view.reveal_row = None;
     view.focus_placement = None;
     view.own_input_reveal = false;
@@ -680,7 +680,7 @@ fn render_line_ansi<W: Write>(
     };
     let mut ui = UiState::default();
     if height.is_none() {
-        view.landed_open = true;
+        view.inactive_open = true;
         view.expanded_groups = snapshot
             .worktree_groups
             .iter()

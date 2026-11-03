@@ -351,6 +351,7 @@ fn key_outcome(
             None => InputOutcome::default(),
         },
         KeyAction::MarkAllRead => InputOutcome::mark_all_read(),
+        KeyAction::ToggleInactive => toggle_inactive(view, snapshot),
         KeyAction::Help => {
             view.help_visible = true;
             InputOutcome::redraw()
@@ -536,14 +537,7 @@ pub(super) fn handle_mouse_click(
             view.reveal_row = pane.is_some().then_some(row);
             InputOutcome::redraw()
         }
-        Some(HitTarget::ToggleLanded) => {
-            view.landed_open = !view.landed_open;
-            view.landed_reveal = view.landed_open;
-            anchor_selection(view, snapshot);
-            view.offset_authoritative = true;
-            view.scroll_ease.cancel();
-            InputOutcome::redraw()
-        }
+        Some(HitTarget::ToggleInactive) => toggle_inactive(view, snapshot),
         Some(HitTarget::ToggleDelegation { row, open }) => {
             set_delegation_open(view, snapshot, row, open);
             InputOutcome::redraw()
@@ -589,7 +583,7 @@ pub(super) fn click_focus_pane(
         HitTarget::ProviderTab(_)
         | HitTarget::BodyFilter(_)
         | HitTarget::ToggleGroup(_)
-        | HitTarget::ToggleLanded
+        | HitTarget::ToggleInactive
         | HitTarget::UnreadBanner
         | HitTarget::FocusMarker
         | HitTarget::Hyperlink(_) => None,
@@ -638,6 +632,15 @@ pub(super) fn handle_scroll(down: bool, view: &mut ViewState, ui: &mut UiState) 
     } else {
         view.scroll_offset.saturating_sub(SCROLL_STEP)
     };
+    InputOutcome::redraw()
+}
+
+fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) -> InputOutcome {
+    view.inactive_open = !view.inactive_open;
+    view.inactive_reveal = view.inactive_open;
+    anchor_selection(view, snapshot);
+    view.offset_authoritative = true;
+    view.scroll_ease.cancel();
     InputOutcome::redraw()
 }
 

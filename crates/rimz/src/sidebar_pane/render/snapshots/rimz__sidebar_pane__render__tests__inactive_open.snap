@@ -19,16 +19,16 @@ expression: screen
    task-open-b
    ▢ ────────────────────────────────────  0.0%
 
- ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 inactive ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 
- ↩ landed-a
- ▸ ○ landed-a
+ ↩ inactive-a
+ ▸ ○ inactive-a
 
- ↩ landed-b
- ▸ ✓ landed-b
+ ↩ inactive-b
+ ▸ ✓ inactive-b
 
- ↩ landed-c
- ▸ ✓ landed-c
+ ↩ inactive-c
+ ▸ ✓ inactive-c
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
  ✓ external

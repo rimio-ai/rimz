@@ -71,6 +71,7 @@ pub(in crate::sidebar_pane) enum KeyAction {
     /// `M` — mark every row read without jumping.
     MarkAllRead,
     Help,
+    ToggleInactive,
     Reload,
     Dismiss,
     Filter(Option<BodyFilter>),
@@ -131,6 +132,7 @@ pub(super) fn resolve_key(
         KeyCode::Char('m') => KeyAction::MarkToggle,
         KeyCode::Char('M') => KeyAction::MarkAllRead,
         KeyCode::Char('?') => KeyAction::Help,
+        KeyCode::Char('i') => KeyAction::ToggleInactive,
         KeyCode::Char('/') => KeyAction::Search,
         KeyCode::Char('A') => KeyAction::Filter(None),
         KeyCode::Char('u') => KeyAction::Filter(Some(BodyFilter::Unread)),

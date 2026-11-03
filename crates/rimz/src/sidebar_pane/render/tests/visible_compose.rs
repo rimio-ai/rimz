@@ -119,7 +119,7 @@ fn write_back(ui: &mut ViewState, pane_ui: &mut UiState, frame: compose::Compose
     pane_ui.banner_shown = frame.banner_shown;
     pane_ui.anchor_clamped = frame.anchor_clamped;
     ui.offset_authoritative = false;
-    ui.landed_reveal = false;
+    ui.inactive_reveal = false;
     ui.reveal_row = None;
     ui.focus_placement = None;
     ui.own_input_reveal = false;
@@ -161,7 +161,7 @@ proptest! {
                     if !ui.expanded_groups.remove(&key) { ui.expanded_groups.insert(key); }
                 }
                 8 => width = 20 + value % 61,
-                9 => ui.landed_open = !ui.landed_open,
+                9 => ui.inactive_open = !ui.inactive_open,
                 10 => ui.search_draft =
                     Some(if value % 2 == 0 { "card-1".into() } else { String::new() }),
                 _ => {
@@ -214,7 +214,7 @@ fn paint_scope_tracks_window_epoch_and_selection() {
             .iter()
             .map(|g| g.key.clone())
             .collect(),
-        landed_open: true,
+        inactive_open: true,
         ..Default::default()
     };
     let mut pane_ui = UiState::default();

@@ -623,6 +623,7 @@ fn help_body_rows(
                 "width",
             )),
         ),
+        (key_entry(theme, None, "i", "inactive fold"), None),
     ];
     let filter_section = vec![
         (

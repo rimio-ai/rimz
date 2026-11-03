@@ -19,17 +19,17 @@ expression: screen
 ▎  ▢ ──────────────────────────────────────────────────────────────  0.0%      🮇
 ▎⣾ codex                                                                       🮇
 ▎  task-2                                                                      🮇
-▎  ▢ ──────────────────────────────────────────────────────────────  0.0%      🮇
-                                     ╭ help ───────────────────────────────────╮
- ⑂ beta                              │ keys                                    │
- ⣾ codex                             │   /   search           esc   clear      │
-   task-3                            │ ↕ j/k cards/entries  ↕ J/K   worktrees  │
-   ▢ ────────────────────────────────│ ↕ g/G ends           ↕ ^f/^b page       │
- ⣾ codex                             │ ↕ H/L screen         ⏎ l     focus/open │
-   task-4                            │ ⏎ 1-9 direct         ␣ n/N   needs-you  │
-   ▢ ────────────────────────────────│ ✉ m   read/unread    ✉ M     read all   │
- ⣾ codex                             │ ↔ ←/→ account tabs   ⟳ r     reload     │
-   task-5                            │ ✕ x   dismiss        ↕ a/d   width      │
+▎  ▢ ────────────────────────────────╭ help ───────────────────────────────────╮
+                                     │ keys                                    │
+ ⑂ beta                              │   /   search           esc   clear      │
+ ⣾ codex                             │ ↕ j/k cards/entries  ↕ J/K   worktrees  │
+   task-3                            │ ↕ g/G ends           ↕ ^f/^b page       │
+   ▢ ────────────────────────────────│ ↕ H/L screen         ⏎ l     focus/open │
+ ⣾ codex                             │ ⏎ 1-9 direct         ␣ n/N   needs-you  │
+   task-4                            │ ✉ m   read/unread    ✉ M     read all   │
+   ▢ ────────────────────────────────│ ↔ ←/→ account tabs   ⟳ r     reload     │
+ ⣾ codex                             │ ✕ x   dismiss        ↕ a/d   width      │
+   task-5                            │   i   inactive fold                     │
    ▢ ────────────────────────────────│                                         │
                                      │ filter                                  │
                                      │ ? q   waiting        ! e     attention  │
