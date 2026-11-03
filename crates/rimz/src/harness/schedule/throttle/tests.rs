@@ -26,7 +26,6 @@ pub(in crate::harness::schedule) struct FakeHost {
     disk_reads: Mutex<Vec<PathBuf>>,
     rooms: Mutex<BTreeMap<String, Result<Vec<AgentState>, String>>>,
     workflows: Mutex<Vec<crate::store::workflow::RunRecord>>,
-    runs: Mutex<Vec<RunRecord>>,
     agent_reads: AtomicUsize,
     on_sleep: Mutex<Option<SleepHook>>,
     on_lock: Mutex<Option<SleepHook>>,
@@ -60,7 +59,6 @@ impl FakeHost {
             disk_reads: Mutex::new(Vec::new()),
             rooms: Mutex::new(BTreeMap::new()),
             workflows: Mutex::new(Vec::new()),
-            runs: Mutex::new(Vec::new()),
             agent_reads: AtomicUsize::new(0),
             on_sleep: Mutex::new(None),
             on_lock: Mutex::new(None),
@@ -126,7 +124,11 @@ impl FakeHost {
         self.dead.lock().unwrap().push(pid);
     }
 
-    fn set_agents(&self, workspace: &WorkspaceId, agents: Vec<AgentState>) {
+    pub(in crate::harness::schedule) fn set_agents(
+        &self,
+        workspace: &WorkspaceId,
+        agents: Vec<AgentState>,
+    ) {
         self.rooms
             .lock()
             .unwrap()
@@ -143,8 +145,8 @@ impl Host for FakeHost {
         self.dir.path().join("checks.json")
     }
 
-    fn workflow_pace(&self) -> PathBuf {
-        self.dir.path().join("workflow-pace.json")
+    fn start_stamps(&self) -> PathBuf {
+        self.dir.path().join("start-stamps.json")
     }
 
     fn check(
@@ -250,17 +252,6 @@ impl Host for FakeHost {
             .unwrap_or_else(|| Ok(Vec::new()))
     }
 
-    fn runs(&self, workspace: &WorkspaceId) -> Result<Vec<RunRecord>, String> {
-        Ok(self
-            .runs
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|run| &run.workspace_id == workspace)
-            .cloned()
-            .collect())
-    }
-
     fn workflows(
         &self,
         workspace: &WorkspaceId,
@@ -354,6 +345,23 @@ fn admitted(admission: Admission) -> (Turn, Option<Duration>) {
     }
 }
 
+pub(crate) fn assert_committed_launch_counts_once(launch: impl FnOnce(Turn) -> Vec<AgentState>) {
+    let fake = FakeHost::new();
+    let configured = config("max-parallel-agents=2");
+    let mut candidate = run("first");
+    candidate.machine_gated = false;
+    let (turn, _) = admitted(admit_quiet(&fake, &configured, &candidate));
+    let rows = launch(turn.clone());
+    assert_eq!(rows.len(), 1, "the launch batch committed");
+    assert!(open(&rows[0]), "the committed row still occupies a slot");
+    fake.set_agents(&candidate.workspace, rows);
+    let next = try_admit_in(&fake.host(), &configured, &candidate).unwrap();
+    assert!(
+        matches!(next, Attempt::Turn(_)),
+        "one slot is still free: {next:?}"
+    );
+}
+
 fn admit_quiet(fake: &Arc<FakeHost>, config: &ThrottleConfig, run: &Run) -> Admission {
     let run = Run {
         gives_up_ms: run.gives_up_ms.or(Some(fake.now_ms() + 1_800_000)),
@@ -401,48 +409,195 @@ fn pressure_parses_the_some_line_of_real_proc_text() {
 #[test]
 fn nothing_configured_writes_no_ticket() {
     let fake = FakeHost::new();
-    let open = admit_quiet(&fake, &config("pace = \"0s\"\n"), &run("nightly"));
+    let mut candidate = run("nightly");
+    candidate.machine_gated = false;
+    let open = admit_quiet(&fake, &config(""), &candidate);
     assert!(matches!(open, Admission::Open), "{open:?}");
     assert_eq!(fake.tickets(), 0);
 }
 
 #[test]
-fn capacity_task_cap_counts_working_agents_of_live_task_workflows() {
-    let id = crate::ids::WorkflowRunId::new();
-    let workflow: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-        "version":1, "id":id, "workflow":"review", "task":"nightly", "spec_dir":"/defs",
-        "spec_digest":"test", "scope":{"kind":"project", "path":"/repo"},
-        "project_root":"/repo", "created_at":Timestamp::UNIX_EPOCH,
-        "entered_at":Timestamp::UNIX_EPOCH, "node":"build", "state":"active",
-        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1
-    }))
+fn automation_counts_inherited_children_but_not_user_agents() {
+    let fake = FakeHost::new();
+    let mut parent = agent("parent", AgentStatus::Idle);
+    parent.automation = Some(crate::agents::Automation::Loop);
+    let mut child = parent.clone();
+    child.agent_id = "child".into();
+    child.name = Some("child".into());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.launch_depth = Some(1);
+    fake.set_agents(
+        &workspace(),
+        vec![parent, child, agent("user", AgentStatus::Waiting)],
+    );
+    let hold = limit_hold(
+        fake.as_ref(),
+        &config("max-parallel-automation=2"),
+        &run("next"),
+        0,
+    )
     .unwrap();
-    let mut working = agent("builder", AgentStatus::Running);
-    working.workflow = Some(crate::agents::WorkflowAttemptRef {
-        run: id,
-        seq: 1,
-        role: crate::agents::WorkflowAttemptRole::Step,
-    });
-    let agents = vec![working];
-    let mut actual = Vec::new();
-    for (task, state) in [
-        ("nightly", crate::store::workflow::RunState::Active),
-        ("other", crate::store::workflow::RunState::Active),
-        ("nightly", crate::store::workflow::RunState::Done),
-    ] {
-        let mut run = workflow.clone();
-        run.state = state;
-        let counted = task_working(&agents, &[], &[run.clone()], task, Timestamp::now()).len();
+    assert_eq!(
+        hold.map(|hold| hold.text),
+        Some("2 of 2 automated agents open (@parent, @child)".into())
+    );
+    let hold = limit_hold(
+        fake.as_ref(),
+        &config("max-parallel-agents=3"),
+        &run("next"),
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        hold.map(|hold| hold.text),
+        Some("3 of 3 agents open (@parent, @child, +1)".into())
+    );
+}
+
+#[test]
+fn off_starts_reserve_the_last_automation_slot_under_the_queue_lock() {
+    for (agents, cap) in [(1, 1), (2, 2), (2, 3)] {
         let fake = FakeHost::new();
-        let candidate = self::run(task);
-        fake.set_agents(&candidate.workspace, agents.clone());
-        *fake.workflows.lock().unwrap() = vec![run];
-        let held = limit_hold(fake.as_ref(), &config("max-active-per-task=1"), &candidate)
-            .unwrap()
-            .is_some();
-        actual.push((counted, held));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let threads: Vec<_> = ["first", "second"]
+                .into_iter()
+                .map(|name| {
+                    let fake = Arc::clone(&fake);
+                    let barrier = Arc::clone(&barrier);
+                    scope.spawn(move || {
+                        let mut candidate = run(name);
+                        candidate.machine_gated = false;
+                        candidate.groups[0].agents = agents;
+                        barrier.wait();
+                        try_admit_in(
+                            &fake.host(),
+                            &config(&format!("max-parallel-automation={cap}")),
+                            &candidate,
+                        )
+                        .unwrap()
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Attempt::Turn(_)))
+                .count(),
+            1,
+            "{results:?}"
+        );
+        let group = if agents > 1 {
+            format!("; this start opens {agents}")
+        } else {
+            String::new()
+        };
+        let expected = format!("0 of {cap} automated agents open, {agents} more starting{group}");
+        let held = results
+            .iter()
+            .filter(|result| match result {
+                Attempt::Held(hold) => hold.text == expected,
+                _ => false,
+            })
+            .count();
+        assert_eq!(held, 1, "{results:?}");
     }
-    assert_eq!(actual, vec![(1, true), (0, false), (0, false)]);
+}
+
+#[test]
+fn oversized_groups_refuse_both_blocking_and_one_shot_machine_admission() {
+    for key in ["max-parallel-agents", "max-parallel-automation"] {
+        for machine_gated in [true, false] {
+            let fake = FakeHost::new();
+            let configured = config(&format!("{key}=2"));
+            let mut candidate = run("oversized");
+            candidate.machine_gated = machine_gated;
+            candidate.groups[0].agents = 3;
+            candidate.gives_up_ms = Some(fake.now_ms() + 1_000);
+            let expected = format!(
+                "this start opens 3 agents, more than {key} = 2 allows; raise it in ~/.rimz/config.toml"
+            );
+            let one_shot = try_admit_in(&fake.host(), &configured, &candidate);
+            assert!(one_shot.is_err(), "{key}: {one_shot:?}");
+            assert_eq!(one_shot.unwrap_err().to_string(), expected);
+            let blocking = admit(&fake.host(), &configured, &candidate, None);
+            assert!(blocking.is_err(), "{key}: {blocking:?}");
+            assert_eq!(blocking.unwrap_err().to_string(), expected);
+            assert_eq!(fake.elapsed_ms(), 0, "an impossible start never waits");
+            assert_eq!(fake.tickets(), 0);
+        }
+    }
+}
+
+#[test]
+fn cap_holds_name_the_incoming_group_separately_from_open_agents() {
+    for (key, label) in [
+        ("max-parallel-agents", ""),
+        ("max-parallel-automation", "automated "),
+    ] {
+        let fake = FakeHost::new();
+        let mut opened = [agent("a", AgentStatus::Idle), agent("b", AgentStatus::Idle)];
+        for agent in &mut opened {
+            agent.automation = Some(crate::agents::Automation::Loop);
+        }
+        fake.set_agents(&workspace(), opened.into());
+        let mut candidate = run("pair");
+        candidate.groups[0].agents = 2;
+        let hold = limit_hold(fake.as_ref(), &config(&format!("{key}=3")), &candidate, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            hold.text,
+            format!("2 of 3 {label}agents open (@a, @b); this start opens 2")
+        );
+    }
+}
+
+#[test]
+fn machine_stagger_is_stamped_only_by_gated_reports_and_releases_at_the_exact_gap() {
+    let fake = FakeHost::new();
+    let configured = config("stagger='30s'\nmax-parallel-agents=10");
+    let Attempt::Turn(turn) = try_admit_in(&fake.host(), &configured, &run("first")).unwrap()
+    else {
+        panic!("a gated start takes a turn");
+    };
+    assert!(!fake.start_stamps().exists());
+    let mut adopted = launched("first");
+    adopted.agent_id = "provider-first".into();
+    adopted.status = AgentStatus::Idle;
+    fake.set_agents(&workspace(), vec![adopted]);
+    turn.report_launch(&workspace(), &"first".into());
+    let held = try_admit_in(&fake.host(), &configured, &run("next")).unwrap();
+    assert!(matches!(held, Attempt::Held(hold) if hold.text == "next start in 30s"));
+    fake.clock.fetch_add(29_999, Ordering::SeqCst);
+    let mut off = run("off");
+    off.machine_gated = false;
+    let Attempt::Turn(off_turn) = try_admit_in(&fake.host(), &configured, &off).unwrap() else {
+        panic!("an off start reserves cap slots without taking the machine turn");
+    };
+    off_turn.report_launch(&workspace(), &"off".into());
+    let held = try_admit_in(&fake.host(), &configured, &run("next")).unwrap();
+    assert!(matches!(held, Attempt::Held(hold) if hold.text == "next start in 1s"));
+    fake.clock.fetch_add(1, Ordering::SeqCst);
+    assert!(matches!(
+        try_admit_in(&fake.host(), &configured, &run("next")).unwrap(),
+        Attempt::Turn(_)
+    ));
+    drop(admitted(admit_quiet(
+        &fake,
+        &config("stagger='32s'"),
+        &run("blocking"),
+    )));
+    assert_eq!(
+        fake.elapsed_ms(),
+        32_000,
+        "stagger is not sampled on the resource cadence"
+    );
 }
 
 #[test]
@@ -451,7 +606,7 @@ fn capacity_nonblocking_holds_leave_no_ticket_and_do_not_check_behind_limits() {
         .into_iter()
         .map(|case| {
             let fake = FakeHost::new();
-            let mut configured = config("pace = '0s'\ncheck = 'capacity'\n");
+            let mut configured = config("check = 'capacity'\n");
             let _holder = if case == "queue" {
                 Some(admitted(admit_quiet(&fake, &config(""), &run("first"))).0)
             } else {
@@ -557,6 +712,41 @@ fn capacity_check_holds_an_admitted_turn_without_holding_the_queue_lock() {
 }
 
 #[test]
+fn capacity_checks_refresh_open_counts_after_running_off_lock() {
+    let configured = config("check='capacity'\nmax-parallel-agents=1");
+    for mode in ["look", "try", "blocking"] {
+        let fake = FakeHost::new();
+        *fake.on_check.lock().unwrap() = Some(Box::new(|fake| {
+            fake.set_agents(&workspace(), vec![agent("new", AgentStatus::Idle)]);
+        }));
+        let mut candidate = run("nightly");
+        candidate.gives_up_ms = Some(fake.now_ms() + 1_000);
+        let expected = "1 of 1 agents open (@claude)";
+        match mode {
+            "look" => {
+                let held = look_in(fake.as_ref(), &configured, &candidate).unwrap();
+                assert_eq!(held.map(|hold| hold.text).as_deref(), Some(expected));
+            }
+            "try" => {
+                let attempt = try_admit_in(&fake.host(), &configured, &candidate).unwrap();
+                assert!(
+                    matches!(&attempt, Attempt::Held(hold) if hold.text == expected),
+                    "{attempt:?}"
+                );
+            }
+            _ => {
+                let admission = admit(&fake.host(), &configured, &candidate, None).unwrap();
+                assert!(
+                    matches!(&admission, Admission::Skipped { reason } if reason.contains(expected)),
+                    "{admission:?}"
+                );
+            }
+        }
+        assert_eq!(fake.tickets(), 0);
+    }
+}
+
+#[test]
 fn capacity_answers_and_cache_distinguish_full_errors_and_success() {
     let answers = [
         Ok((Some(0), false)),
@@ -580,7 +770,7 @@ fn capacity_answers_and_cache_distinguish_full_errors_and_success() {
         .map(|(answer, reason)| {
             let fake = FakeHost::new();
             *fake.check_answer.lock().unwrap() = answer;
-            let configured = config("pace = '0s'\ncheck = 'capacity'");
+            let configured = config("check = 'capacity'");
             let mut kinds = Vec::new();
             for _ in 0..2 {
                 let attempt = try_admit_in(&fake.host(), &configured, &run("first")).unwrap();
@@ -808,7 +998,7 @@ fn queued_starts_keep_the_blocking_cause_and_its_text() {
 fn queued_needs_fix_causes_survive_mixed_predecessors_and_held_turns() {
     let fake = FakeHost::new();
     let disk = (HoldKind::Disk, "free disk 1 GB < 20 GB at /other-room");
-    let store = (HoldKind::Store, "cannot count active agents: broken room");
+    let store = (HoldKind::Store, "cannot count open agents: broken room");
     let failure = (
         HoldKind::CheckFailed,
         "capacity check failing: claude exit 2",
@@ -1024,7 +1214,7 @@ fn capacity_check_extends_the_ceiling_but_provider_reports_still_release_it() {
         .into_iter()
         .map(|report| {
             let fake = FakeHost::new();
-            let configured = config("pace = '1s'\ncheck = 'capacity'");
+            let configured = config("check = 'capacity'");
             let (first, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
             fake.set_agents(&workspace(), vec![launched("launch_a")]);
             first.report_launch(&workspace(), &AgentSessionId::from("launch_a"));
@@ -1096,13 +1286,13 @@ fn blocking_wait_reloads_a_raised_cap_before_reusing_a_hold() {
     let fake = FakeHost::new();
     fake.set_agents(&workspace(), vec![agent("otter", AgentStatus::Running)]);
     fake.on_sleep(|fake| {
-        *fake.throttle_config.lock().unwrap() = Some(config("max-active = 2"));
+        *fake.throttle_config.lock().unwrap() = Some(config("max-parallel-agents = 2"));
     });
     let run = Run {
         gives_up_ms: Some(fake.now_ms() + 3_000),
         ..run("nightly")
     };
-    let result = admit(&fake.host(), &config("max-active = 1"), &run, None).unwrap();
+    let result = admit(&fake.host(), &config("max-parallel-agents = 1"), &run, None).unwrap();
     assert!(matches!(result, Admission::Turn { .. }), "{result:?}");
     let (_turn, waited) = admitted(result);
     assert_eq!(waited, Some(Duration::from_secs(1)));
@@ -1153,12 +1343,9 @@ fn blocking_wait_revalidates_new_unreadable_limits_with_the_key_and_fix() {
             .expect_err("a newly configured unreadable limit refuses the held start");
         let message = error.to_string();
         assert!(matches!(error, ThrottleError::Unreadable(_)), "{message}");
+        assert!(message.contains(&format!("`throttle.{key}`")), "{message}");
         assert!(
-            message.contains(&format!("`loop.throttle.{key}`")),
-            "{message}"
-        );
-        assert!(
-            message.contains("remove the key from loop.toml"),
+            message.contains("remove the key from config.toml"),
             "{message}"
         );
         assert_eq!(fake.elapsed_ms(), 1_000);
@@ -1194,20 +1381,25 @@ fn blocking_wait_keeps_the_last_good_config_and_its_original_deadline() {
 }
 
 #[test]
-fn blocking_wait_opens_when_gating_is_removed_but_not_after_its_deadline() {
+fn blocking_wait_releases_when_limits_are_removed_but_not_after_its_deadline() {
     for (bound, opens) in [(3_000, true), (1_000, false)] {
         let fake = FakeHost::new();
         *fake.disk.lock().unwrap() = 12_000_000_000;
         fake.on_sleep(|fake| {
-            *fake.throttle_config.lock().unwrap() = Some(config("pace = '0s'"));
+            *fake.throttle_config.lock().unwrap() = Some(config(""));
         });
         let run = Run {
             gives_up_ms: Some(fake.now_ms() + bound),
             ..run("nightly")
         };
         let result = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None).unwrap();
-        assert_eq!(matches!(result, Admission::Open), opens, "{result:?}");
+        assert_eq!(
+            matches!(result, Admission::Turn { .. }),
+            opens,
+            "{result:?}"
+        );
         assert_eq!(fake.elapsed_ms(), 1_000);
+        drop(result);
         assert_eq!(fake.tickets(), 0);
     }
 }
@@ -1360,8 +1552,8 @@ fn a_run_held_past_its_give_up_instant_is_skipped_with_its_last_reason() {
 fn the_next_start_waits_for_the_report_then_the_provider_or_the_ceiling() {
     for (observed_at, admitted_at) in [(Some(5_000), 5_000), (None, 13_000)] {
         let fake = FakeHost::new();
-        let pacing = config("");
-        let (first, waited) = admitted(admit_quiet(&fake, &pacing, &run("first")));
+        let configured = config("");
+        let (first, waited) = admitted(admit_quiet(&fake, &configured, &run("first")));
         assert_eq!(waited, None, "an empty queue admits at once");
 
         fake.set_agents(&workspace(), Vec::new());
@@ -1381,7 +1573,7 @@ fn the_next_start_waits_for_the_report_then_the_provider_or_the_ceiling() {
             }
         });
         fake.become_owner(2);
-        let admission = admit(&fake.host(), &pacing, &run("second"), None).expect("admit");
+        let admission = admit(&fake.host(), &configured, &run("second"), None).expect("admit");
         let (_second, waited) = admitted(admission);
         assert_eq!(
             fake.elapsed_ms(),
@@ -1415,11 +1607,15 @@ fn a_launch_that_ended_or_vanished_passes_the_turn_on() {
 }
 
 #[test]
-fn with_pacing_off_the_next_start_is_admitted_at_the_report_and_counts_its_row() {
+fn cap_only_off_starts_count_the_committed_row_at_the_report() {
     let fake = FakeHost::new();
-    let capped = config("pace = \"0s\"\nmax-active = 1\n");
+    let off_run = |task| Run {
+        machine_gated: false,
+        ..run(task)
+    };
+    let capped = config("max-parallel-agents = 1\n");
     fake.set_agents(&workspace(), Vec::new());
-    let (first, _) = admitted(admit_quiet(&fake, &capped, &run("first")));
+    let (first, _) = admitted(admit_quiet(&fake, &capped, &off_run("first")));
     fake.on_sleep(move |fake| {
         if fake.elapsed_ms() == 2_000 {
             fake.set_agents(&workspace(), vec![launched("launch_a")]);
@@ -1429,43 +1625,42 @@ fn with_pacing_off_the_next_start_is_admitted_at_the_report_and_counts_its_row()
     fake.become_owner(2);
     let run = Run {
         gives_up_ms: Some(fake.now_ms() + 20_000),
-        ..run("second")
+        ..off_run("second")
     };
     let skipped = admit(&fake.host(), &capped, &run, None).expect("admit");
-    // Before the report the turn is held; at the report it passes on, and the
-    // first sample the second run takes already counts the committed row.
+    // Before the report the admitted start reserves a slot; afterward its row does.
     assert!(
-        matches!(skipped, Admission::Skipped { reason } if reason.ends_with("1 of 1 agents active (@claude)"))
+        matches!(skipped, Admission::Skipped { reason } if reason.ends_with("1 of 1 agents open (@claude)"))
     );
 }
 
 #[test]
 fn a_dropped_turn_and_a_dead_owner_both_release_the_next_run() {
     let fake = FakeHost::new();
-    let pacing = config("");
-    let (dropped, _) = admitted(admit_quiet(&fake, &pacing, &run("first")));
+    let configured = config("");
+    let (dropped, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
     drop(dropped);
     assert_eq!(fake.tickets(), 0, "an unreported turn removes its ticket");
 
     fake.become_owner(2);
-    let (orphan, _) = admitted(admit_quiet(&fake, &pacing, &run("second")));
+    let (orphan, _) = admitted(admit_quiet(&fake, &configured, &run("second")));
     // The owner dies holding the turn: nothing runs its drop.
     std::mem::forget(orphan);
     fake.become_owner(3);
     let waiting = enqueue_as(&fake, 3, &run("third"));
     assert_eq!(
-        step(&fake, &pacing, &run("third"), &waiting).as_deref(),
+        step(&fake, &configured, &run("third"), &waiting).as_deref(),
         Some("queued: 1 start ahead")
     );
     fake.kill(2);
-    assert_eq!(step(&fake, &pacing, &run("third"), &waiting), None);
+    assert_eq!(step(&fake, &configured, &run("third"), &waiting), None);
     assert_eq!(fake.tickets(), 1);
 }
 
 #[test]
-fn the_machine_cap_counts_only_working_agents_and_samples_every_five_seconds() {
+fn the_machine_cap_counts_open_agents_and_samples_every_five_seconds() {
     let fake = FakeHost::new();
-    let capped = config("pace = \"0s\"\nmax-active = 2\n");
+    let capped = config("max-parallel-agents = 6\n");
     let other = WorkspaceId::from_project_root(Path::new("/other"));
     let mut ended = agent("ended", AgentStatus::Running);
     ended.ended_at = Some(Timestamp::now());
@@ -1476,6 +1671,8 @@ fn the_machine_cap_counts_only_working_agents_and_samples_every_five_seconds() {
         u32::MAX,
         None,
     ));
+    let mut provider_child = agent("provider-child", AgentStatus::Running);
+    provider_child.parent_agent_id = Some("otter".into());
     fake.set_agents(
         &workspace(),
         vec![
@@ -1485,23 +1682,45 @@ fn the_machine_cap_counts_only_working_agents_and_samples_every_five_seconds() {
             agent("done", AgentStatus::Success),
             ended,
             dead,
+            agent("launch_failed", AgentStatus::Failed),
+            agent("errored-turn", AgentStatus::Failed),
+            provider_child,
         ],
     );
     fake.set_agents(&other, vec![agent("fox", AgentStatus::Running)]);
+    let held = limit_hold(fake.as_ref(), &capped, &run("nightly"), 0).unwrap();
+    assert!(
+        held.is_some(),
+        "a live errored-turn agent keeps the machine cap full"
+    );
+    let held = held.unwrap();
+    assert_eq!(held.text, "6 of 6 agents open (@otter, @asking, +4)");
+    let mut automated_error = agent("errored-turn", AgentStatus::Failed);
+    automated_error.automation = Some(crate::agents::Automation::Loop);
+    fake.set_agents(&other, vec![automated_error]);
+    assert_eq!(
+        limit_hold(
+            fake.as_ref(),
+            &config("max-parallel-automation=1"),
+            &run("nightly"),
+            0,
+        )
+        .unwrap()
+        .expect("an errored live automated agent keeps its slot")
+        .kind,
+        HoldKind::AutomationCap,
+    );
     fake.on_sleep(move |fake| {
         if fake.elapsed_ms() == 7_000 {
-            fake.set_agents(&other, vec![agent("fox", AgentStatus::Success)]);
+            fake.set_agents(&other, Vec::new());
         }
     });
-    let held = limit_hold(fake.as_ref(), &capped, &run("nightly"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(held.text, "2 of 2 agents active (@otter, @claude)");
     let admission = admit(&fake.host(), &capped, &run("nightly"), None).expect("admit");
     admitted(admission);
     assert_eq!(fake.elapsed_ms(), 10_000, "admitted on the sample after 7s");
-    // The explicit sample plus three admission samples (0s, 5s, 10s), two workspaces each.
-    assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 8);
+    // The explicit machine/automation samples plus three admission samples (0s, 5s, 10s),
+    // two workspaces each.
+    assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 10);
 }
 
 #[test]
@@ -1513,10 +1732,15 @@ fn a_cap_reason_truncates_the_agents_it_names() {
             .map(|id| agent(id, AgentStatus::Running))
             .to_vec(),
     );
-    let hold = limit_hold(fake.as_ref(), &config("max-active = 3\n"), &run("nightly"))
-        .expect("sample")
-        .expect("held");
-    assert_eq!(hold.text, "4 of 3 agents active (@a, @b, +2)");
+    let hold = limit_hold(
+        fake.as_ref(),
+        &config("max-parallel-agents = 3\n"),
+        &run("nightly"),
+        0,
+    )
+    .expect("sample")
+    .expect("held");
+    assert_eq!(hold.text, "4 of 3 agents open (@a, @b, +2)");
 }
 
 #[test]
@@ -1526,73 +1750,29 @@ fn an_unreadable_workspace_holds_the_run_and_names_it() {
         workspace().to_string(),
         Err("workspace ws_broken unreadable: torn log".to_owned()),
     );
-    let hold = limit_hold(fake.as_ref(), &config("max-active = 3\n"), &run("nightly"))
-        .expect("sample")
-        .expect("held, never a short count");
+    let hold = limit_hold(
+        fake.as_ref(),
+        &config("max-parallel-agents = 3\n"),
+        &run("nightly"),
+        0,
+    )
+    .expect("sample")
+    .expect("held, never a short count");
     assert_eq!(
         hold.text,
-        "cannot count active agents: workspace ws_broken unreadable: torn log"
+        "cannot count open agents: workspace ws_broken unreadable: torn log"
     );
-}
-
-#[test]
-fn a_run_over_its_own_task_cap_is_passed_by_another_task_and_keeps_its_place() {
-    let fake = FakeHost::new();
-    let capped = config("pace = \"0s\"\nmax-active-per-task = 1\n");
-    let mut fixer = agent("fixer-1", AgentStatus::Running);
-    fixer.loop_task = Some("fixer".to_owned());
-    // Another root's task of the same name is another task: its row lives in
-    // another workspace and is never read for this cap.
-    let mut elsewhere = agent("fixer-far", AgentStatus::Running);
-    elsewhere.loop_task = Some("fixer".to_owned());
-    fake.set_agents(
-        &workspace(),
-        vec![fixer.clone(), agent("bystander", AgentStatus::Running)],
-    );
-    fake.set_agents(
-        &WorkspaceId::from_project_root(Path::new("/other")),
-        vec![elsewhere],
-    );
-
-    let first_fixer = enqueue_as(&fake, 1, &run("fixer"));
-    let other_task = enqueue_as(&fake, 2, &run("nightly"));
-    let second_fixer = enqueue_as(&fake, 3, &run("fixer"));
-
-    assert_eq!(
-        step(&fake, &capped, &run("nightly"), &other_task).as_deref(),
-        Some("queued: 1 start ahead"),
-        "nothing is stepped over before it recorded its own cap"
-    );
-    assert_eq!(
-        step(&fake, &capped, &run("fixer"), &first_fixer).as_deref(),
-        Some("task at its cap: 1 of 1 agents active (@fixer-1)")
-    );
-    assert_eq!(
-        step(&fake, &capped, &run("fixer"), &second_fixer).as_deref(),
-        Some("queued: 2 starts ahead"),
-        "a run of the same task stays behind it"
-    );
-    assert_eq!(step(&fake, &capped, &run("nightly"), &other_task), None);
-    remove_ticket(&other_task);
-
-    fixer.status = AgentStatus::Success;
-    fake.set_agents(&workspace(), vec![fixer]);
-    assert_eq!(
-        step(&fake, &capped, &run("fixer"), &second_fixer).as_deref(),
-        Some("queued: 1 start ahead")
-    );
-    assert_eq!(step(&fake, &capped, &run("fixer"), &first_fixer), None);
 }
 
 #[test]
 fn queue_order_follows_enqueue_order_across_owners() {
     let fake = FakeHost::new();
-    let pacing = config("");
+    let configured = config("");
     let tickets = [1, 2, 3].map(|pid| enqueue_as(&fake, pid, &run(&format!("task-{pid}"))));
     let step_for = |index: usize| {
         step(
             &fake,
-            &pacing,
+            &configured,
             &run(&format!("task-{}", index + 1)),
             &tickets[index],
         )
@@ -1613,8 +1793,8 @@ fn queue_order_follows_enqueue_order_across_owners() {
 #[test]
 fn a_waiting_run_is_reported_with_its_reason_and_place() {
     let fake = FakeHost::new();
-    let pacing = config("");
-    let (_turn, _) = admitted(admit_quiet(&fake, &pacing, &run("first")));
+    let configured = config("");
+    let (_turn, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
     let waiting = enqueue_as(&fake, 2, &run("second"));
     let since_ms = fake.now_ms();
     let held = |reason: Option<&str>, pid, position| Held {
@@ -1631,7 +1811,7 @@ fn a_waiting_run_is_reported_with_its_reason_and_place() {
         held_in(fake.as_ref(), "second", Path::new("/repo")),
         [held(None, 2, 2)]
     );
-    step(&fake, &pacing, &run("second"), &waiting);
+    step(&fake, &configured, &run("second"), &waiting);
     // Every waiting run of the task is listed, each with its own process.
     let mut later = held(None, 3, 3);
     enqueue_as(&fake, 3, &run("second"));
@@ -1656,9 +1836,12 @@ fn a_waiting_run_is_reported_with_its_reason_and_place() {
 fn a_configured_limit_this_host_cannot_read_fails_with_the_key_and_the_fix() {
     let fake = FakeHost::new();
     *fake.pressure.lock().unwrap() = Err("/proc/pressure/io: No such file".to_owned());
-    assert_eq!(unreadable(fake.as_ref(), &config("max-active = 2\n")), None);
+    assert_eq!(
+        unreadable(fake.as_ref(), &config("max-parallel-agents = 2\n")),
+        None
+    );
     let problem = unreadable(fake.as_ref(), &config("io-pressure = 40\n")).expect("refused");
-    assert!(problem.contains("`loop.throttle.io-pressure`"), "{problem}");
+    assert!(problem.contains("`throttle.io-pressure`"), "{problem}");
     assert!(problem.contains("/proc/pressure/io"), "{problem}");
     assert!(problem.contains("psi=1"), "{problem}");
     let error = admit(
@@ -1668,20 +1851,22 @@ fn a_configured_limit_this_host_cannot_read_fails_with_the_key_and_the_fix() {
         None,
     )
     .expect_err("a gated fire errors");
-    assert!(error.to_string().contains("`loop.throttle.io-pressure`"));
+    assert!(error.to_string().contains("`throttle.io-pressure`"));
     assert_eq!(fake.tickets(), 0);
 
     *fake.memory.lock().unwrap() = Err("/proc/meminfo: not found".to_owned());
     let problem = unreadable(fake.as_ref(), &config("min-memory = \"8GB\"\n")).expect("refused");
-    assert!(problem.contains("`loop.throttle.min-memory`"), "{problem}");
+    assert!(problem.contains("`throttle.min-memory`"), "{problem}");
 }
 
 #[test]
 fn diagnostic_holds_read_distinct_write_paths_only_with_a_disk_floor() {
     let fake = FakeHost::new();
     *fake.disk.lock().unwrap() = 12_000_000_000;
-    let mut machine = MachineConfig::default();
-    machine.r#loop.throttle = config("min-disk = '20GB'\ncheck = 'exit 2'\n");
+    let mut machine = MachineConfig {
+        throttle: config("min-disk = '20GB'\ncheck = 'exit 2'\n"),
+        ..Default::default()
+    };
     let entry: TaskEntry = toml::from_str("root = '/repo'\n").unwrap();
     let tasks = [("first", &entry), ("second", &entry)];
     assert_eq!(
@@ -1695,7 +1880,7 @@ fn diagnostic_holds_read_distinct_write_paths_only_with_a_disk_floor() {
     assert_eq!(fake.disk_reads(), [PathBuf::from("/repo")]);
     *fake.disk.lock().unwrap() = 20_000_000_000;
     assert!(diagnostic_holds_in(fake.as_ref(), &machine, &tasks).is_empty());
-    machine.r#loop.throttle.min_disk = None;
+    machine.throttle.min_disk = None;
     fake.disk_reads.lock().unwrap().clear();
     assert!(diagnostic_holds_in(fake.as_ref(), &machine, &tasks).is_empty());
     assert!(fake.disk_reads().is_empty());
@@ -1716,13 +1901,13 @@ fn diagnostic_agent_count_failures_require_a_configured_cap() {
     let mut machine = MachineConfig::default();
     assert!(diagnostic_holds_in(fake.as_ref(), &machine, &[("nightly", &entry)]).is_empty());
     assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 0);
-    for caps in ["max-active = 2", "max-active-per-task = 1"] {
-        machine.r#loop.throttle = config(caps);
+    for caps in ["max-parallel-agents = 2", "max-parallel-automation = 1"] {
+        machine.throttle = config(caps);
         assert_eq!(
             diagnostic_holds_in(fake.as_ref(), &machine, &[("nightly", &entry)]),
             [DiagnosticHold {
                 hold: HoldKind::Store,
-                text: "cannot count active agents: workspace ws_broken unreadable: torn log".into(),
+                text: "cannot count open agents: workspace ws_broken unreadable: torn log".into(),
                 disk_path: None,
             }]
         );
@@ -1739,28 +1924,28 @@ fn memory_and_disk_floors_hold_below_the_floor_and_show_beside_the_reading() {
     let fake = FakeHost::new();
     let floors = config("min-memory = \"8GB\"\nmin-disk = \"20GB\"\n");
     *fake.memory.lock().unwrap() = Ok(3_000_000_000);
-    let hold = limit_hold(fake.as_ref(), &floors, &run("nightly")).unwrap();
+    let hold = limit_hold(fake.as_ref(), &floors, &run("nightly"), 0).unwrap();
     assert_eq!(hold.unwrap().text, "available memory 3 GB < 8 GB");
     *fake.memory.lock().unwrap() = Ok(9_000_000_000);
     *fake.disk.lock().unwrap() = 12_000_000_000;
-    let hold = limit_hold(fake.as_ref(), &floors, &run("nightly")).unwrap();
+    let hold = limit_hold(fake.as_ref(), &floors, &run("nightly"), 0).unwrap();
     assert_eq!(hold.unwrap().text, "free disk 12 GB < 20 GB at /repo");
     *fake.disk.lock().unwrap() = 20_000_000_000;
     assert_eq!(
-        limit_hold(fake.as_ref(), &floors, &run("nightly")).unwrap(),
+        limit_hold(fake.as_ref(), &floors, &run("nightly"), 0).unwrap(),
         None
     );
 
     fake.set_pressure(2.4, 3.6);
     let mut mine = agent("fixer-1", AgentStatus::Running);
-    mine.loop_task = Some("nightly".to_owned());
+    mine.automation = Some(crate::agents::Automation::Loop);
     fake.set_agents(
         &workspace(),
         vec![agent("otter", AgentStatus::Running), mine],
     );
     let rows = readings_in(
         fake.as_ref(),
-        &config("cpu-pressure = 60\nmax-active = 6\nmax-active-per-task = 2\n"),
+        &config("cpu-pressure = 60\nmax-parallel-agents = 6\nmax-parallel-automation = 2\n"),
         &run("nightly"),
     );
     assert_eq!(
@@ -1771,8 +1956,8 @@ fn memory_and_disk_floors_hold_below_the_floor_and_show_beside_the_reading() {
             ("memory pressure", "avg10 2%".to_owned()),
             ("memory", "9 GB available".to_owned()),
             ("disk", "20 GB free".to_owned()),
-            ("active agents", "2 (limit max 6)".to_owned()),
-            ("task active agents", "1 (limit max 2)".to_owned()),
+            ("open agents", "2 (limit max 6)".to_owned()),
+            ("automated agents", "1 (limit max 2)".to_owned()),
         ]
     );
 }
@@ -1810,30 +1995,31 @@ fn a_held_run_is_skipped_at_its_give_up_instant_even_when_its_hold_clears_then()
 }
 
 #[test]
-fn a_compacting_agent_counts_toward_neither_cap_until_its_window_expires() {
-    for capped in ["max-active = 1\n", "max-active-per-task = 1\n"] {
+fn a_compacting_agent_counts_toward_both_caps_throughout_its_window() {
+    for capped in ["max-parallel-agents = 1\n", "max-parallel-automation = 1\n"] {
         let fake = FakeHost::new();
         let now = Timestamp::from_millisecond(i64::try_from(fake.now_ms()).unwrap()).unwrap();
         let compacting = |ago_secs: i64| AgentState {
-            loop_task: Some("nightly".to_owned()),
+            automation: Some(crate::agents::Automation::Loop),
             compacting_since: Some(now - jiff::SignedDuration::from_secs(ago_secs)),
             ..agent("otter", AgentStatus::Running)
         };
         fake.set_agents(&workspace(), vec![compacting(10)]);
-        assert_eq!(
-            limit_hold(fake.as_ref(), &config(capped), &run("nightly")).unwrap(),
-            None,
+        assert!(
+            limit_hold(fake.as_ref(), &config(capped), &run("nightly"), 0)
+                .unwrap()
+                .is_some(),
             "{capped}"
         );
         fake.set_agents(
             &workspace(),
             vec![compacting(crate::agents::COMPACTING_WINDOW_SECS + 1)],
         );
-        let hold = limit_hold(fake.as_ref(), &config(capped), &run("nightly"))
+        let hold = limit_hold(fake.as_ref(), &config(capped), &run("nightly"), 0)
             .unwrap()
             .unwrap_or_else(|| panic!("{capped}: a stale compaction counts"));
         assert!(
-            hold.text.ends_with("1 of 1 agents active (@claude)"),
+            hold.text.ends_with("agents open (@claude)"),
             "{}",
             hold.text
         );
@@ -1867,54 +2053,10 @@ fn an_existing_ticket_that_cannot_be_read_fails_admission() {
 }
 
 #[test]
-fn every_waiting_run_of_a_capped_task_is_stepped_over_by_another_task() {
-    let fake = FakeHost::new();
-    let capped = config("pace = \"0s\"\nmax-active-per-task = 1\ncpu-pressure = 50\n");
-    let mut fixer = agent("fixer-1", AgentStatus::Running);
-    fixer.loop_task = Some("fixer".to_owned());
-    fake.set_agents(&workspace(), vec![fixer]);
-
-    // A1, A2, B: A2 is held behind A1 and never records the cap itself.
-    let first_fixer = enqueue_as(&fake, 1, &run("fixer"));
-    let second_fixer = enqueue_as(&fake, 2, &run("fixer"));
-    let other_task = enqueue_as(&fake, 3, &run("nightly"));
-    assert_eq!(
-        step(&fake, &capped, &run("fixer"), &first_fixer).as_deref(),
-        Some("task at its cap: 1 of 1 agents active (@claude)")
-    );
-    // A2 has not passed yet, so it carries no reason.
-    assert_eq!(step(&fake, &capped, &run("nightly"), &other_task), None);
-    remove_ticket(&other_task);
-
-    let other_task = enqueue_as(&fake, 3, &run("nightly"));
-    assert_eq!(
-        step(&fake, &capped, &run("fixer"), &second_fixer).as_deref(),
-        Some("queued: 1 start ahead"),
-        "a run of the capped task keeps its place behind the first"
-    );
-    assert_eq!(step(&fake, &capped, &run("nightly"), &other_task), None);
-    remove_ticket(&other_task);
-
-    // A run held by a machine-wide limit is never stepped over.
-    let pressured = enqueue_as(&fake, 4, &run("nightly"));
-    let last = enqueue_as(&fake, 5, &run("weekly"));
-    fake.set_pressure(80.0, 80.0);
-    assert_eq!(
-        step(&fake, &capped, &run("nightly"), &pressured).as_deref(),
-        Some("cpu pressure 80% ≥ 50%")
-    );
-    fake.set_pressure(0.0, 0.0);
-    assert_eq!(
-        step(&fake, &capped, &run("weekly"), &last).as_deref(),
-        Some("queued: 1 start ahead")
-    );
-}
-
-#[test]
 fn ctrl_c_ends_a_hold_it_listens_for_and_leaves_no_ticket() {
     let fake = FakeHost::new();
-    let pacing = config("");
-    let (_first, _) = admitted(admit_quiet(&fake, &pacing, &run("first")));
+    let configured = config("");
+    let (_first, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
     assert_eq!(
         fake.listening.load(Ordering::SeqCst),
         0,
@@ -1927,7 +2069,7 @@ fn ctrl_c_ends_a_hold_it_listens_for_and_leaves_no_ticket() {
         }
     });
     fake.become_owner(2);
-    let interrupted = admit(&fake.host(), &pacing, &run("second"), None).expect("admit");
+    let interrupted = admit(&fake.host(), &configured, &run("second"), None).expect("admit");
     assert!(
         matches!(interrupted, Admission::Interrupted),
         "{interrupted:?}"
@@ -1939,12 +2081,12 @@ fn ctrl_c_ends_a_hold_it_listens_for_and_leaves_no_ticket() {
 
 /// A run whose caller already listens is the one held behind `first`.
 fn admit_listening(fake: &Arc<FakeHost>, raised: &Arc<AtomicBool>) -> Admission {
-    let pacing = config("");
-    let (first, _) = admitted(admit_quiet(fake, &pacing, &run("first")));
+    let configured = config("");
+    let (first, _) = admitted(admit_quiet(fake, &configured, &run("first")));
     fake.become_owner(2);
     let admission = admit(
         &fake.host(),
-        &pacing,
+        &configured,
         &run("second"),
         Some(Interrupts::raised_by(Arc::clone(raised))),
     )
@@ -1992,7 +2134,7 @@ fn a_held_run_keeps_the_listener_it_was_given() {
 #[test]
 fn ctrl_c_raised_while_taking_the_queue_lock_wins_over_an_admission() {
     let fake = FakeHost::new();
-    let pressure = config("pace = \"0s\"\ncpu-pressure = 50\n");
+    let pressure = config("cpu-pressure = 50\n");
     fake.set_pressure(80.0, 80.0);
     fake.on_sleep(|fake| fake.set_pressure(0.0, 0.0));
     // The cleared reading is sampled at 5s, in the pass this lock opens.

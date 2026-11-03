@@ -1082,7 +1082,7 @@ fn replace_coalesces_without_stopping_a_throttle_held_runner() {
         format!("{config}\nagent='claude'\nprompt='work'\non='any'\n"),
     )
     .unwrap();
-    loop_ok(&env, &["config", "set", "loop.throttle.pace", "1h"]);
+    loop_ok(&env, &["config", "set", "throttle.stagger", "1h"]);
     let queue = env.rimz_home().join("loops/throttle");
     std::fs::create_dir_all(&queue).unwrap();
     std::fs::write(queue.join("00000000000000000001-01890000-0000-7000-8000-000000000000"), json!({"owner":{"pid":std::process::id(),"start":null},"task":"other","root":"/elsewhere","checkout":"/elsewhere","enqueued_ms":1,"state":"admitted"}).to_string()).unwrap();

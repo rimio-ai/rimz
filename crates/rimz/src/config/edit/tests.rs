@@ -431,6 +431,16 @@ const LEGACY_SET_KEYS: &[&str] = &[
 
 #[test]
 fn validates_config_key_read_and_write_surfaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let files =
+        MachineConfigFiles::from_paths(dir.path().join("config.toml"), dir.path().join("agents"));
+    let editor = ConfigEditor::new(files);
+    editor.set("throttle.stagger", "30s").unwrap();
+    let written: toml::Value =
+        toml::from_str(&std::fs::read_to_string(dir.path().join("config.toml")).unwrap()).unwrap();
+    assert_eq!(written["throttle"]["stagger"].as_str(), Some("30s"));
+    assert!(!dir.path().join("loop.toml").exists());
+
     for key in [
         "theme.display.max_cols",
         "theme.display.pixel",
@@ -443,8 +453,8 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.startup-relaunch-wait",
         "loop.tasks.watch.agent",
         "loop.default-timeout",
-        "loop.throttle.pace",
-        "loop.throttle.max-active",
+        "throttle.stagger",
+        "throttle.max-parallel-agents",
         "loop.tasks.watch.prompt",
         "loop.tasks.watch.check",
         "loop.tasks.watch.on",
@@ -1335,7 +1345,7 @@ fn set_document_value_in_empty_document_starts_with_header() {
 #[test]
 fn set_document_value_groups_new_tasks_with_their_section() {
     let seed = "[tasks.one]\ncheck = \"true\"\n# every = \"30m\"\n\n\
-                # Throttle settings\n[throttle]\npace = \"10s\"\n";
+                # Throttle settings\n[throttle]\nstagger = \"10s\"\n";
     let mut doc: DocumentMut = seed.parse().unwrap();
     set_document_value(
         &mut doc,
@@ -1347,7 +1357,7 @@ fn set_document_value_groups_new_tasks_with_their_section() {
         doc.to_string(),
         "[tasks.one]\ncheck = \"true\"\n# every = \"30m\"\n\n\
          [tasks.two]\ncheck = \"false\"\n\n\
-         # Throttle settings\n[throttle]\npace = \"10s\"\n"
+         # Throttle settings\n[throttle]\nstagger = \"10s\"\n"
     );
 }
 

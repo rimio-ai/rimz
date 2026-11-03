@@ -6,7 +6,6 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::utils::size::parse_byte_size;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
 const DEFAULT_TIMEOUT_UNITS: &[DurationUnit] = &[
@@ -14,12 +13,6 @@ const DEFAULT_TIMEOUT_UNITS: &[DurationUnit] = &[
     DurationUnit::Minute,
     DurationUnit::Hour,
     DurationUnit::Day,
-];
-
-const THROTTLE_UNITS: &[DurationUnit] = &[
-    DurationUnit::Second,
-    DurationUnit::Minute,
-    DurationUnit::Hour,
 ];
 
 /// `loop.toml`: scheduled and automated agent-loop helpers.
@@ -33,8 +26,6 @@ pub struct LoopConfig {
         deserialize_with = "deserialize_default_timeout"
     )]
     pub default_timeout: Option<String>,
-    #[serde(skip_serializing_if = "ThrottleConfig::is_empty")]
-    pub throttle: ThrottleConfig,
     pub tasks: Tasks,
     #[serde(skip)]
     pub skipped_tasks: Tasks,
@@ -57,7 +48,7 @@ impl LoopConfig {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.default_timeout.is_none() && self.throttle.is_empty() && self.tasks.0.is_empty()
+        self.default_timeout.is_none() && self.tasks.0.is_empty()
     }
 
     pub fn validate_budgets(&self) -> Result<(), TaskBudgetError> {
@@ -79,184 +70,6 @@ where
         if duration.is_zero() {
             return Err(D::Error::custom("must be greater than zero"));
         }
-    }
-    Ok(raw)
-}
-
-/// `[throttle]`: how loop runs that spawn an agent take turns starting. Every
-/// value is validated at deserialize; the accessors return the parsed form.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct ThrottleConfig {
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_check"
-    )]
-    pub check: Option<String>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_check_timeout"
-    )]
-    pub check_timeout: Option<String>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_pace"
-    )]
-    pub pace: Option<String>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_cap"
-    )]
-    pub max_active: Option<u32>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_cap"
-    )]
-    pub max_active_per_task: Option<u32>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_pressure"
-    )]
-    pub cpu_pressure: Option<u8>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_pressure"
-    )]
-    pub io_pressure: Option<u8>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_pressure"
-    )]
-    pub memory_pressure: Option<u8>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_size"
-    )]
-    pub min_memory: Option<String>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_throttle_size"
-    )]
-    pub min_disk: Option<String>,
-}
-
-impl ThrottleConfig {
-    pub fn check_timeout(&self) -> Duration {
-        throttle_duration(self.check_timeout.as_deref().unwrap_or("30s"))
-            .unwrap_or(Duration::from_secs(30))
-    }
-
-    pub const DEFAULT_PACE: &'static str = "10s";
-
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-
-    /// Whether a check, cap, or resource limit is configured, excluding pacing and wait duration.
-    pub fn has_limits(&self) -> bool {
-        self.check.is_some()
-            || self.max_active.is_some()
-            || self.max_active_per_task.is_some()
-            || self.cpu_pressure.is_some()
-            || self.io_pressure.is_some()
-            || self.memory_pressure.is_some()
-            || self.min_memory.is_some()
-            || self.min_disk.is_some()
-    }
-
-    /// The pacing ceiling before the capacity-check floor is applied.
-    /// Zero turns pacing off only without a check.
-    pub fn pace(&self) -> Duration {
-        throttle_duration(self.pace.as_deref().unwrap_or(Self::DEFAULT_PACE))
-            .unwrap_or(Duration::from_secs(10))
-    }
-
-    pub fn min_memory_bytes(&self) -> Option<u64> {
-        parse_byte_size(self.min_memory.as_deref()?).ok()
-    }
-
-    pub fn min_disk_bytes(&self) -> Option<u64> {
-        parse_byte_size(self.min_disk.as_deref()?).ok()
-    }
-}
-
-fn throttle_duration(raw: &str) -> crate::utils::time::Result<Duration> {
-    parse_duration_units(raw, THROTTLE_UNITS)
-}
-
-fn deserialize_throttle_check<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let raw = Option::<String>::deserialize(deserializer)?;
-    if raw
-        .as_deref()
-        .is_some_and(|command| command.trim().is_empty())
-    {
-        return Err(D::Error::custom(
-            "must be a non-empty command; remove the key to disable it",
-        ));
-    }
-    Ok(raw)
-}
-
-fn deserialize_throttle_pace<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let raw = Option::<String>::deserialize(deserializer)?;
-    if let Some(value) = raw.as_deref() {
-        throttle_duration(value).map_err(D::Error::custom)?;
-    }
-    Ok(raw)
-}
-
-fn deserialize_throttle_check_timeout<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let raw = Option::<String>::deserialize(deserializer)?;
-    if let Some(value) = raw.as_deref()
-        && throttle_duration(value)
-            .map_err(D::Error::custom)?
-            .is_zero()
-    {
-        return Err(D::Error::custom("must be greater than zero"));
-    }
-    Ok(raw)
-}
-
-fn deserialize_throttle_cap<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let cap = Option::<u32>::deserialize(deserializer)?;
-    if cap == Some(0) {
-        return Err(D::Error::custom("must be greater than zero"));
-    }
-    Ok(cap)
-}
-
-fn deserialize_throttle_pressure<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let percent = Option::<u8>::deserialize(deserializer)?;
-    if percent.is_some_and(|percent| !(1..=100).contains(&percent)) {
-        return Err(D::Error::custom("must be a percentage between 1 and 100"));
-    }
-    Ok(percent)
-}
-
-fn deserialize_throttle_size<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let raw = Option::<String>::deserialize(deserializer)?;
-    if let Some(value) = raw.as_deref()
-        && parse_byte_size(value).map_err(D::Error::custom)? == 0
-    {
-        return Err(D::Error::custom("must be greater than zero"));
     }
     Ok(raw)
 }

@@ -23,6 +23,6 @@ expression: screen
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                                               $0.00
  ⚠ capacity check failing: claude exit 1 · 4 held · rimz doctor
  ⚠ starts held: free disk 1G < 2G at /repo · rimz doctor
- ⚠ starts held: cannot count active agents: broken record · 2 held · rimz doctor
+ ⚠ starts held: cannot count open agents: broken record · 2 held · rimz doctor
 
                                                                                                    ? for help

@@ -54,6 +54,7 @@ mod sentry;
 mod sidebar;
 mod skills;
 mod theme;
+mod throttle;
 pub mod tiers;
 mod tool_rules;
 mod web;
@@ -105,8 +106,7 @@ pub(crate) use loop_::WaitMeta;
 pub(crate) use loop_::deserialize_judges;
 pub use loop_::{
     CapacityWait, CapacityWaitErr, CheckOn, FileMark, Guard, Judge, LoopConfig, OverlapPolicy,
-    TaskCheck, TaskEntry, TaskTarget, Tasks, ThrottleConfig, ThrottleSwitch, WatchSpec,
-    has_absolute_task_root,
+    TaskCheck, TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::MultiplexerConfig;
@@ -142,6 +142,7 @@ pub(crate) use theme::InlinePalette;
 #[cfg(test)]
 pub(crate) use theme::{InlineAnsiColors, InlinePrimaryColors};
 pub use theme::{ThemeConfig, ThemeProviderStyle, ThemeStyle};
+pub use throttle::ThrottleConfig;
 pub use tool_rules::ToolRule;
 use web::WebPrefs;
 pub use worktree::{WorktreeBase, WorktreeConfig, WorktreeHooks, WorktreeHooksConfigErr};
@@ -434,17 +435,6 @@ pub struct UnknownConfigKey {
 
 impl std::fmt::Display for UnknownConfigKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if matches!(
-            self.key.as_str(),
-            "throttle.max-wait" | "loop.throttle.max-wait"
-        ) {
-            return write!(
-                formatter,
-                "config key `{}` in {} is retired and has no effect; set `capacity-wait` on each loop task instead; run `rimz setup` to remove it",
-                self.key,
-                self.path.display()
-            );
-        }
         if self.key == "lsp.kill-floor-percent" {
             return write!(
                 formatter,
@@ -571,6 +561,8 @@ impl ConfigNotices {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MachineConfig {
+    #[serde(skip_serializing_if = "ThrottleConfig::is_empty")]
+    pub throttle: ThrottleConfig,
     pub tiers: tiers::TierConfig,
     #[serde(deserialize_with = "deserialize_model_aliases")]
     pub models: BTreeMap<crate::ids::AgentKind, BTreeMap<String, String>>,
@@ -662,6 +654,13 @@ impl MachineConfig {
         let files = MachineConfigFiles::machine();
         load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text)
             .map(|loop_| loop_.unwrap_or_default())
+    }
+
+    /// Strictly reread the machine's core file without the lenient loader's memo.
+    pub(crate) fn load_throttle() -> Result<ThrottleConfig> {
+        let files = MachineConfigFiles::machine();
+        load_optional(files.core_path(), parse_core_text)
+            .map(|core| core.unwrap_or_default().throttle)
     }
 
     /// Load memoized per-machine config for a runtime entry point. Unlike [`Self::load`],
@@ -833,6 +832,7 @@ impl MachineConfig {
 
     fn assemble(core: CoreConfig, theme: ThemeConfig, loop_: LoopConfig) -> Self {
         Self {
+            throttle: core.throttle,
             tiers: core.tiers,
             models: core.models,
             lsp: core.lsp,
@@ -1257,6 +1257,7 @@ pub(crate) fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct CoreConfig {
+    throttle: ThrottleConfig,
     tiers: tiers::TierConfig,
     #[serde(deserialize_with = "deserialize_model_aliases")]
     models: BTreeMap<crate::ids::AgentKind, BTreeMap<String, String>>,

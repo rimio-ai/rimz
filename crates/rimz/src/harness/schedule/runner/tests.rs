@@ -416,7 +416,7 @@ fn a_coalescing_fire_reconciles_after_an_earlier_throttle_admission() {
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
     let mut fire = backlog_fire(root.path(), &catalog);
     fire.throttle_host = throttle::tests::FakeHost::new().host();
-    fire.config = Arc::new(toml::from_str("[loop.throttle]\npace='1s'\n").unwrap());
+    fire.config = Arc::new(toml::from_str("[throttle]\nstagger='1s'\n").unwrap());
     fire.prepare_run_lock(false).unwrap();
     assert!(fire.prepare_throttle().unwrap().is_none());
     assert!(fire.throttle_turn.is_some());
@@ -2970,7 +2970,7 @@ fn throttled_fire<'a>(
     host: &Arc<throttle::tests::FakeHost>,
 ) -> TaskFire<'a> {
     let config: MachineConfig =
-        toml::from_str(&format!("[loop.throttle]\n{throttle_config}")).expect("machine config");
+        toml::from_str(&format!("[throttle]\n{throttle_config}")).expect("machine config");
     let mut fire = TaskFire::new(
         name,
         LoadedTask::new(name, entry, catalog::TaskSource::Config),
@@ -3016,7 +3016,7 @@ fn resident_saved_modes_refuse_invalid_values_before_room_birth_and_record_strik
                 mode: Some(raw.to_owned()),
                 ..resident_entry(root.path())
             };
-            let mut fire = throttled_fire("bad-mode", entry, &catalog, "pace='0s'", &host);
+            let mut fire = throttled_fire("bad-mode", entry, &catalog, "", &host);
             fire.mode = mode;
             let error = fire
                 .prepare(&mut |_| panic!("invalid saved mode must not birth a room"))
@@ -3068,7 +3068,7 @@ fn resident_saved_modes_prepare_typed_permission_overrides() {
                 mode: raw.map(str::to_owned),
                 ..resident_entry(root.path())
             };
-            let mut fire = throttled_fire("mode", entry, &catalog, "pace='0s'", &host);
+            let mut fire = throttled_fire("mode", entry, &catalog, "", &host);
             fire.mode = mode;
             let plan = fire.prepare(&mut record_room).unwrap();
             let TaskFirePlan::Resident {
@@ -3125,7 +3125,7 @@ fn resident_saved_modes_leave_supervised_request_semantics_unchanged() {
                 stay: false,
                 ..resident_entry(root.path())
             };
-            throttled_fire("mode", entry, &catalog, "pace='0s'", &host)
+            throttled_fire("mode", entry, &catalog, "", &host)
                 .compile_spawn_request(
                     "claude".to_owned(),
                     "repair".to_owned(),
@@ -3156,11 +3156,38 @@ fn capacity_manual_fires_bypass_even_a_closed_door() {
         &host,
     );
     fire.mode = LoopRunMode::Manual;
-    Arc::make_mut(&mut fire.config).r#loop.throttle.max_active = Some(0);
+    Arc::make_mut(&mut fire.config).throttle.max_parallel_agents = Some(0);
     let plan = fire.prepare(&mut |_| Ok(())).unwrap();
     assert!(matches!(plan, TaskFirePlan::Resident { .. }), "{plan:?}");
     assert_eq!(host.tickets(), 0);
     assert_eq!(host.elapsed_ms(), 0);
+}
+
+#[test]
+fn capacity_off_tasks_still_hold_at_the_machine_cap() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    host.set_agents(
+        &state.workspace_id,
+        vec![crate::testkit::agent_state(
+            "claude",
+            "existing",
+            Timestamp::now(),
+        )],
+    );
+    host.on_sleep(|host| {
+        host.interrupt
+            .store(true, std::sync::atomic::Ordering::SeqCst)
+    });
+    let mut entry = resident_entry(root.path());
+    entry.throttle = Some(ThrottleSwitch::Off);
+    let mut fire = throttled_fire("off", entry, &catalog, "max-parallel-agents=1", &host);
+    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
+    assert!(matches!(plan, TaskFirePlan::Done(_)), "{plan:?}");
+    assert_eq!(host.elapsed_ms(), 1_000);
+    assert_eq!(host.tickets(), 0);
 }
 
 #[test]
@@ -3178,7 +3205,7 @@ fn capacity_corrupt_memory_does_not_fail_manual_or_exempt_or_admitted_fires() {
         if mode == "off" {
             entry.throttle = Some(ThrottleSwitch::Off);
         }
-        let mut fire = throttled_fire(mode, entry, &catalog, "pace='0s'", &host);
+        let mut fire = throttled_fire(mode, entry, &catalog, "", &host);
         if mode == "manual" {
             fire.mode = LoopRunMode::Manual;
         }
@@ -3285,7 +3312,7 @@ fn capacity_admission_rechecks_a_deadline_after_guard_work() {
     let mut entry = resident_entry(root.path());
     entry.deadline =
         Some(Timestamp::from_millisecond(host.host().now_ms() as i64 + 1_000).unwrap());
-    let mut fire = throttled_fire("late-guard", entry, &catalog, "pace='0s'", &host);
+    let mut fire = throttled_fire("late-guard", entry, &catalog, "", &host);
     host.host().sleep(Duration::from_secs(2));
     let plan = fire.prepare_throttle().unwrap();
     assert!(
@@ -3416,7 +3443,7 @@ fn capacity_one_off_clock_defaults_to_forever() {
     let mut entry = resident_entry(root.path());
     entry.stay = false;
     entry.at = Some("12:00".into());
-    let fire = throttled_fire("once-owed", entry, &catalog, "pace='0s'", &host);
+    let fire = throttled_fire("once-owed", entry, &catalog, "", &host);
     assert_eq!(fire.throttle_run().unwrap().gives_up_ms, None);
 }
 
@@ -3549,7 +3576,7 @@ fn a_fire_that_cannot_read_a_configured_limit_errors() {
     let error = fire
         .prepare(&mut |_| panic!("an unreadable limit births no room"))
         .unwrap_err();
-    assert!(error.to_string().contains("`loop.throttle.cpu-pressure`"));
+    assert!(error.to_string().contains("`throttle.cpu-pressure`"));
     assert_eq!(
         fire.finish_error(&error).record.result,
         LoopRunResult::Errored
@@ -3581,7 +3608,7 @@ fn min_disk_is_read_where_a_fresh_worktree_will_be_made() {
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     let host = throttle::tests::FakeHost::new();
     let config: MachineConfig = toml::from_str(&format!(
-        "[agents.worktree]\ndir = \"{}/worktrees/{{repo}}\"\n[loop.throttle]\nmin-disk = \"1GB\"\n",
+        "[agents.worktree]\ndir = \"{}/worktrees/{{repo}}\"\n[throttle]\nmin-disk = \"1GB\"\n",
         mount.display()
     ))
     .unwrap();
@@ -3776,8 +3803,7 @@ fn capacity_runner_checks_the_resolved_groups_once_per_kind_and_account() {
                 root: dir.path().to_owned(),
                 ..Default::default()
             };
-            let config: MachineConfig =
-                toml::from_str("[loop.throttle]\ncheck = 'capacity'").unwrap();
+            let config: MachineConfig = toml::from_str("[throttle]\ncheck = 'capacity'").unwrap();
             let host = throttle::tests::FakeHost::new();
             let mut fire = TaskFire::new(
                 "nightly",
@@ -3844,7 +3870,7 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
     host.become_owner(9);
     let throttle::Admission::Turn { turn: _holder, .. } = throttle::admit(
         &host.host(),
-        &config.r#loop.throttle,
+        &config.throttle,
         &throttle::Run {
             machine_gated: true,
             limits: None,

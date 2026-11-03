@@ -607,7 +607,9 @@ impl Transition<'_> {
             },
         );
         if let Some(verdict) = ending.route {
-            self.turn_end(&attempt, TurnEndAction::Closed, Some(&verdict), None);
+            if attempt.judged.is_some() {
+                self.turn_end(&attempt, TurnEndAction::Closed, Some(&verdict), None);
+            }
             self.record.node = verdict.node;
             self.record.entered_at = verdict.entered_at;
             return self.route(&verdict.target, verdict.object, verdict.reason);

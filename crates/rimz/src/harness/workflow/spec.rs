@@ -86,8 +86,8 @@ pub struct Header {
 #[schemars(deny_unknown_fields)]
 pub struct Limit {
     #[schemars(range(min = 1))]
-    pub max_active: Option<u32>,
-    pub pace: Option<String>,
+    pub max_parallel: Option<u32>,
+    pub stagger: Option<String>,
 }
 
 pub(super) fn duration(raw: &str) -> Result<std::time::Duration, crate::utils::time::TimeInputErr> {
@@ -104,10 +104,10 @@ pub(super) fn duration(raw: &str) -> Result<std::time::Duration, crate::utils::t
 }
 
 impl Limit {
-    pub(in crate::harness) fn pace(
+    pub(in crate::harness) fn stagger(
         &self,
     ) -> Result<Option<std::time::Duration>, crate::utils::time::TimeInputErr> {
-        self.pace.as_deref().map(duration).transpose()
+        self.stagger.as_deref().map(duration).transpose()
     }
 }
 

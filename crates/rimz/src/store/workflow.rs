@@ -457,7 +457,11 @@ pub struct Wait {
     pub case: Option<u32>,
     #[serde(default)]
     pub detail: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "HoldKind::deserialize_optional"
+    )]
     pub hold: Option<HoldKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<AgentKind>,
@@ -640,7 +644,11 @@ pub enum JournalEvent {
         outcome: String,
         #[serde(default)]
         detail: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "HoldKind::deserialize_optional"
+        )]
         hold: Option<HoldKind>,
         first: Timestamp,
         last: Timestamp,

@@ -998,7 +998,7 @@ upward-dependencies = [
 # MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
 # AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
 # KeepWarm parses the role/profile horizon and the floor for definitions, config edit, harness policy, and `agents validate` (+1).
-# ThrottleConfig::has_limits lets loop show distinguish admission limits from pacing (+1).
+# MachineConfig::load_throttle reads core-only start limits without a memo.
 # TaskCheck and Judge share legacy shell-or-agent guards across config, trust, delivery, and CLI (+2).
 # Guard, TaskEntry::guard and deserialize_judges share ordered loop guards and their serde projection (+3).
 # Machine hibernation policy and its duration validation serve admission (+1 net).
@@ -1382,13 +1382,13 @@ allowed-dependencies = [
 # paths::is_under_root shares empty-root containment across preflights and sandbox planning (+1).
 # atomic::publish_staged_no_replace shares non-replacing staged-entry publication (+1).
 # paths::workflow_runs_under_strict preserves required protection facts across rooms (+1).
-# paths::loop_throttle_workflow_pace names the home-wide workflow launch stamps (+1).
+# paths::loop_throttle_start_stamps names the machine, workflow and step launch stamps.
 surface-budget = 319
 
 [[verdict]]
 kind = "item"
-key = "disk::paths::loop_throttle_workflow_pace"
-reason = "The throttle reads and stamps workflow pacing through one home-wide disk path."
+key = "disk::paths::loop_throttle_start_stamps"
+reason = "The throttle reads and stamps machine, workflow and step stagger through one home-wide disk path."
 
 [[verdict]]
 kind = "item"
@@ -2404,7 +2404,8 @@ path = "crates/rimz/src/ids.rs"
 # `WorkspaceDirName` names workspace dirs beside the `WorkspaceId` they hold.
 # `MessageId::successor` keeps boundary claim commits in per-card FIFO order.
 # HoldKind and needs_fix share typed throttle causes across records and renderers (+2).
-surface-budget = 69
+# HoldKind::deserialize_optional keeps unknown durable hold kinds readable (+1).
+surface-budget = 70
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -3904,7 +3905,18 @@ path = "crates/rimz/src/trust.rs"
 upward-dependencies = ["agents"]
 # The live resolver shares the project-account refusal with birth and display readers (+1).
 # project_packs reads non-executing pack metadata before the trust gate (+1).
-surface-budget = 37
+# project_throttle lets room judgment warn about ignored machine-only project settings (+1).
+surface-budget = 38
+
+[[verdict]]
+kind = "item"
+key = "trust::project_throttle"
+reason = "Room entry detects an ignored project throttle table through the trust-owned project reader."
+
+[[verdict]]
+kind = "item"
+key = "config::throttle::ThrottleConfig"
+reason = "Machine start limits and resource protection live in the core config, independently of loop tasks."
 
 [[verdict]]
 kind = "item"

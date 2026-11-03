@@ -1681,12 +1681,9 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .zip(entry.wait.as_ref())
         .is_some_and(|((kind, session), target)| kind == target.kind && session == target.session);
     let config = MachineConfig::load_lenient();
-    let throttle = if args.json
-        || entry.agent.is_none()
-        || entry.throttle == Some(rimz::config::ThrottleSwitch::Off)
-    {
+    let throttle = if args.json || entry.agent.is_none() {
         ShowThrottle::Off
-    } else if config.r#loop.throttle.has_limits()
+    } else if !config.throttle.is_empty()
         || in_flight.as_ref().is_some_and(|run| !run.held.is_empty())
     {
         ShowThrottle::Full(schedule::throttle::readings(&config, &args.name, entry))
@@ -2761,7 +2758,7 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
             ui::cell(blocked_notice(state)).fg(ui::status::trust(state)),
         );
     }
-    if (view.config.r#loop.throttle.has_limits()
+    if (!view.config.throttle.is_empty()
         || view
             .in_flight
             .as_ref()
@@ -2772,7 +2769,9 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
             "throttle",
             ui::cell(match switch {
                 rimz::config::ThrottleSwitch::On => "on",
-                rimz::config::ThrottleSwitch::Off => "off (starts without taking a turn)",
+                rimz::config::ThrottleSwitch::Off => {
+                    "off (skips machine stagger, resource limits and capacity check, not caps)"
+                }
             }),
         );
     }

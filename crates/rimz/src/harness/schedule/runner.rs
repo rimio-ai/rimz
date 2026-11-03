@@ -710,7 +710,6 @@ impl<'a> TaskFire<'a> {
         self.mode == LoopRunMode::Scheduled
             && self.entry.agent.is_some()
             && self.entry.when.is_some()
-            && self.entry.throttle != Some(ThrottleSwitch::Off)
     }
 
     fn capacity_now(&self) -> Result<Timestamp> {
@@ -883,11 +882,7 @@ impl<'a> TaskFire<'a> {
             return Ok(None);
         }
         let run = self.throttle_run()?;
-        let held = throttle::look_in(
-            self.throttle_host.as_ref(),
-            &self.config.r#loop.throttle,
-            &run,
-        )?;
+        let held = throttle::look_in(self.throttle_host.as_ref(), &self.config.throttle, &run)?;
         if let Some(plan) = self.prepare_capacity_end()? {
             return Ok(Some(plan));
         }
@@ -910,7 +905,7 @@ impl<'a> TaskFire<'a> {
             None => self.resident_groups.clone(),
         };
         Ok(throttle::Run {
-            machine_gated: true,
+            machine_gated: self.entry.throttle != Some(ThrottleSwitch::Off),
             limits: None,
             groups,
             gives_up_ms: self
@@ -938,7 +933,7 @@ impl<'a> TaskFire<'a> {
         if self.throttle_turn.is_some() {
             return Ok(None);
         }
-        if self.mode == LoopRunMode::Manual || self.entry.throttle == Some(ThrottleSwitch::Off) {
+        if self.mode == LoopRunMode::Manual {
             self.clear_capacity()?;
             return Ok(None);
         }
@@ -947,8 +942,7 @@ impl<'a> TaskFire<'a> {
         }
         let run = self.throttle_run()?;
         if self.capacity_condition() {
-            let attempt =
-                throttle::try_admit_in(&self.throttle_host, &self.config.r#loop.throttle, &run)?;
+            let attempt = throttle::try_admit_in(&self.throttle_host, &self.config.throttle, &run)?;
             if let Some(plan) = self.prepare_capacity_end()? {
                 return Ok(Some(plan));
             }
@@ -965,12 +959,8 @@ impl<'a> TaskFire<'a> {
             return Ok(None);
         }
         let listening = self.check_interrupts.take();
-        let admission = throttle::admit(
-            &self.throttle_host,
-            &self.config.r#loop.throttle,
-            &run,
-            listening,
-        )?;
+        let admission =
+            throttle::admit(&self.throttle_host, &self.config.throttle, &run, listening)?;
         self.clear_capacity()?;
         match admission {
             throttle::Admission::Open => Ok(None),

@@ -174,7 +174,7 @@ expression: value
     "Limit": {
       "additionalProperties": false,
       "properties": {
-        "max-active": {
+        "max-parallel": {
           "format": "uint32",
           "minimum": 1,
           "type": [
@@ -182,7 +182,7 @@ expression: value
             "null"
           ]
         },
-        "pace": {
+        "stagger": {
           "type": [
             "string",
             "null"

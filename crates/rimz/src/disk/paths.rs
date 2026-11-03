@@ -1767,8 +1767,8 @@ pub(crate) fn loop_throttle_check_cache() -> PathBuf {
     loops_dir().join("throttle-checks.json")
 }
 
-pub(crate) fn loop_throttle_workflow_pace() -> PathBuf {
-    loops_dir().join("workflow-pace.json")
+pub(crate) fn loop_throttle_start_stamps() -> PathBuf {
+    loops_dir().join("start-stamps.json")
 }
 
 /// A new ticket in `queue`; the name sorts by its enqueue time.

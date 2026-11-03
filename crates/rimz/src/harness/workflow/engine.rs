@@ -17,7 +17,7 @@ use crate::harness::schedule::{
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, LiveAttempt,
-    ParkReason, RunRecord, RunState, Scope, ScopeKind,
+    ParkReason, RunRecord, RunState, Scope, ScopeKind, Verdict,
 };
 
 mod accounting;
@@ -349,7 +349,11 @@ enum Decision {
 #[derive(Default)]
 struct Admission {
     eviction: Option<(u64, String, Option<String>)>,
-    capacity: Option<(u64, String, std::result::Result<throttle::Attempt, String>)>,
+    capacity: Option<(
+        u64,
+        String,
+        std::result::Result<throttle::Attempt, throttle::ThrottleError>,
+    )>,
 }
 
 pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -> Result<()> {
@@ -377,12 +381,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             Decision::Admit(request) => {
                 let (seq, node, run) = *request;
                 let config = crate::config::MachineConfig::load_lenient();
-                admission.capacity = Some((
-                    seq,
-                    node,
-                    throttle::try_admit(&config.r#loop.throttle, &run)
-                        .map_err(|error| error.to_string()),
-                ));
+                admission.capacity = Some((seq, node, throttle::try_admit(&config.throttle, &run)));
                 #[cfg(feature = "testkit")]
                 crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_ADMISSION_GATE");
                 continue;
@@ -654,11 +653,9 @@ fn prepare(
         if let Some(spec::StepKind::Agent(agent)) = step.kind() {
             let admits = spec.workflow.limit.is_some()
                 || step.limit.is_some()
-                || (t.record.task.is_some()
-                    && !t.record.manual
-                    && step.throttle != Some(crate::config::ThrottleSwitch::Off));
+                || (t.record.task.is_some() && !t.record.manual);
             if admits && let Some((_, _, Err(reason))) = &admission.capacity {
-                launch_error = Some(reason.clone());
+                launch_error = Some(reason.to_string());
             }
             let groups = if admits || step.window.is_some() {
                 match launch_groups(&t.record, agent) {
@@ -799,6 +796,26 @@ fn prepare(
         ending: None,
         retry: t.record.check_retry_context.clone(),
     });
+    if let Some((_, _, Err(error @ throttle::ThrottleError::Oversized { .. }))) =
+        &admission.capacity
+    {
+        t.stage_agent_end(
+            Ending {
+                outcome: AttemptOutcome::Died,
+                cause: EndCause::Lifecycle,
+                route: Some(Verdict {
+                    node: t.record.node.clone(),
+                    entered_at: t.record.entered_at,
+                    at: Some(t.now),
+                    target: "@failed".into(),
+                    object: json!({"outcome":"died", "reason":error.to_string()}),
+                    reason: ParkReason::User,
+                }),
+                reason: Some(error.to_string()),
+            },
+            &agent::empty_observation(),
+        );
+    }
     persist(&t, &guard)?;
     write_context(&t.record, paths, spec)?;
     if let Some(mut prompt) = prompt {
@@ -839,7 +856,7 @@ fn prepare_capacity(
             may_wait,
         }
     });
-    if !machine_gated && limits.is_none() {
+    if !may_wait && limits.is_none() {
         admission.capacity = None;
         return Ok(None);
     }

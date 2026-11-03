@@ -37,11 +37,7 @@ fn turn(attempt: Attempt) -> Turn {
     turn
 }
 
-fn attempt(
-    root: &str,
-    node: &str,
-    lifecycle: StepLifecycle,
-) -> (workflow::RunRecord, AgentState, RunRecord) {
+fn attempt(root: &str, node: &str, lifecycle: StepLifecycle) -> (workflow::RunRecord, AgentState) {
     let id = WorkflowRunId::new();
     let run_id = RunId::new();
     let reference = format!("leader-{id}");
@@ -51,7 +47,12 @@ fn attempt(
         role: WorkflowAttemptRole::Step,
     };
     let mut leader = agent(&reference, AgentStatus::Running);
+    leader.name = Some("leader".into());
     leader.workflow = Some(pin.clone());
+    leader.automation = Some(crate::agents::Automation::Workflow {
+        workflow: "review".into(),
+        step: node.into(),
+    });
     let workflow = serde_json::from_value(json!({
         "version":1, "id":id, "workflow":"review", "task":"nightly", "spec_dir":"/defs",
         "spec_digest":"test", "scope":{"kind":"worktree", "path":root},
@@ -65,43 +66,34 @@ fn attempt(
         }
     }))
     .unwrap();
-    let supervised = serde_json::from_value(json!({
-        "run_id":run_id, "workspace_id":WorkspaceId::from_project_root(Path::new(root)),
-        "kind":"claude", "agent_id":reference, "workflow":pin, "status":"running",
-        "permission_mode":"auto", "prompt":"build", "worktree_path":root,
-        "started_at":Timestamp::UNIX_EPOCH, "updated_at":Timestamp::UNIX_EPOCH
-    }))
-    .unwrap();
-    (workflow, leader, supervised)
+    (workflow, leader)
 }
 
-fn install(fake: &FakeHost, record: workflow::RunRecord, agents: Vec<AgentState>, run: RunRecord) {
+fn install(fake: &FakeHost, record: workflow::RunRecord, agents: Vec<AgentState>) {
     fake.set_agents(
         &WorkspaceId::from_project_root(&record.project_root),
         agents,
     );
     fake.workflows.lock().unwrap().push(record);
-    fake.runs.lock().unwrap().push(run);
 }
 
 #[test]
-fn limits_count_working_leaders_across_rooms_and_held_steps_with_you() {
+fn limits_count_stamped_open_rows_across_rooms_even_after_the_run_ends() {
     let fake = FakeHost::new();
-    let (first, leader, supervised) = attempt("/first", "build", StepLifecycle::Stay);
+    let (first, leader) = attempt("/first", "build", StepLifecycle::Stay);
     let mut companion = leader.clone();
     companion.agent_id = "companion".into();
     companion.name = Some("companion".into());
     let mut subagent = leader.clone();
     subagent.parent_agent_id = Some(leader.agent_id.clone());
-    let mut judge = leader.clone();
-    judge.workflow.as_mut().unwrap().role = WorkflowAttemptRole::Judge;
-    install(
-        &fake,
-        first,
-        vec![leader, companion, subagent, judge],
-        supervised,
-    );
-    let (mut second, leader, supervised) = attempt("/second", "fix", StepLifecycle::Until);
+    let mut child = leader.clone();
+    child.agent_id = "child".into();
+    child.name = Some("child".into());
+    child.parent_agent_id = Some(leader.agent_id.clone());
+    child.launch_depth = Some(1);
+    child.workflow = None;
+    install(&fake, first, vec![leader, companion, subagent, child]);
+    let (mut second, leader) = attempt("/second", "fix", StepLifecycle::Until);
     second.held = Some(workflow::HeldSession {
         attempt: second.attempt.take().unwrap(),
         entered_at: Timestamp::UNIX_EPOCH,
@@ -114,13 +106,19 @@ fn limits_count_working_leaders_across_rooms_and_held_steps_with_you() {
         }))
         .unwrap(),
     );
-    install(&fake, second, vec![leader], supervised);
+    install(&fake, second, vec![leader]);
     for (root, state, name, status) in [
         (
             "/idle",
             workflow::RunState::Active,
             "review",
             AgentStatus::Idle,
+        ),
+        (
+            "/errored",
+            workflow::RunState::Active,
+            "review",
+            AgentStatus::Failed,
         ),
         (
             "/terminal",
@@ -135,17 +133,21 @@ fn limits_count_working_leaders_across_rooms_and_held_steps_with_you() {
             AgentStatus::Running,
         ),
     ] {
-        let (mut record, mut leader, supervised) = attempt(root, "build", StepLifecycle::Stay);
+        let (mut record, mut leader) = attempt(root, "build", StepLifecycle::Stay);
         record.state = state;
         record.workflow = name.into();
+        leader.automation = Some(crate::agents::Automation::Workflow {
+            workflow: name.into(),
+            step: "build".into(),
+        });
         leader.status = status;
-        install(&fake, record, vec![leader], supervised);
+        install(&fake, record, vec![leader]);
     }
     let workflow = held(
         try_admit_in(
             &fake.host(),
-            &config("pace='0s'"),
-            &limited(Some("max-active=2"), None),
+            &config(""),
+            &limited(Some("max-parallel=7"), None),
         )
         .unwrap(),
     );
@@ -153,71 +155,138 @@ fn limits_count_working_leaders_across_rooms_and_held_steps_with_you() {
         (workflow.kind, workflow.text.as_str()),
         (
             HoldKind::WorkflowLimit,
-            "limit review 2/2 working (2 with you)"
+            "workflow review: 7 of 7 agents open (@claude, @claude, +5)"
         )
     );
     let step = held(
         try_admit_in(
             &fake.host(),
-            &config("pace='0s'"),
-            &limited(None, Some("max-active=1")),
+            &config(""),
+            &limited(None, Some("max-parallel=6")),
         )
         .unwrap(),
     );
     assert_eq!(
         (step.kind, step.text.as_str()),
-        (HoldKind::StepLimit, "limit build 1/1 working (1 with you)")
+        (
+            HoldKind::StepLimit,
+            "step build: 6 of 6 agents open (@claude, @leader, +4)"
+        )
     );
-    let mut fix = limited(None, Some("max-active=1"));
+    let mut fix = limited(None, Some("max-parallel=1"));
     fix.limits.as_mut().unwrap().step = "fix".into();
     assert_eq!(
-        held(try_admit_in(&fake.host(), &config("pace='0s'"), &fix).unwrap()).text,
-        "limit fix 1/1 working (1 with you)"
+        held(try_admit_in(&fake.host(), &config(""), &fix).unwrap()).text,
+        "step fix: 1 of 1 agents open (@claude)"
     );
 }
 
 #[test]
-fn limits_count_an_unbound_launch_once_but_only_match_live_steps() {
+fn a_workflow_limit_cannot_loosen_the_machine_automation_cap() {
     let fake = FakeHost::new();
-    let (mut record, leader, supervised) = attempt("/repo", "build", StepLifecycle::Turn);
+    let (record, leader) = attempt("/repo", "build", StepLifecycle::Stay);
+    install(&fake, record, vec![leader]);
+    let request = limited(Some("max-parallel=10"), None);
+    let hold =
+        held(try_admit_in(&fake.host(), &config("max-parallel-automation=1"), &request).unwrap());
+    assert_eq!(hold.text, "1 of 1 automated agents open (@claude)");
+}
+
+#[test]
+fn limits_count_each_stamped_row_without_attempt_deduplication() {
+    let fake = FakeHost::new();
+    let (mut record, leader) = attempt("/repo", "build", StepLifecycle::Turn);
     record.attempt.as_mut().unwrap().run = None;
     let mut companion = leader.clone();
     companion.agent_id = "companion".into();
     companion.name = Some("companion".into());
-    install(&fake, record, vec![leader, companion], supervised);
-    let request = limited(None, Some("max-active=1"));
-    assert_eq!(
-        held(try_admit_in(&fake.host(), &config("pace='0s'"), &request).unwrap()).text,
-        "limit build 1/1 working"
-    );
-    fake.workflows.lock().unwrap()[0]
-        .attempt
-        .as_mut()
-        .unwrap()
-        .seq = 2;
-    drop(turn(
-        try_admit_in(&fake.host(), &config("pace='0s'"), &request).unwrap(),
-    ));
+    install(&fake, record, vec![leader, companion]);
+    let request = limited(None, Some("max-parallel=2"));
+    for seq in [1, 2] {
+        fake.workflows.lock().unwrap()[0]
+            .attempt
+            .as_mut()
+            .unwrap()
+            .seq = seq;
+        assert_eq!(
+            held(try_admit_in(&fake.host(), &config(""), &request).unwrap()).text,
+            "step build: 2 of 2 agents open (@leader, @companion)"
+        );
+    }
+}
+
+#[test]
+fn limit_holds_name_the_incoming_group_at_both_scopes() {
+    for workflow_limit in [true, false] {
+        let fake = FakeHost::new();
+        let (record, leader) = attempt("/repo", "build", StepLifecycle::Stay);
+        let mut companion = leader.clone();
+        companion.agent_id = "companion".into();
+        companion.name = Some("companion".into());
+        install(&fake, record, vec![leader, companion]);
+        let mut request = if workflow_limit {
+            limited(Some("max-parallel=3"), None)
+        } else {
+            limited(None, Some("max-parallel=3"))
+        };
+        request.groups[0].agents = 2;
+        let scope = if workflow_limit {
+            "workflow review"
+        } else {
+            "step build"
+        };
+        assert_eq!(
+            held(try_admit_in(&fake.host(), &config(""), &request).unwrap()).text,
+            format!("{scope}: 2 of 3 agents open (@leader, @companion); this start opens 2")
+        );
+    }
+}
+
+#[test]
+fn oversized_groups_refuse_workflow_and_step_limits_even_behind_a_launch() {
+    for workflow_limit in [true, false] {
+        let fake = FakeHost::new();
+        let mut request = if workflow_limit {
+            limited(Some("max-parallel=1"), None)
+        } else {
+            limited(None, Some("max-parallel=1"))
+        };
+        let _launching = turn(try_admit_in(&fake.host(), &config(""), &request).unwrap());
+        request.groups[0].agents = 2;
+        let result = try_admit_in(&fake.host(), &config(""), &request);
+        assert!(result.is_err(), "{result:?}");
+        let scope = if workflow_limit {
+            "workflow review"
+        } else {
+            "step build"
+        };
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!(
+                "this start opens 2 agents, more than max-parallel = 1 allows; raise max-parallel in {scope}'s definition"
+            )
+        );
+    }
 }
 
 #[test]
 fn limits_reserve_the_last_slot_under_the_shared_queue_lock() {
     let fake = FakeHost::new();
-    let (record, leader, supervised) = attempt("/existing", "build", StepLifecycle::Turn);
-    install(&fake, record, vec![leader], supervised);
+    let (record, leader) = attempt("/existing", "build", StepLifecycle::Turn);
+    install(&fake, record, vec![leader]);
     let barrier = Arc::new(std::sync::Barrier::new(2));
     let results = std::thread::scope(|scope| {
         let starts: Vec<_> = ["/one", "/two"]
             .into_iter()
             .map(|root| {
-                let mut request = limited(Some("max-active=2"), None);
+                let mut request = limited(Some("max-parallel=2"), None);
                 request.workspace = WorkspaceId::from_project_root(Path::new(root));
                 request.root = root.into();
                 let barrier = Arc::clone(&barrier);
                 let host = fake.host();
                 scope.spawn(move || {
                     barrier.wait();
-                    let answer = try_admit_in(&host, &config("pace='0s'"), &request).unwrap();
+                    let answer = try_admit_in(&host, &config(""), &request).unwrap();
                     (request, answer)
                 })
             })
@@ -250,46 +319,46 @@ fn limits_reserve_the_last_slot_under_the_shared_queue_lock() {
     let Attempt::Turn(turn) = answer else {
         unreachable!()
     };
-    let (mut record, mut leader, mut supervised) =
+    let (mut record, mut leader) =
         attempt(request.root.to_str().unwrap(), "build", StepLifecycle::Turn);
     record.id = request.limits.as_ref().unwrap().run.clone();
     leader.workflow.as_mut().unwrap().run = record.id.clone();
-    supervised.workflow = leader.workflow.clone();
     let agent_id = leader.agent_id.clone();
-    install(&fake, record, vec![leader], supervised);
+    install(&fake, record, vec![leader]);
     turn.report_launch(&request.workspace, &agent_id);
     let hold = held(
         try_admit_in(
             &fake.host(),
-            &config("pace='0s'"),
-            &limited(Some("max-active=2"), None),
+            &config(""),
+            &limited(Some("max-parallel=2"), None),
         )
         .unwrap(),
     );
     assert_eq!(
         (hold.kind, hold.text.as_str()),
-        (HoldKind::WorkflowLimit, "limit review 2/2 working")
+        (
+            HoldKind::WorkflowLimit,
+            "workflow review: 2 of 2 agents open (@claude, @claude)"
+        )
     );
 }
 
 #[test]
 fn limits_scope_inflight_turns_and_keep_the_machine_release_rule() {
     let fake = FakeHost::new();
-    let request = limited(Some("max-active=1"), None);
-    let configured = config("pace='0s'");
+    let request = limited(Some("max-parallel=1"), None);
+    let configured = config("");
     let first = turn(try_admit_in(&fake.host(), &configured, &request).unwrap());
     let hold = held(try_admit_in(&fake.host(), &configured, &request).unwrap());
     assert_eq!(
         (hold.kind, hold.text.as_str()),
-        (HoldKind::WorkflowLimit, "limit review: 1 start launching")
+        (
+            HoldKind::WorkflowLimit,
+            "workflow review: 1 start launching"
+        )
     );
-    assert!(matches!(
-        try_admit_in(&fake.host(), &configured, &run("ordinary")).unwrap(),
-        Attempt::Open
-    ));
-    let other_machine =
-        turn(try_admit_in(&fake.host(), &config("pace='10s'"), &run("ordinary")).unwrap());
-    let mut other = limited(None, Some("max-active=1"));
+    let other_machine = turn(try_admit_in(&fake.host(), &config(""), &run("ordinary")).unwrap());
+    let mut other = limited(None, Some("max-parallel=1"));
     other.limits.as_mut().unwrap().workflow = "other".into();
     drop(turn(
         try_admit_in(&fake.host(), &configured, &other).unwrap(),
@@ -303,16 +372,23 @@ fn limits_scope_inflight_turns_and_keep_the_machine_release_rule() {
     first.report_launch(&workspace(), &"provisional".into());
     let mut idle = agent("adopted", AgentStatus::Idle);
     idle.launch_id = Some("provisional".into());
+    idle.automation = Some(crate::agents::Automation::Workflow {
+        workflow: "review".into(),
+        step: "build".into(),
+    });
     fake.set_agents(&workspace(), vec![idle]);
     drop(turn(
-        try_admit_in(&fake.host(), &config("pace='10s'"), &run("ordinary")).unwrap(),
+        try_admit_in(&fake.host(), &config(""), &run("ordinary")).unwrap(),
     ));
     let hold = held(try_admit_in(&fake.host(), &configured, &request).unwrap());
     assert_eq!(
         (hold.kind, hold.text.as_str()),
-        (HoldKind::WorkflowLimit, "limit review: 1 start launching")
+        (
+            HoldKind::WorkflowLimit,
+            "workflow review: 1 of 1 agents open (@claude)"
+        )
     );
-    fake.clock.fetch_add(120_000, Ordering::SeqCst);
+    fake.set_agents(&workspace(), Vec::new());
     drop(turn(
         try_admit_in(&fake.host(), &configured, &request).unwrap(),
     ));
@@ -321,21 +397,23 @@ fn limits_scope_inflight_turns_and_keep_the_machine_release_rule() {
 #[test]
 fn limits_keep_fifo_standing_while_a_machine_turn_is_in_flight() {
     let fake = FakeHost::new();
-    let configured = config("pace='0s'");
-    let (running, leader, supervised) = attempt("/running", "build", StepLifecycle::Turn);
+    let configured = config("");
+    let (running, leader) = attempt("/running", "build", StepLifecycle::Turn);
     let running_room = WorkspaceId::from_project_root(&running.project_root);
-    install(&fake, running, vec![leader], supervised);
-    let machine =
-        turn(try_admit_in(&fake.host(), &config("pace='10s'"), &run("ordinary")).unwrap());
+    install(&fake, running, vec![leader]);
+    let machine = turn(try_admit_in(&fake.host(), &config(""), &run("ordinary")).unwrap());
 
-    let mut earlier = limited(Some("max-active=1"), None);
+    let mut earlier = limited(Some("max-parallel=1"), None);
     earlier.machine_gated = true;
     let hold = held(try_admit_in(&fake.host(), &configured, &earlier).unwrap());
     assert_eq!(
         (hold.kind, hold.text.as_str()),
-        (HoldKind::WorkflowLimit, "limit review 1/1 working")
+        (
+            HoldKind::WorkflowLimit,
+            "workflow review: 1 of 1 agents open (@claude)"
+        )
     );
-    let (mut waiter, _, _) = attempt("/earlier", "build", StepLifecycle::Turn);
+    let (mut waiter, _) = attempt("/earlier", "build", StepLifecycle::Turn);
     waiter.attempt = None;
     let first = Timestamp::from_millisecond(999_999).unwrap();
     waiter.wait = Some(
@@ -353,13 +431,13 @@ fn limits_keep_fifo_standing_while_a_machine_turn_is_in_flight() {
 
     drop(machine);
     fake.set_agents(&running_room, vec![]);
-    let later = limited(Some("max-active=1"), None);
+    let later = limited(Some("max-parallel=1"), None);
     let hold = held(try_admit_in(&fake.host(), &configured, &later).unwrap());
     assert_eq!(
         (hold.kind, hold.text.as_str()),
         (
             HoldKind::WorkflowLimit,
-            "limit review: 1 earlier start waiting"
+            "workflow review: 1 earlier start waiting"
         )
     );
 }
@@ -367,9 +445,9 @@ fn limits_keep_fifo_standing_while_a_machine_turn_is_in_flight() {
 #[test]
 fn limits_without_machine_gates_do_not_serialize_unrelated_workflows() {
     let fake = FakeHost::new();
-    let configured = config("pace='0s'");
-    let mut first = limited(Some("max-active=1"), None);
-    first.machine_gated = true;
+    let configured = config("");
+    let mut first = limited(Some("max-parallel=1"), None);
+    first.machine_gated = false;
     let first_turn = turn(try_admit_in(&fake.host(), &configured, &first).unwrap());
     let ticket = read_ticket(&first_turn.0.ticket).unwrap().unwrap();
     let mut other = first.clone();
@@ -388,36 +466,36 @@ fn limits_without_machine_gates_do_not_serialize_unrelated_workflows() {
 }
 
 #[test]
-fn limits_pace_is_stamped_only_at_report_and_releases_at_the_exact_gap() {
+fn limits_stagger_is_stamped_only_at_report_and_releases_at_the_exact_gap() {
     let fake = FakeHost::new();
-    let request = limited(Some("pace='10m'"), Some("pace='5m'"));
-    let config = config("pace='0s'");
+    let request = limited(Some("stagger='10m'"), Some("stagger='5m'"));
+    let config = config("");
     drop(turn(try_admit_in(&fake.host(), &config, &request).unwrap()));
-    assert!(!fake.workflow_pace().exists());
+    assert!(!fake.start_stamps().exists());
     let first = turn(try_admit_in(&fake.host(), &config, &request).unwrap());
     fake.clock.fetch_add(60_000, Ordering::SeqCst);
     first.report_launch(&workspace(), &"leader".into());
     assert!(
-        fake.workflow_pace().is_file(),
-        "a reported limited launch must persist its pace"
+        fake.start_stamps().is_file(),
+        "a reported limited launch must persist its stagger"
     );
     fake.set_agents(&workspace(), vec![agent("leader", AgentStatus::Running)]);
     let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fake.workflow_pace()).unwrap()).unwrap();
-    assert_eq!(value["review"]["last_launch_ms"], 1_060_000);
-    assert_eq!(value["review"]["steps"]["build"], 1_060_000);
+        serde_json::from_slice(&std::fs::read(fake.start_stamps()).unwrap()).unwrap();
+    assert_eq!(value["workflows"]["review"]["last_launch_ms"], 1_060_000);
+    assert_eq!(value["workflows"]["review"]["steps"]["build"], 1_060_000);
     fake.clock.fetch_add(60_000, Ordering::SeqCst);
     first.report_launch(&workspace(), &"retry".into());
     let hold = held(try_admit_in(&fake.host(), &config, &request).unwrap());
     assert_eq!(
         (hold.kind, hold.text.as_str()),
-        (HoldKind::WorkflowLimit, "limit review next start in 9m")
+        (HoldKind::WorkflowLimit, "workflow review: next start in 9m")
     );
     let mut step_only = request.clone();
     step_only.limits.as_mut().unwrap().workflow_limit = None;
     assert_eq!(
         held(try_admit_in(&fake.host(), &config, &step_only).unwrap()).text,
-        "limit build next start in 4m"
+        "step build: next start in 4m"
     );
     fake.clock.fetch_add(240_000, Ordering::SeqCst);
     drop(turn(
@@ -475,10 +553,10 @@ fn limits_fifo_uses_capacity_arrival_scope_and_run_id_ties() {
         ),
     ] {
         let fake = FakeHost::new();
-        let (mut waiter, _, _) = attempt("/waiter", step, StepLifecycle::Turn);
+        let (mut waiter, _) = attempt("/waiter", step, StepLifecycle::Turn);
         waiter.attempt = None;
         waiter.state = state;
-        let mut request = limited(Some("max-active=1"), Some("max-active=1"));
+        let mut request = limited(Some("max-parallel=1"), Some("max-parallel=1"));
         request.limits.as_mut().unwrap().run = WorkflowRunId::new();
         let first = Timestamp::from_millisecond(1_000_000 + offset).unwrap();
         waiter.wait = Some(serde_json::from_value(json!({
@@ -489,7 +567,7 @@ fn limits_fifo_uses_capacity_arrival_scope_and_run_id_ties() {
             vec![],
         );
         fake.workflows.lock().unwrap().push(waiter);
-        let answer = try_admit_in(&fake.host(), &config("pace='0s'"), &request).unwrap();
+        let answer = try_admit_in(&fake.host(), &config(""), &request).unwrap();
         actual.push((matches!(answer, Attempt::Held(_)), expected));
         if let Attempt::Held(hold) = answer {
             let name = if kind == HoldKind::WorkflowLimit {
@@ -498,7 +576,17 @@ fn limits_fifo_uses_capacity_arrival_scope_and_run_id_ties() {
                 "build"
             };
             assert_eq!(hold.kind, kind);
-            assert_eq!(hold.text, format!("limit {name}: 1 earlier start waiting"));
+            assert_eq!(
+                hold.text,
+                format!(
+                    "{} {name}: 1 earlier start waiting",
+                    if kind == HoldKind::WorkflowLimit {
+                        "workflow"
+                    } else {
+                        "step"
+                    }
+                )
+            );
         }
     }
     assert!(
@@ -508,71 +596,51 @@ fn limits_fifo_uses_capacity_arrival_scope_and_run_id_ties() {
 }
 
 #[test]
-fn limits_manual_claims_never_wait_and_exemption_is_workflow_max_active_only() {
+fn limits_manual_claims_never_wait_and_restart_workflow_stagger() {
     let fake = FakeHost::new();
-    let (record, leader, supervised) = attempt("/repo", "build", StepLifecycle::Turn);
-    install(&fake, record, vec![leader], supervised);
-    let mut manual = limited(Some("max-active=1\npace='10m'"), None);
+    let (record, leader) = attempt("/repo", "build", StepLifecycle::Turn);
+    install(&fake, record, vec![leader]);
+    let mut manual = limited(Some("max-parallel=1\nstagger='10m'"), None);
     manual.limits.as_mut().unwrap().may_wait = false;
     let first = turn(
         try_admit_in(
             &fake.host(),
-            &config("max-active=1\ncheck='capacity'"),
+            &config("max-parallel-agents=1\ncheck='capacity'"),
             &manual,
         )
         .unwrap(),
     );
     first.report_launch(&workspace(), &"manual".into());
-    assert!(fake.workflow_pace().is_file());
+    assert!(fake.start_stamps().is_file());
     assert!(fake.checked_groups().is_empty());
-    fake.clock.fetch_add(120_000, Ordering::SeqCst);
-    std::fs::remove_file(fake.workflow_pace()).unwrap();
-    let mut automated = limited(Some("max-active=2"), None);
-    automated.machine_gated = true;
-    drop(turn(
-        try_admit_in(&fake.host(), &config("max-active-per-task=1"), &automated).unwrap(),
-    ));
-    automated.limits.as_mut().unwrap().workflow_limit = None;
-    automated.limits.as_mut().unwrap().step_limit = Some(toml::from_str("max-active=2").unwrap());
-    assert_eq!(
-        held(try_admit_in(&fake.host(), &config("max-active-per-task=1"), &automated).unwrap())
-            .kind,
-        HoldKind::TaskCap
-    );
-    automated.limits.as_mut().unwrap().workflow_limit =
-        Some(toml::from_str("max-active=2").unwrap());
-    assert_eq!(
-        held(try_admit_in(&fake.host(), &config("max-active=1"), &automated).unwrap()).kind,
-        HoldKind::MachineCap
-    );
 }
 
 #[test]
-fn limits_fail_closed_on_unreadable_rooms_and_corrupt_pace_records_they_read() {
+fn limits_fail_closed_on_unreadable_rooms_and_corrupt_stamp_records_they_read() {
     let fake = FakeHost::new();
-    std::fs::write(fake.workflow_pace(), "broken").unwrap();
-    let request = limited(None, Some("pace='1m'"));
+    std::fs::write(fake.start_stamps(), "broken").unwrap();
+    let request = limited(None, Some("stagger='1m'"));
     assert_eq!(
-        held(try_admit_in(&fake.host(), &config("pace='0s'"), &request).unwrap()).kind,
+        held(try_admit_in(&fake.host(), &config(""), &request).unwrap()).kind,
         HoldKind::Store
     );
     drop(turn(
         try_admit_in(
             &fake.host(),
-            &config("pace='0s'"),
-            &limited(None, Some("max-active=1")),
+            &config(""),
+            &limited(None, Some("max-parallel=1")),
         )
         .unwrap(),
     ));
-    std::fs::remove_file(fake.workflow_pace()).unwrap();
-    let (record, _, _) = attempt("/repo", "build", StepLifecycle::Turn);
+    std::fs::remove_file(fake.start_stamps()).unwrap();
+    let (record, _) = attempt("/repo", "build", StepLifecycle::Turn);
     fake.workflows.lock().unwrap().push(record);
     fake.rooms
         .lock()
         .unwrap()
         .insert(workspace().to_string(), Err("broken room".into()));
     assert_eq!(
-        held(try_admit_in(&fake.host(), &config("pace='0s'"), &request).unwrap()).kind,
+        held(try_admit_in(&fake.host(), &config(""), &request).unwrap()).kind,
         HoldKind::Store
     );
 }

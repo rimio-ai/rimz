@@ -716,17 +716,31 @@ fn doctor_account_standing_is_cache_only_and_empty_paid_credits_are_not_exhausti
     );
 }
 
+fn write_throttle_config(env: &Env, text: impl AsRef<str>) -> std::io::Result<()> {
+    let mut tables: toml::Table = toml::from_str(text.as_ref()).unwrap();
+    let core_path = env.rimz_home().join("config.toml");
+    let mut core: toml::Table =
+        toml::from_str(&std::fs::read_to_string(&core_path).unwrap_or_default()).unwrap();
+    if let Some(throttle) = tables.remove("throttle") {
+        core.insert("throttle".into(), throttle);
+    }
+    std::fs::write(core_path, toml::to_string(&core).unwrap())?;
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        toml::to_string(&tables).unwrap(),
+    )
+}
+
 #[test]
 fn doctor_reads_fresh_throttle_disk_floors_without_admitting_or_running_checks() {
     let env = Env::new();
-    let config = env.rimz_home().join("loop.toml");
     for (floor, free, held) in [
         (true, 12_000_000_000u64, true),
         (true, 20_000_000_000, false),
         (false, 1, false),
     ] {
-        std::fs::write(
-            &config,
+        write_throttle_config(
+            &env,
             format!(
                 concat!(
                     "[throttle]\n{}check='touch diagnostic-check-ran'\n",
@@ -787,11 +801,7 @@ fn doctor_throttle_holds_include_trusted_project_tasks_in_other_rooms_without_re
         &other,
         "[tasks.project-only]\nagent='codex'\nprompt='review'\nsignal='ci.done'\n",
     );
-    std::fs::write(
-        env.rimz_home().join("loop.toml"),
-        "[throttle]\nmin-disk='20GB'\n",
-    )
-    .unwrap();
+    write_throttle_config(&env, "[throttle]\nmin-disk='20GB'\n").unwrap();
     let paths = env.state_path_for(&other);
     let record = std::fs::read(&paths.workspace_record).unwrap();
     let diagnostic_path = DiagSink::under(
@@ -845,11 +855,7 @@ fn doctor_throttle_holds_include_trusted_project_tasks_in_other_rooms_without_re
         "{body}"
     );
 
-    std::fs::write(
-        env.rimz_home().join("loop.toml"),
-        "[throttle]\nmax-active-per-task=1\n",
-    )
-    .unwrap();
+    write_throttle_config(&env, "[throttle]\nmax-parallel-automation=1\n").unwrap();
     if paths.events_log.exists() {
         std::fs::remove_file(&paths.events_log).unwrap();
     }
@@ -888,8 +894,8 @@ fn doctor_throttle_disk_floors_sample_each_fanout_checkout() {
             "text": format!("free disk 12 GB < 20 GB at {}", checkout.display()),
         }));
     }
-    std::fs::write(
-        env.rimz_home().join("loop.toml"),
+    write_throttle_config(
+        &env,
         format!(
             concat!(
                 "[throttle]\nmin-disk='20GB'\n[tasks.fanout]\nroot={:?}\n",
@@ -921,9 +927,9 @@ fn doctor_reports_an_unreadable_agent_count_only_with_a_cap() {
     }
     std::fs::create_dir_all(&paths.events_log).unwrap();
     let record = std::fs::read(&paths.workspace_record).unwrap();
-    for caps in ["max-active=2\n", "max-active-per-task=1\n", ""] {
-        std::fs::write(
-            env.rimz_home().join("loop.toml"),
+    for caps in ["max-parallel-agents=2\n", "max-parallel-automation=1\n", ""] {
+        write_throttle_config(
+            &env,
             format!(
                 "[throttle]\n{caps}[tasks.nightly]\nspec='codex'\nsignal='ci.done'\nroot={:?}\n",
                 env.project_root,
@@ -937,7 +943,7 @@ fn doctor_reports_an_unreadable_agent_count_only_with_a_cap() {
             assert_eq!(holds[0]["hold"], "store");
             let text = holds[0]["text"].as_str().unwrap();
             assert!(
-                text.starts_with("cannot count active agents: workspace ")
+                text.starts_with("cannot count open agents: workspace ")
                     && text.contains("unreadable"),
                 "{text}"
             );

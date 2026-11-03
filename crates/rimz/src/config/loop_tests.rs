@@ -28,35 +28,9 @@ fn task_capacity_wait_accepts_positive_durations_or_forever() {
 }
 
 #[test]
-fn retired_throttle_wait_warns_and_has_no_effect() {
-    let parsed = super::super::parse_loop_text_collecting(
-        Path::new("loop.toml"),
-        "[throttle]\nmax-wait = 'not a duration'",
-    );
-    assert!(
-        parsed.is_ok(),
-        "a retired value must not be validated: {parsed:?}"
-    );
-    let parsed = parsed.unwrap();
-    assert_eq!(parsed.value.throttle, ThrottleConfig::default());
-    assert_eq!(parsed.unknown_keys, ["throttle.max-wait"]);
-    let warning = super::super::UnknownConfigKey {
-        path: PathBuf::from("loop.toml"),
-        key: "throttle.max-wait".into(),
-    }
-    .to_string();
-    assert!(
-        warning.contains("retired") && warning.contains("capacity-wait"),
-        "{warning}"
-    );
-}
-
-#[test]
 fn narrow_loop_matches_full_lenient_config() {
     for contents in [
-        Some(
-            "default-timeout = '5m'\n[throttle]\npace = '1s'\n[tasks.nightly]\ncheck = 'cargo test'\nevery = '1h'\n",
-        ),
+        Some("default-timeout = '5m'\n[tasks.nightly]\ncheck = 'cargo test'\nevery = '1h'\n"),
         Some("[tasks.nightly\n"),
         Some("[tasks.nightly]\ncheck = 'cargo test'\nbudget = 'bad'\n"),
         None,
@@ -233,48 +207,6 @@ fn malformed_agent_checks_preserve_the_cause() {
         let error = serde_json::from_value::<TaskEntry>(json).unwrap_err();
         assert!(error.to_string().contains(cause), "{error}");
     }
-}
-
-#[test]
-fn throttle_has_limits_excludes_pacing() {
-    assert!(!ThrottleConfig::default().has_limits());
-    let pacing: ThrottleConfig = toml::from_str("pace = \"1s\"").unwrap();
-    assert!(!pacing.has_limits());
-    for limit in [
-        "cpu-pressure = 25",
-        "io-pressure = 25",
-        "memory-pressure = 25",
-        "min-memory = \"1GB\"",
-        "min-disk = \"1GB\"",
-        "max-active = 2",
-        "max-active-per-task = 2",
-    ] {
-        assert!(
-            toml::from_str::<ThrottleConfig>(limit)
-                .unwrap()
-                .has_limits(),
-            "{limit}"
-        );
-    }
-}
-
-#[test]
-fn capacity_check_config_parses_and_rejects_empty_commands_and_invalid_timeouts() {
-    let configured: ThrottleConfig =
-        toml::from_str("check = 'capacity'\ncheck-timeout = '2m'").unwrap();
-    assert_eq!(configured.check.as_deref(), Some("capacity"));
-    assert_eq!(configured.check_timeout(), Duration::from_secs(120));
-    assert!(configured.has_limits());
-    let rejected: Vec<_> = [
-        "check = '  '",
-        "check-timeout = '0s'",
-        "check-timeout = '1d'",
-        "check-timeout = 'soon'",
-    ]
-    .into_iter()
-    .map(|text| toml::from_str::<ThrottleConfig>(text).is_err())
-    .collect();
-    assert_eq!(rejected, [true; 4]);
 }
 
 #[test]
@@ -648,57 +580,6 @@ fn default_timeout_rejects_a_zero_duration() {
             err.to_string().contains("must be greater than zero"),
             "{err}"
         );
-    }
-}
-
-#[test]
-fn throttle_table_parses_with_defaults_and_typed_values() {
-    let defaults = LoopConfig::default().throttle;
-    assert!(defaults.is_empty());
-    assert_eq!(defaults.pace(), Duration::from_secs(10));
-    assert_eq!(defaults.min_memory_bytes(), None);
-
-    let config: LoopConfig = toml::from_str(
-        "[throttle]\npace = \"0s\"\nmax-active = 12\n\
-         max-active-per-task = 4\ncpu-pressure = 60\nio-pressure = 40\n\
-         memory-pressure = 100\nmin-memory = \"8GB\"\nmin-disk = \"20GB\"\n",
-    )
-    .expect("valid throttle table");
-    let throttle = &config.throttle;
-    assert!(!config.is_empty(), "a throttle table alone is content");
-    assert_eq!(throttle.pace(), Duration::ZERO);
-    assert_eq!(throttle.max_active, Some(12));
-    assert_eq!(throttle.max_active_per_task, Some(4));
-    assert_eq!(
-        (
-            throttle.cpu_pressure,
-            throttle.io_pressure,
-            throttle.memory_pressure
-        ),
-        (Some(60), Some(40), Some(100))
-    );
-    assert_eq!(throttle.min_memory_bytes(), Some(8_000_000_000));
-    assert_eq!(throttle.min_disk_bytes(), Some(20_000_000_000));
-    let round_trip: LoopConfig =
-        toml::from_str(&toml::to_string(&config).expect("serialize")).expect("reparse");
-    assert_eq!(round_trip, config);
-}
-
-#[test]
-fn throttle_table_rejects_values_that_could_never_admit() {
-    for (text, expected) in [
-        ("check-timeout = \"0s\"", "must be greater than zero"),
-        ("check-timeout = \"1d\"", "unit"),
-        ("pace = \"soon\"", "duration"),
-        ("max-active = 0", "must be greater than zero"),
-        ("max-active-per-task = 0", "must be greater than zero"),
-        ("cpu-pressure = 0", "between 1 and 100"),
-        ("io-pressure = 101", "between 1 and 100"),
-        ("min-memory = \"lots\"", "size"),
-        ("min-disk = \"0\"", "must be greater than zero"),
-    ] {
-        let err = toml::from_str::<LoopConfig>(&format!("[throttle]\n{text}\n")).expect_err(text);
-        assert!(err.to_string().contains(expected), "{text}: {err}");
     }
 }
 
