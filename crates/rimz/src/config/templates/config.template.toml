@@ -169,11 +169,11 @@ disable_session_metadata = true       # stop Zellij's per-second metadata/ps loo
 ## osc8_hyperlinks = true
 
 [tmux]
-# RimZ applies these to its tmux session on every birth. Three behaviours have
-# no key here: window titles, and the server terminal-features for synchronized
-# output and for hyperlinks. The extended-keys terminal feature and the three
-# root key bindings follow `extended_keys` below; the same guide section lists
-# them all.
+# RimZ applies these on open, reattach, and reload to its tmux session and current
+# windows. Three behaviours have no key here: window titles, and the server
+# terminal-features for synchronized output and for hyperlinks. The extended-keys
+# terminal feature and the three root key bindings follow `extended_keys` below;
+# the same guide section lists them all.
 mouse = true
 focus_events = true
 history_limit = 100000

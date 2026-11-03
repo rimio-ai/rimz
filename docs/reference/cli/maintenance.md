@@ -181,6 +181,7 @@ rimz reload [--repair]
 - publishes the invoking build as the target of every live room, so each room's sidebars restart onto it in place;
 - stops each live room's running hook drainer after its current frame, then nudges a replacement on the recorded build; a room with no running drainer starts none;
 - upgrades a room's Zellij presence plugin when its build or configuration differs, and leaves a current one alone;
+- re-applies `[tmux]` room options and `[mux] status_bar` to each live tmux room, warning and continuing if a room's apply fails or its session vanishes;
 - moves the `rimzd` loop panel, Codex broker, content supervisors and their configured commands onto the room's new build in place, and restarts the Claude remote-control host (an open phone session drops);
 - restarts standalone `rimz stats --refresh` dashboards and stats children of older, non-following content supervisors;
 - retires outdated language-server brokers without interrupting running servers or attached editors;

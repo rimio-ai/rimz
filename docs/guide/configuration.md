@@ -432,7 +432,7 @@ The stuck-stage `!` is independent of the optional [55-minute stalled-team nudge
 
 ### Multiplexer room options
 
-RimZ applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without your editing the global Zellij or tmux config. These tables are the only ones this page does not list in full: `rimz config init --print` gives every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/multiplexers.md).
+RimZ applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without your editing the global Zellij or tmux config. `rimz reload` also re-applies options to live tmux sessions and their current windows. These tables are the only ones this page does not list in full: `rimz config init --print` gives every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/multiplexers.md).
 
 ```toml
 [mux]
@@ -448,7 +448,7 @@ pane_border_status = "top"    # optional; unset: inherit, except stack-window ti
 
 `[mux] default` picks the backend, consulted after an explicit `--mux <name>`, its `--zellij` and `--tmux` shorthands, and the check for a Zellij or tmux you are already inside. Left unset, RimZ takes tmux when both are installed. If the configured backend is not installed, RimZ skips the setting and auto-detects an installed backend; room start warns. An already-open room keeps its backend until it is reset.
 
-`[mux] status_bar` selects the room's status bar: `"full"` (the default) leaves your tmux bar alone, `"compact"` keeps a clickable strip of up to 21 tabs around the current window, and `"off"` hides it. Zellij rooms ignore this setting for now. See [large tmux rooms](./multiplexer.md#large-tmux-rooms) for the compact bar's trade-offs.
+`[mux] status_bar` selects the room's status bar: `"full"` (the default) leaves your tmux bar alone, `"compact"` keeps a clickable strip of up to 21 tabs around the current window, and `"off"` hides it. Changes apply on start, attach, or `rimz reload`. Zellij rooms ignore this setting for now. See [large tmux rooms](./multiplexer.md#large-tmux-rooms) for the compact bar's trade-offs.
 
 The two backends differ in what an unset key means.
 
@@ -465,7 +465,7 @@ Every other key, `pane_frames` and `copy_clipboard` among them, is asserted only
 
 A session value here overrides `config.kdl` absolutely. Most changes apply on the next `rimz start` or reattach; start-only settings and removal of optional keys wait for a new room. Client settings apply per attach, but `mouse_mode = true` cannot override `mouse_mode false` in `config.kdl`. See [change what the room asserts](./multiplexer.md#change-what-the-room-asserts) for the start-only keys and how to apply changes.
 
-`[tmux]` carries a RimZ default for every key except the two pane-border keys, so other unset keys mean RimZ's value rather than yours. Changed window settings reach every open window on the next open or reattach, and future windows match. Removing a pane-border key restores inheritance from `~/.tmux.conf` or tmux's defaults on that next apply, except in a window holding a stack. With `pane_border_status` unset, a stack window gets top borders naming its members and blanking every other pane, including the sidebar; closing the last member returns control to your config. Setting `pane_border_status` to `"top"` or `"bottom"` also hands RimZ `pane-border-format`, which titles work panes and blanks the sidebar's border row. An explicit `"off"` disables borders, including stack borders, and inherits your format. The table spans session, window, and server scope, clipboard and rich-key handling included, because tmux has no per-session form for those.
+`[tmux]` carries a RimZ default for every key except the two pane-border keys, so other unset keys mean RimZ's value rather than yours. Changed window settings reach every open window on open, reattach, or `rimz reload`; open or reattach also refreshes defaults for future windows. Removing a pane-border key restores inheritance from `~/.tmux.conf` or tmux's defaults on that next apply, except in a window holding a stack. With `pane_border_status` unset, a stack window gets top borders naming its members and blanking every other pane, including the sidebar; closing the last member returns control to your config. Setting `pane_border_status` to `"top"` or `"bottom"` also hands RimZ `pane-border-format`, which titles work panes and blanks the sidebar's border row. An explicit `"off"` disables borders, including stack borders, and inherits your format. The table spans session, window, and server scope, clipboard and rich-key handling included, because tmux has no per-session form for those.
 
 Three tmux behaviours are not keys either: window titles (`set-titles` with the `set-titles-string` that carries a pane's title to the tab), and the server `terminal-features` entries for synchronized output and for hyperlinks. Two more are governed by `extended_keys` rather than standing alone: the `extkeys` terminal feature, which RimZ unsets when you turn the key off, and the three root key bindings for Shift+Enter, Alt+Enter, and RimZ's own `User240` signal, which it stops writing.
 

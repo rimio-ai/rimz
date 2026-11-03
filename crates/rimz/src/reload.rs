@@ -2,8 +2,8 @@
 //!
 //! `rimz reload` stages the invoking binary, writes it as each live room's
 //! durable target, restarts running hook drainers, nudges supervisors,
-//! hash-gates Zellij plugin convergence, and reports the bounded convergence
-//! window without changing terminal panes.
+//! hash-gates Zellij plugin convergence, re-applies tmux room options, and
+//! reports the bounded convergence window without changing terminal panes.
 //! `rimz sidebar repair` is the independent structural close/add and daemon-view
 //! reopen pass. Standalone stats dashboards and children of non-following
 //! supervisors are signalled before workspace enumeration. The rimzd processes
@@ -747,6 +747,18 @@ fn upgrade_live(
                 );
             }
         }
+    }
+
+    if *mux == MuxName::Tmux
+        && let Err(err) = crate::mux::TmuxBackend::default()
+            .apply_room_options(&ws.session_name, &MultiplexerConfig::from(machine_config))
+    {
+        tracing::warn!(
+            session = %ws.session_name,
+            tags.operation = "reload.tmux_options",
+            error = &err as &dyn std::error::Error,
+            "reload: applying tmux room options failed",
+        );
     }
 
     // Reap orphan sidebar processes whose pane is gone — the mux cannot close a
