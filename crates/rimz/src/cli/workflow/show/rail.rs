@@ -13,7 +13,7 @@ impl View<'_> {
         rail.compact = self.record.state != RunState::Active;
         let hops = workflow::hops(self.spec, self.journal);
         let counts = entries(&hops);
-        let current = self.presentation(false)?.0;
+        let current = workflow_view::glyph_role(self.record);
         for row in rail.rows.iter_mut().chain(&mut rail.unreachable) {
             let count = counts.get(row.name.as_str()).copied().unwrap_or(0);
             let last = self.last(&row.name, &hops);

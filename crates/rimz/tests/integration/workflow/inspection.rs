@@ -742,7 +742,8 @@ fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
         "{text}"
     );
     assert!(active.contains("review#g-window"), "{text}");
-    assert!(held.contains("queued: 1 start ahead, ×3"), "{text}");
+    assert!(held.contains("queued: 1 start ahead"), "{text}");
+    assert!(!held.contains('×'), "{text}");
     assert!(
         held.contains("legacy hold") && !held.contains("×1"),
         "{text}"
@@ -763,8 +764,8 @@ fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
         ("a-ask", rimz::config::GlyphRole::StatusWaiting, "2m"),
         ("b-sleep", rimz::config::GlyphRole::StatusSleeping, "1m"),
         ("c-run", rimz::config::GlyphRole::StatusWorking, "0s"),
-        ("d-held", rimz::config::GlyphRole::StatusIdle, "4m"),
-        ("e-legacy", rimz::config::GlyphRole::StatusIdle, "2m"),
+        ("d-held", rimz::config::GlyphRole::PipelineCurrent, "4m"),
+        ("e-legacy", rimz::config::GlyphRole::PipelineCurrent, "2m"),
         ("f-fix", rimz::config::GlyphRole::StatusWaiting, "1m"),
         ("g-window", rimz::config::GlyphRole::StatusSleeping, "0s"),
     ] {
@@ -800,7 +801,7 @@ fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
             .iter()
             .find(|row| row["id"] == json!(sleeping.id))
             .unwrap()["detail"],
-        "said pending, ×3"
+        "pending"
     );
 }
 

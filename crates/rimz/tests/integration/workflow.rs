@@ -1230,7 +1230,7 @@ fn human_show_wait_and_journal_are_readable() {
         text.starts_with("review#project  ☾ waiting at pr"),
         "{text}"
     );
-    assert_eq!(text.matches("said pending, ×1").count(), 1, "{text}");
+    assert_eq!(text.matches("pending, recheck").count(), 1, "{text}");
     assert!(text.contains("trail  "), "{text}");
     let zone = jiff::tz::TimeZone::system();
     let today = jiff::Timestamp::now().to_zoned(zone.clone()).date();
@@ -1251,7 +1251,7 @@ fn human_show_wait_and_journal_are_readable() {
     let wait = &value["record"]["wait"];
     assert!(
         text.contains(&format!(
-            "said pending, ×1, recheck {}",
+            "pending, recheck {}",
             local_time(&wait["recheck_at"])
         )),
         "{text}"
@@ -1290,9 +1290,7 @@ fn human_show_wait_and_journal_are_readable() {
     );
     let waiting = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(
-        waiting
-            .lines()
-            .any(|line| line.contains("said pending, ×3")),
+        waiting.lines().any(|line| line.contains(": pending")),
         "{waiting}"
     );
     fs::write(dir.join("checks/pr.sh"), "printf 'not-json'").unwrap();
@@ -1458,9 +1456,11 @@ fn human_window_wait_includes_evidence_and_omits_missing_recheck() {
         .workflow(&id.parse().unwrap());
     fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
     let text = success(command(&env, &["workflow", "show", &id]));
-    assert!(text.contains("window 5h.left=12<42, ×40"), "{text}");
+    assert!(text.contains("window 5h.left=12<42"), "{text}");
+    assert!(!text.lines().next().unwrap().contains("×40"), "{text}");
     let listed = success(command(&env, &["workflow", "list"]));
-    assert!(listed.contains("window 5h.left=12<42, ×40"), "{listed}");
+    assert!(listed.contains("window 5h.left=12<42"), "{listed}");
+    assert!(!listed.contains("×40"), "{listed}");
     success(command(&env, &["workflow", "cancel", &id]));
 }
 

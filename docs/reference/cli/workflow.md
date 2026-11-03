@@ -74,7 +74,7 @@ The two-positional form takes a workflow name only, not an address or run id (us
 
 When the sealed definition loads with ignored fields, the row adds ` · N ignored` to its detail, without changing JSON `detail`. The mark is omitted if it cannot fit the terminal width. The live-runs table under `show <WORKFLOW>` uses the same mark. A clean run has no mark. Single-run `show`, including `--history` and finished runs, prints each ignored field's path and reason as a `warning:` line below the headline. These warnings are recomputed from the sealed definition with the current binary; they are not copied into the run record. Environment warnings such as auto-continue being off do not mark a run. Loop views, the sidebar, resume receipts, and definition rails do not show ignored-field marks.
 
-Detail is `asking you: <handle> (<kind>): <one-line text>` for a blocking ask; otherwise a live staying session reads `with you`, with `; checking <check>` while held and `; <wait phrase>` when waiting. A capacity hold prints its reason with `, ×N` above one; other runs print the [park phrase](#park-reasons), [wait phrase](#the-waiting-line), `running` (with ` · visit <n> of <max>` when capped), or `checking`. JSON `detail` retains the shared phrase, including `held <age>[, gives up <clock>] · <reason>, ×N` for capacity waits, without node or the separate age column. A single-run `show` says `<step> is asking you` while asking, otherwise `<step> is with you` for a live staying attempt. Its session attempt is `held.attempt` while checking, otherwise `attempt`; its `lifecycle` is `stay` or `until`, omitted for turn attempts. An open blocking ask is stored in `asking`; `asked_ms` is the total closed pause time in milliseconds. Both are omitted when empty or zero. While held, NODE names the check; `show` keeps the session's step and handle in its headline and names the current check below it.
+Detail is `asking you: <handle> (<kind>): <one-line text>` for a blocking ask; otherwise a live staying session reads `with you`, with ` · checking <check>` while held and `: <wait phrase>` at that check, or ` · <check>: <wait phrase>` after it when waiting. A capacity hold prints its reason; other runs print the [park phrase](#park-reasons), [wait phrase](#the-waiting-line), `running` (with ` · visit <n> of <max>` when capped), or `checking`. JSON `detail` retains the shared phrase, including `held <age>[, gives up <clock>] · <reason>` for capacity waits, without node or the separate age column. A single-run `show` says `<step> is asking you` while asking, otherwise `<step> is with you` for a live staying attempt. Its session attempt is `held.attempt` while checking, otherwise `attempt`; its `lifecycle` is `stay` or `until`, omitted for turn attempts. An open blocking ask is stored in `asking`; `asked_ms` is the total closed pause time in milliseconds. Both are omitted when empty or zero. While held, NODE names the check; `show` keeps the session's step and handle in its headline and names the current check below it.
 
 `rimz workflow show <RUN> [--history | --json]` opens with the address and current state. A wait names its node, elapsed time, recheck and the next bound's time and target; a hold names its outcome, duration and the next bound's time and target. The forecast picks the earliest unfired deadline, timeout or hold completion, in that order on ties. A running step shows its visit limit and agent handle when available. Asking reads `<step> is asking you · <handle> (<kind>)` and says to answer in the pane or with `rimz answer`; a turn step's timeout pauses while asking. A parked headline reads `parked at <node> <age> · <reason>`, leaving its explanation to the block below. Finished runs say `done`, `failed`, or `canceled`, aged from termination. The origin line names when and how the run started (by hand or by loop task), the number of completed attempts, and their known total cost, including judge evaluations. It omits cost when none is recorded, and never estimates a live attempt's spend.
 
@@ -92,24 +92,25 @@ Adjacent check answers with the same node, origin, outcome, and condition case i
 
 ### The waiting line
 
+Status phrases do not print `said` or an advance count: an advance can find the run waiting without evaluating its check. The JSON shapes are unchanged; this text change also applies to `workflow list --json` `detail` and `loop list --json` / `loop show --json` `workflow_runs[].detail`. History and park answer rows keep `<node> said <outcome>` and their journal-fold counts.
+
 A run at a wait carries a shared phrase without the node; capacity waits carry a held age. A single-run `show` puts the phrase in its state headline, or below a `with you` headline. Every instant, including capacity bounds, uses local `HH:MM` today, `Mon HH:MM` within six days in either direction, and `YYYY-MM-DD HH:MM` beyond that.
 
 ```console
 $ rimz workflow list
 ACTIVE
-  ☾ ci-watch#feat-x  review  said pending, ×1, recheck 16:09  0s
+  ☾ ci-watch#feat-x  review  pending, recheck 16:09  0s
 ```
 
 | Part | Meaning |
 | --- | --- |
-| `said <outcome>` | A check answered an outcome routed to `@wait`. |
+| `<outcome>` | A check answered an outcome routed to `@wait`. |
 | `holding <outcome> <elapsed>/<for>` | A condition case keeps winning while its hold duration runs. |
 | `unknown: <keys and reasons>` | A condition cannot read enough data to choose its first matching case. Bare `ci` can name a local HEAD not on the PR or CI read at a different PR head; see [JSON shapes](#json-shapes) for the reason forms. |
 | `window <term>` | An agent step or judge whose provider `window` is closed, with the failing term and its reading. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot evict it yet. |
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
-| `held <age>[, gives up <clock>]` | An automatic loop-started agent step is held by machine capacity or a workflow/step limit. Its give-up time is absent for `forever`; reason and count follow ` · `. |
-| `×N` | How many advances found it still waiting. `show --history` omits this count from the waiting phrase only when exactly one history row states the wait with the same count. Human `workflow list` omits it for capacity holds with count one; its JSON and the loop commands retain it. |
+| `held <age>[, gives up <clock>]` | An automatic loop-started agent step is held by machine capacity or a workflow/step limit. Its give-up time is absent for `forever`; the reason follows ` · `. |
 | `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal matching that check's subscription clears it. For a `for` hold it is when the hold completes, and subscribed signals and the minute tick re-sample the case before then. |
 
 ## Cancel and resume

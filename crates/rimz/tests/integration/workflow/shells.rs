@@ -119,7 +119,8 @@ fn shell_fail_waits_without_journaling_a_tail_and_log_errors_are_invalid() {
     let log = fs::read_to_string(input["log"].as_str().unwrap()).unwrap();
     assert!(log.contains("1\n2\n3\n") && log.contains("4999\n5000\n") && log.contains("stderr"));
     let text = success(command(&env, &["workflow", "show", &id]));
-    assert!(text.contains("said fail"), "{text}");
+    assert!(text.lines().any(|line| line.contains(": fail")), "{text}");
+    assert!(!text.contains("said fail"), "{text}");
     fs::create_dir(Path::new(value["dir"].as_str().unwrap()).join("2.check.log")).unwrap();
     success(command(&env, &["workflow", "advance", &id]));
     let invalid = settled(&env, &id, "parked");

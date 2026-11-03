@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 use jiff::Timestamp;
-use rimz::config::GlyphRole;
 use rimz::store::workflow::{RunState, Wait};
 use unicode_width::UnicodeWidthStr;
 
@@ -63,7 +62,7 @@ pub(super) fn render(
     let details = live
         .iter()
         .zip(&specs)
-        .map(|(run, spec)| workflow_view::detail(&run.record, spec.as_ref(), now))
+        .map(|(run, spec)| workflow_view::detail(&run.record, spec.as_ref(), now, None))
         .collect::<Vec<_>>();
     if json {
         let rows = live
@@ -102,25 +101,10 @@ pub(super) fn render(
         let record = &run.record;
         let asking = workflow_view::asking(record).is_some();
         let capacity = capacity_wait(record).filter(|_| !asking);
-        let needs_fix =
-            capacity.is_some_and(|wait| wait.hold.is_some_and(rimz::ids::HoldKind::needs_fix));
-        let role = if record.state == RunState::Parked || asking || needs_fix {
-            GlyphRole::StatusWaiting
-        } else if capacity.is_some() {
-            GlyphRole::StatusIdle
-        } else if record.wait.is_some() {
-            GlyphRole::StatusSleeping
-        } else {
-            GlyphRole::StatusWorking
-        };
+        let role = workflow_view::glyph_role(record);
         let since = capacity.map_or_else(|| workflow_view::since(record), |wait| wait.first);
         let detail = capacity.map_or(detail, |wait| {
-            let reason = render::one_line(wait.detail.as_deref().unwrap_or("waiting for its turn"));
-            if wait.count > 1 {
-                format!("{reason}, ×{}", wait.count)
-            } else {
-                reason
-            }
+            render::one_line(wait.detail.as_deref().unwrap_or("waiting for its turn"))
         });
         rooms
             .entry(&record.project_root)

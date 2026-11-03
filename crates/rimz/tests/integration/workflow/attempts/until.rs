@@ -257,7 +257,7 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     assert!(view["prev_attempt"].is_null());
     assert!(view.get("visits").is_none());
     let list = success(room.command(&["workflow", "list"]).output().unwrap());
-    assert!(list.contains("with you; checking after"), "{list}");
+    assert!(list.contains("with you · checking after"), "{list}");
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(
         text.contains("build is with you") && text.contains("checking after"),
@@ -269,6 +269,6 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     assert_eq!(events(&value, "turn_end")[0]["action"], "kept");
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(text.contains("build is with you"), "{text}");
-    assert_eq!(text.matches("said pending").count(), 1, "{text}");
+    assert_eq!(text.matches("  pending\n").count(), 1, "{text}");
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }

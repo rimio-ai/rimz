@@ -655,13 +655,19 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
             "then @user",
             "ci: pending",
             "pr: unread",
-            "said pending, ×2",
+            ": pending",
             "gate pending ×2 → @wait",
             " · now",
         ],
     );
     assert!(!text.contains("history:"), "{text}");
-    assert_eq!(text.matches("said pending, ×2").count(), 1, "{text}");
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.contains("waiting at gate") && line.contains(": pending"))
+            .count(),
+        1,
+        "{text}"
+    );
 
     record.deadline = Some("2000-01-01T12:05:00Z".parse().unwrap());
     save(&env, &record);
