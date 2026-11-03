@@ -3757,14 +3757,15 @@ fn staggered_requests(idle: bool) {
                 assert!(update.is_final());
                 continue;
             }
-            assert_eq!(
-                shown_panes(&update),
-                panes
-                    .iter()
-                    .filter(|pane| *pane != own)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            );
+            let mut expected = panes
+                .iter()
+                .filter(|pane| *pane != own)
+                .cloned()
+                .collect::<Vec<_>>();
+            if idle {
+                expected.reverse();
+            }
+            assert_eq!(shown_panes(&update), expected);
         }
     }
 }

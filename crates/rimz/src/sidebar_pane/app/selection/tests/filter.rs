@@ -1314,7 +1314,7 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
         }
         group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     }
-    groups[1].finished = true;
+    groups[1].inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Success));
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(
@@ -1322,7 +1322,8 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
         1,
         "landed results are outside the review lens"
     );
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive =
+        Some(crate::store::snapshot::SidebarInactive::Landed);
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(
         ui.make_up_filter,
@@ -1613,7 +1614,7 @@ fn step_attention_index_reverses_the_inbox_walk() {
     let mut landed = snapshot.worktree_groups[0].clone();
     landed.key = "/repo/landed".to_owned();
     landed.label = "landed".to_owned();
-    landed.finished = true;
+    landed.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     landed.rows = vec![filter_row(
         true,
         "landed-unread",

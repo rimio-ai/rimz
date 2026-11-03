@@ -415,7 +415,7 @@ inactive_after_secs = 3600
 archive_after_secs = 86400
 ```
 
-`[agents.attention]` moves the boundaries the [ranking](./sidebar.md) draws between cards.
+`[agents.attention]` moves the boundaries the [ranking](./sidebar.md) draws between cards. `inactive_after_secs` also sets the quiet window for landed groups to fold; `archive_after_secs` sets it for unlanded groups. Both use the latest agent launch or prompt, not cache pings or resume.
 
 | Key | Default | Boundary it moves |
 | --- | --- | --- |

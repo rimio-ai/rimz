@@ -8,10 +8,10 @@ use crate::store::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
 use super::aggregate::AttentionWindows;
-use super::score::{self, GitRung, GroupCalm};
+use super::score::{self, GitRung};
 use super::{
-    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
-    WorktreePrState, WorktreeTrunkSync,
+    SidebarInactive, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
 };
 
 /// The branch shared by a group's branched rows, if any. Returns `None` for a
@@ -250,13 +250,21 @@ pub(super) fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
     .collect()
 }
 
-pub(super) fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
+pub(super) fn refresh_overlay_group(
+    group: &mut SidebarWorktreeGroup,
+    now: jiff::Timestamp,
+    windows: AttentionWindows,
+) {
     sort_rows(Arc::make_mut(&mut group.rows).as_mut_slice());
     group.status_counts = status_counts(&group.rows);
-    group.finished = group_finished(group);
+    group.inactive = group_inactive(group, now, windows);
 }
 
-pub(super) fn sort_groups_for_presentation(groups: &mut Arc<Vec<SidebarWorktreeGroup>>) {
+pub(super) fn sort_groups_for_presentation(
+    groups: &mut Arc<Vec<SidebarWorktreeGroup>>,
+    now: jiff::Timestamp,
+    windows: AttentionWindows,
+) {
     for index in 0..groups.len() {
         let group = &groups[index];
         let cohorts = rank_cohort_blocks(group.rows.iter().map(row_rank_facts));
@@ -264,15 +272,15 @@ pub(super) fn sort_groups_for_presentation(groups: &mut Arc<Vec<SidebarWorktreeG
             .rows
             .iter()
             .is_sorted_by_key(|row| rank_key(row_rank_facts(row), &cohorts));
-        let finished = group_finished(group);
-        if rows_sorted && group.finished == finished {
+        let inactive = group_inactive(group, now, windows);
+        if rows_sorted && group.inactive == inactive {
             continue;
         }
         let group = &mut Arc::make_mut(groups)[index];
         if !rows_sorted {
             sort_rows(Arc::make_mut(&mut group.rows).as_mut_slice());
         }
-        group.finished = finished;
+        group.inactive = inactive;
     }
     if !groups
         .iter()
@@ -303,6 +311,7 @@ struct RankFacts<'a> {
     score: u32,
     factor_milli: u32,
     last_activity: jiff::Timestamp,
+    registered_at: Option<jiff::Timestamp>,
     pane_ordinal: Option<u64>,
     cohort: Option<&'a str>,
     launch_ordinal: Option<u32>,
@@ -319,6 +328,7 @@ fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
         score: row.attention_score,
         factor_milli: score::recovered_time_factor_milli(status, row.attention_score),
         last_activity: row.last_activity,
+        registered_at: row.as_agent().and_then(|agent| agent.registered_at),
         pane_ordinal: row_ordinal(row),
         cohort: row.launch_cohort(),
         launch_ordinal: row.launch_ordinal(),
@@ -347,6 +357,7 @@ fn agent_rank_facts(
         score,
         factor_milli: score::recovered_time_factor_milli(Some(status), score),
         last_activity: agent.last_activity,
+        registered_at: agent.registered_at,
         pane_ordinal: agent_ordinal(agent),
         cohort: agent_launch_cohort(agent),
         launch_ordinal: agent.launch_ordinal,
@@ -665,30 +676,21 @@ pub(super) fn compare_groups(
     left: &SidebarWorktreeGroup,
     right: &SidebarWorktreeGroup,
 ) -> Ordering {
-    // The `external` catch-all always tails: out-of-project residue never
-    // displaces project work, so it sorts below every project group — below even
-    // archived groups, and regardless of any `waiting`/`failed` member it holds.
-    // Finished project groups follow all unfinished work. A root-lane group
-    // holding an agent card is never finished. Actionable groups lead, followed
-    // by that root group, then the rest. Within each tier the same macro bands
-    // apply, read off the liveliest member: hot work, warm work, archive. Urgency
-    // decides attention inside the winning band, then calm activity orders
-    // working, successful, idle, and process-only groups before git, pane
-    // creation, and label settle ties.
+    // External stays last; inactive groups follow active project work. Only
+    // actionable groups use urgency. Other active groups rank by their newest
+    // agent registration, and inactive groups by their latest agent activity.
     group_sort_key(
         left.rows.iter().map(row_rank_facts),
         left.kind,
-        left.finished,
+        left.inactive.is_some(),
         left.root_lane,
-        group_git_rung(left),
         &left.label,
     )
     .cmp(&group_sort_key(
         right.rows.iter().map(row_rank_facts),
         right.kind,
-        right.finished,
+        right.inactive.is_some(),
         right.root_lane,
-        group_git_rung(right),
         &right.label,
     ))
 }
@@ -696,68 +698,62 @@ pub(super) fn compare_groups(
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct GroupRankKey {
     external: bool,
-    finished: bool,
+    inactive: bool,
     tier: u8,
-    band: u8,
     urgency: Reverse<u32>,
-    calm: GroupCalm,
-    git: GitRung,
-    earliest_ordinal: StartKey<u64>,
+    newest: StartKey<Reverse<jiff::Timestamp>>,
+    ordinal: StartKey<Reverse<u64>>,
     label: String,
 }
 
 fn group_sort_key<'a>(
     facts: impl Iterator<Item = RankFacts<'a>>,
     kind: SidebarWorktreeKind,
-    finished: bool,
+    inactive: bool,
     root_lane: bool,
-    git: GitRung,
     label: &str,
 ) -> GroupRankKey {
-    // The group's band is read from its liveliest member. Row order seats
-    // process rows below agent cards, so group liveness is computed across all
-    // rows instead of borrowed from `rows.first()`; an empty group sinks last.
-    let mut band = u8::MAX;
     let mut urgency = 0;
-    let mut calm = GroupCalm::Processes;
-    let mut earliest_ordinal: Option<u64> = None;
-    let mut has_agent = false;
+    let mut newest_registration = None;
+    let mut agent_activity = None;
+    let mut process_activity = None;
+    let mut highest_ordinal = None;
     let mut actionable = false;
     for facts in facts {
-        has_agent |= !facts.is_process;
         actionable |= facts.status.is_some_and(AgentStatus::is_actionable);
-        let facts_band = facts_band(&facts);
-        if facts_band < band {
-            band = facts_band;
-            urgency = group_member_urgency(&facts);
-            calm = group_member_calm(facts.status);
-        } else if facts_band == band {
-            urgency = urgency.max(group_member_urgency(&facts));
-            calm = calm.min(group_member_calm(facts.status));
+        urgency = urgency.max(group_member_urgency(&facts));
+        if facts.is_process {
+            process_activity = process_activity.max(Some(facts.last_activity));
+        } else {
+            newest_registration = newest_registration.max(facts.registered_at);
+            agent_activity = agent_activity.max(Some(facts.last_activity));
         }
-        if let Some(ordinal) = facts.pane_ordinal {
-            earliest_ordinal = Some(earliest_ordinal.map_or(ordinal, |min| min.min(ordinal)));
-        }
+        highest_ordinal = highest_ordinal.max(facts.pane_ordinal);
     }
     GroupRankKey {
         external: kind == SidebarWorktreeKind::External,
-        finished,
+        inactive,
         tier: if actionable {
             0
-        } else if root_lane && has_agent {
+        } else if root_lane {
             1
         } else {
             2
         },
-        band,
-        urgency: Reverse(urgency),
-        calm,
-        git,
-        // The group's earliest member pane ordinal uses the same creation-order
-        // key as the calm tiebreak, so group order tracks the mux's pane layout
-        // even when no agent reports a process start (Zellij) instead of
-        // degrading to the label.
-        earliest_ordinal: StartKey::from(earliest_ordinal),
+        urgency: Reverse(if actionable { urgency } else { 0 }),
+        newest: StartKey::from(
+            if inactive {
+                agent_activity.or(process_activity)
+            } else {
+                newest_registration
+            }
+            .map(Reverse),
+        ),
+        ordinal: StartKey::from(
+            highest_ordinal
+                .filter(|_| newest_registration.is_none())
+                .map(Reverse),
+        ),
         label: label.to_owned(),
     }
 }
@@ -771,33 +767,51 @@ fn group_git_rung(group: &SidebarWorktreeGroup) -> GitRung {
     score::git_rung(group.clean, finished)
 }
 
-pub(super) fn group_finished(group: &SidebarWorktreeGroup) -> bool {
-    if group.root_lane && group.rows.iter().any(SidebarRow::is_agent) {
-        return false;
-    }
-    !group.rows.is_empty()
-        && group_git_rung(group) == GitRung::Done
-        && !group
+fn group_inactive(
+    group: &SidebarWorktreeGroup,
+    now: jiff::Timestamp,
+    windows: AttentionWindows,
+) -> Option<SidebarInactive> {
+    if group.root_lane
+        || group.kind == SidebarWorktreeKind::External
+        || group
             .rows
             .iter()
-            .any(|row| member_blocks_finish(row.attention_status()))
+            .any(|row| member_blocks_inactivity(row.attention_status()))
+    {
+        return None;
+    }
+    let landed = group_git_rung(group) == GitRung::Done;
+    if !landed && group.rows.iter().any(|row| row.unread) {
+        return None;
+    }
+    let quiet = group
+        .rows
+        .iter()
+        .filter_map(|row| {
+            row.as_agent()
+                .map(|agent| agent.engaged_at.unwrap_or(row.last_activity))
+        })
+        .max()
+        .or_else(|| group.rows.iter().map(|row| row.last_activity).max())?;
+    let window = if landed {
+        windows.inactive_after_secs
+    } else {
+        windows.archive_after_secs
+    };
+    (now.duration_since(quiet).as_secs() > i64::from(window)).then_some(if landed {
+        SidebarInactive::Landed
+    } else {
+        SidebarInactive::Unlanded
+    })
 }
 
-fn member_blocks_finish(status: Option<AgentStatus>) -> bool {
+fn member_blocks_inactivity(status: Option<AgentStatus>) -> bool {
     status.is_some_and(|status| status == AgentStatus::Running || status.is_attention())
 }
 
-fn group_member_calm(status: Option<AgentStatus>) -> GroupCalm {
-    match status {
-        Some(AgentStatus::Success) => GroupCalm::Finished,
-        Some(AgentStatus::Sleeping | AgentStatus::Idle) => GroupCalm::Idle,
-        None => GroupCalm::Processes,
-        Some(_) => GroupCalm::Working,
-    }
-}
-
 fn group_member_urgency(facts: &RankFacts<'_>) -> u32 {
-    if is_attention(facts.status) {
+    if facts.status.is_some_and(AgentStatus::is_actionable) {
         facts.score
     } else {
         0
@@ -834,8 +848,8 @@ impl AgentWorktreeGroup<'_> {
 }
 
 /// Group root agents by worktree and rank them the way the sidebar ranks rows
-/// and groups: actionable groups first, then the root-lane group, then the rest,
-/// with the `external` catch-all last. The roster has no finished partition.
+/// and groups: actionable groups first, then the root lane, then newest agent
+/// registration first, with `external` last. The roster has no inactive partition.
 /// Within groups, attention agents lead (longest-overdue), with calm agents in
 /// stable spawn order. The `rimz agents list` roster reuses this so the CLI
 /// and the room agree on order.
@@ -890,7 +904,6 @@ pub fn group_live_agents_by_worktree<'a>(
             group.kind,
             false,
             *root_lane,
-            GitRung::Unknown,
             &group.label,
         )
     });

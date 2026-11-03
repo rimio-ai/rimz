@@ -63,7 +63,7 @@ pub use view::{
 };
 pub use view::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, ProviderPlan, RedeemForecast,
-    RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort,
+    RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort, SidebarInactive,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
     SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount, SidebarUnitKey,
     SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice, TruthNotice, UnitStatus,

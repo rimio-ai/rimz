@@ -121,7 +121,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `⇡3 ⇣1` | commits ahead of and behind the trunk |
 | `+127 -43` | lines added and removed against the trunk |
 | `⟳` `✓` `✕` `⇉` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
-| `▸` | a collapsed finished group |
+| `▸` | a collapsed inactive group |
 | `▸` / `▾` (`worktree.landed_closed` / `worktree.landed_open`) | the landed chip, closed / open; both glyph sets use these shapes |
 | `+3 more` / `− less` | hidden idle rows; click to expand or collapse |
 
@@ -245,7 +245,7 @@ Each line is the waiting `?` glyph, the workflow, the node it parked at, and the
 
 The make-up line counts units: a team's members within one worktree group, or one solo agent. Process rows are no unit. The left cluster is `?` waiting, `!` failed, `⏸︎` paused, `✓` done; the right is `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero, including a room holding only landed results.
 
-Any member can add `?`, `!`, or `⏸︎`. A staged board at `Done` gives `✓`, even without an owner. Otherwise a visible owner's displayed status decides `⢿`, `☾`, or `○` (an owner showing `✓` also gives `○` until the board reaches `Done`). Other members add attention only. Without a usable pipeline and owner, the team's calm bucket is working first, otherwise sleeping, idle, or done. A solo unit follows its row. The calm bucket counts beside attention only when it is `⢿`. Only `✓` excludes finished groups. For example, a working team with idle teammates is `⢿ 1`, `○ 0`; a team with a waiting member and working owner is `? 1`, `⢿ 1`. The same team name in two worktree groups counts twice; cards in `external` count solo. `¤` still counts agents, so the buckets need not sum to it.
+Any member can add `?`, `!`, or `⏸︎`. A staged board at `Done` gives `✓`, even without an owner. Otherwise a visible owner's displayed status decides `⢿`, `☾`, or `○` (an owner showing `✓` also gives `○` until the board reaches `Done`). Other members add attention only. Without a usable pipeline and owner, the team's calm bucket is working first, otherwise sleeping, idle, or done. A solo unit follows its row. The calm bucket counts beside attention only when it is `⢿`. Only `✓` excludes inactive groups. For example, a working team with idle teammates is `⢿ 1`, `○ 0`; a team with a waiting member and working owner is `? 1`, `⢿ 1`. The same team name in two worktree groups counts twice; cards in `external` count solo. `¤` still counts agents, so the buckets need not sum to it.
 
 Picking a status shows every member of every unit that counts in that bucket. A filter chooses only which cards appear: shown cards keep their provider colour and selection opens only the selected card, exactly as without a filter. Selection keys (`j`/`k`, `g`/`G`, pages, `H`/`L`, `[`/`]`) reach every shown card; clicks, digits, `Enter`, and the `n`/`N`/`Space` inbox walk keep their usual behaviour within the shown roster. Changing the filter keeps a still-shown selection, without starting a browse pick; typing a search highlights its first visible row. Unread and open-PR lenses keep their per-card and per-group membership, respectively.
 
@@ -273,7 +273,7 @@ A room with no agents has no make-up line:
 
 The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The selected card keeps its screen row while any line of it is visible; otherwise the topmost visible card holds the view. Cards above it growing, shrinking, expanding, collapsing, or re-sorting, and the unread banner appearing or disappearing, leave it in place. Previous selections stay open while the layout freeze is armed, even when there is room to collapse them. Only data or configuration changes with no room to absorb them still move the card at the top or bottom.
 
-Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card with this sidebar's keys or mouse brings it into view with the least motion; a card taller than the view lands by its first line. Native tab switches, outside focus commands, and the initial focus on attach move the highlight without scrolling. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection. Opening the landed chip scrolls only far enough to show the first receipt it reveals. Unfolding a finished group also brings the member it focuses into view with the least motion.
+Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card with this sidebar's keys or mouse brings it into view with the least motion; a card taller than the view lands by its first line. Native tab switches, outside focus commands, and the initial focus on attach move the highlight without scrolling. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection. Opening the landed chip scrolls only far enough to show the first receipt it reveals. Unfolding an inactive group also brings the member it focuses into view with the least motion.
 
 A mouse wheel tick glides the cards to their new position over about a tenth of a second without moving the selection; under load the glide drops frames rather than slowing down. The view then stays anchored to what it shows, without the unchanged selection pulling it back. Only the wheel glides: selection reveals, the unread-banner click, jumps, and corrections for changes above land in one frame. Those corrections alone do not wake the scrollbar.
 
@@ -656,7 +656,7 @@ The optional [`harness.stall_nudge`](../guide/configuration.md#stalled-team-nudg
 
 The stage duration sits immediately after the stage name, such as `Implement 4h12m`; the run total alone is pinned right, such as `4h51m`. Both are muted, without a clock face or slash. Below an hour a duration uses one whole unit (`45s`, `18m`); from an hour it uses two scaled units (`1h00m`, `4h12m`, `1d02h`). An unknown stage time leaves just the name; an unknown total leaves the right side empty. At `Done`, only the frozen total appears. The stage clock sums every visit to the current stage since the run started, counted from parseable entries in the board's `## Progress` (or `## Progress log`) ledger, including an `opened` entry. A backward flip resumes the stage's accumulated time; a same-stage re-flip changes nothing. The total starts at the first parseable ledger entry (or the latest flip out of `Done`, which also clears earlier visits) and runs until now, or until the last `-> Done` entry at `Done`; a `Done -> Done` re-flip does not move the stop. On a RimZ-written board the stage time never exceeds the total. A missing or future start omits that duration, and `Done` without a valid stop omits the clock. If a hand-edited `Stage:` disagrees with the ledger's open stage, the stage clock is absent. Clicking the line focuses the visible stage owner's pane, otherwise the first actionable team member, otherwise the group's first visible row.
 
-### Row cap and finished groups
+### Row cap and inactive groups
 
 A group shows at most six idle and process rows. The rest fold behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. Working, waiting, failed, paused, done, unread, and selected cards are never folded. While a filter is active the cap is off, and rows and groups that do not match are hidden.
 
@@ -671,7 +671,7 @@ A group shows at most six idle and process rows. The rest fold behind a dim `+K 
    +3 more
 ```
 
-A group is finished when its tree is clean, no member is working or blocked, and its pull request merged or closed or the trunk contains its work. The main checkout's group (`#main`) is never finished while it holds a live agent card. Every finished group with an agent collapses to its header and a two-line receipt, unread results included:
+A group becomes inactive once its latest agent launch or non-keepalive prompt is more than an hour old if landed, otherwise more than a day old. Running, asking, failed and parked members block folding; unread rows block unlanded groups only. The main checkout and external groups never fold. Landed means a merged or closed PR or work merged into trunk, with a clean or unknown tree state. A dirty merged tree uses the unlanded window. Process-only groups use their latest activity instead of launches and prompts. Every inactive group with an agent collapses to its header and a two-line receipt:
 
 ```
  ↩ merged-work                                   ✓ main
@@ -681,9 +681,9 @@ A group is finished when its tree is clean, no member is working or blocked, and
 
 The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with plain muted active duration on the right, or an age with a clock face since it finished once that record expires. Both cover every session the team ran in this worktree, resumed sessions and subagents included. When the line is too narrow for one member it reads `▸ +K done`.
 
-Click a folded group's header or either receipt line to show the cards and focus the first receipt member's live pane, bringing its card into view. Focusing any member also shows the cards. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in finished groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
+Click a folded group's header or either receipt line to show the cards and focus the first receipt member's live pane, bringing its card into view. Focusing any member also shows the cards. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
-Finished groups follow all unfinished project work and precede `external`. At 54 columns, the closed landed chip replaces their headers and receipts:
+inactive groups follow all unfinished project work and precede `external`. At 54 columns, the closed landed chip replaces their headers and receipts:
 
 ```
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▸ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
@@ -694,26 +694,26 @@ Click anywhere on the chip's line to open it. If the receipts it reveals are bel
 ```
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 
+ ↩ landed-a
+ ▸ ○ landed-a
+
  ↩ landed-b
  ▸ ✓ landed-b
 
  ↩ landed-c
  ▸ ✓ landed-c
-
- ↩ landed-a
- ▸ ○ landed-a
 ```
 
-The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. A filter or search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches finished groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
+The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. A filter or search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches inactive groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
 
-A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
+A folded inactive group hides its pipeline line and puts the stage after the team name on the roster line:
 
 ```
  ⑂ pipeline
  ▸ forge · Done  ✓ planner  ✓ coder
 ```
 
-Expanding the group restores the pipeline line. Cards rank by status and age; groups do too, except the main checkout's group stays below groups holding asks or failures and above the rest while it holds a live agent card. Its own ask or failure ranks among the attention groups instead. Read state never moves a card. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
+Expanding the group restores the pipeline line. Cards rank by status and age. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Inactive groups sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
 
 ## The provider dashboard
 
@@ -1018,8 +1018,8 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click either line of a subagent entry | select the parent card and focus the child's live pane, else the parent's pane |
 | click `+K older` | append older entries, select the card and focus the parent's live pane |
 | click `+K more`, `− less` | expand or cap the group without moving focus |
-| click a folded finished group's header or either receipt line | show its cards and focus the first receipt member's live pane, revealing its card |
-| click an expanded finished group's header | collapse its cards without moving focus |
+| click a folded inactive group's header or either receipt line | show its cards and focus the first receipt member's live pane, revealing its card |
+| click an expanded inactive group's header | collapse its cards without moving focus |
 | click `[ ▸ N landed ]` / `[ ▾ N landed ]` | show or hide landed receipts in this client view; opening scrolls to the first receipt it reveals |
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |

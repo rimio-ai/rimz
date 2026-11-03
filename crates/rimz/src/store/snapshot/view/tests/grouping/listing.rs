@@ -6,6 +6,28 @@ use super::*;
 use crate::store::snapshot::group_live_agents_by_worktree;
 
 #[test]
+fn listing_roster_mirrors_newest_first_groups_independent_of_working_state() {
+    let mut old = agent_in("old", "/repo/old", AgentStatus::Running, 0).in_pane("%9");
+    old.registered_at = Some(ago(100));
+    let mut new = agent_in("new", "/repo/new", AgentStatus::Idle, 0).in_pane("%1");
+    new.registered_at = Some(ago(1));
+    let snapshot = room_with_agent_panes(vec![old, new]);
+    let refs = snapshot.agents.iter().collect::<Vec<_>>();
+    let listing = group_live_agents_by_worktree(&refs, &snapshot);
+    assert_eq!(
+        (
+            listing.iter().map(|g| g.label.as_str()).collect::<Vec<_>>(),
+            snapshot
+                .worktree_groups
+                .iter()
+                .map(|g| g.label.as_str())
+                .collect::<Vec<_>>()
+        ),
+        (vec!["new", "old"], vec!["new", "old"])
+    );
+}
+
+#[test]
 fn listing_roster_mirrors_sidebar_root_pin_and_actionable_tier() {
     let agents = [
         ("desk", "/repo", AgentStatus::Idle, 25 * 60 * 60),

@@ -251,7 +251,7 @@ mod tests {
             row.id = id.clone();
             let mut group = worktree_group(dir.path(), vec![row]);
             group.key = id;
-            group.finished = true;
+            group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
             groups.push(group);
         }
         drop(connection);
@@ -323,7 +323,7 @@ mod tests {
             rows.push(row);
         }
         let mut group = worktree_group(dir.path(), rows);
-        group.finished = true;
+        group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         let mut memo = EffortParseMemo::default();
 
         let computed = compute_cohort_effort(
@@ -458,7 +458,7 @@ mod tests {
         }
         drop(connection);
         let mut group = worktree_group(&checkout, rows);
-        group.finished = true;
+        group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         let mut memo = EffortParseMemo::default();
         let compute = |memo: &mut EffortParseMemo| {
             compute_cohort_effort(

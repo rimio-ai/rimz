@@ -644,7 +644,8 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
         Some("main"),
         None,
     )]);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive =
+        Some(crate::store::snapshot::SidebarInactive::Landed);
     let screen = snapshot_to_screen(&snapshot, 54, 20);
     assert!(screen.lines().nth(3).unwrap().contains("¤ 1"), "{screen}");
     assert!(
@@ -885,7 +886,8 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
         Some(crate::store::snapshot::WorktreePrState::Open);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(101);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive =
+        Some(crate::store::snapshot::SidebarInactive::Landed);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_state =
         Some(crate::store::snapshot::WorktreePrState::Open);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_number = Some(202);

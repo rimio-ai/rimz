@@ -103,7 +103,7 @@ A capture whose reply never arrives fails (exit `1`) rather than printing nothin
 | Flag | Meaning |
 | --- | --- |
 | `--width <COLS>`, `--height <ROWS>` | Override the frame dimensions. Each must be at least `1`. |
-| `--expand` | Open every card and group, including finished groups, and grow the frame to fit. Conflicts with `--height`. |
+| `--expand` | Open every card and group, including inactive groups, and grow the frame to fit. Conflicts with `--height`. |
 | `--section <LABEL>` | Print only the matching physical rows from the full-size frame, without labels. Filtering does not reflow or expand the frame. No match prints nothing. |
 | `--workspace-id <ID>`, `--mux <BACKEND>`, `--session-name <NAME>` | Select the room and multiplexer to render. |
 

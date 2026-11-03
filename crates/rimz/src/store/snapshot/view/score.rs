@@ -129,16 +129,6 @@ pub(super) fn git_rung(clean: Option<bool>, finished: bool) -> GitRung {
     }
 }
 
-/// Calm group activity after urgency has decided: live work, successful work
-/// awaiting acceptance, idle agents, then process-only groups.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(super) enum GroupCalm {
-    Working,
-    Finished,
-    Idle,
-    Processes,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

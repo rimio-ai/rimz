@@ -192,7 +192,7 @@ fn finished_group_collapses_unread_success_until_revealed() {
     ];
     rows[0].unread = true;
     let mut group = group(rows);
-    group.finished = true;
+    group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
 
     assert!(
         visible_ids(&group, &BodyLens::default(), false).is_empty(),
@@ -321,7 +321,7 @@ fn finished_group_reveals_when_a_members_child_is_focused() {
         agent_row("parent", AgentStatus::Success),
         agent_row("sibling", AgentStatus::Success),
     ]);
-    group.finished = true;
+    group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     let child = PaneId::from_parts(MuxName::Zellij, "terminal_child");
     let now = group.rows[0].last_activity;
     std::sync::Arc::make_mut(&mut group.rows)[0]
@@ -350,7 +350,7 @@ fn finished_roster_names_keep_soft_provider_brand_tones() {
     mystery.name = "unregistered".to_owned();
     mystery.as_agent_mut().expect("agent row").handle = Some("mystery".to_owned());
     let mut finished = group(vec![planner, mystery]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
 
     let mut snapshot = snapshot_with(Vec::new());
     snapshot.worktree_groups = vec![finished].into();
@@ -388,7 +388,7 @@ fn finished_roster_leads_with_the_projected_team() {
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
     ]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.team = Some("rimz".to_owned());
 
     let (texts, _, _) = render_group(&finished, false);
@@ -416,7 +416,7 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
     let mut finished = group(finished_rows);
     finished.key = "/repo/merged-pod".to_owned();
     finished.label = "merged-pod".to_owned();
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
 
     let mut live_row = agent_row("live-row", AgentStatus::Running);
     live_row.name = "live-runner".to_owned();
@@ -503,7 +503,7 @@ fn finished_roster_pins_the_member_cost() {
         agent_row_with_cost("first", 0.42),
         agent_row_with_cost("second", 0.58),
     ]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(total),
         ..crate::store::snapshot::SidebarCohortEffort::default()
@@ -536,7 +536,7 @@ fn finished_roster_pins_the_member_cost() {
         agent_row_with_cost("sidecar-only", 2.0),
         agent_row("absent", AgentStatus::Success),
     ]);
-    no_cost.finished = true;
+    no_cost.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     let (texts, _, _) = render_group(&no_cost, false);
     assert!(
         texts
@@ -600,7 +600,7 @@ fn expanded_finished_group_cards_show_seat_lifetime_cost() {
         agent_row_with_cost("planner", 0.42),
         agent_row_with_cost("coder", 0.58),
     ]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(4.0),
         seats,
@@ -641,7 +641,7 @@ fn finished_roster_folds_overflow_without_clipping_names() {
         agent_row("reviewer", AgentStatus::Success),
         agent_row("observer", AgentStatus::Success),
     ]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
 
     let (texts, _, _) = render_group_at_width(&finished, false, 30);
     let receipt = roster_receipt(&texts);
@@ -657,7 +657,7 @@ fn finished_roster_folds_process_rows_into_the_remainder() {
         agent_row("coder", AgentStatus::Success),
         process_row("shell"),
     ]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
 
     let (texts, _, _) = render_group(&finished, false);
     let receipt = roster_receipt(&texts);
@@ -668,7 +668,7 @@ fn finished_roster_folds_process_rows_into_the_remainder() {
 #[test]
 fn finished_process_only_group_stays_expanded() {
     let mut finished = group(vec![process_row("shell-one"), process_row("shell-two")]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
 
     let (texts, _, _) = render_group(&finished, false);
     assert!(!finished.collapses());
@@ -690,7 +690,7 @@ fn held_member_reveals_the_whole_finished_roster() {
         agent_row("coder", AgentStatus::Success),
         agent_row("reviewer", AgentStatus::Success),
     ]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     let held = HashSet::from(["coder".to_owned()]);
 
     let snapshot = snapshot_with(Vec::new());
@@ -743,7 +743,7 @@ fn held_member_reveals_the_whole_finished_roster() {
 #[test]
 fn finished_header_toggles_both_directions_while_live_header_jumps_to_a_row() {
     let mut finished = group(idle_rows(2));
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     let (texts, map, hits) = render_group(&finished, true);
     assert_eq!(map[0], None);
     assert!(
@@ -773,7 +773,7 @@ fn lone_finished_agent_collapses_but_process_stays_visible() {
         ("process", process_row("shell"), "○ zsh"),
     ] {
         let mut finished = group(vec![row]);
-        finished.finished = true;
+        finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
 
         let (texts, map, hits) = render_group(&finished, false);
 
@@ -834,7 +834,7 @@ fn narrow_finished_receipt_still_targets_first_member_before_the_shell() {
         agent_row("first-long-name", AgentStatus::Success),
         agent_row("second", AgentStatus::Success),
     ]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.pr_url = Some("https://example.test/pull/91".into());
     finished.pr_number = Some(91);
     finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
@@ -877,7 +877,7 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_active_duration() {
     second_agent.usage.cache_read_input_tokens = Some(300_000);
 
     let mut finished = group(vec![first, second]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(1.0),
         tokens: crate::agents::spending::EffortTokens {
@@ -935,7 +935,7 @@ fn finished_receipt_aggregates_session_cache_hit_percent() {
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
     ]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         tokens: crate::agents::spending::EffortTokens {
             input: 100,
@@ -959,7 +959,7 @@ fn finished_receipt_aggregates_session_cache_hit_percent() {
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
     ]);
-    no_counters.finished = true;
+    no_counters.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     no_counters.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         tokens: crate::agents::spending::EffortTokens {
             output: 200,
@@ -988,7 +988,7 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
     let mut witness = agent_row("coder", AgentStatus::Success);
     witness.last_activity = row.last_activity;
     let mut finished = group(vec![row, witness]);
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(1.0),
         tokens: crate::agents::spending::EffortTokens {
@@ -1179,7 +1179,7 @@ fn group(
         trunk: None,
         worktree_backed: false,
         root_lane: false,
-        finished: false,
+        inactive: None,
         clean: None,
         landed: None,
         trunk_sync: None,

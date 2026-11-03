@@ -34,7 +34,7 @@ fn stuck_stage_fails_only_the_owner_and_refreshes_group_facts() {
     );
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.trunk_sync = Some(WorktreeTrunkSync::Merged);
-    group.finished = true;
+    group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     snapshot.project_stuck_stages();
     assert_eq!(row(&snapshot, "coder").status(), Some(AgentStatus::Failed));
     assert_eq!(
@@ -43,7 +43,7 @@ fn stuck_stage_fails_only_the_owner_and_refreshes_group_facts() {
     );
     assert_eq!(row(&snapshot, "reviewer").status(), Some(AgentStatus::Idle));
     let group = &snapshot.worktree_groups[0];
-    assert!(!group.finished);
+    assert!(group.inactive.is_none());
     assert_eq!(group.rows[0].id, row(&snapshot, "coder").id);
     assert!(
         group

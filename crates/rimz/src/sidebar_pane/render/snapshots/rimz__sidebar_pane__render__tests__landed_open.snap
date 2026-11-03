@@ -21,14 +21,14 @@ expression: screen
 
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 
+ ↩ landed-a
+ ▸ ○ landed-a
+
  ↩ landed-b
  ▸ ✓ landed-b
 
  ↩ landed-c
  ▸ ✓ landed-c
-
- ↩ landed-a
- ▸ ○ landed-a
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
  ✓ external

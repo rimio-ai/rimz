@@ -23,6 +23,9 @@ fn landed_snapshot() -> SidebarSnapshot {
             Some(&format!("task-{name}")),
         );
         member.role = Some(name.to_owned());
+        if name.starts_with("landed-") {
+            member.registered_at = Some(fixed_now() - Duration::from_secs(7200));
+        }
         member
     })
     .collect();

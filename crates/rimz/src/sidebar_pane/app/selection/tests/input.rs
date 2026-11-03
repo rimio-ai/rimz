@@ -997,7 +997,7 @@ fn landed_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
     let mut finished = template;
     finished.key = "landed".to_owned();
     finished.label = "landed".to_owned();
-    finished.finished = true;
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         active_secs: Some(60),
         ..Default::default()
@@ -1456,7 +1456,8 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
     ) {
         row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
     }
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive =
+        Some(crate::store::snapshot::SidebarInactive::Landed);
     let group_key = snapshot.worktree_groups[0].key.clone();
     let mut ui = render::ViewState {
         baseline_pane: Some(selected.clone()),
@@ -2189,7 +2190,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         trunk: None,
         worktree_backed: false,
         root_lane: false,
-        finished: false,
+        inactive: None,
         clean: None,
         landed: None,
         trunk_sync: None,

@@ -103,7 +103,7 @@ fn group(key: &str, rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
         trunk: None,
         worktree_backed: false,
         root_lane: false,
-        finished: false,
+        inactive: None,
         clean: None,
         landed: None,
         trunk_sync: None,
@@ -243,7 +243,8 @@ fn frozen_reorder_matches_stable_sort_across_partitions_and_arrivals() {
                     rows.reverse();
                 }
                 let mut group = group(key, rows);
-                group.finished = finished;
+                group.inactive =
+                    (finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
                 if external {
                     group.kind = SidebarWorktreeKind::External;
                 }
@@ -267,7 +268,7 @@ fn frozen_reorder_matches_stable_sort_across_partitions_and_arrivals() {
             std::sync::Arc::make_mut(&mut expected.worktree_groups).sort_by_key(|group| {
                 (
                     group.kind == SidebarWorktreeKind::External,
-                    group.finished,
+                    group.inactive.is_some(),
                     frozen
                         .groups
                         .iter()
@@ -611,8 +612,10 @@ fn freeze_preserves_partitions_when_a_middle_group_lands_or_revives() {
             group("c", vec![row("c1", "terminal_3")]),
             group("external", vec![row("e1", "terminal_4")]),
         ];
-        groups[1].finished = was_finished;
-        groups[2].finished = was_finished;
+        groups[1].inactive =
+            (was_finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
+        groups[2].inactive =
+            (was_finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
         groups[3].kind = SidebarWorktreeKind::External;
         let mut current = snapshot_with_groups(groups);
         let mut ui = ViewState::default();
@@ -620,7 +623,8 @@ fn freeze_preserves_partitions_when_a_middle_group_lands_or_revives() {
         apply_freeze(&mut ui, &mut current, true, 1_000, false);
 
         let changed = if was_finished { 2 } else { 1 };
-        std::sync::Arc::make_mut(&mut current.worktree_groups)[changed].finished = !was_finished;
+        std::sync::Arc::make_mut(&mut current.worktree_groups)[changed].inactive =
+            (!was_finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
         apply_freeze(&mut ui, &mut current, false, 1_001, false);
 
         assert_eq!(group_keys(&current), vec!["a", "c", "b", "external"]);
@@ -644,7 +648,7 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
     };
     let groups = || {
         let mut finished = group("finished", vec![]);
-        finished.finished = true;
+        finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         let mut external = group("external", vec![]);
         external.kind = SidebarWorktreeKind::External;
         vec![

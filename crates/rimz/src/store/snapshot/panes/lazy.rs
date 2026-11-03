@@ -777,7 +777,13 @@ fn idle_agent_row(
         inactive: false,
         archived: false,
         attention_score: 0,
-        last_activity: pane.pane_process_start.unwrap_or(now),
+        last_activity: pane
+            .pane_process_start
+            .or_else(|| {
+                let ms = i64::try_from(pane.first_seen_at_ms?).ok()?;
+                Timestamp::from_millisecond(ms).ok()
+            })
+            .unwrap_or(now),
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             model: default_model.map(ToOwned::to_owned),
             usage: crate::agents::AgentUsageSummary {

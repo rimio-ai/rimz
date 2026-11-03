@@ -1056,7 +1056,7 @@ fn root_pod_is_excluded_from_git_reads() {
         .collect();
     assert_eq!(
         kinds,
-        vec![SidebarWorktreeKind::Worktree, SidebarWorktreeKind::Root]
+        vec![SidebarWorktreeKind::Root, SidebarWorktreeKind::Worktree]
     );
     assert_eq!(
         needed_worktree_paths(&snapshot, Default::default()),
@@ -1203,7 +1203,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         trunk: None,
         worktree_backed: false,
         root_lane: false,
-        finished: false,
+        inactive: None,
         clean: None,
         landed: None,
         trunk_sync: None,

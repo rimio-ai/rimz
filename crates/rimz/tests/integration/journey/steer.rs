@@ -48,21 +48,21 @@ fn sidebar_keys_move_selection_between_rendered_agent_rows() {
     );
 
     room.send_keys(KEY_DOWN);
-    let screen = room.wait_for(|s| selected_group(s, "alpha"), SETTLE);
-    assert!(
-        selected_group(&screen, "alpha"),
-        "the first down key selects the first worktree group:\n{screen}"
-    );
-
-    let screen = send_until(&room, KEY_DOWN, |s| selected_group(s, "beta"));
+    let screen = room.wait_for(|s| selected_group(s, "beta"), SETTLE);
     assert!(
         selected_group(&screen, "beta"),
+        "the first down key selects the first worktree group, the newest launch:\n{screen}"
+    );
+
+    let screen = send_until(&room, KEY_DOWN, |s| selected_group(s, "alpha"));
+    assert!(
+        selected_group(&screen, "alpha"),
         "down key should move the rendered selection to the next worktree:\n{screen}"
     );
 
-    let screen = send_until(&room, KEY_UP, |s| selected_group(s, "alpha"));
+    let screen = send_until(&room, KEY_UP, |s| selected_group(s, "beta"));
     assert!(
-        selected_group(&screen, "alpha"),
+        selected_group(&screen, "beta"),
         "up key should move the rendered selection back to the previous worktree:\n{screen}"
     );
 }

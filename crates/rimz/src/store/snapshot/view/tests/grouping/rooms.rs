@@ -40,13 +40,12 @@ fn directory_room_groups_git_backed_rows_by_resolved_worktree() {
             )
         })
         .collect();
-    // Groups order by their earliest pane's creation ordinal: query-engine
-    // (`%1`) before billing (`%3`) before the room root pod (`%4`), with external
-    // tailing. Membership and counts are what this test pins; the order tracks
-    // pane creation rather than the label.
+    // The root pod leads even without an agent; the other project groups
+    // follow by newest registration, and external tails them.
     assert_eq!(
         summary,
         vec![
+            (SidebarWorktreeKind::Root, "/srv/agents", "main", 1),
             (
                 SidebarWorktreeKind::Worktree,
                 "/srv/agents/query-engine",
@@ -59,7 +58,6 @@ fn directory_room_groups_git_backed_rows_by_resolved_worktree() {
                 "billing",
                 1
             ),
-            (SidebarWorktreeKind::Root, "/srv/agents", "main", 1),
             (SidebarWorktreeKind::External, "external", "external", 1),
         ],
     );
@@ -151,13 +149,13 @@ fn deeply_nested_git_backed_row_gets_own_worktree_pod() {
     assert_eq!(
         summary,
         vec![
+            (SidebarWorktreeKind::Root, "/srv/agents", "main", 1),
             (
                 SidebarWorktreeKind::Worktree,
                 "/srv/agents/org/team/repo",
                 "feature/nested",
                 1
             ),
-            (SidebarWorktreeKind::Root, "/srv/agents", "main", 1),
         ],
     );
 }

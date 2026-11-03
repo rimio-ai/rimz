@@ -63,7 +63,8 @@ fn fleet(count: usize) -> SidebarSnapshot {
     snapshot.theme.display.stale_after_secs = 60;
     for group in Arc::make_mut(&mut snapshot.worktree_groups) {
         group.kind = SidebarWorktreeKind::Worktree;
-        group.finished = group.label == "group-2";
+        group.inactive =
+            (group.label == "group-2").then_some(crate::store::snapshot::SidebarInactive::Landed);
         for row in Arc::make_mut(&mut group.rows) {
             row.as_agent_mut().unwrap().cache = Some(CacheClock {
                 ceiling_secs: 60,

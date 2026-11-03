@@ -36,6 +36,260 @@ fn labels(snapshot: &SidebarSnapshot) -> Vec<String> {
 }
 
 #[test]
+fn inactive_membership_uses_strict_quiet_windows_and_blockers() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (name, landed, age, status, unread, root, external, process, dirty, folded) in [
+        (
+            "landed boundary",
+            true,
+            3600,
+            AgentStatus::Success,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "landed past",
+            true,
+            3601,
+            AgentStatus::Success,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+        ),
+        (
+            "unlanded 23h",
+            false,
+            82800,
+            AgentStatus::Idle,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "unlanded boundary",
+            false,
+            86400,
+            AgentStatus::Idle,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "unlanded past",
+            false,
+            86401,
+            AgentStatus::Idle,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+        ),
+        (
+            "root agent",
+            true,
+            90000,
+            AgentStatus::Idle,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "root process",
+            true,
+            90000,
+            AgentStatus::Idle,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+        ),
+        (
+            "external",
+            true,
+            90000,
+            AgentStatus::Idle,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+        ),
+        (
+            "running",
+            true,
+            90000,
+            AgentStatus::Running,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "waiting",
+            true,
+            90000,
+            AgentStatus::Waiting,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "failed",
+            true,
+            90000,
+            AgentStatus::Failed,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "paused",
+            true,
+            90000,
+            AgentStatus::Paused,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "unread unlanded",
+            false,
+            90000,
+            AgentStatus::Success,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "unread landed",
+            true,
+            90000,
+            AgentStatus::Success,
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+        ),
+        (
+            "process landed",
+            true,
+            3601,
+            AgentStatus::Idle,
+            false,
+            false,
+            false,
+            true,
+            false,
+            true,
+        ),
+        (
+            "dirty merged",
+            true,
+            3601,
+            AgentStatus::Success,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+        ),
+    ] {
+        let mut member = agent_in("member", "/repo/work", status, 0);
+        member.registered_at = Some(ago(age));
+        let mut snapshot = ranked_snapshot(vec![member]);
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+        group.clean = Some(!dirty);
+        group.pr_state = landed.then_some(WorktreePrState::Merged);
+        group.root_lane = root;
+        if external {
+            group.kind = SidebarWorktreeKind::External;
+        }
+        let row = &mut std::sync::Arc::make_mut(&mut group.rows)[0];
+        row.unread = unread;
+        row.last_activity = ago(age);
+        if process {
+            row.card = RowCard::Process(crate::store::snapshot::ProcessCard::default());
+        }
+        snapshot.sort_groups_for_presentation();
+        actual.push((name, snapshot.worktree_groups[0].inactive.is_some()));
+        expected.push((name, folded));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn inactive_membership_changes_with_time_alone_and_a_new_agent_revives_it() {
+    let mut member = agent_in("member", "/repo/work", AgentStatus::Idle, 0);
+    member.registered_at = Some(ago(3600));
+    let mut snapshot = ranked_snapshot(vec![member]);
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.clean = Some(true);
+    group.pr_state = Some(WorktreePrState::Closed);
+    snapshot.sort_groups_for_presentation();
+    let before = snapshot.worktree_groups[0].inactive.is_some();
+    snapshot.now += std::time::Duration::from_secs(1);
+    snapshot.sort_groups_for_presentation();
+    let after = snapshot.worktree_groups[0].inactive.is_some();
+    let mut arrival = snapshot.worktree_groups[0].rows[0].clone();
+    arrival.id = "arrival".to_owned();
+    arrival.as_agent_mut().unwrap().registered_at = Some(snapshot.now);
+    // The card's engagement instant is derived at projection, not row activity.
+    let mut value = serde_json::to_value(&arrival).unwrap();
+    value["engaged_at"] = serde_json::json!(snapshot.now);
+    arrival = serde_json::from_value(value).unwrap();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(arrival);
+    snapshot.sort_groups_for_presentation();
+    assert_eq!(
+        (
+            before,
+            after,
+            snapshot.worktree_groups[0].inactive.is_some()
+        ),
+        (false, true, false)
+    );
+}
+
+#[test]
 fn root_group_pins_calm_and_archived_agents_above_working_groups() {
     let orders = [
         (AgentStatus::Success, 0),
@@ -110,7 +364,7 @@ fn native_child_attention_outranks_the_pinned_root_group() {
 }
 
 #[test]
-fn process_only_root_group_is_not_pinned_and_can_finish() {
+fn process_only_root_group_is_pinned_and_never_folds() {
     let mut snapshot = room(vec![
         agent_in("working", "/repo/working", AgentStatus::Running, 0).in_pane("%1"),
     ])
@@ -135,20 +389,20 @@ fn process_only_root_group_is_not_pinned_and_can_finish() {
         (
             before,
             labels(&snapshot),
-            snapshot.worktree_groups[1].root_lane,
-            snapshot.worktree_groups[1].finished,
+            snapshot.worktree_groups[0].root_lane,
+            snapshot.worktree_groups[0].inactive.is_some(),
         ),
         (
-            vec!["working".to_owned(), "repo".to_owned()],
-            vec!["working".to_owned(), "repo".to_owned()],
+            vec!["repo".to_owned(), "working".to_owned()],
+            vec!["repo".to_owned(), "working".to_owned()],
             true,
-            true,
+            false,
         )
     );
 }
 
 #[test]
-fn root_group_with_an_agent_never_finishes_on_a_landed_branch() {
+fn root_group_with_an_agent_never_folds_on_a_landed_branch() {
     let results = [false, true].map(|merged_pr| {
         let mut snapshot = ranked_snapshot_in(
             vec![
@@ -173,7 +427,7 @@ fn root_group_with_an_agent_never_finishes_on_a_landed_branch() {
             .iter()
             .find(|group| group.key == "/repo")
             .expect("root group");
-        (labels(&snapshot), root.finished, root.collapses())
+        (labels(&snapshot), root.inactive.is_some(), root.collapses())
     });
 
     assert_eq!(
@@ -278,7 +532,7 @@ fn group_tiering_floats_attention_and_always_tails_external() {
 }
 
 #[test]
-fn git_rung_orders_calm_worktree_groups() {
+fn git_rung_does_not_order_active_worktree_groups() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("unknown", "/repo/unknown", AgentStatus::Idle, 1_000),
         agent_in("merged", "/repo/merged", AgentStatus::Idle, 1_000),
@@ -304,13 +558,13 @@ fn git_rung_orders_calm_worktree_groups() {
 
     assert_eq!(
         labels(&snapshot),
-        vec!["dirty", "clean", "unknown", "merged"],
-        "git rung decides among calm groups after band and urgency tie"
+        vec!["clean", "dirty", "merged", "unknown"],
+        "equal launch times use labels, not git rungs"
     );
 }
 
 #[test]
-fn calm_activity_precedes_git_for_working_and_success_groups() {
+fn newest_registration_precedes_git_for_working_and_success_groups() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("success", "/repo/success", AgentStatus::Success, 1_000),
         agent_in("running", "/repo/working", AgentStatus::Running, 2_000),
@@ -330,13 +584,13 @@ fn calm_activity_precedes_git_for_working_and_success_groups() {
 
     assert_eq!(labels(&snapshot), vec!["working", "success"]);
     assert!(
-        !snapshot.worktree_groups[0].finished,
+        snapshot.worktree_groups[0].inactive.is_none(),
         "a running member revives a git-finished line of work"
     );
 }
 
 #[test]
-fn sleeping_group_uses_idle_calm_tier() {
+fn equal_registration_times_use_labels_not_git_or_calm_state() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("sleeping", "/repo/sleeping", AgentStatus::Sleeping, 1_000),
         agent_in("idle", "/repo/idle", AgentStatus::Idle, 1_000),
@@ -350,7 +604,7 @@ fn sleeping_group_uses_idle_calm_tier() {
 }
 
 #[test]
-fn clean_success_group_leads_merged_success_group() {
+fn newer_success_group_leads_without_folding_a_fresh_merge() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),
         agent_in("clean", "/repo/clean", AgentStatus::Success, 2_000),
@@ -364,12 +618,12 @@ fn clean_success_group_leads_merged_success_group() {
     snapshot.sort_groups_for_presentation();
 
     assert_eq!(labels(&snapshot), vec!["clean", "merged"]);
-    assert!(!snapshot.worktree_groups[0].finished);
-    assert!(snapshot.worktree_groups[1].finished);
+    assert!(snapshot.worktree_groups[0].inactive.is_none());
+    assert!(snapshot.worktree_groups[1].inactive.is_none());
 }
 
 #[test]
-fn finished_partition_follows_archived_unfinished_and_precedes_external() {
+fn inactive_partition_follows_active_work_and_precedes_external() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done", "/repo/done", AgentStatus::Success, 1_000),
         agent_in("old", "/repo/old", AgentStatus::Idle, 2_000).active_ago(25 * 60 * 60),
@@ -379,16 +633,21 @@ fn finished_partition_follows_archived_unfinished_and_precedes_external() {
         if group.label == "done" {
             group.clean = Some(true);
             group.trunk_sync = Some(WorktreeTrunkSync::Merged);
+            let card = std::sync::Arc::make_mut(&mut group.rows)[0]
+                .as_agent_mut()
+                .unwrap();
+            card.registered_at = Some(ago(7200));
+            card.engaged_at = Some(ago(3601));
         }
     }
     snapshot.sort_groups_for_presentation();
     assert_eq!(labels(&snapshot), ["old", "done", "external"]);
     assert!(snapshot.worktree_groups[0].rows[0].archived);
-    assert!(snapshot.worktree_groups[1].finished);
+    assert!(snapshot.worktree_groups[1].inactive.is_some());
 }
 
 #[test]
-fn native_child_attention_keeps_merged_success_unfinished_and_expanded() {
+fn native_child_attention_keeps_merged_success_active_and_expanded() {
     for status in [AgentStatus::Failed, AgentStatus::Waiting] {
         let mut snapshot = room_with_agent_panes(vec![
             agent_in("parent", "/repo/merged", AgentStatus::Success, 1_000),
@@ -401,6 +660,10 @@ fn native_child_attention_keeps_merged_success_unfinished_and_expanded() {
             .expect("merged group present");
         merged.clean = Some(true);
         merged.trunk_sync = Some(WorktreeTrunkSync::Merged);
+        std::sync::Arc::make_mut(&mut merged.rows)[0]
+            .as_agent_mut()
+            .unwrap()
+            .engaged_at = Some(ago(3601));
         assert_eq!(merged.rows.len(), 1);
         assert_eq!(merged.rows[0].status(), Some(AgentStatus::Success));
         assert_eq!(merged.rows[0].attention_status(), Some(status));
@@ -412,7 +675,7 @@ fn native_child_attention_keeps_merged_success_unfinished_and_expanded() {
             .iter()
             .find(|group| group.label == "merged")
             .expect("merged group present");
-        assert!(!merged.finished, "native {status:?} blocks finish");
+        assert!(merged.inactive.is_none(), "native {status:?} blocks finish");
         assert!(
             !merged.collapses(),
             "an actionable singleton stays expanded"
@@ -422,7 +685,38 @@ fn native_child_attention_keeps_merged_success_unfinished_and_expanded() {
 }
 
 #[test]
-fn merged_success_archives_immediately_and_attention_revives_it() {
+fn inactive_membership_revives_on_prompts_but_not_resume_activity() {
+    for prompt in [false, true] {
+        let mut member = agent_in("member", "/repo/work", AgentStatus::Idle, 0);
+        member.registered_at = Some(ago(7200));
+        member.last_prompt_at = Some(ago(3601));
+        member.last_activity = ago(3601);
+        let mut snapshot = ranked_snapshot(vec![member.clone()]);
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+        group.clean = Some(true);
+        group.pr_state = Some(WorktreePrState::Closed);
+        snapshot.sort_groups_for_presentation();
+        assert!(snapshot.worktree_groups[0].inactive.is_some());
+
+        member.last_activity = ago(0);
+        if prompt {
+            member.last_prompt_at = Some(ago(0));
+        }
+        let mut snapshot = ranked_snapshot(vec![member]);
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+        group.clean = Some(true);
+        group.pr_state = Some(WorktreePrState::Closed);
+        snapshot.sort_groups_for_presentation();
+        assert_eq!(
+            snapshot.worktree_groups[0].inactive.is_some(),
+            !prompt,
+            "prompt={prompt}"
+        );
+    }
+}
+
+#[test]
+fn landed_group_folds_by_engagement_and_attention_revives_it() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done", "/repo/done", AgentStatus::Success, 1_000).active_ago(5 * 60),
         agent_in("warm", "/repo/warm", AgentStatus::Idle, 2_000).active_ago(
@@ -439,6 +733,11 @@ fn merged_success_archives_immediately_and_attention_revives_it() {
         .expect("done group present");
     done.clean = Some(true);
     done.trunk_sync = Some(WorktreeTrunkSync::Merged);
+    let card = std::sync::Arc::make_mut(&mut done.rows)[0]
+        .as_agent_mut()
+        .unwrap();
+    card.registered_at = Some(ago(7200));
+    card.engaged_at = Some(ago(3601));
     snapshot.sort_groups_for_presentation();
 
     assert_eq!(labels(&snapshot), vec!["warm", "done"]);
@@ -447,10 +746,10 @@ fn merged_success_archives_immediately_and_attention_revives_it() {
         .iter()
         .find(|group| group.label == "done")
         .expect("done group present");
-    assert!(done.finished);
+    assert!(done.inactive.is_some());
     assert!(
         done.rows.iter().all(|row| !row.inactive && !row.archived),
-        "the group archives from its terminal verdict, not its activity clock"
+        "the group folds from engagement, not its activity clock"
     );
 
     let done = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
@@ -462,25 +761,27 @@ fn merged_success_archives_immediately_and_attention_revives_it() {
         .expect("agent row")
         .status = AgentStatus::Running;
     snapshot.sort_groups_for_presentation();
-    assert_eq!(labels(&snapshot), vec!["done", "warm"]);
-    assert!(!snapshot.worktree_groups[0].finished);
+    assert_eq!(labels(&snapshot), vec!["warm", "done"]);
+    assert!(snapshot.worktree_groups[1].inactive.is_none());
 
-    std::sync::Arc::make_mut(
-        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
-    )[0]
-    .as_agent_mut()
-    .expect("agent row")
-    .status = AgentStatus::Waiting;
+    let done = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .find(|group| group.label == "done")
+        .unwrap();
+    std::sync::Arc::make_mut(&mut done.rows)[0]
+        .as_agent_mut()
+        .expect("agent row")
+        .status = AgentStatus::Waiting;
     snapshot.sort_groups_for_presentation();
     assert_eq!(labels(&snapshot), vec!["done", "warm"]);
     assert!(
-        !snapshot.worktree_groups[0].finished,
+        snapshot.worktree_groups[0].inactive.is_none(),
         "attention keeps a merged group hot"
     );
 }
 
 #[test]
-fn pristine_landed_fork_stays_clean_until_work_is_finished() {
+fn pristine_and_freshly_merged_groups_follow_registration_order() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),
         agent_in("pristine", "/repo/pristine", AgentStatus::Success, 2_000),
@@ -497,8 +798,8 @@ fn pristine_landed_fork_stays_clean_until_work_is_finished() {
     snapshot.sort_groups_for_presentation();
 
     assert_eq!(labels(&snapshot), vec!["pristine", "merged"]);
-    assert!(!snapshot.worktree_groups[0].finished);
-    assert!(snapshot.worktree_groups[1].finished);
+    assert!(snapshot.worktree_groups[0].inactive.is_none());
+    assert!(snapshot.worktree_groups[1].inactive.is_none());
 }
 
 #[test]
@@ -520,7 +821,7 @@ fn process_only_group_tails_calm_agent_groups() {
 }
 
 #[test]
-fn merged_pr_sinks_calm_worktree_group() {
+fn fresh_merged_pr_does_not_sink_worktree_group() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
         agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
@@ -536,11 +837,17 @@ fn merged_pr_sinks_calm_worktree_group() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["working", "done"]);
+    assert_eq!(labels(&snapshot), vec!["done", "working"]);
+    assert!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .all(|g| g.inactive.is_none())
+    );
 }
 
 #[test]
-fn closed_pr_sinks_calm_worktree_group() {
+fn fresh_closed_pr_does_not_sink_worktree_group() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
         agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
@@ -556,7 +863,13 @@ fn closed_pr_sinks_calm_worktree_group() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["working", "done"]);
+    assert_eq!(labels(&snapshot), vec!["done", "working"]);
+    assert!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .all(|g| g.inactive.is_none())
+    );
 }
 
 #[test]
@@ -578,11 +891,11 @@ fn open_pr_does_not_sink_calm_worktree_group() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["open", "working", "done"]);
+    assert_eq!(labels(&snapshot), vec!["done", "open", "working"]);
 }
 
 #[test]
-fn merged_pr_sinks_git_backed_channel_group() {
+fn fresh_merged_pr_does_not_sink_git_backed_channel_group() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done-idle", "/repo/done-channel", AgentStatus::Idle, 1_000),
         agent_in(
@@ -604,7 +917,13 @@ fn merged_pr_sinks_git_backed_channel_group() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["working-channel", "done-channel"]);
+    assert_eq!(labels(&snapshot), vec!["done-channel", "working-channel"]);
+    assert!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .all(|g| g.inactive.is_none())
+    );
 }
 
 #[test]
