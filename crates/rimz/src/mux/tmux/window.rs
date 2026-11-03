@@ -13,6 +13,7 @@ use super::options::{
     spawn_command_is_sidebar_serve, window_option_argv,
 };
 use super::parse::parse_new_window_ids;
+use super::status::swap_window_commands;
 
 /// Window options that carry a compare-and-set rename's two names into one
 /// tmux command list; see [`TmuxBackend::window_name_guarded_command`].
@@ -1200,18 +1201,7 @@ impl TmuxBackend {
                 None
             }
         };
-        if let Err(err) = self
-            .cmd()
-            .args([
-                "swap-window".to_owned(),
-                "-d".to_owned(),
-                "-s".to_owned(),
-                format!("{session}:{name}"),
-                "-t".to_owned(),
-                format!("{session}:{base}"),
-            ])
-            .run()
-        {
+        if let Err(err) = self.batch(&swap_window_commands(session, &name, &base)) {
             tracing::warn!(
                 session = %session,
                 tags.operation = "tmux.move_daemon_window",

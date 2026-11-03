@@ -25,6 +25,7 @@ mod run_command;
 mod server_cwd;
 mod session;
 mod sidebar;
+mod status;
 mod support;
 mod team_stage;
 mod title;

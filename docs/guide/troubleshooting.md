@@ -458,6 +458,10 @@ The `MACHINE CONFIG` section names parse and validation errors in `config.toml`,
 
 Markdown definitions fail differently. A broken profile, team, or subagent definition refuses only the launches that select it, while read-only views keep showing the definitions that loaded. `rimz start` summarizes broken definitions in a few lines grouped by cause; `rimz agents validate` lists each file and error. Nothing rewrites a definition for you.
 
+### Window switching is slow in a large tmux room
+
+With hundreds of windows, the full status tab list can dominate redraw work. Run `rimz config set mux.status_bar compact` for a smaller clickable strip, or `rimz config set mux.status_bar off` to hide it, then `rimz start` to apply the change to the open room. See [large tmux rooms](./multiplexer.md#large-tmux-rooms) for what compact preserves and when its tab text refreshes.
+
 ### A `[zellij]` or `[tmux]` setting did nothing
 
 Run `rimz start` to apply changes to an open room. Zellij's start-only settings, and removal of an optional `[zellij]` key, need a new room. If `[zellij] mouse_mode = true` still leaves the mouse disabled, remove or change `mouse_mode false` in `config.kdl` before attaching. If `pane_frames = true` draws no frame, split the work pane: Zellij frames a pane only when its tab holds another framed pane, and the sidebar and bottom bar do not count. See [change what the room asserts](./multiplexer.md#change-what-the-room-asserts) for the start-only list and when each backend applies changes.

@@ -16,7 +16,7 @@ Three more Zellij differences have nothing to do with typing. Session serializat
 
 On tmux the room turns on the mouse, focus events, a 100,000-line scrollback, notification passthrough, the OSC 52 clipboard, clickable OSC 8 links, atomic redraws, and the extended-keys handling that makes Shift+Enter and Alt+Enter soft newlines while plain Enter still submits. It sets `escape-time` to 10 ms, keeps window numbering compact, resizes panes per attached client, and titles the outer terminal. In its `rimzd` window it turns `remain-on-exit` off, so a daemon pane that exits closes and RimZ restarts it while the window survives. Your other windows keep their retention setting.
 
-Everything else is yours, inside the room and out: your theme, your prefix, your copy-mode bindings, your status bar, your keybinds. `~/.tmux.conf` and `config.kdl` are still read in a room, and the settings above layer over them. The one place the room reaches into your key tables is tmux's root table. It binds `S-Enter` and `M-Enter` there for soft newlines, plus a `User240` that turns a bare `ESC[27u` back into plain Escape; some terminals, Ghostty among them, answer the extended-keys request with that sequence.
+Everything else is yours, inside the room and out: your theme, your prefix, your copy-mode bindings, your status bar unless you choose a different `status_bar` mode, your keybinds. `~/.tmux.conf` and `config.kdl` are still read in a room, and the settings above layer over them. The one place the room reaches into your key tables is tmux's root table. It binds `S-Enter` and `M-Enter` there for soft newlines, plus a `User240` that turns a bare `ESC[27u` back into plain Escape; some terminals, Ghostty among them, answer the extended-keys request with that sequence.
 
 For the panes RimZ creates, the outer terminal's title is the room and a short pane identity: `myrepo-a1b2 | zsh`, `myrepo-a1b2 | codex`. Agent and channel panes carry their RimZ identity; any other pane shows its running command on tmux, and on Zellij the name it was launched with. Applications cannot overwrite it, so the shell that likes to set your title to an SSH host and a working path does not, and you can still pick the room's window out of a taskbar.
 
@@ -33,6 +33,25 @@ tmux -S "${XDG_RUNTIME_DIR:-/tmp/rimz-$(id -u)}/rimz/tmux/server" ls
 It holds one session per project and exits when the last one closes. `rimz paths` prints the same directory as `runtime root`.
 
 Zellij has no such split: a RimZ room is an ordinary session in `zellij ls`, and `zellij action` addresses it with no extra flag. On either backend, a new room's session name is its state directory name under `~/.rimz/ws/`, such as `myrepo-a1b2`, also shown by `rimz list` and `rimz gc`. A running room keeps its older name across an upgrade; `rimz start` and `rimz attach` join it unchanged. The next birth, after the session ends or you run `rimz reset`, takes the state directory name.
+
+### Large tmux rooms
+
+With hundreds of windows, tmux's full tab list can make switching slow: it formats every tab on each status redraw, including redraws triggered by agents changing their terminal titles. `[mux] status_bar` in `~/.rimz/config.toml` offers three modes, at any room size:
+
+- `"full"` (default): leave your bar alone, including a `set status off` you type inside the room.
+- `"compact"`: keep a clickable strip of up to 21 tabs around the current window, shifted inward at either end of the list. tmux's own `<`/`>` overflow markers, tab clicks, `prefix w`, and the sidebar still work.
+- `"off"`: hide the bar for this room.
+
+```sh
+rimz config set mux.status_bar compact
+rimz start
+```
+
+Changes apply when you start or attach to the room. Zellij rooms ignore `status_bar` for now. In `compact` or `off`, RimZ owns the room's `status` and `status-format`, so a toggle typed inside the room lasts until that next apply; switching back to `full` returns them to your config.
+
+Compact keeps your left and right status text, lengths and styles, tab formats and styles, separators, and justification. It replaces a custom `status-format[0]` with tmux's standard layout; additional global status lines are preserved. If your global bar is off, choosing compact turns it on for the room; an existing multi-line bar keeps its line count.
+
+Tab contents refresh when windows are selected, added, removed, renamed or moved, and on activity, bell and silence alerts. Time- or title-driven tab content (`%H`, `#T`), including the current tab's, waits for the next such event or re-apply. A manual `swap-window` on tmux older than 3.8, and activity or bell flags with `activity-action none` or `bell-action none`, also wait for that next event. Sparse indices with `renumber-windows` off can show fewer than 21 tabs.
 
 ### Two keys that work from any pane
 

@@ -14,6 +14,7 @@ mod layout;
 mod options;
 mod parse;
 mod presence;
+mod status;
 mod window;
 
 pub use presence::{ControlLine, PresenceWatch, TmuxLayoutPane};
@@ -31,7 +32,7 @@ use options::{
 use parse::parse_terminal_features;
 
 use super::{CommandSpec, MuxBackend, MuxErr, Result};
-use crate::config::TmuxConfig;
+use crate::config::{MultiplexerConfig, TmuxConfig};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ScriptLine {
@@ -608,13 +609,14 @@ impl TmuxBackend {
     }
 
     /// Apply RimZ's tmux room options.
-    pub(super) fn apply_room_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
+    pub fn apply_room_options(&self, session: &str, config: &MultiplexerConfig) -> Result<()> {
+        let tmux = &config.tmux;
         let terminal_features = self
             .cmd()
             .args(["show-options", "-s", "terminal-features"])
             .run()?;
         let mut commands: Vec<Vec<String>> = Vec::new();
-        for (key, value) in tmux_server_options(config) {
+        for (key, value) in tmux_server_options(tmux) {
             commands.push(vec![
                 "set-option".to_owned(),
                 "-s".to_owned(),
@@ -625,10 +627,10 @@ impl TmuxBackend {
         // tmux appends duplicate array entries, so fixed indices make these
         // writes idempotent while the repair commands purge leaked strays.
         commands.extend(tmux_terminal_features_commands(
-            config,
+            tmux,
             &parse_terminal_features(&terminal_features.stdout),
         ));
-        for (key, value) in tmux_session_options(config) {
+        for (key, value) in tmux_session_options(tmux) {
             commands.push(vec![
                 "set-option".to_owned(),
                 "-t".to_owned(),
@@ -637,14 +639,14 @@ impl TmuxBackend {
                 value,
             ]);
         }
-        commands.extend(tmux_extended_key_bindings(config));
+        commands.extend(tmux_extended_key_bindings(tmux));
         commands.extend(stack_hook_commands());
         commands.push(vec![
             "set-option".into(),
             "-t".into(),
             session.into(),
             "@rimz_stack_borders".into(),
-            if config.pane_border_status.is_none() {
+            if tmux.pane_border_status.is_none() {
                 "1"
             } else {
                 "0"
@@ -652,7 +654,9 @@ impl TmuxBackend {
             .into(),
         ]);
         self.batch(&commands)?;
-        self.apply_window_options(session, config)
+        self.apply_window_options(session, tmux)?;
+        self.apply_status(session, config.status_bar);
+        Ok(())
     }
 
     /// Compare window-scoped options in two reads, then script only differing
