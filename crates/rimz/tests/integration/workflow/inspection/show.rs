@@ -1089,7 +1089,7 @@ fn condition_rail_paints_a_held_case_even_without_a_new_evaluation() {
 }
 
 #[test]
-fn parked_and_terminal_rails_are_compact_and_only_parked_has_a_current_node() {
+fn parked_and_terminal_rails_are_horizontal_and_only_parked_has_a_current_node() {
     let (env, mut record) = fixture(
         "parked",
         Some("cap"),
@@ -1102,9 +1102,9 @@ fn parked_and_terminal_rails_are_compact_and_only_parked_has_a_current_node() {
     record.visits = serde_json::from_value(json!({"build":{"total":1,"keys":[]}})).unwrap();
     save(&env, &record);
     let parked = human(&env, &record, false);
-    contains(&parked, &["● gate ×2  ? build 1/2"]);
+    contains(&parked, &["◆ gate\n╰─ ? build ↑"]);
     assert!(
-        parked.find("you can\n").unwrap() < parked.find("● gate").unwrap(),
+        parked.find("you can\n").unwrap() < parked.find("◆ gate").unwrap(),
         "{parked}"
     );
     assert!(!parked.contains("├─"), "{parked}");
@@ -1113,7 +1113,7 @@ fn parked_and_terminal_rails_are_compact_and_only_parked_has_a_current_node() {
         record.terminal_at = Some(record.entered_at);
         save(&env, &record);
         let text = human(&env, &record, false);
-        contains(&text, &["● gate ×2  ● build 1/2"]);
+        contains(&text, &["◆ gate\n╰─ ● build ↑"]);
         assert!(
             !text.contains("you can\n") && !text.contains("├─"),
             "{text}"

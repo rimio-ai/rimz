@@ -1,16 +1,300 @@
+use std::collections::BTreeMap;
 use std::io::Write;
+use unicode_width::UnicodeWidthStr;
 
 use rimz::config::GlyphRole;
 use rimz::harness::schedule::when::WhenExpr;
-use rimz::harness::workflow::{CheckKind, Edge, EdgeSource, Fireability, StepKind, WorkflowSpec};
-use rimz::store::workflow::StepLifecycle;
+use rimz::harness::workflow::{
+    CheckKind, Edge, EdgeSource, Fireability, Hop, HopKind, StepKind, WalkNode, WorkflowSpec,
+};
+use rimz::store::workflow::{JournalEntry, JournalEvent, RunRecord, RunState, StepLifecycle};
 
 use super::render;
+
+pub(super) fn reached<'a>(hops: &'a [Hop], journal: &'a [JournalEntry]) -> BTreeMap<&'a str, u64> {
+    let mut counts = BTreeMap::new();
+    let mut position = None;
+    for hop in hops {
+        if hop.kind == HopKind::VisitsReset {
+            continue;
+        }
+        let node = hop.node.as_str();
+        if position != Some(node) || hop.kind == HopKind::Resume {
+            *counts.entry(node).or_default() += 1;
+        }
+        position = Some(node);
+        if hop.kind == HopKind::Route
+            && let Some(target) = hop
+                .target
+                .as_deref()
+                .filter(|target| !target.starts_with('@'))
+        {
+            *counts.entry(target).or_default() += hop.count;
+            position = Some(target);
+        }
+    }
+    for entry in journal {
+        if matches!(
+            entry.event,
+            JournalEvent::Attempt { .. } | JournalEvent::Evaluation { .. }
+        ) {
+            counts.entry(entry.node.as_str()).or_insert(1);
+        }
+    }
+    counts
+}
+
+struct TrackNode {
+    name: String,
+    parent: Option<String>,
+    glyph: String,
+    glyph_style: anstyle::Style,
+    name_style: anstyle::Style,
+    reached: bool,
+    current: bool,
+    ending: bool,
+    visits: u64,
+}
+
+impl TrackNode {
+    fn width(&self) -> usize {
+        self.glyph.width() + 1 + self.name.width()
+    }
+
+    fn repeat(&self) -> String {
+        if self.visits > 1 {
+            format!(" ×{}", self.visits)
+        } else {
+            String::new()
+        }
+    }
+
+    fn write(&self, out: &mut impl Write) -> std::io::Result<()> {
+        write!(
+            out,
+            "{} {}",
+            render::paint(self.glyph_style, &self.glyph),
+            render::paint(self.name_style, &self.name)
+        )
+    }
+}
+
+fn track_positions<'a>(
+    main: &[&'a TrackNode],
+    left: usize,
+    right: usize,
+) -> Vec<(usize, &'a TrackNode)> {
+    main[left..right]
+        .iter()
+        .scan(if left > 0 { 2 } else { 0 }, |column, node| {
+            let start = *column;
+            *column += node.width() + 3;
+            Some((start, *node))
+        })
+        .collect()
+}
+
+fn track_width(positions: &[(usize, &TrackNode)], hangs: &[&TrackNode]) -> usize {
+    positions
+        .iter()
+        .map(|(column, node)| {
+            let hang = hangs
+                .iter()
+                .filter(|hang| hang.parent.as_deref() == Some(node.name.as_str()))
+                .map(|hang| 3 + hang.width() + hang.repeat().width() + 2)
+                .max()
+                .unwrap_or(0);
+            column + node.width().max(hang)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+pub(super) fn horizontal(
+    out: &mut impl Write,
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+    hops: &[Hop],
+    journal: &[JournalEntry],
+    width: Option<usize>,
+    indent: usize,
+) -> std::io::Result<()> {
+    let counts = reached(hops, journal);
+    let ending = hops
+        .iter()
+        .rposition(|hop| matches!(hop.kind, HopKind::Terminal { .. }))
+        .and_then(|index| {
+            hops[..index]
+                .iter()
+                .rev()
+                .find(|hop| hop.kind == HopKind::Route)
+        })
+        .map(|hop| hop.node.as_str());
+    let role = super::workflow_view::glyph_role(record);
+    let machine = super::super::machine_config();
+    let glyph = rimz::theme::theme_glyphs(&machine.theme);
+    let walk = spec.walk();
+    let reachable = walk.nodes.len();
+    let nodes = walk
+        .nodes
+        .into_iter()
+        .chain(walk.unreachable.into_iter().map(|node| WalkNode {
+            node,
+            hangs_under: None,
+        }))
+        .map(|node| {
+            let current = !record.state.is_terminal()
+                && (node.node == record.node
+                    || record
+                        .held
+                        .as_ref()
+                        .is_some_and(|held| held.attempt.node == node.node));
+            let reached = counts.contains_key(node.node.as_str());
+            let check = spec.checks.contains_key(&node.node);
+            let terminal = record.state.is_terminal() && ending == Some(node.node.as_str());
+            let state_style =
+                render::status::workflow(record.state, role == GlyphRole::StatusWaiting);
+            let (glyph_style, name_style) = if current {
+                (state_style.bold(), state_style.bold())
+            } else if reached {
+                let style = if terminal && record.state == RunState::Failed {
+                    render::palette::alarm()
+                } else {
+                    render::palette::good()
+                };
+                (
+                    style,
+                    if terminal {
+                        style
+                    } else {
+                        render::palette::body()
+                    },
+                )
+            } else {
+                (render::palette::muted(), render::palette::muted())
+            };
+            TrackNode {
+                glyph: glyph(if current {
+                    role
+                } else {
+                    match (check, reached) {
+                        (true, true) => GlyphRole::PipelineCheckPassed,
+                        (true, false) => GlyphRole::PipelineCheckFuture,
+                        (false, true) => GlyphRole::PipelinePassed,
+                        (false, false) => GlyphRole::PipelineFuture,
+                    }
+                }),
+                glyph_style,
+                name_style,
+                reached,
+                current,
+                ending: terminal,
+                visits: record
+                    .visits
+                    .get(&node.node)
+                    .map_or(0, |visits| visits.total),
+                name: node.node,
+                parent: node.hangs_under,
+            }
+        })
+        .collect::<Vec<_>>();
+    let (nodes, unreachable) = nodes.split_at(reachable);
+    let main = nodes
+        .iter()
+        .filter(|node| node.parent.is_none())
+        .collect::<Vec<_>>();
+    let hangs = nodes
+        .iter()
+        .filter(|node| node.parent.is_some() && (node.visits > 0 || node.current || node.ending))
+        .collect::<Vec<_>>();
+    let anchors = main
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| {
+            node.current
+                || node.ending
+                || hangs.iter().any(|hang| {
+                    (hang.current || hang.ending)
+                        && hang.parent.as_deref() == Some(node.name.as_str())
+                })
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let first = anchors
+        .first()
+        .copied()
+        .unwrap_or(main.len().saturating_sub(1))
+        .saturating_sub(1);
+    let last = anchors
+        .last()
+        .copied()
+        .unwrap_or(main.len().saturating_sub(1));
+    let (mut left, mut right) = (0, main.len());
+    let positions = loop {
+        let positions = track_positions(&main, left, right);
+        if width.is_none_or(|width| track_width(&positions, &hangs) <= width.saturating_sub(indent))
+        {
+            break positions;
+        }
+        if left < first {
+            left += 1;
+            continue;
+        }
+        if right > last + 1 {
+            right -= 1;
+            continue;
+        }
+        break positions;
+    };
+    if positions.is_empty() {
+        return Ok(());
+    }
+    write!(out, "{:indent$}", "")?;
+    if left > 0 {
+        write!(out, "{}", render::paint(render::palette::faint(), "… "))?;
+    }
+    for (index, (_, node)) in positions.iter().enumerate() {
+        if index > 0 {
+            write!(out, "{}", render::paint(render::palette::faint(), " ─ "))?;
+        }
+        node.write(out)?;
+    }
+    writeln!(out)?;
+    for (column, parent) in &positions {
+        for hang in hangs
+            .iter()
+            .filter(|hang| hang.parent.as_deref() == Some(parent.name.as_str()))
+        {
+            write!(
+                out,
+                "{:padding$}{}",
+                "",
+                render::paint(render::palette::faint(), "╰─ "),
+                padding = indent + column
+            )?;
+            hang.write(out)?;
+            writeln!(
+                out,
+                "{}{}",
+                hang.repeat(),
+                render::paint(render::palette::faint(), " ↑")
+            )?;
+        }
+    }
+    for node in unreachable
+        .iter()
+        .filter(|node| node.current || node.reached)
+    {
+        write!(out, "{:indent$}", "")?;
+        node.write(out)?;
+        writeln!(out)?;
+    }
+    Ok(())
+}
 
 pub(super) struct Rail {
     pub(super) rows: Vec<Row>,
     pub(super) unreachable: Vec<Row>,
-    pub(super) compact: bool,
     start: String,
 }
 
@@ -57,30 +341,11 @@ impl Rail {
         Self {
             rows,
             unreachable,
-            compact: false,
             start: spec.workflow.start.clone(),
         }
     }
 
     pub(super) fn write(&self, out: &mut impl Write, width: usize) -> std::io::Result<()> {
-        if self.compact {
-            let mut columns = 0;
-            for row in self.rows.iter().chain(&self.unreachable) {
-                let text = row.label();
-                let length = unicode_width::UnicodeWidthStr::width(text.as_str());
-                if columns > 0 && columns + 2 + length > width {
-                    writeln!(out)?;
-                    columns = 0;
-                }
-                if columns > 0 {
-                    write!(out, "  ")?;
-                    columns += 2;
-                }
-                write!(out, "{}", render::paint(row.style, &text))?;
-                columns += length;
-            }
-            return writeln!(out);
-        }
         for row in &self.rows {
             row.write(out, width)?;
         }
@@ -95,15 +360,6 @@ impl Rail {
 }
 
 impl Row {
-    fn label(&self) -> String {
-        let glyph = rimz::theme::theme_glyphs(&super::super::machine_config().theme)(self.glyph);
-        if self.heading.is_empty() {
-            format!("{glyph} {}", self.name)
-        } else {
-            format!("{glyph} {} {}", self.name, self.heading)
-        }
-    }
-
     fn definition(
         spec: &WorkflowSpec,
         name: &str,
@@ -491,6 +747,315 @@ mod tests {
                 "{runner}"
             );
         }
+    }
+
+    fn record(node: &str) -> RunRecord {
+        serde_json::from_value(serde_json::json!({
+            "version":1, "id":rimz::ids::WorkflowRunId::new(), "workflow":"land",
+            "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
+            "scope":{"kind":"worktree", "path":"/repo/lane"},
+            "created_at":jiff::Timestamp::UNIX_EPOCH, "entered_at":jiff::Timestamp::UNIX_EPOCH,
+            "state":"active", "node":node, "visits":{}, "visit_grant":0,
+            "deadline_fired":false, "next_seq":1,
+        }))
+        .unwrap()
+    }
+
+    fn route(node: &str, outcome: &str, target: &str) -> Hop {
+        Hop {
+            at: jiff::Timestamp::UNIX_EPOCH,
+            node: node.into(),
+            outcome: Some(outcome.into()),
+            target: Some(target.into()),
+            count: 1,
+            kind: HopKind::Route,
+        }
+    }
+
+    fn land_hops() -> Vec<Hop> {
+        vec![
+            route("begin", "pass", "sweep"),
+            route("sweep", "ended", "watch"),
+            route("watch", "green", "notes"),
+            route("notes", "pass", "triage"),
+        ]
+    }
+
+    fn horizontal_text(record: &RunRecord, hops: &[Hop], width: Option<usize>) -> String {
+        let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
+        let mut out = anstream::StripStream::new(Vec::new());
+        horizontal(&mut out, &spec, record, hops, &[], width, 6).unwrap();
+        String::from_utf8(out.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn reached_counts_entries_not_repeated_wait_answers() {
+        let mut wait = route("watch", "pending", "@wait");
+        wait.count = 3;
+        let hops = [
+            route("begin", "pass", "sweep"),
+            route("sweep", "ended", "watch"),
+            wait,
+            route("watch", "green", "clean"),
+        ];
+        assert_eq!(
+            reached(&hops, &[]),
+            BTreeMap::from([("begin", 1), ("sweep", 1), ("watch", 1), ("clean", 1),])
+        );
+    }
+
+    #[test]
+    fn horizontal_walk_distinguishes_kinds_and_states_without_color() {
+        let hops = land_hops();
+        let text = horizontal_text(&record("triage"), &hops, None);
+        assert_eq!(
+            text,
+            "      ◆ begin ─ ● sweep ─ ◆ watch ─ ◆ notes ─ ⢿ triage ─ ◇ ruled\n"
+        );
+        assert_eq!(text.matches("triage").count(), 1, "{text}");
+        let current_check = horizontal_text(&record("watch"), &hops[..2], None);
+        assert!(
+            current_check.contains("◆ begin ─ ● sweep ─ ⢿ watch ─ ◇ notes ─ ○ triage ─ ◇ ruled"),
+            "{current_check}"
+        );
+        assert!(
+            !text.contains("fix") && !current_check.contains("fix"),
+            "{text}\n{current_check}"
+        );
+        let mut held = record("sweep");
+        held.wait = Some(
+            serde_json::from_value(serde_json::json!({
+                "node":"sweep", "outcome":"capacity", "hold":"queue",
+                "first":jiff::Timestamp::UNIX_EPOCH, "last":jiff::Timestamp::UNIX_EPOCH,
+                "count":1,
+            }))
+            .unwrap(),
+        );
+        let text = horizontal_text(&held, &hops[..1], None);
+        assert!(text.contains("◆ begin ─ ◉ sweep ─ ◇ watch"), "{text}");
+        for set in ["unicode", "nerd_font"] {
+            let mut theme = rimz::config::ThemeConfig::default();
+            theme.glyphs.set = Some(set.into());
+            let glyph = rimz::theme::theme_glyphs(&theme);
+            let current = glyph(super::super::workflow_view::glyph_role(&held));
+            for future in [GlyphRole::PipelineFuture, GlyphRole::PipelineCheckFuture] {
+                assert_ne!(current, glyph(future), "{set}");
+            }
+        }
+    }
+
+    #[test]
+    fn horizontal_detours_hang_under_their_parent_and_follow_width_elision() {
+        let mut record = record("triage");
+        record.visits.insert(
+            "fix".into(),
+            rimz::store::workflow::StepVisits {
+                total: 2,
+                ..Default::default()
+            },
+        );
+        let mut hops = land_hops();
+        hops.splice(
+            2..2,
+            [
+                route("watch", "red", "fix"),
+                route("fix", "ended", "watch"),
+                route("watch", "red", "fix"),
+                route("fix", "ended", "watch"),
+            ],
+        );
+        let text = horizontal_text(&record, &hops, None);
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert_eq!(
+            lines[1].find('╰'),
+            lines[0]
+                .find("◆ watch")
+                .map(|at| unicode_width::UnicodeWidthStr::width(&lines[0][..at])),
+            "{text}"
+        );
+        assert!(lines[1].contains("╰─ ● fix ×2 ↑"), "{text}");
+        record.node = "fix".into();
+        let current = horizontal_text(&record, &hops[..5], None);
+        assert!(current.contains("╰─ ⢿ fix ×2 ↑"), "{current}");
+        assert_eq!(current.matches("fix").count(), 1, "{current}");
+        record.node = "triage".into();
+        for width in [40, 60] {
+            let text = horizontal_text(&record, &hops, Some(width));
+            assert!(
+                text.starts_with("      … ") && text.contains("◆ notes ─ ⢿ triage"),
+                "{width}: {text}"
+            );
+            assert!(
+                text.lines()
+                    .all(|line| unicode_width::UnicodeWidthStr::width(line) <= width),
+                "{width}: {text}"
+            );
+            assert_eq!(text.contains("╰─"), text.contains("◆ watch"), "{text}");
+        }
+    }
+
+    #[test]
+    fn horizontal_elides_unreached_left_and_reached_right_branches() {
+        let spec: WorkflowSpec = toml::from_str(
+            "[workflow]\nscope='worktree'\nstart='choose'\n\
+             [checks.choose]\nshell='true'\non.a='unit_tests'\n\
+             on.b='integration_tests'\non.c='used'\n\
+             [steps.unit_tests]\nshell='true'\nthen='used'\n\
+             [steps.integration_tests]\nshell='true'\nthen='used'\n\
+             [checks.used]\nshell='true'\non.pass='final'\n\
+             [checks.final]\nshell='true'\non.pass='@done'\non.retry='choose'\n",
+        )
+        .unwrap();
+        let mut hops = vec![route("choose", "c", "used"), route("used", "pass", "final")];
+        let mut rendered = Vec::new();
+        for (node, width, anchors) in [
+            ("final", 60, "◆ used ─ ⢿ final"),
+            ("choose", 40, "⢿ choose"),
+        ] {
+            if node == "choose" {
+                hops.push(route("final", "retry", "choose"));
+            }
+            let mut out = anstream::StripStream::new(Vec::new());
+            horizontal(&mut out, &spec, &record(node), &hops, &[], Some(width), 6).unwrap();
+            let text = String::from_utf8(out.into_inner()).unwrap();
+            assert!(text.contains(anchors), "{text}");
+            rendered.push((width, text));
+        }
+        assert!(
+            rendered
+                .iter()
+                .all(|(width, text)| text.lines().all(|line| line.width() <= *width)),
+            "{rendered:#?}"
+        );
+    }
+
+    #[test]
+    fn horizontal_keeps_a_terminal_detour_and_its_parent_even_without_visits() {
+        let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
+        let mut record = record("fix");
+        record.state = RunState::Failed;
+        let mut hops = land_hops()[..2].to_vec();
+        hops.extend([
+            route("watch", "red", "fix"),
+            route("fix", "capacity", "@failed"),
+            Hop {
+                kind: HopKind::Terminal {
+                    state: record.state,
+                },
+                ..route("fix", "failed", "@failed")
+            },
+        ]);
+        let mut rendered = Vec::new();
+        for visits in [0, 1] {
+            record.visits.insert(
+                "fix".into(),
+                rimz::store::workflow::StepVisits {
+                    total: visits,
+                    ..Default::default()
+                },
+            );
+            for width in [None, Some(40)] {
+                let mut out = Vec::new();
+                horizontal(&mut out, &spec, &record, &hops, &[], width, 6).unwrap();
+                rendered.push((width, String::from_utf8(out).unwrap()));
+            }
+        }
+        assert!(
+            rendered.iter().all(|(_, text)| text.contains("watch")
+                && text.contains(&render::paint(render::palette::alarm(), "fix"))
+                && text.contains(&render::paint(render::palette::alarm(), "●"))),
+            "{rendered:#?}"
+        );
+        for (width, text) in rendered {
+            let text = anstream::adapter::strip_str(&text).to_string();
+            assert_eq!(text.matches("fix").count(), 1, "{text}");
+            assert!(
+                width.is_none_or(|width| text.lines().all(|line| line.width() <= width)),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn horizontal_appends_resumed_and_reached_unreachable_nodes() {
+        let spec: WorkflowSpec = toml::from_str(&format!(
+            "{LAND}\n[steps.resumed]\nshell='true'\nthen='watch'\n\
+             [steps.never_used]\nshell='true'\nthen='watch'\n"
+        ))
+        .unwrap();
+        let machine = super::super::super::machine_config();
+        let glyph = rimz::theme::theme_glyphs(&machine.theme);
+        let mut rendered = Vec::new();
+        for (state, node) in [
+            (RunState::Active, "resumed"),
+            (RunState::Parked, "resumed"),
+            (RunState::Active, "watch"),
+        ] {
+            let mut record = record(node);
+            record.state = state;
+            let mut hops = vec![Hop {
+                kind: HopKind::Resume,
+                ..route("resumed", "resume", "resumed")
+            }];
+            if node == "watch" {
+                hops.push(route("resumed", "ended", "watch"));
+            }
+            let role = if node == "resumed" {
+                super::super::workflow_view::glyph_role(&record)
+            } else {
+                GlyphRole::PipelinePassed
+            };
+            let mut out = anstream::StripStream::new(Vec::new());
+            horizontal(&mut out, &spec, &record, &hops, &[], Some(40), 6).unwrap();
+            rendered.push((
+                format!("      {} resumed", glyph(role)),
+                String::from_utf8(out.into_inner()).unwrap(),
+            ));
+        }
+        assert!(
+            rendered
+                .iter()
+                .all(|(last, text)| text.lines().last() == Some(last.as_str())
+                    && text.matches("resumed").count() == 1
+                    && !text.contains("never_used")
+                    && text.lines().all(|line| line.width() <= 40)),
+            "{rendered:#?}"
+        );
+    }
+
+    #[test]
+    fn horizontal_terminal_marks_only_the_failed_ending_node_alarm() {
+        let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
+        let actual = [RunState::Done, RunState::Failed].map(|state| {
+            let mut record = record("watch");
+            record.state = state;
+            let mut hops = land_hops()[..2].to_vec();
+            hops.push(route(
+                "watch",
+                state.as_str(),
+                if state == RunState::Done {
+                    "@done"
+                } else {
+                    "@failed"
+                },
+            ));
+            hops.push(Hop {
+                kind: HopKind::Terminal { state },
+                target: None,
+                ..hops.last().unwrap().clone()
+            });
+            let mut out = Vec::new();
+            horizontal(&mut out, &spec, &record, &hops, &[], None, 0).unwrap();
+            let text = String::from_utf8(out).unwrap();
+            (
+                text.matches(&render::paint(render::palette::good(), "◆"))
+                    .count(),
+                text.matches(&render::paint(render::palette::alarm(), "◆"))
+                    .count(),
+            )
+        });
+        assert_eq!(actual, [(2, 0), (1, 1)]);
     }
 
     #[test]
