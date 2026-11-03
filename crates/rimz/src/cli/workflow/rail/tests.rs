@@ -156,6 +156,34 @@ fn horizontal_walk_distinguishes_kinds_and_states_without_color() {
 }
 
 #[test]
+fn live_current_node_roles_differ_from_every_node_mark_in_each_set() {
+    for set in ["unicode", "nerd_font"] {
+        let mut theme = rimz::config::ThemeConfig::default();
+        theme.glyphs.set = Some(set.into());
+        let glyph = rimz::theme::theme_glyphs(&theme);
+        for current in [
+            GlyphRole::StatusWorking,
+            GlyphRole::StatusWaiting,
+            GlyphRole::StatusSleeping,
+            GlyphRole::PipelineCurrent,
+        ] {
+            for mark in [
+                GlyphRole::PipelineFuture,
+                GlyphRole::PipelinePassed,
+                GlyphRole::PipelineCheckFuture,
+                GlyphRole::PipelineCheckPassed,
+            ] {
+                assert_ne!(
+                    glyph(current),
+                    glyph(mark),
+                    "{set}: {current:?} vs {mark:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn horizontal_detours_hang_under_their_parent_and_follow_width_elision() {
     let mut record = record("triage");
     record.visits.insert(
