@@ -3,8 +3,8 @@ use rimz::trust::{self};
 
 use super::super::open_existing_store;
 use super::model::{
-    AccountRow, Accounts, AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus,
-    OutdatedIntegration, PluginProbeRow, PluginRow, Probe, Trust,
+    AccountRow, Accounts, AgentCounts, AgentRollup, AgentRow, CompactionLowered, HookRow,
+    HookStatus, OutdatedIntegration, PluginProbeRow, PluginRow, Probe, Trust,
 };
 
 impl From<rimz::agents::BirthLoginErr> for super::model::AccountProblem {
@@ -414,6 +414,9 @@ fn project_agent_rollup(
         .filter_map(|agent| {
             let historical = agent.ended_at.is_some()
                 || !live_keys.contains(&(agent.kind.clone(), agent.agent_id.clone()));
+            let compaction_lowered = (!historical)
+                .then(|| agent_compaction_lowered(agent))
+                .flatten();
             let agent = if historical {
                 agent
             } else {
@@ -439,7 +442,10 @@ fn project_agent_rollup(
             let (status, phase) =
                 rimz::store::snapshot::card_status(agent, row, child, demotion, snapshot.now);
             counts.add(status);
-            if !audit && !matches!(status, AgentStatus::Failed | AgentStatus::Paused) {
+            if !audit
+                && !matches!(status, AgentStatus::Failed | AgentStatus::Paused)
+                && compaction_lowered.is_none()
+            {
                 return None;
             }
             let handle = rimz::address::paste_address(agent, snapshot, reader);
@@ -474,12 +480,60 @@ fn project_agent_rollup(
                 account,
                 turn_error: agent.displayed_turn_error_label(snapshot.now),
                 attributed_to_account,
+                compaction_lowered,
                 restartable: agent.pane.is_some() && agent.ended_at.is_none(),
                 historical,
             })
         })
         .collect();
     AgentRollup::Observed { counts, rows }
+}
+
+fn agent_compaction_lowered(agent: &rimz::agents::AgentState) -> Option<CompactionLowered> {
+    let context = agent.context.as_ref()?;
+    let model = context.model_id.as_ref()?;
+    let limits = context
+        .model_context_limits
+        .as_ref()
+        .filter(|limits| limits.model == *model);
+    let compaction = rimz::agents::registry::native_compaction(
+        agent.kind.as_str(),
+        agent.record.as_ref().and_then(|record| record.auto_compact),
+        agent.resolved_context_window()?,
+        limits,
+    )?;
+    let configured = compaction.lowered?;
+    let max_window = limits.and_then(|limits| limits.max_window);
+    let fix = if max_window.is_some_and(|max| compaction.raw_window >= max) {
+        let profile = agent.profile.as_deref().map_or_else(
+            || "its profile".to_owned(),
+            |name| format!("the `{name}` profile"),
+        );
+        format!(
+            "lower `auto-compact` to {} or less where this launch sets it: its team role, \
+             {profile}, else `[harness] auto_compact`",
+            compaction.point
+        )
+    } else {
+        let config = rimz::agents::session_login_env(&agent.kind, agent.login.as_ref())
+            .ok()
+            .and_then(|env| {
+                rimz::agents::find_definition(agent.kind.as_str())?.model_config_path(&env)
+            });
+        let location = config.map_or_else(
+            || format!("the {} account's config.toml", agent.login_key()),
+            |path| path.display().to_string(),
+        );
+        format!("set `model_context_window` in {location}")
+    };
+    Some(CompactionLowered {
+        configured,
+        effective: compaction.point,
+        model: model.clone(),
+        raw_window: compaction.raw_window,
+        max_window,
+        fix,
+    })
 }
 
 pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Accounts> {
@@ -920,6 +974,175 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compaction_agent(
+        window: u64,
+        count: u64,
+        max_window: Option<u64>,
+    ) -> rimz::agents::AgentState {
+        let mut agent = rimz::testkit::agent_state("codex", "compaction", jiff::Timestamp::now());
+        agent.record = Some(Box::new(rimz::agents::LaunchRecord {
+            auto_compact: Some(count),
+            ..Default::default()
+        }));
+        agent.context = Some(rimz::agents::AgentContext {
+            model_id: Some("gpt-6-sol".into()),
+            model_context_limits: Some(rimz::agents::context::ModelContextLimits {
+                model: "gpt-6-sol".into(),
+                max_window,
+                usable_percent: Some(95),
+                own_compact_limit: None,
+            }),
+            tokens: Some(rimz::agents::AgentTokenUsage {
+                context_window_size: Some(window),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        agent
+    }
+
+    #[test]
+    fn compaction_lowered_fix_raises_a_smaller_or_unknown_window() {
+        let env =
+            rimz::agents::session_login_env(&rimz::ids::AgentKind::new_unchecked("codex"), None)
+                .unwrap();
+        let config = rimz::agents::find_definition("codex")
+            .unwrap()
+            .config_home(&env)
+            .unwrap()
+            .join("config.toml");
+        for max in [Some(872_000), None] {
+            let agent = compaction_agent(258_400, 372_000, max);
+            assert_eq!(
+                agent_compaction_lowered(&agent).map(|lowered| lowered.fix),
+                Some(format!(
+                    "set `model_context_window` in {}",
+                    config.display()
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_lowered_fix_reduces_the_count_at_model_capacity() {
+        let agent = compaction_agent(828_400, 1_000_000, Some(872_000));
+        assert_eq!(
+            agent_compaction_lowered(&agent).map(|lowered| lowered.fix),
+            Some(
+                "lower `auto-compact` to 784800 or less where this launch sets it: its team \
+                 role, its profile, else `[harness] auto_compact`"
+                    .into()
+            )
+        );
+        let mut profiled = agent;
+        profiled.profile = Some("big".into());
+        assert_eq!(
+            agent_compaction_lowered(&profiled).map(|lowered| lowered.fix),
+            Some(
+                "lower `auto-compact` to 784800 or less where this launch sets it: its team \
+                 role, the `big` profile, else `[harness] auto_compact`"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn compaction_lowered_keeps_warning_when_account_path_is_unknown() {
+        let mut agent = compaction_agent(258_400, 372_000, Some(872_000));
+        agent.login = Some("missing-compaction-account".parse().unwrap());
+        assert_eq!(
+            agent_compaction_lowered(&agent).map(|lowered| (lowered.effective, lowered.fix)),
+            Some((
+                244_800,
+                "set `model_context_window` in the codex@missing-compaction-account account's config.toml"
+                    .into(),
+            ))
+        );
+    }
+
+    #[test]
+    fn compaction_lowered_keeps_live_healthy_rows_and_uses_the_latest_sidecar() {
+        let now = jiff::Timestamp::now();
+        let mut small = rimz::testkit::agent_state("codex", "small-window", now);
+        small.name = Some("small-window".into());
+        small.name_explicit = true;
+        small.record = Some(Box::new(rimz::agents::LaunchRecord {
+            auto_compact: Some(372_000),
+            ..Default::default()
+        }));
+        let mut unlowered = small.clone();
+        unlowered.agent_id = "large-window".into();
+        let mut historical = small.clone();
+        historical.agent_id = "historical-window".into();
+        historical.ended_at = Some(now);
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
+            vec![small.clone(), unlowered.clone(), historical.clone()],
+            now,
+        );
+        small.context = Some(rimz::agents::AgentContext {
+            model_id: Some("gpt-6-sol".into()),
+            model_context_limits: Some(rimz::agents::context::ModelContextLimits {
+                model: "gpt-6-sol".into(),
+                max_window: Some(872_000),
+                usable_percent: Some(95),
+                own_compact_limit: None,
+            }),
+            tokens: Some(rimz::agents::AgentTokenUsage {
+                context_window_size: Some(258_400),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        unlowered.context = small.context.clone();
+        unlowered
+            .context
+            .as_mut()
+            .unwrap()
+            .tokens
+            .as_mut()
+            .unwrap()
+            .context_window_size = Some(828_400);
+        historical.context = small.context.clone();
+        let live_keys = [
+            (small.kind.clone(), small.agent_id.clone()),
+            (unlowered.kind.clone(), unlowered.agent_id.clone()),
+        ]
+        .into();
+        for audit in [false, true] {
+            let rollup = project_agent_rollup(
+                &[small.clone(), unlowered.clone(), historical.clone()],
+                &snapshot,
+                &Default::default(),
+                &rimz::address::AddressContext {
+                    channel: None,
+                    origin: rimz::address::ChannelOrigin::Root,
+                },
+                &mut Probe::Ready(Accounts { rows: vec![] }),
+                audit,
+                &live_keys,
+            );
+            let wire = serde_json::to_value(rollup).unwrap();
+            let warnings: Vec<_> = wire["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|row| row.get("compaction_lowered"))
+                .cloned()
+                .collect();
+            assert_eq!(
+                warnings,
+                [serde_json::json!({"configured": 372_000,
+                "effective": 244_800, "model": "gpt-6-sol", "raw_window": 272_000,
+                "max_window": 872_000})]
+            );
+            assert_eq!(
+                wire["rows"].as_array().unwrap().len(),
+                if audit { 3 } else { 1 }
+            );
+        }
+    }
 
     #[test]
     fn integration_file_identity_resolves_dangling_directory_links() {

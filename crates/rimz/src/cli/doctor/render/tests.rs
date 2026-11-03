@@ -935,6 +935,7 @@ fn agents_keep_actionable_rows_counted_and_account_limits_contextual() {
                     account: "codex@team".into(),
                     turn_error: Some("reason".into()),
                     attributed_to_account: attributed,
+                    compaction_lowered: None,
                     restartable,
                     historical: false,
                 }],
@@ -955,6 +956,74 @@ fn agents_keep_actionable_rows_counted_and_account_limits_contextual() {
         if attributed {
             assert!(!closing.contains("fix:"), "{closing}");
         }
+    }
+}
+
+#[test]
+fn compaction_lowered_counts_one_or_several_agents_with_closing_fixes() {
+    use super::super::model::{AgentRow, CompactionLowered};
+    for count in [1, 2] {
+        let rows = ["@otter", "@fox"]
+            .into_iter()
+            .take(count)
+            .map(|handle| AgentRow {
+                kind: "codex".into(),
+                agent_id: handle.into(),
+                branch: Some("main".into()),
+                status: AgentStatus::Running,
+                phase: Default::default(),
+                last_seen: Timestamp::now(),
+                handle: handle.into(),
+                account: "codex@default".into(),
+                turn_error: None,
+                attributed_to_account: false,
+                restartable: true,
+                historical: false,
+                compaction_lowered: Some(CompactionLowered {
+                    configured: 372_000,
+                    effective: 244_800,
+                    model: "gpt-6-sol".into(),
+                    raw_window: 272_000,
+                    max_window: Some(872_000),
+                    fix: "set `model_context_window` in /account/config.toml".into(),
+                }),
+            })
+            .collect();
+        let report = DoctorReport {
+            agents: Some(AgentRollup::Observed {
+                counts: AgentCounts {
+                    running: count,
+                    ..Default::default()
+                },
+                rows,
+            }),
+            ..report_fixture()
+        };
+        let mut tally = Tally::default();
+        let body = strip(|w| render_agents(w, &report, &mut tally));
+        let sentence = "372k lowered to 244k: gpt-6-sol runs a 272k window";
+        assert_eq!(body.matches(sentence).count(), count, "{body}");
+        assert_eq!(tally.warns.len(), count);
+        assert!(tally.alarms.is_empty());
+        assert!(
+            !body.contains("model_context_window"),
+            "remedies belong in the closing block"
+        );
+        let closing = strip(|w| render_tally(w, &tally));
+        assert_eq!(
+            closing
+                .matches("set `model_context_window` in /account/config.toml")
+                .count(),
+            1,
+            "{closing}"
+        );
+        for handle in ["@otter", "@fox"].into_iter().take(count) {
+            assert_eq!(body.matches(handle).count(), 1, "{body}");
+        }
+        insta::assert_snapshot!(
+            format!("compaction_lowered_{count}"),
+            format!("{body}\n{closing}")
+        );
     }
 }
 
@@ -3323,6 +3392,7 @@ fn audit_adds_agent_context_without_changing_findings() {
         account: "codex@team".into(),
         turn_error: None,
         attributed_to_account: false,
+        compaction_lowered: None,
         restartable: !historical,
         historical,
     };
