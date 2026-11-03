@@ -565,10 +565,13 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_severity: Option<ContextSeverity>,
     /// The session's registration instant, copied from
-    /// `AgentState.registered_at`. The live-spend enrichment reads it to date a
-    /// session's first cost; row ordering keys on pane creation, not this.
+    /// `AgentState.registered_at`. Dates first cost and newest-first groups;
+    /// row ordering still keys on pane creation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
+    /// Latest launch or non-keepalive prompt, the group's quiet-clock input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engaged_at: Option<Timestamp>,
     /// How long this agent's *own* provider session has been quiet: the row
     /// clock as it stood before `fold_child_activity_onto_parents` raised it to
     /// a child's, set only on a row that fold actually raised. A delegating
@@ -660,6 +663,7 @@ impl Default for AgentCard {
             sub_agent_cost_usd: None,
             context_severity: None,
             registered_at: None,
+            engaged_at: None,
             own_last_activity: None,
             cache: None,
             sub_agents: Vec::new(),
@@ -749,6 +753,7 @@ impl AgentCard {
             sub_agent_cost_usd: None,
             context_severity: None,
             registered_at: agent.registered_at,
+            engaged_at: agent.registered_at.max(agent.last_prompt_at),
             own_last_activity: None,
             cache: None,
             sub_agents: Vec::new(),

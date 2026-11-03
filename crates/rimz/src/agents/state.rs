@@ -1019,6 +1019,10 @@ pub struct AgentState {
     /// The user-task boundary used to retire older finished children. Follows `turn_started_at` except that agent and harness prompt headers carry it forward; context resets advance both stamps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_turn_started_at: Option<Timestamp>,
+    /// Latest non-keepalive submitted prompt, including steers and prompts
+    /// resuming parked work. Registration and state observations carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_prompt_at: Option<Timestamp>,
     /// The agent's last request before the open run of keepalive-only turns, the clock `harness.cache_keepalive_max` caps. `None` when the latest opened turn was not a keepalive ping; a context reset clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keepalive_since: Option<Timestamp>,
@@ -1116,10 +1120,9 @@ pub struct AgentState {
     pub last_activity: Timestamp,
     /// When this session first entered the rollup — the timestamp of its
     /// earliest reduced event, set once and carried forward unchanged
-    /// (identity, never activity). The sidebar's calm tiebreak falls back to it
-    /// as the row's spawn key when the backend reports no pane process start
-    /// (Zellij), so a calm row holds a stable order without one. `None` only on
-    /// a rollup persisted before the field existed.
+    /// (identity, never activity). The sidebar uses it for newest-first group
+    /// order and, with `last_prompt_at`, the group's quiet clock. `None` only
+    /// on a rollup persisted before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
     /// Ingress time of this conversation's latest on-screen claim. Carried
@@ -1355,6 +1358,7 @@ impl AgentState {
             turn_ended_at: None,
             last_tool_at: None,
             user_turn_started_at: None,
+            last_prompt_at: None,
             keepalive_since: None,
             ping_turn: false,
             pinged_at: None,
