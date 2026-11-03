@@ -158,6 +158,18 @@ The choreography and write classes are [store.md → The write path](./store.md#
 
 `WORKTREE_ROW_CAP` (6) caps the idle and process tail in the renderer, never the snapshot. Active, paused, blocked, finished, focused, and unread rows render past the cap, so jump targets and unread convergence stay visible. The observer's pass scales with the full roster, and the render and selection walks scale with the visible set. Both stay bounded by live pane count across the 20 to 100 agent target. If that bound loosens, the fix is row virtualization in the renderer, never hiding rows from the snapshot.
 
+### Hidden-view sweep calibration
+
+On 2026-11-03, a release `testkit` build drove the production sweep on tmux 3.8, Linux x86_64, with 262 hidden windows, 525 panes and 5,227,162 retained normal-screen history lines (20,000 injected lines per work pane). Each run compared an idle baseline, one direct `fit_views` batch, and one sweep kick on the same private server. Before the sweep, hidden windows returned to the batch's exact starting pane dimensions, history counts and screen modes. External `tmux display-message -p ok` calls measured shared-server RTT; independent geometry reads observed convergence.
+
+| Phase | Run A max / p99 RTT (ms) | Run B max / p99 RTT (ms) | Server CPU, A / B (% of one core) | Convergence, A / B (s) |
+| --- | --- | --- | --- | --- |
+| Baseline | 4.457 / 2.824 | 18.437 / 5.766 | 7.83 / 9.33 | — |
+| Single batch | 318.843 / 318.843 | 513.345 / 513.345 | 95.75 / 100.74 | 0.349 / 0.546 |
+| Paced sweep | 12.461 / 8.042 | 18.936 / 11.725 | 12.37 / 14.74 | 12.029 / 12.224 |
+
+RTT sampling waited 5 ms after each response (observed idle gaps at most 7.24 ms); geometry was polled every 50 ms. CPU is the server's `/proc/<pid>/stat` user-plus-system tick delta over phase wall time, including both readers. The short batch phases contained four and three RTT samples, so their nearest-rank p99 equals their maximum; 10 ms CPU accounting ticks can put a short phase slightly above 100%. Both sweeps fitted all 262 windows and wrote one record with zero failed, skipped or remaining windows. The 150,000-line budget, 1,500-line per-window cost and eight-window cap were retained: both runs met the 50 ms RTT and approximately 15% CPU bounds. This fixture excludes sidebar supervisors, provider redraws and SSH/Ghostty rendering.
+
 ## Overhead at fleet scale
 
 RimZ is sized against a single agent: watching a hundred agents should cost a small and nearly flat fraction of running one of them.
