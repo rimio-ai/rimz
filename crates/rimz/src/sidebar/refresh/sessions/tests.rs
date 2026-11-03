@@ -369,19 +369,24 @@ fn transcript_backstop_is_stat_gated() {
     let observed_at = first.context.observed_at;
     let stat = first.transcript_stat;
 
-    refresh_session_transcript_context_with_snapshot(
-        None,
-        &runtime,
-        "codex",
-        "sess-1",
-        Some("gpt-5"),
-        None,
-        RefreshTrigger::Tick,
-        None,
-    );
-    let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
-    assert_eq!(second.context.observed_at, observed_at);
-    assert_eq!(second.transcript_stat, stat);
+    for open_ask in [None, Some(Timestamp::now())] {
+        refresh_session_transcript_context_with_snapshot(
+            None,
+            &runtime,
+            "codex",
+            "sess-1",
+            Some("gpt-5"),
+            None,
+            RefreshTrigger::Tick,
+            open_ask,
+        );
+        let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        assert_eq!(
+            second.context.observed_at, observed_at,
+            "an unproven open ask ({open_ask:?}) rewrites nothing"
+        );
+        assert_eq!(second.transcript_stat, stat);
+    }
 
     std::fs::OpenOptions::new()
         .append(true)

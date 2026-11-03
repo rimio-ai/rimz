@@ -9,6 +9,278 @@ use crate::agents::{
     LocalSpendFold, PriceBook, SessionOrigin, TokenSplit, TranscriptRole, TranscriptStat,
 };
 
+const PERMISSION_ASK: &str = "2026-11-03T08:30:48.822Z";
+const PERMISSION_CALL: &str = "2026-11-03T08:30:48.751Z";
+const PERMISSION_RESULT: &str = "2026-11-03T08:30:51.220Z";
+
+fn permission_line(at: &str, payload: serde_json::Value) -> String {
+    json!({"timestamp": at, "type": "response_item", "payload": payload}).to_string() + "\n"
+}
+
+fn permission_exec() -> String {
+    permission_line(
+        PERMISSION_CALL,
+        json!({"type": "custom_tool_call", "name": "exec", "call_id": "exec-1",
+            "input": "await tools.exec_command({cmd: 'cargo test'});"}),
+    )
+}
+
+fn permission_output(at: &str, call_id: &str, status: &str) -> String {
+    permission_line(
+        at,
+        json!({"type": "custom_tool_call_output", "call_id": call_id, "output": [
+            {"type": "input_text", "text": format!("{status}\nWall time 2.5 seconds\nOutput:\n")},
+            {"type": "input_text", "text": "Script completed\n{\"session_id\": 42}"}
+        ]}),
+    )
+}
+
+fn permission_refresh(
+    path: &Path,
+    since: Option<jiff::Timestamp>,
+    prior: Option<&crate::agents::context::record::AgentContextRecord>,
+) -> Option<crate::agents::LocalContextRefresh> {
+    let login_env = BTreeMap::from([(
+        "CODEX_HOME".to_owned(),
+        path.parent().unwrap().to_string_lossy().into_owned(),
+    )]);
+    CodexAdapter.local_context_refresh(
+        crate::agents::RefreshTrigger::Watch,
+        &crate::agents::LocalContextRefreshCtx {
+            login_env: &login_env,
+            agent_id: "permission-session",
+            model_hint: None,
+            prior_session_name: None,
+            current_transcript_path: None,
+            prior_transcript_path: path.to_str(),
+            prior_transcript_stat: prior.and_then(|record| record.transcript_stat.as_ref()),
+            prior_spend_fold: prior.and_then(|record| record.spend_fold.as_ref()),
+            prior_model_context_limits_key: None,
+            open_permission_since: since,
+            prior_permission_settle: prior.and_then(|record| record.context.permission_settle),
+            shared_pricing_cache_path: &path.parent().unwrap().join("prices.json"),
+        },
+    )
+}
+
+#[test]
+fn permission_scan_tracks_asking_exec_terminal_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let since = PERMISSION_ASK.parse().unwrap();
+    for status in ["Script completed", "Script failed", "Script terminated"] {
+        let text = permission_exec() + &permission_output(PERMISSION_RESULT, "exec-1", status);
+        std::fs::write(&path, text).unwrap();
+        let proof = permission_refresh(&path, Some(since), None)
+            .and_then(|refresh| refresh.context.permission_settle.into_set());
+        assert_eq!(
+            proof,
+            Some(crate::agents::context::PermissionSettle {
+                ask_since: since,
+                at: PERMISSION_RESULT.parse().unwrap(),
+            }),
+            "{status} finishes the asking cell even when its process keeps running"
+        );
+    }
+}
+
+#[test]
+fn permission_scan_tracks_yielded_exec_and_asking_wait() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let since = PERMISSION_ASK.parse().unwrap();
+    for asking_wait in [false, true] {
+        let mut text = permission_exec()
+            + &permission_output(
+                if asking_wait {
+                    PERMISSION_CALL
+                } else {
+                    PERMISSION_RESULT
+                },
+                "exec-1",
+                "Script running with cell ID g2:41",
+            );
+        let wait_at = if asking_wait {
+            PERMISSION_CALL
+        } else {
+            PERMISSION_RESULT
+        };
+        text += &permission_line(
+            wait_at,
+            json!({"type": "function_call", "name": "wait",
+            "call_id": "wait-1", "arguments": "{\"cell_id\":\"g2:41\"}"}),
+        );
+        text += &permission_line(
+            PERMISSION_RESULT,
+            json!({"type": "function_call_output",
+            "call_id": "wait-1",
+            "output": "Script running with cell ID g2:41\nWall time 0.1 seconds\nOutput:\n"}),
+        );
+        text += &permission_line(
+            PERMISSION_RESULT,
+            json!({"type": "function_call", "name": "wait",
+            "call_id": "other-wait", "arguments": "{\"cell_id\":\"g2:99\"}"}),
+        );
+        text += &permission_output(PERMISSION_RESULT, "other-wait", "Script completed");
+        std::fs::write(&path, &text).unwrap();
+        assert!(
+            permission_refresh(&path, Some(since), None)
+                .unwrap()
+                .context
+                .permission_settle
+                .is_keep()
+        );
+
+        text += &permission_line(
+            PERMISSION_RESULT,
+            json!({"type": "function_call", "name": "wait",
+            "call_id": "wait-2", "arguments": "{\"cell_id\":\"g2:41\"}"}),
+        );
+        text += &permission_line(
+            PERMISSION_RESULT,
+            json!({"type": "function_call_output",
+            "call_id": "wait-2", "output": "Script completed\nWall time 0.2 seconds\nOutput:\n"}),
+        );
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(
+            permission_refresh(&path, Some(since), None)
+                .and_then(|refresh| refresh.context.permission_settle.into_set())
+                .map(|proof| proof.at),
+            Some(PERMISSION_RESULT.parse().unwrap()),
+            "asking_wait={asking_wait}"
+        );
+    }
+}
+
+#[test]
+fn permission_scan_requires_visible_codemode_call_and_strictly_later_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let since = PERMISSION_ASK.parse().unwrap();
+    let completed = permission_output(PERMISSION_RESULT, "exec-1", "Script completed");
+    std::fs::write(&path, permission_exec() + &completed).unwrap();
+    assert!(
+        permission_refresh(&path, Some(since), None)
+            .and_then(|refresh| refresh.context.permission_settle.into_set())
+            .is_some()
+    );
+
+    let direct = permission_line(
+        PERMISSION_CALL,
+        json!({"type": "function_call",
+        "name": "request_user_input_async", "call_id": "direct", "arguments": "{}"}),
+    );
+    let notify = permission_line(
+        PERMISSION_RESULT,
+        json!({"type": "custom_tool_call_output",
+        "call_id": "exec-1",
+        "output": [{"type": "input_text", "text": "progress: Script completed"}]}),
+    );
+    for text in [
+        completed.clone(),
+        permission_exec() + &direct + &completed,
+        permission_exec() + &permission_output(PERMISSION_ASK, "exec-1", "Script completed"),
+        permission_exec() + &permission_output(PERMISSION_CALL, "exec-1", "Script completed"),
+        permission_exec() + &notify,
+        permission_exec()
+            + &permission_output(PERMISSION_RESULT, "another-exec", "Script completed"),
+    ] {
+        std::fs::write(&path, text).unwrap();
+        assert!(
+            permission_refresh(&path, Some(since), None)
+                .unwrap()
+                .context
+                .permission_settle
+                .is_keep()
+        );
+    }
+}
+
+#[test]
+fn permission_refresh_rechecks_an_unanswered_ask_with_unchanged_stat() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let since = PERMISSION_ASK.parse().unwrap();
+    let mut prior = crate::agents::context::record::AgentContextRecord::new(
+        "codex",
+        "permission-session",
+        AgentContext::default(),
+    );
+    prior.transcript_path = Some(path.to_string_lossy().into_owned());
+    std::fs::write(&path, permission_exec()).unwrap();
+    prior.transcript_stat = TranscriptStat::from_path(&path);
+    assert!(
+        permission_refresh(&path, Some(since), Some(&prior)).is_none(),
+        "a recheck that finds no terminal result writes nothing"
+    );
+
+    std::fs::write(
+        &path,
+        permission_exec() + &permission_output(PERMISSION_RESULT, "exec-1", "Script completed"),
+    )
+    .unwrap();
+    prior.transcript_stat = TranscriptStat::from_path(&path);
+    assert!(permission_refresh(&path, None, Some(&prior)).is_none());
+    assert_eq!(
+        permission_refresh(&path, Some(since), Some(&prior))
+            .and_then(|refresh| refresh.context.permission_settle.into_set())
+            .map(|proof| proof.at),
+        Some(PERMISSION_RESULT.parse().unwrap()),
+        "the hook folded after a refresh already consumed this exact stat"
+    );
+}
+
+#[test]
+fn permission_refresh_keeps_proof_without_the_ask_or_asking_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let since = PERMISSION_ASK.parse().unwrap();
+    std::fs::write(
+        &path,
+        permission_exec() + &permission_output(PERMISSION_RESULT, "exec-1", "Script completed"),
+    )
+    .unwrap();
+    let refresh = permission_refresh(&path, Some(since), None).unwrap();
+    let mut prior = crate::agents::context::record::AgentContextRecord::new(
+        "codex",
+        "permission-session",
+        AgentContext::default(),
+    );
+    prior.apply_local_refresh(CodexAdapter.spec(), refresh, since);
+    let proof = prior.context.permission_settle;
+    assert!(
+        proof.is_some(),
+        "initial terminal result establishes the fact"
+    );
+
+    let later = permission_line(
+        PERMISSION_RESULT,
+        json!({"type": "custom_tool_call",
+        "name": "exec", "call_id": "later", "input": "text('tool-free work')"}),
+    );
+    std::fs::write(&path, "x".repeat(70 * 1024) + "\n" + &later).unwrap();
+    for supplied in [Some(since), None] {
+        prior.transcript_stat = None;
+        let refresh = permission_refresh(&path, supplied, Some(&prior)).unwrap();
+        assert!(refresh.context.permission_settle.is_keep());
+        prior.apply_local_refresh(CodexAdapter.spec(), refresh, since);
+        assert_eq!(prior.context.permission_settle, proof);
+    }
+    prior.apply_context_refresh("codex", "permission-session", AgentContext::default(), None);
+    assert_eq!(
+        prior.context.permission_settle, proof,
+        "rich writers keep local proof"
+    );
+    let wire = serde_json::to_value(&prior).unwrap();
+    assert_eq!(
+        serde_json::from_value::<crate::agents::context::record::AgentContextRecord>(wire)
+            .unwrap()
+            .context
+            .permission_settle,
+        proof
+    );
+}
+
 #[test]
 fn local_context_reads_model_catalog_limits_with_tolerant_fallbacks() {
     let model = "gpt-6.1-sol";
@@ -745,6 +1017,8 @@ fn capacity_task_complete_refresh_keeps_the_turn_end_fact() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .unwrap();
     let error = refresh.context.turn_error.into_set().unwrap();
@@ -1260,6 +1534,8 @@ fn transcript_refresh_stamps_plan_marker_instead_of_completion() {
         None,
         &dir.path().join("prices.json"),
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("transcript refresh");
     assert_eq!(
@@ -1342,6 +1618,8 @@ fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("changed transcript refreshes");
     assert_eq!(
@@ -1410,6 +1688,8 @@ fn messageless_task_complete_refreshes_as_unknown_death() {
             None,
             &pricing_cache_path,
             &std::collections::BTreeMap::new(),
+            None,
+            None,
         )
         .expect("changed transcript refreshes");
         let error = refresh
@@ -1457,6 +1737,8 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("changed transcript refreshes");
     assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
@@ -1480,6 +1762,8 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("changed transcript refreshes");
     let error = refresh
@@ -1802,6 +2086,8 @@ fn refresh_transcript_context_tracks_fast_toggles_across_resumed_folds() {
             prior.as_ref(),
             &pricing_cache_path,
             &std::collections::BTreeMap::new(),
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1835,7 +2121,9 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
             Some(&stat),
             None,
             &pricing_cache_path,
-            &std::collections::BTreeMap::new()
+            &std::collections::BTreeMap::new(),
+            None,
+            None,
         )
         .is_none(),
         "unchanged stat skips the tail read and sidecar write"
@@ -1859,6 +2147,8 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("changed stat refreshes");
     assert_eq!(
@@ -1891,7 +2181,9 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
             Some(&unchanged_stat),
             None,
             &pricing_cache_path,
-            &std::collections::BTreeMap::new()
+            &std::collections::BTreeMap::new(),
+            None,
+            None,
         )
         .is_none(),
         "unchanged stat remains gated regardless of prior effort"
@@ -1914,6 +2206,8 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("missing stat refreshes");
     assert_eq!(refresh.context.effort, crate::agents::FieldPatch::Keep);
@@ -1949,6 +2243,8 @@ fn refresh_transcript_context_backfills_unchanged_legacy_fold() {
         Some(&legacy),
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("unchanged legacy fold bypasses the stat gate for one cold backfill");
     let usage = refresh
@@ -1975,7 +2271,9 @@ fn refresh_transcript_context_backfills_unchanged_legacy_fold() {
             Some(&stat),
             Some(&rebuilt),
             &pricing_cache_path,
-            &std::collections::BTreeMap::new()
+            &std::collections::BTreeMap::new(),
+            None,
+            None,
         )
         .is_none(),
         "the unchanged rebuilt fold returns to the cheap stat-gated path"
@@ -2011,6 +2309,8 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("changed transcript refreshes");
 
@@ -2055,6 +2355,8 @@ fn refresh_transcript_context_publishes_plan_burn_matching_history() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .unwrap();
     let actual = refresh
@@ -2111,6 +2413,8 @@ fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
         None,
         &pricing_cache_path,
         &std::collections::BTreeMap::new(),
+        None,
+        None,
     )
     .expect("changed transcript refreshes");
     let actual = refresh
