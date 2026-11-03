@@ -307,3 +307,64 @@ fn background_view_swap_refreshes_compact_strip_in_its_own_session() {
     assert_strip(&server, session, 0, 1, 1);
     assert!(strip(&server, "other-current-session").is_empty());
 }
+
+#[test]
+fn reload_reapplies_room_options_without_starting_stopped_sessions() {
+    require_tmux!();
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.record(&env.home_root.join("stopped"));
+    let workspace = env.resolve_workspace(&env.project_root);
+    let session = &workspace.session_name;
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    server
+        .backend
+        .ensure_session(&session_opts(
+            session,
+            workspace.workspace_id.clone(),
+            &env.project_root,
+            &env.project_root,
+            Some((120, 40)),
+        ))
+        .unwrap();
+    server.output(&["set-option", "-g", "status", "on"]);
+    server.output(&["set-option", "-g", "base-index", "0"]);
+    server.output(&["move-window", "-r", "-t", session]);
+    let sessions = server.stdout(&["list-sessions", "-F", "#{session_name}"]);
+    for mode in ["off", "compact", "full"] {
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            format!("[mux]\nstatus_bar = {mode:?}\n[tmux]\nhistory_limit = 54321\n"),
+        )
+        .unwrap();
+        let result = env.rimz().arg("reload").output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            server.show_option(&["-t", session], "history-limit"),
+            "54321"
+        );
+        match mode {
+            "off" => assert_eq!(server.show_option(&["-t", session], "status"), "off"),
+            "compact" => assert_strip(&server, session, 0, 0, 0),
+            _ => assert_inherits_status(&server, session),
+        }
+        assert_eq!(
+            server.stdout(&["list-sessions", "-F", "#{session_name}"]),
+            sessions
+        );
+    }
+    assert!(
+        server
+            .backend
+            .apply_room_options("vanished", &Default::default())
+            .is_err()
+    );
+    assert_eq!(
+        server.stdout(&["list-sessions", "-F", "#{session_name}"]),
+        sessions
+    );
+}

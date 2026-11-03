@@ -6,7 +6,7 @@ The defaults are the exception. Multiplexers were tuned for shells and editors d
 
 ## What the room changes, and what stays yours
 
-A room is one Zellij or tmux session. Every time RimZ opens or reattaches it, RimZ asserts the settings agents need and stops there; it never edits `~/.config/zellij/config.kdl` or `~/.tmux.conf`. Detach the way you always do, and `rimz start` in the project directory, or `rimz attach <session>` from anywhere, brings you back to the same panes.
+A room is one Zellij or tmux session. Every time RimZ opens or reattaches it, RimZ asserts the settings agents need and stops there; it never edits `~/.config/zellij/config.kdl` or `~/.tmux.conf`. On tmux, `rimz reload` also re-applies options to the live session and its current windows. Detach the way you always do, and `rimz start` in the project directory, or `rimz attach <session>` from anywhere, brings you back to the same panes.
 
 If an older RimZ wrote the room, `rimz start` tears it down and opens a fresh room instead. Its history is not carried over. If a running room still holds the workspace, start refuses without changing it; close that session from its multiplexer, then start again. See [starting a room](../reference/cli/getting-started.md#start-the-room).
 
@@ -44,10 +44,10 @@ With hundreds of windows, tmux's full tab list can make switching slow: it forma
 
 ```sh
 rimz config set mux.status_bar compact
-rimz start
+rimz reload
 ```
 
-Changes apply when you start or attach to the room. Zellij rooms ignore `status_bar` for now. In `compact` or `off`, RimZ owns the room's `status` and `status-format`, so a toggle typed inside the room lasts until that next apply; switching back to `full` returns them to your config.
+Changes apply when you start or attach to the room, or run `rimz reload` for live tmux rooms. Zellij rooms ignore `status_bar` for now. In `compact` or `off`, RimZ owns the room's `status` and `status-format`, so a toggle typed inside the room lasts until that next apply; switching back to `full` returns them to your config.
 
 Compact keeps your left and right status text, lengths and styles, tab formats and styles, separators, and justification. It replaces a custom `status-format[0]` with tmux's standard layout; additional global status lines are preserved. If your global bar is off, choosing compact turns it on for the room; an existing multi-line bar keeps its line count.
 
@@ -74,7 +74,7 @@ pane_border_status = "top"      # unset: inherit, except stack-window titles
 
 The backends differ in what an unset key means. `[tmux]` carries a RimZ value for every key but the two pane-border ones, so leaving a key out means RimZ's default rather than yours. `[zellij]` asserts the optional keys you set alongside four always-resolved keys: `mouse_click_through` and `focus_follows_mouse` behind single-click jumps, `session_serialization`, and `disable_session_metadata`. Session settings apply at room birth and through live reconfiguration; client settings apply when you attach. Every key with its default is in [configuration → multiplexer room options](./configuration.md#multiplexer-room-options).
 
-A changed `[tmux]` value reaches every open window the next time RimZ opens or reattaches the session, and windows opened later get the same settings. Removing a pane-border key restores inheritance from `~/.tmux.conf` on that next open or reattach, except that a window holding a stack gets top borders naming its members and blanking all other panes. Closing its last member restores inheritance. An explicit `pane_border_status`, including `"off"`, wins over this stack default.
+A changed `[tmux]` value reaches every open window on open, reattach, or `rimz reload`. Open or reattach also refreshes the defaults for windows opened later. Removing a pane-border key restores inheritance from `~/.tmux.conf` on that next apply, except that a window holding a stack gets top borders naming its members and blanking all other panes. Closing its last member restores inheritance. An explicit `pane_border_status`, including `"off"`, wins over this stack default.
 
 A `[zellij]` session value overrides `config.kdl` absolutely. Most changes reach an open room on the next `rimz start` or reattach. `session_serialization`, `disable_session_metadata`, `scroll_buffer_size`, `on_force_close`, `osc8_hyperlinks`, `show_startup_tips`, and `show_release_notes` take effect at the next room birth. `mouse_mode` and `support_kitty_keyboard_protocol` apply per attaching client.
 
