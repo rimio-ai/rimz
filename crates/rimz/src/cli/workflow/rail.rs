@@ -83,21 +83,41 @@ fn track_positions<'a>(
     main: &[&'a TrackNode],
     left: usize,
     right: usize,
-) -> Vec<(usize, &'a TrackNode)> {
+    elide_between: Option<&[usize]>,
+) -> Vec<(usize, &'a TrackNode, &'static str)> {
     main[left..right]
         .iter()
-        .scan(if left > 0 { 2 } else { 0 }, |column, node| {
-            let start = *column;
-            *column += node.width() + 3;
-            Some((start, *node))
+        .enumerate()
+        .filter(|(index, _)| {
+            let index = left + index;
+            elide_between.is_none_or(|anchors| {
+                anchors.contains(&index)
+                    || anchors.first().is_none_or(|first| index < *first)
+                    || anchors.last().is_none_or(|last| index > *last)
+            })
         })
+        .scan(
+            (if left > 0 { 2 } else { 0 }, None),
+            |(column, previous), (index, node)| {
+                let separator = match *previous {
+                    None => "",
+                    Some(previous) if index > previous + 1 => " ─ … ─ ",
+                    Some(_) => " ─ ",
+                };
+                *column += separator.width();
+                let start = *column;
+                *column += node.width();
+                *previous = Some(index);
+                Some((start, *node, separator))
+            },
+        )
         .collect()
 }
 
-fn track_width(positions: &[(usize, &TrackNode)], hangs: &[&TrackNode]) -> usize {
+fn track_width(positions: &[(usize, &TrackNode, &str)], hangs: &[&TrackNode]) -> usize {
     positions
         .iter()
-        .map(|(column, node)| {
+        .map(|(column, node, _)| {
             let hang = hangs
                 .iter()
                 .filter(|hang| hang.parent.as_deref() == Some(node.name.as_str()))
@@ -203,7 +223,7 @@ pub(super) fn horizontal(
         .iter()
         .filter(|node| node.parent.is_none())
         .collect::<Vec<_>>();
-    let hangs = nodes
+    let mut hangs = nodes
         .iter()
         .filter(|node| node.parent.is_some() && (node.visits > 0 || node.current || node.ending))
         .collect::<Vec<_>>();
@@ -223,25 +243,39 @@ pub(super) fn horizontal(
     let first = anchors
         .first()
         .copied()
-        .unwrap_or(main.len().saturating_sub(1))
-        .saturating_sub(1);
+        .unwrap_or(main.len().saturating_sub(1));
     let last = anchors
         .last()
         .copied()
         .unwrap_or(main.len().saturating_sub(1));
     let (mut left, mut right) = (0, main.len());
+    let mut elide_between = None;
     let positions = loop {
-        let positions = track_positions(&main, left, right);
+        let positions = track_positions(&main, left, right, elide_between);
         if width.is_none_or(|width| track_width(&positions, &hangs) <= width.saturating_sub(indent))
         {
             break positions;
         }
-        if left < first {
+        if left < first.saturating_sub(1) {
             left += 1;
             continue;
         }
         if right > last + 1 {
             right -= 1;
+            continue;
+        }
+        if elide_between.is_none() && anchors.windows(2).any(|pair| pair[1] > pair[0] + 1) {
+            elide_between = Some(anchors.as_slice());
+            continue;
+        }
+        if left < first {
+            left += 1;
+            continue;
+        }
+        if hangs.iter().any(|hang| !(hang.current || hang.ending)) {
+            hangs.retain(|hang| hang.current || hang.ending);
+            (left, right) = (0, main.len());
+            elide_between = None;
             continue;
         }
         break positions;
@@ -253,14 +287,18 @@ pub(super) fn horizontal(
     if left > 0 {
         write!(out, "{}", render::paint(render::palette::faint(), "… "))?;
     }
-    for (index, (_, node)) in positions.iter().enumerate() {
-        if index > 0 {
-            write!(out, "{}", render::paint(render::palette::faint(), " ─ "))?;
+    for (_, node, separator) in &positions {
+        if !separator.is_empty() {
+            write!(
+                out,
+                "{}",
+                render::paint(render::palette::faint(), separator)
+            )?;
         }
         node.write(out)?;
     }
     writeln!(out)?;
-    for (column, parent) in &positions {
+    for (column, parent, _) in &positions {
         for hang in hangs
             .iter()
             .filter(|hang| hang.parent.as_deref() == Some(parent.name.as_str()))
