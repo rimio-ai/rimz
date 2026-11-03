@@ -928,7 +928,7 @@ fn tmux_agent_exec_command(
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
     };
@@ -978,7 +978,7 @@ fn tmux_resume_command(
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
     };
@@ -1023,7 +1023,7 @@ fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str)
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: rimz::harness::launch::ExecIdentity {
             name: Some("pruner".to_owned()),

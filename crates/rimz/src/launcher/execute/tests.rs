@@ -88,7 +88,7 @@ impl Fixture {
                 leader_index: Some(0),
                 placement: Placement::NewTab,
                 pick_session: false,
-                loop_reminder: None,
+                reminder_section: None,
                 loop_task: None,
                 description: None,
                 report_to: ReportTo::Launcher,

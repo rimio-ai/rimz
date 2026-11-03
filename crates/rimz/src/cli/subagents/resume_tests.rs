@@ -103,7 +103,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 exit_on_run_completion: !keep,
                 subagent: true,
                 follow_up_message: None,
-                loop_reminder: None,
+                reminder_section: None,
                 headless: None,
                 identity: ExecIdentity {
                     resume_model_override: false,

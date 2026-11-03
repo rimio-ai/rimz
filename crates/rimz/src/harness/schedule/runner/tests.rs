@@ -615,12 +615,12 @@ fn resident_plan_carries_the_fire_reminder() {
         Instant::now(),
     )
     .unwrap();
-    let TaskFirePlan::Resident { loop_reminder, .. } = fire.prepare(&mut record_room).unwrap()
+    let TaskFirePlan::Resident { reminder_body, .. } = fire.prepare(&mut record_room).unwrap()
     else {
         panic!("resident plan")
     };
     assert_eq!(
-        loop_reminder,
+        reminder_body,
         "The user fired the rule `resident` by hand. You run once here and stay on afterwards. The user is watching this run."
     );
 }
@@ -1093,7 +1093,11 @@ fn spawn_requests_share_loop_cleanup_and_force_a_tab_only_when_scheduled() {
                 request.timeout,
                 (mode == LoopRunMode::Scheduled).then_some(SCHEDULED_RUN_DEFAULT_TIMEOUT)
             );
-            let reminder = request.loop_reminder.expect("loop single run reminder");
+            let Some(crate::harness::launch::ReminderSection::Loop(reminder)) =
+                request.reminder_section
+            else {
+                panic!("loop single run reminder")
+            };
             assert_eq!(
                 reminder.ends_with(" The run is stopped after 2h."),
                 mode == LoopRunMode::Scheduled,
@@ -1136,7 +1140,10 @@ fn spawn_reminder_names_the_configured_default_timeout() {
             ManagedLaunchState::Unsupported,
         )
         .unwrap();
-    let reminder = request.loop_reminder.unwrap();
+    let Some(crate::harness::launch::ReminderSection::Loop(reminder)) = request.reminder_section
+    else {
+        panic!("loop single run reminder")
+    };
     assert!(
         reminder.starts_with(
             "RimZ started you from the rule `hourly`, which launches an agent every 1h."

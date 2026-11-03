@@ -1596,7 +1596,7 @@ mod launch_options {
                 into_loop_check_request(parse_agents(&argv), "nightly", &config).unwrap();
             assert_eq!(request.loop_task.as_deref(), Some("nightly"));
             // The check script wrote this prompt, not the rule.
-            assert_eq!(request.loop_reminder, None);
+            assert_eq!(request.reminder_section, None);
             assert!(!request.background);
             assert_eq!(request.keep, keep);
             assert_eq!(request.self_cleanup_on_completion, !keep);

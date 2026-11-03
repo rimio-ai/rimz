@@ -1443,7 +1443,7 @@ impl Fixture {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             follow_up_message: None,
-            loop_reminder: None,
+            reminder_section: None,
             headless: None,
             skills: None,
             no_skill_tool: false,

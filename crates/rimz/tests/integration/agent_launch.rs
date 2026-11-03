@@ -195,7 +195,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity::default(),
     }
@@ -5078,7 +5078,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             exit_on_run_completion: false,
             subagent: false,
             follow_up_message: None,
-            loop_reminder: None,
+            reminder_section: None,
             headless: None,
             identity: ExecIdentity::default(),
         };
@@ -5234,7 +5234,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             exit_on_run_completion: false,
             subagent: false,
             follow_up_message: None,
-            loop_reminder: None,
+            reminder_section: None,
             headless: None,
             identity: ExecIdentity::default(),
         };
@@ -5447,7 +5447,7 @@ esac"#,
         exit_on_run_completion: true,
         subagent: true,
         follow_up_message: failed_follow_up,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity::default(),
     };

@@ -2071,8 +2071,8 @@ pub struct LayoutPaneParams<'a> {
     pub resume_seeds: Option<&'a [CohortSeed]>,
     pub launch_identities: &'a [AgentLaunchIdentity],
     pub fallback_channel: Option<&'a str>,
-    /// A loop fire's `### Loop` reminder body, for the cell that receives the prompt.
-    pub loop_reminder: Option<&'a str>,
+    /// The reminder section for the cell that receives the prompt.
+    pub reminder_section: Option<&'a crate::harness::launch::ReminderSection>,
     pub leader_run: Option<LayoutRunParams<'a>>,
 }
 
@@ -2240,7 +2240,7 @@ fn fresh_agent_argv(
         };
     }
     if launch.prompt.is_some() {
-        request.loop_reminder = params.loop_reminder.map(str::to_owned);
+        request.reminder_section = params.reminder_section.cloned();
     }
     if let Some(run) = params
         .leader_run

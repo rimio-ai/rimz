@@ -190,9 +190,8 @@ pub struct SupervisedRunRequest {
     pub max_attempts: Option<u32>,
     pub loop_task: Option<String>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
-    /// The `### Loop` reminder body the loop fire composed; every attempt's
-    /// pane request carries it.
-    pub loop_reminder: Option<String>,
+    /// The non-durable reminder section every attempt's pane request carries.
+    pub reminder_section: Option<crate::harness::launch::ReminderSection>,
     pub passthrough: Vec<String>,
     /// Managed-account state: pending inputs, unsupported selection, unresolved
     /// exact selection, or one proven binding.
@@ -247,7 +246,7 @@ impl SupervisedRunRequest {
             max_attempts: None,
             loop_task: None,
             workflow: None,
-            loop_reminder: None,
+            reminder_section: None,
             passthrough: Vec::new(),
             managed_launch,
             login: crate::store::writer::LaunchLogin::RoomDefault,

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::launch::ExecRequest;
+use super::launch::{ExecRequest, ReminderSection};
 use super::launch_context::{self, escape_reminder_text};
 use super::subagent_policy::{self, SubagentCatalog};
 use crate::agents::payload::{RimzBlock, wrap_rimz_block};
@@ -132,11 +132,11 @@ pub(super) fn render(
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
         paragraphs.push(model_line(params, &model));
     }
-    if let Some(body) = &request.loop_reminder {
-        let heading = if request.headless.is_some() {
-            "Judge"
-        } else {
-            "Loop"
+    if let Some(section) = &request.reminder_section {
+        let (heading, body) = match section {
+            ReminderSection::Loop(body) => ("Loop", body),
+            ReminderSection::Judge(body) => ("Judge", body),
+            ReminderSection::Workflow(body) => ("Workflow", body),
         };
         paragraphs.push(format!("### {heading}\n\n{body}"));
     }

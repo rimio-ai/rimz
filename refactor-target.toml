@@ -2096,7 +2096,8 @@ path = "crates/rimz/src/harness"
 # StallNudgeRequest, nudge_stalled_teams, helper, NudgeErr, and queue share the producer/CLI seam (+5).
 # workflow::cancel_args shares reason-bearing cancellation argv with removal callers (+1).
 # workflow::Limit shares the strict limit table with engine and CLI (+1).
-surface-budget = 1072
+# ReminderSection shares explicit launch-reminder headings across callers (+1).
+surface-budget = 1073
 
 [[verdict]]
 kind = "item"
@@ -4466,7 +4467,13 @@ allowed-dependencies = [
 # AgentShellResolution, its name/path views, and resolve_agent_shell share room-aware lookup (+4).
 # AgentShellResolution::missing_saved_path exposes the stale lookup without changing JSON (+1).
 # AgentShellPersistence selects room-scoped or per-launch shell lookups (+1).
-surface-budget = 56
+# ReminderSection shares explicit launch-reminder headings across callers (+1).
+surface-budget = 57
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ReminderSection"
+reason = "Loop fires, headless judges, and workflow launches carry their reminder heading with its body."
 
 [[verdict]]
 kind = "item"

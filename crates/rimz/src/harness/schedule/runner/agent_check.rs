@@ -174,10 +174,8 @@ pub(super) fn run(
         prompt: Some(fire.augment_guard_prompt(prompt)),
         extra_args: cell.args.clone(),
     };
-    request.loop_reminder = Some(reminder::compose_check(
-        &fire.name,
-        &fire.task,
-        &action_prompt,
+    request.reminder_section = Some(crate::harness::launch::ReminderSection::Judge(
+        reminder::compose_check(&fire.name, &fire.task, &action_prompt),
     ));
     let unit = state.ensure_temp_unit(None)?;
     let path = unit.join(format!("loop-judge-{}", RunId::new()));

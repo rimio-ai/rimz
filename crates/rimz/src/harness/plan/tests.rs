@@ -2429,7 +2429,7 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
             resume_seeds: None,
             launch_identities: &[],
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
@@ -3936,7 +3936,7 @@ fn run_bound_command_cells_wrap_raw_argv_and_the_users_shell() {
                 resume_seeds: None,
                 launch_identities: &[],
                 fallback_channel: None,
-                loop_reminder: None,
+                reminder_section: None,
                 leader_run: bound.then_some(LayoutRunParams {
                     run_id: &run_id,
                     leader_index: 0,
@@ -4027,7 +4027,9 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
             resume_seeds: None,
             launch_identities: &identities,
             fallback_channel: None,
-            loop_reminder: Some("fired"),
+            reminder_section: Some(&crate::harness::launch::ReminderSection::Loop(
+                "fired".into(),
+            )),
             leader_run: None,
         },
     )
@@ -4039,12 +4041,12 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
         crate::harness::launch::ExecAction::Launch { prompt: None, .. }
     ));
     // Only the cell that receives the rule's prompt is told the rule launched it.
-    assert_eq!(first.loop_reminder, None);
+    assert_eq!(first.reminder_section, None);
     assert_eq!(
-        exec_request(&panes.columns[1].panes[1].argv)
-            .loop_reminder
-            .as_deref(),
-        Some("fired")
+        exec_request(&panes.columns[1].panes[1].argv).reminder_section,
+        Some(crate::harness::launch::ReminderSection::Loop(
+            "fired".into()
+        ))
     );
     assert_eq!(panes.columns[0].panes[0].name.as_deref(), Some("claude"));
     assert_request_field(
@@ -4137,7 +4139,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
                 resume_seeds: Some(&plan.seeds),
                 launch_identities: &[],
                 fallback_channel: None,
-                loop_reminder: None,
+                reminder_section: None,
                 leader_run: None,
             },
         )
@@ -4203,7 +4205,7 @@ fn in_place_resume_layout_returns_to_the_existing_shell() {
             resume_seeds: Some(&seeds),
             launch_identities: &[],
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
@@ -4266,7 +4268,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&seeds),
             launch_identities: &fresh,
             fallback_channel: Some("fallback"),
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
@@ -4298,7 +4300,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
             launch_identities: &[],
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
@@ -4319,7 +4321,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&[CohortSeed::Fresh]),
             launch_identities: &fresh,
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
@@ -4338,7 +4340,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&seeds),
             launch_identities: &surplus,
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
@@ -4405,7 +4407,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
             resume_seeds: None,
             launch_identities: &launches,
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
@@ -4447,7 +4449,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
                 resume_seeds: None,
                 launch_identities: &launches,
                 fallback_channel: None,
-                loop_reminder: None,
+                reminder_section: None,
                 leader_run: None,
             },
         )
@@ -4518,7 +4520,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
             resume_seeds: Some(&seeds),
             launch_identities: &[],
             fallback_channel: Some("new-channel"),
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
